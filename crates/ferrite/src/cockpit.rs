@@ -14110,10 +14110,11 @@ mod tests {
                 "a short summary must size to its text: {summary:?}"
             );
             assert!(
-                control.left() > summary.right()
+                control.right() <= summary.left() + px(0.5)
                     && (control.size.width - px(crate::theme::TOOL_DISCLOSURE_HIT)).abs() <= px(1.)
-                    && control.right() <= px(width),
-                "the chevron trails the text and stays inside the Pane: {summary:?} / {control:?}"
+                    && (summary.left() - control.left() - px(crate::theme::GUTTER_W)).abs()
+                        <= px(0.5),
+                "the chevron leads in the gutter, the text at C1: {summary:?} / {control:?}"
             );
         }
 

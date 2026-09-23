@@ -749,6 +749,9 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **Glyphs are drawn, never typed.** `❯` is `prompt.svg`, `∴` is
 //   `reasoning.svg`, the answer mark is the monochrome `ferrite-mono.svg`,
 //   the tool dot and the elbow are painted. None of them registers text.
+// - **One left edge.** A disclosure's chevron leads, in the gutter where
+//   tool dots hang; nothing sits at the reading column's right but a
+//   settled call's duration.
 // - **State lives in the dot.** A tool's name is neutral ink whatever
 //   happened; its dot says how it went (`tool_dot`), and a failure colours
 //   the one word that says so. A collapsed group is one muted line whose only
@@ -815,10 +818,10 @@ pub const DIFF_SIGN_GAP: f32 = SPACE_1;
 /// be the transcript rather than a note in it.
 pub const HUNK_MAX_ROWS: usize = 24;
 
-/// 20px — an invisible hit area, not a drawn thing: a disclosure's trailing
-/// chevron target and a prompt action's button.
-pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
-/// 10px — the trailing disclosure chevron.
+/// 20px — an invisible hit area, not a drawn thing: a disclosure's leading
+/// chevron target (the gutter, `GUTTER_W`) and a prompt action's button.
+pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
+/// 10px — the leading disclosure chevron, in the gutter's glyph box.
 pub const DISCLOSURE_CHEVRON: f32 = 10.0;
 /// 4px — how far a prompt's hover wash bleeds past its text on each side.
 pub const PROMPT_HOVER_BLEED: f32 = SPACE_1;

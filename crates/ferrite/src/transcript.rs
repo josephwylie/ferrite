@@ -547,8 +547,8 @@ impl TranscriptView {
         let disclosure = view
             .as_ref()
             .map(|view| self.control(&call, view.clone(), cx));
-        // The group recipe: no glyph, a muted line at C1, the chevron
-        // trailing.
+        // The group recipe: a muted line at C1, the chevron leading in the
+        // gutter.
         let header = div()
             .id(SharedString::from(format!(
                 "turn-diff-row-{}",
@@ -560,7 +560,6 @@ impl TranscriptView {
             .items_center()
             .min_w_0()
             .pl(px(theme::GUTTER_W))
-            .pr(px(theme::TOOL_DISCLOSURE_HIT))
             .rounded(px(theme::R_CHIP))
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))

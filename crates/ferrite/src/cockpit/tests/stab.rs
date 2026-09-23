@@ -1197,3 +1197,41 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
         "exactly the focused Pane of the two wears the ring"
     );
 }
+
+/// A group's disclosure chevron leads, in the gutter where tool dots hang,
+/// and the summary starts at C1 after it: nothing at the column's right.
+#[gpui::test]
+fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("group-chevron-leads", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    for (id, name) in [("one", "Bash"), ("two", "Read")] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input: serde_json::json!({ "command": "true" }),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "ok".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    let row = cx.debug_bounds("tool-group-one").expect("the group");
+    let control = view
+        .read_with(cx, |view, _| {
+            view.panes[0].tool_bounds(pane::DisclosureId::Group("one".into()))
+        })
+        .expect("the group's chevron");
+    assert!(
+        (control.left() - row.left()).abs() <= px(0.5),
+        "the chevron sits in the gutter: {control:?} / {row:?}"
+    );
+    assert!(control.right() <= row.left() + px(crate::theme::GUTTER_W) + px(0.5));
+}

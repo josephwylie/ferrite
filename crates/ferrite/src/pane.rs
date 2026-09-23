@@ -4805,12 +4805,11 @@ pub(crate) fn render_block(
                     )
                     .into_any_element();
             };
-            let header = gutter_row(mark, theme::LH_PROSE)
+            let header = gutter_row(yielding_mark(mark), theme::LH_PROSE)
                 .id(SharedString::from(format!("reasoning-row-{:?}", block.id)))
                 .group(DISCLOSURE_ROW)
                 .relative()
                 .items_center()
-                .pr(px(theme::TOOL_DISCLOSURE_HIT))
                 .rounded(px(theme::R_CHIP))
                 .hover_row()
                 .child(
@@ -4918,6 +4917,15 @@ const DISCLOSURE_ROW: &str = "disclosure-row";
 
 /// A transcript row: its mark in the gutter, centred on a `first_line` box,
 /// and its text at C1 (the caller's next child, `flex_1 min_w_0`).
+/// A disclosable row's gutter mark: it yields its glyph box to the leading
+/// chevron while the pointer is on the row (`tool_disclosure_control`).
+fn yielding_mark(mark: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .group_hover(DISCLOSURE_ROW, |style| style.invisible())
+        .child(mark)
+}
+
 fn gutter_row(mark: impl IntoElement, first_line: f32) -> Div {
     div()
         .flex()
@@ -5183,23 +5191,29 @@ fn render_tool(
         ));
         trailing = true;
     }
-    let line = gutter_row(tool_dot(tool, reduce_motion), theme::LH_UI)
-        .id(SharedString::from(format!("tool-row-{}", tool.call)))
-        .relative()
-        .items_center()
-        .gap_0()
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED))
-        .rounded(px(theme::R_CHIP))
-        .when(has_disclosure, |line| {
-            line.group(DISCLOSURE_ROW)
-                .pr(px(theme::TOOL_DISCLOSURE_HIT))
-                .hover_row()
-        })
-        .child(call)
-        .when(trailing, |line| line.child(trail.pl(px(theme::SPACE_3))))
-        .children(disclosure);
+    let dot = tool_dot(tool, reduce_motion);
+    let line = gutter_row(
+        if has_disclosure {
+            yielding_mark(dot).into_any_element()
+        } else {
+            dot
+        },
+        theme::LH_UI,
+    )
+    .id(SharedString::from(format!("tool-row-{}", tool.call)))
+    .relative()
+    .items_center()
+    .gap_0()
+    .text_size(px(theme::FS_UI))
+    .line_height(px(theme::LH_UI))
+    .text_color(rgb(TEXT_MUTED))
+    .rounded(px(theme::R_CHIP))
+    .when(has_disclosure, |line| {
+        line.group(DISCLOSURE_ROW).hover_row()
+    })
+    .child(call)
+    .when(trailing, |line| line.child(trail.pl(px(theme::SPACE_3))))
+    .children(disclosure);
     let mut card = gpui::component::collapsible::Collapsible::new()
         .w_full()
         .open(expanded)
@@ -5332,22 +5346,13 @@ where
             }),
     );
     highlights.sort_by_key(|(range, _)| range.start);
-    let mark = if activity.running > 0 {
-        components::pulsing_dot(
-            SharedString::from(format!("live-group-{call}")),
-            RUNNING,
-            RUNNING_HALO,
-            reduce_motion,
-        )
-    } else {
-        div().into_any_element()
-    };
-    let mut header = gutter_row(mark, theme::LH_UI)
+    // The gutter is the chevron's (`tool_disclosure_control`): a running
+    // member says so on its own line under the header, with its dot.
+    let mut header = gutter_row(div(), theme::LH_UI)
         .id(SharedString::from(format!("tool-group-row-{call}")))
         .group(DISCLOSURE_ROW)
         .relative()
         .items_center()
-        .pr(px(theme::TOOL_DISCLOSURE_HIT))
         .rounded(px(theme::R_CHIP))
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
@@ -5568,12 +5573,13 @@ fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
 }
 
 /// A disclosure row's click target: an overlay over the whole row, so the
-/// label and the trail toggle it too, with the chevron **trailing** in a
-/// `TOOL_DISCLOSURE_HIT` box at the row's right edge (the row reserves that
-/// room). The chevron shows while the pointer is on the row, while the row
-/// is open or keyboard-targeted, and always on a collapsed group — the one
-/// row whose details are the point. A keyboard target draws the
-/// `FOCUS_RING` round the whole row.
+/// label and the trail toggle it too, with the chevron **leading**, in the
+/// gutter's glyph box where tool dots hang — one left edge, nothing at the
+/// column's right. A group or the turn's changes (no mark of their own)
+/// always show it; a row with a mark (a tool's dot, reasoning's `∴`) shows
+/// it while the pointer is on the row or the keyboard targets it, the mark
+/// yielding its box meanwhile (`yielding_mark`). A keyboard target draws
+/// the `FOCUS_RING` round the whole row.
 pub fn tool_disclosure_control(
     call: &DisclosureId,
     expanded: bool,
@@ -5590,12 +5596,12 @@ pub fn tool_disclosure_control(
         (_, false) => "Show tool details",
         (_, true) => "Hide tool details",
     };
-    let shown = expanded || targeted || matches!(call, DisclosureId::Group(_));
+    let shown = targeted || matches!(call, DisclosureId::Group(_) | DisclosureId::TurnDiff(_));
     let control = div()
         .id(SharedString::from(format!("tool-button-{call}")))
         .flex()
         .items_center()
-        .justify_center()
+        .justify_start()
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
         .tooltip(move |window, cx| {
@@ -5606,7 +5612,7 @@ pub fn tool_disclosure_control(
                 .invisible()
                 .group_hover(DISCLOSURE_ROW, |style| style.visible())
         })
-        .child(icon(
+        .child(components::glyph_box(icon(
             if expanded {
                 icons::CHEVRON_DOWN
             } else {
@@ -5614,13 +5620,13 @@ pub fn tool_disclosure_control(
             },
             theme::DISCLOSURE_CHEVRON,
             TEXT_MUTED,
-        ));
+        )));
     div()
         .absolute()
         .inset_0()
         .flex()
         .items_center()
-        .justify_end()
+        .justify_start()
         .cursor_pointer()
         // Keyboard cycling outlines the complete disclosure row so the
         // operator can see which row Enter will toggle.
