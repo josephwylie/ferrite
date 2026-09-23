@@ -134,6 +134,8 @@ impl TextRuns {
             id: format!("output-{}-{block:?}-{part}", self.namespace).into(),
             text: text.to_string().into(),
             cache: self.cache.clone(),
+            aria_label: "Tool output".into(),
+            fill: false,
         }
     }
 

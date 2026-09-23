@@ -7297,12 +7297,23 @@ impl CockpitView {
             self.panes[index]
                 .document_rich
                 .file_context(document.path.parent(), &self.panes[index].preview);
-            crate::rich::Markdown::new(
-                format!("document-{}", document.path.display()),
-                document.source,
-                self.panes[index].document_rich.clone(),
-            )
-            .into_any_element()
+            if document.is_markdown() {
+                crate::rich::Markdown::new(
+                    format!("document-{}", document.path.display()),
+                    document.source,
+                    self.panes[index].document_rich.clone(),
+                )
+                .into_any_element()
+            } else {
+                crate::rich::Output {
+                    id: format!("file-{}", document.path.display()).into(),
+                    text: document.source.into(),
+                    cache: self.panes[index].document_rich.clone(),
+                    aria_label: "File contents".into(),
+                    fill: true,
+                }
+                .into_any_element()
+            }
         });
         let content = self.panes[index].preview.mount(content, document_body);
         if !self.panes[index].is_main() {
@@ -7485,8 +7496,10 @@ impl CockpitView {
                     transcript.read(cx).received_reasoning_is_visible(&caption)
                 })
             });
+        let changed_files = l1.then(|| self.changed_file_links(index)).flatten();
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
+            changed_files,
             received_reasoning_visible,
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
             composer_actions: (level != Level::Wall)
@@ -7524,6 +7537,101 @@ impl CockpitView {
             child_footer: self.child_footer(index, cx),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
+    }
+
+    fn changed_file_links(&self, index: usize) -> Option<AnyElement> {
+        use gpui::component::{Icon, IconName};
+
+        let pane = self.panes.get(index)?;
+        let thread = pane.thread()?;
+        let changed_files = self.facts.get(thread)?.changed_files.clone();
+        if changed_files.is_empty() {
+            return None;
+        }
+        let cwd = self.thread_path(thread)?;
+        let preview = pane.preview.clone();
+        let mut links = div()
+            .id(("thread-documents", thread.get() as usize))
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap(px(4.))
+            .overflow_x_scroll();
+        for (file_index, file) in changed_files.into_iter().enumerate() {
+            let raw = std::path::PathBuf::from(&file.path);
+            let path = if raw.is_absolute() {
+                raw
+            } else {
+                cwd.join(raw)
+            };
+            let title = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let title_for_open = title.clone();
+            let path_for_open = path.clone();
+            let host = preview.clone();
+            links = links.child(
+                div()
+                    .debug_selector(move || format!("thread-document-{file_index}"))
+                    .child(
+                        crate::components::button(("thread-document", file_index))
+                            .max_w(px(240.))
+                            .h(px(crate::theme::COMPOSER_ROW_H))
+                            .px(px(6.))
+                            .bg(rgb(crate::theme::PANE))
+                            .rounded(px(crate::theme::R_CHIP))
+                            .tooltip(format!("Open {}", path.display()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .min_w_0()
+                                    .text_size(px(crate::theme::FS_SM))
+                                    .text_color(rgb(crate::theme::TEXT))
+                                    .child(div().min_w_0().truncate().child(title))
+                                    .child(pane::diff_stat(file.added, file.removed)),
+                            )
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                host.open_document(
+                                    path_for_open.clone(),
+                                    title_for_open.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                    ),
+            );
+        }
+        Some(
+            div()
+                .debug_selector(|| "thread-documents".into())
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .min_w_0()
+                .h(px(crate::theme::COMPOSER_ROW_H))
+                .gap(px(6.))
+                .child(
+                    Icon::new(IconName::FileText)
+                        .size(px(crate::theme::ROW_ICON))
+                        .text_color(rgb(crate::theme::TEXT_2)),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(crate::theme::FONT_UI)
+                        .text_size(px(crate::theme::FS_SM))
+                        .text_color(rgb(crate::theme::TEXT_2))
+                        .child("Files changed"),
+                )
+                .child(links)
+                .into_any_element(),
+        )
     }
 
     fn toggle_tool(
@@ -11408,6 +11516,76 @@ mod tests {
         }
     }
 
+    fn many_questions(id: &str) -> SessionEvent {
+        let questions = (0..4)
+            .map(|index| ferrite_core::questions::Question {
+                id: None,
+                question: format!("Question {} needs an answer", index + 1),
+                header: format!("Question {}", index + 1),
+                multi_select: false,
+                secret: false,
+                allow_other: false,
+                options: vec![
+                    ferrite_core::questions::Choice {
+                        label: "First choice".into(),
+                        description: "The first available answer".into(),
+                        preview: None,
+                    },
+                    ferrite_core::questions::Choice {
+                        label: "Second choice".into(),
+                        description: "The second available answer".into(),
+                        preview: None,
+                    },
+                ],
+            })
+            .collect::<Vec<_>>();
+        SessionEvent::DecisionRequested {
+            decision: Decision {
+                delivery: Default::default(),
+                kind: ferrite_core::DecisionKind::Questions(questions),
+                policy: Default::default(),
+                id: id.into(),
+                tool_use_id: "toolu_many_questions".into(),
+                tool_name: "AskUserQuestion".into(),
+                description: String::new(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        }
+    }
+
+    #[gpui::test]
+    fn a_long_question_form_scrolls_to_the_next_question(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("question-scroll", 1);
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(900.), px(600.)));
+        fake.streams.borrow()[0]
+            .send(many_questions("q_scroll"))
+            .unwrap();
+        tick(cx);
+
+        let viewport = cx.debug_bounds("question-scroll-content").unwrap();
+        let before = cx.debug_bounds("question-choice-3-1").unwrap();
+        assert!(
+            before.bottom() > viewport.bottom(),
+            "the last question must begin below the question viewport"
+        );
+
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        cx.run_until_parked();
+
+        let after = cx.debug_bounds("question-choice-3-1").unwrap();
+        assert!(
+            after.bottom() <= viewport.bottom() && after.top() >= viewport.top(),
+            "wheel scrolling must reveal the next question: {after:?} in {viewport:?}"
+        );
+    }
+
     /// Main and child questions share native controls; composer input stays chat.
     #[gpui::test]
     fn a_question_decision_is_answered_by_its_form(cx: &mut TestAppContext) {
@@ -14579,6 +14757,99 @@ mod tests {
             cx.debug_bounds("progress-caption-Checking fold call sites")
                 .is_none(),
             "completed turns stop their live indication"
+        );
+    }
+
+    #[gpui::test]
+    fn edited_files_stay_one_click_away_above_the_prompt(cx: &mut TestAppContext) {
+        let (core, fake, workspace) = bound_cockpit("thread-documents", Provider::Claude);
+        let document = workspace.join("docs").join("generated.md");
+        let source = workspace.join("src").join("generated.rs");
+        std::fs::create_dir_all(document.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&document, "# Generated guide\n").unwrap();
+        std::fs::write(&source, "fn generated() {}\n").unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let stream = fake.streams.borrow();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "edit-doc".into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "docs/generated.md" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "edit-doc".into(),
+                output: "updated".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "docs/generated.md".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 0,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["+# Generated guide".into()],
+                    }],
+                },
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "edit-code".into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "src/generated.rs" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "edit-code".into(),
+                output: "updated".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "src/generated.rs".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["-fn old() {}".into(), "+fn generated() {}".into()],
+                    }],
+                },
+            })
+            .unwrap();
+        drop(stream);
+        tick(cx);
+
+        let shelf = debug_bounds(cx, "thread-documents".to_string()).unwrap();
+        let prompt = debug_bounds(cx, "focused-prompt-editor".to_string()).unwrap();
+        assert!(
+            shelf.origin.y < prompt.origin.y,
+            "files sit above typed input"
+        );
+        let link = debug_bounds(cx, "thread-document-0".to_string())
+            .expect("the edited Markdown file is listed in its Thread");
+        cx.simulate_click(link.center(), gpui::Modifiers::none());
+        assert_eq!(
+            view.read_with(cx, |view, _| view.panes[0]
+                .preview
+                .document()
+                .map(|document| document.path)),
+            Some(document)
+        );
+        let close = debug_bounds(cx, "close-markdown-reader".to_string()).unwrap();
+        cx.simulate_click(close.center(), gpui::Modifiers::none());
+        let code = debug_bounds(cx, "thread-document-1".to_string())
+            .expect("a non-Markdown file is listed too");
+        cx.simulate_click(code.center(), gpui::Modifiers::none());
+        assert_eq!(
+            view.read_with(cx, |view, _| view.panes[0]
+                .preview
+                .document()
+                .map(|document| document.path)),
+            Some(source)
         );
     }
 

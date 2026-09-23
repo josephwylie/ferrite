@@ -320,17 +320,11 @@ pub fn inline_file(
                 return;
             }
         }
-        let markdown = file
-            .path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
-            });
-        if markdown && file.path.exists() {
+        if !image && file.path.exists() {
             if let Some(host) = &host {
-                host.open_document(file.path.clone(), name_for_open.clone(), window, cx);
-                return;
+                if host.open_text_document(file.path.clone(), name_for_open.clone(), window, cx) {
+                    return;
+                }
             }
         }
         file.open(window, cx);

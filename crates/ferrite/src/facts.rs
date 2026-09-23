@@ -10,15 +10,15 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+use crate::pane::{wall_card, WallCard};
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
+use ferrite_core::docview::{FileChange, Instruments};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{BranchStatus, WorkspaceBinding};
 use ferrite_core::ThreadId;
 use gpui::SharedString;
-
-use crate::pane::{wall_card, WallCard};
 
 /// One Thread's cached facts. `None` on any of them is honest — the row
 /// draws that line empty and keeps its height rather than inventing a word.
@@ -64,6 +64,9 @@ pub struct ThreadFacts {
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.
     pub wall: WallCard,
+    /// Files edited anywhere in this Thread, including its subagents, with
+    /// their rolled-up diff totals. Folded only when activity changes.
+    pub changed_files: Vec<FileChange>,
     main_busy: bool,
     selected_wall: Option<(Subject, WallCard)>,
 }
@@ -321,8 +324,12 @@ impl Facts {
             open.and_then(|open| open.pending()),
         );
         let last_used = cockpit.last_used(thread);
+        let changed_files = open.map(changed_files);
         let facts = self.threads.entry(thread).or_default();
         facts.wall = card;
+        if let Some(changed_files) = changed_files {
+            facts.changed_files = changed_files;
+        }
         if open.is_some() {
             facts.subagents = cockpit.subagent_count(thread).unwrap_or_default();
         }
@@ -334,6 +341,29 @@ impl Facts {
         }
         facts.main_busy = open.is_some_and(|open| open.busy());
     }
+}
+
+fn changed_files(open: ferrite_core::cockpit::ThreadView<'_>) -> Vec<FileChange> {
+    let activity = open.activity();
+    let mut changed = Vec::<FileChange>::new();
+    let transcripts = std::iter::once(activity.main().transcript()).chain(
+        activity
+            .children()
+            .into_iter()
+            .map(|agent| agent.transcript()),
+    );
+    for transcript in transcripts {
+        for file in Instruments::of(transcript).changed {
+            match changed.iter_mut().find(|changed| changed.path == file.path) {
+                Some(changed) => {
+                    changed.added += file.added;
+                    changed.removed += file.removed;
+                }
+                None => changed.push(file),
+            }
+        }
+    }
+    changed
 }
 
 fn project_label(

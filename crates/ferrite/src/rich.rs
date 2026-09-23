@@ -495,6 +495,8 @@ pub struct Output {
     pub id: SharedString,
     pub text: SharedString,
     pub cache: TextCache,
+    pub aria_label: SharedString,
+    pub fill: bool,
 }
 
 impl gpui::RenderOnce for Output {
@@ -511,9 +513,10 @@ impl gpui::RenderOnce for Output {
             .readonly(true)
             .appearance(false)
             .bordered(false)
-            .aria_label("Tool output")
+            .aria_label(self.aria_label)
             .w_full()
             .min_w_0()
+            .when(self.fill, |view| view.h_full())
             .p_0()
             .font_family(window.text_style().font_family.clone())
             .text_size(window.text_style().font_size.to_pixels(window.rem_size()))
@@ -759,12 +762,23 @@ mod file_link_tests {
             let document_body = self.preview.document().map(|document| {
                 self.document_cache
                     .file_context(document.path.parent(), &self.preview);
-                Markdown::new(
-                    format!("document-{}", document.path.display()),
-                    document.source,
-                    self.document_cache.clone(),
-                )
-                .into_any_element()
+                if document.is_markdown() {
+                    Markdown::new(
+                        format!("document-{}", document.path.display()),
+                        document.source,
+                        self.document_cache.clone(),
+                    )
+                    .into_any_element()
+                } else {
+                    Output {
+                        id: format!("file-{}", document.path.display()).into(),
+                        text: document.source.into(),
+                        cache: self.document_cache.clone(),
+                        aria_label: "File contents".into(),
+                        fill: true,
+                    }
+                    .into_any_element()
+                }
             });
             use gpui::base::ElementExt;
             self.preview.mount(
@@ -981,6 +995,63 @@ mod file_link_tests {
     }
 
     #[gpui::test]
+    fn code_file_click_opens_the_native_reader(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join("ferrite-reader.rs");
+        std::fs::write(&path, "fn ferrite() {}\n").unwrap();
+        let source = format!("[source]({})", path.display());
+        let (view, cx) = fixture(cx, &source);
+
+        let target = card(cx, "ferrite-reader.rs").center();
+        cx.simulate_click(target, Modifiers::default());
+
+        assert_eq!(cx.opened_url(), None);
+        let document = view
+            .read_with(cx, |view, _| view.preview.document())
+            .expect("the code file is retained by the built-in reader");
+        assert_eq!(document.path, path);
+        assert_eq!(document.source, "fn ferrite() {}\n");
+        assert!(!document.is_markdown());
+        assert!(cx.debug_bounds("markdown-reader").is_some());
+    }
+
+    #[gpui::test]
+    fn large_code_file_uses_the_virtualized_reader(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join("ferrite-large-reader.rs");
+        let source = (0..5_000)
+            .map(|line| format!("fn line_{line}() {{}}\n"))
+            .collect::<String>();
+        std::fs::write(&path, source).unwrap();
+        let link = format!("[large source]({})", path.display());
+        let (_, cx) = fixture(cx, &link);
+        let target = card(cx, "ferrite-large-reader.rs").center();
+
+        cx.simulate_click(target, Modifiers::default());
+
+        let id = format!("file-{}", path.display());
+        assert!(
+            cx.update(|_, cx| testing::output(&id, cx).is_some()),
+            "large source files must use the bounded, virtualized text reader"
+        );
+    }
+
+    #[gpui::test]
+    fn binary_file_card_falls_back_to_the_os(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join("ferrite-reader.bin");
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let source = format!("[binary]({})", path.display());
+        let (view, cx) = fixture(cx, &source);
+        let target = card(cx, "ferrite-reader.bin").center();
+
+        cx.simulate_click(target, Modifiers::default());
+
+        assert_eq!(
+            cx.opened_url(),
+            Some(url::Url::from_file_path(path).unwrap().to_string())
+        );
+        assert!(view.read_with(cx, |view, _| view.preview.document().is_none()));
+    }
+
+    #[gpui::test]
     fn file_cards_wrap_inline_and_preserve_markdown_and_copying(cx: &mut TestAppContext) {
         let source = "Before [**report**](report.md:12) after.\n\n- Read [notes](notes.txt).\n\n| File | Result |\n| --- | --- |\n| [data](data.csv) | Ready |\n\n[web](https://example.com/report.pdf)";
         let (view, cx) = fixture(cx, source);
@@ -1092,7 +1163,7 @@ mod file_link_tests {
         std::fs::write(&path, "fixture").unwrap();
         let second = std::env::temp_dir().join("ferrite-keyboard-second.txt");
         std::fs::write(&second, "second").unwrap();
-        let (_, cx) = fixture(
+        let (view, cx) = fixture(
             cx,
             "[the **report** file](ferrite-keyboard.txt) and [second](ferrite-keyboard-second.txt)",
         );
@@ -1101,18 +1172,23 @@ mod file_link_tests {
         cx.simulate_event(gpui::KeyUpEvent {
             keystroke: gpui::Keystroke::parse("enter").unwrap(),
         });
+        assert_eq!(cx.opened_url(), None);
         assert_eq!(
-            cx.opened_url(),
-            Some(url::Url::from_file_path(path).unwrap().to_string())
+            view.read_with(cx, |view, _| view.preview.document().map(|file| file.path)),
+            Some(path)
         );
+        let close = cx.debug_bounds("close-markdown-reader").unwrap();
+        cx.simulate_click(close.center(), Modifiers::default());
+        cx.update(|window, cx| window.focus_next(cx));
         cx.update(|window, cx| window.focus_next(cx));
         cx.simulate_keystrokes("enter");
         cx.simulate_event(gpui::KeyUpEvent {
             keystroke: gpui::Keystroke::parse("enter").unwrap(),
         });
+        assert_eq!(cx.opened_url(), None);
         assert_eq!(
-            cx.opened_url(),
-            Some(url::Url::from_file_path(second).unwrap().to_string())
+            view.read_with(cx, |view, _| view.preview.document().map(|file| file.path)),
+            Some(second)
         );
     }
     #[gpui::test]

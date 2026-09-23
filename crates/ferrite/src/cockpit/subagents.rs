@@ -27,6 +27,7 @@ struct RequestForm {
     form_inputs: HashMap<String, Entity<InputState>>,
     values: serde_json::Map<String, serde_json::Value>,
     fit: QuestionFit,
+    scroll: ScrollHandle,
 }
 
 #[derive(Default)]
@@ -1182,6 +1183,7 @@ impl CockpitView {
                         form_inputs,
                         values: form_defaults(&fields),
                         fit: Default::default(),
+                        scroll: ScrollHandle::new(),
                     },
                 );
             }
@@ -1666,9 +1668,11 @@ impl CockpitView {
                     form_inputs: Default::default(),
                     values: Default::default(),
                     fit: Default::default(),
+                    scroll: ScrollHandle::new(),
                 },
             );
         }
+        let scroll = forms.0.borrow()[&handle].scroll.clone();
         let mut content = div()
             .id(("question-content", handle.serial as usize))
             .debug_selector(|| "question-scroll-content".into())
@@ -1682,7 +1686,9 @@ impl CockpitView {
             .min_w_0()
             .flex_shrink_1()
             .max_h(px(320.))
-            .overflow_y_scrollbar()
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .vertical_scrollbar(&scroll)
             .pr(px(4.))
             .flex()
             .flex_col()

@@ -1,5 +1,5 @@
-//! Pane-owned file previews: images use a focused overlay and Markdown uses
-//! a reading rail beside the live transcript.
+//! Pane-owned file previews: images use a focused overlay while text files
+//! use a reading rail beside the live transcript.
 
 use std::{
     path::{Path, PathBuf},
@@ -71,17 +71,28 @@ impl Preview {
         window.refresh();
     }
 
-    pub fn open_document(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
+    /// Open a UTF-8 text file in the built-in reader. `false` means the file
+    /// is binary, so callers that support it may fall back to the OS.
+    pub fn open_text_document(
+        &self,
+        path: PathBuf,
+        title: String,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         use gpui::component::{notification::Notification, WindowExt as _};
-        let source = match std::fs::read_to_string(&path) {
-            Ok(source) => source,
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 window.push_notification(
                     Notification::error(format!("Could not open {}: {error}", path.display())),
                     cx,
                 );
-                return;
+                return true;
             }
+        };
+        let Ok(source) = String::from_utf8(bytes) else {
+            return false;
         };
         self.state.lock().unwrap().document = Some(Document {
             path,
@@ -89,6 +100,20 @@ impl Preview {
             source,
         });
         window.refresh();
+        true
+    }
+
+    pub fn open_document(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
+        use gpui::component::{notification::Notification, WindowExt as _};
+        if !self.open_text_document(path.clone(), title, window, cx) {
+            window.push_notification(
+                Notification::error(format!(
+                    "Could not preview {} because it is not a text file",
+                    path.display()
+                )),
+                cx,
+            );
+        }
     }
 
     pub fn document(&self) -> Option<Document> {
@@ -138,6 +163,8 @@ impl Preview {
         let Some(body) = document_body else {
             return pane;
         };
+        let markdown = document.is_markdown();
+        let kind = if markdown { "MARKDOWN" } else { "FILE" };
         let preview = self.clone();
         let available = f32::from(self.bounds.lock().unwrap().size.width);
         let document_width = px((available * 0.46).clamp(280., 640.));
@@ -158,6 +185,33 @@ impl Preview {
                 )
             },
         );
+        let document_content = if markdown {
+            div()
+                .id("markdown-reader-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(rems(52.))
+                        .mx_auto()
+                        .px(px(theme::PANE_PAD_X))
+                        .pt(px(theme::BODY_PAD_T))
+                        .pb(px(theme::BODY_PAD_B))
+                        .child(body),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .id("markdown-reader-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .p(px(theme::PANE_PAD_X))
+                .child(div().size_full().child(body))
+                .into_any_element()
+        };
         let document_pane = {
             let close = self.clone();
             div()
@@ -183,6 +237,9 @@ impl Preview {
                         .gap_2()
                         .px(px(theme::PANE_PAD_X))
                         .bg(rgb(theme::PANE_HEAD))
+                        .rounded_t(px(theme::R_SURFACE - 1.))
+                        .border_b_1()
+                        .border_color(rgba(theme::PANE_HEAD_EDGE))
                         .child(
                             Icon::new(IconName::FileText)
                                 .size(px(theme::ROW_ICON))
@@ -200,14 +257,29 @@ impl Preview {
                         )
                         .child(
                             div()
+                                .flex_shrink_0()
+                                .rounded(px(theme::R_CHIP))
+                                .bg(rgb(theme::RAISED))
+                                .px(px(theme::CHIP_PAD_X))
+                                .py(px(theme::CHIP_PAD_Y))
+                                .text_size(px(theme::FS_MONO))
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .child(kind),
+                        )
+                        .child(
+                            div()
                                 .debug_selector(|| "close-markdown-reader".into())
                                 .child(
-                                    Button::new("close-markdown-reader")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Close)
-                                        .accessibility_label("Close document reader")
+                                    crate::components::button("close-markdown-reader")
+                                        .w(px(theme::ICON_BUTTON))
+                                        .h(px(theme::ICON_BUTTON))
+                                        .p_0()
                                         .tooltip("Close document reader")
+                                        .child(
+                                            Icon::new(IconName::Close)
+                                                .size(px(theme::ICON_BUTTON_GLYPH))
+                                                .text_color(rgb(theme::TEXT_MUTED)),
+                                        )
                                         .on_click(move |_, window, cx| {
                                             cx.stop_propagation();
                                             close.close_document(window);
@@ -215,23 +287,7 @@ impl Preview {
                                 ),
                         ),
                 )
-                .child(
-                    div()
-                        .id("markdown-reader-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .child(
-                            div()
-                                .w_full()
-                                .max_w(rems(52.))
-                                .mx_auto()
-                                .px(px(theme::PANE_PAD_X))
-                                .pt(px(theme::BODY_PAD_T))
-                                .pb(px(theme::BODY_PAD_B))
-                                .child(body),
-                        ),
-                )
+                .child(document_content)
         };
         let mounted = div()
             .relative()
@@ -291,6 +347,17 @@ fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
             Notification::error(format!("Could not open {}: {error}", path.display())),
             cx,
         ),
+    }
+}
+
+impl Document {
+    pub fn is_markdown(&self) -> bool {
+        self.path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+            })
     }
 }
 
