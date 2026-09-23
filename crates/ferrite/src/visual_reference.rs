@@ -635,10 +635,14 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-F)
 
         // ---- WP-G scene arms (append above the end line)
-        // The nav scene with the Project filter's menu down.
+        // The nav scene with the Project filter's menu down, and the
+        // focused Thread's row renaming (the editor must not move the row).
         "navfilter" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
+                if let Some(thread) = view.cockpit.roster().focused_thread() {
+                    view.start_rename(super::RenameTarget::Thread(thread), cx);
+                }
                 view.nav_filter_open = true;
                 view.nav_parked_open = true;
                 cx.notify();
