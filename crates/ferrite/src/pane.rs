@@ -2057,12 +2057,13 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
         };
         // A dot-led run (tool, notice): the `●` in its own ink, then the
         // name in `TEXT_2` and the rest in metadata ink, as one text run so
-        // the line clamp still applies.
+        // the line clamp still applies. A call reads as L1 spells it,
+        // `Name(args)`, the parentheses touching the name.
         let dotted = |dot: u32, name: &str, rest: &str| {
             let text = if rest.is_empty() {
                 format!("● {name}")
             } else {
-                format!("● {name} {rest}")
+                format!("● {name}({rest})")
             };
             let dot_end = '●'.len_utf8();
             let name_end = dot_end + 1 + name.len();
@@ -2152,13 +2153,15 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                     ToolState::Failed(_) => BLOCKED,
                     _ => TEXT_FAINT,
                 };
-                dotted(dot, &tool.name, &tool.summary).line_clamp(1)
+                // One line, cut with an ellipsis inside the cell: a long
+                // unbroken argument never runs out through the cell edge.
+                dotted(dot, &tool.name, &tool_summary_line(tool)).truncate()
             }
             Body::Notice(text) => dotted(ATTENTION, text.trim(), ""),
             Body::Meta(text) => line(text.clone(), TEXT_MUTED),
             Body::TurnEnd(end) => line(end.text(), TEXT_MUTED),
             Body::Thinking(text) => {
-                line(ferrite_core::progress::headline(text), TEXT_MUTED).line_clamp(1)
+                line(ferrite_core::progress::headline(text), TEXT_MUTED).truncate()
             }
         };
         let lines = if matches!(block.body, Body::Tool(_) | Body::Thinking(_)) {

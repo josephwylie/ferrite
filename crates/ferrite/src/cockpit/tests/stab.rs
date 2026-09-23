@@ -541,3 +541,44 @@ fn an_l2_head_does_not_repeat_the_branch(cx: &mut TestAppContext) {
     );
     assert!(title.right() <= expand.left(), "{title:?} / {expand:?}");
 }
+
+/// An L2 tail's tool row reads as L1 spells it, `● Name(args)`, and a long
+/// unbroken argument is cut with an ellipsis inside the cell rather than
+/// running out through its edge.
+#[gpui::test]
+fn l2_tail_tool_rows_stay_inside_the_cell(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("l2-tail-inside", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "long".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({
+                "command": "cargo check --workspace --all-targets --features visual-reference,test-support --message-format=short"
+            }),
+        })
+        .unwrap();
+    tick(cx);
+    let (namespace, id, rect) = cx.update(|window, cx| {
+        let view = view.read(cx);
+        let pane = &view.panes[0];
+        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let id = thread.transcript().blocks().last().unwrap().id;
+        (pane.text_namespace(), id, view.pane_rects(window)[0].1)
+    });
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    let row = cx
+        .debug_bounds(Box::leak(
+            format!("l2-tail-row-{namespace}-{id:?}").into_boxed_str(),
+        ))
+        .expect("the tool row");
+    assert!(
+        row.right() <= px(rect.x + rect.w - crate::theme::CELL_PAD) + px(0.5),
+        "the row {row:?} ends inside the cell {rect:?}"
+    );
+    assert_eq!(row.size.height, px(crate::theme::LH_META), "one line");
+}
