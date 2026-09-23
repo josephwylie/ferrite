@@ -40,7 +40,7 @@ use gpui::component::button::Button;
 use gpui::component::tooltip::Tooltip;
 use gpui::prelude::*;
 use gpui::{
-    div, px, radians, relative, rgb, rgba, AnyElement, CursorStyle, Div, ScrollHandle,
+    div, px, radians, relative, rgb, rgba, AnyElement, App, CursorStyle, Div, ScrollHandle,
     SharedString, Stateful, Transformation,
 };
 
@@ -378,26 +378,18 @@ pub fn nav_head() -> Div {
 /// The persistent door to a new Thread. It sits beside the Project filter,
 /// reusing the same compact icon-control grammar as the rest of the nav.
 /// The cockpit owns the click because opening a draft changes its roster.
-pub fn add_thread_button() -> Button {
-    components::button("add-thread")
+pub fn add_thread_button(cx: &App) -> Button {
+    components::icon_button("add-thread", icons::PLUS, "New Thread", cx)
         .debug_selector(|| "add-thread".into())
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .tooltip("New Thread")
-        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// The rail's primary creation door gets the same generous target as its
 /// Thread avatars; the expanded header retains its denser 28px control.
-pub fn rail_add_thread_button() -> Button {
-    components::button("rail-add-thread")
+pub fn rail_add_thread_button(cx: &App) -> Button {
+    components::icon_button("rail-add-thread", icons::PLUS, "New Thread", cx)
         .debug_selector(|| "rail-add-thread".into())
         .w(px(NAV_RAIL_CONTROL))
         .h(px(NAV_RAIL_CONTROL))
-        .p_0()
-        .tooltip("New Thread")
-        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// Easy-access ordering control beside New Thread. Its selected state is

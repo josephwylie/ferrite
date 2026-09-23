@@ -9331,7 +9331,7 @@ impl CockpitView {
                 cx.notify();
             })),
         );
-        let head = head.child(nav::add_thread_button().on_click(cx.listener(
+        let head = head.child(nav::add_thread_button(cx).on_click(cx.listener(
             |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.open_draft(DraftTarget::Main, cx);
@@ -9799,7 +9799,7 @@ impl CockpitView {
             )));
         }
         let primary = nav::rail_actions()
-            .child(nav::rail_add_thread_button().on_click(cx.listener(
+            .child(nav::rail_add_thread_button(cx).on_click(cx.listener(
                 |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_draft(DraftTarget::Main, cx);

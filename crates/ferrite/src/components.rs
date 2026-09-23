@@ -487,7 +487,8 @@ pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -
 // --------------------------------------------------------------- controls
 
 /// An icon-only control: `ICON_BUTTON` square, the glyph at
-/// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, a tooltip naming what it does.
+/// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, brightening to `TEXT` under the
+/// pointer, a tooltip naming what it does.
 pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: &'static str,
@@ -501,15 +502,22 @@ pub fn icon_button(
                 .hover(rgb(theme::HOVER).into())
                 .active(rgb(theme::PRESSED).into()),
         )
+        .group(ICON_BUTTON_GROUP)
         .size(px(theme::ICON_BUTTON))
         .tooltip(tooltip)
         .accessibility_label(tooltip)
-        .child(icons::icon(
-            glyph,
-            theme::ICON_BUTTON_GLYPH,
-            theme::TEXT_MUTED,
-        ))
+        .child(
+            icons::icon(glyph, theme::ICON_BUTTON_GLYPH, theme::TEXT_MUTED)
+                .group_hover(ICON_BUTTON_GROUP, |style| {
+                    style.text_color(rgb(theme::TEXT))
+                }),
+        )
 }
+
+/// An `svg()` paints from its own style, never an ambient text colour, so
+/// the button's hover reaches its glyph through a named group. Every icon
+/// button shares the name: `group_hover` resolves to the nearest one.
+const ICON_BUTTON_GROUP: &str = "icon-button";
 
 /// A quiet text control: `CONTROL_H`, mono `FS_UI` `W_LABEL` `TEXT_2`;
 /// hover `RAISED_2`, press `FILL_HOVER`.
