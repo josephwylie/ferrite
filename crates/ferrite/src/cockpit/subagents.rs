@@ -950,43 +950,48 @@ impl CockpitView {
             }
         };
         let error = pane.history_error.clone();
-        // A read-only Composer: the Composer's own ground and edge in its
-        // slot, a dimmed `❯` (nothing to type here), what this transcript
-        // covers, and the way back to Main.
-        Some(
-            native_keys(
+        // A read-only Composer: the Composer's own block — ground, edge,
+        // radius and inset in the reading column — with a dimmed `❯` in its
+        // glyph box (nothing to type here), what this transcript covers at
+        // C1, and the way back to Main.
+        let footer = components::raised_edged(theme::COMPOSER_EDGE)
+            .debug_selector(move || format!("child-footer-{}", thread.get()))
+            .flex()
+            .items_center()
+            .min_h(px(theme::COMPOSER_ROW_H))
+            .px(px(theme::COMPOSER_PAD_X))
+            .py(px(theme::COMPOSER_PAD_T))
+            .font_family(theme::FONT_MONO)
+            .text_size(px(theme::FS_SM))
+            .line_height(px(theme::LH_META))
+            .child(components::gutter(
+                components::prompt_mark(theme::TEXT_MUTED),
+                theme::LH_META,
+            ))
+            .child(
+                div()
+                    .debug_selector(move || format!("child-footer-text-{}", thread.get()))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(if error.is_some() {
+                        theme::BLOCKED
+                    } else {
+                        theme::TEXT_MUTED
+                    }))
+                    .child(SharedString::from(
+                        error.as_deref().unwrap_or(coverage).to_string(),
+                    )),
+            )
+            .child(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
                     .gap(px(theme::SPACE_2))
-                    .px(px(theme::PANE_PAD_X))
-                    .py(px(theme::SPACE_1_5))
-                    .bg(rgb(theme::RAISED))
-                    .border_t_1()
-                    .border_color(rgba(theme::COMPOSER_EDGE))
-                    .rounded_bl(px(theme::R_PANE - 1.))
-                    .rounded_br(px(theme::R_PANE - 1.))
-                    .font_family(theme::FONT_MONO)
-                    .text_size(px(theme::FS_SM))
-                    .line_height(px(theme::LH_META))
-                    .child(components::prompt_mark(theme::TEXT_MUTED))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(if error.is_some() {
-                                theme::BLOCKED
-                            } else {
-                                theme::TEXT_MUTED
-                            }))
-                            .child(SharedString::from(
-                                error.as_deref().unwrap_or(coverage).to_string(),
-                            )),
-                    )
-                    .when(error.is_some(), |footer| {
-                        footer.child(
+                    .ml(px(theme::SPACE_2))
+                    .when(error.is_some(), |actions| {
+                        actions.child(
                             components::ghost_button(
                                 ("retry-child-history", thread.get()),
                                 "Retry",
@@ -1006,6 +1011,17 @@ impl CockpitView {
                                 view.select_subject(thread, Subject::Main, window, cx)
                             })),
                     ),
+            );
+        // The Composer's slot: the Pane's inline padding, the reading
+        // column, and the block's inset from the Pane's foot.
+        Some(
+            native_keys(
+                div()
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px(px(theme::PANE_PAD_X))
+                    .pb(px(theme::COMPOSER_INSET_B))
+                    .child(components::reading_column(footer)),
             )
             .into_any_element(),
         )

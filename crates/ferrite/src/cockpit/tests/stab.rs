@@ -610,3 +610,56 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     assert!(band.right() <= model.left(), "{band:?} / {model:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A Subagent's read-only footer is the Composer's own block: in the
+/// reading column, inset from the Pane's foot, its `❯` on the Composer's
+/// axis and its text at C1.
+#[gpui::test]
+fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (core, fake) = cockpit("child-footer-block", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("Atlas".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    for event in [
+        ActivityEvent::Discovered(info),
+        ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Idle,
+        },
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap();
+    }
+    tick(cx);
+    let main_block = cx.debug_bounds("composer-block").expect("Main's Composer");
+    let tab: &'static str = Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
+    let at = cx.debug_bounds(tab).expect("Atlas's tab").center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    tick(cx);
+    let footer = cx
+        .debug_bounds("child-footer-1")
+        .expect("the read-only footer");
+    let text = cx.debug_bounds("child-footer-text-1").unwrap();
+    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    assert_eq!(footer.left(), main_block.left(), "the Composer's column");
+    assert_eq!(footer.size.width, main_block.size.width);
+    assert!(
+        (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET_B)).abs()
+            <= px(1.5),
+        "inset from the Pane's foot: {footer:?} / {pane:?}"
+    );
+    assert_eq!(
+        text.left() - footer.left(),
+        px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W),
+        "the text starts at C1"
+    );
+}
