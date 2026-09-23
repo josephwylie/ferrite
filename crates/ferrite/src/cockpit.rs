@@ -8077,7 +8077,7 @@ impl CockpitView {
                     "usage-meter-{key}"
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
-                .rounded(px(crate::theme::R_CONTROL))
+                .rounded(px(crate::theme::COMPOSER_CHIP_R))
                 .child(pane::usage_meter_body(
                     self.prefs.settings.usage_meter_style,
                     fraction,

@@ -614,7 +614,9 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
     assert!(
-        effort.right() <= block.right() - px(crate::theme::COMPOSER_PAD_X) + px(0.5),
+        effort.right()
+            <= block.right() - px(crate::theme::COMPOSER_CONTROL_INSET + crate::theme::SEND_BUTTON)
+                + px(0.5),
         "effort {effort:?} stays inside the block {block:?}"
     );
     assert!(model.right() <= effort.left());
