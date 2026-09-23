@@ -1152,7 +1152,22 @@ pub const FORM_CONTROL_H: f32 = 32.0;
 /// Selected-value controls share a comfortable measure inside wider forms.
 pub const FORM_FIELD_W: f32 = 320.0;
 /// Inset around the chips of a segmented choice control.
-pub const FORM_CHOICE_PAD: f32 = 3.0;
+pub const FORM_CHOICE_PAD: f32 = SPACE_1;
+/// A choice chip's and a chooser's inline padding inside the 32px row.
+pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
+pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
+/// A switch row's label block takes at most this share of the row, so a
+/// long description wraps before it crowds the switch.
+pub const FORM_TEXT_FRACTION: f32 = 0.6;
+/// The Settings switch: a 28×16 pill (2px inset), a 12px thumb travelling
+/// the pill's inner width.
+pub const SWITCH_W: f32 = 28.0;
+pub const SWITCH_H: f32 = 16.0;
+pub const SWITCH_INSET: f32 = SPACE_0_5;
+pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
+pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
+/// A fact row's key column (About): the longest key, "Development build".
+pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.
 pub const MODAL_HEAD_H: f32 = 48.0;
 pub const MODAL_PAD: f32 = 16.0;

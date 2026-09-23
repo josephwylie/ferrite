@@ -2481,7 +2481,6 @@ impl CockpitView {
 
     /// Searchable toolkit Settings, drawn above the cockpit's overlays.
     fn settings_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use gpui::component::setting::SettingGroup;
         if !self.settings_open {
             return None;
         }
@@ -2504,7 +2503,7 @@ impl CockpitView {
                 settings.default_provider = provider
             }),
         )];
-        let mut new_thread_groups = vec![SettingGroup::new().items(defaults)];
+        let mut new_thread_groups = vec![prefs::group(None).items(defaults)];
         for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
             let model = prefs::chooser(
@@ -2563,11 +2562,8 @@ impl CockpitView {
                     settings.set_effort_for(provider, value)
                 }),
             );
-            new_thread_groups.push(
-                SettingGroup::new()
-                    .title(provider_title(provider))
-                    .items([model, effort]),
-            );
+            new_thread_groups
+                .push(prefs::group(Some(provider_title(provider))).items([model, effort]));
         }
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -2639,7 +2635,7 @@ impl CockpitView {
                 settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
             prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript.",
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
-            prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "⌘B toggles it any time",
+            prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "cmd-B toggles it any time",
                 settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
             prefs::choices(
                 "settings-usage-meter",
@@ -2714,20 +2710,18 @@ impl CockpitView {
         ]);
         let pages = vec![
             prefs::page("New Threads", new_thread_groups),
-            prefs::page("Permissions", vec![SettingGroup::new().items(permissions)]),
+            prefs::page("Permissions", vec![prefs::group(None).items(permissions)]),
             prefs::page(
                 "Behaviour",
                 vec![
-                    SettingGroup::new().title("Reading").items(reading),
-                    SettingGroup::new()
-                        .title("Threads and navigation")
-                        .items(behaviour),
+                    prefs::group(Some("Reading")).items(reading),
+                    prefs::group(Some("Threads and navigation")).items(behaviour),
                 ],
             ),
-            prefs::page("About", vec![SettingGroup::new().items(about)]),
+            prefs::page("About", vec![prefs::group(None).items(about)]),
         ];
 
-        let card = prefs::card()
+        let card = prefs::sheet(prefs::WIDTH, prefs::HEIGHT)
             .id("settings-card")
             .debug_selector(|| "settings-card".into())
             .track_focus(&self.settings_focus)
@@ -2735,13 +2729,16 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(prefs::head(prefs::close_button(cx).on_click(cx.listener(
-                |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.settings_open = false;
-                    cx.notify();
-                },
-            ))))
+            .child(prefs::sheet_head(
+                "Settings",
+                prefs::sheet_close("settings-close", "Close Settings", cx).on_click(cx.listener(
+                    |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.settings_open = false;
+                        cx.notify();
+                    },
+                )),
+            ))
             .child(prefs::body(pages));
         Some(
             deferred(

@@ -1044,7 +1044,7 @@ fn cursor_steps(choices: &[Choice]) -> usize {
 /// insets its content by the row's own inline padding, so the row takes it
 /// back and spans the item edge to edge. The kit draws the hover and cursor
 /// face (`tokens.accent` = `FILL`) on the item itself.
-fn kit_row(row: Div) -> Div {
+pub fn kit_row(row: Div) -> Div {
     row.flex_1().mx(px(-theme::MENU_ROW_PAD_X))
 }
 
