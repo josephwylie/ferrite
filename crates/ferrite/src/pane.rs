@@ -3103,6 +3103,9 @@ pub fn mode_chip(mode: &str) -> Div {
         .px(px(theme::MODE_CHIP_PAD_X))
         .rounded(px(theme::R_CHIP))
         .bg(rgb(HOVER))
+        // Its own size, like the model chip across the row: inside the
+        // picker's button it would otherwise take the button's smaller one.
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT_2))
         .child(icon(icons::PENCIL, theme::ICON_PENCIL, TEXT_MUTED))
         .child(mode.to_owned())
@@ -3804,6 +3807,7 @@ pub fn context_usage(
             .child(
                 div()
                     .flex_shrink_0()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(TEXT_MUTED))
                     .child(label),
             )
@@ -3885,8 +3889,10 @@ pub fn context_usage(
                   label: SharedString,
                   count: SharedString,
                   share: Option<SharedString>| {
-        // Without a share column the count is the reading, in full ink.
+        // Without a share column the count is the reading, in full ink,
+        // and there is no legend to keep a swatch column aligned with.
         let count_ink = if share.is_some() { TEXT_MUTED } else { TEXT };
+        let slot = share.is_some();
         tabular(
             div()
                 .id(SharedString::from(selector.clone()))
@@ -3896,13 +3902,15 @@ pub fn context_usage(
                 .items_center()
                 .gap(px(8.))
                 .h(px(theme::USAGE_LEGEND_ROW_H))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .size(px(theme::USAGE_SWATCH))
-                        .rounded(px(2.))
-                        .when_some(swatch, |square, ink| square.bg(rgb(ink))),
-                )
+                .when(slot, |row| {
+                    row.child(
+                        div()
+                            .flex_shrink_0()
+                            .size(px(theme::USAGE_SWATCH))
+                            .rounded(px(2.))
+                            .when_some(swatch, |square, ink| square.bg(rgb(ink))),
+                    )
+                })
                 .child(div().flex_1().min_w_0().truncate().child(label))
                 .child(
                     div()
@@ -3999,6 +4007,7 @@ pub fn context_usage(
         .child(
             div()
                 .flex_shrink_0()
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(TEXT_MUTED))
                 .child("Context window"),
         )
@@ -4133,6 +4142,7 @@ pub fn context_usage(
                 div()
                     .debug_selector(move || selector.clone())
                     .pb(px(2.))
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(TEXT_MUTED))
                     .child(title),
             )

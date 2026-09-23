@@ -86,17 +86,6 @@ pub fn action_button(id: impl Into<ElementId>, text: impl Into<SharedString>, cx
         .child(label(text, theme::TEXT))
 }
 
-/// A card section's heading: small, muted, and the same everywhere, so a
-/// glance finds the group before it reads the rows.
-pub fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .text_size(px(theme::FS_SM))
-        .line_height(gpui::relative(theme::LINE_UI))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(rgb(theme::TEXT_MUTED))
-        .child(text.into())
-}
-
 pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
     div()
         .text_size(px(theme::FS_SM))
@@ -115,8 +104,9 @@ pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
         .child(text.into())
 }
 
-/// The same menu is opened by a chip or a slash command. PopupMenu owns
-/// keyboard navigation, checked rows, scrolling and dismissal.
+/// The same menu is opened by a chip or a slash command. The toolkit's
+/// Popover places it against its trigger; the list itself is the app's
+/// own menu surface, riding the toolkit's `PopupMenu` key bindings.
 #[derive(Clone)]
 pub struct Choice {
     pub label: SharedString,
@@ -133,6 +123,10 @@ type Picked = std::rc::Rc<dyn Fn(usize, &mut gpui::Window, &mut gpui::App)>;
 pub struct ChoiceMenu {
     pub id: SharedString,
     pub trigger: Button,
+    /// Which corner of the menu meets the trigger: `BottomLeft` for a
+    /// control at the left of its row, `BottomRight` at the right, so the
+    /// menu opens over its own Pane rather than across the next one.
+    pub anchor: gpui::Anchor,
     pub choices: Vec<Choice>,
     pub open: bool,
     pub return_focus: gpui::FocusHandle,
@@ -140,110 +134,245 @@ pub struct ChoiceMenu {
     pub on_pick: Picked,
 }
 
-#[derive(Default)]
+/// What a `ChoiceMenu` keeps between frames: the row under the keyboard or
+/// the pointer, the focus the menu's keys ride on, and whether this
+/// opening has taken focus yet.
 struct ChoiceMenuState {
-    menu: Option<gpui::Entity<gpui::component::menu::PopupMenu>>,
-    steps: usize,
+    selected: Option<usize>,
+    focus: gpui::FocusHandle,
+    scroll: gpui::ScrollHandle,
     initialized: bool,
+}
+
+impl ChoiceMenu {
+    /// A row the keyboard can land on: not a heading, not disabled.
+    fn clickable(choice: &Choice) -> bool {
+        !choice.section && !choice.disabled
+    }
 }
 
 impl gpui::RenderOnce for ChoiceMenu {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        use gpui::component::{
-            menu::{PopupMenu, PopupMenuItem},
-            popover::Popover,
-        };
-        use gpui::Focusable as _;
-        let retained =
-            window.use_keyed_state(self.id.clone(), cx, |_, _| ChoiceMenuState::default());
+        use gpui::base::actions::{Cancel, Confirm, SelectDown, SelectUp};
+        use gpui::component::popover::Popover;
+        let retained = window.use_keyed_state(self.id.clone(), cx, |_, cx| ChoiceMenuState {
+            selected: None,
+            focus: cx.focus_handle(),
+            scroll: gpui::ScrollHandle::new(),
+            initialized: false,
+        });
+        let choices = std::rc::Rc::new(self.choices);
         if !self.open {
             retained.update(cx, |state, _| {
-                state.menu = None;
+                state.selected = None;
                 state.initialized = false;
             });
-        } else if retained.read(cx).menu.is_none() {
-            let checked = self
-                .choices
+        } else if retained.read(cx).selected.is_none() {
+            // Open on the current choice, else the first live row.
+            let selected = choices
                 .iter()
-                .filter(|choice| !choice.section && !choice.disabled)
-                .position(|choice| choice.checked)
-                .unwrap_or(0);
-            let steps = checked + 1;
-            let pick = self.on_pick.clone();
-            let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
-                menu = menu
-                    .action_context(self.return_focus)
-                    .check_side(gpui::component::Side::Right)
+                .position(|choice| Self::clickable(choice) && choice.checked)
+                .or_else(|| choices.iter().position(Self::clickable));
+            retained.update(cx, |state, _| state.selected = selected);
+        }
+        let focus = retained.read(cx).focus.clone();
+        let on_open = self.on_open;
+        let on_pick = self.on_pick;
+        let return_focus = self.return_focus;
+        // Closing hands the keyboard back to where it came from, unless a
+        // pick has already moved it somewhere else on purpose.
+        let close = {
+            let on_open = on_open.clone();
+            let focus = focus.clone();
+            std::rc::Rc::new(move |window: &mut gpui::Window, cx: &mut gpui::App| {
+                if focus.contains_focused(window, cx) || window.focused(cx).is_none() {
+                    window.focus(&return_focus, cx);
+                }
+                on_open(false, window, cx);
+            })
+        };
+        let step = {
+            let retained = retained.clone();
+            let choices = choices.clone();
+            move |forward: bool, cx: &mut gpui::App| {
+                retained.update(cx, |state, cx| {
+                    let live: Vec<usize> = choices
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, choice)| Self::clickable(choice))
+                        .map(|(index, _)| index)
+                        .collect();
+                    if live.is_empty() {
+                        return;
+                    }
+                    // Wraps at either end, as the toolkit's menu did.
+                    let next = match state
+                        .selected
+                        .and_then(|at| live.iter().position(|i| *i == at))
+                    {
+                        Some(at) if forward => live[(at + 1) % live.len()],
+                        Some(at) => live[(at + live.len() - 1) % live.len()],
+                        None if forward => live[0],
+                        None => live[live.len() - 1],
+                    };
+                    state.selected = Some(next);
+                    state.scroll.scroll_to_item(next);
+                    cx.notify();
+                });
+            }
+        };
+        let step = std::rc::Rc::new(step);
+        let content =
+            {
+                let retained = retained.clone();
+                move |_: &mut gpui::component::popover::PopoverState,
+                  _: &mut gpui::Window,
+                  cx: &mut gpui::Context<gpui::component::popover::PopoverState>| {
+                let (selected, scroll, initialized) = {
+                    let state = retained.read(cx);
+                    (state.selected, state.scroll.clone(), state.initialized)
+                };
+                let mut list = crate::menu::shell()
+                    .id("choice-menu")
+                    .key_context("PopupMenu")
+                    .track_focus(&focus)
+                    .w_auto()
                     .min_w(px(240.))
                     .max_w(px(320.))
                     .max_h(px(420.))
-                    .scrollable(true);
-                for (index, choice) in self.choices.into_iter().enumerate() {
-                    if choice.section {
-                        continue;
-                    }
-                    let picked = pick.clone();
-                    let item = PopupMenuItem::new(choice.label)
-                        .when_some(choice.icon, |item, (path, color)| {
-                            item.icon(
-                                gpui::component::Icon::empty()
-                                    .path(path)
-                                    .text_color(rgb(color)),
-                            )
-                        })
-                        .checked(choice.checked)
-                        .disabled(choice.disabled)
-                        .on_click(move |_, window, cx| picked(index, window, cx));
-                    menu = menu.item(item);
-                }
-                menu
-            });
-            let on_open = self.on_open.clone();
-            window
-                .subscribe(&menu, cx, move |_, _: &gpui::DismissEvent, window, cx| {
-                    on_open(false, window, cx);
-                })
-                .detach();
-            retained.update(cx, |state, _| {
-                state.menu = Some(menu);
-                state.steps = steps;
-            });
-        }
-        let menu = retained.read(cx).menu.clone();
-        let on_open = self.on_open;
-        let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
-            .appearance(false)
-            .overlay_closable(false)
-            .anchor(gpui::Anchor::BottomLeft)
-            .trigger(self.trigger)
-            .open(self.open)
-            .on_open_change(move |open, window, cx| on_open(*open, window, cx));
-        if let Some(menu) = menu {
-            popover = popover
-                .track_focus(&menu.focus_handle(cx))
-                .content(move |_, _, _| {
-                    use gpui::base::ElementExt as _;
-                    let retained = retained.clone();
-                    let menu = menu.clone();
-                    div().child(menu.clone()).on_prepaint(move |_, window, cx| {
-                        let steps = retained.update(cx, |state, _| {
-                            if state.initialized {
-                                return None;
-                            }
-                            state.initialized = true;
-                            Some(state.steps)
-                        });
-                        if let Some(steps) = steps {
-                            menu.focus_handle(cx).focus(window, cx);
-                            for _ in 0..steps {
-                                window
-                                    .dispatch_action(Box::new(gpui::base::actions::SelectDown), cx);
-                            }
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .on_action({
+                        let step = step.clone();
+                        move |_: &SelectDown, _, cx| {
+                            cx.stop_propagation();
+                            step(true, cx)
                         }
                     })
-                });
-        }
-        popover
+                    .on_action({
+                        let step = step.clone();
+                        move |_: &SelectUp, _, cx| {
+                            cx.stop_propagation();
+                            step(false, cx)
+                        }
+                    })
+                    .on_action({
+                        let retained = retained.clone();
+                        let on_pick = on_pick.clone();
+                        let close = close.clone();
+                        move |_: &Confirm, window, cx| {
+                            cx.stop_propagation();
+                            if let Some(index) = retained.read(cx).selected {
+                                on_pick(index, window, cx);
+                            }
+                            close(window, cx);
+                        }
+                    })
+                    .on_action({
+                        let close = close.clone();
+                        move |_: &Cancel, window, cx| {
+                            cx.stop_propagation();
+                            close(window, cx);
+                        }
+                    })
+                    .on_mouse_down_out({
+                        let close = close.clone();
+                        move |_, window, cx| close(window, cx)
+                    });
+                for (index, choice) in choices.iter().enumerate() {
+                    if choice.section {
+                        list = list.child(crate::menu::heading_after(
+                            choice.icon.map(|(path, color)| {
+                                crate::icons::icon(path, theme::PROVIDER_MARK_SM, color)
+                            }),
+                            choice.label.clone(),
+                        ));
+                        continue;
+                    }
+                    let live = Self::clickable(choice);
+                    let ink = if choice.disabled {
+                        theme::TEXT_MUTED
+                    } else if choice.checked {
+                        theme::TEXT_STRONG
+                    } else {
+                        theme::TEXT_2
+                    };
+                    // The app's menu row: 30px, the current choice strong
+                    // with its check hard right, the keyboard's row on the
+                    // hover face.
+                    let row = div()
+                        .id(("choice-row", index))
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(theme::ROW_ICON_GAP + 3.))
+                        .h(px(theme::MENU_ROW_H))
+                        .px(px(theme::ROW_PAD_X))
+                        .rounded(px(theme::R_CONTROL))
+                        .text_color(rgb(ink))
+                        .when(choice.checked, |row| row.font_weight(gpui::FontWeight::MEDIUM))
+                        .when(live && selected == Some(index), |row| {
+                            row.bg(rgb(theme::HOVER))
+                        })
+                        .when_some(choice.icon, |row, (path, color)| {
+                            row.child(crate::icons::icon(path, theme::PROVIDER_MARK_SM, color))
+                        })
+                        .child(div().flex_1().min_w_0().truncate().child(choice.label.clone()))
+                        .when(choice.checked, |row| {
+                            row.child(crate::icons::icon(
+                                crate::icons::CHECK,
+                                theme::ICON_CHEVRON_LG,
+                                theme::TEXT,
+                            ))
+                        });
+                    list = list.child(if live {
+                        let retained = retained.clone();
+                        let on_pick = on_pick.clone();
+                        let close = close.clone();
+                        row.cursor_pointer()
+                            .on_mouse_move(move |_, _, cx| {
+                                retained.update(cx, |state, cx| {
+                                    if state.selected != Some(index) {
+                                        state.selected = Some(index);
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                            .on_click(move |_, window, cx| {
+                                on_pick(index, window, cx);
+                                close(window, cx);
+                            })
+                    } else {
+                        row
+                    });
+                }
+                // Take the keyboard once per opening, on the first frame
+                // the list is painted.
+                if !initialized {
+                    use gpui::base::ElementExt as _;
+                    let retained = retained.clone();
+                    let focus = focus.clone();
+                    list = list.on_prepaint(move |_, window, cx| {
+                        let first = retained.update(cx, |state, _| {
+                            !std::mem::replace(&mut state.initialized, true)
+                        });
+                        if first {
+                            focus.focus(window, cx);
+                        }
+                    });
+                }
+                list
+            }
+            };
+        Popover::new(SharedString::from(format!("choice:{}", self.id)))
+            .appearance(false)
+            .overlay_closable(false)
+            .anchor(self.anchor)
+            .trigger(self.trigger)
+            .open(self.open)
+            .on_open_change(move |open, window, cx| on_open(*open, window, cx))
+            .track_focus(&retained.read(cx).focus.clone())
+            .when(self.open, |popover| popover.content(content))
     }
 }
 

@@ -540,8 +540,6 @@ pub const SESSION_CARD_W: f32 = 280.0;
 /// A small filled verb inside a floating card.
 pub const CARD_ACTION_H: f32 = 22.0;
 pub const CARD_ACTION_PAD_X: f32 = 8.0;
-/// A selectable row inside a floating card (one permission mode).
-pub const CARD_ROW_H: f32 = 26.0;
 pub const USAGE_CARD_PAD: f32 = 10.0;
 /// Between one window's block and the next, and inside one block.
 pub const USAGE_CARD_GAP: f32 = 12.0;

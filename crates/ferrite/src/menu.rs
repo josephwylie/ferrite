@@ -8,13 +8,16 @@
 //! the second. Anything else pressed disarms it.
 
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, SharedString, Stateful};
+use gpui::{
+    anchored, div, point, px, rgb, rgba, Anchor, Anchored, Bounds, BoxShadow, Div, FontWeight,
+    Pixels, SharedString, Stateful,
+};
 
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, BLOCKED_WASH, FS_MD, FS_MONO, MENU, MENU_PAD, MENU_ROW_H, R_CONTROL, R_MENU,
-    SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR,
-    SHADOW_NEAR_Y, TEXT, TEXT_MUTED, TEXT_STRONG,
+    BLOCKED, BLOCKED_WASH, FONT_UI, FS_MD, FS_MONO, FS_SM, GRID_PAD, MENU, MENU_PAD, MENU_ROW_H,
+    ROW_PAD_X, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
+    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_MUTED, TEXT_STRONG,
 };
 
 /// The menu's width: wide enough for `Confirm delete Thread` beside a
@@ -22,6 +25,12 @@ use crate::theme::{
 const WIDTH: f32 = 224.0;
 /// The band between two groups of rows — space, never a line.
 const GAP_H: f32 = 6.0;
+/// A group heading's row.
+pub const HEADING_H: f32 = 24.0;
+/// Between a control and the card it opens.
+const ANCHOR_GAP: f32 = 4.0;
+/// The shortest a card is squeezed to before it may cover its control.
+const MIN_CARD_H: f32 = 160.0;
 
 /// One row of the menu.
 pub struct Item {
@@ -68,6 +77,12 @@ pub fn shell() -> Div {
         // inert space so the covered text's I-beam cannot show through.
         .cursor_default()
         .occlude()
+        // Every floating surface starts from the UI face at the menu size.
+        // A card anchored under the mono Composer or Pane head would
+        // otherwise inherit that face, and no two cards would match.
+        .font_family(FONT_UI)
+        .text_size(px(FS_MD))
+        .text_color(rgb(TEXT))
         .flex()
         .flex_col()
         .w(px(WIDTH))
@@ -90,6 +105,61 @@ pub fn shell() -> Div {
                 spread_radius: px(0.),
             },
         ])
+}
+
+/// A group's heading inside any floating surface — a picker's section, a
+/// card's block, the order menu's title. One recipe, so every popup names
+/// its groups the same way.
+pub fn heading(title: impl Into<SharedString>) -> Div {
+    heading_after(None::<Div>, title)
+}
+
+/// A heading led by a mark — a picker's section, named by its Provider's
+/// logo before its name.
+pub fn heading_after(lead: Option<impl IntoElement>, title: impl Into<SharedString>) -> Div {
+    div()
+        .flex()
+        .gap(px(6.))
+        .children(lead)
+        .flex_shrink_0()
+        .items_center()
+        .h(px(HEADING_H))
+        .px(px(ROW_PAD_X))
+        .font_family(FONT_UI)
+        .text_size(px(FS_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(TEXT_MUTED))
+        .child(title.into())
+}
+
+/// Where a card opened from a control sits: against the control, not at
+/// the pointer, so it lands in the same place however the control was
+/// pressed. `above` opens it upward (the Composer's controls sit at a
+/// Pane's foot); `right` aligns its right edge with the control's (a
+/// control at the right end of its row). The toolkit's pickers keep the
+/// same gap.
+pub fn anchored_to(trigger: Bounds<Pixels>, above: bool, right: bool) -> Anchored {
+    let gap = point(px(0.), px(ANCHOR_GAP));
+    let (corner, at) = match (above, right) {
+        (false, false) => (Anchor::TopLeft, trigger.bottom_left() + gap),
+        (false, true) => (Anchor::TopRight, trigger.bottom_right() + gap),
+        (true, false) => (Anchor::BottomLeft, trigger.origin - gap),
+        (true, true) => (Anchor::BottomRight, trigger.top_right() - gap),
+    };
+    anchored()
+        .anchor(corner)
+        .position(at)
+        .snap_to_window_with_margin(px(GRID_PAD))
+}
+
+/// The tallest a card opening upward from `trigger` may grow: the room
+/// between the control and the window's top margin, so it never slides
+/// down over the control that opened it — it scrolls instead, as the
+/// toolkit's pickers do. Never more than `window_max`, and never so short
+/// that nothing fits.
+pub fn room_above(trigger: Bounds<Pixels>, window_max: f32) -> f32 {
+    let room = f32::from(trigger.origin.y) - GRID_PAD - ANCHOR_GAP;
+    room.min(window_max).max(MIN_CARD_H)
 }
 
 /// The space between two groups of rows.
@@ -120,7 +190,7 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
         .justify_between()
         .gap(px(12.))
         .h(px(MENU_ROW_H))
-        .px(px(9.))
+        .px(px(ROW_PAD_X))
         .rounded(px(R_CONTROL))
         .text_size(px(FS_MD))
         .text_color(rgb(ink))

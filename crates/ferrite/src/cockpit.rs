@@ -223,14 +223,18 @@ pub struct CockpitView {
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
     /// The usage meter's detail card, tied to the Pane that opened it and
-    /// the click position. A draft Pane has a meter too — its account
-    /// windows are real before the first prompt — so this is a
-    /// `PaneIdentity`, not a Thread.
-    context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
+    /// the meter's bounds it hangs from. A draft Pane has a meter too —
+    /// its account windows are real before the first prompt — so this is
+    /// a `PaneIdentity`, not a Thread.
+    context_usage: Option<(PaneIdentity, gpui::Bounds<gpui::Pixels>)>,
     /// Whether the usage card's context legend is open. Kept across
     /// openings: an operator who wants the breakdown wants it every time.
     context_usage_expanded: bool,
-    session_controls: Option<(ThreadId, u64, gpui::Point<gpui::Pixels>)>,
+    session_controls: Option<(ThreadId, u64, gpui::Bounds<gpui::Pixels>)>,
+    /// Where each control that opens a card was last painted, keyed by the
+    /// control. A card hangs from its control's edge, so a press records
+    /// the bounds it was painted at rather than the pointer.
+    trigger_bounds: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<gpui::Pixels>>>>,
     /// The Composer's mode menu, open on one Thread's Session generation.
     mode_picker: Option<(ThreadId, u64)>,
     session_control_error: Option<(ThreadId, u64, String)>,
@@ -238,7 +242,7 @@ pub struct CockpitView {
     /// position (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
     /// disagree with the mark that opened it.
-    context_checks: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
+    context_checks: Option<(ThreadId, gpui::Bounds<gpui::Pixels>)>,
     /// A seam being dragged: the board, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
@@ -1001,6 +1005,7 @@ impl CockpitView {
             mode_picker: None,
             session_control_error: None,
             context_checks: None,
+            trigger_bounds: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_has_toggled: false,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
@@ -8626,18 +8631,21 @@ impl CockpitView {
             .context_usage
             .is_some_and(|(shown, _)| shown == identity);
         let selector = key.clone();
+        let meter = key.clone();
         Some(
             div()
                 .id(gpui::ElementId::Name(SharedString::from(format!(
                     "usage-meter-{key}"
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
+                .relative()
                 .rounded(px(crate::theme::R_CHIP))
                 .child(pane::usage_meter_body(
                     self.prefs.settings.usage_meter_style,
                     fraction,
                     limits,
                 ))
+                .child(self.record_trigger(format!("usage-meter-{key}")))
                 .hover_raised()
                 .press_raised()
                 .on_mouse_down(
@@ -8662,8 +8670,8 @@ impl CockpitView {
                         view.session_controls = None;
                         // Outside-click dismissal runs in capture phase, before this
                         // toggle. Use the state of the meter that received the press.
-                        view.context_usage = (!was_open)
-                            .then_some((identity, event.position - gpui::point(px(0.), px(12.))));
+                        let at = view.trigger_at(&format!("usage-meter-{meter}"), event.position);
+                        view.context_usage = (!was_open).then_some((identity, at));
                         cx.notify();
                     }),
                 )
@@ -8726,6 +8734,7 @@ impl CockpitView {
         Some(
             crate::components::ChoiceMenu {
                 id: format!("mode-picker-{}", thread.get()).into(),
+                anchor: gpui::Anchor::BottomLeft,
                 trigger: crate::components::button(("mode-picker", thread.get() as usize))
                     .debug_selector(move || format!("mode-picker-{}", thread.get()))
                     .p_0()
@@ -8846,8 +8855,9 @@ impl CockpitView {
             .is_some_and(|(shown, shown_generation, _)| {
                 shown == thread && shown_generation == generation
             });
-        Some(
-            crate::components::button(SharedString::from(format!(
+        let key = format!("session-controls-{}", thread.get());
+        let record = self.record_trigger(key.clone());
+        let button = crate::components::button(SharedString::from(format!(
                 "session-controls-{}",
                 thread.get()
             )))
@@ -8873,37 +8883,88 @@ impl CockpitView {
                 view.context_menu = None;
                 view.context_usage = None;
                 view.context_checks = None;
-                view.session_controls = (!was_open).then_some((
-                    thread,
-                    generation,
-                    match event {
-                        ClickEvent::Mouse(event) => event.up.position,
-                        _ => window.mouse_position(),
-                    },
-                ));
+                let pointer = match event {
+                    ClickEvent::Mouse(event) => event.up.position,
+                    _ => window.mouse_position(),
+                };
+                let at = view.trigger_at(&key, pointer);
+                view.session_controls = (!was_open).then_some((thread, generation, at));
                 cx.notify();
-            }))
-            .into_any_element(),
+            }));
+        Some(
+            div()
+                .relative()
+                .child(button)
+                .child(record)
+                .into_any_element(),
         )
+    }
+
+    /// A probe laid over a control (its parent must be `relative`):
+    /// records where the control landed, for the card it opens to hang
+    /// from. Pinned to all four edges — an absolute child with no inset
+    /// sits at its static position, after the control's content, and
+    /// would report bounds a control's height too low.
+    fn record_trigger(&self, key: impl Into<SharedString>) -> impl IntoElement {
+        let bounds = self.trigger_bounds.clone();
+        let key = key.into();
+        gpui::canvas(
+            move |at, _, _| {
+                bounds.borrow_mut().insert(key, at);
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// The control's latest painted bounds, else the ones it was pressed at.
+    fn live_trigger(
+        &self,
+        key: &str,
+        pressed: gpui::Bounds<gpui::Pixels>,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        self.trigger_bounds
+            .borrow()
+            .get(key)
+            .copied()
+            .unwrap_or(pressed)
+    }
+
+    /// Where the control named `key` was last painted — or, if it never
+    /// was (a keyboard path before the first frame), a point at `pointer`.
+    fn trigger_at(
+        &self,
+        key: &str,
+        pointer: gpui::Point<gpui::Pixels>,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        self.trigger_bounds
+            .borrow()
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| gpui::Bounds::new(pointer, gpui::size(px(0.), px(0.))))
     }
 
     /// `max_h` is the tallest the card may grow: the window, less the
     /// margin `anchored` keeps it from the edges.
     fn session_controls_element(&self, max_h: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use crate::components::{action_button, label, section_label};
+        use crate::components::action_button;
         use crate::theme::{
-            ATTENTION, BLOCKED, CARD_ROW_H, FILL, FS_SM, RUNNING, SESSION_CARD_W, STATUS_DOT, TEXT,
-            TEXT_MUTED, TEXT_STRONG,
+            ATTENTION, BLOCKED, FILL, FS_MD, FS_SM, MENU_ROW_H, RUNNING, SESSION_CARD_W,
+            STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
         };
         let (thread, generation, at) = self.session_controls?;
         let open = self.cockpit.thread(thread)?;
         if open.generation() != generation {
             return None;
         }
+        // Where the button is now, not where it was pressed: the card
+        // follows it through a resize.
+        let at = self.live_trigger(&format!("session-controls-{}", thread.get()), at);
+        let max_h = menu::room_above(at, max_h);
         let transcript = open.transcript();
-        // One type scale for the whole card: every name, status and verb at
-        // the small UI size, the sections told apart by their headings
-        // rather than by whatever size each control happened to default to.
+        // The app's menu scale: names at the menu size, statuses, errors
+        // and verbs one step down, each group under the shared heading.
         // `flex_shrink_0`: past the height cap the card scrolls rather than
         // squeezing its sections until the bottom ones clip.
         let section = || {
@@ -8914,15 +8975,7 @@ impl CockpitView {
                 .w_full()
                 .gap(px(4.))
         };
-        let heading = |title: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .h(px(22.))
-                .px(px(6.))
-                .child(section_label(title))
-        };
+        let heading = |title: &'static str| menu::heading(title).justify_between();
         // A server's or a task's own row: one quiet raised face, so each
         // entry reads as one thing with its verbs inside it.
         let entry = || {
@@ -8947,11 +9000,8 @@ impl CockpitView {
             .w(px(SESSION_CARD_W))
             .max_h(px(max_h))
             .overflow_y_scroll()
-            .p(px(8.))
-            .gap(px(12.))
-            .text_size(px(FS_SM))
-            .line_height(gpui::relative(crate::theme::LINE_UI))
-            .text_color(rgb(TEXT));
+            .gap(px(8.))
+            .line_height(gpui::relative(crate::theme::LINE_UI));
         if let Some((_, _, error)) =
             self.session_control_error
                 .as_ref()
@@ -8963,6 +9013,7 @@ impl CockpitView {
                 div()
                     .id("session-control-error")
                     .flex_shrink_0()
+                    .text_size(px(FS_SM))
                     .px(px(8.))
                     .py(px(6.))
                     .rounded(px(crate::theme::R_CONTROL))
@@ -8986,27 +9037,30 @@ impl CockpitView {
                     .tab_stop(true)
                     .accessibility_label(mode.label.clone())
                     .w_full()
-                    .h(px(CARD_ROW_H))
-                    .px(px(6.))
+                    .h(px(MENU_ROW_H))
+                    .px(px(crate::theme::ROW_PAD_X))
                     .when(selected, |row| row.bg(rgb(FILL)))
                     .child(
+                        // The picker recipe: the current mode strong on the
+                        // fill, its check hard right.
                         div()
                             .flex()
                             .flex_1()
+                            .min_w_0()
                             .items_center()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .w(px(12.))
-                                    .flex_shrink_0()
-                                    .text_size(px(FS_SM))
-                                    .text_color(rgb(RUNNING))
-                                    .child(if selected { "✓" } else { "" }),
-                            )
-                            .child(label(
-                                mode.label,
-                                if selected { TEXT_STRONG } else { TEXT },
-                            )),
+                            .justify_between()
+                            .gap(px(8.))
+                            .text_size(px(FS_MD))
+                            .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_2 }))
+                            .when(selected, |row| row.font_weight(gpui::FontWeight::MEDIUM))
+                            .child(div().min_w_0().truncate().child(mode.label))
+                            .children(selected.then(|| {
+                                crate::icons::icon(
+                                    crate::icons::CHECK,
+                                    crate::theme::ICON_CHEVRON_LG,
+                                    TEXT,
+                                )
+                            })),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         view.run_session_control(
@@ -9042,7 +9096,8 @@ impl CockpitView {
         if transcript.mcp_servers().is_empty() {
             servers = servers.child(
                 div()
-                    .px(px(6.))
+                    .px(px(crate::theme::ROW_PAD_X))
+                    .text_size(px(FS_SM))
                     .text_color(rgb(TEXT_MUTED))
                     .child("No MCP servers reported"),
             );
@@ -9078,6 +9133,7 @@ impl CockpitView {
                     div()
                         .debug_selector(move || format!("mcp-status-{index}-{status}"))
                         .flex_shrink_0()
+                        .text_size(px(FS_SM))
                         .text_color(rgb(status_ink))
                         .child(status_label),
                 );
@@ -9090,6 +9146,7 @@ impl CockpitView {
                 row = row.child(
                     div()
                         .pl(px(STATUS_DOT + 8.))
+                        .text_size(px(FS_SM))
                         .text_color(rgb(TEXT_MUTED))
                         .child(error.clone()),
                 );
@@ -9211,7 +9268,8 @@ impl CockpitView {
             if background.is_empty() {
                 tasks = tasks.child(
                     div()
-                        .px(px(6.))
+                        .px(px(crate::theme::ROW_PAD_X))
+                        .text_size(px(FS_SM))
                         .text_color(rgb(TEXT_MUTED))
                         .child("No background tasks"),
                 );
@@ -9278,11 +9336,11 @@ impl CockpitView {
                     cx.notify();
                 }
             }));
+        // The button sits at the right end of the Composer's row: the card
+        // opens upward, its right edge on the button's.
         Some(
             deferred(
-                anchored()
-                    .position(at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
+                menu::anchored_to(at, true, true)
                     .child(card)
                     .into_any_element(),
             )
@@ -9306,8 +9364,12 @@ impl CockpitView {
         let was_open = self
             .context_checks
             .is_some_and(|(shown, _)| shown == thread);
+        let key = format!("ci-mark-{}", thread.get());
+        let record = self.record_trigger(key.clone());
         Some(
             pane::ci_mark(pr, thread.get())
+                .relative()
+                .child(record)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -9318,8 +9380,8 @@ impl CockpitView {
                         view.context_usage = None;
                         // Outside-click dismissal runs in the capture phase,
                         // before this toggle: read the mark that was pressed.
-                        view.context_checks = (!was_open)
-                            .then_some((thread, event.position + gpui::point(px(0.), px(8.))));
+                        let at = view.trigger_at(&key, event.position);
+                        view.context_checks = (!was_open).then_some((thread, at));
                         cx.notify();
                     }),
                 )
@@ -9333,6 +9395,7 @@ impl CockpitView {
     /// listener needs this view's `Context`.
     fn context_checks_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (thread, at) = self.context_checks?;
+        let at = self.live_trigger(&format!("ci-mark-{}", thread.get()), at);
         let pr = self
             .facts
             .get(thread)
@@ -9377,13 +9440,10 @@ impl CockpitView {
                     cx.notify();
                 }
             }));
+        // The mark rides the Pane head's checkout line: the card drops
+        // below it, from its left edge.
         Some(
-            deferred(
-                anchored()
-                    .position(at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(card),
-            )
+            deferred(menu::anchored_to(at, false, false).child(card))
             .with_priority(2)
             .into_any_element(),
         )
@@ -9392,6 +9452,14 @@ impl CockpitView {
     /// `max_h` as for `session_controls_element`.
     fn context_usage_element(&self, max_h: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (identity, at) = self.context_usage?;
+        let at = self.live_trigger(
+            &match identity {
+                PaneIdentity::Thread(thread) => format!("usage-meter-{}", thread.get()),
+                PaneIdentity::Draft(draft) => format!("usage-meter-draft-{}", draft.get()),
+            },
+            at,
+        );
+        let max_h = menu::room_above(at, max_h);
         let (usage, provider, details, usage_details, last_cost) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
@@ -9474,14 +9542,10 @@ impl CockpitView {
                     cx.notify();
                 }
             }));
+        // The meter sits toward the right of the Composer's row, beside
+        // the model: the card opens upward, its right edge on the meter's.
         Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::BottomLeft)
-                    .position(at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(card),
-            )
+            deferred(menu::anchored_to(at, true, true).child(card))
             .with_priority(2)
             .into_any_element(),
         )
@@ -9610,6 +9674,13 @@ impl CockpitView {
         crate::components::ChoiceMenu {
             // Rebuild the retained native menu when availability changes.
             id: format!("choice-{identity:?}-{effort}-{busy}").into(),
+            // The model and effort chips end the Composer's row; a draft's
+            // band starts its own.
+            anchor: if band {
+                gpui::Anchor::BottomLeft
+            } else {
+                gpui::Anchor::BottomRight
+            },
             trigger,
             choices,
             open: open.is_some(),

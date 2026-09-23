@@ -5,7 +5,6 @@ use gpui::prelude::*;
 use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, FontWeight, SharedString};
 
 use gpui::component::button::Button;
-use gpui::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui::component::{ActiveTheme, Selectable, Sizable};
 use gpui_base::{spring, Switch, SwitchThumb, SwitchTrack};
@@ -207,10 +206,26 @@ pub fn chooser<T: Clone + 'static>(
         .unwrap_or_else(|| "Choose an option".into());
     SettingItem::new(
         title,
-        SettingField::render(move |_, _, cx| {
+        SettingField::render(move |_, window, cx| {
             let options = options.clone();
             let change = change.clone();
-            components::form_button(id, cx)
+            // The app's own choice menu, like every other dropdown: the open
+            // flag and the focus it hands back to live beside the field.
+            let open = window.use_keyed_state(
+                SharedString::from(format!("chooser-open-{id}")),
+                cx,
+                |_, _| false,
+            );
+            let return_focus = window
+                .use_keyed_state(
+                    SharedString::from(format!("chooser-focus-{id}")),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx)
+                .clone();
+            let is_open = *open.read(cx);
+            let trigger = components::form_button(id, cx)
                 .debug_selector(move || id.into())
                 .accessibility_label(format!("{title}: {selected}"))
                 .h(px(FORM_CONTROL_H))
@@ -226,27 +241,38 @@ pub fn chooser<T: Clone + 'static>(
                         .min_w_0()
                         .truncate()
                         .child(components::form_label(selected.clone(), TEXT_STRONG)),
-                )
-                .dropdown_menu(move |menu, _, _| {
-                    options.iter().fold(
-                        menu.min_w(px(240.))
-                            .max_w(px(360.))
-                            .max_h(px(320.))
-                            .scrollable(true),
-                        |menu, (label, selected, value)| {
-                            let value = value.clone();
-                            let change = change.clone();
-                            menu.item(
-                                PopupMenuItem::new(label.clone())
-                                    .checked(*selected)
-                                    .on_click(move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        change(value.clone(), cx);
-                                    }),
-                            )
-                        },
-                    )
+                );
+            let choices = options
+                .iter()
+                .map(|(label, selected, _)| components::Choice {
+                    label: label.clone(),
+                    icon: None,
+                    checked: *selected,
+                    disabled: false,
+                    section: false,
                 })
+                .collect();
+            let values: Rc<Vec<T>> =
+                Rc::new(options.into_iter().map(|(_, _, value)| value).collect());
+            components::ChoiceMenu {
+                id: SharedString::from(format!("chooser-{id}")),
+                trigger,
+                anchor: gpui::Anchor::TopLeft,
+                choices,
+                open: is_open,
+                return_focus,
+                on_open: Rc::new(move |value, _, cx| {
+                    open.update(cx, |open, cx| {
+                        *open = value;
+                        cx.notify();
+                    })
+                }),
+                on_pick: Rc::new(move |index, _, cx| {
+                    if let Some(value) = values.get(index) {
+                        change(value.clone(), cx);
+                    }
+                }),
+            }
         }),
     )
     .description(detail.into())
