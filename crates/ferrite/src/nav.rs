@@ -464,7 +464,7 @@ pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
         .flex_shrink_0()
         .items_center()
         .h(px(NAV_SECTION_H))
-        .when(!first, |section| section.mt(px(GROUP_GAP)))
+        .when(!first, |section| section.mt(px(NAV_SECTION_GAP)))
         .pl(px(ROW_PAD_X))
         .child(lead(icon(icons::FOLDER, ROW_ICON, TEXT_FAINT)))
         .child(
@@ -523,14 +523,16 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .gap(px(NAV_LEAD_GAP))
         .rounded(px(R_CONTROL))
         .text_size(px(FS_UI))
-        .font_weight(W_LABEL)
+        .font_weight(W_BODY)
         .line_height(px(LH_UI))
-        // An open trigger wears its hover face: the menu is the hover made
-        // permanent, so the control does not blink when the pointer leaves.
+        // The filter is a quiet line over the tree, not a second toolbar:
+        // body weight in `TEXT_2`, its glyphs muted. An open trigger wears
+        // its hover face: the menu is the hover made permanent, so the
+        // control does not blink when the pointer leaves.
         .when(state.open, |open| {
             open.bg(rgb(FILL)).text_color(rgb(TEXT_STRONG))
         })
-        .when(!state.open, |shut| shut.text_color(rgb(TEXT)))
+        .when(!state.open, |shut| shut.text_color(rgb(TEXT_2)))
         .hover_control()
         .press_control()
         .child(lead(
@@ -1081,8 +1083,9 @@ pub fn parked_header(count: usize, open: bool) -> Stateful<Div> {
         .flex_shrink_0()
         .items_center()
         .h(px(NAV_SECTION_H))
+        .mt(px(NAV_SECTION_GAP))
         .px(px(ROW_PAD_X))
-        .rounded(px(R_CONTROL))
+        .rounded(px(NAV_ROW_R))
         .hover_row()
         .press_row()
         .child(lead(
@@ -1309,7 +1312,7 @@ fn row_frame(id: (&'static str, usize), height: f32, selected: bool) -> Stateful
         .px(px(ROW_PAD_X))
         .py(px(ROW_PAD_Y))
         .gap(px(ROW_GAP))
-        .rounded(px(R_CONTROL));
+        .rounded(px(NAV_ROW_R));
     let frame = if selected {
         frame.bg(rgb(FILL)).hover_carried().press_row()
     } else {
@@ -1353,15 +1356,15 @@ fn meta_line(project: Option<SharedString>, branch: Option<SharedString>) -> Div
     }
 }
 
-/// The provider logomark, monochrome in the metadata ink — colour is state,
+/// The provider logomark, monochrome in the structure ink — colour is state,
 /// and a green Codex mark beside a green running dot would read as one — or
 /// an empty box of the same width when the provider is unknowable (an
 /// unreadable parked log). The box is never a placeholder glyph and never a
 /// `cl` / `cx` string: it holds the column open and says nothing.
 fn provider_mark(provider: Option<Provider>, size: f32) -> AnyElement {
     match provider {
-        Some(Provider::Codex) => icon(icons::CODEX, size, TEXT_MUTED).into_any_element(),
-        Some(Provider::Claude) => icon(icons::CLAUDE, size, TEXT_MUTED).into_any_element(),
+        Some(Provider::Codex) => icon(icons::CODEX, size, TEXT_FAINT).into_any_element(),
+        Some(Provider::Claude) => icon(icons::CLAUDE, size, TEXT_FAINT).into_any_element(),
         None => div()
             .flex_shrink_0()
             .w(px(size))
@@ -1400,6 +1403,26 @@ mod tests {
             projects: Some("ferrite".into()),
             members: vec![current_thread(Some(Provider::Codex), true)],
         }
+    }
+
+    /// A nav row is a soft card (the block radius), the filter over the
+    /// tree is a quiet body-weight line in `TEXT_2`, and a section heading
+    /// keeps the section step above it.
+    #[test]
+    fn nav_rows_and_the_filter_read_quietly() {
+        let mut row = thread_row(&thread(Some(Provider::Claude)));
+        let radii = row.style().corner_radii.clone();
+        assert_eq!(radii.top_left, Some(px(NAV_ROW_R).into()));
+        let mut filter = filter_trigger(&FilterState {
+            label: "All Projects".into(),
+            open: false,
+            options: Vec::new(),
+        });
+        let style = filter.style();
+        assert_eq!(style.text.font_weight, Some(W_BODY));
+        assert_eq!(style.text.color, Some(rgb(TEXT_2).into()));
+        let mut parked = parked_header(3, false);
+        assert_eq!(parked.style().margin.top, Some(px(NAV_SECTION_GAP).into()));
     }
 
     /// The selection rule: one fill in the whole tree, on the focused

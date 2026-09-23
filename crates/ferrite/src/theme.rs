@@ -1412,6 +1412,11 @@ pub const MEMBER_INDENT: f32 = NAV_TEXT_X;
 pub const RAIL_OFFSET: f32 = MEMBER_INDENT - ROW_PAD_X - NAV_LEAD_W / 2.0;
 pub const RAIL_INSET: f32 = 3.0;
 pub const NAV_GROUP_RAIL: u32 = HAIRLINE_STRONG;
+/// A nav row's radius: the block radius, so a selected row reads as a soft
+/// card on the ground rather than a control.
+pub const NAV_ROW_R: f32 = R_BLOCK;
+/// 12px — above a section heading (a Project, the Parked fold).
+pub const NAV_SECTION_GAP: f32 = SPACE_3;
 /// 12px — the provider logomark in a nav row: the lead slot's size, so the
 /// row's two glyph columns match.
 pub const PROVIDER_MARK: f32 = GLYPH_BOX;
