@@ -101,17 +101,18 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
     });
 
-    // At instrument size, actions share the metadata row so they do not
-    // narrow every line of a draft or force extra wrapped rows.
+    // At instrument size the Composer keeps its shape: the one control
+    // (Stop now, over an empty line while the turn runs) rides the input
+    // row at its right, after the line.
     cx.simulate_resize(gpui::size(px(860.), px(500.)));
     tick(cx);
     let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let send = bounds(
+    let control = bounds(
         cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])),
+        format!("composer-stop-{:?}", PaneIdentity::Thread(threads[1])),
     );
-    assert!(editor.right() >= send.right() - px(1.));
-    assert!(editor.bottom() <= send.top());
+    assert!(editor.right() <= control.left());
+    assert!(control.top() >= editor.top() && control.bottom() <= editor.top() + px(20.5));
 }
 
 #[gpui::test]
@@ -139,20 +140,20 @@ fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) 
         );
         assert!(view.panes[0].composer.read(cx).is_empty());
     });
-    // A disabled empty Send must not invoke Enter's separate unqueue path.
-    cx.simulate_click(send.center(), gpui::Modifiers::none());
-    tick(cx);
-    view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued_all(),
-            ["follow up"]
-        );
-        assert!(view.panes[0].composer.read(cx).is_empty());
-    });
+    // Over an empty line while the turn runs, the one control is Stop:
+    // there is no empty Send to reach Enter's separate unqueue path.
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("composer-send-{:?}", PaneIdentity::Thread(thread)).into_boxed_str()
+        ))
+        .is_none(),
+        "the control became Stop"
+    );
     let stop = bounds(
         cx,
         format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
     );
+    assert_eq!(stop.center(), send.center(), "in the same place");
     cx.simulate_click(stop.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1);

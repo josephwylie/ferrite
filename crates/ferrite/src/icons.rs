@@ -81,6 +81,8 @@ icons![
     // (end WP-C)
 
     // ---- WP-D icons (append names above the end line)
+    "arrow-up",
+    "stop",
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
@@ -163,6 +165,9 @@ pub const REASONING: &str = "icons/reasoning.svg";
 /// Lucide bell, whose 24-box stroke read heavier than the gear beside it).
 #[allow(dead_code)]
 pub const BELL: &str = "icons/bell.svg";
+/// The Composer's round send control: ↑ sends, ■ stops the running turn.
+pub const ARROW_UP: &str = "icons/arrow-up.svg";
+pub const STOP: &str = "icons/stop.svg";
 // (end WP-C)
 
 /// `⌘` (not in Geist Mono): the command key wherever a key combination is
@@ -397,7 +402,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            30,
+            32,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -422,6 +427,7 @@ mod tests {
             SUBAGENTS,
             COPY,
             RESEND,
+            ARROW_UP,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();

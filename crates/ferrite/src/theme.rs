@@ -1065,14 +1065,26 @@ pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 /// turns `FOCUS_RING` only when the Pane's own edge is a state colour and
 /// the Composer holds the keyboard (otherwise the Pane ring, the accent `❯`
 /// and the caret carry focus). Rows are `COMPOSER_ROW_H`, `COMPOSER_GAP`
-/// apart: queued prompts (dim `❯` lines), the input line, the hint row.
-/// Any pad, gap, edge or inset change here must update
-/// `pane::composer_fixed_height` in the same commit.
+/// apart: queued prompts (dim `❯` lines), then the one input row — `❯` and
+/// the line at left, the model pair and the round send control at right.
+/// Under the box, outside it, the meta row (`COMPOSER_META_H`,
+/// `COMPOSER_META_GAP` below the box): mode and a draft's setup chips at
+/// left, session controls and the usage meter at right, `FS_SM`
+/// `TEXT_MUTED`. The Composer writes one key hint, in its placeholder;
+/// its controls' tooltips name their keys. Any pad, gap, edge or inset
+/// change here must update `pane::composer_fixed_height` in the same commit.
 pub const COMPOSER_PAD_X: f32 = BOX_INSET_X - 1.0;
-pub const COMPOSER_PAD_T: f32 = SPACE_1_5;
-pub const COMPOSER_PAD_B: f32 = SPACE_1_5;
+pub const COMPOSER_PAD_T: f32 = SPACE_2;
+pub const COMPOSER_PAD_B: f32 = SPACE_2;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 pub const COMPOSER_GAP: f32 = SPACE_1;
+pub const COMPOSER_META_H: f32 = CHIP_H;
+pub const COMPOSER_META_GAP: f32 = SPACE_1;
+/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. It sends
+/// (↑) whenever the line has text — queueing behind a running turn — and
+/// stops (■) while a turn runs over an empty line.
+pub const SEND_BUTTON: f32 = COMPOSER_ROW_H;
+pub const SEND_GLYPH: f32 = 10.0;
 /// The block's 1px edge, top and bottom: part of its fixed height.
 pub const COMPOSER_EDGE_W: f32 = 1.0;
 /// 8px — from the block to the Pane's bottom edge at L1 (the transcript's
@@ -1112,9 +1124,6 @@ pub const MENTION_WASH: u32 = ACCENT_WASH;
 pub const PICKER_PAD_X: f32 = SPACE_1_5;
 pub const PICKER_GAP: f32 = SPACE_1;
 pub const ICON_CHEVRON_SM: f32 = 10.0;
-/// Send and Stop: quiet mono text controls, `COMPOSER_ROW_H` high with the
-/// chip's inline padding.
-pub const COMPOSER_ACTION_PAD_X: f32 = PICKER_PAD_X;
 /// The context ring: a 14px box, 5.4px radius, 2px stroke, sweeping
 /// clockwise from 12 o'clock with a round cap. No text, ever.
 pub const USAGE_RING_D: f32 = 14.0;
@@ -1220,8 +1229,9 @@ pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + 2.0 * COMPOSER_EDGE_W
     + COMPOSER_PAD_T
     + COMPOSER_PAD_B
-    + COMPOSER_GAP
-    + 2.0 * COMPOSER_ROW_H
+    + COMPOSER_ROW_H
+    + COMPOSER_META_GAP
+    + COMPOSER_META_H
     + SPACE_2;
 /// A fact row's key column (About): the longest key, "Development build".
 pub const FACT_KEY_W: f32 = 136.0;

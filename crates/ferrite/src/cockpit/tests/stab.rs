@@ -607,7 +607,10 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     );
     assert!(model.right() <= effort.left());
     let band = cx.debug_bounds("draft-band").expect("the setup chips");
-    assert!(band.right() <= model.left(), "{band:?} / {model:?}");
+    assert!(
+        band.top() >= block.bottom(),
+        "the setup chips ride the meta row under the box: {band:?} / {block:?}"
+    );
     // The meter gives way first, so the setup chips keep their names.
     assert!(cx.debug_bounds("usage-meter-draft-1").is_none());
     for chip in ["band-chip-0", "band-chip-1"] {
@@ -1234,4 +1237,54 @@ fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
         "the chevron sits in the gutter: {control:?} / {row:?}"
     );
     assert!(control.right() <= row.left() + px(crate::theme::GUTTER_W) + px(0.5));
+}
+
+/// The Composer is one input row in its box — the line, then the model pair
+/// and the round send control — with a quiet meta row under it (mode at
+/// left, usage at right). Enter still sends and the control turns to Stop
+/// while the turn runs over an empty line.
+#[gpui::test]
+fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("composer-one-row", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let block = cx.debug_bounds("composer-block").unwrap();
+    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+    let meta = cx.debug_bounds("composer-meta").expect("the meta row");
+    let send: &'static str =
+        Box::leak(format!("composer-send-{:?}", PaneIdentity::Thread(thread)).into_boxed_str());
+    let control = cx.debug_bounds(send).expect("the send control");
+    assert_eq!(
+        block.size.height,
+        px(2. * crate::theme::COMPOSER_EDGE_W
+            + crate::theme::COMPOSER_PAD_T
+            + crate::theme::COMPOSER_PAD_B
+            + crate::theme::COMPOSER_ROW_H),
+        "one row in the box"
+    );
+    assert!(
+        meta.top() >= block.bottom(),
+        "the meta row is under the box"
+    );
+    assert!(editor.right() <= control.left() && control.right() <= block.right());
+    assert!(control.top() >= editor.top() && control.bottom() <= editor.bottom() + px(0.5));
+    assert!(
+        cx.debug_bounds("prompt-placeholder").is_some(),
+        "the resting line carries its one hint in the placeholder"
+    );
+
+    cx.simulate_input("go");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(fake.sent.borrow().as_slice(), ["go"], "Enter sends");
+    let stop: &'static str =
+        Box::leak(format!("composer-stop-{:?}", PaneIdentity::Thread(thread)).into_boxed_str());
+    let stop = cx.debug_bounds(stop).expect("Stop while the turn runs");
+    assert_eq!(stop.center(), control.center());
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "Esc still interrupts");
 }

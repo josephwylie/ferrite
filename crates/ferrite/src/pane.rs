@@ -607,7 +607,6 @@ pub struct PaneFacts<'a> {
     pub composer_empty: bool,
     /// Queue viewport derived from this Pane's actual available height.
     pub composer_queue_height: f32,
-    pub history_available: bool,
     pub focused: bool,
     /// This Thread finished while the operator looked elsewhere and they
     /// have not landed on it since (an unread Notice): the focus ring
@@ -819,9 +818,7 @@ pub(crate) struct PaneCtx<'a> {
     pub has_activity_decisions: bool,
     pub queued: Vec<&'a str>,
     pub queue_height: f32,
-    pub needs_queue: bool,
     pub composer_empty: bool,
-    pub history_available: bool,
     pub permission_mode: Option<SharedString>,
     pub suggestion: Option<&'a str>,
     pub received_reasoning_visible: bool,
@@ -871,7 +868,6 @@ pub fn render_pane(
         project_branches,
         composer_empty,
         composer_queue_height,
-        history_available,
         focused,
         attention,
         wall,
@@ -985,11 +981,7 @@ pub fn render_pane(
         has_activity_decisions,
         queued: thread.map(|thread| thread.queued_all()).unwrap_or_default(),
         queue_height: composer_queue_height,
-        // Submission guidance follows the same predicate as Submit, including
-        // startup and held prompts, independently of this Pane's focus.
-        needs_queue: thread.is_some_and(|thread| thread.needs_queue()),
         composer_empty,
-        history_available,
         permission_mode: thread.and_then(|thread| {
             thread
                 .permission_mode()
@@ -1213,12 +1205,10 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 decision: cx.decision,
                 queued: std::mem::take(&mut cx.queued),
                 queue_height: cx.queue_height,
-                needs_queue: cx.needs_queue,
                 empty: cx.composer_empty,
                 attachments: cx.attachments.take(),
                 actions: cx.composer_actions.take(),
                 background: cx.background.take(),
-                history_available: cx.history_available,
                 menu: cx.menu.take(),
                 mode: cx.permission_mode.as_deref(),
                 mode_picker: cx.mode_picker.take(),
@@ -1255,12 +1245,10 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     decision: cx.decision,
                     queued: std::mem::take(&mut cx.queued),
                     queue_height: cx.queue_height,
-                    needs_queue: cx.needs_queue,
                     empty: cx.composer_empty,
                     attachments: cx.attachments.take(),
                     actions: cx.composer_actions.take(),
                     background: cx.background.take(),
-                    history_available: cx.history_available,
                     menu: None,
                     mode: cx.permission_mode.as_deref(),
                     mode_picker: None,
@@ -1581,12 +1569,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     decision: None,
                     queued: Vec::new(),
                     queue_height: 0.,
-                    needs_queue: false,
                     empty: composer_empty,
                     attachments,
                     actions: composer_actions,
                     background: None,
-                    history_available: false,
                     menu,
                     mode: None,
                     mode_picker: None,
@@ -3148,14 +3134,12 @@ struct ComposerStack<'a> {
     /// above the line, the latest on top.
     queued: Vec<&'a str>,
     queue_height: f32,
-    needs_queue: bool,
     empty: bool,
     attachments: Option<AnyElement>,
     actions: Option<AnyElement>,
     /// Running background tasks as chips, hung at the right edge of the
     /// same shelf the pending files sit on.
     background: Option<AnyElement>,
-    history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
     /// The mode chip wired to its menu; `None` draws the plain chip.
@@ -3210,12 +3194,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         decision,
         queued,
         queue_height,
-        needs_queue,
         empty,
         attachments,
         mut actions,
         background,
-        history_available,
         menu,
         mode,
         mode_picker,
@@ -3230,7 +3212,6 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         drop_target,
         alert,
     } = stack;
-    let is_draft = setup_controls.is_some();
     let blocking = decision.is_some_and(Decision::blocks_execution);
     let mut block = components::raised_edged(composer_edge(alert, editing, drop_target))
         .debug_selector(|| "composer-block".into())
@@ -3339,7 +3320,18 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_color(rgb(TEXT_MUTED))
-                .child(placeholder(decision.is_some(), transcript, suggestion)),
+                .children({
+                    let (ghost, hint) = placeholder(decision.is_some(), transcript, suggestion);
+                    [ghost.into_any_element()]
+                        .into_iter()
+                        .chain(hint.map(|(key, verb)| {
+                            div()
+                                .flex_shrink_0()
+                                .ml(px(theme::SPACE_3))
+                                .child(format!("{key} {verb}"))
+                                .into_any_element()
+                        }))
+                }),
         );
     }
     // The `❯` is always in layout, so the text origin never moves with
@@ -3354,13 +3346,20 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             theme::COMPOSER_ROW_H,
         ))
         .child(line);
-    if !compact {
-        input = input.children(
-            actions
-                .take()
-                .map(|actions| div().flex_shrink_0().ml(px(theme::SPACE_2)).child(actions)),
-        );
-    }
+    // The box's one row: `❯` and the line at left; the model pair and the
+    // send control at right, on the first line's box however the line
+    // grows (L2 has no model pair, only the send control).
+    input = input.child(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::PICKER_GAP))
+            .h(px(theme::COMPOSER_ROW_H))
+            .ml(px(theme::SPACE_2))
+            .children(model_picker.map(|picker| div().flex_shrink_0().child(picker)))
+            .children(actions.map(|actions| div().flex_shrink_0().child(actions))),
+    );
     block = block.child(input);
     // The popover paints above the stack — deferred, so it escapes the
     // Pane's clip and draws over the transcript (#24).
@@ -3376,60 +3375,47 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // The hint row: setup or mode and the key hints at left; usage,
-    // session controls and the model pair at right. The hints give way
-    // first — they clip, the controls never do.
-    let mut controls = div()
+    // The meta row, under the box and outside it, quiet `FS_SM`
+    // `TEXT_MUTED`: a draft's setup chips and the Session's mode at left,
+    // the session controls and the usage meter at right. No key hints: the
+    // placeholder carries one, the controls' tooltips name their keys, and
+    // every binding works whether or not it is written down.
+    let mut meta = div()
+        .debug_selector(|| "composer-meta".into())
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::SPACE_2))
-        .h(px(theme::COMPOSER_ROW_H))
-        .min_w_0();
+        .h(px(theme::COMPOSER_META_H))
+        .mt(px(theme::COMPOSER_META_GAP))
+        .px(px(theme::BOX_INSET_X))
+        .min_w_0()
+        .overflow_hidden()
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(TEXT_MUTED));
     if let Some(setup) = setup_controls {
-        controls = controls.child(setup);
+        meta = meta.child(setup);
     }
     // The chip is the live Session's permission mode, so it rides every
     // Pane whose Session has announced one and is not blocked: a Decision
     // owns the keyboard until it is answered, and a closed Session has no
     // mode to be in (its chip is None). It is not tied to a turn in
     // flight — the mode is exactly what an operator changes *between*
-    // prompts.
-    // The plain chip (no menu: L2) rides the hint row's wrap, so in a
-    // narrow cell it gives way whole before Send/Stop ever would.
-    let mut plain_mode = None;
+    // prompts. L2 draws it plain (no menu).
     if let Some(mode) = mode.filter(|_| !blocking) {
-        match mode_picker {
-            Some(picker) => controls = controls.child(div().flex_shrink_0().child(picker)),
-            None => plain_mode = Some(mode_chip(mode, false).mr(px(theme::SPACE_1))),
-        }
+        meta = meta.child(div().flex_shrink_0().child(match mode_picker {
+            Some(picker) => picker,
+            None => mode_chip(mode, false).into_any_element(),
+        }));
     }
-    let hints = if compact && empty {
-        COMPACT_HINTS
-    } else if !empty {
-        typing_hints(needs_queue)
-    } else {
-        composer_hints(
-            is_draft,
-            history_available,
-            followup::suggest(decision.is_some(), transcript, suggestion)
-                .acceptable()
-                .is_some(),
-        )
-    };
-    controls = controls.child(hint_row(plain_mode, hints));
-    if let Some(meter) = usage_meter {
-        controls = controls.child(div().flex_shrink_0().child(meter));
-    }
+    meta = meta.child(div().flex_1());
     if let Some(session_controls) = session_controls {
-        controls = controls.child(div().flex_shrink_0().child(session_controls));
+        meta = meta.child(div().flex_shrink_0().child(session_controls));
     }
-    if let Some(picker) = model_picker {
-        controls = controls.child(div().flex_shrink_0().child(picker));
+    if let Some(meter) = usage_meter {
+        meta = meta.child(div().flex_shrink_0().child(meter));
     }
-    // L2 has no model/usage controls. Use their row for actions so every
-    // line of a small Pane's draft keeps the full editor width.
-    controls = controls.children(actions.map(|actions| div().flex_shrink_0().child(actions)));
     let stack = div()
         .flex()
         .flex_col()
@@ -3456,7 +3442,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     }),
             )
         })
-        .child(block.child(controls));
+        .child(block)
+        .child(meta);
     if compact {
         div()
             .flex_shrink_0()
@@ -3552,100 +3539,26 @@ pub fn session_chip() -> Div {
     control_chip(TEXT_MUTED).child("•••")
 }
 
-/// The hint row's key hints, on `components::key_hints`' recipe (keys
-/// `TEXT_2`, verbs `TEXT_MUTED`, `SPACE_3` between pairs) with one
-/// difference: each pair keeps its width, and pairs that do not fit wrap
-/// onto a second line the row's height clips away — a narrow row drops
-/// whole hints, never half of one. A zero-width lead keeps even the first
-/// pair honest: a line always takes one item, and it is the lead. `lead`
-/// (the plain mode chip) goes first and gives way the same way.
-fn hint_row(lead: Option<Div>, hints: &[(&'static str, &'static str)]) -> Div {
-    components::text_meta()
-        .flex()
-        .flex_1()
-        .flex_wrap()
-        .min_w_0()
-        .h(px(theme::COMPOSER_ROW_H))
-        .pt(px((theme::COMPOSER_ROW_H - theme::LH_META) / 2.))
-        .overflow_hidden()
-        .child(div().flex_shrink_0().w(px(0.)).h(px(theme::LH_META)))
-        .children(lead.map(|lead| lead.mt(px((theme::LH_META - theme::CHIP_H) / 2.))))
-        .children(hints.iter().map(|(key, verb)| {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .mr(px(theme::SPACE_3))
-                .gap(px(theme::SPACE_1))
-                .whitespace_nowrap()
-                // The key is code text (rule 6); its verb is UI.
-                .child(
-                    div()
-                        .font_family(theme::FONT_CODE)
-                        .text_color(rgb(TEXT_2))
-                        .child(*key),
-                )
-                .child(*verb)
-        }))
-}
-
-/// The L2 hint row with an empty line: the two menus, nothing else fits.
-const COMPACT_HINTS: &[(&str, &str)] = &[("@", "files"), ("/", "commands")];
-
-/// The hint row while the line has text: what Enter does now (it queues
-/// behind a running turn), and how to break the line instead.
-fn typing_hints(needs_queue: bool) -> &'static [(&'static str, &'static str)] {
-    if needs_queue {
-        &[("↵", "queue"), ("⇧↵", "newline")]
-    } else {
-        &[("↵", "send"), ("⇧↵", "newline")]
-    }
-}
-
-/// The hints under an empty line, on the hint row. A showing prediction
-/// takes the first slot: it is the only one of these the operator cannot
-/// discover by looking at the box, and an accept key nobody knows about is
-/// the same as no accept key. `esc` is never here: Stop carries it.
-fn composer_hints(
-    is_draft: bool,
-    history_available: bool,
-    suggested: bool,
-) -> &'static [(&'static str, &'static str)] {
-    match (is_draft, suggested, history_available) {
-        (true, _, _) => &[("@", "project files"), ("/import", "session")],
-        (false, true, true) => &[("⇥", "accept"), ("↑", "history"), ("@", "files")],
-        (false, true, false) => &[("⇥", "accept"), ("@", "files"), ("/", "commands")],
-        (false, false, true) => &[("↑", "history"), ("@", "files"), ("/", "commands")],
-        (false, false, false) => &[("@", "files"), ("/", "commands")],
-    }
-}
-
-/// Hints as the row reads them, `key verb` pairs three spaces apart — for
-/// tests and copy.
-#[cfg(test)]
-fn hint_text(hints: &[(&str, &str)]) -> String {
-    hints
-        .iter()
-        .map(|(key, verb)| format!("{key} {verb}"))
-        .collect::<Vec<_>>()
-        .join("   ")
-}
-
-/// The idle line's ghost text (§D.7): the prototype's three, plus the
-/// predicted follow-up when one has landed. A prediction is already in the
-/// operator's voice and already filtered, so it is shown verbatim — it is a
-/// draft of their next prompt, not a description of one, which is what lets
-/// Tab accept it. It never names the Thread and never lists the hints; the
-/// `.hint` on the same row already does that.
+/// The idle line's ghost text (§D.7) and the one hint it carries — the only
+/// key hint the Composer writes down; its controls' tooltips name theirs. A
+/// predicted follow-up is already in the operator's voice and already
+/// filtered, so it is shown verbatim — a draft of their next prompt, not a
+/// description of one — with `⇥ accept`, because an accept key nobody knows
+/// about is the same as no accept key. The resting line points at the `/`
+/// menu, where everything else lives.
 fn placeholder(
     pending: bool,
     transcript: Option<&Transcript>,
     suggestion: Option<&str>,
-) -> SharedString {
+) -> (SharedString, Option<(&'static str, &'static str)>) {
     match followup::suggest(pending, transcript, suggestion) {
-        Followup::Decision => SharedString::from("Reply to the Decision\u{2026}"),
-        Followup::Revive => SharedString::from("Revive and continue\u{2026}"),
-        Followup::Suggested(text) => SharedString::from(text),
-        Followup::Steer => SharedString::from("Steer this Thread\u{2026}"),
+        Followup::Decision => (SharedString::from("Reply to the Decision\u{2026}"), None),
+        Followup::Revive => (SharedString::from("Revive and continue\u{2026}"), None),
+        Followup::Suggested(text) => (SharedString::from(text), Some(("⇥", "accept"))),
+        Followup::Steer => (
+            SharedString::from("Steer this Thread\u{2026}"),
+            Some(("/", "for commands")),
+        ),
     }
 }
 
@@ -3767,8 +3680,8 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) ->
 }
 
 /// The Composer's height less its editor rows and queue: the inset below
-/// the block, the block's two edges and padding, and the hint row with the
-/// gap above it. The shelf floats above and is not part of the budget.
+/// it, the block's two edges and padding, and the meta row under the block
+/// with its gap. The shelf floats above and is not part of the budget.
 fn composer_fixed_height(compact: bool) -> f32 {
     let inset = if compact {
         theme::COMPOSER_INSET_L2
@@ -3779,8 +3692,8 @@ fn composer_fixed_height(compact: bool) -> f32 {
         + 2. * theme::COMPOSER_EDGE_W
         + theme::COMPOSER_PAD_T
         + theme::COMPOSER_PAD_B
-        + theme::COMPOSER_GAP
-        + theme::COMPOSER_ROW_H
+        + theme::COMPOSER_META_GAP
+        + theme::COMPOSER_META_H
 }
 
 /// Leave the majority of a Pane available for its Thread context. Only the
@@ -6081,36 +5994,34 @@ mod tests {
         assert_eq!(tokens_label(8_040), "8.0k");
         assert_eq!(tokens_label(12_400), "12k");
     }
+    /// The Composer writes down one key hint, in its placeholder: a
+    /// prediction's accept key (the one thing about it the box cannot
+    /// show), or at rest the `/` menu where everything else lives. A
+    /// Decision's line and a dead Session's carry none.
     #[test]
-    fn footer_advertises_history_only_when_the_context_is_armed() {
+    fn the_placeholder_carries_the_one_key_hint() {
+        let live = Transcript::default();
         assert_eq!(
-            hint_text(composer_hints(false, true, false)),
-            "↑ history   @ files   / commands"
+            placeholder(false, Some(&live), None).1,
+            Some(("/", "for commands"))
+        );
+        assert_eq!(placeholder(true, Some(&live), None).1, None);
+        let mut answered = Transcript::default();
+        answered.apply(Input::Prompt("fix the decoder".into()));
+        answered.apply(Input::Event(SessionEvent::TextDelta {
+            text: "Fixed it.".into(),
+        }));
+        answered.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        assert_eq!(
+            placeholder(false, Some(&answered), Some("Run the tests")).1,
+            Some(("⇥", "accept"))
         );
         assert_eq!(
-            hint_text(composer_hints(false, false, false)),
-            "@ files   / commands"
-        );
-        assert_eq!(
-            hint_text(composer_hints(true, true, false)),
-            "@ project files   /import session",
-            "drafts never advertise Thread history"
-        );
-        // Stop carries `esc`; no hint row ever repeats it.
-        for (draft, history, suggested) in [(false, true, true), (true, false, false)] {
-            assert!(!hint_text(composer_hints(draft, history, suggested)).contains("esc"));
-        }
-        assert!(!hint_text(typing_hints(true)).contains("esc"));
-    }
-
-    /// A prediction the operator can accept must say so: the key is the one
-    /// thing about it the box itself cannot show.
-    #[test]
-    fn footer_advertises_the_accept_key_while_a_prediction_shows() {
-        assert!(hint_text(composer_hints(false, true, true)).starts_with("⇥ accept"));
-        assert!(hint_text(composer_hints(false, false, true)).starts_with("⇥ accept"));
-        assert!(
-            !hint_text(composer_hints(true, true, true)).contains("accept"),
+            placeholder(false, None, Some("Run the tests")).1,
+            Some(("/", "for commands")),
             "a draft has no conversation to predict from"
         );
     }
@@ -7373,11 +7284,11 @@ mod tests {
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
         assert_eq!(
-            placeholder(false, Some(&live), None),
+            placeholder(false, Some(&live), None).0,
             "Steer this Thread\u{2026}"
         );
         assert_eq!(
-            placeholder(true, Some(&live), None),
+            placeholder(true, Some(&live), None).0,
             "Reply to the Decision\u{2026}"
         );
 
@@ -7386,7 +7297,7 @@ mod tests {
             reason: "the CLI exited".into(),
         }));
         assert_eq!(
-            placeholder(false, Some(&closed), None),
+            placeholder(false, Some(&closed), None).0,
             "Revive and continue\u{2026}"
         );
 
@@ -7402,20 +7313,20 @@ mod tests {
             cost_usd: None,
         }));
         assert_eq!(
-            placeholder(false, Some(&answered), Some("Run the tests")),
+            placeholder(false, Some(&answered), Some("Run the tests")).0,
             "Run the tests"
         );
         // A Decision and a dead Session both outrank it.
         assert_eq!(
-            placeholder(true, Some(&answered), Some("Run the tests")),
+            placeholder(true, Some(&answered), Some("Run the tests")).0,
             "Reply to the Decision\u{2026}"
         );
         assert_eq!(
-            placeholder(false, Some(&closed), Some("Run the tests")),
+            placeholder(false, Some(&closed), Some("Run the tests")).0,
             "Revive and continue\u{2026}"
         );
 
-        for line in [
+        for (line, _) in [
             placeholder(false, Some(&live), None),
             placeholder(true, Some(&live), None),
             placeholder(false, Some(&closed), None),
@@ -7437,11 +7348,6 @@ mod tests {
     // ---- WP-D tests (append above the end line)
     /// With text in the line the row says what Enter does now: behind a
     /// running turn it queues, not sends.
-    #[test]
-    fn typing_hints_say_whether_enter_sends_or_queues() {
-        assert_eq!(hint_text(typing_hints(false)), "↵ send   ⇧↵ newline");
-        assert_eq!(hint_text(typing_hints(true)), "↵ queue   ⇧↵ newline");
-    }
 
     /// The `❯` says where keys land: accent only while the line holds the
     /// keyboard, attention when that line answers a Decision.

@@ -3336,82 +3336,77 @@ impl CockpitView {
                 open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
             });
         let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
-        // Quiet mono text controls on the Composer's raised ground: no face
-        // at rest, `FILL` under the pointer. Each names its verb and its key;
-        // Stop is the one place `esc` is shown.
-        let action = |id: String, cx: &gpui::App| {
-            use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
-            crate::components::button(SharedString::from(id))
-                .custom(
-                    ButtonCustomVariant::new(cx)
-                        .foreground(rgb(crate::theme::TEXT_2).into())
-                        .hover(rgb(crate::theme::FILL).into())
-                        .active(rgb(crate::theme::FILL_HOVER).into()),
-                )
-                .h(px(crate::theme::COMPOSER_ROW_H))
-                .px(px(crate::theme::COMPOSER_ACTION_PAD_X))
-        };
-        let face = |verb: &'static str, key: Option<&'static str>, ink: u32| {
-            crate::components::text_meta()
-                .flex()
-                .items_center()
-                .gap(px(crate::theme::SPACE_1))
-                .child(div().text_color(rgb(ink)).child(verb))
-                .children(key)
-        };
-        let send = action(format!("composer-send-{identity:?}"), cx)
-            .debug_selector(move || format!("composer-send-{identity:?}"))
-            .disabled(!can_send)
-            .tooltip(if starting {
-                "Starting this Thread"
-            } else if queued {
-                "Send or queue input (Enter). Shift+Enter inserts a newline."
-            } else {
-                "Send (Enter). Shift+Enter inserts a newline."
-            })
-            .child(if starting {
-                face("starting…", None, crate::theme::TEXT_MUTED)
-            } else {
-                face(
-                    "send",
-                    Some("↵"),
-                    if can_send {
-                        crate::theme::TEXT_2
-                    } else {
-                        crate::theme::TEXT_MUTED
-                    },
-                )
-            })
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                view.composer_action(identity, false, window, cx);
-            }));
-        let stop = can_stop.then(|| {
-            action(format!("composer-stop-{identity:?}"), cx)
-                .debug_selector(move || format!("composer-stop-{identity:?}"))
-                .tooltip(if starting {
+        // One round control at the end of the input row. With text on the
+        // line it sends (↑) — queueing behind a running turn, as Enter does;
+        // over an empty line while a turn runs (or a draft starts) it stops
+        // (■), as Esc does. The keys work either way and the tooltip names
+        // them. Its selector says which verb it is now.
+        let empty = pane.composer.read(cx).is_empty();
+        let stopping = can_stop && (empty || starting);
+        let (verb, tooltip) = if stopping {
+            (
+                "stop",
+                if starting {
                     "Cancel startup (Esc); keep the draft"
                 } else if has_queue {
                     "Interrupt Main (Esc). Queued prompts remain and may run next."
                 } else {
                     "Interrupt Main (Esc)"
-                })
-                .child(face("stop", Some("esc"), crate::theme::TEXT_2))
+                },
+            )
+        } else {
+            (
+                "send",
+                if queued {
+                    "Send or queue (Enter). Shift+Enter inserts a newline."
+                } else {
+                    "Send (Enter). Shift+Enter inserts a newline."
+                },
+            )
+        };
+        let live = stopping || can_send;
+        let id = format!("composer-{verb}-{identity:?}");
+        let selector = id.clone();
+        let button = {
+            use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
+            crate::components::button(SharedString::from(id))
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .foreground(rgb(crate::theme::PANE).into())
+                        .hover(rgb(crate::theme::TEXT).into())
+                        .active(rgb(crate::theme::TEXT_2).into()),
+                )
+                .debug_selector(move || selector.clone())
+                .size(px(crate::theme::SEND_BUTTON))
+                .p_0()
+                .rounded_full()
+                .bg(rgb(if live {
+                    crate::theme::TEXT_STRONG
+                } else {
+                    crate::theme::FILL
+                }))
+                .disabled(!live)
+                .tooltip(tooltip)
+                .accessibility_label(tooltip)
+                .child(crate::icons::icon(
+                    if stopping {
+                        crate::icons::STOP
+                    } else {
+                        crate::icons::ARROW_UP
+                    },
+                    crate::theme::SEND_GLYPH,
+                    if live {
+                        crate::theme::PANE
+                    } else {
+                        crate::theme::TEXT_MUTED
+                    },
+                ))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
-                    view.composer_action(identity, true, window, cx);
+                    view.composer_action(identity, stopping, window, cx);
                 }))
-        });
-        Some(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(crate::theme::SPACE_1))
-                .children(stop)
-                .child(send)
-                .into_any_element(),
-        )
+        };
+        Some(button.into_any_element())
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -7676,7 +7671,6 @@ impl CockpitView {
                 level == Level::Instruments,
                 open.map_or(0, |thread| thread.queued_all().len()),
             ),
-            history_available: self.history_available(index, level),
             focused,
             attention: !focused && self.cockpit.notifications().attention(thread),
             wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
@@ -11892,7 +11886,7 @@ mod tests {
             let scroll = view.panes[0].transcript().unwrap().read(cx).scroll();
             (scroll.bounds(), scroll.item_is_visible(0))
         });
-        let composer = cx.debug_bounds("focused-prompt-editor").unwrap();
+        let composer = cx.debug_bounds("composer-block").unwrap();
         assert!(choice.right() <= island.right());
         assert!(
             first_row_visible && island.top() - transcript_bounds.top() > px(100.),
@@ -19476,9 +19470,10 @@ mod tests {
             assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
         });
     }
-    /// #25: the mouse door — a click on the footer chip opens the picker.
-    /// The sweep covers the meta row's right side so the test does not
-    /// encode the chip's exact position.
+    /// #25: the mouse door — a click on the model chip opens the picker.
+    /// The sweep covers the input row's right side (where the model pair
+    /// rides beside the send control) so the test does not encode the
+    /// chip's exact position.
     #[gpui::test]
     fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("provider-chip-click", 1);
@@ -19487,11 +19482,12 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
+        let row = cx.debug_bounds("focused-prompt-editor").unwrap().center().y;
         let mut opened = false;
-        'sweep: for y in [668., 674., 680., 686.] {
+        'sweep: for y in [row - px(4.), row, row + px(4.)] {
             for x in (0..30).map(|step| 985. - step as f32 * 10.) {
                 cx.simulate_mouse_down(
-                    gpui::point(px(x), px(y)),
+                    gpui::point(px(x), y),
                     gpui::MouseButton::Left,
                     gpui::Modifiers::none(),
                 );
