@@ -1102,11 +1102,22 @@ pub const COMPOSER_ROW_H: f32 = 20.0;
 pub const COMPOSER_GAP: f32 = SPACE_1;
 pub const COMPOSER_META_H: f32 = CHIP_H;
 pub const COMPOSER_META_GAP: f32 = SPACE_1;
-/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. It sends
-/// (↑) whenever the line has text — queueing behind a running turn — and
-/// stops (■) while a turn runs over an empty line.
+/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. At rest it
+/// sends (↑); while a turn runs it stops (■), whatever is in the line —
+/// Enter is the key that queues a line behind the turn.
 pub const SEND_BUTTON: f32 = COMPOSER_ROW_H;
 pub const SEND_GLYPH: f32 = 10.0;
+/// Live, it is the one bright disc in the Pane: `TEXT_STRONG` with the
+/// glyph in the Pane's ground, stepping down to `TEXT` under the pointer and
+/// `TEXT_2` pressed. Idle (an empty line at rest) it keeps its shape, legible
+/// but plainly off: a `FILL_HOVER` disc, visible on `RAISED`, with a
+/// `TEXT_MUTED` glyph.
+pub const SEND_GROUND: u32 = TEXT_STRONG;
+pub const SEND_INK: u32 = PANE;
+pub const SEND_HOVER: u32 = TEXT;
+pub const SEND_PRESSED: u32 = TEXT_2;
+pub const SEND_IDLE_GROUND: u32 = FILL_HOVER;
+pub const SEND_IDLE_INK: u32 = TEXT_MUTED;
 /// The block's 1px edge, top and bottom: part of its fixed height.
 pub const COMPOSER_EDGE_W: f32 = 1.0;
 /// **Concentric radii.** Every control in and under the box is a

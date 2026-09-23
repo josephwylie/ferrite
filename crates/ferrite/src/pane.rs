@@ -1631,8 +1631,14 @@ pub fn draft_band() -> Div {
 /// that is always in layout and turns `FOCUS_RING` on tab, because the
 /// popover opens on ↵ and the chip must say where ↵ will land.
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
+    // The label truncates in a narrow Pane; the tooltip keeps the whole
+    // choice reachable and names the keys that change it.
+    let tooltip = SharedString::from(format!("{label} \u{b7} Tab, then \u{21b5} to change"));
     div()
         .id(("band-chip", slot))
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+        })
         .debug_selector(move || format!("band-chip-{slot}"))
         .flex_shrink(1.)
         .min_w_0()
@@ -3548,6 +3554,16 @@ pub fn mode_chip(mode: &str, menu: bool) -> Div {
     control_chip(TEXT_2)
         .child(mode.to_owned())
         .when(menu, |chip| chip.child(chip_chevron()))
+}
+
+/// The button a Composer chip rides in (model, effort, mode, session
+/// `•••`): no padding of its own and the chip's pill radius, so the kit's
+/// hover, pressed and focus faces fill exactly the chip's shape.
+pub fn composer_control(id: impl Into<gpui::ElementId>) -> gpui::component::button::Button {
+    components::button(id)
+        .p_0()
+        .h_auto()
+        .rounded(px(theme::COMPOSER_CHIP_R))
 }
 
 /// The session-controls trigger: `•••` on the control-chip recipe.

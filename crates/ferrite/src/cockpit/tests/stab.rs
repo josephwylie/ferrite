@@ -1256,7 +1256,7 @@ fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
 /// The Composer is one input row in its box — the line, then the model pair
 /// and the round send control — with a quiet meta row under it (mode at
 /// left, usage at right). Enter still sends and the control turns to Stop
-/// while the turn runs over an empty line.
+/// while the turn runs.
 #[gpui::test]
 fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
