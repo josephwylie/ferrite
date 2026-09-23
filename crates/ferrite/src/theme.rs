@@ -781,29 +781,79 @@ pub const HUNK_MAX_ROWS: usize = 24;
 // Owner: WP-B (rich.rs, scrollbar.rs, attachments::inline_file, the Markdown vendor knobs.)
 // Edit values and append tokens only inside this section.
 
-/// Inline code's ink on its chip.
-pub const INLINE_CODE_INK: u32 = 0xe3c88f;
-/// A restrained fenced-code inset; the header and source share one edge.
-pub const CODE_PAD: f32 = 8.;
+/// **Markdown.** Agent prose is Geist in `TEXT` at the reading size
+/// (`answer_text_size`, set by the answer row). Blocks sit `PROSE_GAP` apart;
+/// a heading takes more space above (`PROSE_GAP + HEADING_SPACE_ABOVE` = 20)
+/// than below (`HEADING_SPACE_BELOW` = 8). H1–H3 are `W_STRONG`
+/// `TEXT_STRONG`, H4–H6 `W_LABEL` `TEXT_2`, never italic or underlined, each
+/// on its own pixel line (`prose_line_height`). Tables are horizontal
+/// hairlines only; a quote is a 2px `TEXT_FAINT` rule and `TEXT_2`, not
+/// italic; list markers are `TEXT_MUTED` in the vendor's measured column.
+/// Code is a `RAISED` block; inline code is mono on an `ACCENT_WASH` chip;
+/// links are `ACCENT` over an `ACCENT_EDGE` underline.
+///
+/// 12px — between Markdown blocks (`SPACE_3`).
+pub const PROSE_GAP: f32 = SPACE_3;
+/// 8px — added above a heading that follows a sibling, on top of
+/// `PROSE_GAP`, so a heading opens a section rather than closing one.
+pub const HEADING_SPACE_ABOVE: f32 = SPACE_2;
+/// 8px — below a heading, in place of `PROSE_GAP`.
+pub const HEADING_SPACE_BELOW: f32 = SPACE_2;
+/// Inline code's ink on its chip (the Markdown path paints the chip; the
+/// plain-text fallback carries the ink alone).
+pub const INLINE_CODE_INK: u32 = TEXT_STRONG;
+/// The inline-code chip reaches 2px past its glyphs and stays 2px inside the
+/// line box top and bottom (18px tall on a 22px line). Painted, never laid
+/// out.
+pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
+pub const INLINE_CODE_INSET_Y: f32 = SPACE_0_5;
+/// A quote's rule and its text inset.
+pub const QUOTE_RULE_W: f32 = 2.0;
+pub const QUOTE_PAD_L: f32 = SPACE_3;
+/// 6px — a table cell's block padding (its inline padding is the vendor's
+/// 8px, which its column measurement assumes).
+pub const TABLE_CELL_PAD_Y: f32 = SPACE_1_5;
+/// The rule under a table's header row: one step stronger than the rows'.
+pub const TABLE_HEAD_RULE: u32 = HAIRLINE_STRONG;
+/// 4px — a horizontal rule's own margin inside its block, so it sits 16px
+/// from its neighbours.
+pub const RULE_MARGIN_Y: f32 = SPACE_1;
+/// A fenced code block: 12px inline, 10px block padding (Zeron's code body;
+/// 10 is off the scale so the 24px header and an 18px line land on even
+/// pixels).
+pub const CODE_PAD_X: f32 = SPACE_3;
+pub const CODE_PAD_Y: f32 = 10.0;
+/// The code header row: language label, html `Preview`, `Copy`/`Copied`.
 pub const CODE_HEADER_H: f32 = 24.;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_H: f32 = 24.;
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-pub const CODE_ACTION_PAD_X: f32 = 8.;
-/// Code blocks: a language label at 5/10/0, then `pre` at 4/10/8.
-#[allow(dead_code)]
-pub const CODE_LANG_PAD_T: f32 = 5.0;
-#[allow(dead_code)]
-pub const CODE_PAD_X: f32 = 10.0;
-#[allow(dead_code)]
-pub const CODE_PRE_PAD_T: f32 = 4.0;
-#[allow(dead_code)]
-pub const CODE_PRE_PAD_B: f32 = 8.0;
-/// Inline code's own padding: 1px block, 4px inline.
-#[allow(dead_code)]
-pub const INLINE_CODE_PAD_X: f32 = 4.0;
-#[allow(dead_code)]
-pub const INLINE_CODE_PAD_Y: f32 = 1.0;
+pub const CODE_ACTION_PAD_X: f32 = SPACE_2;
+/// The html preview dialog: the reading column's width, and a height cap
+/// before its body scrolls.
+pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
+/// An inline file chip: `CHIP_H` tall so it fits a 22px prose line without
+/// moving it; 6px inline padding; a 12px file mark (or a 14px thumbnail) 6px
+/// from the name; clamped between 64 and 280px wide.
+pub const INLINE_FILE_H: f32 = CHIP_H;
+pub const INLINE_FILE_PAD_X: f32 = SPACE_1_5;
+pub const INLINE_FILE_GAP: f32 = SPACE_1_5;
+pub const INLINE_FILE_ICON: f32 = 12.0;
+pub const INLINE_FILE_THUMB: f32 = 14.0;
+pub const INLINE_FILE_MIN_W: f32 = 64.0;
+pub const INLINE_FILE_MAX_W: f32 = 280.0;
+/// **Scrollbars** are a thin overlay with no track, never in layout: a
+/// `SCROLLBAR_GUTTER` hit strip at the scroller's right edge; while
+/// scrolling a 4px `SCROLLBAR` thumb, under the pointer (or dragged) 6px
+/// `SCROLLBAR_HOVER`; idle, nothing. The thumb keeps `SCROLLBAR_INSET` from
+/// the edge and never gets shorter than `SCROLLBAR_MIN_THUMB`.
+pub const SCROLLBAR_GUTTER: f32 = 12.0;
+pub const SCROLLBAR_THUMB_W: f32 = 4.0;
+pub const SCROLLBAR_THUMB_W_HOVER: f32 = 6.0;
+pub const SCROLLBAR_INSET: f32 = 3.0;
+pub const SCROLLBAR_MIN_THUMB: f32 = 40.0;
+const _: () = assert!(SCROLLBAR_GUTTER == 2. * SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
+const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // (end WP-B) — append above this line only
 
 // ======================================== WP-C · pane frame, levels, board, titlebar
