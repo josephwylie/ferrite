@@ -1288,3 +1288,54 @@ fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1, "Esc still interrupts");
 }
+
+/// The prompt heads its turn: the operator's line is at prose size, the
+/// same size as the answer under it, and turns sit `GAP_TURN` apart while
+/// the blocks inside one sit a block step apart.
+#[gpui::test]
+fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("prompt-heads-turn", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(900.)));
+    tick(cx);
+    for (prompt, answer) in [
+        ("first ask", "First answer."),
+        ("second ask", "Second answer."),
+    ] {
+        cx.simulate_input(prompt);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        let stream = fake.streams.borrow()[0].clone();
+        stream
+            .send(SessionEvent::TextDelta {
+                text: format!("{answer}\n\n"),
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+    }
+    let (namespace, prompts) = view.read_with(cx, |view, _| {
+        let pane = &view.panes[0];
+        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let prompts: Vec<_> = thread
+            .transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block.body, Body::Prompt(_)))
+            .map(|block| block.id)
+            .collect();
+        (pane.text_namespace(), prompts)
+    });
+    let size = cx.update(|_, cx| {
+        crate::rich::testing::font_size(&format!("literal-{namespace}-{:?}-0", prompts[1]), cx)
+    });
+    assert_eq!(size, Some(px(crate::theme::FS_PROSE)), "prose size");
+    assert_eq!(crate::theme::GAP_TURN, 32.);
+    assert_eq!(crate::theme::GAP_STAMP, crate::theme::GAP_SECTION);
+}

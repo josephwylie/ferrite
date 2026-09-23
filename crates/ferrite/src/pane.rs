@@ -4614,16 +4614,17 @@ pub(crate) fn render_block(
                 .rounded(px(theme::R_CHIP))
                 .hover_row()
                 .hover_text()
-                // The operator's own words: UI face, set apart from the
-                // agent's by the `❯`, the label weight and the strong ink.
+                // The operator's own words head the turn: prose size in the
+                // UI face, set apart from the answer under it by the `❯`, the
+                // label weight and the strong ink.
                 .font_family(theme::FONT_UI)
                 .font_weight(theme::W_LABEL)
-                .text_size(px(theme::FS_UI))
-                .line_height(px(theme::LH_UI))
+                .text_size(px(theme::FS_PROSE))
+                .line_height(px(theme::LH_PROSE))
                 .text_color(rgb(TEXT_STRONG))
                 .child(components::gutter(
                     components::prompt_mark(ACCENT),
-                    theme::LH_UI,
+                    theme::LH_PROSE,
                 ))
                 .child(
                     div()

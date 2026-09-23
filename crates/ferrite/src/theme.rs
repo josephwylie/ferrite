@@ -756,26 +756,33 @@ pub fn init_components(cx: &mut gpui::App) {
 //   happened; its dot says how it went (`tool_dot`), and a failure colours
 //   the one word that says so. A collapsed group is one muted line whose only
 //   state ink is ` · N failed`.
-// - **Rhythm by rule.** The space above a row is chosen once, at reconcile,
-//   from the row before it and its own kind (`GAP_*`), and is part of the
-//   row's identity, so a changed gap is a changed row and nothing is measured
-//   per frame.
-// - **Face follows voice.** Structural rows are mono `FS_UI`/`LH_UI`; agent
-//   prose and reasoning are Geist `FS_PROSE`/`LH_PROSE`; the stamp and the
-//   trail are `FS_SM`/`LH_META`.
+// - **Rhythm in three steps.** A turn opens `GAP_TURN` (32) under the one
+//   before it; blocks inside a turn — answer, summary, tool row, stamp —
+//   sit `GAP_SECTION` (12, the block step) apart; rows of one run of work
+//   (and a one-paragraph commentary into the call it introduces) sit
+//   `GAP_TOOL` (4, the row step) apart. The space above a row is chosen
+//   once, at reconcile, from the row before it and its own kind, and is
+//   part of the row's identity, so a changed gap is a changed row and
+//   nothing is measured per frame.
+// - **The prompt anchors its turn.** The operator's line is the turn's
+//   heading: prose size (`FS_PROSE`/`LH_PROSE`) at `W_LABEL` in
+//   `TEXT_STRONG` under the accent `❯`, over answers at prose size, regular,
+//   in `TEXT`. Structural rows (tool calls, summaries) are `FS_UI`/`LH_UI`;
+//   the stamp and the trail are `FS_SM`/`LH_META`.
 
-/// 24px — above every prompt but the first: the turn boundary. No rule is
-/// drawn between turns; this space, the accent `❯` and the stamp do the job.
-pub const GAP_TURN: f32 = SPACE_6;
+/// 32px — above every prompt but the first: the turn boundary. No rule is
+/// drawn between turns; this space, the prompt's weight and the stamp do the
+/// job.
+pub const GAP_TURN: f32 = SPACE_8;
 /// 12px — a change of voice: prompt → the agent's first row, prose ↔ tools,
 /// anything ↔ reasoning, notices, the turn's changes.
 pub const GAP_SECTION: f32 = SPACE_3;
 /// 4px — tool rows in one run of work, and a one-paragraph commentary that
 /// introduces the tool row under it.
 pub const GAP_TOOL: f32 = SPACE_1;
-/// 8px — the last row of a turn → its stamp (and a decision record under
-/// the row it answers).
-pub const GAP_STAMP: f32 = SPACE_2;
+/// The last row of a turn → its stamp (and a decision record under the row
+/// it answers): the block step, like any block of the turn.
+pub const GAP_STAMP: f32 = GAP_SECTION;
 
 /// 6px — a tool call's state dot, the size of every status dot.
 pub const TOOL_DOT: f32 = STATUS_DOT;
