@@ -7639,14 +7639,13 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The pending Decision of `thread` when it is a question — parsed
-    /// fresh, which is cheap: a Decision's input is a few hundred bytes.
+    /// The pending Decision of `thread` when it is a question, borrowed.
     fn pending_questions(
         &self,
         thread: ThreadId,
     ) -> Option<(
         ferrite_core::activity::DecisionHandle,
-        Vec<ferrite_core::questions::Question>,
+        &[ferrite_core::questions::Question],
     )> {
         let request = self
             .cockpit
@@ -7655,18 +7654,32 @@ impl CockpitView {
             .pending_decisions()
             .iter()
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?;
-        let questions = pane::question_of(&request.decision)?;
+        let questions = pane::questions_of(&request.decision)?;
         Some((request.handle.clone(), questions))
     }
 
+    /// A digit key (`PickOption1..4`, bound where a Decision holds the
+    /// keyboard): on an empty line — or wherever no line is being typed —
+    /// it picks row `option` of the request this Pane shows (a single
+    /// single-select question then answers at once); with text on the line,
+    /// or nothing to pick, it is a digit again.
     fn pick_or_type(
         &mut self,
-        _option: usize,
+        option: usize,
         digit: &'static str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(pane) = self.panes.get(self.focused()) {
+        let index = self.focused();
+        let typing = self.level_now(window) == Level::Transcript
+            && self
+                .panes
+                .get(index)
+                .is_some_and(|pane| pane.is_main() && !pane.composer.read(cx).is_empty());
+        if !typing && self.pick_request_row(index, option, window, cx) {
+            return;
+        }
+        if let Some(pane) = self.panes.get(index) {
             pane.composer
                 .clone()
                 .update(cx, |composer, cx| composer.insert(digit, cx));
@@ -7793,23 +7806,24 @@ impl CockpitView {
         }
     }
 
-    /// The pending Decision's keycaps (#26), each press wired to the exact
-    /// decide verb its key runs — no new semantics, the mouse presses the
-    /// keycap it depicts. Assembled here like `pane_controls`; presses land
-    /// on the clicked Pane first (the keyboard may be elsewhere) and stop
-    /// propagation so the Pane's own press handler cannot re-target them.
-    /// L1 draws y/n and, where the request offered a standing answer, a;
-    /// the L2 card keeps y/n alone.
+    /// The L2 Decision cell's keycaps (#26), each press wired to the exact
+    /// decide verb its key runs — the mouse presses the keycap it depicts.
+    /// Only keys that act are drawn (`y` where the provider allows it, `n`
+    /// where it allows a deny), and only where the cell draws its own
+    /// compact card: at L1 every request is the overlay card, whose rows
+    /// carry their keys. Presses land on the clicked Pane first (the
+    /// keyboard may be elsewhere) and stop propagation so the Pane's own
+    /// press handler cannot re-target them.
     fn decide_keycaps(
         &self,
         index: usize,
         level: Level,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let thread = self.panes[index].thread()?;
-        if !self.panes[index].is_main() {
+        if level != Level::Instruments || !self.l2_decision_card(index) {
             return None;
         }
+        let thread = self.panes[index].thread()?;
         let request = self
             .cockpit
             .thread(thread)?
@@ -7818,8 +7832,7 @@ impl CockpitView {
             .iter()
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?
             .clone();
-        let decision = &request.decision;
-        let offers_always = level == Level::Transcript && decision.standing_answer().is_some();
+        let policy = request.decision.policy;
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
             let request = request.clone();
             keycap.on_mouse_down(
@@ -7833,11 +7846,12 @@ impl CockpitView {
                 }),
             )
         };
-        let mut cluster = pane::decide_row(level)
-            .child(wire(pane::keycap_allow(), Answer::Allow, cx))
-            .child(wire(pane::keycap_deny(), Answer::Deny, cx));
-        if offers_always {
-            cluster = cluster.child(wire(pane::keycap_always(), Answer::Always, cx));
+        let mut cluster = decision::key_actions();
+        if policy.allow && !policy.interaction_required {
+            cluster = cluster.child(wire(pane::keycap_allow(), Answer::Allow, cx));
+        }
+        if policy.deny {
+            cluster = cluster.child(wire(pane::keycap_deny(), Answer::Deny, cx));
         }
         Some(cluster.into_any_element())
     }

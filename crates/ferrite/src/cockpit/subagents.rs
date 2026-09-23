@@ -1,6 +1,6 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
-use crate::{components, theme};
+use crate::{components, decision, theme};
 use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
@@ -8,7 +8,6 @@ use ferrite_core::transcript::Status;
 use gpui::component::{
     button::ButtonVariants,
     checkbox::Checkbox,
-    group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputState},
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement,
@@ -171,68 +170,70 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
         })
 }
 
-/// The one shell every pending request wears — approvals, questions, forms,
-/// external links and the unreadable fallback alike. It floats above the
-/// Composer as a self-contained island: enough separation to read as the
-/// current task, while the quiet attention edge still communicates urgency.
-fn request_island(
-    handle: &DecisionHandle,
-    body: impl IntoElement,
-    cx: &mut gpui::App,
-) -> AnyElement {
-    let radius = gpui::component::Theme::global(cx).radius_2xl();
-    // Clip flex ancestors instead of forcing zero minimum heights: the
-    // native Scrollable must contribute its intrinsic size until the pane
-    // runs out of space, then shrink only its content viewport.
-    let surface = div()
-        .bg(rgb(theme::RAISED))
-        .border_1()
-        .border_color(rgba(theme::ATTENTION_EDGE))
-        .rounded(radius)
-        .p(px(16.))
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .style()
-        .clone();
+/// Every request card's frame in the overlay: the Pane's inline inset, the
+/// card centred in the reading column, and the dock gap above the
+/// Composer. For a question this frame is the island `QuestionFit`
+/// measures, so the gap is part of what must fit.
+fn request_frame(card: impl IntoElement) -> Div {
     native_keys(
         div()
             .w_full()
             .min_w_0()
-            .overflow_hidden()
+            .min_h_0()
             .flex()
-            .justify_center()
-            .px(radius)
-            .pb(px(8.))
-            .child(
-                div()
-                    .id(("question-island", handle.serial as usize))
-                    .debug_selector(|| "question-island".into())
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    // The island floats over the transcript, whose prose is
-                    // selectable and so paints an I-beam. Without a hitbox of
-                    // its own the card inherits that cursor everywhere the
-                    // controls do not cover.
-                    .cursor_default()
-                    .w_full()
-                    .max_w(px(680.))
-                    .min_w_0()
-                    .overflow_hidden()
-                    .font_family(theme::FONT_PROSE)
-                    .child(
-                        GroupBox::new()
-                            .id("question-surface")
-                            .fill()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .content_style(surface)
-                            .child(body),
-                    ),
-            ),
+            .flex_col()
+            .items_center()
+            .overflow_hidden()
+            .px(px(theme::PANE_PAD_X))
+            .pb(px(theme::DECISION_DOCK_GAP))
+            .child(card),
     )
-    .into_any_element()
+}
+
+/// Whether `pane` shows `request`: its selected Subject's, and on Main
+/// also a request whose owner the provider did not name.
+fn shown_on(pane: &PaneView, request: &PendingDecision) -> bool {
+    request.subject.as_ref() == Some(&pane.selected)
+        || (request.subject.is_none() && pane.is_main())
+}
+
+/// A head's `· detail`: the tool or header, and `agent unknown` when the
+/// provider named no owner.
+fn request_detail(detail: &str, unowned: bool) -> Option<SharedString> {
+    match (detail.is_empty(), unowned) {
+        (true, false) => None,
+        (false, false) => Some(detail.to_string().into()),
+        (true, true) => Some("agent unknown".into()),
+        (false, true) => Some(format!("{detail} · agent unknown").into()),
+    }
+}
+
+/// The question digit keys pick in: the first with options and no pick
+/// yet, else the first with options (a multi-select keeps toggling).
+fn digit_question(
+    answers: &[ferrite_core::questions::Answer],
+    questions: &[ferrite_core::questions::Question],
+) -> Option<usize> {
+    let with_options = |at: &usize| !questions[*at].options.is_empty();
+    (0..questions.len())
+        .filter(with_options)
+        .find(|at| {
+            answers
+                .get(*at)
+                .is_some_and(|answer| answer.picks.is_empty())
+        })
+        .or_else(|| (0..questions.len()).find(with_options))
+}
+
+/// A pick: single-select replaces, multi-select toggles.
+fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
+    if !multi {
+        *picks = vec![option];
+    } else if picks.contains(&option) {
+        picks.retain(|at| *at != option);
+    } else {
+        picks.push(option);
+    }
 }
 
 pub(crate) fn transcript_status(status: AgentStatus, fresh: bool) -> Status {
@@ -922,7 +923,7 @@ impl CockpitView {
         if !pending.iter().any(|request| {
             (request.subject.as_ref() == Some(&pane.selected)
                 || (request.subject.is_none() && pane.is_main()))
-                && pane::question_of(&request.decision).is_some()
+                && pane::questions_of(&request.decision).is_some()
                 && (compact
                     || pane
                         .request_forms
@@ -937,13 +938,27 @@ impl CockpitView {
             native_keys(
                 components::button(("expand-question", thread.get()))
                     .tab_stop(true)
-                    .h(px(20.))
-                    .px(px(6.))
-                    .bg(rgb(theme::FILL))
+                    .h(px(theme::CHIP_H))
+                    .px(px(theme::CHIP_PAD_X))
+                    .rounded(px(theme::R_CHIP))
+                    .bg(rgba(theme::ATTENTION_WASH))
                     .accessibility_label("Expand this Thread to answer its question")
-                    .tooltip("Expand this Thread to answer its question (⌘F)")
+                    .tooltip(match CockpitView::key_label("cockpit::ToggleFullscreen") {
+                        Some(key) => format!("Expand this Thread to answer its question ({key})"),
+                        None => "Expand this Thread to answer its question".into(),
+                    })
                     .debug_selector(|| "question-expand".into())
-                    .label("Expand to answer")
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(theme::SPACE_1_5))
+                            .text_size(px(theme::FS_SM))
+                            .line_height(px(theme::LH_META))
+                            .text_color(rgb(theme::ATTENTION))
+                            .child(decision::mark())
+                            .child("expand to answer"),
+                    )
                     .on_click(cx.listener(move |view, _, _, cx| {
                         if let Some(index) = view.pane_for(thread) {
                             view.focus_pane(index);
@@ -976,7 +991,7 @@ impl CockpitView {
             .filter(|request| {
                 (request.subject.as_ref() == Some(&pane.selected)
                     || (request.subject.is_none() && pane.is_main()))
-                    && pane::question_of(&request.decision).is_some()
+                    && pane::questions_of(&request.decision).is_some()
             })
             .map(|request| request.handle.clone())
             .collect();
@@ -1001,39 +1016,22 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        // An L2 cell draws Main's single approval as its own compact body
+        // with y/n keycaps; every other request, at L1 all of them, is the
+        // one card in the requests overlay.
+        if self.level_of(index, window) == Level::Instruments && self.l2_decision_card(index) {
+            return None;
+        }
         let pane = &self.panes[index];
         let thread = pane.thread()?;
         let activity = self.cockpit.thread(thread)?.activity();
-        let all = activity.pending_decisions();
-        if pane.is_main()
-            && all.iter().all(|request| {
-                matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
-            })
-            && all
-                .iter()
-                .all(|request| request.decision.suggestions.is_empty())
-            && all.len() <= 1
-            && all
-                .iter()
-                .all(|request| request.subject == Some(Subject::Main))
-        {
-            return None;
-        }
-        let requests: Vec<_> = all
+        let fullscreen = self.cockpit.roster().fullscreen() == Some(pane.identity);
+        let requests: Vec<_> = activity
+            .pending_decisions()
             .iter()
+            .filter(|request| shown_on(pane, request))
             .filter(|request| {
-                request.subject.as_ref() == Some(&pane.selected)
-                    || (request.subject.is_none() && pane.is_main())
-            })
-            .cloned()
-            .collect();
-        if requests.is_empty() {
-            return None;
-        }
-        let requests: Vec<_> = requests
-            .into_iter()
-            .filter(|request| {
-                self.cockpit.roster().fullscreen() == Some(pane.identity)
+                fullscreen
                     || !pane
                         .request_forms
                         .0
@@ -1041,10 +1039,18 @@ impl CockpitView {
                         .get(&request.handle)
                         .is_some_and(|form| form.fit.needs_expansion())
             })
+            .cloned()
             .collect();
         if requests.is_empty() {
             return None;
         }
+        // Below the short-Pane height a question body keeps two option rows
+        // and scrolls, so its head and answer row stay in reach.
+        let short = self
+            .pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .is_some_and(|(_, rect)| rect.h < theme::DECISION_SHORT_PANE_H);
         let multiple_requests = requests.len() > 1;
         let mut cards = div()
             .id(("subject-requests", thread.get()))
@@ -1053,10 +1059,9 @@ impl CockpitView {
             .flex()
             .min_h_0()
             .max_h_full()
-            .flex_col()
-            .gap(px(8.));
+            .flex_col();
         for request in requests {
-            cards = cards.child(self.request_card(index, thread, request, window, cx));
+            cards = cards.child(self.request_card(index, thread, request, short, window, cx));
         }
         if multiple_requests {
             Some(native_keys(cards.max_h_full().overflow_y_scrollbar()).into_any_element())
@@ -1068,66 +1073,118 @@ impl CockpitView {
         }
     }
 
+    /// Whether this Pane's L2 cell shows Main's pending approval as its own
+    /// compact card (`l2_decision_body`) — the only request the cell draws
+    /// without a Composer, so the keyboard must go to `decision_focus`.
+    pub(super) fn l2_decision_card(&self, index: usize) -> bool {
+        let pane = &self.panes[index];
+        if !pane.is_main() {
+            return false;
+        }
+        let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) else {
+            return false;
+        };
+        let pending = open.activity().pending_decisions();
+        let mut shown = pending.iter().filter(|request| shown_on(pane, request));
+        match (shown.next(), shown.next()) {
+            (Some(request), None) => {
+                request.subject == Some(Subject::Main)
+                    && matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
+                    && open.pending() == Some(&request.decision)
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn request_card(
         &self,
         index: usize,
         thread: ThreadId,
         request: PendingDecision,
+        short: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // Keep this dispatcher shallow. Windows gives the GUI main thread a
         // 1 MiB stack; compiling every Decision builder into this one frame
         // overflowed it as soon as a question arrived.
-        if let Some(questions) = pane::question_of(&request.decision) {
+        if let Some(questions) = pane::questions_of(&request.decision) {
             let handle = request.handle.clone();
-            return self
-                .question_request_card(index, thread, request, handle, questions, window, cx);
+            let questions = questions.to_vec();
+            return self.question_request_card(
+                index, thread, request, handle, questions, short, window, cx,
+            );
         }
-        self.non_question_request_card(index, thread, request, window, cx)
+        match &request.decision.kind {
+            ferrite_core::DecisionKind::Form { .. } => {
+                self.form_request_card(index, thread, request, window, cx)
+            }
+            ferrite_core::DecisionKind::External { .. }
+            | ferrite_core::DecisionKind::Unsupported { .. } => {
+                self.link_request_card(index, thread, request, cx)
+            }
+            _ => self.approval_request_card(index, thread, request, cx),
+        }
     }
 
-    fn non_question_request_card(
+    /// The head, the prose and the send error every non-question card
+    /// shares; the tool's name rides the head, the description reads as
+    /// prose (`request-title-*`).
+    fn request_preamble(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        request: &PendingDecision,
+    ) -> (Div, Option<Div>, Option<SharedString>) {
+        let decision = &request.decision;
+        let status = if request.submitting {
+            pane::live_text(decision::status("sending…"), "request-live".into())
+        } else {
+            decision::status("waiting").into_any_element()
+        };
+        let head = decision::head(
+            decision::kind_word(decision),
+            request_detail(&decision.tool_name, request.subject.is_none()),
+            Some(status),
+        );
+        let title = if decision.description.is_empty() && decision.tool_name.is_empty() {
+            Some(SharedString::from(
+                "The provider sent a request Ferrite could not read.",
+            ))
+        } else {
+            (!decision.description.is_empty())
+                .then(|| SharedString::from(decision.description.clone()))
+        };
+        let serial = request.handle.serial;
+        let title = title.map(|title| {
+            decision::prose(title)
+                .debug_selector(move || format!("request-title-{}-{serial}", thread.get()))
+        });
+        let error = request
+            .reply_error
+            .clone()
+            .map(SharedString::from)
+            .or_else(|| {
+                self.panes[index]
+                    .request_error
+                    .as_ref()
+                    .filter(|(failed, _)| failed == &request.handle)
+                    .map(|(_, error)| SharedString::from(error.clone()))
+            });
+        (head, title, error)
+    }
+
+    fn approval_request_card(
         &self,
         index: usize,
         thread: ThreadId,
         request: PendingDecision,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let handle = request.handle.clone();
-        let mut card = div()
-            .id(SharedString::from(format!(
-                "request-{}-{}-{}",
-                thread.get(),
-                handle.generation,
-                handle.serial
-            )))
-            .w_full()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .debug_selector({
-                        let serial = handle.serial;
-                        move || format!("request-title-{}-{serial}", thread.get())
-                    })
-                    .text_size(px(theme::FS_UI))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::TEXT))
-                    .child(format!(
-                        "{} · {}",
-                        request.decision.tool_name, request.decision.description
-                    )),
-            );
-        if request.subject.is_none() {
-            card = card.child(components::label(
-                "Agent identity unavailable",
-                theme::TEXT_2,
-            ));
-        }
+        let (head, title, error) = self.request_preamble(index, thread, &request);
+        let mut children = vec![head.into_any_element()];
+        children.extend(title.map(IntoElement::into_any_element));
         if let Some(input) = pane::approval_input(
             &request.decision,
             &self.panes[index].rich,
@@ -1139,503 +1196,464 @@ impl CockpitView {
             )
             .into(),
         ) {
-            card = card.child(input);
+            children.push(
+                decision::well(input)
+                    .debug_selector(|| "approval-well".into())
+                    .into_any_element(),
+            );
         }
-        if let Some((failed, error)) = &self.panes[index].request_error {
-            if failed == &handle {
-                card = card.child(components::label(
-                    format!("Could not send answer: {error}"),
-                    theme::BLOCKED,
-                ));
-            }
-        }
-        if let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind {
-            let fields = fields.clone();
-            let forms = self.panes[index].request_forms.clone();
-            if !forms.0.borrow().contains_key(&handle) {
-                let mut form_inputs = HashMap::new();
-                for field in &fields {
-                    let initial = match &field.kind {
-                        ferrite_core::FormFieldKind::String { default, .. } => {
-                            default.clone().unwrap_or_default()
-                        }
-                        ferrite_core::FormFieldKind::Number { default, .. } => {
-                            default.map(|value| value.to_string()).unwrap_or_default()
-                        }
-                        ferrite_core::FormFieldKind::Integer { default, .. } => {
-                            default.map(|value| value.to_string()).unwrap_or_default()
-                        }
-                        _ => continue,
-                    };
-                    let input = cx.new(|cx| {
-                        let mut input = InputState::new(window, cx);
-                        input.set_value(initial, window, cx);
-                        input
-                    });
-                    form_inputs.insert(field.id.clone(), input);
+        children.extend(
+            error.map(|error| decision::error_line("could not send", error).into_any_element()),
+        );
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .gap(px(theme::DECISION_ROW_GAP));
+        for (at, row) in decision::approval_rows(&request.decision)
+            .into_iter()
+            .enumerate()
+        {
+            let serial = handle.serial;
+            let selector = match row.verb {
+                decision::Verb::Allow => format!("request-allow-{}-{serial}", thread.get()),
+                decision::Verb::Deny => format!("request-deny-{}-{serial}", thread.get()),
+                decision::Verb::Always(choice) | decision::Verb::Choose(choice) => {
+                    format!("approval-choice-{choice}")
                 }
-                forms.0.borrow_mut().insert(
-                    handle.clone(),
-                    RequestForm {
-                        answers: Vec::new(),
-                        inputs: Vec::new(),
-                        form_inputs,
-                        values: form_defaults(&fields),
-                        fit: Default::default(),
-                    },
+            };
+            let verb = row.verb;
+            let request = request.clone();
+            let mut button = decision::option_row(
+                SharedString::from(format!(
+                    "request-row-{}-{}-{at}",
+                    handle.generation, handle.serial
+                )),
+                decision::Row {
+                    key: row.key,
+                    label: row.label,
+                    description: None,
+                    recommended: false,
+                    selected: false,
+                    enabled: row.enabled && !request.submitting,
+                    prose: false,
+                },
+            )
+            .debug_selector(move || selector.clone())
+            .on_click(
+                cx.listener(move |view, _, _, cx| view.pick_approval(thread, &request, verb, cx)),
+            );
+            if verb == decision::Verb::Deny {
+                // The Main card's deny has always answered to this name.
+                button = button.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .debug_selector(|| "decision-deny".into()),
                 );
             }
-            let submit_handle = handle.clone();
-            let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
-            let mut body = div().w_full().flex().flex_col().gap(px(12.));
-            for (field_index, field) in fields.iter().enumerate() {
-                let mut section = div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .debug_selector({
-                        let id = field.id.clone();
-                        move || format!("form-field-{id}")
-                    })
-                    .child(
-                        div()
-                            .text_color(rgb(theme::TEXT))
-                            .child(field.label.clone()),
-                    );
-                if !field.description.is_empty() {
-                    section =
-                        section.child(components::label(field.description.clone(), theme::TEXT_2));
+            rows = rows.child(button);
+        }
+        children.push(rows.into_any_element());
+        request_frame(decision::card(handle.serial, children)).into_any_element()
+    }
+
+    /// An approval row's verb, from its click or its digit. The standing
+    /// "always" row keeps the native `Choose` a click has always sent; only
+    /// the `a` key sends `AllowAlways` (`answer_request`).
+    fn pick_approval(
+        &mut self,
+        thread: ThreadId,
+        request: &PendingDecision,
+        verb: decision::Verb,
+        cx: &mut Context<Self>,
+    ) {
+        match verb {
+            decision::Verb::Allow => {
+                self.answer_request(thread, request.clone(), Answer::Allow, cx)
+            }
+            decision::Verb::Deny => self.answer_request(thread, request.clone(), Answer::Deny, cx),
+            decision::Verb::Always(choice) | decision::Verb::Choose(choice) => {
+                if let Some(choice) = request.decision.suggestions.get(choice) {
+                    self.respond_exact(
+                        thread,
+                        &request.handle,
+                        DecisionAnswer::Choose {
+                            value: choice.value.clone(),
+                        },
+                        cx,
+                    )
                 }
-                match &field.kind {
-                    ferrite_core::FormFieldKind::String { .. }
-                    | ferrite_core::FormFieldKind::Number { .. }
-                    | ferrite_core::FormFieldKind::Integer { .. } => {
-                        if let Some(input) = forms.0.borrow()[&handle].form_inputs.get(&field.id) {
-                            section = section.child(Input::new(input).disabled(request.submitting));
-                        }
+            }
+        }
+    }
+
+    fn form_request_card(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        request: PendingDecision,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let handle = request.handle.clone();
+        let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind else {
+            unreachable!("dispatched on the Form kind")
+        };
+        let fields = fields.clone();
+        let (head, title, error) = self.request_preamble(index, thread, &request);
+        let forms = self.panes[index].request_forms.clone();
+        if !forms.0.borrow().contains_key(&handle) {
+            let mut form_inputs = HashMap::new();
+            for field in &fields {
+                let initial = match &field.kind {
+                    ferrite_core::FormFieldKind::String { default, .. } => {
+                        default.clone().unwrap_or_default()
                     }
-                    ferrite_core::FormFieldKind::Boolean { .. } => {
-                        let checked = forms.0.borrow()[&handle]
-                            .values
-                            .get(&field.id)
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false);
-                        let forms = forms.clone();
-                        let handle = handle.clone();
-                        let id = field.id.clone();
-                        section = section.child(
-                            Checkbox::new(("form-bool", field_index))
-                                .checked(checked)
-                                .disabled(request.submitting)
-                                .child("Enabled")
-                                .on_click(cx.listener(move |_, checked: &bool, _, cx| {
-                                    if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                        form.values
-                                            .insert(id.clone(), serde_json::Value::Bool(*checked));
-                                    }
-                                    cx.notify();
-                                })),
-                        );
+                    ferrite_core::FormFieldKind::Number { default, .. } => {
+                        default.map(|value| value.to_string()).unwrap_or_default()
                     }
-                    ferrite_core::FormFieldKind::Enum {
-                        options,
-                        multi_select,
-                        ..
-                    } => {
-                        let selected = forms.0.borrow()[&handle].values.get(&field.id).cloned();
-                        if *multi_select {
-                            for (option_index, option) in options.iter().enumerate() {
-                                let checked = selected
-                                    .as_ref()
-                                    .and_then(|value| value.as_array())
-                                    .is_some_and(|values| {
-                                        values.iter().any(|value| {
-                                            value
-                                                == &serde_json::Value::String(option.value.clone())
-                                        })
-                                    });
-                                let forms = forms.clone();
-                                let handle = handle.clone();
-                                let id = field.id.clone();
-                                let value = option.value.clone();
-                                section = section.child(
-                                    Checkbox::new(("form-enum", field_index * 256 + option_index))
-                                        .checked(checked)
-                                        .disabled(request.submitting)
-                                        .child(option.label.clone())
-                                        .on_click(cx.listener(move |_, checked: &bool, _, cx| {
-                                            if let Some(form) =
-                                                forms.0.borrow_mut().get_mut(&handle)
-                                            {
-                                                let values =
-                                                    form.values.entry(id.clone()).or_insert_with(
-                                                        || serde_json::Value::Array(Vec::new()),
-                                                    );
-                                                let values = values
-                                                    .as_array_mut()
-                                                    .expect("form enum is an array");
-                                                values.retain(|item| {
-                                                    item != &serde_json::Value::String(
-                                                        value.clone(),
-                                                    )
-                                                });
-                                                if *checked {
-                                                    values.push(serde_json::Value::String(
-                                                        value.clone(),
-                                                    ));
-                                                }
-                                            }
-                                            cx.notify();
-                                        })),
-                                );
-                            }
-                        } else {
-                            let selected_index =
-                                selected.as_ref().and_then(|value| value.as_str()).and_then(
-                                    |value| options.iter().position(|option| option.value == value),
-                                );
+                    ferrite_core::FormFieldKind::Integer { default, .. } => {
+                        default.map(|value| value.to_string()).unwrap_or_default()
+                    }
+                    _ => continue,
+                };
+                let input = cx.new(|cx| {
+                    let mut input = InputState::new(window, cx);
+                    input.set_value(initial, window, cx);
+                    input
+                });
+                form_inputs.insert(field.id.clone(), input);
+            }
+            forms.0.borrow_mut().insert(
+                handle.clone(),
+                RequestForm {
+                    answers: Vec::new(),
+                    inputs: Vec::new(),
+                    form_inputs,
+                    values: form_defaults(&fields),
+                    fit: Default::default(),
+                },
+            );
+        }
+        let submit_handle = handle.clone();
+        let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
+        let mut body = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(theme::DECISION_QUESTIONS_GAP));
+        for (field_index, field) in fields.iter().enumerate() {
+            let mut section = div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(theme::SPACE_1_5))
+                .debug_selector({
+                    let id = field.id.clone();
+                    move || format!("form-field-{id}")
+                })
+                .child(
+                    div()
+                        .text_color(rgb(theme::TEXT))
+                        .child(field.label.clone()),
+                );
+            if !field.description.is_empty() {
+                section = section.child(decision::note(field.description.clone()));
+            }
+            match &field.kind {
+                ferrite_core::FormFieldKind::String { .. }
+                | ferrite_core::FormFieldKind::Number { .. }
+                | ferrite_core::FormFieldKind::Integer { .. } => {
+                    if let Some(input) = forms.0.borrow()[&handle].form_inputs.get(&field.id) {
+                        section = section.child(Input::new(input).disabled(request.submitting));
+                    }
+                }
+                ferrite_core::FormFieldKind::Boolean { .. } => {
+                    let checked = forms.0.borrow()[&handle]
+                        .values
+                        .get(&field.id)
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    let forms = forms.clone();
+                    let handle = handle.clone();
+                    let id = field.id.clone();
+                    section = section.child(
+                        Checkbox::new(("form-bool", field_index))
+                            .checked(checked)
+                            .disabled(request.submitting)
+                            .child("Enabled")
+                            .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                    form.values
+                                        .insert(id.clone(), serde_json::Value::Bool(*checked));
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+                ferrite_core::FormFieldKind::Enum {
+                    options,
+                    multi_select,
+                    ..
+                } => {
+                    let selected = forms.0.borrow()[&handle].values.get(&field.id).cloned();
+                    if *multi_select {
+                        for (option_index, option) in options.iter().enumerate() {
+                            let checked = selected
+                                .as_ref()
+                                .and_then(|value| value.as_array())
+                                .is_some_and(|values| {
+                                    values.iter().any(|value| {
+                                        value == &serde_json::Value::String(option.value.clone())
+                                    })
+                                });
                             let forms = forms.clone();
                             let handle = handle.clone();
                             let id = field.id.clone();
-                            let options = options.clone();
+                            let value = option.value.clone();
                             section = section.child(
-                                RadioGroup::vertical(("form-enum", field_index))
-                                    .selected_index(selected_index)
+                                Checkbox::new(("form-enum", field_index * 256 + option_index))
+                                    .checked(checked)
                                     .disabled(request.submitting)
-                                    .children(options.iter().enumerate().map(|(index, option)| {
-                                        Radio::new(index).child(option.label.clone())
-                                    }))
-                                    .on_click(cx.listener(move |_, selected: &usize, _, cx| {
-                                        if let (Some(form), Some(option)) = (
-                                            forms.0.borrow_mut().get_mut(&handle),
-                                            options.get(*selected),
-                                        ) {
-                                            form.values.insert(
-                                                id.clone(),
-                                                serde_json::Value::String(option.value.clone()),
-                                            );
+                                    .child(option.label.clone())
+                                    .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                        if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                            let values =
+                                                form.values.entry(id.clone()).or_insert_with(
+                                                    || serde_json::Value::Array(Vec::new()),
+                                                );
+                                            let values = values
+                                                .as_array_mut()
+                                                .expect("form enum is an array");
+                                            values.retain(|item| {
+                                                item != &serde_json::Value::String(value.clone())
+                                            });
+                                            if *checked {
+                                                values
+                                                    .push(serde_json::Value::String(value.clone()));
+                                            }
                                         }
                                         cx.notify();
                                     })),
                             );
                         }
+                    } else {
+                        let selected_index = selected
+                            .as_ref()
+                            .and_then(|value| value.as_str())
+                            .and_then(|value| {
+                                options.iter().position(|option| option.value == value)
+                            });
+                        let forms = forms.clone();
+                        let handle = handle.clone();
+                        let id = field.id.clone();
+                        let options = options.clone();
+                        section = section.child(
+                            RadioGroup::vertical(("form-enum", field_index))
+                                .selected_index(selected_index)
+                                .disabled(request.submitting)
+                                .children(options.iter().enumerate().map(|(index, option)| {
+                                    Radio::new(index).child(option.label.clone())
+                                }))
+                                .on_click(cx.listener(move |_, selected: &usize, _, cx| {
+                                    if let (Some(form), Some(option)) = (
+                                        forms.0.borrow_mut().get_mut(&handle),
+                                        options.get(*selected),
+                                    ) {
+                                        form.values.insert(
+                                            id.clone(),
+                                            serde_json::Value::String(option.value.clone()),
+                                        );
+                                    }
+                                    cx.notify();
+                                })),
+                        );
                     }
                 }
-                body = body.child(section);
             }
-            if let Some((failed, error)) = &self.panes[index].request_error {
-                if failed == &handle {
-                    body = body.child(
-                        div()
-                            .debug_selector(|| "form-validation-error".into())
-                            .text_color(rgb(theme::BLOCKED))
-                            .child(error.clone()),
-                    );
-                }
-            }
-            let cancel_handle = handle.clone();
-            return request_island(
-                &handle,
-                card.child(
-                    div()
-                        .max_h(px(
-                            (f32::from(window.viewport_size().height) * 0.45).min(360.)
-                        ))
-                        .flex()
-                        .flex_col()
-                        .overflow_y_scrollbar()
-                        .child(body),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(
-                            gpui::component::button::Button::new("form-cancel")
-                                .small()
-                                .label("Cancel")
-                                .disabled(!request.decision.policy.deny || request.submitting)
-                                .debug_selector(|| "form-cancel".into())
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.respond_exact(
-                                        thread,
-                                        &cancel_handle,
-                                        DecisionAnswer::Cancel,
-                                        cx,
-                                    )
-                                })),
-                        )
-                        .child(
-                            gpui::component::button::Button::new("form-send")
-                                .primary()
-                                .small()
-                                .label("Send")
-                                .disabled(!request.decision.policy.allow || request.submitting)
-                                .debug_selector(move || selector.clone())
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    let mut state = forms.0.borrow_mut();
-                                    let Some(form) = state.get_mut(&submit_handle) else {
-                                        return;
-                                    };
-                                    for field in &fields {
-                                        let Some(input) = form.form_inputs.get(&field.id) else {
-                                            continue;
-                                        };
-                                        let text = input.read(cx).value().to_string();
-                                        if text.trim().is_empty() {
-                                            if field.required {
-                                                form.values.insert(
-                                                    field.id.clone(),
-                                                    serde_json::Value::Null,
-                                                );
-                                            } else {
-                                                form.values.remove(&field.id);
-                                            }
-                                            continue;
-                                        }
-                                        let value = match &field.kind {
-                                            ferrite_core::FormFieldKind::String { .. } => {
-                                                serde_json::Value::String(text)
-                                            }
-                                            ferrite_core::FormFieldKind::Number { .. } => {
-                                                match text
-                                                    .parse::<f64>()
-                                                    .ok()
-                                                    .and_then(serde_json::Number::from_f64)
-                                                {
-                                                    Some(value) => serde_json::Value::Number(value),
-                                                    None => {
-                                                        form.values.insert(
-                                                            field.id.clone(),
-                                                            serde_json::Value::String(text),
-                                                        );
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                            ferrite_core::FormFieldKind::Integer { .. } => {
-                                                match text.parse::<i64>() {
-                                                    Ok(value) => serde_json::Value::from(value),
-                                                    Err(_) => {
-                                                        form.values.insert(
-                                                            field.id.clone(),
-                                                            serde_json::Value::String(text),
-                                                        );
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                            _ => continue,
-                                        };
-                                        form.values.insert(field.id.clone(), value);
-                                    }
-                                    let values = serde_json::Value::Object(form.values.clone());
-                                    drop(state);
-                                    if let Err(error) =
-                                        ferrite_core::validate_form(&fields, &values)
-                                    {
-                                        if let Some(index) = view.pane_for(thread) {
-                                            view.panes[index].request_error =
-                                                Some((submit_handle.clone(), error));
-                                        }
-                                        cx.notify();
-                                        return;
-                                    }
-                                    view.respond_exact(
-                                        thread,
-                                        &submit_handle,
-                                        DecisionAnswer::Form { values },
-                                        cx,
-                                    );
-                                })),
-                        ),
-                ),
-                cx,
-            );
-        } else if let ferrite_core::DecisionKind::External { url } = &request.decision.kind {
-            let url = url.clone();
-            let complete_handle = handle.clone();
-            let cancel_handle = handle.clone();
-            return request_island(
-                &handle,
-                card.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .child(components::label(
-                            "Complete this request in your browser, then confirm here.",
-                            theme::TEXT_2,
-                        ))
-                        .child(
-                            gpui::component::button::Button::new("external-open")
-                                .small()
-                                .label("Open link")
-                                .disabled(!safe_external_url(&url))
-                                .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .justify_end()
-                                .gap(px(8.))
-                                .child(
-                                    gpui::component::button::Button::new("external-cancel")
-                                        .small()
-                                        .label("Cancel")
-                                        .disabled(
-                                            !request.decision.policy.deny || request.submitting,
-                                        )
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            view.respond_exact(
-                                                thread,
-                                                &cancel_handle,
-                                                DecisionAnswer::Cancel,
-                                                cx,
-                                            )
-                                        })),
-                                )
-                                .child(
-                                    gpui::component::button::Button::new("external-complete")
-                                        .primary()
-                                        .small()
-                                        .label("Complete")
-                                        .disabled(
-                                            !request.decision.policy.allow || request.submitting,
-                                        )
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            view.respond_exact(
-                                                thread,
-                                                &complete_handle,
-                                                DecisionAnswer::Allow {
-                                                    input: serde_json::Value::Null,
-                                                },
-                                                cx,
-                                            )
-                                        })),
-                                ),
-                        ),
-                ),
-                cx,
-            );
-        } else if let ferrite_core::DecisionKind::Unsupported { reason } = &request.decision.kind {
-            let cancel_handle = handle.clone();
-            return request_island(
-                &handle,
-                card.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .child(components::label(reason.clone(), theme::TEXT_2))
-                        .child(
-                            gpui::component::button::Button::new("unsupported-cancel")
-                                .small()
-                                .label("Cancel")
-                                .disabled(!request.decision.policy.deny || request.submitting)
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.respond_exact(
-                                        thread,
-                                        &cancel_handle,
-                                        DecisionAnswer::Cancel,
-                                        cx,
-                                    )
-                                })),
-                        ),
-                ),
-                cx,
-            );
-        } else {
-            let accepted = request.decision.input.clone();
-            let allow_handle = handle.clone();
-            let choice_handle = handle.clone();
-            card = card.child(
-                div()
-                    .flex()
-                    .gap(px(6.))
-                    .child(
-                        components::button(SharedString::from(format!(
-                            "request-allow-{}-{}",
-                            handle.generation, handle.serial
-                        )))
-                        .tab_stop(true)
-                        .label("Allow")
-                        .disabled(!request.decision.policy.allow || request.submitting)
-                        .debug_selector(move || {
-                            format!("request-allow-{}-{}", thread.get(), allow_handle.serial)
-                        })
-                        .on_click(cx.listener({
-                            let handle = handle.clone();
-                            move |view, _, _, cx| {
-                                view.respond_exact(
-                                    thread,
-                                    &handle,
-                                    DecisionAnswer::Allow {
-                                        input: accepted.clone(),
-                                    },
-                                    cx,
-                                )
-                            }
-                        })),
+            body = body.child(section);
+        }
+        let cancel_handle = handle.clone();
+        let mut children = vec![head.into_any_element()];
+        children.extend(title.map(IntoElement::into_any_element));
+        children.push(
+            div()
+                .min_h_0()
+                .max_h(px(theme::DECISION_BODY_MAX_H))
+                .flex()
+                .flex_col()
+                .overflow_y_scrollbar()
+                .child(body)
+                .into_any_element(),
+        );
+        children.extend(error.map(|error| {
+            decision::error_line("not sent", error)
+                .debug_selector(|| "form-validation-error".into())
+                .into_any_element()
+        }));
+        let sending = request.submitting;
+        children.push(
+            decision::footer(
+                &[],
+                [
+                    decision::skip_button("form-cancel", "Cancel", cx)
+                        .disabled(!request.decision.policy.deny || sending)
+                        .debug_selector(|| "form-cancel".into())
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
+                        }))
+                        .into_any_element(),
+                    decision::send_button(
+                        "form-send",
+                        if sending { "Sending…" } else { "Send" },
+                        !request.decision.policy.allow || sending,
+                        cx,
                     )
-                    .child(
-                        components::button(SharedString::from(format!(
-                            "request-deny-{}-{}",
-                            handle.generation, handle.serial
-                        )))
-                        .tab_stop(true)
-                        .label("Deny")
-                        .disabled(!request.decision.policy.deny || request.submitting)
-                        .debug_selector({
-                            let serial = handle.serial;
-                            move || format!("request-deny-{}-{serial}", thread.get())
-                        })
-                        .on_click(cx.listener({
-                            let handle = handle.clone();
-                            move |view, _, _, cx| {
-                                view.respond_exact(
-                                    thread,
-                                    &handle,
-                                    DecisionAnswer::Deny {
-                                        message: "The operator denied this tool.".into(),
-                                    },
-                                    cx,
-                                )
-                            }
-                        })),
-                    ),
-            );
-            for (choice_index, choice) in request.decision.suggestions.iter().enumerate() {
-                let handle = choice_handle.clone();
-                let value = choice.value.clone();
-                let label = choice.label.clone();
-                card = card.child(
-                    components::button(SharedString::from(format!(
-                        "approval-choice-{}-{}",
-                        handle.serial, choice_index
-                    )))
-                    .tab_stop(true)
-                    .label(label.clone())
-                    .disabled(request.submitting)
-                    .debug_selector(move || format!("approval-choice-{choice_index}"))
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.send_form(thread, &submit_handle, &fields, cx)
+                    }))
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        );
+        request_frame(decision::card(handle.serial, children)).into_any_element()
+    }
+
+    fn send_form(
+        &mut self,
+        thread: ThreadId,
+        handle: &DecisionHandle,
+        fields: &[ferrite_core::FormField],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let forms = self.panes[index].request_forms.clone();
+        let mut state = forms.0.borrow_mut();
+        let Some(form) = state.get_mut(handle) else {
+            return;
+        };
+        for field in fields {
+            let Some(input) = form.form_inputs.get(&field.id) else {
+                continue;
+            };
+            let text = input.read(cx).value().to_string();
+            if text.trim().is_empty() {
+                if field.required {
+                    form.values
+                        .insert(field.id.clone(), serde_json::Value::Null);
+                } else {
+                    form.values.remove(&field.id);
+                }
+                continue;
+            }
+            let value = match &field.kind {
+                ferrite_core::FormFieldKind::String { .. } => serde_json::Value::String(text),
+                ferrite_core::FormFieldKind::Number { .. } => match text
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                {
+                    Some(value) => serde_json::Value::Number(value),
+                    None => serde_json::Value::String(text),
+                },
+                ferrite_core::FormFieldKind::Integer { .. } => match text.parse::<i64>() {
+                    Ok(value) => serde_json::Value::from(value),
+                    Err(_) => serde_json::Value::String(text),
+                },
+                _ => continue,
+            };
+            form.values.insert(field.id.clone(), value);
+        }
+        let values = serde_json::Value::Object(form.values.clone());
+        drop(state);
+        if let Err(error) = ferrite_core::validate_form(fields, &values) {
+            self.panes[index].request_error = Some((handle.clone(), error));
+            cx.notify();
+            return;
+        }
+        self.respond_exact(thread, handle, DecisionAnswer::Form { values }, cx);
+    }
+
+    /// A request finished outside Ferrite (`External`), or one it cannot
+    /// answer here (`Unsupported`): the reason, and the actions it allows.
+    fn link_request_card(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        request: PendingDecision,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let handle = request.handle.clone();
+        let (head, title, error) = self.request_preamble(index, thread, &request);
+        let sending = request.submitting;
+        let mut children = vec![head.into_any_element()];
+        children.extend(title.map(IntoElement::into_any_element));
+        let cancel_handle = handle.clone();
+        let cancel = decision::skip_button(
+            match &request.decision.kind {
+                ferrite_core::DecisionKind::External { .. } => "external-cancel",
+                _ => "unsupported-cancel",
+            },
+            "Cancel",
+            cx,
+        )
+        .disabled(!request.decision.policy.deny || sending)
+        .on_click(cx.listener(move |view, _, _, cx| {
+            view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
+        }))
+        .into_any_element();
+        let actions = match &request.decision.kind {
+            ferrite_core::DecisionKind::External { url } => {
+                children.push(
+                    decision::note("Complete this request in your browser, then confirm here.")
+                        .into_any_element(),
+                );
+                let url = url.clone();
+                let complete_handle = handle.clone();
+                vec![
+                    decision::skip_button("external-open", "Open link", cx)
+                        .disabled(!safe_external_url(&url))
+                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url)))
+                        .into_any_element(),
+                    cancel,
+                    decision::send_button(
+                        "external-complete",
+                        "Complete",
+                        !request.decision.policy.allow || sending,
+                        cx,
+                    )
                     .on_click(cx.listener(move |view, _, _, cx| {
                         view.respond_exact(
                             thread,
-                            &handle,
-                            DecisionAnswer::Choose {
-                                value: value.clone(),
+                            &complete_handle,
+                            DecisionAnswer::Allow {
+                                input: serde_json::Value::Null,
                             },
                             cx,
                         )
-                    })),
-                );
+                    }))
+                    .into_any_element(),
+                ]
             }
-        }
-        request_island(&handle, card, cx)
+            ferrite_core::DecisionKind::Unsupported { reason } => {
+                children.push(decision::note(reason.clone()).into_any_element());
+                vec![cancel]
+            }
+            _ => vec![cancel],
+        };
+        children.extend(
+            error.map(|error| decision::error_line("could not send", error).into_any_element()),
+        );
+        children.push(decision::footer(&[], actions).into_any_element());
+        request_frame(decision::card(handle.serial, children)).into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn question_request_card(
         &self,
         index: usize,
@@ -1643,6 +1661,7 @@ impl CockpitView {
         request: PendingDecision,
         handle: DecisionHandle,
         questions: Vec<ferrite_core::questions::Question>,
+        short: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1653,7 +1672,7 @@ impl CockpitView {
                 .map(|question| {
                     cx.new(|cx| {
                         InputState::new(window, cx)
-                            .placeholder("Or write your own answer…")
+                            .placeholder("or type your own answer…")
                             .masked(question.secret)
                     })
                 })
@@ -1669,6 +1688,10 @@ impl CockpitView {
                 },
             );
         }
+        let sending = request.submitting;
+        let answers = forms.0.borrow()[&handle].answers.clone();
+        // The question the digit keys pick in; only its rows show digits.
+        let target = digit_question(&answers, &questions);
         let mut content = div()
             .id(("question-content", handle.serial as usize))
             .debug_selector(|| "question-scroll-content".into())
@@ -1681,165 +1704,117 @@ impl CockpitView {
             .w_full()
             .min_w_0()
             .flex_shrink_1()
-            .max_h(px(320.))
+            .max_h(px(if short {
+                theme::DECISION_SHORT_BODY_MAX_H
+            } else {
+                theme::DECISION_BODY_MAX_H
+            }))
             .overflow_y_scrollbar()
-            .pr(px(4.))
+            .pr(px(theme::DECISION_SCROLL_GUTTER))
             .flex()
             .flex_col()
-            .gap(px(20.));
+            .gap(px(theme::DECISION_QUESTIONS_GAP));
         for (qi, question) in questions.iter().enumerate() {
+            let keyed = target == Some(qi);
+            let digit = |at: usize| {
+                (keyed && at < decision::DIGIT_KEYS)
+                    .then(|| SharedString::from((at + 1).to_string()))
+            };
             let mut section = div()
                 .flex_shrink_0()
                 .w_full()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .text_size(px(theme::FS_PROSE))
-                        .line_height(px(theme::LH_PROSE))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::TEXT_STRONG))
-                        .child(question.question.clone()),
-                );
+                .gap(px(theme::DECISION_QUESTION_GAP))
+                .child(decision::question_text(question.question.clone()));
             if question.multi_select {
-                section = section.child(components::label("Choose any that apply", theme::TEXT_2));
-                for (oi, option) in question.options.iter().enumerate() {
-                    let checked = forms.0.borrow()[&handle].answers[qi].picks.contains(&oi);
-                    let forms = forms.clone();
-                    let handle = handle.clone();
-                    section = section.child(
-                        div()
-                            .id(("question-checkbox-hover", qi * 256 + oi))
-                            .when(qi == 0 && oi == 0, |row| {
-                                row.on_prepaint(measure_question(
-                                    forms.clone(),
-                                    handle.clone(),
-                                    QuestionMeasure::FirstControl,
-                                    cx.entity().downgrade(),
-                                ))
-                            })
-                            .w_full()
-                            .min_w_0()
-                            .rounded(px(theme::R_CONTROL))
-                            .border_1()
-                            .border_color(if checked {
-                                rgb(theme::FOCUS_RING)
-                            } else {
-                                rgba(theme::TRANSPARENT)
-                            })
-                            .when(checked, |row| row.bg(rgb(theme::FILL)))
-                            .when(!request.submitting, |row| {
-                                row.cursor_pointer().hover(|style| {
-                                    style
-                                        .bg(rgb(theme::FILL_HOVER))
-                                        .border_color(rgb(theme::TEXT_FAINT))
-                                })
-                            })
-                            .child(
-                                Checkbox::new(("question-checkbox", qi * 256 + oi))
-                                    .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                                    .checked(checked)
-                                    .disabled(request.submitting)
-                                    .accessibility_label(option.label.clone())
-                                    .w_full()
-                                    .min_w_0()
-                                    .px(px(10.))
-                                    .py(px(6.))
-                                    .child(question_choice(option))
-                                    .on_click(cx.listener(move |_, checked: &bool, _, cx| {
-                                        if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                            let picks = &mut form.answers[qi].picks;
-                                            picks.retain(|at| *at != oi);
-                                            if *checked {
-                                                picks.push(oi);
-                                            }
-                                        }
-                                        cx.notify();
-                                    })),
-                            ),
-                    );
-                }
-            } else if !question.options.is_empty() {
-                let selected = forms.0.borrow()[&handle].answers[qi].picks.first().copied();
+                section = section.child(decision::note("choose any"));
+            }
+            let mut rows = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(theme::DECISION_ROW_GAP));
+            for (oi, option) in question.options.iter().enumerate() {
+                let selected = answers[qi].picks.contains(&oi);
+                let (label, recommended) = decision::split_recommended(&option.label);
                 let forms = forms.clone();
-                let handle = handle.clone();
+                let pick_handle = handle.clone();
+                let multi = question.multi_select;
+                rows = rows.child(
+                    decision::option_row(
+                        ("question-choice", qi * 256 + oi),
+                        decision::Row {
+                            key: digit(oi),
+                            label: SharedString::from(label.to_string()),
+                            description: Some(option.description.clone().into()),
+                            recommended,
+                            selected,
+                            enabled: !sending,
+                            prose: true,
+                        },
+                    )
+                    .debug_selector(move || format!("question-choice-{qi}-{oi}"))
+                    .when(qi == 0 && oi == 0, |row| {
+                        row.on_prepaint(measure_question(
+                            forms.clone(),
+                            handle.clone(),
+                            QuestionMeasure::FirstControl,
+                            cx.entity().downgrade(),
+                        ))
+                    })
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if let Some(form) = forms.0.borrow_mut().get_mut(&pick_handle) {
+                            pick_option(&mut form.answers[qi].picks, oi, multi);
+                        }
+                        view.clear_request_error(thread, &pick_handle);
+                        cx.notify();
+                    })),
+                );
+            }
+            section = section.child(rows);
+            if question.allow_other {
+                let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
                 section = section.child(
-                    RadioGroup::vertical(("question-radios", qi))
+                    div()
                         .w_full()
                         .min_w_0()
-                        .selected_index(selected)
-                        .disabled(request.submitting)
-                        .children(question.options.iter().enumerate().map(|(oi, option)| {
-                            let checked = selected == Some(oi);
-                            Radio::new(oi)
-                                .when(qi == 0 && oi == 0, |row| {
-                                    row.on_prepaint(measure_question(
+                        .flex()
+                        .items_center()
+                        .gap(px(theme::DECISION_ROW_INNER_GAP))
+                        .px(px(theme::DECISION_ROW_PAD_X))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_shrink_0()
+                                .min_w(px(theme::KBD_H))
+                                .children(digit(question.options.len()).map(components::kbd)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .debug_selector(move || selector.clone())
+                                .when(qi == 0 && question.options.is_empty(), |input| {
+                                    input.on_prepaint(measure_question(
                                         forms.clone(),
                                         handle.clone(),
                                         QuestionMeasure::FirstControl,
                                         cx.entity().downgrade(),
                                     ))
                                 })
-                                .w_full()
-                                .min_w_0()
-                                .group("question-option")
-                                .rounded(px(theme::R_CONTROL))
-                                .border_1()
-                                .border_color(if checked {
-                                    rgb(theme::FOCUS_RING)
-                                } else {
-                                    rgba(theme::TRANSPARENT)
-                                })
-                                .when(checked, |row| row.bg(rgb(theme::FILL)))
-                                .when(!request.submitting, |row| {
-                                    row.cursor_pointer().hover(|style| {
-                                        style
-                                            .bg(rgb(theme::FILL_HOVER))
-                                            .border_color(rgb(theme::TEXT_FAINT))
-                                    })
-                                })
-                                .px(px(10.))
-                                .py(px(6.))
-                                .accessibility_label(option.label.clone())
-                                .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                                .child(question_choice(option))
-                        }))
-                        .on_click(cx.listener(move |_, selected: &usize, _, cx| {
-                            if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                form.answers[qi].picks = vec![*selected];
-                            }
-                            cx.notify();
-                        })),
+                                .cursor_text()
+                                .child(
+                                    Input::new(&forms.0.borrow()[&handle].inputs[qi])
+                                        .small()
+                                        .disabled(sending),
+                                ),
+                        ),
                 );
             }
-            if question.allow_other {
-                let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
-                content = content.child(
-                    section.child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .debug_selector(move || selector.clone())
-                            .when(qi == 0 && question.options.is_empty(), |input| {
-                                input.on_prepaint(measure_question(
-                                    forms.clone(),
-                                    handle.clone(),
-                                    QuestionMeasure::FirstControl,
-                                    cx.entity().downgrade(),
-                                ))
-                            })
-                            .cursor_text()
-                            .child(
-                                Input::new(&forms.0.borrow()[&handle].inputs[qi])
-                                    .disabled(request.submitting),
-                            ),
-                    ),
-                );
-            } else {
-                content = content.child(section);
-            }
+            content = content.child(section);
         }
         let async_question = !request.decision.blocks_execution();
         let working = async_question
@@ -1848,73 +1823,53 @@ impl CockpitView {
                 .as_ref()
                 .and_then(|subject| self.cockpit.thread(thread)?.activity().subject(subject))
                 .is_some_and(|subject| subject.busy());
-        let status = if request.submitting {
-            "Sending answer…"
+        let status = decision::status(if sending {
+            "sending…"
         } else if working {
-            "Work continues while you answer"
+            "work continues"
         } else if async_question {
-            "Answer when ready"
+            "answer when ready"
         } else {
-            "Waiting for your answer"
-        };
-        let status = div()
-            .min_w_0()
-            .text_size(px(theme::FS_SM))
-            .text_color(rgb(theme::TEXT_2))
-            .child(status);
-        let status = if request.submitting || working {
+            "waiting"
+        });
+        let status = if sending || working {
             pane::live_text(status, "question-live".into())
         } else {
             status.into_any_element()
         };
-        let mut body = div()
-            .overflow_hidden()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .text_size(px(theme::FS_UI))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme::ATTENTION))
-                            .child(if questions.len() == 1 {
-                                "Question for you".into()
-                            } else {
-                                format!("{} questions for you", questions.len())
-                            }),
-                    )
-                    .child(div().flex_1())
-                    .child(status),
-            )
-            .when(request.subject.is_none(), |body| {
-                body.child(components::label(
-                    "Agent identity unavailable",
-                    theme::TEXT_2,
+        let detail = match questions.as_slice() {
+            [question] if !question.header.is_empty() => Some(question.header.clone()),
+            _ => None,
+        };
+        let head = decision::head(
+            if questions.len() == 1 {
+                "question".to_string()
+            } else {
+                format!("{} questions", questions.len())
+            },
+            request_detail(
+                detail.as_deref().unwrap_or_default(),
+                request.subject.is_none(),
+            ),
+            Some(status),
+        );
+        let mut children = vec![
+            head.into_any_element(),
+            div()
+                .flex()
+                .flex_col()
+                .min_h_0()
+                .overflow_hidden()
+                .debug_selector(|| "question-viewport".into())
+                .on_prepaint(measure_question(
+                    forms.clone(),
+                    handle.clone(),
+                    QuestionMeasure::Viewport,
+                    cx.entity().downgrade(),
                 ))
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .debug_selector(|| "question-viewport".into())
-                    .on_prepaint(measure_question(
-                        forms.clone(),
-                        handle.clone(),
-                        QuestionMeasure::Viewport,
-                        cx.entity().downgrade(),
-                    ))
-                    .child(content),
-            );
+                .child(content)
+                .into_any_element(),
+        ];
         if let Some(error) = request.reply_error.as_ref().or_else(|| {
             self.panes[index]
                 .request_error
@@ -1922,27 +1877,40 @@ impl CockpitView {
                 .filter(|(failed, _)| failed == &handle)
                 .map(|(_, error)| error)
         }) {
-            body = body.child(div().text_color(rgb(theme::BLOCKED)).child(error.clone()));
+            children.push(decision::error_line("not sent", error.clone()).into_any_element());
         }
-        let island_measure = measure_question(
-            forms.clone(),
-            handle.clone(),
-            QuestionMeasure::Island,
-            cx.entity().downgrade(),
-        );
         let skip_handle = handle.clone();
         let submit_handle = handle.clone();
         let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
-        body = body.child(
-            div()
-                .flex_shrink_0()
-                .flex()
-                .justify_end()
-                .items_center()
-                .gap(px(10.))
-                .child(
-                    question_action_button("question-skip", "Skip", false)
-                        .disabled(request.submitting)
+        let hints: Vec<(String, &str)> = target
+            .map(|qi| {
+                let question = &questions[qi];
+                let keys = (question.options.len() + usize::from(question.allow_other))
+                    .min(decision::DIGIT_KEYS);
+                let range = if keys > 1 {
+                    format!("1-{keys}")
+                } else {
+                    "1".into()
+                };
+                if question.multi_select {
+                    vec![(range, "toggle"), ("↵".into(), "send")]
+                } else if questions.len() == 1 {
+                    vec![(range, "answer")]
+                } else {
+                    vec![(range, "pick"), ("↵".into(), "send")]
+                }
+            })
+            .unwrap_or_default();
+        let hints: Vec<(&str, &str)> = hints
+            .iter()
+            .map(|(key, verb)| (key.as_str(), *verb))
+            .collect();
+        children.push(
+            decision::footer(
+                &hints,
+                [
+                    decision::skip_button("question-skip", "Skip", cx)
+                        .disabled(sending)
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.respond_exact(
                                 thread,
@@ -1952,62 +1920,179 @@ impl CockpitView {
                                 },
                                 cx,
                             )
-                        })),
-                )
-                .child(
-                    question_action_button(
+                        }))
+                        .into_any_element(),
+                    decision::send_button(
                         "question-send",
-                        if request.submitting {
-                            "Sending…"
-                        } else {
-                            "Send answer"
-                        },
-                        true,
+                        if sending { "Sending…" } else { "Send" },
+                        sending,
+                        cx,
                     )
-                    .disabled(request.submitting)
                     .debug_selector(move || selector.clone())
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        let mut state = forms.0.borrow_mut();
-                        let Some(form) = state.get_mut(&submit_handle) else {
-                            return;
-                        };
-                        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
-                            answer.other = Some(input.read(cx).value().to_string())
-                                .filter(|text| !text.trim().is_empty());
-                        }
-                        if form
-                            .answers
-                            .iter()
-                            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
-                        {
-                            if let Some(index) = view.pane_for(thread) {
-                                view.panes[index].request_error = Some((
-                                    submit_handle.clone(),
-                                    "Answer each question before sending.".into(),
-                                ));
-                            }
-                            cx.notify();
-                            return;
-                        }
-                        let answers = form.answers.clone();
-                        drop(state);
-                        view.respond_exact(
-                            thread,
-                            &submit_handle,
-                            DecisionAnswer::Questions { answers },
-                            cx,
-                        );
-                    })),
-                ),
+                        view.send_question_form(thread, &submit_handle, false, cx);
+                    }))
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
         );
-        div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .on_prepaint(island_measure)
-            .child(request_island(&handle, body, cx))
+        // The frame is the island QuestionFit measures: it carries the dock
+        // gap as well as the card, so `required` counts every pixel the
+        // overlay must hold.
+        request_frame(decision::card(handle.serial, children))
+            .on_prepaint(measure_question(
+                forms,
+                handle.clone(),
+                QuestionMeasure::Island,
+                cx.entity().downgrade(),
+            ))
             .into_any_element()
+    }
+
+    fn clear_request_error(&mut self, thread: ThreadId, handle: &DecisionHandle) {
+        if let Some(index) = self.pane_for(thread) {
+            if self.panes[index]
+                .request_error
+                .as_ref()
+                .is_some_and(|(failed, _)| failed == handle)
+            {
+                self.panes[index].request_error = None;
+            }
+        }
+    }
+
+    /// Send a question form: every question needs a pick or typed words.
+    /// `quiet` (the ↵ path) leaves an incomplete form alone instead of
+    /// flagging it. Returns whether an answer went out.
+    pub(super) fn send_question_form(
+        &mut self,
+        thread: ThreadId,
+        handle: &DecisionHandle,
+        quiet: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.pane_for(thread) else {
+            return false;
+        };
+        let forms = self.panes[index].request_forms.clone();
+        let mut state = forms.0.borrow_mut();
+        let Some(form) = state.get_mut(handle) else {
+            return false;
+        };
+        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
+            answer.other =
+                Some(input.read(cx).value().to_string()).filter(|text| !text.trim().is_empty());
+        }
+        if form
+            .answers
+            .iter()
+            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
+        {
+            drop(state);
+            if !quiet {
+                self.panes[index].request_error = Some((
+                    handle.clone(),
+                    "Answer each question before sending.".into(),
+                ));
+                cx.notify();
+            }
+            return false;
+        }
+        let answers = form.answers.clone();
+        drop(state);
+        self.respond_exact(thread, handle, DecisionAnswer::Questions { answers }, cx);
+        true
+    }
+
+    /// ↵ on an empty Main Composer line: send the question this Pane shows
+    /// when every one of its questions is answered. False leaves the key to
+    /// the Composer (an empty line's ↵ takes a held prompt back).
+    pub(super) fn send_ready_question(&mut self, cx: &mut Context<Self>) -> bool {
+        let index = self.focused();
+        let Some(request) = self.shown_request(index) else {
+            return false;
+        };
+        if request.submitting || pane::questions_of(&request.decision).is_none() {
+            return false;
+        }
+        let thread = self.panes[index].thread().expect("a request has a Thread");
+        self.send_question_form(thread, &request.handle, true, cx)
+    }
+
+    /// The first request this Pane's selected Subject shows — the one its
+    /// digit keys pick in.
+    fn shown_request(&self, index: usize) -> Option<PendingDecision> {
+        let pane = self.panes.get(index)?;
+        self.cockpit
+            .thread(pane.thread()?)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .find(|request| shown_on(pane, request))
+            .cloned()
+    }
+
+    /// Digit `n` (0-based) on the request this Pane shows: an approval runs
+    /// row n's verb; a question picks option n of its digit question — a
+    /// single single-select question with no typed words then sends at
+    /// once (one key) — or focuses the words field one past its options.
+    /// False when nothing here takes the digit, so it types.
+    pub(super) fn pick_request_row(
+        &mut self,
+        index: usize,
+        n: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(request) = self.shown_request(index) else {
+            return false;
+        };
+        let thread = self.panes[index].thread().expect("a request has a Thread");
+        if request.submitting {
+            return true;
+        }
+        let Some(questions) = pane::questions_of(&request.decision) else {
+            if !matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
+                return false;
+            }
+            let Some(verb) = decision::digit_verb(&request.decision, n) else {
+                return false;
+            };
+            self.pick_approval(thread, &request, verb, cx);
+            return true;
+        };
+        let forms = self.panes[index].request_forms.clone();
+        let mut state = forms.0.borrow_mut();
+        // The card builds its form on first paint; a question never drawn
+        // (a compact cell's expander) has nothing to pick in yet.
+        let Some(form) = state.get_mut(&request.handle) else {
+            return false;
+        };
+        let Some(qi) = digit_question(&form.answers, questions) else {
+            return false;
+        };
+        let question = &questions[qi];
+        if n < question.options.len() {
+            pick_option(&mut form.answers[qi].picks, n, question.multi_select);
+            let one_key = questions.len() == 1
+                && !question.multi_select
+                && form.inputs[qi].read(cx).value().trim().is_empty();
+            drop(state);
+            self.clear_request_error(thread, &request.handle);
+            if one_key {
+                self.send_question_form(thread, &request.handle, false, cx);
+            }
+            cx.notify();
+            true
+        } else if question.allow_other && n == question.options.len() {
+            let focus = form.inputs[qi].read(cx).focus_handle(cx);
+            drop(state);
+            window.focus(&focus, cx);
+            true
+        } else {
+            false
+        }
     }
 
     fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
@@ -2085,7 +2170,7 @@ impl CockpitView {
         answer: Answer,
         cx: &mut Context<Self>,
     ) {
-        if (pane::question_of(&request.decision).is_some()
+        if (pane::questions_of(&request.decision).is_some()
             || matches!(
                 request.decision.kind,
                 ferrite_core::DecisionKind::Form { .. }
@@ -2126,90 +2211,6 @@ impl CockpitView {
 
 fn safe_external_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
-}
-
-/// Question actions deliberately bypass the kit's light primary preset. Its
-/// inherited hover foreground can erase the label on this dark island.
-fn question_action_button(
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-    primary: bool,
-) -> gpui_base::Button {
-    let button = gpui_base::Button::new(id)
-        .tab_stop(true)
-        .h(px(32.))
-        .px(px(12.))
-        .rounded(px(theme::R_CONTROL))
-        .border_1()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .cursor_pointer()
-        .styles(|styles| styles.disabled(|style| style.opacity(0.45)))
-        .child(label.into());
-    if primary {
-        button
-            .bg(rgb(theme::TEXT))
-            .border_color(rgb(theme::TEXT))
-            .text_color(rgb(theme::GROUND))
-            .hover(|style| {
-                style
-                    .bg(rgb(theme::TEXT_STRONG))
-                    .border_color(rgb(theme::TEXT_STRONG))
-                    .text_color(rgb(theme::GROUND))
-            })
-            .active(|style| {
-                style
-                    .bg(rgb(theme::TEXT_2))
-                    .border_color(rgb(theme::TEXT_2))
-                    .text_color(rgb(theme::GROUND))
-            })
-            .focus_visible(|style| style.border_color(rgb(theme::ATTENTION)))
-    } else {
-        button
-            .bg(rgba(theme::TRANSPARENT))
-            .border_color(rgb(theme::FILL))
-            .text_color(rgb(theme::TEXT))
-            .hover(|style| {
-                style
-                    .bg(rgb(theme::HOVER))
-                    .border_color(rgb(theme::FILL_HOVER))
-                    .text_color(rgb(theme::TEXT_STRONG))
-            })
-            .active(|style| {
-                style
-                    .bg(rgb(theme::FILL))
-                    .border_color(rgb(theme::FILL_HOVER))
-                    .text_color(rgb(theme::TEXT_STRONG))
-            })
-            .focus_visible(|style| style.border_color(rgb(theme::ATTENTION)))
-    }
-}
-
-/// Labels and descriptions wrap inside the native choice's content slot.
-fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement {
-    div()
-        .flex_1()
-        .min_w_0()
-        .mt(px(-theme::CHOICE_LABEL_LIFT))
-        .flex()
-        .flex_col()
-        .gap(px(3.))
-        .text_size(px(theme::FS_PROSE_SM))
-        .line_height(px(theme::LH_PROSE_SM))
-        .child(
-            div()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(theme::TEXT))
-                .child(choice.label.clone()),
-        )
-        .when(!choice.description.is_empty(), |column| {
-            column.child(
-                div()
-                    .text_color(rgb(theme::TEXT_2))
-                    .child(choice.description.clone()),
-            )
-        })
 }
 
 fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, serde_json::Value> {
