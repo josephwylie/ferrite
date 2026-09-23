@@ -231,11 +231,16 @@ impl Markdown {
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
+        // Prose sets its own face; the inherited style is the Pane's.
+        let face: SharedString = theme::FONT_UI.into();
         #[cfg(test)]
         testing::record(
             self.id.clone(),
             state.clone(),
-            window.text_style().clone(),
+            gpui::TextStyle {
+                font_family: face.clone(),
+                ..window.text_style().clone()
+            },
             cx,
         );
         let heading_size = window.text_style().font_size.to_pixels(window.rem_size());
@@ -262,7 +267,7 @@ impl gpui::RenderOnce for Markdown {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
-            .font_family(theme::FONT_UI)
+            .font_family(face)
             .w_full()
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
