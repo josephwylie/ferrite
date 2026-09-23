@@ -1165,6 +1165,45 @@ fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut Tes
     assert!(pulse_parked(cx));
 }
 
+/// A pulse tick repaints what paints the loop and nothing cached beside it:
+/// the working mark animates while the Pane's retained transcript — the
+/// expensive native text — is reused from its cache on every tick.
+#[gpui::test]
+fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) {
+    cx.update(crate::motion::testing::drive_pulse);
+    let (mut core, fake) = cockpit("motion-tick-isolation", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_some());
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+    assert!(
+        mounted_native_texts(&prefix, cx) > 0,
+        "the premise: the transcript's native text is mounted"
+    );
+
+    reset_native_text_renders(cx);
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(crate::theme::MOTION_PULSE_TICK_MS));
+        cx.run_until_parked();
+    }
+    assert!(!pulse_parked(cx), "the mark kept the clock running");
+    assert_eq!(
+        native_text_renders(&prefix, cx),
+        0,
+        "ten ticks rebuilt none of the cached transcript's native text"
+    );
+    assert_eq!(display_frames(cx), 0, "and asked the display for nothing");
+}
+
 fn nav_column_width(cx: &mut gpui::VisualTestContext) -> f32 {
     f32::from(
         cx.debug_bounds("nav-column")
