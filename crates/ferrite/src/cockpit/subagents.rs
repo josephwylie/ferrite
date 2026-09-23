@@ -1957,6 +1957,10 @@ impl CockpitView {
                             div()
                                 .flex_1()
                                 .min_w_0()
+                                // The field's edge and padding hang left of
+                                // the column, so its text starts where the
+                                // option labels do.
+                                .ml(px(-(theme::QUESTION_FIELD_PAD_X + 1.)))
                                 .debug_selector(move || selector.clone())
                                 .when(qi == 0 && question.options.is_empty(), |input| {
                                     input.on_prepaint(measure_question(
@@ -1968,9 +1972,18 @@ impl CockpitView {
                                 })
                                 .cursor_text()
                                 .child(
-                                    Input::new(&forms.0.borrow()[&handle].inputs[qi])
-                                        .small()
-                                        .disabled(sending),
+                                    gpui::Styled::h(
+                                        Input::new(&forms.0.borrow()[&handle].inputs[qi])
+                                            .small()
+                                            .disabled(sending),
+                                        px(theme::CONTROL_H),
+                                    )
+                                    .px(px(theme::QUESTION_FIELD_PAD_X))
+                                    .rounded(px(theme::R_CONTROL))
+                                    .bg(rgb(theme::PANE))
+                                    .border_color(rgb(theme::INPUT_EDGE))
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(theme::FS_UI)),
                                 ),
                         ),
                 );

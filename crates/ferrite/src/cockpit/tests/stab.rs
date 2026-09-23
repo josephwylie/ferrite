@@ -710,3 +710,41 @@ fn an_l2_approval_cell_keeps_its_composer(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(composer_text(&view, cx), "hold on");
 }
+
+/// A question's own-answer field is a full control: `CONTROL_H` tall, its
+/// edge and padding hanging left of the option labels' column so its text
+/// starts where they do.
+#[gpui::test]
+fn the_own_answer_field_is_a_full_control_on_the_label_column(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("own-answer-field", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(900.)));
+    fake.streams.borrow()[0].send(question("own")).unwrap();
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .pending_decisions()[0]
+            .handle
+            .serial
+    });
+    let field = cx
+        .debug_bounds(Box::leak(
+            format!("request-other-{}-{serial}-0", thread.get()).into_boxed_str(),
+        ))
+        .expect("the own-answer field");
+    let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
+    assert_eq!(field.size.height, px(crate::theme::CONTROL_H));
+    let labels = choice.left()
+        + px(crate::theme::DECISION_ROW_PAD_X
+            + crate::theme::KBD_H
+            + crate::theme::DECISION_ROW_INNER_GAP);
+    assert_eq!(
+        field.left() + px(crate::theme::QUESTION_FIELD_PAD_X + 1.),
+        labels,
+        "the field's text starts on the labels' column"
+    );
+}

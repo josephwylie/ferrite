@@ -1251,6 +1251,11 @@ pub const DECISION_SHORT_BODY_MAX_H: f32 =
     2.0 * (2.0 * LH_PROSE_SM + 2.0 * DECISION_ROW_PAD_Y) + DECISION_ROW_GAP;
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
+/// A question's "type your own answer" field: the sheet field recipe
+/// (`PANE`, `INPUT_EDGE`, `R_CONTROL`, `CONTROL_H`, mono `FS_UI`) with 6px
+/// inline padding, its edge and padding hanging left of the option labels'
+/// column so its text starts on it.
+pub const QUESTION_FIELD_PAD_X: f32 = SPACE_1_5;
 /// An L2 keycap pair (`y allow`): key, 4px, verb; pairs 12px apart.
 pub const DECISION_KEY_GAP: f32 = SPACE_1;
 pub const DECISION_KEYS_GAP: f32 = SPACE_3;
