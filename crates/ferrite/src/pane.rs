@@ -1076,14 +1076,24 @@ pub fn render_pane(
 // Each slot's body belongs to one package; its signature and `PaneCtx` are
 // the integrator's.
 
-/// WP-A · the L1 working line, while the transcript streams. It overlays
+/// WP-A · the L1 working line, while the transcript streams (or its
+/// starting shape while a Session starts). It overlays
 /// the bottom of the transcript body — the list's own bottom padding, which
 /// is taller than the line — so a turn starting or stopping never resizes
 /// the list viewport or moves what the operator is reading. It sits in the
 /// reading column on the transcript rows' axis, over the Pane's ground.
 fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
     let transcript = cx.transcript?;
-    (transcript.status() == Status::Streaming).then(|| {
+    let line = if transcript.status() == Status::Streaming {
+        working_line(transcript, false, cx.received_reasoning_visible)
+    } else if cx.starting {
+        // A Session starting or being replaced, with nothing streaming yet:
+        // the same line, saying so.
+        starting_line(cx.reduce_motion)
+    } else {
+        return None;
+    };
+    Some(
         div()
             .relative()
             .w_full()
@@ -1100,15 +1110,33 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
                     .pb(px(theme::SPACE_1))
                     .bg(rgb(PANE))
                     .child(components::reading_column(
-                        div().px(px(theme::BOX_INSET_X)).child(working_line(
-                            transcript,
-                            false,
-                            cx.received_reasoning_visible,
-                        )),
+                        div().px(px(theme::BOX_INSET_X)).child(line),
                     )),
             )
-            .into_any_element()
-    })
+            .into_any_element(),
+    )
+}
+
+/// The working line's shape while a Session starts: the Ferrite mark (still
+/// under reduced motion) and `Starting session`.
+fn starting_line(reduce_motion: bool) -> Div {
+    let mark = if reduce_motion {
+        icons::ferrite_icon(theme::GLYPH_BOX)
+    } else {
+        icons::animated_ferrite_icon(theme::GLYPH_BOX, "live-progress-indicator")
+    };
+    div()
+        .debug_selector(|| "transcript-starting".into())
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .font_family(theme::FONT_MONO)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(TEXT_2))
+        .child(components::gutter(mark, theme::LH_UI))
+        .child(div().min_w_0().truncate().child("Starting session"))
 }
 
 /// WP-C · the tasks strip under the head.
