@@ -686,6 +686,12 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.scrollbar = rgba(TRANSPARENT).into();
     theme.scrollbar_thumb = rgb(SCROLLBAR).into();
     theme.scrollbar_thumb_hover = rgb(SCROLLBAR_HOVER).into();
+    // The subject strip (the app's only TabBar, plain Tab variant): no bar
+    // ground, the active tab a FILL pill in TEXT_STRONG, the rest muted.
+    theme.tab_bar = rgba(TRANSPARENT).into();
+    theme.tab_active = rgb(FILL).into();
+    theme.tab_active_foreground = rgb(TEXT_STRONG).into();
+    theme.tab_foreground = rgb(TEXT_MUTED).into();
     // `Theme::change` resolved the kit's pre-computed tokens from its default
     // palette, and nothing recomputes them: widgets that read `tokens.*`
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
@@ -1166,32 +1172,78 @@ pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
 // Owner: WP-F (decision.rs, subagents.rs, the Decision card and keycaps.)
 // Edit values and append tokens only inside this section.
 
-/// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
-/// gap, and a 15px warning mark.
-#[allow(dead_code)]
-pub const DECISION_MARGIN_X: f32 = 12.0;
-#[allow(dead_code)]
-pub const DECISION_MARGIN_B: f32 = 8.0;
-#[allow(dead_code)]
-pub const DECISION_PAD_X: f32 = 10.0;
-#[allow(dead_code)]
-pub const DECISION_PAD_Y: f32 = 8.0;
-#[allow(dead_code)]
-pub const DECISION_GAP: f32 = 10.0;
-pub const ICON_WARNING: f32 = 15.0;
-/// The Decision card's keycaps today: 3px block, 7px inline padding.
-#[allow(dead_code)]
-pub const KEYCAP_PAD_X: f32 = 7.0;
-#[allow(dead_code)]
-pub const KEYCAP_PAD_Y: f32 = 3.0;
-/// The native checkbox/radio indicator's box.
-const CHOICE_CONTROL: f32 = 16.0;
-/// The lift that drops a question choice's label onto the native
-/// checkbox/radio indicator's center. The control top-aligns with the label
-/// column, whose first line boxes `LH_PROSE_SM`, so the label rides half that
-/// difference too low. Lifting the label rather than sinking the control
-/// keeps a wrapped choice and its description flowing from the same edge.
-pub const CHOICE_LABEL_LIFT: f32 = (LH_PROSE_SM - CHOICE_CONTROL) / 2.0;
+/// The Decision card (approvals, questions, forms, links — Main's and a
+/// Subagent's alike): a `RAISED` block under an `ATTENTION_WASH` ground with
+/// a 1px `ATTENTION_EDGE` (35%) edge, in the reading column above the
+/// Composer. Mono head (`◆` drawn, the kind word `W_LABEL` `ATTENTION`),
+/// prose question (Geist `FS_PROSE` `W_STRONG` `TEXT_STRONG`), option rows
+/// that each show the one key that picks them, a mono footer. Colour is
+/// state: Deny is not red; the card's amber is the only hue it carries.
+/// 12px inline and 10px block padding; 8px between sections.
+pub const DECISION_PAD_X: f32 = SPACE_3;
+pub const DECISION_PAD_Y: f32 = 10.0;
+pub const DECISION_GAP: f32 = SPACE_2;
+/// The head's drawn diamond: 8px in a `LH_META` line.
+pub const DECISION_MARK: f32 = SPACE_2;
+/// From the card to the Composer below it, and between stacked cards.
+pub const DECISION_DOCK_GAP: f32 = SPACE_2;
+/// An option row: 8px inline, 4px block padding around a `LH_PROSE_SM` line
+/// (26px with no description), 2px apart; its keycap sits 8px before the
+/// label. Hover is `FILL` (the row rests on `RAISED`), selected is `FILL`
+/// plus a trailing `ACCENT` check — never a focus-coloured border.
+pub const DECISION_ROW_PAD_X: f32 = SPACE_2;
+pub const DECISION_ROW_PAD_Y: f32 = SPACE_1;
+pub const DECISION_ROW_GAP: f32 = SPACE_0_5;
+pub const DECISION_ROW_INNER_GAP: f32 = SPACE_2;
+/// The selected row's trailing check.
+pub const DECISION_CHECK: f32 = SPACE_3;
+/// A question's text to its rows, and one question to the next.
+pub const DECISION_QUESTION_GAP: f32 = SPACE_2;
+pub const DECISION_QUESTIONS_GAP: f32 = SPACE_4;
+/// The command well: `GROUND`, 6/10 padding, scrolling past 160px.
+pub const DECISION_WELL_PAD_X: f32 = 10.0;
+pub const DECISION_WELL_PAD_Y: f32 = SPACE_1_5;
+pub const DECISION_INPUT_MAX_H: f32 = 160.0;
+/// A question body's scroll cap inside the card (head and footer stay
+/// pinned); container-relative, never a window fraction.
+pub const DECISION_BODY_MAX_H: f32 = 320.0;
+/// Below a 360px Pane the body caps at two described option rows and
+/// scrolls, so the head and the answer row always stay in reach.
+pub const DECISION_SHORT_PANE_H: f32 = 360.0;
+pub const DECISION_SHORT_BODY_MAX_H: f32 =
+    2.0 * (2.0 * LH_PROSE_SM + 2.0 * DECISION_ROW_PAD_Y) + DECISION_ROW_GAP;
+/// The scroll gutter a body keeps free for its thumb.
+pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
+/// An L2 keycap pair (`y allow`): key, 4px, verb; pairs 12px apart.
+pub const DECISION_KEY_GAP: f32 = SPACE_1;
+pub const DECISION_KEYS_GAP: f32 = SPACE_3;
+/// The L2 Decision body: the cell's padding, 6px between its lines.
+pub const DECISION_L2_GAP: f32 = SPACE_1_5;
+
+/// Subagent tabs: the kit's plain `Tab` variant at XSmall (20px high, 8px
+/// inline padding inside a 1px edge each side, packed with no gap), the
+/// active tab a `FILL` pill; labels truncate at 112px. A mark sits 6px
+/// after its label; the `+N` overflow keeps 4px either side.
+pub const SUBJECT_TAB_PAD_X: f32 = SPACE_2;
+pub const SUBJECT_TAB_EDGE: f32 = 1.0;
+pub const SUBJECT_TAB_GAP: f32 = SPACE_1;
+pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_1_5;
+pub const SUBJECT_LABEL_MAX_W: f32 = 112.0;
+/// The strip's row: the 20px pills with 2px of air above and below.
+pub const SUBJECT_STRIP_H: f32 = CHIP_H + 2.0 * SPACE_0_5;
+/// A working tab's busy dots: three 2px dots 2px apart (10px, no slack),
+/// lifting 2px on a 650ms loop; still under reduced motion.
+pub const BUSY_DOT_D: f32 = SPACE_0_5;
+pub const BUSY_DOT_GAP: f32 = SPACE_0_5;
+pub const BUSY_DOT_LIFT: f32 = SPACE_0_5;
+pub const BUSY_DOTS_MS: u64 = 650;
+pub const BUSY_DOTS_W: f32 = 3.0 * BUSY_DOT_D + 2.0 * BUSY_DOT_GAP;
+/// The one needs-you dot: a waiting tab and the head's jump control.
+pub const ATTENTION_DOT: f32 = 5.0;
+/// A failed agent's drawn `✗`, in `BLOCKED`, beside its label.
+pub const SUBJECT_FAILED_MARK: f32 = SPACE_2;
+/// The head's jump control: a `CHIP_H` square around the dot.
+pub const ATTENTION_JUMP: f32 = CHIP_H;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav
@@ -1524,6 +1576,7 @@ mod tests {
             assert_eq!(tokens.accent.color, solid(FILL));
             assert_eq!(tokens.popover.color, solid(MENU));
             assert_eq!(tokens.muted.color, solid(RAISED));
+            assert_eq!(tokens.tab_active.color, solid(FILL));
             assert_eq!(tokens.ring.color, solid(FOCUS_RING));
             assert_eq!(tokens.input.color, solid(INPUT_EDGE));
             assert_eq!(tokens.border.color, alpha(HAIRLINE_STRONG));
