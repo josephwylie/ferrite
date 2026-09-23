@@ -4837,7 +4837,8 @@ pub(crate) fn render_block(
             }
             row.child(reasoning.child(body)).into_any_element()
         }
-        // A notice: a dot and one mono line. Only the transcript's latest
+        // A notice: a dot and one line, cut by width at the column's edge
+        // with the whole of it one hover away. Only the transcript's latest
         // notice wears the Pane's state (`signal`); history stays neutral.
         Body::Notice(text) => {
             let (mark, ink) = if signal == TEXT_MUTED {
@@ -4853,11 +4854,19 @@ pub(crate) fn render_block(
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .text_color(rgb(ink))
-                .child(div().flex_1().min_w_0().child(selection.line(
-                    block.id,
-                    text.clone(),
-                    separators(text),
-                ))),
+                .child(
+                    div()
+                        .id(SharedString::from(format!("notice-{:?}", block.id)))
+                        .debug_selector({
+                            let id = block.id;
+                            move || format!("notice-{id:?}")
+                        })
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .tooltip(crate::menu::tooltip(text.clone()))
+                        .child(selection.line(block.id, text.clone(), separators(text))),
+                ),
             )
             .into_any_element()
         }

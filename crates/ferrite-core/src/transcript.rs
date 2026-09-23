@@ -1581,9 +1581,9 @@ impl Transcript {
 /// How much of a tool failure a row carries; the model got all of it.
 const ERROR_CHARS: usize = 200;
 
-/// How much of a tool's output its `⎿` continuation row carries — one line
-/// that never wraps at transcript density.
-const RESULT_CHARS: usize = 80;
+/// How much of a tool's output its `⎿` continuation row carries: one line
+/// the row cuts by width, never wrapping.
+const RESULT_CHARS: usize = crate::progress::ROW_CHARS;
 
 const TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -2995,7 +2995,17 @@ mod tests {
             "the first non-blank line, without the rest"
         );
 
-        // An overlong line is cut to a row, marked.
+        // A line longer than a narrow row stays whole: the row cuts it by
+        // width, not this fold.
+        let mut wide = Transcript::default();
+        wide.apply(started("toolu_3", "Bash", serde_json::Value::Null));
+        wide.apply(completed("toolu_3", &"y".repeat(150), false));
+        let Body::Tool(tool) = &wide.blocks()[0].body else {
+            panic!("expected a tool row")
+        };
+        assert_eq!(tool.result_line.as_deref(), Some("y".repeat(150).as_str()));
+
+        // Only a line past what any row can show is cut, marked.
         let mut long = Transcript::default();
         long.apply(started("toolu_2", "Bash", serde_json::Value::Null));
         long.apply(completed("toolu_2", &"x".repeat(500), false));
@@ -3003,7 +3013,7 @@ mod tests {
             panic!("expected a tool row")
         };
         let line = tool.result_line.as_deref().unwrap();
-        assert_eq!(line.chars().count(), 81);
+        assert_eq!(line.chars().count(), RESULT_CHARS + 1);
         assert!(line.ends_with('…'));
     }
 

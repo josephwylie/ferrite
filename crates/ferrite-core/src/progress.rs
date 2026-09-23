@@ -359,6 +359,11 @@ pub fn duration_label(elapsed: std::time::Duration) -> String {
     }
 }
 
+/// The bound on a one-line row's text: wider than any row can show, so a
+/// row cuts its line by width (an ellipsis at its edge) and this only caps
+/// what a pathological line costs to shape. Never a display length.
+pub const ROW_CHARS: usize = 256;
+
 /// A status line is one readable line. Bound Unicode by characters, and
 /// remove control characters. ANSI CSI/OSC escapes are discarded too.
 pub fn one_line(text: &str, max: usize) -> String {

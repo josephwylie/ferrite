@@ -414,3 +414,52 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         }));
     }
 }
+
+/// A question without a header is named by its whole text, and the notice
+/// row cuts it by width at the column's edge: one line, reaching the edge,
+/// not a character count short of it.
+#[gpui::test]
+fn a_long_question_notice_is_cut_by_width_not_by_characters(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("question-notice-width", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    let text = "Which details should remain visible when the transcript is narrowed to a single \
+                column, and should the tool rows keep their durations or give them up first?";
+    let q = ferrite_core::questions::Question {
+        id: Some("q".into()),
+        question: text.into(),
+        header: String::new(),
+        multi_select: false,
+        secret: false,
+        allow_other: false,
+        options: vec![ferrite_core::questions::Choice {
+            label: "Keep".into(),
+            description: String::new(),
+            preview: None,
+        }],
+    };
+    fake.streams.borrow()[0]
+        .send(typed_decision(DecisionKind::Questions(vec![q])))
+        .unwrap();
+    tick(cx);
+    let (id, notice) = view.read_with(cx, |v, _| {
+        let thread = v.cockpit.thread(v.panes[0].thread().unwrap()).unwrap();
+        let block = thread.transcript().blocks().last().unwrap();
+        let ferrite_core::transcript::Body::Notice(line) = &block.body else {
+            panic!("the question leaves a notice: {:?}", block.body)
+        };
+        (block.id, line.clone())
+    });
+    assert_eq!(notice, format!("asks 1 question · {text}"));
+    let row = debug_bounds(cx, format!("notice-{id:?}")).expect("the notice row");
+    let block = cx.debug_bounds("composer-block").unwrap();
+    assert_eq!(row.size.height, px(crate::theme::LH_UI), "one line");
+    assert!(
+        row.right() <= block.right() - px(crate::theme::BOX_INSET_X) + px(0.5),
+        "the row {row:?} ends at the column's edge {block:?}"
+    );
+    assert!(
+        row.right() >= block.right() - px(crate::theme::BOX_INSET_X) - px(0.5),
+        "the row {row:?} runs to the column's edge, not a character count short"
+    );
+}
