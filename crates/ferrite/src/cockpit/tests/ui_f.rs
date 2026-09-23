@@ -183,7 +183,6 @@ fn a_multi_select_question_toggles_on_digits_and_sends_on_enter(cx: &mut TestApp
 /// A Subagent's approval card shows its keys and they answer it: `y` on
 /// the child's tab allows exactly that child's request.
 #[gpui::test]
-#[ignore = "red until the lead lands the child body Decision context (routed request 4)"]
 fn a_subagent_approval_answers_its_keycaps(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
     for (key, id) in [("y", "child-y"), ("n", "child-n"), ("1", "child-1")] {
