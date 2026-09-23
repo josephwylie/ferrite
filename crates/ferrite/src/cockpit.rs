@@ -7634,6 +7634,7 @@ impl CockpitView {
                         && pane.composer.read(cx).focus_handle(cx).is_focused(window),
                     reduce_motion: cx.reduce_motion(),
                     drop_target: self.drop_target(index, cx),
+                    show_focus: self.visible_indices().len() > 1,
                 },
                 level,
             ));
@@ -7684,6 +7685,7 @@ impl CockpitView {
                 && window.is_window_active()
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
+            show_focus: self.visible_indices().len() > 1,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.

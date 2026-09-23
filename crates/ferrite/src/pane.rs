@@ -624,6 +624,9 @@ pub struct PaneFacts<'a> {
     /// Native files are dragged over this Pane: the drop sheet covers it
     /// and the Composer, drawn above the sheet, wears the accent edge.
     pub drop_target: bool,
+    /// More than one Pane is on the board, so which one holds the keyboard
+    /// needs showing: only then does focus draw the `FOCUS_RING` edge.
+    pub show_focus: bool,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
@@ -875,6 +878,7 @@ pub fn render_pane(
         reduce_motion,
         editing,
         drop_target,
+        show_focus,
     } = facts;
     let pulse = attention.then(|| view.thread()).flatten();
     let empty = WallCard::default();
@@ -927,8 +931,17 @@ pub fn render_pane(
         thread.is_some_and(|thread| !thread.activity().pending_decisions().is_empty());
     let blocked = state == WallState::Blocked;
     let alert = attention_pending || blocked;
-    let edge = PaneEdge::of(focused, attention_pending, blocked);
-    let mut shell = pane_shell(edge.ink()).when(edge == PaneEdge::Rest, |shell| shell.hover_edge());
+    // Focus is drawn only where it tells the operator something: a lone
+    // Pane is plainly the one holding the keyboard, and rests on its
+    // hairline like any other.
+    let framed = focused && show_focus;
+    let edge = PaneEdge::of(framed, attention_pending, blocked);
+    let key = view.thread().map_or(0, ThreadId::get);
+    let mut shell = pane_shell(edge.ink())
+        .when(edge == PaneEdge::Rest, |shell| shell.hover_edge())
+        .when(edge == PaneEdge::Focused, |shell| {
+            shell.debug_selector(move || format!("pane-focus-edge-{key}"))
+        });
     let mut activity_attention = activity_attention;
     if level != Level::Transcript {
         if let Some(attention) = activity_attention.take() {
@@ -941,7 +954,7 @@ pub fn render_pane(
             );
         }
     }
-    let frame = |shell: Div| pane_frame(shell, focused, alert, pulse, reduce_motion);
+    let frame = |shell: Div| pane_frame(shell, framed, alert, pulse, reduce_motion);
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
@@ -1037,7 +1050,6 @@ pub fn render_pane(
             attention: activity_attention,
             action: expand_question,
             tasks: l1_tasks(&mut cx),
-            unfocused: !focused,
         },
     ));
     match transcript {
@@ -1485,6 +1497,8 @@ pub struct DraftState<'a> {
     pub reduce_motion: bool,
     /// Native files hover the draft (`PaneFacts::drop_target`).
     pub drop_target: bool,
+    /// More than one Pane is on the board (`PaneFacts::show_focus`).
+    pub show_focus: bool,
 }
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
@@ -1506,10 +1520,13 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         editing,
         reduce_motion: _,
         drop_target,
+        show_focus,
     } = state;
     // A draft wears the live Pane's edge: the resting hairline (stepping up
-    // under the pointer) or the focus ink. It has no state to announce.
-    let edge = PaneEdge::of(focused, false, false);
+    // under the pointer) or, beside other Panes, the focus ink. It has no
+    // state to announce.
+    let framed = focused && show_focus;
+    let edge = PaneEdge::of(framed, false, false);
     let shell = pane_shell(edge.ink()).when(edge == PaneEdge::Rest, |shell| shell.hover_edge());
 
     if level != Level::Transcript {
@@ -1528,7 +1545,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 )
                 .child(div().absolute().top(px(2.)).right(px(2.)).child(discard))
                 .children(drop_target.then(crate::prompt_drop::sheet)),
-            focused,
+            framed,
             None,
             false,
         );
@@ -1586,7 +1603,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     alert: false,
                 },
             )),
-        focused,
+        framed,
         None,
         false,
     )
@@ -2326,9 +2343,6 @@ struct PaneHeadState<'a> {
     action: Option<AnyElement>,
     /// The tasks meter (`l1_tasks`), riding the right cluster.
     tasks: Option<AnyElement>,
-    /// Another Pane holds focus: the title steps down from `TEXT_STRONG`
-    /// to `TEXT`, the one focus cue that survives a state edge.
-    unfocused: bool,
 }
 
 fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
@@ -2343,7 +2357,6 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         attention,
         action,
         tasks,
-        unfocused,
     } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -2379,7 +2392,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .font_weight(theme::W_LABEL)
-                .text_color(rgb(if unfocused { TEXT } else { TEXT_STRONG }))
+                .text_color(rgb(TEXT))
                 .child(match title {
                     Some(title) => title,
                     None => div()
@@ -2418,8 +2431,6 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .h(px(theme::PANE_HEAD_H))
         .gap(px(theme::HEAD_CLUSTER_GAP))
         .px(px(theme::PANE_PAD_X))
-        .border_b_1()
-        .border_color(rgba(PANE_HEAD_EDGE))
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))

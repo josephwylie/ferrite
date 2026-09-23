@@ -1147,3 +1147,53 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         assert_eq!(family.as_deref(), Some(FONT_CODE), "{what} is code");
     }
 }
+
+/// Focus is drawn only when it tells the operator something: a lone Pane
+/// rests on its hairline with no head rule, and the focus ink appears once a
+/// second Pane shares the board.
+#[gpui::test]
+fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("focus-only-when-shared", 2);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.visible_indices().len()),
+        1
+    );
+    for thread in &threads {
+        assert!(
+            cx.debug_bounds(Box::leak(
+                format!("pane-focus-edge-{}", thread.get()).into_boxed_str(),
+            ))
+            .is_none(),
+            "a lone Pane draws no focus"
+        );
+    }
+
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.visible_indices().len()) > 1);
+    let shown = threads
+        .iter()
+        .filter(|thread| {
+            cx.debug_bounds(Box::leak(
+                format!("pane-focus-edge-{}", thread.get()).into_boxed_str(),
+            ))
+            .is_some()
+        })
+        .count();
+    assert_eq!(
+        shown, 1,
+        "exactly the focused Pane of the two wears the ring"
+    );
+}

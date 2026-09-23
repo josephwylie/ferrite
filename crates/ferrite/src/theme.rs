@@ -117,8 +117,6 @@ pub const HAIRLINE: u32 = 0xffffff14;
 /// `#ffffff24` (14%) — the stronger rule: floating edges (menu, popover,
 /// tooltip, toast), the Composer's resting edge, a blockquote's rule.
 pub const HAIRLINE_STRONG: u32 = 0xffffff24;
-/// The hairline under the Pane header.
-pub const PANE_HEAD_EDGE: u32 = HAIRLINE;
 /// The Composer's resting edge.
 pub const COMPOSER_EDGE: u32 = HAIRLINE_STRONG;
 /// Rules between transcript table rows.
@@ -915,13 +913,16 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // in layout, so a state change recolours it and nothing reflows. The edge
 // says one thing, by precedence (`pane::PaneEdge`): blocked `BLOCKED` >
 // a Decision `ATTENTION` > focused `FOCUS_RING` > at rest `HAIRLINE`, which
-// lifts to `HAIRLINE_STRONG` under the pointer. A *focused* alert Pane also
-// draws a `FOCUS_RING` ring inset by 2px, so focus is never hidden by a
-// state. A Thread that finished while the operator looked elsewhere breathes
+// lifts to `HAIRLINE_STRONG` under the pointer. Focus is drawn only while
+// more than one Pane is on the board: a lone Pane is plainly the one with
+// the keyboard and rests on its hairline. A *focused* alert Pane beside
+// others also draws a `FOCUS_RING` ring inset by 2px, so focus is never
+// hidden by a state. A Thread that finished while the operator looked elsewhere breathes
 // an `ACCENT` ring until they land on it (still under reduced motion).
 //
-// **The head is one 36px row** on the Pane's own plane, closed by a
-// hairline: dot · title · checkout, the agent tabs, then the right cluster —
+// **The head is one 36px row** on the Pane's own plane, with no rule under
+// it (the body's top padding separates them): dot · title (`W_LABEL`
+// `TEXT`) · checkout, the agent tabs, then the right cluster —
 // tasks meter · PR/CI · attention jump · head action. Colour is state: the
 // checkout, drift and PR are `TEXT_MUTED`; only the CI dot, a failure count
 // and the live meter segment carry a hue.
