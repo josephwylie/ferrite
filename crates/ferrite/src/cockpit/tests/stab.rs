@@ -1351,3 +1351,23 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     assert_eq!(crate::theme::GAP_TURN, 32.);
     assert_eq!(crate::theme::GAP_STAMP, crate::theme::GAP_SECTION);
 }
+
+/// A Decision card's head names its kind and says nothing more while it
+/// simply waits: no `waiting` beside the card that is plainly waiting.
+#[gpui::test]
+fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("decision-head-quiet", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(900.)));
+    fake.streams.borrow()[0].send(question("quiet")).unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("question-island").is_some(),
+        "the card is up"
+    );
+    assert!(
+        cx.debug_bounds("decision-status").is_none(),
+        "a waiting card carries no status word"
+    );
+}

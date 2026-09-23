@@ -1298,15 +1298,15 @@ impl CockpitView {
         request: &PendingDecision,
     ) -> (Div, Option<Div>, Option<SharedString>) {
         let decision = &request.decision;
-        let status = if request.submitting {
-            pane::live_text(decision::status("sending…"), "request-live".into())
-        } else {
-            decision::status("waiting").into_any_element()
-        };
+        // The head names the kind; a status word rides it only when it adds
+        // something — a card is waiting by being there.
+        let status = request
+            .submitting
+            .then(|| pane::live_text(decision::status("sending…"), "request-live".into()));
         let head = decision::head(
             decision::kind_word(decision),
             request_detail(&decision.tool_name, request.subject.is_none()),
-            Some(status),
+            status,
         );
         let title = if decision.description.is_empty() && decision.tool_name.is_empty() {
             Some(SharedString::from(
@@ -1889,7 +1889,9 @@ impl CockpitView {
                 .flex_col()
                 .gap(px(theme::DECISION_QUESTION_GAP))
                 .child(decision::question_text(question.question.clone()));
-            if question.multi_select {
+            // The footer's `1-N toggle` already says "choose any" for the
+            // question the digits reach; another multi-select says it here.
+            if question.multi_select && !keyed {
                 section = section.child(decision::note("choose any"));
             }
             let mut rows = div()
@@ -1997,20 +1999,25 @@ impl CockpitView {
                 .as_ref()
                 .and_then(|subject| self.cockpit.thread(thread)?.activity().subject(subject))
                 .is_some_and(|subject| subject.busy());
-        let status = decision::status(if sending {
-            "sending…"
+        // A plain wait says nothing the card does not: only a status that
+        // adds something rides the head.
+        let status = if sending {
+            Some("sending…")
         } else if working {
-            "work continues"
+            Some("work continues")
         } else if async_question {
-            "answer when ready"
+            Some("answer when ready")
         } else {
-            "waiting"
+            None
+        }
+        .map(|word| {
+            let status = decision::status(word);
+            if sending || working {
+                pane::live_text(status, "question-live".into())
+            } else {
+                status.into_any_element()
+            }
         });
-        let status = if sending || working {
-            pane::live_text(status, "question-live".into())
-        } else {
-            status.into_any_element()
-        };
         let detail = match questions.as_slice() {
             [question] if !question.header.is_empty() => Some(question.header.clone()),
             _ => None,
@@ -2025,7 +2032,7 @@ impl CockpitView {
                 detail.as_deref().unwrap_or_default(),
                 request.subject.is_none(),
             ),
-            Some(status),
+            status,
         );
         let mut children = vec![
             head.into_any_element(),

@@ -1276,10 +1276,12 @@ pub const MENU_PATH_TAIL: usize = 48;
 /// prose question (Geist `FS_PROSE` `W_STRONG` `TEXT_STRONG`), option rows
 /// that each show the one key that picks them, a mono footer. Colour is
 /// state: Deny is not red; the card's amber is the only hue it carries.
-/// 12px inline and 10px block padding; 8px between sections.
+/// 12px inline and 10px block padding; the block step (12) between sections.
+/// The head names the kind and nothing else unless a status adds something
+/// (`sending…`, `work continues`); a card is waiting by being there.
 pub const DECISION_PAD_X: f32 = SPACE_3;
 pub const DECISION_PAD_Y: f32 = 10.0;
-pub const DECISION_GAP: f32 = SPACE_2;
+pub const DECISION_GAP: f32 = SPACE_3;
 /// The head's drawn diamond: 8px in a `LH_META` line.
 pub const DECISION_MARK: f32 = SPACE_2;
 /// From the card to the Composer below it, and between stacked cards.

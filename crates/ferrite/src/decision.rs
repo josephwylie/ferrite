@@ -213,6 +213,7 @@ pub fn mark() -> impl IntoElement {
 /// A head's right-hand status (`waiting`, `answer when ready` …).
 pub fn status(text: impl Into<SharedString>) -> Div {
     div()
+        .debug_selector(|| "decision-status".into())
         .flex_shrink_0()
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
