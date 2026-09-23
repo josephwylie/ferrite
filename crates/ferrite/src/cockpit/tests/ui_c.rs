@@ -698,6 +698,37 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
     });
 }
 
+/// Fix 3: the Solo titlebar says `needs you` once. The Thread's own state
+/// word (`needs you · question`, the ⌘D door) stands, and the band's
+/// `· N need you` count does not repeat it; on a board, where no Thread
+/// rides the band, the count is still there.
+#[gpui::test]
+fn the_solo_titlebar_says_needs_you_once(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("needs-you-once", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    fake.streams.borrow()[0].send(question("once")).unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("titlebar-needs-you").is_some(),
+        "the Thread's state word says needs you"
+    );
+    assert!(
+        cx.debug_bounds("titlebar-need-you").is_none(),
+        "and the count does not say it again"
+    );
+}
+
+#[gpui::test]
+fn a_board_titlebar_keeps_its_need_you_count(cx: &mut TestAppContext) {
+    let (_view, fake, cx, _group) = board("need-you-count", 2, cx);
+    fake.streams.borrow()[1].send(decision("count")).unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("titlebar-need-you").is_some());
+    assert!(cx.debug_bounds("titlebar-needs-you").is_none());
+}
+
 /// Q6 (the operator's ruling): on a board a waiting cell's edge is
 /// `ATTENTION_EDGE`, ochre at 35%, and the single answer-target cell alone
 /// wears full `ATTENTION`; in Solo no state recolours the edge — the docked

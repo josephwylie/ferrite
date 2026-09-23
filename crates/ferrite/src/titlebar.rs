@@ -303,8 +303,9 @@ fn need_you(count: usize) -> Div {
 /// board the Thread follows the Group in place of the count, and how many
 /// Threads that hides is the Group name's tooltip. Truncation order: the
 /// branch first, then the Project, then the title. The band's own copy
-/// (`chrome`, never inside a drag region) closes it: `· N need you`, then
-/// `· dev` in a development build.
+/// (`chrome`, never inside a drag region) closes it: `· N need you` —
+/// unless the Solo Thread's state word already says `needs you`, which is
+/// said once — then `· dev` in a development build.
 fn title_region(title: Title, board: Board, chrome: bool) -> Div {
     let Title {
         project,
@@ -332,6 +333,13 @@ fn title_region(title: Title, board: Board, chrome: bool) -> Div {
     let has_project = project.is_some();
     let has_group = group.is_some();
     let has_thread = thread.is_some();
+    // `needs you` is said once on the band: while the Solo Thread's own
+    // state word says it (and is the same ⌘D door), the count is not
+    // repeated after it — the nav's Needs-you strip holds the queue.
+    let said = thread
+        .as_ref()
+        .is_some_and(|thread| matches!(thread.state, Some(crate::pane::HeadSlot::NeedsYou(_))));
+    let waiting = if said { 0 } else { waiting };
     let hidden = count
         .filter(|_| fullscreen)
         .map(|count| count.saturating_sub(1));
