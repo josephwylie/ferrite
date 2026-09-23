@@ -533,7 +533,6 @@ fn heading(level: u8, base: gpui::Pixels) -> gpui::StyleRefinement {
 
 /// A code token's highlight: ink by class (slice 01 §2.6), comments italic.
 /// The one mapping both the Markdown fence and the plain fallback paint.
-#[allow(dead_code)]
 pub(crate) fn syntax_style(class: ferrite_core::transcript::Class) -> gpui::HighlightStyle {
     use ferrite_core::transcript::Class;
     let ink = match class {

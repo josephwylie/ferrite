@@ -23,7 +23,7 @@ use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
-    Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
+    Block, BlockId, Body, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
     ToolState, Transcript,
 };
 use ferrite_core::workspace::{
@@ -5973,23 +5973,6 @@ fn code_lines(
     vec![div().child(selection.line(block, source.to_string(), highlights))]
 }
 
-/// A syntax class's ink. The prototype's code blocks have exactly one
-/// class, `.comment` (§E.7), everything else in the body's own `--text-2`
-/// (R-08); the operator overruled that loss of colour, so the highlighter's
-/// whole vocabulary now paints — each in a hue that keeps clear of the
-/// Pane's state signals where it can.
-fn class_ink(class: Class) -> u32 {
-    match class {
-        // The lexer's newer classes paint as plain until WP-B assigns them
-        // `SYN_FUNCTION`, `SYN_TYPE` and `SYN_PUNCT`.
-        Class::Plain | Class::Function | Class::Type | Class::Punct => theme::SYN_PLAIN,
-        Class::Keyword => SYN_KEYWORD,
-        Class::Str => SYN_STRING,
-        Class::Comment => theme::SYN_COMMENT,
-        Class::Number => SYN_NUMBER,
-    }
-}
-
 /// Syntax highlight runs for a code Block, or none while the highlighter is
 /// still thinking.
 pub(crate) fn code(
@@ -6008,14 +5991,7 @@ pub(crate) fn code(
         if end > source.len() {
             return Vec::new();
         }
-        let color = class_ink(token.class);
-        highlights.push((
-            at..end,
-            HighlightStyle {
-                color: Some(rgb(color).into()),
-                ..Default::default()
-            },
-        ));
+        highlights.push((at..end, crate::rich::syntax_style(token.class)));
         at = end;
     }
     highlights
@@ -6024,6 +6000,7 @@ pub(crate) fn code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::transcript::Class;
     #[test]
     fn progress_token_counts_stay_compact() {
         assert_eq!(tokens_label(340), "340");
@@ -6995,21 +6972,33 @@ mod tests {
                 ("// 42", Class::Comment),
             ])),
         );
-        let inks: Vec<(std::ops::Range<usize>, gpui::Hsla)> = runs
+        let inks: Vec<(std::ops::Range<usize>, gpui::Hsla, Option<gpui::FontStyle>)> = runs
             .iter()
-            .map(|(range, style)| (range.clone(), style.color.unwrap()))
+            .map(|(range, style)| (range.clone(), style.color.unwrap(), style.font_style))
             .collect();
         assert_eq!(
             inks,
             vec![
-                (0..3, rgb(SYN_KEYWORD).into()),
-                (3..8, rgb(theme::SYN_PLAIN).into()),
-                (8..12, rgb(SYN_STRING).into()),
-                (12..14, rgb(theme::SYN_PLAIN).into()),
-                (14..19, rgb(theme::SYN_COMMENT).into()),
+                (0..3, rgb(SYN_KEYWORD).into(), None),
+                (3..8, rgb(theme::SYN_PLAIN).into(), None),
+                (8..12, rgb(SYN_STRING).into(), None),
+                (12..14, rgb(theme::SYN_PLAIN).into(), None),
+                (
+                    14..19,
+                    rgb(theme::SYN_COMMENT).into(),
+                    Some(gpui::FontStyle::Italic)
+                ),
             ]
         );
-        assert_eq!(class_ink(Class::Number), SYN_NUMBER);
+        for (class, ink) in [
+            (Class::Number, SYN_NUMBER),
+            (Class::Function, theme::SYN_FUNCTION),
+            (Class::Type, theme::SYN_TYPE),
+            (Class::Punct, theme::SYN_PUNCT),
+        ] {
+            let runs = code("x", Some(&tokens(&[("x", class)])));
+            assert_eq!(runs[0].1.color, Some(rgb(ink).into()), "{class:?}");
+        }
         assert!(
             code(
                 source,
