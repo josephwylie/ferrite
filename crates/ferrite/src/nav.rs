@@ -290,7 +290,7 @@ pub fn shell(collapsed: bool) -> Div {
         .w(px(if collapsed { RAIL_WIDTH } else { WIDTH }))
         .overflow_hidden()
         .bg(rgb(NAV))
-        .font_family(FONT_MONO)
+        .font_family(FONT_UI)
 }
 
 /// The 42px window-chrome band at the top of the column.
@@ -824,7 +824,7 @@ pub fn project_thread_row_with_title(
     .child(mark_cell(row))
 }
 
-/// A Thread row's title: one mono line in body weight that truncates, in
+/// A Thread row's title: one UI line in body weight that truncates, in
 /// `title_ink`. The box sets the 16px line the rename editor inherits.
 fn title_cell(row: &ThreadRow, title: impl IntoElement) -> Div {
     div()
@@ -1231,7 +1231,7 @@ pub fn rail_items() -> Stateful<Div> {
         .overflow_y_scroll()
 }
 
-/// One rail item: a Thread reduced to a two-letter mono monogram plus its
+/// One rail item: a Thread reduced to a two-letter monogram plus its
 /// still status dot in the corner (the rail's box is too tight for a
 /// breathing halo). Provider logos made every Codex or Claude Thread
 /// identical; the monogram keeps the rail scannable while the tooltip
@@ -1256,7 +1256,7 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
                 .justify_center()
                 .w(px(NAV_RAIL_CONTROL))
                 .h(px(NAV_RAIL_CONTROL))
-                .font_family(FONT_MONO)
+                .font_family(FONT_UI)
                 .text_size(px(if cfg!(target_os = "macos") {
                     FS_UI
                 } else {

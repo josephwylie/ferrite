@@ -162,7 +162,7 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
                 .border_1()
                 .border_color(rgba(theme::ATTENTION_EDGE))
                 .rounded(px(theme::R_BLOCK))
-                .font_family(theme::FONT_MONO)
+                .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .text_color(rgb(theme::TEXT))
@@ -226,7 +226,7 @@ pub fn question_text(text: impl Into<SharedString>) -> Div {
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .font_family(theme::FONT_PROSE)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_PROSE))
         .line_height(px(theme::LH_PROSE))
         .font_weight(theme::W_STRONG)
@@ -240,14 +240,14 @@ pub fn prose(text: impl Into<SharedString>) -> Div {
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .font_family(theme::FONT_PROSE)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_PROSE))
         .line_height(px(theme::LH_PROSE))
         .text_color(rgb(theme::TEXT))
         .child(text.into())
 }
 
-/// A mono aside (`choose any`, a form field's hint).
+/// A UI aside (`choose any`, a form field's hint).
 pub fn note(text: impl Into<SharedString>) -> Div {
     div()
         .flex_shrink_0()
@@ -273,7 +273,7 @@ pub fn well(child: impl IntoElement) -> Div {
         .rounded(px(theme::R_CONTROL))
         .px(px(theme::DECISION_WELL_PAD_X))
         .py(px(theme::DECISION_WELL_PAD_Y))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_CODE))
         .text_color(rgb(theme::TEXT_STRONG))
@@ -308,12 +308,12 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     };
     let label = if row.prose {
         div()
-            .font_family(theme::FONT_PROSE)
+            .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_PROSE_SM))
             .font_weight(theme::W_LABEL)
     } else {
         div()
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
     };
     let accessibility = SharedString::from(format!(
@@ -361,7 +361,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                 .child(label.line_height(px(theme::LH_PROSE_SM)).child(row.label))
                 .children(row.description.filter(|text| !text.is_empty()).map(|text| {
                     div()
-                        .font_family(theme::FONT_PROSE)
+                        .font_family(theme::FONT_UI)
                         .text_size(px(theme::FS_PROSE_SM))
                         .line_height(px(theme::LH_PROSE_SM))
                         .text_color(rgb(theme::TEXT_2))
@@ -372,7 +372,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
             button.child(
                 div()
                     .flex_shrink_0()
-                    .font_family(theme::FONT_MONO)
+                    .font_family(theme::FONT_UI)
                     .text_size(px(theme::FS_SM))
                     .line_height(px(theme::LH_PROSE_SM))
                     .text_color(rgb(theme::ACCENT))
@@ -495,7 +495,7 @@ pub fn key_action(id: &'static str, key: &'static str, verb: &'static str) -> St
         .items_center()
         .gap(px(theme::DECISION_KEY_GAP))
         .rounded(px(theme::R_CHIP))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_MUTED))

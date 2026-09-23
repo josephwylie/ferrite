@@ -115,25 +115,25 @@ pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
 
 // ------------------------------------------------------------------- type
 
-/// A mono UI line: `FONT_MONO` · `FS_UI` on `LH_UI` · `TEXT`.
+/// A UI line: `FONT_UI` · `FS_UI` on `LH_UI` · `TEXT`.
 pub fn text_ui() -> Div {
     div()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(theme::TEXT))
 }
 
-/// Metadata: `FONT_MONO` · `FS_SM` on `LH_META` · `TEXT_MUTED`.
+/// Metadata: `FONT_UI` · `FS_SM` on `LH_META` · `TEXT_MUTED`.
 pub fn text_meta() -> Div {
     div()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_MUTED))
 }
 
-/// A group's title inside a surface: mono `FS_SM` `W_LABEL` `TEXT_MUTED`,
+/// A group's title inside a surface: UI `FS_SM` `W_LABEL` `TEXT_MUTED`,
 /// written as-is (terminal case, no rule), 8px above what it heads.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
     text_meta()
@@ -208,7 +208,7 @@ pub fn float_shadow() -> Vec<BoxShadow> {
 
 /// A floating surface (menu, popover, card): `MENU` ground, a
 /// `HAIRLINE_STRONG` edge, `R_BLOCK`, the float shadow, `FLOAT_PAD` inside,
-/// mono UI type. It occludes what it covers and owns its cursor. The caller
+/// UI type. It occludes what it covers and owns its cursor. The caller
 /// states its width and position.
 pub fn floating_surface() -> Div {
     text_ui()
@@ -225,7 +225,7 @@ pub fn floating_surface() -> Div {
 }
 
 /// The badge that follows the pointer while a Pane or a nav row is
-/// dragged, so the two drags read as one gesture: a raised mono tag with a
+/// dragged, so the two drags read as one gesture: a raised UI tag with a
 /// strong edge and the float shadow, the dragged title in `TEXT_STRONG`,
 /// truncating rather than trailing a banner. Its face is set here because a
 /// drag preview is its own window-level view and inherits nothing.
@@ -241,7 +241,7 @@ pub fn drag_badge(label: SharedString) -> Div {
         .border_1()
         .border_color(rgba(theme::HAIRLINE_STRONG))
         .shadow(float_shadow())
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .font_weight(theme::W_LABEL)
@@ -353,22 +353,23 @@ fn kbd_face() -> Div {
         .px(px(theme::KBD_PAD_X))
         .rounded(px(theme::R_CHIP))
         .bg(rgb(theme::RAISED_2))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_2))
 }
 
-/// A key combination as it is drawn, from a key table's spelling. Geist
-/// Mono has no `⌘`, so `cmd` is `command.svg` in a `KEY_GLYPH` box; every
-/// other part stays its own word. Parts joined by `-` sit tight, as a menu
-/// shortcut reads (`cmd-F` → `⌘F`); parts joined by spaces keep one mono
-/// space apart, as a keycap reads (`cmd shift N` → `⌘ shift N`). The one
-/// place the command glyph is drawn.
+/// A key combination as it is drawn, from a key table's spelling, in the
+/// code face (keys are machine text, rule 6). Neither face has `⌘`, so `cmd`
+/// is `command.svg` in a `KEY_GLYPH` box; every other part stays its own
+/// word. Parts joined by `-` sit tight, as a menu shortcut reads (`cmd-F` →
+/// `⌘F`); parts joined by spaces keep one code space apart, as a keycap
+/// reads (`cmd shift N` → `⌘ shift N`). The one place the command glyph is
+/// drawn.
 pub fn key_combo(keys: &str, ink: u32) -> Div {
     let spaced = keys.contains(' ');
     let gap = if spaced {
-        theme::FS_SM * theme::MONO_ADVANCE
+        theme::FS_SM * theme::CODE_ADVANCE
     } else {
         0.
     };
@@ -376,6 +377,7 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
         .flex()
         .flex_shrink_0()
         .items_center()
+        .font_family(theme::FONT_CODE)
         .gap(px(gap))
         .text_color(rgb(ink))
         .children(keys.split([' ', '-']).map(|part| {
@@ -403,8 +405,10 @@ pub fn key_hints(hints: &[(&str, &str)]) -> Div {
                 .flex()
                 .flex_shrink_0()
                 .gap(px(theme::SPACE_1))
+                // The key is code text (rule 6); its verb is UI.
                 .child(
                     div()
+                        .font_family(theme::FONT_CODE)
                         .text_color(rgb(theme::TEXT_2))
                         .child(SharedString::from(key.to_string())),
                 )
@@ -412,7 +416,7 @@ pub fn key_hints(hints: &[(&str, &str)]) -> Div {
         }))
 }
 
-/// The prompt mark `❯`, drawn (Geist Mono lacks the glyph): `prompt.svg` in a
+/// The prompt mark `❯`, drawn (neither face has the glyph): `prompt.svg` in a
 /// `GLYPH_BOX`. The transcript prompt and the Composer share it; `ink` is
 /// `ACCENT` where it marks the live input, `TEXT_MUTED` where it does not.
 pub fn prompt_mark(ink: u32) -> AnyElement {
@@ -491,7 +495,7 @@ pub fn icon_button(
 /// button shares the name: `group_hover` resolves to the nearest one.
 const ICON_BUTTON_GROUP: &str = "icon-button";
 
-/// A quiet text control: `CONTROL_H`, mono `FS_UI` `W_LABEL` `TEXT_2`;
+/// A quiet text control: `CONTROL_H`, UI `FS_UI` `W_LABEL` `TEXT_2`;
 /// hover `RAISED_2`, press `FILL_HOVER`.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     button(id)
@@ -658,10 +662,11 @@ pub fn match_highlights(
         .collect()
 }
 
-/// A mono name column for `chars` characters, clamped between
-/// `MENU_NAME_MIN_W` and `MENU_NAME_MAX_W`.
-pub fn mono_column_w(chars: usize) -> f32 {
-    (chars as f32 * theme::MONO_CELL).clamp(theme::MENU_NAME_MIN_W, theme::MENU_NAME_MAX_W)
+/// An aligned name column (the `/command` names, code text) for `chars`
+/// characters, clamped between `MENU_NAME_MIN_W` and `MENU_NAME_MAX_W`.
+/// The row sets names in such a column in the code face.
+pub fn code_column_w(chars: usize) -> f32 {
+    (chars as f32 * theme::CODE_CELL).clamp(theme::MENU_NAME_MIN_W, theme::MENU_NAME_MAX_W)
 }
 
 /// A menu row's content with no id and no pointer role, for kit hosts
@@ -697,7 +702,11 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                 .truncate()
                 .when(armed, |label| label.font_weight(theme::W_LABEL))
                 .when_some(item.label_w, |label, width| {
-                    label.w(px(width)).flex_shrink_0()
+                    // An aligned column holds names that are code.
+                    label
+                        .w(px(width))
+                        .flex_shrink_0()
+                        .font_family(theme::FONT_CODE)
                 })
                 .child(gpui::StyledText::new(label).with_highlights(highlights)),
         )
@@ -707,7 +716,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(theme::FONT_MONO)
+                    .font_family(theme::FONT_UI)
                     .text_size(px(theme::FS_SM))
                     .text_color(rgb(inks.detail))
                     .child(detail),
@@ -747,7 +756,7 @@ pub fn menu_row(
     }
 }
 
-/// A menu section title: mono `FS_SM` `W_LABEL` `TEXT_MUTED`, an optional
+/// A menu section title: UI `FS_SM` `W_LABEL` `TEXT_MUTED`, an optional
 /// leading mark and an optional note after it.
 pub fn menu_section(
     title: impl Into<SharedString>,
@@ -1069,7 +1078,7 @@ mod tests {
             Some(rgba(theme::HAIRLINE_STRONG).into())
         );
         assert_eq!(style.box_shadow, Some(float_shadow()));
-        assert_eq!(style.text.font_family, Some(theme::FONT_MONO.into()));
+        assert_eq!(style.text.font_family, Some(theme::FONT_UI.into()));
     }
 
     #[test]
@@ -1077,14 +1086,14 @@ mod tests {
         for (mut run, face, size, line, ink) in [
             (
                 text_ui(),
-                theme::FONT_MONO,
+                theme::FONT_UI,
                 theme::FS_UI,
                 theme::LH_UI,
                 theme::TEXT,
             ),
             (
                 text_meta(),
-                theme::FONT_MONO,
+                theme::FONT_UI,
                 theme::FS_SM,
                 theme::LH_META,
                 theme::TEXT_MUTED,
@@ -1201,8 +1210,8 @@ mod tests {
         );
         let mut dead = menu_row("d", &MenuItem::new("Reveal").disabled(true), false, false);
         assert_eq!(dead.style().mouse_cursor, None);
-        assert_eq!(mono_column_w(1), theme::MENU_NAME_MIN_W);
-        assert_eq!(mono_column_w(400), theme::MENU_NAME_MAX_W);
+        assert_eq!(code_column_w(1), theme::MENU_NAME_MIN_W);
+        assert_eq!(code_column_w(400), theme::MENU_NAME_MAX_W);
     }
 
     #[test]

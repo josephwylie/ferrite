@@ -160,7 +160,7 @@ impl RenderOnce for PreviewLayer {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(crate::theme::FONT_MONO)
+                                    .font_family(crate::theme::FONT_UI)
                                     .text_size(px(crate::theme::FS_UI))
                                     .font_weight(crate::theme::W_LABEL)
                                     .text_color(rgb(crate::theme::TEXT_STRONG))

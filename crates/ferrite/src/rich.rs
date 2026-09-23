@@ -232,7 +232,7 @@ impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
         // Prose sets its own face; the inherited style is the Pane's.
-        let face: SharedString = theme::FONT_PROSE.into();
+        let face: SharedString = theme::FONT_UI.into();
         #[cfg(test)]
         testing::record(
             self.id.clone(),
@@ -341,7 +341,7 @@ impl gpui::Render for CodeActions {
             .min_w_0()
             .h(px(theme::CODE_HEADER_H))
             .gap(px(theme::SPACE_1))
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_SM))
             .line_height(px(theme::LH_META))
             .text_color(rgb(theme::TEXT_MUTED))
@@ -364,7 +364,7 @@ impl gpui::Render for CodeActions {
                         dialog
                             .title(
                                 gpui::div()
-                                    .font_family(theme::FONT_MONO)
+                                    .font_family(theme::FONT_UI)
                                     .text_size(px(theme::FS_UI))
                                     .line_height(px(theme::LH_UI))
                                     .font_weight(theme::W_LABEL)
@@ -377,7 +377,7 @@ impl gpui::Render for CodeActions {
                             .child(
                                 gpui::div()
                                     .id("html-preview")
-                                    .font_family(theme::FONT_PROSE)
+                                    .font_family(theme::FONT_UI)
                                     .text_size(px(theme::FS_PROSE))
                                     .line_height(px(theme::LH_PROSE))
                                     .text_color(rgb(theme::TEXT))
@@ -458,7 +458,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 .px(px(theme::CODE_PAD_X))
                 .py(px(theme::CODE_PAD_Y))
                 .rounded(px(theme::R_BLOCK))
-                .font_family(theme::FONT_MONO)
+                .font_family(theme::FONT_CODE)
                 .font_weight(theme::W_BODY)
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_CODE))
@@ -468,7 +468,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
             ..Default::default()
         })
-        .with_inline_code_font(Some(theme::FONT_MONO.into()))
+        .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
             color: rgba(theme::ACCENT_WASH).into(),
             radius: px(theme::R_CHIP),
@@ -756,6 +756,16 @@ pub mod testing {
             .iter()
             .find(|(id, _)| id.starts_with(prefix))
             .map(|(_, (state, _))| state.read(cx).selected_text())
+    }
+
+    /// The face a recorded text view was laid out in (its inherited family,
+    /// or a Markdown view's prose face).
+    pub fn font_family(prefix: &str, cx: &App) -> Option<SharedString> {
+        cx.global::<Views>()
+            .0
+            .iter()
+            .find(|(id, _)| id.starts_with(prefix))
+            .map(|(_, (_, style))| style.font_family.clone())
     }
 
     pub fn font_size(prefix: &str, cx: &App) -> Option<gpui::Pixels> {
@@ -1735,7 +1745,7 @@ mod vendor_knob_tests {
         cx.update(gpui::component::init);
         fn code(style: TextViewStyle) -> TextViewStyle {
             style
-                .with_inline_code_font(Some(theme::FONT_MONO.into()))
+                .with_inline_code_font(Some(theme::FONT_CODE.into()))
                 .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
                     color: rgba(theme::ACCENT_WASH).into(),
                     radius: px(theme::R_CHIP),
@@ -1787,7 +1797,7 @@ mod style_tests {
             style.link_underline(),
             Some(rgba(theme::ACCENT_EDGE).into())
         );
-        assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_MONO));
+        assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
         let wash = style
             .inline_code_wash()
             .expect("inline code sits on a chip");

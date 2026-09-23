@@ -263,7 +263,7 @@ fn trigger(unread: usize, waiting: bool, open: bool) -> Button {
         .when(unread > 0, |bell| bell.child(badge(unread, waiting)))
 }
 
-/// The unread count pill: mono, tabular, `99+` past two digits.
+/// The unread count pill: UI face, tabular, `99+` past two digits.
 fn badge(unread: usize, waiting: bool) -> Div {
     let (ground, ink) = badge_inks(waiting);
     let count: SharedString = if unread > 99 {
@@ -284,7 +284,7 @@ fn badge(unread: usize, waiting: bool) -> Div {
             .px(px(SPACE_1))
             .rounded_full()
             .bg(rgb(ground))
-            .font_family(FONT_MONO)
+            .font_family(FONT_UI)
             .text_size(px(FS_BADGE))
             .line_height(px(BADGE_H))
             .font_weight(W_LABEL)
@@ -324,7 +324,7 @@ fn detail_line(row: &Row) -> Div {
         .child(div().min_w_0().truncate().child(rest))
 }
 
-/// A toast's body in the mono chrome voice: the status mark, the Thread's
+/// A toast's body in the UI voice: the status mark, the Thread's
 /// name, the detail with its state word coloured.
 fn toast_body(row: &Row) -> Div {
     let ink = mark_ink(row);

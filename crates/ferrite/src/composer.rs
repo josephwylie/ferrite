@@ -1140,6 +1140,8 @@ impl Element for LineElement {
         let text_style = window.text_style();
         let line_height = window.line_height();
         let composer = self.composer.clone();
+        #[cfg(test)]
+        testing::record_face(composer.entity_id(), text_style.font_family.clone(), _cx);
         let layout_id =
             window.request_measured_layout(style, move |known, available, window, cx| {
                 let width = known.width.or(match available.width {
@@ -1360,6 +1362,26 @@ fn spill_pasted_image(image: &gpui::Image) -> Option<PathBuf> {
     Some(path)
 }
 
+/// The face each Composer's line was last laid out in, for the font-role
+/// tests: the line is code text (theme rule 6).
+#[cfg(test)]
+pub mod testing {
+    use gpui::{App, EntityId, Global, SharedString};
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct Faces(HashMap<EntityId, SharedString>);
+    impl Global for Faces {}
+
+    pub(super) fn record_face(id: EntityId, family: SharedString, cx: &mut App) {
+        cx.default_global::<Faces>().0.insert(id, family);
+    }
+
+    pub fn face(id: EntityId, cx: &App) -> Option<SharedString> {
+        cx.try_global::<Faces>()?.0.get(&id).cloned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1402,7 +1424,7 @@ mod tests {
     fn runs_split_at_pill_and_marked_boundaries() {
         let base = TextRun {
             len: 0,
-            font: gpui::font(crate::theme::FONT_MONO),
+            font: gpui::font(crate::theme::FONT_CODE),
             color: gpui::white(),
             background_color: None,
             underline: None,
@@ -1438,7 +1460,7 @@ mod tests {
     fn selected_runs_take_the_strong_ink() {
         let base = TextRun {
             len: 0,
-            font: gpui::font(crate::theme::FONT_MONO),
+            font: gpui::font(crate::theme::FONT_CODE),
             color: rgb(crate::theme::TEXT_2).into(),
             background_color: None,
             underline: None,

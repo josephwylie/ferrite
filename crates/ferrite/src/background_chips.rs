@@ -110,7 +110,7 @@ fn chip(
         .px(px(theme::CHIP_PAD_X))
         .rounded(px(theme::R_CHIP))
         .bg(rgb(theme::FILL))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_2))

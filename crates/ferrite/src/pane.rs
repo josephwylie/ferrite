@@ -1149,7 +1149,7 @@ fn starting_line(reduce_motion: bool) -> Div {
         .items_center()
         .w_full()
         .min_w_0()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT_2))
@@ -1271,9 +1271,9 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
 /// The Pane box (§D.1): `--pane` ground, 8px radius, and a 1px border that
 /// is **always in layout** — transparent at rest, amber on a Decision, red
 /// when blocked — so a state change reflows nothing. `overflow: hidden`
-/// clips the children to the radius. The mono family is declared once
-/// here: everything inside a Pane inherits it, everything outside keeps
-/// the system sans the root declares.
+/// clips the children to the radius. The UI face is declared once here;
+/// code text inside a Pane (tool arguments and output, diffs, code, the
+/// Composer's line) sets the code face where it is drawn.
 fn pane_shell(edge: gpui::Hsla) -> Div {
     div()
         .relative()
@@ -1286,7 +1286,7 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
         .border_1()
         .border_color(edge)
         .rounded(px(theme::R_PANE))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .overflow_hidden()
 }
 
@@ -2082,12 +2082,17 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
         // name in `TEXT_2` and the rest in metadata ink, as one text run so
         // the line clamp still applies. A call reads as L1 spells it,
         // `Name(args)`, the parentheses touching the name.
+        // The arguments are machine text in the code face (rule 6), cut with
+        // an ellipsis where the cell ends.
         let dotted = |dot: u32, name: &str, rest: &str| {
-            let text = if rest.is_empty() {
-                format!("● {name}")
-            } else {
-                format!("● {name}({rest})")
-            };
+            let text = format!("● {name}");
+            let args = (!rest.is_empty()).then(|| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::FONT_CODE)
+                    .child(SharedString::from(format!("({rest})")))
+            });
             let dot_end = '●'.len_utf8();
             let name_end = dot_end + 1 + name.len();
             let runs = vec![
@@ -2108,11 +2113,19 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
             ];
             div()
                 .w_full()
+                .flex()
                 .flex_shrink_0()
+                .min_w_0()
                 .text_size(px(theme::FS_SM))
                 .line_height(px(theme::LH_META))
                 .text_color(rgb(TEXT_MUTED))
-                .child(StyledText::new(text).with_highlights(runs))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .child(StyledText::new(text).with_highlights(runs)),
+                )
+                .children(args)
         };
         let prose = |spans: &[Span]| -> String {
             spans
@@ -2156,7 +2169,7 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                 if text.is_empty() {
                     continue;
                 }
-                line(text, TEXT_2).font_family(theme::FONT_PROSE)
+                line(text, TEXT_2).font_family(theme::FONT_UI)
             }
             Body::Heading { spans, .. } => {
                 let text = prose(spans);
@@ -2164,7 +2177,7 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                     continue;
                 }
                 line(text, TEXT)
-                    .font_family(theme::FONT_PROSE)
+                    .font_family(theme::FONT_UI)
                     .font_weight(theme::W_STRONG)
             }
             Body::Code { language, .. } => line(
@@ -2266,7 +2279,7 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
         .min_h_0()
         .p(px(theme::CELL_PAD))
         .gap(px(theme::DECISION_L2_GAP))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .child(decision::head(decision::kind_word(decision), None, None))
         .child(
             div()
@@ -2345,9 +2358,8 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
     // The title holds its width up to `HEAD_TITLE_MAX_W`, where it
     // truncates, and never shrinks below `HEAD_TITLE_MIN_W` (or its whole
     // text, when that is shorter): the checkout gives way first, and the
-    // agent tabs fold into their `+N` before the title starves. The floor
-    // is exact because the title is one mono run: `MONO_CELL` a character.
-    // `left` keeps its children's floors, so nothing squeezes past them.
+    // agent tabs fold into their `+N` before the title starves
+    // (`title_floor`). `left` keeps its children's floors, so nothing squeezes past them.
     let title_floor = title_floor(&view.name);
     let left = div()
         .flex()
@@ -2423,11 +2435,13 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
 }
 
 /// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
-/// or its whole text when that is shorter. Exact, because the title is one
-/// mono run at `FS_UI`: `MONO_CELL` a character.
+/// or about its whole text when that is shorter. The title is proportional
+/// UI text, so its width is estimated from below (`UI_ADVANCE_FLOOR` a
+/// character): a short title is never padded past its text, and only a head
+/// squeezed to its floor can clip one's last letter.
 fn title_floor(name: &str) -> f32 {
-    (name.chars().count() as f32 * theme::MONO_CELL)
-        .ceil()
+    (name.chars().count() as f32 * theme::FS_UI * theme::UI_ADVANCE_FLOOR)
+        .floor()
         .min(theme::HEAD_TITLE_MIN_W)
 }
 
@@ -2619,7 +2633,7 @@ pub fn checks_card() -> Div {
         .min_w(px(theme::CHECKS_CARD_W))
         .max_w(px(theme::CHECKS_CARD_MAX_W))
         .p(px(theme::CHECKS_CARD_PAD))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT))
@@ -2804,8 +2818,8 @@ pub(crate) fn meter_layout(done: usize, total: usize) -> MeterLayout {
     }
 }
 
-/// The painted meter (the head, L2 and the wall share it; Geist Mono has
-/// no `▰▱`): done steps in `TEXT_2`, the rest unlit. `live` lights the
+/// The painted meter (the head, L2 and the wall share it; neither face has
+/// `▰▱`): done steps in `TEXT_2`, the rest unlit. `live` lights the
 /// step being run in `RUNNING` — the one colour on a meter, because a step
 /// in progress is live state. Finishing a plan is not a status: a full
 /// meter is all `TEXT_2`, no check and no green.
@@ -3041,7 +3055,7 @@ fn working_line(
         .flex_shrink_0()
         .w_full()
         .min_w_0()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI));
     if let Some(caption) = caption {
@@ -3068,7 +3082,7 @@ fn working_line(
                         .debug_selector(|| "progress-metadata".into())
                         .flex_shrink_0()
                         .whitespace_nowrap()
-                        .pl(px(theme::MONO_CELL))
+                        .pl(px(theme::WORD_GAP))
                         .text_size(px(theme::FS_SM))
                         .text_color(rgb(TEXT_MUTED))
                         .child(SharedString::from(format!("({})", facts.join(" \u{b7} ")))),
@@ -3266,6 +3280,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                                     let namespace = namespace.clone();
                                     div()
                                         .flex_shrink_0()
+                                        .font_family(theme::FONT_CODE)
                                         .debug_selector(move || {
                                             format!("queue-row-{namespace}-{index}")
                                         })
@@ -3292,6 +3307,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .relative()
         .flex_1()
         .min_w_0()
+        // The input is a terminal line: the code face, placeholder too.
+        .font_family(theme::FONT_CODE)
         .line_height(px(theme::COMPOSER_ROW_H))
         .text_color(rgb(TEXT_STRONG))
         .child(view.composer.clone());
@@ -3549,7 +3566,13 @@ fn hint_row(lead: Option<Div>, hints: &[(&'static str, &'static str)]) -> Div {
                 .mr(px(theme::SPACE_3))
                 .gap(px(theme::SPACE_1))
                 .whitespace_nowrap()
-                .child(div().text_color(rgb(TEXT_2)).child(*key))
+                // The key is code text (rule 6); its verb is UI.
+                .child(
+                    div()
+                        .font_family(theme::FONT_CODE)
+                        .text_color(rgb(TEXT_2))
+                        .child(*key),
+                )
                 .child(*verb)
         }))
 }
@@ -4667,7 +4690,10 @@ pub(crate) fn render_block(
                 .rounded(px(theme::R_CHIP))
                 .hover_row()
                 .hover_text()
-                .font_family(theme::FONT_MONO)
+                // The operator's own words: UI face, set apart from the
+                // agent's by the `❯`, the label weight and the strong ink.
+                .font_family(theme::FONT_UI)
+                .font_weight(theme::W_LABEL)
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .text_color(rgb(TEXT_STRONG))
@@ -4749,7 +4775,7 @@ pub(crate) fn render_block(
             let (summary, details) = reasoning_text(thought);
             let mark = icon(icons::REASONING, theme::GLYPH_BOX, TEXT_FAINT);
             let reasoning = div()
-                .font_family(theme::FONT_PROSE)
+                .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_PROSE))
                 .line_height(px(theme::LH_PROSE))
                 .text_color(rgb(TEXT_MUTED));
@@ -4849,6 +4875,7 @@ pub(crate) fn render_block(
                     .flex()
                     .flex_col()
                     .overflow_hidden()
+                    .font_family(theme::FONT_CODE)
                     .text_size(px(theme::FS_UI))
                     .line_height(px(theme::LH_CODE))
                     .text_color(rgb(TEXT_2))
@@ -4892,7 +4919,7 @@ fn gutter_row(mark: impl IntoElement, first_line: f32) -> Div {
 /// Fallback prose at C1, in the answer's face.
 fn prose_row(row: Div) -> Div {
     row.pl(px(theme::GUTTER_W))
-        .font_family(theme::FONT_PROSE)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_PROSE))
         .line_height(px(theme::LH_PROSE))
         .text_color(rgb(TEXT))
@@ -5000,7 +5027,7 @@ fn turn_end(block: BlockId, end: &ferrite_core::transcript::TurnEnd, selection: 
     )
 }
 
-/// The `·` seams in a mono line: glyph ink, never a weight. Highlighted in
+/// The `·` seams in a UI line: glyph ink, never a weight. Highlighted in
 /// place so the line stays one run and copies back exactly as written.
 fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     text.match_indices('\u{b7}')
@@ -5068,14 +5095,23 @@ fn tool_dot(tool: &ToolBlock, reduce_motion: bool) -> AnyElement {
 
 /// A call's name and arguments as one line, `Name(args)` with the parens
 /// touching: the name in body ink, the rest muted.
+/// A call line `Name(args)`: the name is UI text in `TEXT`, the arguments
+/// — a command, a path — are machine text in the code face (rule 6), one
+/// selectable line either way.
 fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
-    vec![(
-        0..tool.name.len(),
+    let label = text::tool_label(tool).len();
+    let name = tool.name.len().min(label);
+    let mut highlights = vec![(
+        0..name,
         HighlightStyle {
             color: Some(rgb(TEXT).into()),
             ..Default::default()
         },
-    )]
+    )];
+    if name < label {
+        highlights.push((name..label, gpui::base::text::code_run()));
+    }
+    highlights
 }
 
 /// A settled call's time, from one second up; below that it is noise.
@@ -5322,7 +5358,7 @@ where
                 .whitespace_nowrap()
                 .child(
                     div()
-                        .px(px(theme::MONO_CELL))
+                        .px(px(theme::WORD_GAP))
                         .text_color(rgb(TEXT_FAINT))
                         .child("·"),
                 )
@@ -5457,7 +5493,9 @@ pub(crate) fn output_block(
     command: bool,
     selection: &TextRuns,
 ) -> Div {
+    // Output is machine text: the code face, like the call's arguments.
     let rows = elbow_row(theme::LH_CODE)
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_CODE))
         .text_color(rgb(ink))
@@ -5710,6 +5748,7 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
         .rounded(px(theme::R_CHIP))
         .overflow_hidden()
         .bg(rgb(RAISED))
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         // A whole-pixel line box: a fractional one rounds each row's origin
         // and height independently, and the added/removed washes can leave a
@@ -5846,7 +5885,7 @@ fn diff_max_number(diff: &Diff, cap: usize) -> usize {
 /// (at least two), rounded up to a whole pixel.
 fn diff_number_width(max: usize) -> f32 {
     let digits = max.max(1).ilog10() as usize + 1;
-    (digits.max(2) as f32 * theme::MONO_CELL).ceil()
+    (digits.max(2) as f32 * theme::CODE_CELL).ceil()
 }
 
 /// What a unified-diff line is, read from its first byte.
@@ -5977,8 +6016,8 @@ fn prose(block: BlockId, spans: &[Span], selection: &TextRuns) -> AnyElement {
 /// enough on its own: gpui shapes a run of leading U+0020 to zero advance —
 /// and U+00A0 in its place shapes to zero too — so every inner line landed
 /// flush left however the string was cut. So the leading spaces go into
-/// their own box, sized from the mono advance (JetBrains Mono is 600/1000
-/// em, the 0.6 below), and the code follows in a second run. The spaces are
+/// their own box, sized from the code advance (Geist Mono is 600/1000
+/// em, `CODE_ADVANCE`), and the code follows in a second run. The spaces are
 /// still emitted as a text fragment inside that box, so a copy takes the
 /// line back whole; only its painting is guaranteed by the width.
 fn code_lines(
@@ -6306,7 +6345,7 @@ mod tests {
                 .flex()
                 .flex_col()
                 .w(px(900.))
-                .font_family(crate::theme::FONT_MONO)
+                .font_family(crate::theme::FONT_UI)
                 .text_size(px(12.))
                 .children(self.decisions.iter().enumerate().map(|(at, decision)| {
                     let rows = decision::approval_rows(decision)
@@ -7119,10 +7158,13 @@ mod tests {
             };
             assert_eq!(text::tool_label(&tool), "Bash(cargo test)");
             let highlights = call_highlights(&tool);
-            assert_eq!(highlights.len(), 1);
+            assert_eq!(highlights.len(), 2);
             assert_eq!(highlights[0].0, 0..4, "only the name is lifted");
             assert_eq!(highlights[0].1.color, Some(rgb(TEXT).into()));
             assert_eq!(highlights[0].1.font_weight, None, "names are never bold");
+            // The arguments are set in the code face and nothing else.
+            assert_eq!(highlights[1].0, 4..16);
+            assert_eq!(highlights[1].1, gpui::base::text::code_run());
         }
         assert_eq!(result_ink(&ToolState::Ok), TEXT_MUTED);
         assert_eq!(
@@ -7143,7 +7185,7 @@ mod tests {
         );
         assert_eq!(text::diff_body(""), "");
         assert_eq!(DiffKind::Removed.paint().sign, "-", "ASCII, like both CLIs");
-        let cell = theme::MONO_CELL;
+        let cell = theme::CODE_CELL;
         assert_eq!(
             diff_number_width(7),
             (2. * cell).ceil(),

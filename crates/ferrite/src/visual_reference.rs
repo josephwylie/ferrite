@@ -445,7 +445,7 @@ fn render(
         if label == "wide" && state == "edges" {
             let measurements: Vec<_> = ["\tb", "a\tb", "aaaa\tb", "        b"].into_iter().map(|text| {
                 let line = window.text_system().shape_line(text.to_owned().into(), gpui::px(crate::theme::FS_UI), &[gpui::TextRun {
-                    len:text.len(),font:gpui::font(crate::theme::FONT_MONO),color:gpui::rgb(crate::theme::TEXT).into(),background_color:None,underline:None,strikethrough:None,
+                    len:text.len(),font:gpui::font(crate::theme::FONT_CODE),color:gpui::rgb(crate::theme::TEXT).into(),background_color:None,underline:None,strikethrough:None,
                 }],None);
                 serde_json::json!({"source":text,"b_x_logical_px":f32::from(line.x_for_index(text.len()-1))})
             }).collect();

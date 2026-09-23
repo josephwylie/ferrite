@@ -130,7 +130,7 @@ pub fn strip(
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
-/// The titlebar's contextual creation door (UI-13): the `+` and its mono
+/// The titlebar's contextual creation door (UI-13): the `+` and its UI
 /// label in the chrome icon-button face — `TEXT_MUTED` glyph, the `HOVER`
 /// face under the pointer, `PRESSED` held, `R_CONTROL`. It is a sibling of
 /// the Windows drag region, never a child, so its click reaches the app
@@ -159,7 +159,7 @@ pub fn add_thread_button(label: &'static str, tooltip: &'static str, cx: &App) -
                 .flex()
                 .items_center()
                 .gap(px(TITLE_ADD_GAP))
-                .font_family(FONT_MONO)
+                .font_family(FONT_UI)
                 .text_size(px(FS_UI))
                 .line_height(px(LH_UI))
                 .text_color(rgb(TEXT_2))
@@ -200,7 +200,7 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
         )
 }
 
-/// The dev-build mark, beside the location it qualifies: a quiet mono
+/// The dev-build mark, beside the location it qualifies: a quiet UI
 /// `dev` in a hairline box. Not a state — `ATTENTION` would say "something
 /// needs you" to every operator of a local build. It is a sibling of the
 /// drag region rather than a child: anything inside one is non-client to
@@ -218,7 +218,7 @@ fn dev_badge() -> Div {
         .rounded(px(R_CHIP))
         .border_1()
         .border_color(rgba(HAIRLINE_STRONG))
-        .font_family(FONT_MONO)
+        .font_family(FONT_UI)
         .text_size(px(FS_SM))
         .line_height(px(LH_META))
         .font_weight(W_BODY)
@@ -226,7 +226,7 @@ fn dev_badge() -> Div {
         .child("dev")
 }
 
-/// The location, on one mono baseline: in Solo the Project alone; in a
+/// The location, on one UI baseline: in Solo the Project alone; in a
 /// Group the Project, a faint `/`, the Group's name as the band's one title
 /// and how many Panes it shows; ` · fullscreen` while one Pane fills the
 /// board. The Group's name gives way last.
@@ -255,7 +255,7 @@ fn title_region(title: Title, board: Board) -> Div {
         .min_w_0()
         .px(px(GRID_PAD))
         .gap(px(TITLE_GAP))
-        .font_family(FONT_MONO)
+        .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(LH_UI))
         .children(project.map(|project| {

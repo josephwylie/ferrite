@@ -64,7 +64,7 @@ pub fn sheet() -> Div {
         .border_1()
         .border_color(rgba(theme::ACCENT_EDGE))
         .opacity(0.96)
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(theme::TEXT_STRONG))

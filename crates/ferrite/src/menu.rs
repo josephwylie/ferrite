@@ -46,13 +46,13 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
         })
 }
 
-/// A shortcut in the menu's trailing column: mono `FS_SM`, `cmd-` drawn as
+/// A shortcut in the menu's trailing column: code-face `FS_SM` keys, `cmd-` drawn as
 /// the command glyph (`components::key_combo`).
 fn shortcut(keys: &SharedString, ink: u32) -> Div {
     components::key_combo(keys, ink).text_size(px(FS_SM))
 }
 
-/// A tooltip in the floating vocabulary: mono `FS_SM`, 8px × 4px, at most
+/// A tooltip in the floating vocabulary: UI `FS_SM`, 8px × 4px, at most
 /// `TOOLTIP_MAX_W` wide (a long path wraps), the float shadow over the kit's
 /// raised ground and strong hairline edge.
 pub fn tooltip(
@@ -61,7 +61,7 @@ pub fn tooltip(
     let text = text.into();
     move |window, cx| {
         gpui::component::tooltip::Tooltip::new(text.clone())
-            .font_family(FONT_MONO)
+            .font_family(FONT_UI)
             .text_size(px(FS_SM))
             .line_height(px(LH_META))
             .px(px(TOOLTIP_PAD_X))

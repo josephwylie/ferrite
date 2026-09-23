@@ -867,7 +867,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
                 px(crate::theme::FS_SM),
                 &[gpui::TextRun {
                     len: text.len(),
-                    font: gpui::font(crate::theme::FONT_MONO),
+                    font: gpui::font(crate::theme::FONT_UI),
                     color: gpui::rgb(crate::theme::TEXT).into(),
                     background_color: None,
                     underline: None,
@@ -946,5 +946,204 @@ fn an_l2_approval_allows_on_y_with_the_card_or_the_composer_focused(cx: &mut Tes
             "y allows with the {holder} holding the keyboard: {:?}",
             fake.answered.borrow()
         );
+    }
+}
+
+/// Theme rule 6, sampled where each face is set: the app's own copy is in
+/// the UI face (Geist), and only code and machine text is in the code face
+/// (Geist Mono).
+#[gpui::test]
+fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
+    use crate::theme::{FONT_CODE, FONT_UI};
+    use gpui::Styled as _;
+    let (core, fake) = cockpit("font-roles", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(1000.)));
+    tick(cx);
+    cx.simulate_input("Check the fixture");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let stream = fake.streams.borrow()[0].clone();
+    for (id, name, input) in [
+        (
+            "run",
+            "Bash",
+            serde_json::json!({ "command": "cargo test -p ferrite" }),
+        ),
+        (
+            "read",
+            "Read",
+            serde_json::json!({ "file_path": "src/lib.rs" }),
+        ),
+    ] {
+        stream
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input,
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "ok".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    stream
+        .send(SessionEvent::TextDelta {
+            text: "Use `cargo test` here.\n\n```rust\nlet x = 1;\n```\n\n".into(),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolStarted {
+            id: "edit".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": "/workspace/x.txt" }),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolCompleted {
+            id: "edit".into(),
+            output: "applied".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::FileEdit {
+                path: "/workspace/x.txt".into(),
+                hunks: vec![ferrite_core::Hunk {
+                    old_start: 1,
+                    old_lines: 2,
+                    new_start: 1,
+                    new_lines: 2,
+                    lines: vec![" alpha".into(), "-bravo".into(), "+delta".into()],
+                }],
+            },
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    drop(stream);
+    tick(cx);
+    tick(cx);
+
+    let (namespace, blocks, composer) = view.read_with(cx, |view, _| {
+        let pane = &view.panes[0];
+        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let blocks: Vec<_> = thread
+            .transcript()
+            .blocks()
+            .iter()
+            .map(|block| (block.id, block.body.clone()))
+            .collect();
+        (pane.text_namespace(), blocks, pane.composer.entity_id())
+    });
+    let id_of = |pick: &dyn Fn(&Body) -> bool| {
+        blocks
+            .iter()
+            .find(|(_, body)| pick(body))
+            .map(|(id, _)| *id)
+            .expect("the fixture's block")
+    };
+    let face = |cx: &mut gpui::VisualTestContext, prefix: String| {
+        cx.update(|_, cx| crate::rich::testing::font_family(&prefix, cx))
+            .unwrap_or_else(|| panic!("{prefix} was drawn"))
+    };
+    let prompt = id_of(&|body| matches!(body, Body::Prompt(_)));
+    let group = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Bash"));
+    let edit = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Edit"));
+    let stamp = id_of(&|body| matches!(body, Body::TurnEnd(_)));
+
+    // UI: the prompt echo, a group summary, a tool call's line (its name;
+    // the arguments carry the code mark, `call_highlights`), the stamp.
+    for (what, prefix) in [
+        ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
+        ("group summary", format!("literal-{namespace}-{group:?}-0")),
+        ("call line", format!("literal-{namespace}-{edit:?}-0")),
+        ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
+    ] {
+        assert_eq!(face(cx, prefix).as_ref(), FONT_UI, "{what} is UI text");
+    }
+    // Code: the diff's lines and the Composer's line.
+    // A settled edit's diff shows once it is disclosed.
+    for disclosure in [
+        pane::DisclosureId::Group("edit".into()),
+        pane::DisclosureId::Tool("edit".into()),
+    ] {
+        if let Some(control) =
+            view.read_with(cx, |view, _| view.panes[0].tool_bounds(disclosure.clone()))
+        {
+            cx.simulate_click(control.center(), gpui::Modifiers::none());
+            tick(cx);
+        }
+    }
+    let diff_faces: Vec<_> = (0..10)
+        .filter_map(|ordinal| {
+            let prefix = format!("literal-{namespace}-{edit:?}-{ordinal}");
+            cx.update(|_, cx| {
+                let text = crate::rich::testing::full_text(&prefix, cx)?;
+                ["alpha", "bravo", "delta"]
+                    .iter()
+                    .any(|line| text.trim() == *line)
+                    .then(|| crate::rich::testing::font_family(&prefix, cx))
+                    .flatten()
+            })
+        })
+        .collect();
+    assert!(!diff_faces.is_empty(), "the diff is drawn");
+    assert!(
+        diff_faces.iter().all(|face| face.as_ref() == FONT_CODE),
+        "every diff line is code: {diff_faces:?}"
+    );
+    assert_eq!(
+        cx.update(|_, cx| crate::composer::testing::face(composer, cx))
+            .as_deref(),
+        Some(FONT_CODE),
+        "the Composer's line is code"
+    );
+    // Code in prose: fenced blocks and inline spans.
+    let style = crate::rich::style(px(16.));
+    assert_eq!(
+        style.code_block().text.font_family.as_deref(),
+        Some(FONT_CODE)
+    );
+    assert_eq!(style.inline_code_font().as_deref(), Some(FONT_CODE));
+
+    // The surfaces chrome inherits its face from.
+    let ui = |mut div: gpui::Div| div.style().text.font_family.clone();
+    for (what, family) in [
+        ("nav", ui(crate::nav::shell(false))),
+        (
+            "menu row",
+            ui(crate::components::menu_row_content(
+                &crate::components::MenuItem::new("Rename"),
+                false,
+                false,
+            )),
+        ),
+        (
+            "floating surface",
+            ui(crate::components::floating_surface()),
+        ),
+        ("settings sheet", ui(crate::prefs::sheet(400., 300.))),
+        ("settings label", ui(crate::components::text_ui())),
+        ("metadata", ui(crate::components::text_meta())),
+    ] {
+        assert_eq!(family.as_deref(), Some(FONT_UI), "{what} is UI text");
+    }
+    for (what, family) in [
+        ("keycap", ui(crate::components::kbd("y"))),
+        (
+            "keys",
+            ui(crate::components::key_combo("cmd-F", crate::theme::TEXT)),
+        ),
+        ("command well", ui(crate::decision::well(gpui::div()))),
+    ] {
+        assert_eq!(family.as_deref(), Some(FONT_CODE), "{what} is code");
     }
 }

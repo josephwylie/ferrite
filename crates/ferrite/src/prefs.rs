@@ -39,7 +39,7 @@ pub fn veil() -> Div {
 
 /// A modal sheet, `width` × `height` at most `MODAL_VIEWPORT_FRACTION` of
 /// the window: `RAISED`, the strong hairline edge, `R_PANE`, the float
-/// shadow, mono UI type. Its definite height is what lets the body scroll.
+/// shadow, UI type. Its definite height is what lets the body scroll.
 pub fn sheet(width: f32, height: f32) -> Div {
     components::text_ui()
         .flex()
@@ -112,7 +112,7 @@ pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
         .child(right)
 }
 
-/// A form row's label block: the label in mono `FS_UI` `TEXT`, and its
+/// A form row's label block: the label in UI `FS_UI` `TEXT`, and its
 /// description under it in prose at `FS_PROSE_SM` (prose is never smaller).
 pub fn form_text(title: impl Into<SharedString>, detail: Option<SharedString>) -> Div {
     div()
@@ -123,7 +123,7 @@ pub fn form_text(title: impl Into<SharedString>, detail: Option<SharedString>) -
         .child(components::text_ui().child(title.into()))
         .children(detail.map(|detail| {
             div()
-                .font_family(FONT_PROSE)
+                .font_family(FONT_UI)
                 .text_size(px(FS_PROSE_SM))
                 .line_height(px(LH_PROSE_SM))
                 .text_color(rgb(TEXT_MUTED))
@@ -200,7 +200,7 @@ pub fn body(pages: Vec<SettingPage>) -> Div {
     div().flex_1().min_h_0().child(settings)
 }
 
-/// A page, its header in the mono UI voice over the one rule weight.
+/// A page, its header in the UI voice over the one rule weight.
 pub fn page(title: &'static str, groups: Vec<SettingGroup>) -> SettingPage {
     let header = gpui::StyleRefinement::default()
         .px(px(MODAL_PAD))
@@ -214,11 +214,11 @@ pub fn page(title: &'static str, groups: Vec<SettingGroup>) -> SettingPage {
         .groups(groups)
 }
 
-/// A group of items. Its title is a section header: mono `FS_SM` in the
+/// A group of items. Its title is a section header: UI `FS_SM` in the
 /// kit's muted ink, sentence case (the items set their own type).
 pub fn group(title: Option<&'static str>) -> SettingGroup {
     let group = SettingGroup::new()
-        .font_family(FONT_MONO)
+        .font_family(FONT_UI)
         .text_size(px(FS_SM));
     match title {
         Some(title) => group.title(title),
@@ -463,7 +463,7 @@ pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: 
         .child(components::form_label(label, ink))
 }
 
-/// A read-only fact: its key in a muted mono column, its value mono `TEXT_2`
+/// A read-only fact: its key in a muted column, its value UI `TEXT_2`
 /// wrapping anywhere, so a full path stays readable. Searchable by both.
 pub fn fact(title: &'static str, value: SharedString) -> SettingItem {
     let words = [SharedString::from(title), value.clone()];

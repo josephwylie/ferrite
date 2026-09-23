@@ -39,12 +39,20 @@
 //!    glyphs, rules, separators; at least 3:1 on `GROUND`/`PANE`).
 //!    **`TEXT_FAINT` is never text.** A row spends at most two text inks, one
 //!    glyph ink and one state colour.
-//! 6. **Two faces.** `FONT_MONO` (Geist Mono) is the structural voice: chrome,
-//!    nav, Pane heads, prompts, tool activity, the Composer, code, menus.
-//!    `FONT_PROSE` (Geist) is for what an operator reads at length: agent
-//!    prose, Decision questions, option descriptions. Mono uses weights 400
-//!    and 500 only, 500 for a surface's single title; 600 is prose only
-//!    (headings, `**strong**`, the Decision question); 700 is unused.
+//! 6. **Two faces, chosen by what the text is.** `FONT_UI` (Geist) is the
+//!    face of the app: the nav, the titlebar, Pane and cell heads, the prompt
+//!    echo (set apart by its `❯`, weight and ink, not its face), group
+//!    summaries, stamps, the working line, Decisions, menus, sheets,
+//!    notifications, chips, buttons, empty states, and agent prose.
+//!    `FONT_CODE` (Geist Mono) is only for literal code and machine text:
+//!    fenced blocks and inline `code`, diffs and their number column, a tool
+//!    call's arguments and every line of its output (the tool's name is UI),
+//!    the Composer's input line, placeholder and queued prompts (a terminal
+//!    line), a Decision's command well, keycaps, and the aligned `/command`
+//!    names. A metric that assumes a fixed advance (`CODE_CELL`) is only ever
+//!    laid out against code text. Weights: 400 body; 500 a surface's single
+//!    title, labels and the prompt echo; 600 prose emphasis (headings,
+//!    `**strong**`, the Decision question); 700 is unused.
 //! 7. **Pixel line heights.** Every text role is a (size, line height) pair,
 //!    and fixed row heights are `const` expressions of those pairs, never
 //!    hand-summed literals.
@@ -53,10 +61,10 @@
 //!    More space above a heading or a new turn than below it.
 //! 9. **Radii say role, not size:** Pane 10 · block 8 · control 6 · chip 4 ·
 //!    tight 3. A nested radius is the outer radius less its inset.
-//! 10. **Glyph coverage.** A glyph outside the bundled Geist Mono cmap is
+//! 10. **Glyph coverage.** A glyph outside either bundled face's cmap is
 //!     never text on any surface; it is an SVG in a glyph box. `CHROME_GLYPHS`
-//!     lists the non-ASCII glyphs text may use, and a test checks them against
-//!     the bundled face.
+//!     lists the non-ASCII glyphs text may use, and a test checks each against
+//!     both bundled faces, Geist and Geist Mono.
 //!
 //! **Layout of this file.** Everything down to `init_components` is the frozen
 //! shared head: values more than one work package reads, and the kit mapping.
@@ -323,20 +331,33 @@ pub fn prose_line_height(size: f32) -> f32 {
 }
 
 /// 0.6em — Geist Mono's advance width (600/1000 em), the pitch a
-/// per-character cell must be laid out on so it cannot round up to a whole
-/// pixel.
-pub const MONO_ADVANCE: f32 = 0.6;
-/// 7.5px — one mono column at `FS_UI`.
-pub const MONO_CELL: f32 = FS_UI * MONO_ADVANCE;
+/// per-character cell of *code* text must be laid out on so it cannot round
+/// up to a whole pixel. UI text is proportional: nothing lays it out on a
+/// cell.
+pub const CODE_ADVANCE: f32 = 0.6;
+/// 7.5px — one code column at `FS_UI`.
+pub const CODE_CELL: f32 = FS_UI * CODE_ADVANCE;
+/// 0.5em — a floor under Geist's average advance in UI copy. Only an
+/// estimate from below may be laid out against proportional text (a title's
+/// floor), so a short label is never padded past itself.
+pub const UI_ADVANCE_FLOOR: f32 = 0.5;
+/// 4px — one word space between UI runs laid side by side (a caption and its
+/// facts, a summary and its ` · N failed`).
+pub const WORD_GAP: f32 = SPACE_1;
 
-/// The non-ASCII glyphs mono text may use: every one is in the bundled Geist
-/// Mono cmap (asserted by `theme::tests`). Anything else — `❯ ⎿ ∴ ✻ ✓ ✗ ☐`
+/// The non-ASCII glyphs text may use in either face: every one is in both
+/// bundled cmaps (asserted by `theme::tests`). Anything else — `❯ ⎿ ∴ ✻ ✓ ✗ ☐`
 /// and friends — is an SVG in a glyph box, never text. A rule the tests
 /// enforce, so it compiles only with them.
 #[cfg(test)]
 pub const CHROME_GLYPHS: &[char] = &[
-    '↳', '±', '↑', '↓', '⇥', '⇧', '↵', '⌫', '•', '●', '…', '→', '·', '−', '—', '│', '└', '─', '›',
+    '↳', '±', '↑', '↓', '⇥', '⇧', '↵', '•', '●', '…', '→', '·', '−', '—', '›',
 ];
+/// The glyphs only keys may use: a key is code text (rule 6), drawn in the
+/// code face wherever it appears (`components::key_hints`, keycaps), and
+/// Geist has no `⌫`.
+#[cfg(test)]
+pub const KEY_GLYPHS: &[char] = &['⌫'];
 
 /// 720px — the reading column's maximum width, gutter included. Wide Panes
 /// centre the column; narrow Panes use their full width. The Composer, the
@@ -570,23 +591,21 @@ pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 
 // ------------------------------------------------------------------ faces
 
-/// The mono face, **bundled**: Geist Mono. It is the structural voice —
-/// chrome, nav, Pane heads, prompts, tool activity, the Composer, code.
+/// The UI face, **bundled**: Geist. Everything an operator reads as the app
+/// — chrome, heads, menus, sheets, summaries — and agent prose (rule 6).
+/// The kit's `font_family` is set from it.
 ///
 /// gpui has no variation-axis support, so `main.rs` registers static
-/// instances (Regular, Italic, Medium, SemiBold, Bold). They share the
-/// typographic family name (name ID 16), and CoreText/DirectWrite resolve the
-/// face from `.font_weight(..)`. **Never reach a weight by family name**:
-/// `.font_family("Geist Mono Medium")` silently resolves to the fallback face.
-pub const FONT_MONO: &str = "Geist Mono";
+/// instances (Regular, Italic, Medium, SemiBold, Bold) of both faces. They
+/// share their typographic family name (name ID 16), and CoreText/DirectWrite
+/// resolve the face from `.font_weight(..)`. **Never reach a weight by
+/// family name**: `.font_family("Geist Medium")` silently resolves to the
+/// fallback face.
+pub const FONT_UI: &str = "Geist";
 
-/// The prose face, bundled: Geist. Agent prose, Decision questions, option
-/// descriptions — what an operator reads at length.
-pub const FONT_PROSE: &str = "Geist";
-
-/// The chrome face. Chrome is mono (operator decision), so this is
-/// `FONT_MONO` under its role name; the kit's `font_family` is set from it.
-pub const FONT_UI: &str = FONT_MONO;
+/// The code face, bundled: Geist Mono. Only literal code and machine text
+/// (rule 6); the kit's `mono_font_family` is set from it.
+pub const FONT_CODE: &str = "Geist Mono";
 
 /// Install Longbridge once per app, then map its semantic theme to Ferrite's
 /// existing tokens. Constructors also call this for standalone test windows.
@@ -619,7 +638,7 @@ pub fn init_components(cx: &mut gpui::App) {
     let theme = Theme::global_mut(cx);
     theme.font_family = FONT_UI.into();
     theme.font_size = px(FS_UI);
-    theme.mono_font_family = FONT_MONO.into();
+    theme.mono_font_family = FONT_CODE.into();
     theme.mono_font_size = px(FS_UI);
     theme.radius = px(R_CONTROL);
     theme.radius_lg = px(R_BLOCK);
@@ -784,7 +803,7 @@ pub const DIFF_ADDED_INK: u32 = 0xb4cfc0;
 pub const DIFF_REMOVED_INK: u32 = 0xddb5b0;
 /// A diff card at C2: `RAISED`, `R_CHIP`, 4px above and inside it, 8px
 /// inline. Its columns are `[number][8][sign][4][code]`: the number column
-/// is as wide as the largest number's digits (`MONO_CELL` each), the sign is
+/// is as wide as the largest number's digits (`CODE_CELL` each), the sign is
 /// one whole-pixel mono cell, and code keeps its indentation.
 pub const HUNK_PAD_X: f32 = SPACE_2;
 pub const HUNK_PAD_Y: f32 = SPACE_1;
@@ -1121,9 +1140,10 @@ pub const USAGE_LINE_GAP: f32 = 2.0;
 /// tight enough that the trio reads as one control, wide enough that the
 /// three readings stay separate.
 pub const USAGE_RING_GAP: f32 = 4.0;
-/// The readout's percent column: four mono cells at `FS_SM`, so 9% → 62% →
+/// The readout's percent column: room for `100%` at `FS_SM` in tabular
+/// figures (four code-cell widths is the generous bound), so 9% → 62% →
 /// 100% never shifts the marks beside it.
-pub const USAGE_READOUT_W: f32 = 4.0 * FS_SM * MONO_ADVANCE;
+pub const USAGE_READOUT_W: f32 = 4.0 * FS_SM * CODE_ADVANCE;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions.
@@ -1610,7 +1630,7 @@ mod tests {
         assert!(near(FS_PROSE * heading_scale(2), 16.0));
         assert!(near(FS_PROSE * heading_scale(3), FS_PROSE));
         assert_eq!(prose_line_height(FS_PROSE), LH_PROSE);
-        assert!(near(MONO_CELL, 7.5));
+        assert!(near(CODE_CELL, 7.5));
     }
 
     #[gpui::test]
@@ -1645,7 +1665,7 @@ mod tests {
             assert_eq!(theme.radius, gpui::px(R_CONTROL));
             assert_eq!(theme.radius_lg, gpui::px(R_BLOCK));
             assert_eq!(theme.font_family.as_ref(), FONT_UI);
-            assert_eq!(theme.mono_font_family.as_ref(), FONT_MONO);
+            assert_eq!(theme.mono_font_family.as_ref(), FONT_CODE);
         });
     }
 
@@ -1745,34 +1765,44 @@ mod tests {
     }
 
     const GEIST_MONO: &[u8] = include_bytes!("../assets/fonts/GeistMono.ttf");
+    const GEIST: &[u8] = include_bytes!("../assets/fonts/Geist.ttf");
+    /// Both bundled faces, by name: a glyph text may use is in each.
+    const FACES: [(&str, &[u8]); 2] = [("Geist", GEIST), ("Geist Mono", GEIST_MONO)];
 
     #[test]
     fn faces_are_the_bundled_families() {
-        assert_eq!(FONT_UI, FONT_MONO);
+        assert_ne!(FONT_UI, FONT_CODE, "UI and code are two faces");
         for face in crate::FONTS {
             let family = family(face);
             assert!(
-                family == FONT_MONO || family == FONT_PROSE,
+                family == FONT_UI || family == FONT_CODE,
                 "a bundled face names the family `{family}`"
             );
         }
-        assert_eq!(family(GEIST_MONO), FONT_MONO);
+        assert_eq!(family(GEIST), FONT_UI);
+        assert_eq!(family(GEIST_MONO), FONT_CODE);
     }
 
     #[test]
-    fn chrome_glyphs_are_in_geist_mono() {
-        assert!(covers(GEIST_MONO, 'a') && covers(GEIST_MONO, '$'));
-        // The glyphs the grammar must draw as SVG, because the face lacks them.
-        for missing in ['❯', '⎿', '∴', '✻', '✓', '✗', '☐'] {
-            assert!(!covers(GEIST_MONO, missing), "{missing} is covered now");
+    fn chrome_glyphs_are_in_both_faces() {
+        for (name, face) in FACES {
+            assert!(covers(face, 'a') && covers(face, '$'), "{name}");
+            // The glyphs the grammar must draw as SVG, because a face lacks
+            // them.
+            for missing in ['❯', '⎿', '∴', '✻', '✓', '✗', '☐'] {
+                assert!(!covers(face, missing), "{missing} is covered in {name} now");
+            }
+            for glyph in CHROME_GLYPHS {
+                assert!(covers(face, *glyph), "{glyph} is not in {name}");
+            }
         }
-        for glyph in CHROME_GLYPHS {
+        for glyph in KEY_GLYPHS {
             assert!(covers(GEIST_MONO, *glyph), "{glyph} is not in Geist Mono");
         }
     }
 
-    /// Every non-ASCII glyph render code puts in a literal must be one the
-    /// bundled mono face draws: `❯ ⎿ ∴ ✻ ✓ ✗ ☐ ◆ ⌘` and friends are SVG glyph
+    /// Every non-ASCII glyph render code puts in a literal must be one both
+    /// bundled faces draw: `❯ ⎿ ∴ ✻ ✓ ✗ ☐ ◆ ⌘` and friends are SVG glyph
     /// boxes or painted marks. Scans the render modules' non-test source,
     /// skipping comments.
     #[test]
@@ -1822,15 +1852,27 @@ mod tests {
                 }
                 let code = code.split(" // ").next().unwrap_or(code);
                 for c in code.chars().filter(|c| !c.is_ascii()) {
-                    if !covers(GEIST_MONO, c) {
-                        missing.push(format!("{file}:{} {c} (U+{:04X})", at + 1, c as u32));
+                    // A key's glyph is drawn in the code face only.
+                    let faces: &[(&str, &[u8])] = if KEY_GLYPHS.contains(&c) {
+                        &FACES[1..]
+                    } else {
+                        &FACES
+                    };
+                    for (name, face) in faces {
+                        if !covers(face, c) {
+                            missing.push(format!(
+                                "{file}:{} {c} (U+{:04X}) not in {name}",
+                                at + 1,
+                                c as u32
+                            ));
+                        }
                     }
                 }
             }
         }
         assert!(
             missing.is_empty(),
-            "glyphs Geist Mono lacks:\n{}",
+            "glyphs a bundled face lacks:\n{}",
             missing.join("\n")
         );
     }

@@ -2271,7 +2271,7 @@ impl CockpitView {
                                 .bg(rgb(crate::theme::RAISED))
                                 .border_1()
                                 .border_color(rgba(crate::theme::HAIRLINE_STRONG))
-                                .font_family(crate::theme::FONT_MONO)
+                                .font_family(crate::theme::FONT_UI)
                                 .text_size(px(crate::theme::FS_SM))
                                 .line_height(px(crate::theme::LH_META))
                                 .text_color(rgb(crate::theme::TEXT_STRONG))
@@ -5946,7 +5946,7 @@ impl CockpitView {
         // Slash commands align their descriptions in one column sized to
         // the longest name shown (clamped, so a long `mcp__…` name cuts).
         let label_w = matches!(open.kind, Kind::Commands).then(|| {
-            crate::components::mono_column_w(
+            crate::components::code_column_w(
                 open.rows
                     .iter()
                     .map(|row| row.name.chars().count())
@@ -6841,7 +6841,7 @@ fn effort_title(effort: &str) -> String {
 
 /// What each rung buys, in the words the providers' own menus use.
 /// An effort level as its Composer chip reads it: the title, lowercase
-/// (`high`, `extra high`) — the chip is a mono control, the menu rows keep
+/// (`high`, `extra high`) — the chip is a quiet control, the menu rows keep
 /// their titles.
 fn effort_chip_label(effort: &str) -> SharedString {
     SharedString::from(effort_title(effort).to_lowercase())
@@ -7762,7 +7762,7 @@ impl CockpitView {
             .items_center()
             .justify_center()
             .gap(px(EMPTY_BOARD_GAP))
-            .font_family(FONT_MONO)
+            .font_family(FONT_UI)
             .text_size(px(FS_SM))
             .line_height(px(LH_META))
             .text_color(rgb(TEXT_MUTED))

@@ -67,7 +67,7 @@ impl Attachments {
 /// The pending files as chips on the shelf above the Composer — the
 /// background chips' recipe, so files going in and work going on read as
 /// one surface: `ATTACH_CHIP_H`, `R_CHIP`, `FILL` (stepping to `FILL_HOVER`
-/// under the pointer), a 16px thumbnail or file mark, the name in mono
+/// under the pointer), a 16px thumbnail or file mark, the name in UI type
 /// `FS_SM` `TEXT_2` cut at `ATTACH_CHIP_MAX_W`, and a quiet `×`. The image
 /// thumbnail and the `×` are real buttons (tab stops, Enter/Space) in the
 /// `PromptAttachment` key context; a click anywhere else on a chip opens
@@ -165,7 +165,7 @@ fn pending_chips(
             .rounded(gpui::px(theme::R_CHIP))
             .bg(rgb(theme::FILL))
             .hover_carried()
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::FONT_UI)
             .text_size(gpui::px(theme::FS_SM))
             .line_height(gpui::px(theme::LH_META))
             .text_color(rgb(theme::TEXT_2))
@@ -342,7 +342,7 @@ impl RenderOnce for Attachments {
 }
 
 /// A file link in prose, drawn as a chip that fits the prose line: a file
-/// mark (or the image's own thumbnail), then the name in mono `TEXT` and a
+/// mark (or the image's own thumbnail), then the name in UI type `TEXT` and a
 /// `:line` suffix in `TEXT_MUTED`, on `RAISED` (`FILL` under the
 /// pointer). The native Markdown flow reserves the returned size and wraps
 /// the chip atomically, so the width is measured in the face it is drawn in.
@@ -377,7 +377,7 @@ pub fn inline_file(
     let image = gpui::Img::extensions().contains(&extension.as_str());
     let title = format!("{name}{location}");
     let mut face = window.text_style();
-    face.font_family = theme::FONT_MONO.into();
+    face.font_family = theme::FONT_UI.into();
     face.font_weight = theme::W_BODY;
     face.font_style = gpui::FontStyle::Normal;
     let text_w = window
@@ -430,7 +430,7 @@ pub fn inline_file(
         .hover_raised()
         .press_raised()
         .rounded(px(theme::R_CHIP))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .not_italic()
         .text_size(px(theme::FS_UI))

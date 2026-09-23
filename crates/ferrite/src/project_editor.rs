@@ -57,7 +57,7 @@ pub fn body() -> Scrollable<Div> {
         .gap(px(SPACE_2))
 }
 
-/// A section header: the mono section label, and its hint in prose.
+/// A section header: the UI section label, and its hint in prose.
 pub fn section_label(title: &'static str, hint: &'static str) -> Div {
     div()
         .flex_shrink_0()
@@ -67,7 +67,7 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
         .child(components::section_label(title).pb(px(SPACE_0_5)))
         .child(
             div()
-                .font_family(FONT_PROSE)
+                .font_family(FONT_UI)
                 .text_size(px(FS_PROSE_SM))
                 .line_height(px(LH_PROSE_SM))
                 .text_color(rgb(TEXT_MUTED))

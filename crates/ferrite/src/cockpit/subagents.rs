@@ -961,7 +961,7 @@ impl CockpitView {
             .min_h(px(theme::COMPOSER_ROW_H))
             .px(px(theme::COMPOSER_PAD_X))
             .py(px(theme::COMPOSER_PAD_T))
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_SM))
             .line_height(px(theme::LH_META))
             .child(components::gutter(
@@ -1982,7 +1982,7 @@ impl CockpitView {
                                     .rounded(px(theme::R_CONTROL))
                                     .bg(rgb(theme::PANE))
                                     .border_color(rgb(theme::INPUT_EDGE))
-                                    .font_family(theme::FONT_MONO)
+                                    .font_family(theme::FONT_UI)
                                     .text_size(px(theme::FS_UI)),
                                 ),
                         ),

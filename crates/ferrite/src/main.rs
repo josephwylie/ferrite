@@ -63,8 +63,8 @@ const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 /// The bundled faces, compiled in. gpui has no variation-axis support, so
 /// each weight is its own static file. Every face in a family shares its
-/// typographic family name (`theme::FONT_MONO` = Geist Mono,
-/// `theme::FONT_PROSE` = Geist), and CoreText / DirectWrite resolve the right
+/// typographic family name (`theme::FONT_UI` = Geist,
+/// `theme::FONT_CODE` = Geist Mono), and CoreText / DirectWrite resolve the right
 /// face from `.font_weight(..)` — never reach a weight by family name.
 pub(crate) static FONTS: [&[u8]; 10] = [
     include_bytes!("../assets/fonts/GeistMono.ttf"),
