@@ -73,6 +73,10 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
   code highlight then carries a zero `fade_out` marker (no pixel effect; it
   survives highlight merges) that `Inline` and `InlineFlow` run builders use to
   find code runs; with a wash the square highlight background is dropped.
+- `code_run()`: a highlight carrying only that marker. A code block's
+  highlighter may return it, and the block's `Inline` shapes those ranges in the
+  inline-code family (no wash): Ferrite sets a tool call's arguments in the code
+  face beside its proportional name within one selectable line.
 - `with_blockquote(StyleRefinement)`, `with_rule(StyleRefinement)`: refined after
   the defaults (a quote's `not_italic()` wins over the default italic).
 - `with_list_markers(bullet, ordinal)`: marker refinements; their text
