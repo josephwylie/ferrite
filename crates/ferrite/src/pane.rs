@@ -429,7 +429,8 @@ impl PaneView {
         } else if !self.disclosure.expanded.remove(call) {
             self.disclosure.expanded.insert(call.clone());
         }
-        self.disclosure.target = Some(call.clone());
+        // Toggling never moves the keyboard target: Tab/Shift-Tab set it,
+        // and a pointer click only opens or closes the row.
         self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
     }
 

@@ -1010,7 +1010,10 @@ impl CockpitView {
         };
         match event {
             crate::transcript::TranscriptEvent::ToggleDisclosure(call) => {
+                // A click just opens or closes the row; the keyboard ring is
+                // Tab's alone, so a click never leaves one behind.
                 self.focus_pane(index);
+                self.panes[index].clear_tool_target();
                 self.panes[index].toggle_tool(call);
                 cx.notify();
             }

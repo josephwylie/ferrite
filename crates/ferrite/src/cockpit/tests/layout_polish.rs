@@ -567,3 +567,78 @@ fn compact_live_reasoning_appears_once_and_returns_to_history(cx: &mut TestAppCo
         "completed reasoning is retained"
     );
 }
+
+/// A pointer click only opens or closes a disclosure: it draws no keyboard
+/// ring on the row and leaves the Composer holding the keyboard. The ring
+/// is Tab's alone, and Tab still draws it after a click.
+#[gpui::test]
+fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("polish-disclosure-click", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect output".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    for id in ["clicked-a", "clicked-b"] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command":"echo result"}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "result".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let group = pane::DisclosureId::Group("clicked-a".into());
+    let at = view.read_with(cx, |view, _| {
+        view.panes[0].tool_bounds(group.clone()).unwrap().center()
+    });
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.panes[0].tool_expanded(group.clone()),
+            "the click opens the group"
+        );
+        assert!(
+            !view.panes[0].has_tool_target(),
+            "a click sets no keyboard target"
+        );
+    });
+    assert!(
+        cx.debug_bounds("tool-disclosure-keyboard-target").is_none(),
+        "a click paints no keyboard ring"
+    );
+    cx.update(|window, cx| {
+        let pane = &view.read(cx).panes[0];
+        assert!(pane.composer.focus_handle(cx).is_focused(window));
+    });
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            !view.panes[0].tool_expanded(group.clone()),
+            "a second click closes it"
+        );
+    });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("tool-disclosure-keyboard-target").is_some(),
+        "Tab still draws the ring"
+    );
+}

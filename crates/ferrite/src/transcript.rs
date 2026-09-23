@@ -669,7 +669,6 @@ impl TranscriptView {
                 view.clear_output_selection(cx);
                 cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
             });
-            window.focus(&view.read(cx).tool_focus(), cx);
         });
         #[cfg(test)]
         let control = {
