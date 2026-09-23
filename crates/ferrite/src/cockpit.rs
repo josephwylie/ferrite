@@ -3312,37 +3312,59 @@ impl CockpitView {
                 open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
             });
         let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
-        let send =
-            crate::components::button(SharedString::from(format!("composer-send-{identity:?}")))
-                .debug_selector(move || format!("composer-send-{identity:?}"))
+        // Quiet mono text controls on the Composer's raised ground: no face
+        // at rest, `FILL` under the pointer. Each names its verb and its key;
+        // Stop is the one place `esc` is shown.
+        let action = |id: String, cx: &gpui::App| {
+            use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
+            crate::components::button(SharedString::from(id))
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .foreground(rgb(crate::theme::TEXT_2).into())
+                        .hover(rgb(crate::theme::FILL).into())
+                        .active(rgb(crate::theme::FILL_HOVER).into()),
+                )
                 .h(px(crate::theme::COMPOSER_ROW_H))
-                .px(px(crate::theme::MODE_CHIP_PAD_X))
-                .bg(rgb(crate::theme::FILL))
-                .disabled(!can_send)
-                .tooltip(if starting {
-                    "Starting this Thread"
-                } else if queued {
-                    "Send or queue input (Enter). Shift+Enter inserts a newline."
-                } else {
-                    "Send (Enter). Shift+Enter inserts a newline."
-                })
-                .child(crate::components::label(
-                    if starting { "Starting…" } else { "Send" },
+                .px(px(crate::theme::COMPOSER_ACTION_PAD_X))
+        };
+        let face = |verb: &'static str, key: Option<&'static str>, ink: u32| {
+            crate::components::text_meta()
+                .flex()
+                .items_center()
+                .gap(px(crate::theme::SPACE_1))
+                .child(div().text_color(rgb(ink)).child(verb))
+                .children(key)
+        };
+        let send = action(format!("composer-send-{identity:?}"), cx)
+            .debug_selector(move || format!("composer-send-{identity:?}"))
+            .disabled(!can_send)
+            .tooltip(if starting {
+                "Starting this Thread"
+            } else if queued {
+                "Send or queue input (Enter). Shift+Enter inserts a newline."
+            } else {
+                "Send (Enter). Shift+Enter inserts a newline."
+            })
+            .child(if starting {
+                face("starting…", None, crate::theme::TEXT_MUTED)
+            } else {
+                face(
+                    "send",
+                    Some("↵"),
                     if can_send {
-                        crate::theme::TEXT
+                        crate::theme::TEXT_2
                     } else {
                         crate::theme::TEXT_MUTED
                     },
-                ))
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    view.composer_action(identity, false, window, cx);
-                }));
+                )
+            })
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.composer_action(identity, false, window, cx);
+            }));
         let stop = can_stop.then(|| {
-            crate::components::button(SharedString::from(format!("composer-stop-{identity:?}")))
+            action(format!("composer-stop-{identity:?}"), cx)
                 .debug_selector(move || format!("composer-stop-{identity:?}"))
-                .h(px(crate::theme::COMPOSER_ROW_H))
-                .px(px(crate::theme::MODE_CHIP_PAD_X))
                 .tooltip(if starting {
                     "Cancel startup (Esc); keep the draft"
                 } else if has_queue {
@@ -3350,7 +3372,7 @@ impl CockpitView {
                 } else {
                     "Interrupt Main (Esc)"
                 })
-                .child(crate::components::label("Stop · Esc", crate::theme::TEXT_2))
+                .child(face("stop", Some("esc"), crate::theme::TEXT_2))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     view.composer_action(identity, true, window, cx);
@@ -3361,7 +3383,7 @@ impl CockpitView {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(crate::theme::KEYS_GAP))
+                .gap(px(crate::theme::SPACE_1))
                 .children(stop)
                 .child(send)
                 .into_any_element(),
@@ -5773,9 +5795,9 @@ impl CockpitView {
             None => SharedString::from(provider_title(provider)),
         };
         let effort_label = match draft.binding.effort() {
-            Some(effort) => SharedString::from(effort_title(effort)),
+            Some(effort) => effort_chip_label(effort),
             None => match self.prefs.settings.effort_for(provider) {
-                Some(effort) => SharedString::from(effort_title(effort)),
+                Some(effort) => effort_chip_label(effort),
                 None => SharedString::from("effort"),
             },
         };
@@ -5785,7 +5807,7 @@ impl CockpitView {
                 pane::draft_picker(
                     "draft-model-picker",
                     draft.band_focus == Some(pane::BandChip::Provider),
-                    pane::model_picker(Some(provider), model_label),
+                    pane::model_picker(Some(provider), model_label, false),
                 ),
             ),
             (
@@ -5793,7 +5815,7 @@ impl CockpitView {
                 pane::draft_picker(
                     "draft-effort-picker",
                     draft.band_focus == Some(pane::BandChip::Effort),
-                    pane::effort_picker(effort_label),
+                    pane::effort_picker(effort_label, false),
                 ),
             ),
         ];
@@ -5801,7 +5823,7 @@ impl CockpitView {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(crate::theme::KEYS_GAP));
+            .gap(px(crate::theme::PICKER_GAP));
         for (chip, control) in controls {
             row = row.child(self.choice_menu(index, Kind::Band(chip), control, cx));
         }
@@ -6714,6 +6736,13 @@ fn effort_title(effort: &str) -> String {
 }
 
 /// What each rung buys, in the words the providers' own menus use.
+/// An effort level as its Composer chip reads it: the title, lowercase
+/// (`high`, `extra high`) — the chip is a mono control, the menu rows keep
+/// their titles.
+fn effort_chip_label(effort: &str) -> SharedString {
+    SharedString::from(effort_title(effort).to_lowercase())
+}
+
 fn effort_detail(effort: &str) -> &'static str {
     match effort {
         "minimal" => "the least reasoning the model allows",
@@ -7853,7 +7882,7 @@ impl CockpitView {
                 let fraction = usage
                     .context_window
                     .filter(|window| *window > 0)
-                    .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+                    .map(|window| usage.total_tokens as f32 / window as f32);
                 (
                     fraction,
                     open.provider(),
@@ -7865,7 +7894,7 @@ impl CockpitView {
             // half of what the operator came to check before writing a
             // prompt. The account windows beside it are already real.
             PaneIdentity::Draft(draft) => (
-                0.,
+                None,
                 self.panes[index].draft()?.binding.provider().provider,
                 format!("draft-{}", draft.get()),
                 false,
@@ -7884,7 +7913,7 @@ impl CockpitView {
                     "usage-meter-{key}"
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
-                .rounded(px(crate::theme::R_CHIP))
+                .rounded(px(crate::theme::R_CONTROL))
                 .child(pane::usage_meter_body(
                     self.prefs.settings.usage_meter_style,
                     fraction,
@@ -7983,7 +8012,7 @@ impl CockpitView {
                     .p_0()
                     .h_auto()
                     .tooltip("Permission mode")
-                    .child(pane::mode_chip(&label)),
+                    .child(pane::mode_chip(&label, true)),
                 choices,
                 open: is_open,
                 return_focus: self.panes[index].composer.focus_handle(cx),
@@ -8105,7 +8134,9 @@ impl CockpitView {
             )))
             .debug_selector(move || format!("session-controls-{}", thread.get()))
             .tooltip("Session controls")
-            .child("•••")
+            .p_0()
+            .h_auto()
+            .child(pane::session_chip())
             .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
@@ -8146,15 +8177,48 @@ impl CockpitView {
             return None;
         }
         let transcript = open.transcript();
-        let mut card = menu::shell()
+        // A readout in sections, not a stack of buttons: a quiet section
+        // head, then rows — a name at the left, its state and its actions
+        // (quiet mono text controls) at the right.
+        let text_action = |id: SharedString, verb: &'static str| {
+            use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
+            crate::components::button(id)
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .foreground(rgb(crate::theme::TEXT_2).into())
+                        .hover(rgb(crate::theme::FILL).into())
+                        .active(rgb(crate::theme::FILL_HOVER).into()),
+                )
+                .h(px(crate::theme::CHIP_H))
+                .px(px(crate::theme::PICKER_PAD_X))
+                .child(
+                    crate::components::text_meta()
+                        .text_color(rgb(crate::theme::TEXT_2))
+                        .child(verb),
+                )
+        };
+        let head = |title: &'static str| {
+            crate::components::text_meta()
+                .px(px(crate::theme::MENU_ROW_PAD_X))
+                .pt(px(crate::theme::SPACE_1_5))
+                .pb(px(crate::theme::SPACE_0_5))
+                .child(title)
+        };
+        let row = || {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(crate::theme::SPACE_2))
+                .min_h(px(crate::theme::MENU_ROW_H))
+                .px(px(crate::theme::MENU_ROW_PAD_X))
+                .min_w_0()
+        };
+        let mut card = crate::components::floating_surface()
             .id("session-controls-card")
             .debug_selector(|| "session-controls-card".into())
-            .max_h(px(420.))
-            .overflow_y_scroll()
-            .p(px(8.))
-            .gap(px(6.))
-            .flex()
-            .flex_col();
+            .w(px(crate::theme::SESSION_CARD_W))
+            .max_h(px(crate::theme::MENU_MAX_H))
+            .overflow_y_scroll();
         if let Some((_, _, error)) =
             self.session_control_error
                 .as_ref()
@@ -8163,20 +8227,69 @@ impl CockpitView {
                 })
         {
             card = card.child(
-                div()
+                row()
                     .id("session-control-error")
-                    .text_color(rgb(crate::theme::ATTENTION))
-                    .child(error.clone()),
+                    .items_start()
+                    .py(px(crate::theme::SPACE_1))
+                    .text_size(px(crate::theme::FS_SM))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(crate::theme::BLOCKED))
+                            .child("error"),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_color(rgb(crate::theme::TEXT_2))
+                            .child(error.clone()),
+                    ),
             );
         }
-        for (index, mode) in open.permission_modes().into_iter().enumerate() {
+        let modes = open.permission_modes();
+        if !modes.is_empty() {
+            card = card.child(head("mode"));
+        }
+        let current = open.permission_mode().map(str::to_owned);
+        for (index, mode) in modes.into_iter().enumerate() {
+            let checked = current.as_deref() == Some(mode.value.as_str());
             let value = mode.value;
             card = card.child(
                 crate::components::button(SharedString::from(format!("permission-mode-{index}")))
                     .debug_selector(move || format!("permission-mode-{index}"))
                     .tab_stop(true)
+                    .w_full()
+                    .h(px(crate::theme::MENU_ROW_H))
+                    .px(px(crate::theme::MENU_ROW_PAD_X))
+                    .rounded(px(crate::theme::R_MENU_ROW))
                     .accessibility_label(mode.label.clone())
-                    .child(mode.label)
+                    .child(
+                        div()
+                            .flex()
+                            .w_full()
+                            .items_center()
+                            .gap(px(crate::theme::SPACE_2))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(rgb(if checked {
+                                        crate::theme::TEXT_STRONG
+                                    } else {
+                                        crate::theme::TEXT
+                                    }))
+                                    .child(mode.label),
+                            )
+                            .children(checked.then(|| {
+                                crate::icons::icon(
+                                    crate::icons::CHECK,
+                                    crate::theme::ICON_CHEVRON,
+                                    crate::theme::ACCENT,
+                                )
+                            })),
+                    )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         view.run_session_control(
                             thread,
@@ -8189,69 +8302,50 @@ impl CockpitView {
                     })),
             );
         }
-        if open.supports_control(ferrite_core::ControlKind::ReloadMcp) {
-            card = card.child(
-                crate::components::button("mcp-reload")
-                    .debug_selector(|| "mcp-reload".into())
-                    .tab_stop(true)
-                    .child("Reload MCP")
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_session_control(
-                            thread,
-                            generation,
-                            ferrite_core::SessionControl::ReloadMcp,
-                        );
-                        cx.notify();
-                    })),
-            );
-        }
+        card = card.child(head("mcp"));
         if transcript.mcp_servers().is_empty() {
-            card = card.child(
-                div()
-                    .text_color(rgb(crate::theme::TEXT_MUTED))
-                    .child("No MCP servers reported"),
-            );
+            card = card.child(crate::components::menu_note("no MCP servers reported"));
         }
         for (index, server) in transcript.mcp_servers().iter().enumerate() {
             let name = server.name.clone();
-            let status = match server.status {
-                ferrite_core::McpStatus::Connected => "connected",
-                ferrite_core::McpStatus::Connecting => "connecting",
-                ferrite_core::McpStatus::NeedsAuth => "needs-auth",
-                ferrite_core::McpStatus::Failed => "failed",
-                ferrite_core::McpStatus::Disabled => "disabled",
-                ferrite_core::McpStatus::Unknown => "unknown",
+            let (status, dot) = match server.status {
+                ferrite_core::McpStatus::Connected => ("connected", crate::theme::RUNNING),
+                ferrite_core::McpStatus::Connecting => ("connecting", crate::theme::ATTENTION),
+                ferrite_core::McpStatus::NeedsAuth => ("needs-auth", crate::theme::ATTENTION),
+                ferrite_core::McpStatus::Failed => ("failed", crate::theme::BLOCKED),
+                ferrite_core::McpStatus::Disabled => ("disabled", crate::theme::TEXT_FAINT),
+                ferrite_core::McpStatus::Unknown => ("unknown", crate::theme::TEXT_FAINT),
             };
-            let mut row = div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .min_w_0()
-                .items_start()
-                .gap(px(6.))
-                .child(server.name.clone())
+            let mut line = row()
+                .child(crate::components::status_dot(dot))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(crate::theme::TEXT))
+                        .child(server.name.clone()),
+                )
                 .child(
                     div()
                         .debug_selector(move || format!("mcp-status-{index}-{status}"))
-                        .text_color(rgb(crate::theme::TEXT_MUTED))
+                        .flex_shrink_0()
+                        .text_size(px(crate::theme::FS_SM))
+                        .text_color(rgb(if server.status == ferrite_core::McpStatus::Failed {
+                            crate::theme::BLOCKED
+                        } else {
+                            crate::theme::TEXT_MUTED
+                        }))
                         .child(status),
                 );
-            if let Some(error) = server.error.as_ref() {
-                row = row.child(
-                    div()
-                        .text_color(rgb(crate::theme::ATTENTION))
-                        .child(error.clone()),
-                );
-            }
             if server.status == ferrite_core::McpStatus::NeedsAuth
                 && open.supports_control(ferrite_core::ControlKind::LoginMcp)
             {
                 let login_name = server.name.clone();
-                row = row.child(
-                    crate::components::button(SharedString::from(format!("mcp-login-{index}")))
+                line = line.child(
+                    text_action(SharedString::from(format!("mcp-login-{index}")), "sign in")
                         .debug_selector(move || format!("mcp-login-{index}"))
                         .tab_stop(true)
-                        .child("Sign in")
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
                                 open.generation() == generation
@@ -8280,20 +8374,25 @@ impl CockpitView {
                 .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
             {
                 let url = url.clone();
-                row = row.child(
-                    crate::components::button(SharedString::from(format!("mcp-authorize-{index}")))
-                        .debug_selector(move || format!("mcp-authorize-{index}"))
-                        .tab_stop(true)
-                        .child("Open sign-in")
-                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url))),
+                line = line.child(
+                    text_action(
+                        SharedString::from(format!("mcp-authorize-{index}")),
+                        "open sign-in",
+                    )
+                    .debug_selector(move || format!("mcp-authorize-{index}"))
+                    .tab_stop(true)
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url))),
                 );
             }
             if open.supports_control(ferrite_core::ControlKind::ReconnectMcp) {
-                row = row.child(
-                    crate::components::button(SharedString::from(format!("mcp-reconnect-{index}")))
-                        .debug_selector(move || format!("mcp-reconnect-{index}"))
-                        .child("Reconnect")
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                line = line.child(
+                    text_action(
+                        SharedString::from(format!("mcp-reconnect-{index}")),
+                        "reconnect",
+                    )
+                    .debug_selector(move || format!("mcp-reconnect-{index}"))
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
                                 open.generation() == generation
                                     && open
@@ -8312,30 +8411,71 @@ impl CockpitView {
                                 );
                             }
                             cx.notify();
-                        })),
+                        },
+                    )),
                 );
             }
-            card = card.child(row);
+            card = card.child(line);
+            if let Some(error) = server.error.as_ref() {
+                card = card.child(
+                    div()
+                        .pl(px(crate::theme::MENU_ROW_PAD_X
+                            + crate::theme::STATUS_DOT
+                            + crate::theme::SPACE_2))
+                        .pr(px(crate::theme::MENU_ROW_PAD_X))
+                        .pb(px(crate::theme::SPACE_1))
+                        .text_size(px(crate::theme::FS_SM))
+                        .text_color(rgb(crate::theme::TEXT_MUTED))
+                        .whitespace_normal()
+                        .child(error.clone()),
+                );
+            }
         }
-        for (index, task) in transcript.progress().background().iter().enumerate() {
-            let mut row = div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .min_w_0()
-                .items_start()
-                .gap(px(6.))
-                .child(task.label.clone());
-            if task.status == ferrite_core::progress::TaskStatus::Working
-                && open.supports_control(ferrite_core::ControlKind::StopTask)
-            {
+        if open.supports_control(ferrite_core::ControlKind::ReloadMcp) {
+            card = card.child(
+                row().child(
+                    text_action("mcp-reload".into(), "reload mcp")
+                        .debug_selector(|| "mcp-reload".into())
+                        .tab_stop(true)
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            view.run_session_control(
+                                thread,
+                                generation,
+                                ferrite_core::SessionControl::ReloadMcp,
+                            );
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
+        let tasks = transcript.progress().background();
+        if !tasks.is_empty() || open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
+            card = card.child(head("tasks"));
+        }
+        for (index, task) in tasks.iter().enumerate() {
+            let working = task.status == ferrite_core::progress::TaskStatus::Working;
+            let mut line = row()
+                .child(crate::components::status_dot(if working {
+                    crate::theme::RUNNING
+                } else {
+                    crate::theme::TEXT_FAINT
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(crate::theme::TEXT))
+                        .child(task.label.clone()),
+                );
+            if working && open.supports_control(ferrite_core::ControlKind::StopTask) {
                 let id = task.id.clone();
-                row = row.child(
-                    crate::components::button(SharedString::from(format!(
-                        "background-stop-{index}"
-                    )))
+                line = line.child(
+                    text_action(
+                        SharedString::from(format!("background-stop-{index}")),
+                        "stop",
+                    )
                     .debug_selector(move || format!("background-stop-{index}"))
-                    .child("Stop")
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
@@ -8360,21 +8500,21 @@ impl CockpitView {
                     )),
                 );
             }
-            card = card.child(row);
+            card = card.child(line);
         }
         if open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
-            card = card.child(
-                crate::components::button("background-all")
-                    .child("Run tasks in background")
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            card = card.child(row().child(
+                text_action("background-all".into(), "run tasks in background").on_click(
+                    cx.listener(move |view, _: &ClickEvent, _, cx| {
                         view.run_session_control(
                             thread,
                             generation,
                             ferrite_core::SessionControl::BackgroundTasks,
                         );
                         cx.notify();
-                    })),
-            );
+                    }),
+                ),
+            ));
         }
         let card = card
             .on_mouse_down(
@@ -8389,7 +8529,8 @@ impl CockpitView {
         Some(
             deferred(
                 anchored()
-                    .position(at)
+                    .anchor(gpui::Anchor::BottomRight)
+                    .position(at - gpui::point(px(0.), px(crate::theme::FLOAT_OFFSET)))
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
                     .child(card)
                     .into_any_element(),
@@ -8537,7 +8678,7 @@ impl CockpitView {
                 None,
             ),
         };
-        let card = menu::shell()
+        let card = crate::components::floating_surface()
             .id("context-usage-card")
             .debug_selector(|| "context-usage-card".into())
             .child(pane::context_usage(
@@ -8615,9 +8756,7 @@ impl CockpitView {
                 .p_0()
                 .h_auto()
                 .tooltip(if busy { TUNING_BUSY_HINT } else { "Model" })
-                .child(
-                    pane::model_picker(Some(provider), label).when(busy, |chip| chip.opacity(0.8)),
-                ),
+                .child(pane::model_picker(Some(provider), label, busy)),
             cx,
         );
         // The effort chip beside it — only when the model takes one; a
@@ -8626,9 +8765,9 @@ impl CockpitView {
             ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
         let effort_chip = (!ladder.is_empty()).then(|| {
             let label = match open.effort() {
-                Some(effort) => SharedString::from(effort_title(effort)),
+                Some(effort) => effort_chip_label(effort),
                 None => match self.prefs.settings.effort_for(provider) {
-                    Some(effort) => SharedString::from(effort_title(effort)),
+                    Some(effort) => effort_chip_label(effort),
                     None => SharedString::from("effort"),
                 },
             };
@@ -8643,7 +8782,7 @@ impl CockpitView {
                     } else {
                         "Reasoning effort"
                     })
-                    .child(pane::effort_picker(label).when(busy, |chip| chip.opacity(0.8))),
+                    .child(pane::effort_picker(label, busy)),
                 cx,
             )
         });
@@ -8652,7 +8791,7 @@ impl CockpitView {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(crate::theme::KEYS_GAP))
+                .gap(px(crate::theme::PICKER_GAP))
                 .child(model_chip)
                 .children(effort_chip)
                 .into_any_element(),

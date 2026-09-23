@@ -11,7 +11,6 @@ use gpui::component::{
         AttachmentMedia, AttachmentTitle,
     },
     button::{Button, ButtonVariants},
-    group_box::{GroupBox, GroupBoxVariants},
     Icon, IconName, Sizable, Theme,
 };
 use gpui::{prelude::*, px, App, Axis, ElementId, Global, IntoElement, Window};
@@ -50,7 +49,7 @@ impl Attachments {
         }
     }
 
-    /// Compact pending attachments in a kit surface above the prompt.
+    /// Pending attachments as compact chips on the shelf above the prompt.
     pub fn in_island(mut self, generation: usize) -> Self {
         self.island = Some(generation);
         self
@@ -65,38 +64,182 @@ impl Attachments {
     }
 }
 
-/// The island's ground and radius — shared with the background shelf that
-/// docks beside it above the prompt, so the two read as one surface.
-pub fn island_surface(cx: &App) -> (gpui::Hsla, gpui::Pixels) {
-    let theme = Theme::global(cx);
-    (theme.muted, theme.radius_2xl())
+/// The pending files as chips on the shelf above the Composer — the
+/// background chips' recipe, so files going in and work going on read as
+/// one surface: `ATTACH_CHIP_H`, `R_CHIP`, `FILL` (stepping to `FILL_HOVER`
+/// under the pointer), a 16px thumbnail or file mark, the name in mono
+/// `FS_SM` `TEXT_2` cut at `ATTACH_CHIP_MAX_W`, and a quiet `×`. The image
+/// thumbnail and the `×` are real buttons (tab stops, Enter/Space) in the
+/// `PromptAttachment` key context; a click anywhere else on a chip opens
+/// the image preview or the file. A new set eases in over 140ms.
+fn pending_chips(
+    attachments: Attachments,
+    generation: usize,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    use crate::pointer::Pointer as _;
+    use crate::theme;
+    use gpui::{div, rgb, SharedString};
+    // The kit retains playback by generation and honors reduced motion.
+    // Typing and image-loading repaints continue the same entrance.
+    let entrance = animate_keyframes(
+        ElementId::from(("attachment-island-enter", generation)),
+        &Keyframes::try_new([Keyframe::new(0., 0_f32), Keyframe::new(1., 1.)])
+            .expect("two ordered entrance keyframes"),
+        Timing::new(Duration::from_millis(140)).ease(Easing::EaseOut),
+        window,
+        cx,
+    )
+    .value;
+    let Attachments {
+        id,
+        files,
+        preview,
+        on_remove,
+        ..
+    } = attachments;
+    let chips = files.into_iter().enumerate().map(|(index, path)| {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let image = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str())
+            });
+        let mark = if image {
+            let host = preview.clone();
+            let open = path.clone();
+            let title = name.clone();
+            crate::components::button(("preview-attachment", index))
+                .tab_stop(true)
+                .p_0()
+                .size(gpui::px(theme::ATTACH_THUMB))
+                .rounded(gpui::px(theme::R_TIGHT))
+                .key_context("PromptAttachment")
+                .accessibility_label(format!("Preview {name}"))
+                .tooltip("Preview image")
+                .child(
+                    gpui::img(path.clone())
+                        .size(gpui::px(theme::ATTACH_THUMB))
+                        .rounded(gpui::px(theme::R_TIGHT))
+                        .object_fit(gpui::ObjectFit::Cover),
+                )
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    host.open(open.clone(), title.clone(), window, cx);
+                })
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .size(gpui::px(theme::ATTACH_THUMB))
+                .child(
+                    Icon::new(IconName::File)
+                        .size(gpui::px(theme::ICON_CHEVRON))
+                        .text_color(rgb(theme::TEXT_MUTED)),
+                )
+                .into_any_element()
+        };
+        let host = preview.clone();
+        let open = path.clone();
+        let title = name.clone();
+        div()
+            .id(("attachment", index))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(gpui::px(theme::SPACE_1_5))
+            .h(gpui::px(theme::ATTACH_CHIP_H))
+            .max_w(gpui::px(theme::ATTACH_CHIP_MAX_W))
+            .min_w_0()
+            .pl(gpui::px(theme::SPACE_0_5))
+            .pr(gpui::px(theme::SPACE_0_5))
+            .rounded(gpui::px(theme::R_CHIP))
+            .bg(rgb(theme::FILL))
+            .hover_carried()
+            .font_family(theme::FONT_MONO)
+            .text_size(gpui::px(theme::FS_SM))
+            .line_height(gpui::px(theme::LH_META))
+            .text_color(rgb(theme::TEXT_2))
+            .child(mark)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(name.clone())),
+            )
+            .when_some(on_remove.clone(), |chip, remove| {
+                let removed = path.clone();
+                chip.child(
+                    crate::components::button(("remove-attachment", index))
+                        .tab_stop(true)
+                        .p_0()
+                        .flex_shrink_0()
+                        .size(gpui::px(theme::BG_CHIP_STOP))
+                        .rounded(gpui::px(theme::R_TIGHT))
+                        .key_context("PromptAttachment")
+                        .accessibility_label(format!("Remove {name}"))
+                        .tooltip(format!("Remove {}", path.display()))
+                        .child(crate::icons::icon(
+                            crate::icons::CLOSE,
+                            theme::BG_CHIP_STOP_GLYPH,
+                            theme::TEXT_MUTED,
+                        ))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            remove(&removed, window, cx);
+                        }),
+                )
+            })
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                if image {
+                    host.open(open.clone(), title.clone(), window, cx);
+                } else {
+                    crate::file_links::FileLink {
+                        path: open.clone(),
+                        location: None,
+                    }
+                    .open(window, cx);
+                }
+            })
+    });
+    div()
+        .id(id)
+        .debug_selector(|| "attachment-island-content".into())
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(gpui::px(theme::SPACE_1_5))
+        .min_w_0()
+        .max_w_full()
+        .relative()
+        .top(gpui::px(theme::SPACE_1 * (1. - entrance)))
+        .opacity(0.6 + 0.4 * entrance)
+        .children(chips)
+        .into_any_element()
 }
 
 impl RenderOnce for Attachments {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        // The kit retains playback by generation and honors reduced motion.
-        // Typing and image-loading repaints continue the same entrance.
-        let entrance = self.island.map(|generation| {
-            animate_keyframes(
-                ElementId::from(("attachment-island-enter", generation)),
-                &Keyframes::try_new([Keyframe::new(0., 0_f32), Keyframe::new(1., 1.)])
-                    .expect("two ordered entrance keyframes"),
-                Timing::new(Duration::from_millis(140)).ease(Easing::EaseOut),
-                window,
-                cx,
-            )
-            .value
-        });
+        if let Some(generation) = self.island {
+            return pending_chips(self, generation, window, cx);
+        }
+        // A delivered prompt's files: the kit cards, on the kit's own stock
+        // tokens (the prompt row owns their placement).
         let stock = &cx.global::<Appearance>().0;
         let tokens = stock.semantic_tokens();
-        let composer_edge = gpui::rgba(crate::theme::COMPOSER_EDGE);
         let cards = AttachmentGroup::new(self.id)
-            .when(self.island.is_some(), |group| {
-                group.w_auto().max_w_full().gap_1p5().py_0()
-            })
             .font_family(stock.font_family.clone())
             .children(self.files.into_iter().enumerate().map(|(index, path)| {
-                let island = self.island.is_some();
                 let name = path
                     .file_name()
                     .unwrap_or_default()
@@ -117,25 +260,14 @@ impl RenderOnce for Attachments {
                 let media = AttachmentMedia::new()
                     .bg(tokens.colors.muted)
                     .text_color(tokens.colors.foreground)
-                    .rounded(if self.island.is_some() {
-                        tokens.radius.sm
-                    } else {
-                        tokens.radius.md
-                    });
+                    .rounded(tokens.radius.md);
                 let card = Attachment::new()
                     .id(("attachment", index))
-                    .when(self.island.is_some(), |attachment| {
-                        attachment.xsmall().min_w_0().w_32()
-                    })
                     .bg(tokens.colors.background)
                     .text_color(tokens.colors.foreground)
                     .border_color(tokens.colors.border)
-                    .rounded(if self.island.is_some() {
-                        tokens.radius.xl
-                    } else {
-                        stock.radius_2xl()
-                    })
-                    .axis(if image && self.island.is_none() {
+                    .rounded(stock.radius_2xl())
+                    .axis(if image {
                         Axis::Vertical
                     } else {
                         Axis::Horizontal
@@ -199,66 +331,13 @@ impl RenderOnce for Attachments {
                             ),
                         )
                     });
-                // The kit's own hover tints the card with `muted`, which is
-                // the island's ground here, so a hovered card dissolves into
-                // it. A ring outside the card is immune to that tint and
-                // answers for every card, clickable or not.
-                if island {
-                    gpui::div()
-                        .flex_none()
-                        .min_w_0()
-                        .rounded(tokens.radius.xl + px(1.))
-                        .border_1()
-                        .border_color(gpui::rgba(crate::theme::TRANSPARENT))
-                        .hover(|style| style.border_color(gpui::rgb(crate::theme::FILL_HOVER)))
-                        .child(card)
-                        .into_any_element()
-                } else {
-                    card.into_any_element()
-                }
+                card
             }));
         KitScale {
-            child: if let Some(entrance) = entrance {
-                let background = Theme::global(cx).muted;
-                let radius = Theme::global(cx).radius_2xl();
-                let surface = gpui::div()
-                    .bg(background)
-                    .rounded(radius)
-                    .border_1()
-                    .border_color(composer_edge)
-                    .p_1p5()
-                    .min_w_0()
-                    .style()
-                    .clone();
-                gpui::div()
-                    .flex()
-                    .justify_center()
-                    .min_w_0()
-                    .px(radius)
-                    .child(
-                        gpui::div()
-                            .debug_selector(|| "attachment-island-content".into())
-                            .min_w_0()
-                            .max_w_full()
-                            .relative()
-                            .top(px(8. * (1. - entrance)))
-                            .opacity(0.6 + 0.4 * entrance)
-                            .child(
-                                GroupBox::new()
-                                    .id("attachment-island")
-                                    .fill()
-                                    .w_auto()
-                                    .max_w_full()
-                                    .content_style(surface)
-                                    .child(cards),
-                            ),
-                    )
-                    .into_any_element()
-            } else {
-                cards.into_any_element()
-            },
+            child: cards.into_any_element(),
             rem_size: stock.font_size,
         }
+        .into_any_element()
     }
 }
 
