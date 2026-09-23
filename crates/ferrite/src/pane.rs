@@ -4094,7 +4094,7 @@ fn placeholder(
     match followup::suggest(pending, transcript, suggestion) {
         // A docked Decision owns the block above this line; the line itself
         // still steers, so it says so (rule 2.8.1: one input line).
-        Followup::Decision => Ghost::ladder("Steer", Some(" this Thread"), false),
+        Followup::Decision => Ghost::ladder("Steer", Some(" this thread"), false),
         Followup::Revive => Ghost::ladder("Revive", Some(" and continue"), false),
         Followup::Suggested(text) => Ghost {
             head: SharedString::from(text),
@@ -4102,7 +4102,7 @@ fn placeholder(
             verbatim: true,
             hint: Some(("\u{21e5}", "accept")),
         },
-        Followup::Steer => Ghost::ladder("Steer", Some(" this Thread"), true),
+        Followup::Steer => Ghost::ladder("Steer", Some(" this thread"), true),
     }
 }
 
@@ -8432,14 +8432,14 @@ mod tests {
         assert_eq!(
             placeholder(false, false, Some(&live), None).rungs(),
             [
-                "Steer this Thread\u{2026} \u{b7} / for commands",
-                "Steer this Thread\u{2026}",
+                "Steer this thread\u{2026} \u{b7} / for commands",
+                "Steer this thread\u{2026}",
                 "Steer\u{2026}",
             ]
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).rungs(),
-            ["Steer this Thread\u{2026}", "Steer\u{2026}"]
+            ["Steer this thread\u{2026}", "Steer\u{2026}"]
         );
 
         let mut closed = Transcript::default();
@@ -8478,7 +8478,7 @@ mod tests {
         // docked the line keeps steering, never the prediction.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).rungs(),
-            ["Steer this Thread\u{2026}", "Steer\u{2026}"]
+            ["Steer this thread\u{2026}", "Steer\u{2026}"]
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).rungs(),

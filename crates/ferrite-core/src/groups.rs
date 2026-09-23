@@ -217,7 +217,7 @@ impl std::fmt::Display for ApplyError {
             Self::Io(error) => write!(f, "{error}"),
             Self::MissingGroup => write!(f, "group no longer exists"),
             Self::MissingProject => write!(f, "Thread project metadata is missing"),
-            Self::SameThread => write!(f, "a Thread cannot be grouped with itself"),
+            Self::SameThread => write!(f, "a thread cannot be grouped with itself"),
             Self::InvalidLayout => write!(f, "layout does not name exactly the group's members"),
         }
     }

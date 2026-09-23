@@ -244,7 +244,7 @@ impl std::fmt::Display for ProvisionError {
             ProvisionError::Locked => {
                 write!(
                     f,
-                    "the first prompt was sent; reopen the Thread to switch its provider"
+                    "the first prompt was sent; reopen the thread to switch its provider"
                 )
             }
             ProvisionError::Busy => write!(f, "a turn is running; change the model when it ends"),
@@ -302,10 +302,10 @@ impl std::fmt::Display for ReviveGroupError {
         match self {
             Self::MissingGroup => write!(f, "group no longer exists"),
             Self::Member { thread, error } => {
-                write!(f, "could not revive Thread {thread}: {error}")
+                write!(f, "could not revive thread {thread}: {error}")
             }
             Self::Rollback { thread, error } => {
-                write!(f, "could not roll back revived Thread {thread}: {error}")
+                write!(f, "could not roll back revived thread {thread}: {error}")
             }
         }
     }
@@ -718,7 +718,7 @@ impl Cockpit {
         if recorded {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                "Threads still record this Project",
+                "Threads still record this project",
             ));
         }
         self.registry.remove_project(project)

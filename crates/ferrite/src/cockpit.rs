@@ -2512,9 +2512,9 @@ impl CockpitView {
         }
         self.group_error = match (refused, reason) {
             (0, _) | (_, None) => None,
-            (1, Some(reason)) => Some(format!("1 parked Thread not deleted: {reason}").into()),
+            (1, Some(reason)) => Some(format!("1 parked thread not deleted: {reason}").into()),
             (count, Some(reason)) => {
-                Some(format!("{count} parked Threads not deleted, last: {reason}").into())
+                Some(format!("{count} parked threads not deleted, last: {reason}").into())
             }
         };
         self.sync_panes(cx);
@@ -2916,7 +2916,7 @@ impl CockpitView {
         let defaults = vec![prefs::choices(
             "settings-provider",
             "Provider",
-            "What a new Thread starts on",
+            "What a new thread starts on",
             [Provider::Claude, Provider::Codex]
                 .into_iter()
                 .map(|provider| {
@@ -3053,13 +3053,13 @@ impl CockpitView {
             ),
         ];
         let behaviour = vec![
-            prefs::toggle("settings-auto-title", "Name Threads automatically",
-                "Use the first prompt, then a short title from the Thread's Provider. Renaming a Thread keeps your title",
+            prefs::toggle("settings-auto-title", "Name threads automatically",
+                "Use the first prompt, then a short title from the thread's provider. Renaming a thread keeps your title",
                 settings.auto_title, self.setting_change(cx, |s, v| s.auto_title = v)),
             prefs::toggle("settings-placeholder-suggestions", "Suggest follow-up prompts",
-                "Predict a possible next prompt in the empty Composer. Tab accepts it without sending",
+                "Predict a possible next prompt in the empty composer. Tab accepts it without sending",
                 settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
-            prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript",
+            prefs::toggle("settings-confirm-delete", "Confirm before deleting a thread", "Ask before removing a thread and its transcript",
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
             prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "cmd-B toggles it any time",
                 settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
@@ -3067,7 +3067,7 @@ impl CockpitView {
         let reading = vec![prefs::choices(
             "settings-solo-answer-size",
             "Solo answer size",
-            "Answer text in Solo and fullscreen. Group panes keep their compact size",
+            "Answer text in solo and fullscreen. Group panes keep their compact size",
             [
                 (
                     "Standard",
@@ -3333,7 +3333,7 @@ impl CockpitView {
             }
             None => {
                 if editor.staged.contains(&path) {
-                    editor.error = Some("that directory is already on this Project".into());
+                    editor.error = Some("that directory is already on this project".into());
                     cx.notify();
                     return;
                 }
@@ -3484,7 +3484,7 @@ impl CockpitView {
                 project_editor::destructive_button("remove-project", "Remove project", in_use, cx)
                     .debug_selector(|| "remove-project".into())
                     .when(in_use, |button| {
-                        button.tip("Park or move its Threads first")
+                        button.tip("Park or move its threads first")
                     })
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();

@@ -1388,7 +1388,7 @@ pub const EMPTY_BOARD_MARK_GAP: f32 = SPACE_4;
 /// label starts at C1 (`COMPOSER_META_START`), its last mark ends on the
 /// send control's trailing edge (`COMPOSER_META_END`); the chips' own
 /// padding hangs outside those edges. The placeholder is a ladder of
-/// rungs (`Steer this Thread… · / for commands`, `Steer this Thread…`,
+/// rungs (`Steer this thread… · / for commands`, `Steer this thread…`,
 /// `Steer…`): the line shows the longest that fits and never cuts a word;
 /// its one key hint follows a `TEXT_FAINT` `·`. The controls' tooltips name
 /// their keys (`Send ↵`, `Interrupt esc`). Any pad, gap, edge or inset

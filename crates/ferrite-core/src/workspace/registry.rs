@@ -218,7 +218,7 @@ impl Registry {
         let Some(primary) = resolved.first().cloned() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "a Project needs at least one directory",
+                "a project needs at least one directory",
             ));
         };
         let owners: BTreeSet<_> = self
@@ -234,7 +234,7 @@ impl Registry {
         if owners.len() > 1 {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "the selected directories belong to different Projects",
+                "the selected directories belong to different projects",
             ));
         }
         if let Some(project) = owners.first().copied() {
@@ -317,7 +317,7 @@ impl Registry {
                 }
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
-                    format!("{} already belongs to another Project", root.display()),
+                    format!("{} already belongs to another project", root.display()),
                 ));
             }
             let project = next.project_mut(id)?;
@@ -354,7 +354,7 @@ impl Registry {
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("{} already belongs to a Project", root.display()),
+                format!("{} already belongs to a project", root.display()),
             ));
         }
         let mut next = self.clone();
