@@ -63,9 +63,11 @@ pub(super) fn output_lines(text: &str) -> usize {
 }
 
 /// Whether output leaves the inline run for the bounded native viewport:
-/// past `OUTPUT_INLINE_BYTES`, or past `OUTPUT_MAX_LINES` lines.
+/// past `OUTPUT_INLINE_BYTES`. Line count alone does not move it — the
+/// viewport owns its own selection, and output that a copy sweep across the
+/// transcript can reach must stay inline.
 pub(super) fn output_scrolls(text: &str) -> bool {
-    text.len() > theme::OUTPUT_INLINE_BYTES || output_lines(text) > theme::OUTPUT_MAX_LINES
+    text.len() > theme::OUTPUT_INLINE_BYTES
 }
 
 /// `512 B`, `1.2 KB`, `3.4 MB`.

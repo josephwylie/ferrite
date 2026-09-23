@@ -325,7 +325,8 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(600.)));
 
-    let suffix = " after reading the detailed notes about this change and the next steps.";
+    // Short enough to sit on one line of the 720px reading column.
+    let suffix = " after reading the notes on this change.";
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: format!("Before [guide](docs/guide.md:12){suffix}"),

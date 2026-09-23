@@ -767,9 +767,10 @@ pub const INPUT_ECHO_CHARS: usize = 48;
 /// A settled call shows its time only from one second up; anything quicker
 /// is noise on every row.
 pub const DURATION_MIN_MS: u128 = 1_000;
-/// Output up to this many lines and bytes draws inline under its elbow;
-/// longer output scrolls in a bounded native viewport of the same height,
-/// with `… +N lines` under it.
+/// Output up to `OUTPUT_INLINE_BYTES` draws inline under its elbow, where a
+/// copy sweep across the transcript reaches it; larger output scrolls in a
+/// bounded native viewport `OUTPUT_MAX_LINES` high, with `… +N lines` under
+/// it saying how much is out of view.
 pub const OUTPUT_MAX_LINES: usize = 12;
 pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
 

@@ -5267,10 +5267,10 @@ fn result_ink(state: &ToolState) -> u32 {
 }
 
 /// A disclosed block of text under its elbow at C2 — a command (`$` first
-/// when it is one), output, a structured result. Short text draws inline,
-/// one wrapping run per hard line; text past `OUTPUT_MAX_LINES` or
-/// `OUTPUT_INLINE_BYTES` scrolls in one bounded, selectable native control,
-/// and `… +N lines` under it says how much is out of view.
+/// when it is one), output, a structured result. Text draws inline, keeping
+/// its whitespace; text past `OUTPUT_INLINE_BYTES` scrolls in one bounded,
+/// selectable native control `OUTPUT_MAX_LINES` high, and `… +N lines` under
+/// it says how much is out of view.
 pub(crate) fn output_block(
     block: BlockId,
     part: &str,
@@ -6942,15 +6942,17 @@ mod tests {
     }
 
     #[test]
-    fn output_past_twelve_lines_or_the_byte_cap_scrolls_in_its_viewport() {
+    fn output_past_the_byte_cap_scrolls_in_its_viewport() {
         let lines = |n: usize| {
             (0..n)
                 .map(|i| format!("line {i}"))
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        assert!(!text::output_scrolls(&lines(theme::OUTPUT_MAX_LINES)));
-        assert!(text::output_scrolls(&lines(theme::OUTPUT_MAX_LINES + 1)));
+        // Line count alone keeps output inline, where a transcript copy
+        // sweep reaches it; only the byte cap moves it to the viewport.
+        assert!(!text::output_scrolls(&lines(40)));
+        assert_eq!(text::output_lines(&lines(40)), 40);
         assert!(text::output_scrolls(
             &"x".repeat(theme::OUTPUT_INLINE_BYTES + 1)
         ));
