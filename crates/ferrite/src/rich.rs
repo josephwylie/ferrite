@@ -880,6 +880,7 @@ mod file_link_tests {
         cwd: std::path::PathBuf,
         preview: crate::attachment_preview::Preview,
         font_size: f32,
+        line_height: Option<f32>,
     }
     impl Render for LinkFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -889,6 +890,7 @@ mod file_link_tests {
                 div().size_full().child(
                     div()
                         .text_size(px(self.font_size))
+                        .when_some(self.line_height, |this, line| this.line_height(px(line)))
                         .child(Markdown::new(
                             "file-link-fixture",
                             self.source.clone(),
@@ -913,6 +915,7 @@ mod file_link_tests {
                 cwd: std::env::temp_dir(),
                 preview,
                 font_size: theme::FS_PROSE,
+                line_height: None,
             });
             gpui::component::Root::new(view, window, cx).bordered(false)
         });
@@ -1136,6 +1139,30 @@ mod file_link_tests {
         assert_eq!(
             cx.update(|_, cx| super::testing::first_entity("file-link-fixture", cx)),
             original
+        );
+    }
+
+    /// A paragraph holding a chip is laid out in the prose's own style, not
+    /// the root's: one line box of the answer's line height, and the text
+    /// before the chip as wide as the recorded style shapes it.
+    #[gpui::test]
+    fn a_paragraph_with_a_file_chip_keeps_the_prose_line(cx: &mut TestAppContext) {
+        let (view, cx) = fixture(cx, "Before [report](report.md) after.");
+        view.update(cx, |view, cx| {
+            view.line_height = Some(theme::LH_PROSE);
+            cx.notify();
+        });
+        cx.simulate_resize(gpui::size(px(400.), px(200.)));
+        cx.run_until_parked();
+        let paragraph = cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap());
+        assert_eq!(paragraph.size.height, px(theme::LH_PROSE));
+        let chip = card(cx, "report.md");
+        let before = cx.update(|window, cx| {
+            testing::caret("file-link-fixture", 0, 1, "Before ", 7, window, cx).unwrap()
+        });
+        assert!(
+            (chip.left() - (before.x - px(0.5))).abs() < px(0.5),
+            "the chip follows text shaped at the prose size: {chip:?} vs {before:?}"
         );
     }
 
