@@ -1,13 +1,11 @@
 //! Ferrite's shared primitives: the one way render code opens a text run,
-//! lays a plane or a floating surface, draws a status mark, a keycap or a
-//! chip, and builds a control or a menu row. Longbridge owns the control
+//! lays a plane or a floating surface, draws a status mark or a keycap, and
+//! builds a control or a menu row. Longbridge owns the control
 //! mechanics; `theme.rs` is the only token source.
 //!
 //! Frozen after the foundation (F3): a package that needs something new
 //! builds it privately and asks for a promotion. A bug fix comes with a
 //! failing test first. Styles are asserted as data in `tests` below.
-// The work packages adopt these primitives; stabilization removes this allow.
-#![allow(dead_code)]
 
 use std::ops::Range;
 use std::time::Duration;
@@ -105,14 +103,6 @@ fn primary_ink(disabled: bool) -> u32 {
     }
 }
 
-pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
-    div()
-        .text_size(px(theme::FS_SM))
-        .line_height(gpui::px(theme::LH_META))
-        .text_color(rgb(ink))
-        .child(text.into())
-}
-
 /// Forms use the body size so values and actions read at the same scale as
 /// their labels. Dense pane chrome continues to use `label`.
 pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
@@ -141,15 +131,6 @@ pub fn text_meta() -> Div {
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_MUTED))
-}
-
-/// Prose: `FONT_PROSE` · `FS_PROSE` on `LH_PROSE` · `TEXT`.
-pub fn text_prose() -> Div {
-    div()
-        .font_family(theme::FONT_PROSE)
-        .text_size(px(theme::FS_PROSE))
-        .line_height(px(theme::LH_PROSE))
-        .text_color(rgb(theme::TEXT))
 }
 
 /// A group's title inside a surface: mono `FS_SM` `W_LABEL` `TEXT_MUTED`,
@@ -200,15 +181,6 @@ pub fn hairline() -> Div {
     div()
         .h(px(1.))
         .w_full()
-        .flex_shrink_0()
-        .bg(rgba(theme::HAIRLINE))
-}
-
-/// The one rule weight, vertical.
-pub fn vhairline() -> Div {
-    div()
-        .w(px(1.))
-        .h_full()
         .flex_shrink_0()
         .bg(rgba(theme::HAIRLINE))
 }
@@ -401,45 +373,6 @@ pub fn key_hints(hints: &[(&str, &str)]) -> Div {
         }))
 }
 
-/// A chip's meaning. Colour is state: only the state tones carry a hue.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tone {
-    Neutral,
-    Accent,
-    Running,
-    Attention,
-    Blocked,
-}
-
-/// A tone's ink and ground (the ground as `0xRRGGBBAA`).
-pub fn tone_inks(tone: Tone) -> (u32, u32) {
-    match tone {
-        Tone::Neutral => (theme::TEXT_2, (theme::RAISED_2 << 8) | 0xff),
-        Tone::Accent => (theme::ACCENT, theme::ACCENT_WASH),
-        Tone::Running => (theme::RUNNING, theme::RUNNING_WASH),
-        Tone::Attention => (theme::ATTENTION, theme::ATTENTION_WASH),
-        Tone::Blocked => (theme::BLOCKED, theme::BLOCKED_WASH),
-    }
-}
-
-/// A chip: `CHIP_H`, `R_CHIP`, mono `FS_SM`, inked and grounded by its tone.
-pub fn chip(label: impl Into<SharedString>, tone: Tone) -> Div {
-    let (ink, ground) = tone_inks(tone);
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .h(px(theme::CHIP_H))
-        .px(px(theme::CHIP_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .bg(rgba(ground))
-        .font_family(theme::FONT_MONO)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(ink))
-        .child(label.into())
-}
-
 /// The prompt mark `❯`, drawn (Geist Mono lacks the glyph): `prompt.svg` in a
 /// `GLYPH_BOX`. The transcript prompt and the Composer share it; `ink` is
 /// `ACCENT` where it marks the live input, `TEXT_MUTED` where it does not.
@@ -539,51 +472,6 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         )
 }
 
-/// A destructive action: a ghost at rest (colour is state), `BLOCKED` ink.
-pub fn danger_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
-    button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(theme::BLOCKED).into())
-                .hover(rgba(theme::BLOCKED_WASH).into())
-                .active(rgba(theme::BLOCKED_WASH).into()),
-        )
-        .h(px(theme::CONTROL_H))
-        .px(px(theme::CONTROL_PAD_X))
-        .child(
-            text_ui()
-                .font_weight(theme::W_LABEL)
-                .text_color(rgb(theme::BLOCKED))
-                .child(label.into()),
-        )
-}
-
-/// One option of a segmented choice. Its 1px edge is always in layout: rest
-/// `HAIRLINE_STRONG` with `TEXT_2`; selected `ACCENT_WASH` + `ACCENT_EDGE` with
-/// `TEXT_STRONG`.
-pub fn choice_chip(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    selected: bool,
-    cx: &App,
-) -> Button {
-    let (ink, ground, edge) = choice_inks(selected);
-    button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(ink).into())
-                .hover(rgb(theme::HOVER).into())
-                .active(rgb(theme::PRESSED).into()),
-        )
-        .h(px(theme::CHIP_H))
-        .px(px(theme::CHIP_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .border_1()
-        .border_color(rgba(edge))
-        .when_some(ground, |chip, ground| chip.bg(rgba(ground)))
-        .child(text_ui().text_color(rgb(ink)).child(label.into()))
-}
-
 /// A choice chip's ink, ground (`0xRRGGBBAA`) and edge.
 pub fn choice_inks(selected: bool) -> (u32, Option<u32>, u32) {
     if selected {
@@ -599,14 +487,6 @@ pub fn choice_inks(selected: bool) -> (u32, Option<u32>, u32) {
 
 // ------------------------------------------------------------------ menus
 
-/// The face a menu row's detail is set in: prose for descriptions, mono for
-/// paths and tags.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Face {
-    Prose,
-    Mono,
-}
-
 /// One menu row's content.
 #[derive(Clone, Debug, Default)]
 pub struct MenuItem {
@@ -617,7 +497,9 @@ pub struct MenuItem {
     pub label_w: Option<f32>,
     /// A 12px leading mark and its ink.
     pub leading: Option<(&'static str, u32)>,
-    pub detail: Option<(SharedString, Face)>,
+    /// A trailing mono detail: a description, a path, a tag. Menus are
+    /// chrome, so descriptions align in one mono column as in a terminal.
+    pub detail: Option<SharedString>,
     /// The key that does the same thing, faint at the right edge.
     pub shortcut: Option<SharedString>,
     pub checked: bool,
@@ -645,8 +527,8 @@ impl MenuItem {
         self.leading = Some((path, ink));
         self
     }
-    pub fn detail(mut self, text: impl Into<SharedString>, face: Face) -> Self {
-        self.detail = Some((text.into(), face));
+    pub fn detail(mut self, text: impl Into<SharedString>) -> Self {
+        self.detail = Some(text.into());
         self
     }
     /// An empty shortcut is no shortcut.
@@ -780,16 +662,13 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                 })
                 .child(gpui::StyledText::new(label).with_highlights(highlights)),
         )
-        .when_some(item.detail.clone(), |row, (detail, face)| {
+        .when_some(item.detail.clone(), |row, detail| {
             row.child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(match face {
-                        Face::Prose => theme::FONT_PROSE,
-                        Face::Mono => theme::FONT_MONO,
-                    })
+                    .font_family(theme::FONT_MONO)
                     .text_size(px(theme::FS_SM))
                     .text_color(rgb(inks.detail))
                     .child(detail),
@@ -905,7 +784,7 @@ impl Choice {
             .checked(self.checked)
             .disabled(self.disabled);
         if let Some(detail) = &self.detail {
-            item = item.detail(detail.clone(), Face::Mono);
+            item = item.detail(detail.clone());
         }
         if let (true, Some((path, ink))) = (marked, self.icon) {
             item = item.leading(path, ink);
@@ -1171,13 +1050,6 @@ mod tests {
                 theme::LH_META,
                 theme::TEXT_MUTED,
             ),
-            (
-                text_prose(),
-                theme::FONT_PROSE,
-                theme::FS_PROSE,
-                theme::LH_PROSE,
-                theme::TEXT,
-            ),
         ] {
             let text = &run.style().text;
             assert_eq!(text.font_family, Some(face.into()));
@@ -1222,21 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn colour_is_state_on_chips() {
-        assert_eq!(tone_inks(Tone::Neutral).0, theme::TEXT_2);
-        assert_eq!(tone_inks(Tone::Accent), (theme::ACCENT, theme::ACCENT_WASH));
-        assert_eq!(
-            tone_inks(Tone::Running),
-            (theme::RUNNING, theme::RUNNING_WASH)
-        );
-        assert_eq!(
-            tone_inks(Tone::Attention),
-            (theme::ATTENTION, theme::ATTENTION_WASH)
-        );
-        assert_eq!(
-            tone_inks(Tone::Blocked),
-            (theme::BLOCKED, theme::BLOCKED_WASH)
-        );
+    fn a_choice_wears_the_accent_only_when_selected() {
         assert_eq!(
             choice_inks(true),
             (
@@ -1320,7 +1178,7 @@ mod tests {
         let item = choice.item(false);
         assert!(item.checked && !item.disabled);
         assert_eq!(item.leading, None, "the mark rides the section title");
-        assert_eq!(item.detail, Some(("1M".into(), Face::Mono)));
+        assert_eq!(item.detail, Some("1M".into()));
         assert_eq!(
             choice.item(true).leading,
             Some((icons::CLAUDE, theme::PROVIDER_CLAUDE))

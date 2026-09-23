@@ -3554,7 +3554,7 @@ pub fn menu_item(row: &MenuRow, cursor: bool, label_w: Option<f32>) -> component
         } else {
             head_truncated(&row.detail, theme::MENU_PATH_TAIL)
         };
-        item = item.detail(detail, components::Face::Mono);
+        item = item.detail(detail);
     }
     // No ↵ on an inert row: enter only dismisses there, and the key would
     // advertise an offer the row does not make.
@@ -4403,7 +4403,7 @@ pub fn picker_row(
         .checked(active)
         .disabled(inert);
     if !detail.is_empty() {
-        item = item.detail(detail, components::Face::Mono);
+        item = item.detail(detail);
     }
     components::menu_row(id, &item, cursor, false)
 }
@@ -6298,7 +6298,7 @@ mod tests {
             prose_detail: false,
             ..inert
         };
-        let (detail, _) = menu_item(&deep, false, None).detail.unwrap();
+        let detail = menu_item(&deep, false, None).detail.unwrap();
         assert!(detail.starts_with("…/") && detail.ends_with("tree/of/files"));
         assert!(detail.chars().count() <= theme::MENU_PATH_TAIL + 2);
 
