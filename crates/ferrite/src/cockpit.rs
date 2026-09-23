@@ -3835,8 +3835,8 @@ impl CockpitView {
     /// line they are the keycaps' answers; with text on the line they are
     /// letters again — the ⌫-unqueue rule, applied to y/n/a — because an
     /// operator half-way through "not yet…" must be able to finish typing
-    /// it. Only at L1, where a Composer is live; the wall and the L2 card
-    /// have no line to be typing into.
+    /// it. At L1 and L2, where a Composer is live; the wall has no line to
+    /// be typing into.
     fn answer_or_type(
         &mut self,
         answer: Answer,
@@ -3848,7 +3848,10 @@ impl CockpitView {
             self.answer_subject(answer, cx);
             return;
         }
-        if self.level_now(window) == Level::Transcript {
+        if matches!(
+            self.level_now(window),
+            Level::Transcript | Level::Instruments
+        ) {
             if let Some(pane) = self.panes.get(self.focused()) {
                 // A question is answered in words as often as by a pick,
                 // and "no, the second one" starts with the deny key: while
@@ -7102,13 +7105,10 @@ impl Render for CockpitView {
                     // through the region's own Decision key context (#23).
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     // An L2 cell draws a Composer too, and the keys go
-                    // where the caret is.
-                    // An L2 Decision cell draws its card in the Composer's
-                    // place; the keyboard goes to the card's own `Decision`
-                    // context, so y/n answer as its keycaps say.
-                    Level::Instruments if self.l2_decision_card(self.focused()) => {
-                        Some(pane.decision_focus.clone())
-                    }
+                    // where the caret is — a Decision cell's included: its
+                    // Composer carries the `Decision` context as at L1, so
+                    // y/n on an empty line answer as the card's keycaps say,
+                    // and anything else is typing.
                     Level::Transcript | Level::Instruments if !pane.is_main() => {
                         Some(pane.transcript_focus.clone())
                     }

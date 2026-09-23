@@ -2,9 +2,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// An L2 cell swaps its body for the Decision card and draws no Composer, so
-/// the keyboard must land on the card's own `Decision` context: `y` answers
-/// the cell from the keyboard, as its keycap says.
+/// An L2 cell swaps its body for the Decision card and keeps its Composer
+/// under it, which holds the keyboard with the `Decision` context: `y` on
+/// its empty line answers the cell, as the card's keycap says.
 #[gpui::test]
 fn an_l2_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-decision-keys", 1);

@@ -1893,7 +1893,10 @@ fn l2_cell(
             .children(composer);
     }
 
-    // A Decision's cell body is the card, keyed like the in-Pane card.
+    // A Decision's cell body is the card, keyed like the in-Pane card; the
+    // cell keeps its Composer under it (every L2 cell has one). The card
+    // holds the keyboard, so y/n answer; a press in the Composer takes
+    // typing, and there an empty line's y/n answer as they do at L1.
     if let Some(decision) = decision.filter(|_| !compact_question) {
         return cell
             .child(header)
@@ -1902,7 +1905,8 @@ fn l2_cell(
                     .key_context("Decision")
                     .track_focus(&view.decision_focus),
             )
-            .children(sheet());
+            .children(sheet())
+            .children(composer);
     }
 
     let read = Instruments::of(transcript);

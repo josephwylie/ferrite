@@ -663,3 +663,50 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
         "the text starts at C1"
     );
 }
+
+/// An L2 cell with an approval keeps its Composer under the card: `y`
+/// still answers from the card, and a press in the Composer takes typing.
+#[gpui::test]
+fn an_l2_approval_cell_keeps_its_composer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("l2-approval-composer", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    fake.streams.borrow()[0].send(decision("l2-keep")).unwrap();
+    tick(cx);
+    let block = cx
+        .debug_bounds("composer-block")
+        .expect("the approval cell keeps its Composer");
+    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    assert!(
+        block.bottom() <= px(pane.y + pane.h),
+        "{block:?} / {pane:?}"
+    );
+
+    // The card answers from the keyboard.
+    cx.simulate_keystrokes("y");
+    tick(cx);
+    assert!(
+        matches!(
+            fake.answered.borrow().last(),
+            Some((id, DecisionAnswer::Allow { .. })) if id == "l2-keep"
+        ),
+        "y answers: {:?}",
+        fake.answered.borrow()
+    );
+
+    // A second request, then a press in the Composer: typing lands there.
+    fake.streams.borrow()[0].send(decision("l2-type")).unwrap();
+    tick(cx);
+    let block = cx.debug_bounds("composer-block").unwrap();
+    cx.simulate_click(block.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("hold on");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "hold on");
+}
