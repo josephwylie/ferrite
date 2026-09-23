@@ -1165,6 +1165,12 @@ pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
 /// Composer it opens from.
 pub const CHOICE_MENU_MIN_W: f32 = 240.0;
 pub const CHOICE_MENU_MAX_W: f32 = 320.0;
+/// 10px — a `⌘` glyph box inside a menu shortcut: the `FS_SM` cap height
+/// band, so the drawn key sits on the letters beside it.
+pub const MENU_KEY_GLYPH: f32 = 10.0;
+/// About 48 characters — how much of a long directory a menu row keeps,
+/// cut at its head behind `…/` (the tail names the place).
+pub const MENU_PATH_TAIL: usize = 48;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents

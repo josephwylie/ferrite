@@ -1,134 +1,81 @@
 //! The context menu: what a right-click on a Thread, a Group, a Project
 //! or a Pane offers. Drawing only, like `nav.rs` — the cockpit decides the
-//! rows and runs the verbs. It floats on the menu ground with the same
-//! two-layer shadow every popover wears, anchored at the pointer.
+//! rows and runs the verbs. It is the one floating surface
+//! (`components::floating_surface`), anchored at the pointer, its rows the
+//! one menu row (`components::menu_row`), its groups split by a hairline.
 //!
 //! A destructive verb never runs on one press: its row arms on the first
-//! (the label becomes the confirmation, in the blocked ink) and runs on
+//! (the label becomes the confirmation, on the blocked wash) and runs on
 //! the second. Anything else pressed disarms it.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, Div, SharedString, Stateful};
+use gpui::{div, px, rgb, Div, SharedString, Stateful};
 
-use crate::pointer::{Pointer, PointerPressed};
+use crate::components::{self, MenuItem};
+use crate::icons;
 use crate::theme::*;
 
-/// The menu's width: wide enough for `Confirm delete Thread` beside a
-/// shortcut hint, narrow enough to sit inside a nav row's reach.
-const WIDTH: f32 = 224.0;
-/// The band between two groups of rows — space, never a line.
-const GAP_H: f32 = 6.0;
+/// One row of the menu: the shared menu row's content. Its `shortcut` is the
+/// key that does the same thing, drawn here so `⌘` can be a glyph box.
+pub type Item = MenuItem;
 
-/// One row of the menu.
-pub struct Item {
-    pub label: SharedString,
-    /// The key that does the same thing, shown muted at the right edge.
-    pub hint: Option<SharedString>,
-    /// Arms before it runs, and wears the blocked ink.
-    pub destructive: bool,
-    /// Drawn muted, presses do nothing.
-    pub disabled: bool,
-}
-
-impl Item {
-    pub fn new(label: impl Into<SharedString>) -> Self {
-        Self {
-            label: label.into(),
-            hint: None,
-            destructive: false,
-            disabled: false,
-        }
-    }
-
-    pub fn hint(mut self, hint: impl Into<SharedString>) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    pub fn destructive(mut self) -> Self {
-        self.destructive = true;
-        self
-    }
-
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-}
-
-/// The floating shell, at the menu ground with the float shadow and no
-/// border. The caller positions it (`anchored`) and fills it with `row`s.
+/// The floating shell: at least `MENU_W`, and as wide as its longest verb
+/// beside its shortcut, so no verb is ever cut. The caller positions it
+/// (`anchored`, which keeps it inside the window).
 pub fn shell() -> Div {
-    div()
-        // This deferred surface sits over selectable transcript text. Own its
-        // inert space so the covered text's I-beam cannot show through.
-        .cursor_default()
-        .occlude()
-        .flex()
-        .flex_col()
-        .w(px(WIDTH))
-        .p(px(MENU_PAD))
-        .rounded(px(R_BLOCK))
-        .bg(rgb(MENU))
-        .shadow(crate::components::float_shadow())
+    components::floating_surface().min_w(px(MENU_W))
 }
 
-/// The space between two groups of rows.
+/// The line between two groups of rows.
 pub fn gap() -> Div {
-    div().flex_shrink_0().h(px(GAP_H))
+    components::menu_separator()
 }
 
-/// One row: the label, the hint hard right. `armed` is a destructive row
-/// on its second press — the confirmation, on the blocked wash.
+/// One row, its shortcut hard right. `armed` is a destructive row on its
+/// second press — the confirmation, on the blocked wash.
 pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
-    let ink = if item.disabled {
-        TEXT_MUTED
-    } else if item.destructive {
-        BLOCKED
-    } else {
-        TEXT
+    let keys = item.shortcut.clone();
+    let face = MenuItem {
+        shortcut: None,
+        ..item.clone()
     };
-    let label: SharedString = if armed {
-        SharedString::from(format!("Confirm: {}", item.label))
-    } else {
-        item.label.clone()
-    };
-    let mut row = div()
-        .id(("context-menu-row", index))
+    let ink = components::row_inks(item, false, armed).shortcut;
+    components::menu_row(("context-menu-row", index), &face, false, armed)
+        .when_some(keys.filter(|_| !armed), |row, keys| {
+            row.child(shortcut(&keys, ink))
+        })
+}
+
+/// A shortcut in the menu's trailing column: mono `FS_SM`, `⌘` drawn as a
+/// glyph box because Geist Mono has no such glyph.
+fn shortcut(keys: &SharedString, ink: u32) -> Div {
+    let mut drawn = div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .justify_between()
-        .gap(px(12.))
-        .h(px(MENU_ROW_H))
-        .px(px(9.))
-        .rounded(px(R_CONTROL))
-        .text_size(px(FS_UI))
-        .text_color(rgb(ink))
-        .child(div().min_w_0().truncate().child(label));
-    if let Some(hint) = &item.hint {
-        row = row.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child(hint.clone()),
-        );
+        .text_size(px(FS_SM))
+        .text_color(rgb(ink));
+    let mut run = String::new();
+    for key in keys.chars() {
+        if key == '⌘' {
+            if !run.is_empty() {
+                drawn = drawn.child(std::mem::take(&mut run));
+            }
+            drawn = drawn.child(icons::icon(icons::COMMAND, MENU_KEY_GLYPH, ink));
+        } else {
+            run.push(key);
+        }
     }
-    if armed {
-        row = row.bg(rgba(BLOCKED_WASH)).text_color(rgb(TEXT_STRONG));
+    if !run.is_empty() {
+        drawn = drawn.child(run);
     }
-    if item.disabled {
-        row
-    } else {
-        row.hover_row().press_row()
-    }
+    drawn
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{deferred, Context, CursorStyle, Render};
+    use gpui::{deferred, rgba, Context, CursorStyle, Render};
     use std::{cell::Cell, rc::Rc};
 
     struct OcclusionHarness {
@@ -164,7 +111,7 @@ mod tests {
 
     #[test]
     fn a_live_row_is_a_button_and_a_disabled_one_is_not() {
-        let live = Item::new("Rename").hint("⏎");
+        let live = Item::new("Rename").shortcut("↵");
         let mut drawn = row(0, &live, false);
         assert_eq!(drawn.style().mouse_cursor, Some(CursorStyle::PointingHand));
         let dead = Item::new("Reveal in Finder").disabled(true);
@@ -176,6 +123,7 @@ mod tests {
     fn the_floating_shell_masks_the_cursor_beneath_it() {
         let mut drawn = shell();
         assert_eq!(drawn.style().mouse_cursor, Some(CursorStyle::Arrow));
+        assert_eq!(drawn.style().min_size.width, Some(px(MENU_W).into()));
     }
 
     #[gpui::test]
@@ -211,5 +159,10 @@ mod tests {
         assert_eq!(drawn.style().background, Some(rgba(BLOCKED_WASH).into()));
         let mut calm = row(2, &delete, false);
         assert_eq!(calm.style().background, None);
+        assert_eq!(
+            components::row_inks(&delete, false, false).label,
+            BLOCKED,
+            "a destructive verb wears the blocked ink before it arms"
+        );
     }
 }

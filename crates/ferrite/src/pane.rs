@@ -3508,102 +3508,74 @@ pub struct MenuRow {
     pub insert: SharedString,
     /// The row's leading text: `/name`, or the file's name.
     pub name: SharedString,
-    /// Matched byte ranges inside `name`, promoted to `--text-strong`.
+    /// Matched byte ranges inside `name`, painted `ACCENT` (never a weight,
+    /// so the row never reflows as the cursor moves).
     pub matched: Vec<std::ops::Range<usize>>,
     /// The dimmer text after it: a command's description, or the file's
     /// directory. Empty draws nothing.
     pub detail: SharedString,
-    /// Whether `detail` reads as prose (the comp's ui-face command
-    /// descriptions) or as a path (mono, like the rows of state 03).
+    /// Whether `detail` is a description (cut at its end) or a path (cut at
+    /// its head, so the useful tail survives). Both draw mono.
     pub prose_detail: bool,
     /// A row kept visible but dead (#25's locked provider door): muted ink,
     /// no match highlights, and its pick does nothing but dismiss.
     pub inert: bool,
 }
 
-/// The Composer menus' popover shell: the selector's exact surface at the
-/// composer's own width (the comps draw slash/@ popovers spanning the box).
+/// The Composer menus' popover: the one floating surface at the Composer's
+/// own width, capped at `MENU_MAX_H` (its row list scrolls past that).
 pub fn menu_popover() -> Div {
-    popover_shell().w_full()
+    components::floating_surface()
+        .w_full()
+        .max_h(px(theme::MENU_MAX_H))
 }
 
-/// One 30px menu row, on the filter menu's recipe (R-07). Selection takes
-/// the `--hover` ground, promotes the name and its matched characters to
-/// `--text-strong` (semibold only while selected) and steps the detail ink
-/// up; the selected row carries the `↵` hint at its right edge.
-pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
-    // An inert row never promotes: muted whatever the arrows do, and its
-    // matches stay unpainted — the row is an explanation, not an offer.
-    let name_ink = match (row.inert, selected) {
-        (true, _) => TEXT_MUTED,
-        (false, true) => TEXT_STRONG,
-        (false, false) => TEXT_2,
-    };
-    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
-    if !row.inert {
-        for range in &row.matched {
-            highlights.push((
-                range.clone(),
-                HighlightStyle {
-                    color: Some(rgb(TEXT_STRONG).into()),
-                    font_weight: selected.then_some(FontWeight::SEMIBOLD),
-                    ..Default::default()
-                },
-            ));
-        }
+/// A `/` or `@` row in the shared menu grammar: the name with its matches
+/// in the accent, the detail muted in its own column (`label_w` aligns the
+/// slash commands' descriptions), `↵` on the cursor row.
+pub fn menu_row(
+    id: impl Into<gpui::ElementId>,
+    row: &MenuRow,
+    cursor: bool,
+    label_w: Option<f32>,
+) -> Stateful<Div> {
+    components::menu_row(id, &menu_item(row, cursor, label_w), cursor, false)
+}
+
+/// A `MenuRow` as the shared menu row's content.
+pub fn menu_item(row: &MenuRow, cursor: bool, label_w: Option<f32>) -> components::MenuItem {
+    let mut item = components::MenuItem::new(row.name.clone())
+        .matched(row.matched.clone())
+        .disabled(row.inert);
+    if let Some(width) = label_w {
+        item = item.label_w(width);
     }
-    let mut drawn = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(10.))
-        .h(px(theme::MENU_ROW_H))
-        .px(px(8.))
-        .rounded(px(theme::R_CONTROL))
-        .when(selected, |row| row.bg(rgb(HOVER)))
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_UI))
-                .text_color(rgb(name_ink))
-                .child(StyledText::new(row.name.clone()).with_highlights(highlights)),
-        );
-    // The Row role (#26): the selected row skips the wash — hover would
-    // downgrade its EDGE ground — but keeps the cursor; an inert row gets
-    // neither, for the same reason it carries no ↵ hint.
-    drawn = match (row.inert, selected) {
-        (true, _) => drawn,
-        (false, true) => drawn.hover_carried(),
-        (false, false) => drawn.hover_row(),
-    };
     if !row.detail.is_empty() {
-        let detail_ink = if selected { TEXT_MUTED } else { TEXT_MUTED };
-        let mut detail = div()
-            .min_w_0()
-            .truncate()
-            .text_color(rgb(detail_ink))
-            .child(row.detail.clone());
-        detail = if row.prose_detail {
-            detail
-                .font_family(theme::FONT_PROSE)
-                .text_size(px(theme::FS_SM))
+        let detail = if row.prose_detail {
+            row.detail.clone()
         } else {
-            detail.text_size(px(theme::FS_SM))
+            head_truncated(&row.detail, theme::MENU_PATH_TAIL)
         };
-        drawn = drawn.child(detail);
+        item = item.detail(detail, components::Face::Mono);
     }
-    // No ↵ hint on an inert row: enter only dismisses there, and a keycap
-    // would advertise an offer the row does not make.
-    if selected && !row.inert {
-        drawn = drawn.child(div().flex_1()).child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child("↵"),
-        );
+    // No ↵ on an inert row: enter only dismisses there, and the key would
+    // advertise an offer the row does not make.
+    if cursor && !row.inert {
+        item = item.shortcut("↵");
     }
-    drawn
+    item
+}
+
+/// A path cut at its head to about its last `tail` characters, behind
+/// `…/`: gpui truncates only at the end, where a path keeps what matters.
+fn head_truncated(path: &SharedString, tail: usize) -> SharedString {
+    let count = path.chars().count();
+    if count <= tail {
+        return path.clone();
+    }
+    let rest: String = path.chars().skip(count - tail).collect();
+    let rest = rest.split_once('/').map_or(rest.as_str(), |(_, rest)| rest);
+    format!("…/{rest}").into()
 }
 
 /// The bounded queue viewport, shared with the editor's pane-height budget.
@@ -4548,149 +4520,41 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
 // for the nav's rows; the header's binding slot is the display-only branch
 // text now.
 
-/// Every popover's shell. The prototype draws exactly one menu — the
-/// Project filter — and the Composer's `/` and `@` menus have no Soft
-/// form of their own (R-07), so they are restyled onto the filter menu's
-/// recipe rather than given a second menu language: the `--menu` ground,
-/// a 10px radius, 4px of padding, `--shadow-float`'s **two** layers, and
-/// **no border**. Width is the caller's. Rows and footer are the
-/// cockpit's to append — their clicks are wired there.
-fn popover_shell() -> Div {
-    div()
-        .cursor_default()
-        .occlude()
-        .flex()
-        .flex_col()
-        .p(px(theme::MENU_PAD))
-        .bg(rgb(theme::MENU))
-        .rounded(px(theme::R_BLOCK))
-        .shadow(crate::components::float_shadow())
-}
-
-/// The ✓-row recipe the pickers share — the provider picker (#25) and the
-/// band popovers (#29) — so "what this Pane is on right now" can never be
-/// spelled two ways. `detail` is the muted section tag riding the right
-/// edge ("provider", "worktree"); empty draws nothing.
+/// The ✓-row the pickers share — the band popovers (#29) — so "what this
+/// Pane is on right now" can never be spelled two ways: the accent check on
+/// the standing choice, the muted tag ("checked out", "worktree · dir")
+/// after the label.
 pub fn picker_row(
+    id: impl Into<gpui::ElementId>,
     label: SharedString,
     detail: SharedString,
-    selected: bool,
+    cursor: bool,
     active: bool,
     inert: bool,
-) -> Div {
-    let mut row = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(10.))
-        .h(px(theme::MENU_ROW_H))
-        .px(px(8.))
-        .rounded(px(theme::R_CONTROL))
-        .text_size(px(theme::FS_UI))
-        .text_color(rgb(if inert {
-            TEXT_MUTED
-        } else if selected {
-            TEXT_STRONG
-        } else {
-            TEXT_2
-        }))
-        .child(div().min_w_0().truncate().child(label))
-        .child(div().flex_1());
-    // The Row role (#26), the menu rows' skip rule: the selected row's
-    // EDGE ground outranks the wash, so it keeps only the cursor. An
-    // inert row is dead: no wash, no cursor — it explains, it never acts.
-    row = if inert {
-        row
-    } else if selected {
-        row.bg(rgb(HOVER)).hover_carried()
-    } else {
-        row.hover_row()
-    };
+) -> Stateful<Div> {
+    let mut item = components::MenuItem::new(label)
+        .checked(active)
+        .disabled(inert);
     if !detail.is_empty() {
-        row = row.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child(detail),
-        );
+        item = item.detail(detail, components::Face::Mono);
     }
-    if active {
-        row = row.child(icon(icons::CHECK, theme::ROW_ICON, TEXT));
-    }
-    row
+    components::menu_row(id, &item, cursor, false)
 }
 
 /// A picker's section title: the Provider's logomark in its brand colour
-/// and its name, with an optional muted note after it (why the section is
-/// fixed). Non-interactive — the arrows skip it, a press does nothing.
+/// (the one place brand colour is allowed) and its name, with an optional
+/// note after it. Non-interactive — the arrows skip it.
 pub fn picker_section(provider: Provider, note: SharedString) -> Div {
-    let mark = match provider {
-        Provider::Codex => icon(icons::CODEX, theme::PROVIDER_MARK_SM, theme::PROVIDER_CODEX),
-        Provider::Claude => icon(
-            icons::CLAUDE,
-            theme::PROVIDER_MARK_SM,
-            theme::PROVIDER_CLAUDE,
-        ),
+    let (mark, ink, title) = match provider {
+        Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX, "Codex"),
+        Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE, "Claude"),
     };
-    let title = match provider {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-    };
-    let mut row = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::KEYS_GAP))
-        .h(px(theme::MENU_ROW_H))
-        .px(px(8.))
-        .mt(px(2.))
-        .text_size(px(theme::FS_SM))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(TEXT))
-        .child(mark)
-        .child(div().child(title));
-    if !note.is_empty() {
-        row = row.child(
-            div()
-                .ml(px(theme::KEYS_GAP))
-                .font_weight(FontWeight::NORMAL)
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child(note),
-        );
-    }
-    row
+    components::menu_section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
 }
 
-/// A muted, non-interactive picker line — why a section is short, said out
-/// loud (#25: the other rows only arrive with the Session's handshake).
-#[allow(dead_code)]
-pub fn picker_hint(text: &'static str) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .h(px(theme::MENU_ROW_H))
-        .px(px(8.))
-        .text_size(px(theme::FS_SM))
-        .text_color(rgb(TEXT_MUTED))
-        .child(text)
-}
-
-/// The popover's key-hint footer — the PromptBox footer grammar, each
-/// menu supplying its own verbs.
-pub fn popover_footer(hints: &'static str) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .h(px(theme::CHIP_H))
-        .px(px(8.))
-        .mt(px(2.))
-        .text_size(px(theme::FS_SM))
-        .text_color(rgb(TEXT_MUTED))
-        .child(hints)
+/// The popover's key-hint footer, each menu supplying its own verbs.
+pub fn popover_footer(hints: &[(&str, &str)]) -> Div {
+    components::menu_footer(hints)
 }
 
 // ----------------------------------------------------------- Block render
@@ -6515,24 +6379,42 @@ mod tests {
             inert: false,
         };
         assert_eq!(
-            cursor(menu_row(&offer, false)),
+            cursor(menu_row(("r", 0usize), &offer, false, None)),
             Some(CursorStyle::PointingHand)
         );
         assert_eq!(
-            cursor(menu_row(&offer, true)),
+            cursor(menu_row(("r", 0usize), &offer, true, None)),
             Some(CursorStyle::PointingHand),
             "the selected row skips the wash, never the cursor"
         );
         let inert = MenuRow {
+            insert: offer.insert.clone(),
+            name: offer.name.clone(),
+            matched: vec![],
+            detail: offer.detail.clone(),
+            prose_detail: true,
             inert: true,
-            ..offer
         };
-        assert_eq!(cursor(menu_row(&inert, false)), None);
-        assert_eq!(cursor(menu_row(&inert, true)), None);
+        assert_eq!(cursor(menu_row(("r", 1usize), &inert, false, None)), None);
+        assert_eq!(cursor(menu_row(("r", 1usize), &inert, true, None)), None);
+        // ↵ rides the cursor row only, and never an inert one.
+        assert_eq!(menu_item(&offer, true, None).shortcut.as_deref(), Some("↵"));
+        assert_eq!(menu_item(&offer, false, None).shortcut, None);
+        assert_eq!(menu_item(&inert, true, None).shortcut, None);
+        // A long directory keeps its tail.
+        let deep = MenuRow {
+            detail: "crates/ferrite/src/some/very/deeply/nested/module/tree/of/files".into(),
+            prose_detail: false,
+            ..inert
+        };
+        let (detail, _) = menu_item(&deep, false, None).detail.unwrap();
+        assert!(detail.starts_with("…/") && detail.ends_with("tree/of/files"));
+        assert!(detail.chars().count() <= theme::MENU_PATH_TAIL + 2);
 
         // The ✓-row both selectors share follows the same rule.
         assert_eq!(
             cursor(picker_row(
+                ("p", 0usize),
                 "workspace root".into(),
                 "".into(),
                 false,
@@ -6543,6 +6425,7 @@ mod tests {
         );
         assert_eq!(
             cursor(picker_row(
+                ("p", 1usize),
                 "workspace root".into(),
                 "".into(),
                 true,
