@@ -151,7 +151,6 @@ fn a_digit_types_when_the_line_has_words(cx: &mut TestAppContext) {
 
 /// A multi-select question: digits toggle its options, ↵ sends the picks.
 #[gpui::test]
-#[ignore = "red until the lead lands the submit hook (routed request 3)"]
 fn a_multi_select_question_toggles_on_digits_and_sends_on_enter(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("multi-toggle", 1);
     bind_production_keys(cx);

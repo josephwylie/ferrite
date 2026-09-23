@@ -3394,6 +3394,11 @@ impl CockpitView {
         if !self.panes[self.focused()].is_main() {
             return;
         }
+        // ↵ on an empty line sends a pending question whose every question
+        // is answered (digits toggled a multi-select; ↵ sends it).
+        if self.panes[self.focused()].composer.read(cx).is_empty() && self.send_ready_question(cx) {
+            return;
+        }
         let composer = self.panes[self.focused()].composer.clone();
         let text = composer.update(cx, |composer, cx| composer.take(cx));
         let text = text.trim().to_string();
