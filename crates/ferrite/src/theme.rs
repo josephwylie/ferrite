@@ -1182,6 +1182,18 @@ pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
 pub const BADGE_H: f32 = 14.0;
 pub const FS_BADGE: f32 = 10.5;
 pub const BADGE_INSET: f32 = SPACE_0_5;
+/// With the nav collapsed, toasts stack BottomRight this far up: the
+/// board's padding, the Pane's edge, a one-line Composer and its inset,
+/// then 8px of air, so the stack clears the Composer.
+pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
+    + 1.0
+    + COMPOSER_INSET_B
+    + 2.0 * COMPOSER_EDGE_W
+    + COMPOSER_PAD_T
+    + COMPOSER_PAD_B
+    + COMPOSER_GAP
+    + 2.0 * COMPOSER_ROW_H
+    + SPACE_2;
 /// A fact row's key column (About): the longest key, "Development build".
 pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.

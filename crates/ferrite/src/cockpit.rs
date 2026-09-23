@@ -9113,6 +9113,23 @@ impl CockpitView {
     /// Toast what arrived since the last frame. Render is the one place
     /// with a Window in hand every frame; the pump has none.
     fn present_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Toasts live at the foot of the nav; with the nav collapsed there is
+        // no ground to spare there, so they stack BottomRight above the
+        // Composer. The theme is written only when the side changes.
+        let (placement, bottom) = if self.nav_collapsed {
+            (
+                gpui::Anchor::BottomRight,
+                crate::theme::TOAST_ABOVE_COMPOSER,
+            )
+        } else {
+            (gpui::Anchor::BottomLeft, crate::theme::GRID_PAD)
+        };
+        let toasts = &gpui::component::Theme::global(cx).notification;
+        if toasts.placement != placement || toasts.margins.bottom != px(bottom) {
+            let toasts = &mut gpui::component::Theme::global_mut(cx).notification;
+            toasts.placement = placement;
+            toasts.margins.bottom = px(bottom);
+        }
         let now = std::time::SystemTime::now();
         let rows: Vec<NoticeRow> = self
             .cockpit
