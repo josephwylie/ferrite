@@ -1209,6 +1209,7 @@ impl Record {
 const DEFAULT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A directory of Thread logs.
+#[derive(Clone)]
 pub struct Store {
     dir: PathBuf,
     flush_interval: std::time::Duration,

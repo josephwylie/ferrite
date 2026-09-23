@@ -1001,7 +1001,7 @@ impl CockpitView {
         // every Thread it did not open is a parked row from the first
         // frame — a launch that opens nothing has no change to notice.
         view.sync_panes(cx);
-        view.facts.parked_changed(&view.cockpit);
+        view.parked_changed(cx);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
@@ -1052,9 +1052,32 @@ impl CockpitView {
         // A Thread that came or went moved between the grid and the nav's
         // parked rows.
         if opened || self.panes.len() != before {
-            self.facts.parked_changed(&self.cockpit);
+            self.parked_changed(cx);
         }
         self.refresh_names();
+    }
+
+    /// The parked set changed: rebuild the nav's parked rows now, from
+    /// peeks, and fetch what only `git` or a whole-log replay can say on the
+    /// background executor — the rows fill in when it answers.
+    fn parked_changed(&mut self, cx: &mut Context<Self>) {
+        let lookups = self.facts.parked_changed(&self.cockpit);
+        if lookups.is_empty() {
+            return;
+        }
+        let logs = self.cockpit.log_reader();
+        cx.spawn(async move |this, cx| {
+            let answers = cx
+                .background_executor()
+                .spawn(async move { lookups.run(&logs) })
+                .await;
+            this.update(cx, |view, cx| {
+                view.facts.parked_looked_up(&view.cockpit, answers);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Compare a visible Subject's key every root render, and only then copy
@@ -2262,7 +2285,7 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.facts.parked_changed(&self.cockpit);
+                self.parked_changed(cx);
             }
             (MenuTarget::Pane(_), MenuVerb::CopySelection) => {
                 if let Some(text) = self.native_copy.clone() {
@@ -2354,7 +2377,7 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.facts.parked_changed(&self.cockpit);
+                self.parked_changed(cx);
             }
             _ => {}
         }
@@ -2383,7 +2406,7 @@ impl CockpitView {
             }
         };
         self.sync_panes(cx);
-        self.facts.parked_changed(&self.cockpit);
+        self.parked_changed(cx);
     }
 
     /// The context menu, floated at the pointer and clamped inside the
@@ -2826,7 +2849,7 @@ impl CockpitView {
             *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
         }
         if self.facts.set_auto_title(self.prefs.settings.auto_title) {
-            self.facts.parked_changed(&self.cockpit);
+            self.parked_changed(cx);
             for thread in self.cockpit.threads() {
                 self.facts.renamed(&self.cockpit, thread);
             }
@@ -5317,7 +5340,7 @@ impl CockpitView {
                 // mirror saw nothing open; a Thread that would not open is
                 // a fresh parked row.
                 if adopted.not_opened.is_some() {
-                    self.facts.parked_changed(&self.cockpit);
+                    self.parked_changed(cx);
                 } else if from.draft().is_some() {
                     self.facts.opened(&self.cockpit, adopted.thread);
                 }

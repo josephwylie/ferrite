@@ -1879,12 +1879,15 @@ impl Cockpit {
         if let Some(open) = self.thread(thread) {
             return Ok(open.activity().children().len());
         }
-        let snapshot = self.store.load(thread)?;
-        let mut activity = Activity::default();
-        for input in snapshot.activity_inputs() {
-            activity.apply(input);
+        self.log_reader().subagent_count(thread)
+    }
+
+    /// A read-only handle on the Thread logs, for the parked-Thread reads
+    /// too slow for the UI thread: it can be moved to a background task.
+    pub fn log_reader(&self) -> LogReader {
+        LogReader {
+            store: self.store.clone(),
         }
-        Ok(activity.view().children().len())
     }
 
     /// When a Thread was last used, live or parked — the nav's default
@@ -4128,6 +4131,27 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
             state.invalidate_suggestion();
         }
         _ => {}
+    }
+}
+
+
+/// Reads a Thread's log without the Cockpit: `Cockpit::log_reader`. It
+/// never writes, so a copy may replay parked logs off the UI thread.
+#[derive(Clone)]
+pub struct LogReader {
+    store: Store,
+}
+
+impl LogReader {
+    /// The subagents a parked Thread's durable activity knows — a replay of
+    /// its whole log, so never on the UI thread for more than one Thread.
+    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
+        let snapshot = self.store.load(thread)?;
+        let mut activity = Activity::default();
+        for input in snapshot.activity_inputs() {
+            activity.apply(input);
+        }
+        Ok(activity.view().children().len())
     }
 }
 
