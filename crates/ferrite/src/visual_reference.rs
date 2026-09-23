@@ -1110,6 +1110,7 @@ fn nav() -> (Scene, Setup) {
         .boot(Provider::Claude, 77_000)
         .text("Added the `app` size and a state filter.")
         .end(0.2210);
+    subagent_crew(&harness_feed, "harness", 5);
     scene.group(&[geist, density, harness], "UI overhaul");
 
     let (flaky, flaky_feed) = scene.open(Provider::Claude, &ferrite, "Fix flaky pump test");
@@ -1140,6 +1141,7 @@ fn nav() -> (Scene, Setup) {
         .boot(Provider::Claude, 31_000)
         .text("Drafted `CHANGELOG.md` for 0.9.")
         .end(0.0930);
+    subagent_crew(&notes_feed, "notes", 3);
 
     let (copy, copy_feed) = scene.open(Provider::Claude, &site, "Checkout copy review");
     scene.core.send(copy, "Review the checkout copy.".into());
@@ -1150,11 +1152,37 @@ fn nav() -> (Scene, Setup) {
     let _ = scene.open(Provider::Codex, &site, "Menu photography brief");
 
     scene.core.focus_thread(running);
-    let setup: Setup = Box::new(|view, _, cx| {
+    // Worktree branches and subagent counts beside titles long and short:
+    // the title keeps its floor, the branch and then the count give way.
+    let setup: Setup = Box::new(move |view, _, cx| {
         view.nav_parked_open = true;
+        let branch = |name: &str| {
+            Some(ferrite_core::workspace::BranchStatus {
+                branch: Some(name.into()),
+                ..Default::default()
+            })
+        };
+        view.facts.set_branches(vec![
+            (harness, branch("worktree-pay-api-migration-cleanup")),
+            (notes, branch("feat/cash-webhook-retries")),
+            (sync, branch("fix/sync")),
+        ]);
         cx.notify();
     });
     (scene, setup)
+}
+
+/// `count` idle subagents under a fixture Main, so its nav row counts them.
+fn subagent_crew(feed: &Feed, prefix: &str, count: usize) {
+    for n in 0..count {
+        let mut info = AgentInfo::new(AgentKey::new(
+            Provider::Claude,
+            "fixture",
+            &format!("{prefix}-{n}"),
+        ));
+        info.parent = Some(Subject::Main);
+        feed.agent(ActivityEvent::Discovered(info));
+    }
 }
 
 /// `nodes` side by side (or stacked), each an equal share.

@@ -1093,7 +1093,11 @@ pub fn needs_you_row(entry: &NeedsYouRow) -> Stateful<Div> {
         .press_row()
         .tooltip(row_tooltip(row))
         .child(lead(components::status_dot(ATTENTION)))
-        .child(title_cell(row, row.name.clone()).ml(px(NAV_LEAD_GAP)))
+        .child(
+            title_cell(row, row.name.clone())
+                .flex_1()
+                .ml(px(NAV_LEAD_GAP)),
+        )
         .child(
             components::text_meta()
                 .flex()
