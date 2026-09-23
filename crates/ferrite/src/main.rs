@@ -60,16 +60,31 @@ fn keep_mouse_cursor_visible(cx: &mut App) {
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
-/// The four static JetBrains Mono instances, compiled in. gpui has no
-/// variation-axis support, so the prototype's one variable face cannot
-/// serve: each weight is its own file. All four share the typographic
+/// The bundled faces, compiled in. gpui has no variation-axis support, so
+/// each weight is its own static file. All four share the typographic
 /// family `theme::FONT_MONO`, and CoreText resolves the right face from
 /// `.font_weight(..)` — see that constant's own doc for the measured
 /// FontId table, and never reach a weight by family name.
-static JBM_REGULAR: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
-static JBM_MEDIUM: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf");
-static JBM_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf");
-static JBM_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
+static FONTS: [&[u8]; 4] = [
+    include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+];
+
+/// Registers the bundled faces. Call it before anything lays out text:
+/// `add_fonts` returns a Result, and a discarded one fails silently — you get
+/// the system font and no explanation.
+pub(crate) fn register_fonts(cx: &App) {
+    cx.text_system()
+        .add_fonts(
+            FONTS
+                .iter()
+                .map(|face| std::borrow::Cow::Borrowed(*face))
+                .collect(),
+        )
+        .expect("the bundled faces load");
+}
 
 fn main() {
     #[cfg(feature = "visual-reference")]
@@ -128,17 +143,7 @@ fn main() {
         .run(move |cx: &mut App| {
             keep_mouse_cursor_visible(cx);
             theme::init_components(cx);
-            // First, before anything can lay out text in it: the bundled mono
-            // face. `add_fonts` returns a Result and a discarded one fails
-            // silently — you get the system font and no explanation.
-            cx.text_system()
-                .add_fonts(vec![
-                    std::borrow::Cow::Borrowed(JBM_REGULAR),
-                    std::borrow::Cow::Borrowed(JBM_MEDIUM),
-                    std::borrow::Cow::Borrowed(JBM_SEMIBOLD),
-                    std::borrow::Cow::Borrowed(JBM_BOLD),
-                ])
-                .expect("the bundled JetBrains Mono faces load");
+            register_fonts(cx);
 
             let bindings = load_bindings(keymap::PLATFORM, cx);
             cx.bind_keys(bindings);
