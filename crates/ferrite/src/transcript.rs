@@ -16,8 +16,8 @@ use ferrite_core::{
     ThreadId,
 };
 use gpui::{
-    base::ElementExt, div, list, prelude::*, px, relative, App, Context, Entity, EventEmitter,
-    FocusHandle, IntoElement, MouseButton, Render, SharedString, Window,
+    base::ElementExt, div, list, prelude::*, px, relative, App, Context, Entity,
+    EventEmitter, FocusHandle, IntoElement, MouseButton, Render, SharedString, Window,
 };
 
 use self::{
@@ -325,17 +325,81 @@ impl TranscriptView {
     }
 
     /// Synchronize all logical native text fragments without mounting rows.
-    /// This uses the same row renderer as the viewport, with no control
-    /// factory, so copy order cannot diverge from presentation order.
+    /// This runs outside a draw, including while the window is occluded.
+    /// Never construct elements here: GPUI's fallback element arena retains
+    /// them indefinitely. Only plain text wrappers may be made and dropped.
     fn sync_members(&mut self, cx: &mut Context<Self>) {
         let selection = self.text_runs();
         let members = selection.capture_members(|| {
             for row in self.rows.rows() {
                 selection.begin_row();
-                let _ = self.render_row(row, &selection, None, cx);
+                self.collect_row_text(row, &selection);
             }
         });
         self.document.sync_members(members, cx);
+    }
+
+    fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
+        if let Some(diff) = row.turn_diff() {
+            let _ = selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new());
+            if self.tool_state(DisclosureId::TurnDiff(diff.turn_id.clone()))
+                == DisclosureState::Expanded
+            {
+                pane::collect_output_text(
+                    BlockId::TURN_DIFF,
+                    "turn-diff",
+                    &diff.diff,
+                    selection,
+                );
+            }
+        } else if let Some(source) = row.source() {
+            let block = &row.blocks()[0];
+            let _ =
+                selection.answer(block.markdown_run.unwrap_or(block.id), source.to_owned());
+        } else if let Some(activity) = ToolActivity::at_start(row.blocks()) {
+            let expanded = self
+                .tool_state(DisclosureId::Group(activity.leader().call.clone()))
+                == DisclosureState::Expanded;
+            pane::collect_activity_text(
+                activity,
+                expanded,
+                |call| self.tool_state(call),
+                selection,
+            );
+        } else if let Some(block) = row.blocks().first() {
+            let expanded = match &block.body {
+                Body::Tool(tool) => self.tool_state(DisclosureId::Tool(tool.call.clone())),
+                Body::Thinking(_) => self.tool_state(DisclosureId::Reasoning(block.id)),
+                _ => DisclosureState::Collapsed,
+            } == DisclosureState::Expanded;
+            pane::collect_block_text(block, expanded, selection);
+        }
+    }
+
+    /// Run only inside a test draw, where GPUI owns the temporary elements.
+    /// Compare every logical fragment (including offscreen rows) against the
+    /// actual renderer, so disclosure and copy projections cannot drift.
+    #[cfg(test)]
+    pub(crate) fn assert_text_projection(&self, cx: &mut Context<Self>) {
+        let selection = self.text_runs();
+        selection.capture_members(|| {
+            for row in self.rows.rows() {
+                selection.begin_row();
+                self.collect_row_text(row, &selection);
+            }
+        });
+        let logical = self.selection_source.registered(self.input.thread);
+        selection.capture_members(|| {
+            for row in self.rows.rows() {
+                selection.begin_row();
+                let _ = self.render_row(row, &selection, None, cx);
+            }
+        });
+        assert_eq!(
+            logical,
+            self.selection_source.registered(self.input.thread),
+            "logical copy fragments must match rendered row identities and text"
+        );
     }
 
     fn render_row(
@@ -360,6 +424,11 @@ impl TranscriptView {
                 Body::Heading { level, .. } => answer_size * theme::heading_scale(*level),
                 _ => answer_size,
             };
+            let pad_y = if blocks.len() == 1 && matches!(&blocks[0].body, Body::Paragraph { .. }) {
+                theme::COMMENTARY_PAD_Y
+            } else {
+                theme::ANSWER_PAD_Y
+            };
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -369,42 +438,24 @@ impl TranscriptView {
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .flex()
-                .gap(px(theme::ANSWER_GAP))
-                .py(px(
-                    if blocks.len() == 1 && matches!(&blocks[0].body, Body::Paragraph { .. }) {
-                        theme::COMMENTARY_PAD_Y
-                    } else {
-                        theme::ANSWER_PAD_Y
-                    },
-                ))
+                .relative()
+                // A fixed gutter needs no flex sizing. Giving Markdown the
+                // remaining block width avoids intrinsic-size passes over the
+                // entire growing document before its final wrapped layout.
+                .pl(px(theme::GUTTER_W + theme::ANSWER_GAP))
+                .py(px(pad_y))
                 .text_size(px(answer_size))
                 .child(
-                    // The answer wears Ferrite's mark where Claude Code's
-                    // transcript puts its `●`, at rest. The gutter cell keeps
-                    // `GUTTER_W` and the mark draws wider out of the flow, so
-                    // the overhang eats into the gap instead of moving the
-                    // prose; the offset drops it onto the first line's optical
-                    // center rather than the row's top.
                     div()
-                        .relative()
-                        .flex_shrink_0()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(pad_y
+                            + theme::ANSWER_MARK_TOP
+                            + (first_line_size - theme::FS_ANSWER) * theme::LINE_BODY / 2.))
                         .w(px(theme::GUTTER_W))
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(0.))
-                                .top(px(theme::ANSWER_MARK_TOP
-                                    + (first_line_size - theme::FS_ANSWER) * theme::LINE_BODY / 2.))
-                                .child(icons::ferrite_icon(theme::ANSWER_MARK)),
-                        ),
+                        .child(icons::ferrite_icon(theme::ANSWER_MARK)),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(selection.answer(first, source.to_owned())),
-                )
+                .child(selection.answer(first, source.to_owned()))
                 .into_any_element();
         }
         if let Some(activity) = ToolActivity::at_start(blocks) {

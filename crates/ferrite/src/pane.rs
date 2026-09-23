@@ -12,6 +12,9 @@
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
 
+mod text;
+pub(crate) use text::{collect_activity_text, collect_block_text, collect_output_text};
+
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
@@ -4663,11 +4666,7 @@ fn render_tool(
         ToolState::Failed(_) => BLOCKED,
         _ => SEP,
     };
-    let summary = if tool.summary.is_empty() {
-        tool.name.clone()
-    } else {
-        format!("{}({})", tool.name, tool_summary_line(tool))
-    };
+    let summary = text::tool_label(tool);
     let call = div().min_w_0().truncate().child(selection.line(
         block,
         summary,
@@ -4722,9 +4721,7 @@ fn render_tool(
     };
     // The tool's green verb already signals success. Keep a test tally in
     // its disclosure instead of replacing a removed badge with redundant prose.
-    let redundant_test_result = tool.state == ToolState::Ok
-        && is_test_run(tool)
-        && tool.result_line.as_deref().and_then(passed_count).is_some();
+    let redundant_test_result = text::redundant_test_result(tool);
     let verdicts: Vec<AnyElement> = tool_verdicts(tool)
         .into_iter()
         // A failed group already supplies the count; keep the child error and
@@ -4886,19 +4883,7 @@ where
     C: FnMut(&DisclosureId) -> Option<AnyElement>,
 {
     let call = activity.leader().call.clone();
-    let total = activity.blocks.len();
-    let unavailable = activity
-        .blocks
-        .iter()
-        .filter(
-            |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Unavailable),
-        )
-        .count();
-    let label = if unavailable > 0 {
-        format!("{total} tool calls · {unavailable} results unavailable")
-    } else {
-        activity.summary()
-    };
+    let label = text::activity_label(&activity);
     let counts = label
         .match_indices(|character: char| character.is_ascii_digit())
         .map(|(at, digit)| {
@@ -5409,11 +5394,7 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
                 code_color,
                 wash,
             } = kind.paint();
-            let body = match kind {
-                DiffKind::Added | DiffKind::Removed => line[1..].trim_start(),
-                DiffKind::Context => line.trim_start(),
-            }
-            .to_string();
+            let body = text::diff_body(line).to_owned();
             let mut row = div()
                 .flex()
                 .gap(px(theme::DIFF_GAP))
@@ -5882,7 +5863,10 @@ mod tests {
             };
             let selection = self.selection.clone();
             self.transcript
-                .update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+                .update(cx, |transcript, cx| {
+                    transcript.sync(input, selection, cx);
+                    transcript.assert_text_projection(cx);
+                });
             self.transcript.clone()
         }
     }

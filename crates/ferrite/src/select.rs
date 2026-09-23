@@ -67,7 +67,7 @@ impl TextRuns {
     }
 
     /// Reuse the presentation's text identities to describe logical membership.
-    /// This pass constructs elements, but never mounts, parses or lays them out.
+    /// The caller collects text without constructing or mounting UI elements.
     /// It runs when content or disclosure changes, never for an ordinary frame.
     pub fn capture_members(&self, build: impl FnOnce()) -> Vec<TextSelectionDocumentMember> {
         assert!(
