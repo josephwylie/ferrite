@@ -2608,13 +2608,16 @@ pub fn check_detail_ink(state: CheckState) -> u32 {
 }
 
 /// The checks card's column, for the cockpit to fill with `checks_head`
-/// and the `check_row`s it has wired. Its own width, because the runs it
-/// lists are named by the forge and a job name is longer than a menu row.
+/// and the `check_row`s it has wired. It grows to its content between
+/// `CHECKS_CARD_W` and `CHECKS_CARD_MAX_W`, because the runs it lists are
+/// named by the forge and a job name — or the tally — is longer than a
+/// menu row.
 pub fn checks_card() -> Div {
     div()
         .flex()
         .flex_col()
-        .w(px(theme::CHECKS_CARD_W))
+        .min_w(px(theme::CHECKS_CARD_W))
+        .max_w(px(theme::CHECKS_CARD_MAX_W))
         .p(px(theme::CHECKS_CARD_PAD))
         .font_family(theme::FONT_MONO)
         .text_size(px(theme::FS_UI))
@@ -2668,6 +2671,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         })
         .collect::<Vec<_>>();
     let tally_line = div()
+        .debug_selector(|| "checks-tally".into())
         .min_w_0()
         .truncate()
         .text_size(px(theme::FS_SM))

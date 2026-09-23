@@ -8776,7 +8776,8 @@ impl CockpitView {
         let card = menu::shell()
             .id("context-checks-card")
             .debug_selector(|| "context-checks-card".into())
-            .w(px(crate::theme::CHECKS_CARD_W))
+            .min_w(px(crate::theme::CHECKS_CARD_W))
+            .max_w(px(crate::theme::CHECKS_CARD_MAX_W))
             .p(px(0.))
             .child(card)
             .on_mouse_down(

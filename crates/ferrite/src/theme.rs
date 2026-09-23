@@ -980,6 +980,8 @@ pub const UNREAD_PULSE_MAX: f32 = 0.7;
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
 pub const CHECKS_CARD_W: f32 = 312.0;
+/// The card's widest: it grows to its tally and run names up to here.
+pub const CHECKS_CARD_MAX_W: f32 = 420.0;
 pub const CHECKS_CARD_PAD: f32 = SPACE_1;
 /// Between the card's heading and its runs.
 pub const CHECKS_CARD_GAP: f32 = SPACE_1;

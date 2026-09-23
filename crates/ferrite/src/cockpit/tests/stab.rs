@@ -816,3 +816,60 @@ fn the_empty_board_titlebar_keeps_the_dev_tag_on_the_inset(cx: &mut TestAppConte
         "{tag:?}"
     );
 }
+
+/// The checks card grows to its own tally: the counts line is never cut
+/// while the card is under its cap.
+#[gpui::test]
+fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("checks-card-width", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let status = branch_status_with_checks();
+    let tally = status.pr.as_ref().unwrap().tally();
+    let text = [
+        (tally.failing, "failed"),
+        (tally.pending, "running"),
+        (tally.passing, "passed"),
+        (tally.skipped, "skipped"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, word)| format!("{count} {word}"))
+    .collect::<Vec<_>>()
+    .join(" · ");
+    view.update(cx, |view, cx| {
+        view.facts.set_branches(vec![(thread, Some(status))]);
+        cx.notify();
+    });
+    tick(cx);
+    let mark = cx.debug_bounds("ci-mark-1").expect("the ci mark");
+    cx.simulate_mouse_down(mark.center(), MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let card = cx.debug_bounds("context-checks-card").expect("the card");
+    assert!(card.size.width >= px(crate::theme::CHECKS_CARD_W));
+    assert!(card.size.width <= px(crate::theme::CHECKS_CARD_MAX_W));
+    let tally = cx.debug_bounds("checks-tally").unwrap();
+    let natural = cx.update(|window, _| {
+        window
+            .text_system()
+            .shape_line(
+                text.clone().into(),
+                px(crate::theme::FS_SM),
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font: gpui::font(crate::theme::FONT_MONO),
+                    color: gpui::rgb(crate::theme::TEXT).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+            .width
+    });
+    assert!(
+        tally.size.width + px(0.5) >= natural,
+        "the tally `{text}` is whole: {tally:?} for {natural:?}"
+    );
+}
