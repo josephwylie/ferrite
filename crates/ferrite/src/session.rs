@@ -134,6 +134,26 @@ impl Spawner for Spawn {
         &mut self,
     ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
         let (tx, rx) = std::sync::mpsc::channel();
+        // Claude announces its menu only at initialize, so without this a
+        // new Claude model reached the pickers only once some Thread's
+        // Session had started on the CLI that knows it.
+        let claude = tx.clone();
+        std::thread::Builder::new()
+            .name("ferrite-claude-model-discovery".into())
+            .spawn(move || {
+                let program = ferrite_core::providers::discover::program(Provider::Claude);
+                let cwd = std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(std::env::temp_dir);
+                match ferrite_core::providers::commands::claude_models(&program, &cwd) {
+                    Ok(models) => {
+                        let _ = claude.send((Provider::Claude, models));
+                    }
+                    Err(error) => eprintln!("ferrite: could not discover Claude models: {error}"),
+                }
+            })
+            .ok()?;
         std::thread::Builder::new()
             .name("ferrite-model-discovery".into())
             .spawn(move || {

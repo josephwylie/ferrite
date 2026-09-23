@@ -1,13 +1,16 @@
 //! Provider-owned command discovery, without a Thread or model turn.
 //! Run off the UI thread; every probe is bounded and reaps its process.
+//! Claude's model menu rides the same initialize answer, so it is read
+//! here too; Codex has its own `model/list` (`codex::catalog`).
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::{store::Provider, SessionCommand};
+use crate::spawn::NoConsoleWindow;
+use crate::{store::Provider, ModelInfo, SessionCommand};
 use serde_json::{json, Value};
 
 pub type Discovery = mpsc::Receiver<io::Result<Vec<SessionCommand>>>;
@@ -22,6 +25,33 @@ fn list_with_timeout(
     cwd: &Path,
     timeout: Duration,
 ) -> io::Result<Vec<SessionCommand>> {
+    probe(program, provider, cwd, timeout, query)
+}
+
+/// The model menu the installed Claude CLI announces at initialize — the
+/// same menu a Session's handshake carries, without a Thread. Call off
+/// the UI thread.
+pub fn claude_models(program: &str, cwd: &Path) -> io::Result<Vec<ModelInfo>> {
+    probe(
+        program,
+        Provider::Claude,
+        cwd,
+        Duration::from_secs(10),
+        |writer, reader, _, _| {
+            claude_initialize(writer, reader, |capabilities| capabilities.models)
+        },
+    )
+}
+
+/// Start the provider's CLI, run `query` against its stdio, and reap the
+/// process on every exit.
+fn probe<T: Send + 'static>(
+    program: &str,
+    provider: Provider,
+    cwd: &Path,
+    timeout: Duration,
+    query: fn(ChildStdin, BufReader<ChildStdout>, Provider, &Path) -> io::Result<T>,
+) -> io::Result<T> {
     let mut command = Command::new(super::spawnable_program(program));
     match provider {
         Provider::Codex => {
@@ -39,6 +69,7 @@ fn list_with_timeout(
         }
     }
     let mut child = command
+        .no_console_window()
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -81,16 +112,13 @@ fn query(
     provider: Provider,
     cwd: &Path,
 ) -> io::Result<Vec<SessionCommand>> {
-    match provider {
-        Provider::Codex => write(
-            &mut writer,
-            json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"ferrite","version":env!("CARGO_PKG_VERSION")}}}),
-        )?,
-        Provider::Claude => write(
-            &mut writer,
-            json!({"type":"control_request","request_id":"commands","request":{"subtype":"initialize"}}),
-        )?,
+    if provider == Provider::Claude {
+        return claude_initialize(writer, reader, |capabilities| capabilities.commands);
     }
+    write(
+        &mut writer,
+        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"ferrite","version":env!("CARGO_PKG_VERSION")}}}),
+    )?;
     let mut line = String::new();
     let mut initialized = false;
     loop {
@@ -101,42 +129,56 @@ fn query(
                 "Provider closed during command discovery",
             ));
         }
-        match provider {
-            Provider::Claude => {
-                if let Some(capabilities) =
-                    super::claude::wire::parse_capabilities(&line, "commands")
-                {
-                    return Ok(capabilities.commands);
-                }
-                if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                    if value["response"]["request_id"] == "commands"
-                        && value["response"]["subtype"] == "error"
-                    {
-                        return Err(io::Error::other(value["response"]["error"].to_string()));
-                    }
-                }
+        if !initialized {
+            if let Some(result) = super::codex::wire::parse_response(&line, 1) {
+                result.map_err(io::Error::other)?;
+                write(&mut writer, json!({"method":"initialized"}))?;
+                write(
+                    &mut writer,
+                    json!({"id":2,"method":"skills/list","params":{"cwds":[cwd],"forceReload":true}}),
+                )?;
+                initialized = true;
             }
-            Provider::Codex => {
-                if !initialized {
-                    if let Some(result) = super::codex::wire::parse_response(&line, 1) {
-                        result.map_err(io::Error::other)?;
-                        write(&mut writer, json!({"method":"initialized"}))?;
-                        write(
-                            &mut writer,
-                            json!({"id":2,"method":"skills/list","params":{"cwds":[cwd],"forceReload":true}}),
-                        )?;
-                        initialized = true;
-                    }
-                } else if let Some(result) = super::codex::wire::parse_response(&line, 2) {
-                    let result = result.map_err(io::Error::other)?;
-                    if !result["data"].is_array() {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "skills/list carried no data",
-                        ));
-                    }
-                    return Ok(super::codex::wire::parse_skills(&result));
-                }
+        } else if let Some(result) = super::codex::wire::parse_response(&line, 2) {
+            let result = result.map_err(io::Error::other)?;
+            if !result["data"].is_array() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "skills/list carried no data",
+                ));
+            }
+            return Ok(super::codex::wire::parse_skills(&result));
+        }
+    }
+}
+
+/// Ask Claude's initialize and take what `pick` wants from the answer.
+fn claude_initialize<T>(
+    mut writer: impl Write,
+    mut reader: impl BufRead,
+    pick: impl FnOnce(super::ClaudeCapabilities) -> T,
+) -> io::Result<T> {
+    write(
+        &mut writer,
+        json!({"type":"control_request","request_id":"commands","request":{"subtype":"initialize"}}),
+    )?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Provider closed during command discovery",
+            ));
+        }
+        if let Some(capabilities) = super::claude::wire::parse_capabilities(&line, "commands") {
+            return Ok(pick(capabilities));
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            if value["response"]["request_id"] == "commands"
+                && value["response"]["subtype"] == "error"
+            {
+                return Err(io::Error::other(value["response"]["error"].to_string()));
             }
         }
     }

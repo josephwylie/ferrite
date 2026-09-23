@@ -174,25 +174,19 @@ fn a_cli_exactly_at_the_pin_is_accepted() {
     ClaudeSession::spawn(config(program)).expect("the pinned version must spawn");
 }
 
-/// A new major is a new protocol until someone proves otherwise. Refusing at
-/// spawn is the whole point: a 3.x CLI that silently changed the wire would
-/// otherwise fail somewhere deep in a turn, where the cause is invisible.
+/// The ceiling is soft: a new major is untested, not refused, so an
+/// operator who upgrades the CLI for newer models is never locked out.
 #[test]
-fn a_cli_at_the_next_major_is_refused_rather_than_trusted() {
-    match spawn_failure(stub("claude-future", "echo '3.0.0 (Claude Code)'")) {
-        ClaudeSpawnError::CliVersionUnsupported {
-            found,
-            supported_below,
-        } => {
-            assert_eq!(found, "3.0.0");
-            assert_eq!(supported_below, "3.0.0");
-        }
-        other => panic!("expected CliVersionUnsupported, got {other:?}"),
-    }
+fn a_cli_at_the_next_major_still_spawns() {
+    let program = stub(
+        "claude-future",
+        "case \"$1\" in --version) echo '3.0.0 (Claude Code)'; exit 0;; esac
+exit 0",
+    );
+    ClaudeSession::spawn(config(program)).expect("an untested major must still spawn");
 }
 
-/// The ceiling is exclusive, so the whole 2.x line stays supported: only a
-/// major bump is treated as an unknown protocol.
+/// The whole 2.x line is inside the tested window.
 #[test]
 fn the_last_release_below_the_next_major_is_accepted() {
     let program = stub(

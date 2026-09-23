@@ -188,25 +188,22 @@ fn a_cli_exactly_at_the_pin_is_accepted() {
     CodexSession::spawn(config(program)).expect("the pinned version must spawn");
 }
 
-/// A new major is a new protocol until someone proves otherwise. Refusing at
-/// spawn is the whole point: a 1.x CLI that silently changed the wire would
-/// otherwise fail somewhere deep in a turn, where the cause is invisible.
+/// The ceiling is soft: a new major is untested, not refused, so an
+/// operator who upgrades the CLI for newer models is never locked out.
 #[test]
-fn a_cli_at_the_next_major_is_refused_rather_than_trusted() {
-    match spawn_failure_of(stub("codex-future", "echo 'codex-cli 1.0.0'")) {
-        CodexSpawnError::CliVersionUnsupported {
-            found,
-            supported_below,
-        } => {
-            assert_eq!(found, "1.0.0");
-            assert_eq!(supported_below, "1.0.0");
-        }
-        other => panic!("expected CliVersionUnsupported, got {other:?}"),
-    }
+fn a_cli_at_the_next_major_still_spawns() {
+    let program = stub(
+        "codex-future",
+        &format!(
+            "case \"$1\" in --version) echo 'codex-cli 1.0.0'; exit 0;; esac
+{}",
+            PRELUDE_BODY
+        ),
+    );
+    CodexSession::spawn(config(program)).expect("an untested major must still spawn");
 }
 
-/// The ceiling is exclusive, so the whole 0.x line stays supported: only a
-/// major bump is treated as an unknown protocol.
+/// The whole 0.x line is inside the tested window.
 #[test]
 fn the_last_release_below_the_next_major_is_accepted() {
     let program = stub(

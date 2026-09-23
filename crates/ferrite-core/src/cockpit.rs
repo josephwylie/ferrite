@@ -5,7 +5,7 @@
 //! back while a turn runs. No process and no window — a Thread's events are
 //! fed in, and what the operator must answer comes out.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -573,6 +573,9 @@ pub struct Cockpit {
     suggestions: (Sender<Suggestion>, Receiver<Suggestion>),
     /// Whether completed turns may ask for and show predicted follow-ups.
     suggestions_enabled: bool,
+    /// Threads whose Session runs a CLI since replaced on disk. Each is
+    /// restarted on its own conversation at the first frame it is idle.
+    stale_sessions: BTreeSet<ThreadId>,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
@@ -604,6 +607,7 @@ impl Cockpit {
             limit: u64::MAX,
             suggestions: channel(),
             suggestions_enabled: true,
+            stale_sessions: BTreeSet::new(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
         })
@@ -744,49 +748,109 @@ impl Cockpit {
 
         let mut restarts = Vec::new();
         for (id, rss) in over {
-            self.visible_subjects.remove(&id);
-            let project = self.project_id(id);
-            let Some(thread) = self.threads.get_mut(&id) else {
-                continue;
-            };
-            let resume = thread.resume.clone();
-            let cwd = workspace::effective_cwd(
-                thread.session_project_root.as_deref(),
-                thread.workspace.as_ref(),
-            )
-            .map(Path::to_path_buf);
-            // Drop the old Session before asking for a new one: the leaking
-            // process must not outlive its replacement.
-            thread.session = None;
-            thread.replacement = None;
-            thread.replace_generation();
-            let spawned = self.spawner.start(SpawnRequest {
-                provider: thread.provider,
-                model: thread.model.as_deref(),
-                effort: thread.effort.as_deref(),
-                resume: resume.as_deref(),
-                cwd: cwd.as_deref(),
-                name: thread.title.as_deref(),
-                additional_directories: project_additional_directories(
-                    &self.registry,
-                    project,
-                    cwd.as_deref(),
-                ),
-            });
-            let note = match spawned {
-                Ok(session) => {
-                    thread.session = Some(session);
-                    // A fresh Session knows nothing: its first prompt must
-                    // carry the session-context preface again.
-                    thread.preface_pending = true;
+            let note = match self.respawn(id) {
+                None => continue,
+                Some(Ok(())) => {
                     format!("restarted — the Session had grown to {}", megabytes(rss))
                 }
-                Err(e) => format!("restart failed after {}: {e}", megabytes(rss)),
+                Some(Err(e)) => format!("restart failed after {}: {e}", megabytes(rss)),
             };
-            thread.apply(Input::Notice(note));
+            if let Some(thread) = self.threads.get_mut(&id) {
+                thread.apply(Input::Notice(note));
+            }
             restarts.push(Restart { thread: id, rss });
         }
         restarts
+    }
+
+    /// Replace `id`'s Session with a fresh one on the same conversation.
+    /// `None` when there is no such Thread.
+    fn respawn(&mut self, id: ThreadId) -> Option<io::Result<()>> {
+        self.stale_sessions.remove(&id);
+        self.visible_subjects.remove(&id);
+        let project = self.project_id(id);
+        let thread = self.threads.get_mut(&id)?;
+        let resume = thread.resume.clone();
+        let cwd = workspace::effective_cwd(
+            thread.session_project_root.as_deref(),
+            thread.workspace.as_ref(),
+        )
+        .map(Path::to_path_buf);
+        // Drop the old Session before asking for a new one: the old
+        // process must not outlive its replacement.
+        thread.session = None;
+        thread.replacement = None;
+        thread.replace_generation();
+        let spawned = self.spawner.start(SpawnRequest {
+            provider: thread.provider,
+            model: thread.model.as_deref(),
+            effort: thread.effort.as_deref(),
+            resume: resume.as_deref(),
+            cwd: cwd.as_deref(),
+            name: thread.title.as_deref(),
+            additional_directories: project_additional_directories(
+                &self.registry,
+                project,
+                cwd.as_deref(),
+            ),
+        });
+        Some(spawned.map(|session| {
+            thread.session = Some(session);
+            // A fresh Session knows nothing: its first prompt must carry
+            // the session-context preface again.
+            thread.preface_pending = true;
+        }))
+    }
+
+    /// The provider's CLI was replaced on disk: restart every Session of
+    /// `provider` on its own conversation so it runs the new release (and
+    /// announces its menu). A Thread mid-turn, waiting on the operator, or
+    /// with work queued is left alone until it is idle — see `pump`.
+    pub fn restart_sessions(&mut self, provider: Provider) {
+        let live = self.threads.iter().filter(|(_, state)| {
+            state.provider == provider && (state.session.is_some() || state.replacement.is_some())
+        });
+        self.stale_sessions.extend(live.map(|(id, _)| *id));
+    }
+
+    /// Restart each stale Session that has nothing in flight. A Thread
+    /// parked or deleted meanwhile needs nothing: its next Session starts
+    /// on the new CLI anyway.
+    fn restart_idle_stale(&mut self) {
+        if self.stale_sessions.is_empty() {
+            return;
+        }
+        let mut idle = Vec::new();
+        self.stale_sessions.retain(|id| {
+            let Some(state) = self.threads.get(id) else {
+                return false;
+            };
+            let Some(session) = &state.session else {
+                return false;
+            };
+            let view = state.activity.view();
+            let settled = !session.is_starting()
+                && state.replacement.is_none()
+                && !state.busy()
+                && !view.main_operator_turn()
+                && view.working_descendants() == 0
+                && view.decisions().is_empty()
+                && !state.native_queue.pending();
+            if settled {
+                idle.push(*id);
+            }
+            true
+        });
+        for id in idle {
+            let note = match self.respawn(id) {
+                None => continue,
+                Some(Ok(())) => "restarted on the updated CLI".to_string(),
+                Some(Err(e)) => format!("restart on the updated CLI failed: {e}"),
+            };
+            if let Some(thread) = self.threads.get_mut(&id) {
+                thread.apply(Input::Notice(note));
+            }
+        }
     }
 
     /// Start a Thread: a durable log, a workspace to work in, and a Session
@@ -2164,6 +2228,7 @@ impl Cockpit {
     /// down. What comes back is only the Panes that actually changed.
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
         self.poll_model_discovery();
+        self.restart_idle_stale();
         // Predictions that finished between frames. Collected before the
         // Thread walk so a landing suggestion repaints in the same frame.
         let landed = self.poll_suggestions();
@@ -2741,6 +2806,25 @@ impl Cockpit {
     /// to repaint. The view also refreshes any already-open model picker.
     pub fn take_models_changed(&mut self) -> bool {
         std::mem::take(&mut self.models_changed)
+    }
+
+    /// Ask the provider menus again, as at startup — after a CLI upgrade,
+    /// whose new release may announce models the old one did not.
+    pub fn rediscover_models(&mut self) {
+        self.model_discovery = self.spawner.discover_models();
+    }
+
+    /// How many Threads on `provider` hold a Session, running, starting or
+    /// being replaced. A CLI upgrade waits for none, so it never swaps a
+    /// binary out from under a live Session (Windows refuses to, mid-run).
+    pub fn live_sessions(&self, provider: Provider) -> usize {
+        self.threads
+            .values()
+            .filter(|state| {
+                state.provider == provider
+                    && (state.session.is_some() || state.replacement.is_some())
+            })
+            .count()
     }
 
     /// The last usable provider announcement, including one saved in an

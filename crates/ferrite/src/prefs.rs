@@ -377,6 +377,37 @@ pub fn fact(title: &'static str, value: SharedString) -> SettingItem {
     .layout(Axis::Vertical)
 }
 
+/// A row that says where something stands and, when there is something to
+/// do about it, offers the one button that does it.
+pub fn action(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    button: Option<SharedString>,
+    act: impl Fn(&mut App) + 'static,
+) -> SettingItem {
+    let act = Rc::new(act);
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, _, cx| {
+            let act = act.clone();
+            div().flex().when_some(button.clone(), |row, label| {
+                row.child(
+                    components::primary_button(id, false, cx)
+                        .debug_selector(move || id.into())
+                        .px(px(10.))
+                        .child(components::form_label(label, crate::theme::GROUND))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            act(cx);
+                        }),
+                )
+            })
+        }),
+    )
+    .description(detail.into())
+}
+
 /// The nav chrome's gear: the door to this panel.
 pub fn gear_button() -> Button {
     components::button("settings-gear")
