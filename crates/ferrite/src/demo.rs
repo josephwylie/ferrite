@@ -1082,6 +1082,7 @@ mod tests {
         assert_eq!(transcript.last_cost(), Some(0.0380));
         assert!(transcript.blocks().iter().all(|block| match &block.body {
             Body::Meta(text) => !text.contains('$'),
+            Body::TurnEnd(end) => !end.text().contains('$'),
             _ => true,
         }));
 

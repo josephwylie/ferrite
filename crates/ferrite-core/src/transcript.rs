@@ -65,6 +65,39 @@ pub enum Body {
     Notice(String),
     /// Bookkeeping the operator glances at — a turn's cost.
     Meta(String),
+    /// How a turn ended: its completion stamp, or the note that it was
+    /// interrupted. Typed so the turn footer can be drawn and searched
+    /// without reparsing its words; `TurnEnd::text` is what it says.
+    TurnEnd(TurnEnd),
+}
+
+/// The row a finished turn leaves behind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnEnd {
+    pub outcome: TurnOutcome,
+    /// Wall time from the prompt to the end, when observed.
+    pub elapsed_ms: Option<u64>,
+    /// The local clock when it completed, as the stamp shows it.
+    pub completed_at: Option<String>,
+}
+
+impl TurnEnd {
+    /// What the row says, and what copy and search see.
+    pub fn text(&self) -> String {
+        match &self.outcome {
+            TurnOutcome::Completed => format!(
+                "Completed · {:.1}s elapsed · {}",
+                self.elapsed_ms.unwrap_or_default() as f64 / 1_000.0,
+                self.completed_at.as_deref().unwrap_or_default()
+            ),
+            TurnOutcome::Interrupted => "interrupted".into(),
+            TurnOutcome::Error(message) => message.clone(),
+        }
+    }
+
+    pub fn completed(&self) -> bool {
+        self.outcome == TurnOutcome::Completed
+    }
 }
 
 /// A tool call as one row: what ran, on what, how it went, and the bounded
@@ -738,10 +771,12 @@ impl Transcript {
     /// and the pick that closes the blank Thread — so no two can disagree.
     pub fn offers_import(&self) -> bool {
         self.status() == Status::Idle
-            && self
-                .blocks
-                .iter()
-                .all(|block| matches!(block.body, Body::Notice(_) | Body::Meta(_)))
+            && self.blocks.iter().all(|block| {
+                matches!(
+                    block.body,
+                    Body::Notice(_) | Body::Meta(_) | Body::TurnEnd(_)
+                )
+            })
     }
 
     pub fn blocks(&self) -> &[Block] {
@@ -790,10 +825,11 @@ impl Transcript {
                 elapsed_ms,
                 completed_at,
             } => {
-                let elapsed = elapsed_ms as f64 / 1_000.0;
-                let id = self.push(Body::Meta(format!(
-                    "Completed · {elapsed:.1}s elapsed · {completed_at}"
-                )));
+                let id = self.push(Body::TurnEnd(TurnEnd {
+                    outcome: TurnOutcome::Completed,
+                    elapsed_ms: Some(elapsed_ms),
+                    completed_at: Some(completed_at),
+                }));
                 Update {
                     dirty: vec![id],
                     ..Update::default()
@@ -1210,9 +1246,11 @@ impl Transcript {
                     // no dollar value appears anywhere (#22 operator
                     // amendment); a completed turn ends without a row.
                     TurnOutcome::Completed => {}
-                    TurnOutcome::Interrupted => {
-                        dirty.push(self.push(Body::Meta("interrupted".into())))
-                    }
+                    TurnOutcome::Interrupted => dirty.push(self.push(Body::TurnEnd(TurnEnd {
+                        outcome: TurnOutcome::Interrupted,
+                        elapsed_ms: None,
+                        completed_at: None,
+                    }))),
                     TurnOutcome::Error(message) => {
                         dirty.push(self.push(Body::Notice(message.clone())))
                     }
@@ -1877,6 +1915,7 @@ mod tests {
             Body::Prompt(line) => line.clone(),
             Body::Thinking(thought) => thought.clone(),
             Body::Notice(text) | Body::Meta(text) => text.clone(),
+            Body::TurnEnd(end) => end.text(),
         }
     }
 
@@ -2941,7 +2980,13 @@ mod tests {
         assert_eq!(transcript.status(), Status::Idle);
         assert_eq!(transcript.last_cost(), None);
         let last = transcript.blocks().last().unwrap();
-        assert!(matches!(last.body, Body::Meta(_)));
+        assert!(matches!(
+            &last.body,
+            Body::TurnEnd(TurnEnd {
+                outcome: crate::TurnOutcome::Interrupted,
+                ..
+            })
+        ));
         assert_eq!(body_text(last), "interrupted");
     }
 

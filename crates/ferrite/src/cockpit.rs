@@ -9610,6 +9610,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
             }
             Body::Thinking(_) => continue,
             Body::Notice(text) | Body::Meta(text) => text.clone(),
+            Body::TurnEnd(end) => end.text(),
         };
         if !out.is_empty() {
             out.push_str("\n\n");

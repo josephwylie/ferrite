@@ -1971,6 +1971,7 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
             }
             Body::Notice(text) => line(text.clone(), ATTENTION).font_weight(FontWeight::SEMIBOLD),
             Body::Meta(text) => line(text.clone(), TEXT_2),
+            Body::TurnEnd(end) => line(end.text(), TEXT_2),
             Body::Thinking(text) => {
                 line(ferrite_core::progress::headline(text), TEXT_2).line_clamp(1)
             }
@@ -4611,6 +4612,10 @@ pub(crate) fn render_block(
         Body::Meta(text) => paragraph(row, TEXT_2)
             .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
+        // A turn's end draws as the Meta note it was (WP-A restyles it).
+        Body::TurnEnd(end) => paragraph(row, TEXT_2)
+            .child(selection.line(block.id, end.text(), Vec::new()))
+            .into_any_element(),
         // Code keeps literal indentation and highlighting without a
         // separate language header or raised container.
         Body::Code {
@@ -5861,6 +5866,10 @@ mod tests {
             outcome: TurnOutcome::Completed,
             cost_usd: Some(0.038),
         }));
+        transcript.apply(Input::CompletionObservation {
+            elapsed_ms: 4_100,
+            completed_at: "8:53 pm".into(),
+        });
         transcript.apply(Input::Notice("send failed: broken pipe".into()));
         transcript.apply(Input::Revived);
         for answer in answers.try_iter() {
@@ -6151,6 +6160,7 @@ mod tests {
                 Body::Thinking(_) => "thinking",
                 Body::Notice(_) => "notice",
                 Body::Meta(_) => "meta",
+                Body::TurnEnd(_) => "turn-end",
             })
             .collect();
         for wanted in [
@@ -6165,6 +6175,7 @@ mod tests {
             "thinking",
             "notice",
             "meta",
+            "turn-end",
         ] {
             assert!(kinds.contains(&wanted), "no {wanted} block in {kinds:?}");
         }

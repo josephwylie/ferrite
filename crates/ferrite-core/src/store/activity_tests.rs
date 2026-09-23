@@ -1004,8 +1004,9 @@ fn cache_restores_historical_failure_rows_without_replacing_matching_live_status
         .iter()
         .filter_map(|block| match &block.body {
             crate::transcript::Body::Meta(text) | crate::transcript::Body::Notice(text) => {
-                Some(text.as_str())
+                Some(text.clone())
             }
+            crate::transcript::Body::TurnEnd(end) => Some(end.text()),
             _ => None,
         })
         .collect();

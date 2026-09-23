@@ -5820,7 +5820,7 @@ mod tests {
                 .blocks()
                 .iter()
                 .filter_map(|block| match &block.body {
-                    Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
+                    Body::TurnEnd(end) if end.completed() => Some(end.text()),
                     _ => None,
                 })
                 .collect();
@@ -5881,8 +5881,17 @@ mod tests {
                 .unwrap()
         };
         let count = |cockpit: &Cockpit, subject: &Subject| {
-            cockpit.thread(thread).unwrap().activity().subject(subject).unwrap()
-            .transcript().blocks().iter().filter(|block| matches!(&block.body, Body::Meta(text) if text.starts_with("Completed"))).count()
+            cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(subject)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(|block| matches!(&block.body, Body::TurnEnd(end) if end.completed()))
+                .count()
         };
         emit(ActivityEvent::Content {
             key: key.clone(),
@@ -5998,9 +6007,7 @@ mod tests {
                 .transcript()
                 .blocks()
                 .iter()
-                .filter(
-                    |block| matches!(&block.body,Body::Meta(text) if text.starts_with("Completed"))
-                )
+                .filter(|block| matches!(&block.body, Body::TurnEnd(end) if end.completed()))
                 .count(),
             1,
             "a prefix reload must merge the completion observed after its checkpoint"
@@ -6016,7 +6023,7 @@ mod tests {
                 .blocks()
                 .iter()
                 .filter_map(|block| match &block.body {
-                    Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
+                    Body::TurnEnd(end) if end.completed() => Some(end.text()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

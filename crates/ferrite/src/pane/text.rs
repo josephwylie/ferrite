@@ -80,6 +80,9 @@ pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &Text
         Body::Notice(text) | Body::Meta(text) => {
             let _ = selection.line(block.id, text.clone(), Vec::new());
         }
+        Body::TurnEnd(end) => {
+            let _ = selection.line(block.id, end.text(), Vec::new());
+        }
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
