@@ -1,6 +1,6 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
-use crate::{components, decision, theme};
+use crate::{components, decision, icons, theme};
 use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
@@ -281,26 +281,75 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
         .unwrap_or_else(|| "Subagent".into())
 }
 
+/// What a subagent tab carries after its label.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct Marks {
+    working: bool,
+    waiting: bool,
+    failed: bool,
+}
+
+/// Busy dots while it works, the needs-you dot while a request waits, a
+/// drawn `✗` once it failed; idle, stopped and starting agents carry none
+/// (the tooltip keeps the status word).
+fn subject_marks(agent: &ferrite_core::activity::AgentView<'_>, waiting: bool) -> Marks {
+    Marks {
+        working: agent.fresh() && agent.status() == AgentStatus::Working,
+        waiting,
+        failed: matches!(agent.status(), AgentStatus::Failed | AgentStatus::NotFound),
+    }
+}
+
+/// One tab's laid-out width in the plain Tab variant: its inline padding
+/// and 1px edges, the label up to its cap, and each mark after a gap. The
+/// overflow model and the tab's own `w` both come from here.
+fn tab_width(label: f32, marks: Marks) -> f32 {
+    let mark = |on: bool, width: f32| {
+        if on {
+            theme::SUBJECT_TAB_INNER_GAP + width
+        } else {
+            0.
+        }
+    };
+    2. * (theme::SUBJECT_TAB_PAD_X + theme::SUBJECT_TAB_EDGE)
+        + label.min(theme::SUBJECT_LABEL_MAX_W)
+        + mark(marks.working, theme::BUSY_DOTS_W)
+        + mark(marks.waiting, theme::ATTENTION_DOT)
+        + mark(marks.failed, theme::SUBJECT_FAILED_MARK)
+}
+
+/// The one needs-you dot: a waiting tab, the overflow, the head's jump.
+fn attention_dot() -> Div {
+    div()
+        .flex_shrink_0()
+        .size(px(theme::ATTENTION_DOT))
+        .rounded_full()
+        .bg(rgb(theme::ATTENTION))
+}
+
+/// A working tab's busy dots: three `RUNNING` dots in a box exactly as wide
+/// as they are, lifting in turn; still under reduced motion.
 fn working_dots(animated: bool) -> AnyElement {
     let mut row = div()
         .flex()
+        .flex_shrink_0()
         .items_center()
-        .gap(px(2.))
-        .w(px(14.))
-        .h(px(12.));
+        .gap(px(theme::BUSY_DOT_GAP))
+        .w(px(theme::BUSY_DOTS_W))
+        .h(px(theme::LH_META));
     for index in 0usize..3 {
         let dot = div()
             .relative()
-            .size(px(2.))
+            .size(px(theme::BUSY_DOT_D))
             .rounded_full()
             .bg(rgb(theme::RUNNING));
         row = row.child(if animated {
             dot.with_animation(
                 ("working-dot", index),
-                Animation::new(Duration::from_millis(650)).repeat(),
+                Animation::new(Duration::from_millis(theme::BUSY_DOTS_MS)).repeat(),
                 move |dot, progress| {
                     let phase = progress * std::f32::consts::TAU - index as f32 * 0.7;
-                    dot.top(px(-phase.sin().max(0.) * 3.))
+                    dot.top(px(-phase.sin().max(0.) * theme::BUSY_DOT_LIFT))
                 },
             )
             .into_any_element()
@@ -430,20 +479,19 @@ impl CockpitView {
         let widths: Vec<f32> = children
             .iter()
             .map(|agent| {
-                let working = agent.fresh() && agent.status() == AgentStatus::Working;
                 let waiting = activity
                     .pending_decisions()
                     .iter()
                     .any(|request| request.subject.as_ref() == Some(&agent.subject()));
-                measure(&agent_name(agent.info())).ceil().min(96.)
-                    + 2.
-                    + if working { 19. } else { 0. }
-                    + if waiting { 9. } else { 0. }
+                tab_width(
+                    measure(&agent_name(agent.info())).ceil(),
+                    subject_marks(agent, waiting),
+                )
             })
             .collect();
         // The slot is laid out after the real title, branch, attention and usage
-        // controls. Match native Underline/XSmall's 10px inter-tab gap exactly.
-        let main_width = measure("Main").ceil() + 2.;
+        // controls; the plain Tab variant packs its tabs with no gap.
+        let main_width = tab_width(measure("Main").ceil(), Marks::default());
         let selected = children
             .iter()
             .position(|agent| agent.subject() == pane.selected);
@@ -451,29 +499,29 @@ impl CockpitView {
             if hidden == 0 {
                 0.
             } else {
-                10. + measure(&format!("+{hidden}")) + 8.
+                2. * (theme::SUBJECT_TAB_GAP + theme::CHIP_PAD_X) + measure(&format!("+{hidden}"))
             }
         };
         // Main and the selected Subject are navigation anchors. Reserve their
         // room first so resizing never hides the transcript being read.
         let minimum = main_width
-            + selected.map_or(0., |at| 10. + widths[at])
+            + selected.map_or(0., |at| widths[at])
             + overflow_width(children.len() - usize::from(selected.is_some()));
         let available = pane.subject_strip_width.max(minimum);
         let mut visible_indices: Vec<usize> = (0..children.len()).collect();
-        let all_width = main_width + widths.iter().sum::<f32>() + widths.len() as f32 * 10.;
+        let all_width = main_width + widths.iter().sum::<f32>();
         if all_width > available {
             visible_indices = selected.into_iter().collect();
-            let mut used = main_width + selected.map_or(0., |at| 10. + widths[at]);
+            let mut used = main_width + selected.map_or(0., |at| widths[at]);
             for (at, width) in widths.iter().enumerate() {
                 if selected == Some(at) {
                     continue;
                 }
                 let overflow = overflow_width(children.len() - visible_indices.len() - 1);
-                if used + 10. + width + overflow > available {
+                if used + width + overflow > available {
                     break;
                 }
-                used += 10. + width;
+                used += width;
                 visible_indices.push(at);
             }
             // Priority changes visibility, not the Provider's child order.
@@ -485,10 +533,11 @@ impl CockpitView {
         let nav = Rc::new(order);
         let interaction = pane.tab_interaction.clone();
         let identity = format!("subject-tabs-{}-{:?}", thread.get(), nav);
+        // The plain Tab variant: the active tab is a `FILL` pill (the kit's
+        // `tab_active`), never a sliding accent underline.
         let mut tabs = TabBar::new(SharedString::from(identity))
-            .underline()
             .xsmall()
-            .h(px(26.))
+            .h(px(theme::CHIP_H))
             .last_empty_space(div().w_0());
         if let Some(at) = nav.iter().position(|subject| subject == &pane.selected) {
             tabs = tabs.selected_index(at);
@@ -499,6 +548,7 @@ impl CockpitView {
                 gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
             })
             .w(px(main_width))
+            .rounded(px(theme::R_CHIP))
             .debug_selector(move || format!("subject-main-{}", thread.get()))
             .child(
                 div()
@@ -527,20 +577,31 @@ impl CockpitView {
                 .pending_decisions()
                 .iter()
                 .any(|request| request.subject.as_ref() == Some(&subject));
-            let working = agent.fresh() && agent.status() == AgentStatus::Working;
-            let mut content = div().flex().items_center().gap(px(5.)).min_w_0().child(
-                div()
-                    .max_w(px(96.))
-                    .truncate()
-                    .text_size(px(theme::FS_SM))
-                    .child(name.clone()),
-            );
-            if working {
+            let marks = subject_marks(agent, waiting);
+            let mut content = div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SUBJECT_TAB_INNER_GAP))
+                .min_w_0()
+                .child(
+                    div()
+                        .max_w(px(theme::SUBJECT_LABEL_MAX_W))
+                        .truncate()
+                        .text_size(px(theme::FS_SM))
+                        .child(name.clone()),
+                );
+            if marks.working {
                 content = content.child(working_dots(!cx.reduce_motion()));
             }
-            if waiting {
-                content =
-                    content.child(div().size(px(4.)).rounded_full().bg(rgb(theme::ATTENTION)));
+            if marks.waiting {
+                content = content.child(attention_dot());
+            }
+            if marks.failed {
+                content = content.child(icons::icon(
+                    icons::CLOSE,
+                    theme::SUBJECT_FAILED_MARK,
+                    theme::BLOCKED,
+                ));
             }
             let selector = format!(
                 "subject-agent-{}-{}",
@@ -554,6 +615,7 @@ impl CockpitView {
             let tab = Tab::new()
                 .aria_label(tooltip.clone())
                 .w(px(widths[visible_indices[at]]))
+                .rounded(px(theme::R_CHIP))
                 .debug_selector(move || selector.clone())
                 .child(content)
                 .tooltip(move |window, cx| {
@@ -577,7 +639,7 @@ impl CockpitView {
             .items_center()
             .flex_1()
             .min_w(px(minimum))
-            .h(px(26.))
+            .h(px(theme::SUBJECT_STRIP_H))
             .debug_selector(move || format!("subject-strip-{}", thread.get()))
             .child(tabs);
         if visible_indices.len() < children.len() {
@@ -603,21 +665,37 @@ impl CockpitView {
                 })
                 .collect();
             let subjects: Vec<_> = hidden.iter().map(|agent| agent.subject()).collect();
+            // A request waiting behind the overflow still shows its dot.
+            let hidden_waiting = hidden.iter().any(|agent| {
+                activity
+                    .pending_decisions()
+                    .iter()
+                    .any(|request| request.subject.as_ref() == Some(&agent.subject()))
+            });
             let weak = cx.entity().downgrade();
             let picking = weak.clone();
             strip = strip.child(components::ChoiceMenu {
                 id: format!("subject-overflow-{}", thread.get()).into(),
                 trigger: components::button(("subject-overflow", thread.get()))
-                    .text()
                     .tab_stop(true)
-                    .h(px(24.))
-                    .px(px(4.))
-                    .ml(px(10.))
-                    .rounded(px(0.))
+                    .h(px(theme::CHIP_H))
+                    .px(px(theme::CHIP_PAD_X))
+                    .mx(px(theme::SUBJECT_TAB_GAP))
+                    .rounded(px(theme::R_CHIP))
                     .accessibility_label("More subagents")
                     .tooltip("More subagents")
                     .debug_selector(move || format!("subject-overflow-{}", thread.get()))
-                    .label(format!("+{}", hidden.len())),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(theme::SUBJECT_TAB_INNER_GAP))
+                            .text_size(px(theme::FS_SM))
+                            .line_height(px(theme::LH_META))
+                            .text_color(rgb(theme::TEXT_MUTED))
+                            .child(format!("+{}", hidden.len()))
+                            .when(hidden_waiting, |label| label.child(attention_dot())),
+                    ),
                 choices,
                 open: pane.agent_menu_open,
                 return_focus: pane.transcript_focus.clone(),
@@ -687,7 +765,7 @@ impl CockpitView {
         let release_focus = focus.clone();
         tab.track_focus(&focus.clone().tab_index(0).tab_stop(true))
             .tab_stop(true)
-            .focus_visible(|style| style.bg(rgb(theme::HOVER)))
+            .focus_visible(components::control_focus)
             .on_click(cx.listener(move |view, event, window, cx| {
                 // The TabBar identity includes the ordered Subjects. A reorder
                 // discards native positional press state before any release.
@@ -753,10 +831,20 @@ impl CockpitView {
                     .map(|agent| agent_name(agent.info()))
             })
             .unwrap_or_else(|| "Subagent".into());
+        // `↳`: this transcript is a child of the Thread's Main.
         div()
-            .truncate()
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_1_5))
+            .min_w_0()
             .debug_selector(move || format!("subject-title-{}", thread.get()))
-            .child(label)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child("↳"),
+            )
+            .child(div().min_w_0().truncate().child(label))
             .into_any_element()
     }
 
@@ -776,7 +864,10 @@ impl CockpitView {
         if pending.is_empty() {
             return None;
         }
-        let text = String::from("Jump to next request");
+        let text = match CockpitView::key_label("cockpit::NextDecision") {
+            Some(key) => format!("Jump to next request ({key})"),
+            None => "Jump to next request".into(),
+        };
         let target = next_request(
             pending
                 .iter()
@@ -788,13 +879,12 @@ impl CockpitView {
                 components::button(("agent-attention", thread.get()))
                     .tab_stop(true)
                     .debug_selector(move || format!("agent-attention-{}", thread.get()))
-                    .text()
-                    .size(px(20.))
+                    .size(px(theme::ATTENTION_JUMP))
                     .p_0()
-                    .rounded(px(0.))
-                    .accessibility_label(text.clone())
+                    .rounded(px(theme::R_CHIP))
+                    .accessibility_label("Jump to next request")
                     .tooltip(text)
-                    .child(div().size(px(5.)).rounded_full().bg(rgb(theme::ATTENTION)))
+                    .child(attention_dot())
                     .on_click(cx.listener(move |view, _, window, cx| {
                         view.select_subject(thread, target.clone(), window, cx)
                     })),
@@ -815,49 +905,68 @@ impl CockpitView {
             .activity()
             .subject(&pane.selected)?;
         let coverage = if !subject.retained() {
-            "Loading saved transcript…"
+            "loading saved transcript…"
         } else {
             match subject.coverage() {
-                TranscriptCoverage::Unavailable => "Transcript unavailable",
-                TranscriptCoverage::ToolActivity => "Tool activity only",
-                TranscriptCoverage::Live => "Live transcript · earlier messages may be unavailable",
-                TranscriptCoverage::Partial => "Partial transcript",
-                TranscriptCoverage::Complete => "Subagent transcript",
+                TranscriptCoverage::Unavailable => "transcript unavailable",
+                TranscriptCoverage::ToolActivity => "tool activity only",
+                TranscriptCoverage::Live => "live transcript · earlier messages may be unavailable",
+                TranscriptCoverage::Partial => "partial transcript",
+                TranscriptCoverage::Complete => "subagent transcript",
             }
         };
         let error = pane.history_error.clone();
+        // A read-only Composer: the Composer's own ground and edge in its
+        // slot, a dimmed `❯` (nothing to type here), what this transcript
+        // covers, and the way back to Main.
         Some(
             native_keys(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
-                    .justify_between()
-                    .gap(px(8.))
+                    .gap(px(theme::SPACE_2))
                     .px(px(theme::PANE_PAD_X))
-                    .py(px(10.))
+                    .py(px(theme::SPACE_1_5))
                     .bg(rgb(theme::RAISED))
-                    .child(div().min_w_0().truncate().child(components::label(
-                        error.as_deref().unwrap_or(coverage),
-                        if error.is_some() {
-                            theme::BLOCKED
-                        } else {
-                            theme::TEXT_MUTED
-                        },
-                    )))
+                    .border_t_1()
+                    .border_color(rgba(theme::COMPOSER_EDGE))
+                    .rounded_bl(px(theme::R_PANE - 1.))
+                    .rounded_br(px(theme::R_PANE - 1.))
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(theme::FS_SM))
+                    .line_height(px(theme::LH_META))
+                    .child(components::prompt_mark(theme::TEXT_MUTED))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(if error.is_some() {
+                                theme::BLOCKED
+                            } else {
+                                theme::TEXT_MUTED
+                            }))
+                            .child(SharedString::from(
+                                error.as_deref().unwrap_or(coverage).to_string(),
+                            )),
+                    )
                     .when(error.is_some(), |footer| {
                         footer.child(
-                            components::button(("retry-child-history", thread.get()))
-                                .tab_stop(true)
-                                .label("Retry")
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.reload_subject_history(thread, cx)
-                                })),
+                            components::ghost_button(
+                                ("retry-child-history", thread.get()),
+                                "Retry",
+                                cx,
+                            )
+                            .tab_stop(true)
+                            .on_click(cx.listener(
+                                move |view, _, _, cx| view.reload_subject_history(thread, cx),
+                            )),
                         )
                     })
                     .child(
-                        components::button(("return-main", thread.get()))
+                        components::ghost_button(("return-main", thread.get()), "Back to Main", cx)
                             .tab_stop(true)
-                            .label("Return to Main")
                             .debug_selector(move || format!("return-main-{}", thread.get()))
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 view.select_subject(thread, Subject::Main, window, cx)

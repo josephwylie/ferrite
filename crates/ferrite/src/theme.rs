@@ -1140,15 +1140,17 @@ pub const DECISION_KEYS_GAP: f32 = SPACE_3;
 /// The L2 Decision body: the cell's padding, 6px between its lines.
 pub const DECISION_L2_GAP: f32 = SPACE_1_5;
 
-/// Subagent tabs: the kit's plain `Tab` variant at XSmall (18px high, 8px
-/// inline padding), the active tab a `FILL` pill, 2px apart; labels
-/// truncate at 112px. A marker sits 6px after its label.
+/// Subagent tabs: the kit's plain `Tab` variant at XSmall (20px high, 8px
+/// inline padding inside a 1px edge each side, packed with no gap), the
+/// active tab a `FILL` pill; labels truncate at 112px. A mark sits 6px
+/// after its label; the `+N` overflow keeps 4px either side.
 pub const SUBJECT_TAB_PAD_X: f32 = SPACE_2;
-pub const SUBJECT_TAB_GAP: f32 = SPACE_0_5;
+pub const SUBJECT_TAB_EDGE: f32 = 1.0;
+pub const SUBJECT_TAB_GAP: f32 = SPACE_1;
 pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_1_5;
 pub const SUBJECT_LABEL_MAX_W: f32 = 112.0;
-/// The strip's row: the head's 20px control line.
-pub const SUBJECT_STRIP_H: f32 = CHIP_H;
+/// The strip's row: the 20px pills with 2px of air above and below.
+pub const SUBJECT_STRIP_H: f32 = CHIP_H + 2.0 * SPACE_0_5;
 /// A working tab's busy dots: three 2px dots 2px apart (10px, no slack),
 /// lifting 2px on a 650ms loop; still under reduced motion.
 pub const BUSY_DOT_D: f32 = SPACE_0_5;
