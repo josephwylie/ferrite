@@ -320,6 +320,9 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-F)
 
     // ---- WP-G states (append above the end line)
+    ("navfilter", &["app"]),
+    ("navprojects", &["app"]),
+    ("navrail", &["app"]),
     // (end WP-G)
 ];
 
@@ -674,6 +677,46 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-F)
 
         // ---- WP-G scene arms (append above the end line)
+        // The nav scene with the Project filter's menu down, and the
+        // focused Thread's row renaming (the editor must not move the row).
+        "navfilter" => {
+            let (scene, _) = nav();
+            let setup: Setup = Box::new(|view, _, cx| {
+                if let Some(thread) = view.cockpit.roster().focused_thread() {
+                    view.start_rename(super::RenameTarget::Thread(thread), cx);
+                }
+                view.nav_filter_open = true;
+                view.nav_parked_open = true;
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // Project order, with the order menu down and the Parked fold open.
+        "navprojects" => {
+            let (scene, _) = nav();
+            let setup: Setup = Box::new(|view, _, cx| {
+                view.change_settings(
+                    |settings| {
+                        settings.thread_list_order =
+                            ferrite_core::settings::ThreadListOrder::ByProject
+                    },
+                    cx,
+                );
+                view.nav_order_open = true;
+                view.nav_parked_open = true;
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // The collapsed rail.
+        "navrail" => {
+            let (scene, _) = nav();
+            let setup: Setup = Box::new(|view, _, cx| {
+                view.nav_parked_open = true;
+                view.set_nav_collapsed(true, cx);
+            });
+            (scene, setup)
+        }
         // (end WP-G)
         _ => legacy(state),
     }

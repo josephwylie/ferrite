@@ -464,9 +464,10 @@ impl Render for NavDragPreview {
 }
 
 /// What a row says while a drag hovers it: the wash of the answer core
-/// already knows. Soft draws the ring version of this as a 1px inset, which
-/// a row with no border cannot carry without moving 2px mid-drag, so the
-/// wash alone speaks — `--drop-valid` or `--drop-refused`, never both.
+/// already knows — `DROP_WASH`, the accent as a ground, where the drop would
+/// land, or `BLOCKED_WASH` where core refuses it. The wash alone speaks: a
+/// ring would need an edge the rows do not have, and adding one mid-drag
+/// would move the row.
 fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target: DropTarget) -> E {
     element.drag_over::<NavDrag>(move |style, drag, _, _| {
         if matches!(groups.preview_drop(drag.drag, target), Plan::Refused(_)) {
@@ -5948,7 +5949,6 @@ impl CockpitView {
 
         // Drafts are not rows: nothing runs, nothing parks, nothing to aim
         // the nav at (#29) — the grid is where a draft lives.
-        let focused = self.cockpit.roster().focused_thread();
         let groups: Vec<nav::GroupBlock> = self
             .cockpit
             .groups()
@@ -5987,7 +5987,6 @@ impl CockpitView {
                     // Summarize the whole Group even when the filter hides
                     // some member rows; opening it still shows every Pane.
                     projects: project_summary,
-                    current: focused.is_some_and(|thread| group.members.contains(&thread)),
                     members,
                 })
             })
@@ -6160,6 +6159,7 @@ impl CockpitView {
             name: self.facts.name(thread),
             status,
             project: facts.and_then(|facts| facts.project_label.clone()),
+            branch: facts.and_then(|facts| facts.branch.clone()),
             provider: self
                 .cockpit
                 .thread(thread)
@@ -9325,6 +9325,7 @@ impl CockpitView {
             menu = menu.child(row);
         }
         let count = state.filter.options.len();
+        menu = menu.child(crate::components::menu_separator());
         menu = menu.child(nav::filter_action(count, "Add Project…").on_mouse_down(
             MouseButton::Left,
             cx.listener(|view, _: &MouseDownEvent, _, cx| {
@@ -9347,17 +9348,11 @@ impl CockpitView {
         let origin = self.cockpit.roster().view();
         let mut tree = nav::nav_tree(&self.nav_scroll);
         if let Some(error) = &self.group_error {
-            tree = tree.child(
-                div()
-                    .px(px(crate::theme::ROW_PAD_X))
-                    .py(px(crate::theme::ROW_PAD_Y))
-                    .rounded(px(crate::theme::R_CONTROL))
-                    .text_size(px(crate::theme::FS_SM))
-                    .text_color(rgb(crate::theme::ATTENTION))
-                    .bg(rgba(crate::theme::ATTENTION_WASH))
-                    .child(error.clone()),
-            );
+            tree = tree.child(nav::notice(error.clone()));
         }
+        // An empty tree names the Project the filter chose; `All Projects`
+        // is a filter state, not a Project, and is not named.
+        let filtered = self.nav_filter.map(|_| state.filter.label.as_ref());
         if state.thread_list_order == ThreadListOrder::ByProject {
             for (index, section) in state.project_sections.iter().enumerate() {
                 let heading =
@@ -9379,10 +9374,7 @@ impl CockpitView {
                 }
             }
             if state.project_sections.is_empty() {
-                tree = tree.child(nav::empty_filter(
-                    &state.filter.label,
-                    !state.parked.is_empty(),
-                ));
+                tree = tree.child(nav::empty_filter(filtered, !state.parked.is_empty()));
             }
             return tree;
         }
@@ -9438,10 +9430,7 @@ impl CockpitView {
             ),
         );
         if state.order.is_empty() {
-            tree = tree.child(nav::empty_filter(
-                &state.filter.label,
-                !state.parked.is_empty(),
-            ));
+            tree = tree.child(nav::empty_filter(filtered, !state.parked.is_empty()));
         }
         tree
     }
@@ -9538,11 +9527,12 @@ impl CockpitView {
             group,
             self.editable_group_title(id, group.title.clone(), cx),
         );
+        let badge = group.title.clone();
         let mut block = nav::group_block()
             // A Group separates itself from whatever is above it: nothing
             // when it opens the tree, the 16px band from another Group —
             // prepended below, because that band is a drop target and not a
-            // margin — and the solos' own 24px from a run of rows.
+            // margin — and the same 16px from a run of rows.
             .when(!first_in_tree && !after_group, |block| {
                 block.mt(px(crate::theme::SOLOS_TOP))
             })
@@ -9557,7 +9547,10 @@ impl CockpitView {
                         drag: Drag::Group(id),
                         origin,
                     },
-                    move |_, _, _, cx| cx.new(|_| NavDragPreview("group".into())),
+                    move |_, _, _, cx| {
+                        let badge = badge.clone();
+                        cx.new(|_| NavDragPreview(badge))
+                    },
                 )
                 .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
                     view.apply_drop(*drag, DropTarget::GroupHeader(id), cx)
@@ -9681,9 +9674,9 @@ impl CockpitView {
         };
         let title = self.editable_thread_title(thread, row.name.clone(), cx);
         let head = if compact {
-            nav::project_thread_row_with_title(row, title, group.is_some())
+            nav::project_thread_row_with_title(row, title, group.is_some(), cx.reduce_motion())
         } else {
-            nav::thread_row_with_title(row, title)
+            nav::thread_row_with_title(row, title, cx.reduce_motion())
         };
         let badge = self.facts.name(thread);
         drop_feedback(head, self.cockpit.groups().clone(), target)
@@ -16009,11 +16002,17 @@ mod tests {
                 .position(|row| row.thread == thread)
                 .expect("every open Thread has a row")
         };
-        // Row `n`: the 42px window band, the 42px nav head, the tree's 8px
-        // inset, n rows of `THREAD_ROW_H` each with the 2px between siblings, then
-        // halfway down its own row. No strip, no section header.
-        let row_y =
-            |n: usize| px(42. + 42. + 8. + n as f32 * (crate::theme::THREAD_ROW_H + 2.) + 28.);
+        // Row `n`: the window band, the nav head, the tree's inset, n rows
+        // of `THREAD_ROW_H` each with the gap between siblings, then halfway
+        // down its own row. No strip, no section header.
+        let row_y = |n: usize| {
+            use crate::theme::*;
+            px(WIN_CHROME_H
+                + NAV_HEAD_H
+                + NAV_TREE_PAD
+                + n as f32 * (THREAD_ROW_H + MEMBER_GAP)
+                + THREAD_ROW_H / 2.)
+        };
         let (second, first) = view.read_with(cx, |view, _| (row_of(view, 1), row_of(view, 0)));
         cx.simulate_click(
             gpui::point(px(104.), row_y(second)),
