@@ -1018,7 +1018,12 @@ pub fn render_pane(
             group_head(GroupHead {
                 key,
                 name: view.name.clone(),
-                dot: Some(head_dot(view.is_main(), state, attention, status)),
+                dot: Some(head_dot(
+                    view.is_main(),
+                    dot_state(state, state_word(state, kind, wall, transcript).as_ref()),
+                    attention,
+                    status,
+                )),
                 unread: attention && view.is_main(),
                 reduce_motion,
                 title,
@@ -1983,6 +1988,20 @@ fn state_word(
     })
 }
 
+/// The state a Thread's dot shows: its wall state, squared with the state
+/// word beside it so the two can never disagree. A turn that ended in an
+/// error reads `failed`, so its dot is `BLOCKED` like a closed Session's;
+/// a `failing` word is always a `BLOCKED` dot. Every surface that draws a
+/// Thread's dot — the nav, the rail, the Group head, the titlebar — reads
+/// it through here.
+pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState {
+    match word {
+        Some(HeadSlot::Failed) if state != WallState::Blocked => WallState::Blocked,
+        Some(HeadSlot::Failing(_)) => WallState::Failing,
+        _ => state,
+    }
+}
+
 /// A Thread's face away from its Pane — the Solo titlebar, which carries
 /// the Thread the headless Solo Pane does not (C2): its status dot and its
 /// state word, read exactly as the Pane reads them.
@@ -2008,9 +2027,10 @@ pub(crate) fn thread_face(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
+    let word = state_word(state, kind, card, Some(transcript));
     (
-        crate::cockpit::thread_status(state, unread),
-        state_word(state, kind, card, Some(transcript)),
+        crate::cockpit::thread_status(dot_state(state, word.as_ref()), unread),
+        word,
     )
 }
 

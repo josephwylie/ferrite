@@ -663,6 +663,41 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
 
 // ------------------------------------------------------ operator rulings
 
+/// Fix 2: a Thread whose turn ended in an error reads `failed` in the nav,
+/// and its dot is `BLOCKED` there, in the rail and in the titlebar — never
+/// the idle grey beside a red word.
+#[gpui::test]
+fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("failed-dot", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    for event in [
+        SessionEvent::TextDelta {
+            text: "Running the pump test.".into(),
+        },
+        SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Error("API Error: 529 overloaded".into()),
+            cost_usd: None,
+        },
+    ] {
+        fake.streams.borrow()[0].send(event).unwrap();
+    }
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let thread = view.cockpit.threads()[0];
+        let row = view.thread_row(thread);
+        assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
+        assert_eq!(
+            thread_status(row.status.wall(), row.unread).ink,
+            crate::theme::BLOCKED,
+            "and the nav and rail dot say it too"
+        );
+        let (face, word) = pane::thread_face(view.cockpit.thread(thread).unwrap(), None, false);
+        assert_eq!(word, Some(pane::HeadSlot::Failed));
+        assert_eq!(face.ink, crate::theme::BLOCKED, "the titlebar's dot agrees");
+    });
+}
+
 /// Q6 (the operator's ruling): on a board a waiting cell's edge is
 /// `ATTENTION_EDGE`, ochre at 35%, and the single answer-target cell alone
 /// wears full `ATTENTION`; in Solo no state recolours the edge — the docked

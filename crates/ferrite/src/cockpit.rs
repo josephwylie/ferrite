@@ -6778,20 +6778,6 @@ impl CockpitView {
     fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
         let facts = self.facts.get(thread);
         let open = self.cockpit.thread(thread);
-        let status = match open {
-            None => nav::RowStatus::Parked,
-            Some(open) => {
-                let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
-                nav::RowStatus::of(pane::wall_state(
-                    Some(open.transcript()),
-                    open.activity()
-                        .pending_decisions()
-                        .iter()
-                        .any(|pending| pending.decision.blocks_execution()),
-                    failing,
-                ))
-            }
-        };
         let now = std::time::SystemTime::now();
         // Unread is its own axis: a Thread that finished while the operator
         // was elsewhere keeps its state and wears the unread face
@@ -6801,6 +6787,25 @@ impl CockpitView {
         // never disagree about a Thread (C10).
         let slot =
             open.and_then(|open| pane::thread_face(open, facts.map(|facts| &facts.wall), unread).1);
+        // The dot is squared with that word (`pane::dot_state`): a row whose
+        // tail says `failed` never wears an idle dot.
+        let status = match open {
+            None => nav::RowStatus::Parked,
+            Some(open) => {
+                let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
+                nav::RowStatus::of(pane::dot_state(
+                    pane::wall_state(
+                        Some(open.transcript()),
+                        open.activity()
+                            .pending_decisions()
+                            .iter()
+                            .any(|pending| pending.decision.blocks_execution()),
+                        failing,
+                    ),
+                    slot.as_ref(),
+                ))
+            }
+        };
         let age = facts
             .and_then(|facts| facts.last_used)
             .map(|at| crate::facts::since_label(at, now))
