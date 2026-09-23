@@ -299,9 +299,12 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-A)
 
     // ---- WP-B states (append above the end line)
+    ("prose", &["narrow", "wide", "app"]),
     // (end WP-B)
 
     // ---- WP-C states (append above the end line)
+    ("chrome", &["narrow", "wide", "app"]),
+    ("emptyboard", &["app"]),
     // (end WP-C)
 
     // ---- WP-D states (append above the end line)
@@ -547,9 +550,76 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-A)
 
         // ---- WP-B scene arms (append above the end line)
+        "prose" => (prose(), none),
         // (end WP-B)
 
         // ---- WP-C scene arms (append above the end line)
+        // The Pane head with a checkout, drift, dirt and a PR whose CI is
+        // failing, with its checks card open under the chip.
+        "chrome" => {
+            let (scene, _) = legacy("live");
+            let setup: Setup = Box::new(|view, window, cx| {
+                use ferrite_core::workspace::{
+                    BranchStatus, Check, CheckState, PrState, PullRequest,
+                };
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                let run = |name: &str, state, detail: &str, url: bool| Check {
+                    name: name.into(),
+                    workflow: Some("CI".into()),
+                    state,
+                    detail: detail.into(),
+                    url: url.then(|| "https://example.com/run".into()),
+                };
+                view.facts.set_branches(vec![(
+                    thread,
+                    Some(BranchStatus {
+                        branch: Some("feat/pane-chrome".into()),
+                        upstream: Some("origin/feat/pane-chrome".into()),
+                        ahead: 2,
+                        behind: 1,
+                        dirty: 3,
+                        pr: Some(PullRequest {
+                            number: 48,
+                            state: PrState::Open,
+                            draft: false,
+                            checks: Some(CheckState::Failing),
+                            runs: vec![
+                                run(
+                                    "test (windows-latest)",
+                                    CheckState::Failing,
+                                    "failure",
+                                    true,
+                                ),
+                                run(
+                                    "test (macos-latest)",
+                                    CheckState::Pending,
+                                    "in_progress",
+                                    true,
+                                ),
+                                run("fmt", CheckState::Passing, "success", true),
+                                run("clippy", CheckState::Skipped, "skipped", false),
+                            ],
+                        }),
+                    }),
+                )]);
+                let width = f32::from(window.viewport_size().width);
+                view.context_checks =
+                    Some((thread, gpui::point(gpui::px(width - 24.), gpui::px(118.))));
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // Every Pane closed: the board's start hint.
+        "emptyboard" => {
+            let mut scene = Scene::new("emptyboard");
+            let ferrite = scene.project("ferrite");
+            let _ = scene.open(Provider::Claude, &ferrite, "Closed");
+            let setup: Setup = Box::new(|view, _, cx| {
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                view.close_pane(ferrite_core::roster::PaneIdentity::Thread(thread), cx);
+            });
+            (scene, setup)
+        }
         // (end WP-C)
 
         // ---- WP-D scene arms (append above the end line)
@@ -1347,6 +1417,42 @@ fn notifications() -> (Scene, Setup) {
 // (end WP-A)
 
 // ---- WP-B scene builders (append above the end line)
+
+/// Markdown the other states do not reach: file chips (with a line, an
+/// image, a long name), an html fence with Preview, a highlighted Rust fence,
+/// headings mid-answer and a table with aligned columns.
+fn prose() -> Scene {
+    let mut scene = Scene::new("prose");
+    let checkout = std::env::current_dir().unwrap();
+    let (thread, sender) = scene.open(Provider::Claude, &checkout, "");
+    scene
+        .core
+        .send(thread, "Where does the answer layout live?".into());
+    sender.text(
+        "The answer row is built in [transcript.rs](crates/ferrite/src/transcript.rs:405), and its \
+         Markdown in [rich.rs](crates/ferrite/src/rich.rs). The icon is \
+         [app-icon.png](crates/ferrite/assets/app-icon.png); the long one is \
+         [2026-09-15-ui-polish-implementation/README.md](docs/audits/2026-09-15-ui-polish-implementation/README.md).\n\n\
+         ## What changed\n\n\
+         Prose now reads at **14/22** with `Geist`; code keeps `Geist Mono`.\n\n\
+         ### Details\n\n\
+         ```rust\n\
+         // Headings scale with the reading size.\n\
+         pub fn heading_scale(level: u8) -> f32 {\n    match level {\n        1 => 18. / 14.,\n        _ => 1.,\n    }\n}\n\
+         let size = Pixels::from(base * heading_scale(2));\n\
+         ```\n\n\
+         ```html\n<p>Hello <b>preview</b></p>\n```\n\n\
+         | Size | Prose | Line |\n| :--- | ---: | ---: |\n| Standard | 14 | 22 |\n| Large | 18 | 28 |\n\n\
+         ---\n\n\
+         #### A quiet heading\n\n\
+         That is all.",
+    );
+    sender.ev(SessionEvent::TurnEnded {
+        outcome: TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    scene
+}
 // (end WP-B)
 
 // ---- WP-C scene builders (append above the end line)

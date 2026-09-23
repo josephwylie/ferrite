@@ -809,44 +809,109 @@ pub const UL_INDENT: f32 = SPACE_4;
 // Owner: WP-B (rich.rs, scrollbar.rs, attachments::inline_file, the Markdown vendor knobs.)
 // Edit values and append tokens only inside this section.
 
-/// Inline code's ink on its chip.
-pub const INLINE_CODE_INK: u32 = 0xe3c88f;
-/// A restrained fenced-code inset; the header and source share one edge.
-pub const CODE_PAD: f32 = 8.;
+/// **Markdown.** Agent prose is Geist in `TEXT` at the reading size
+/// (`answer_text_size`, set by the answer row). Blocks sit `PROSE_GAP` apart;
+/// a heading takes more space above (`PROSE_GAP + HEADING_SPACE_ABOVE` = 20)
+/// than below (`HEADING_SPACE_BELOW` = 8). H1–H3 are `W_STRONG`
+/// `TEXT_STRONG`, H4–H6 `W_LABEL` `TEXT_2`, never italic or underlined, each
+/// on its own pixel line (`prose_line_height`). Tables are horizontal
+/// hairlines only; a quote is a 2px `TEXT_FAINT` rule and `TEXT_2`, not
+/// italic; list markers are `TEXT_MUTED` in the vendor's measured column.
+/// Code is a `RAISED` block; inline code is mono on an `ACCENT_WASH` chip;
+/// links are `ACCENT` over an `ACCENT_EDGE` underline.
+///
+/// 12px — between Markdown blocks (`SPACE_3`).
+pub const PROSE_GAP: f32 = SPACE_3;
+/// 8px — added above a heading that follows a sibling, on top of
+/// `PROSE_GAP`, so a heading opens a section rather than closing one.
+pub const HEADING_SPACE_ABOVE: f32 = SPACE_2;
+/// 8px — below a heading, in place of `PROSE_GAP`.
+pub const HEADING_SPACE_BELOW: f32 = SPACE_2;
+/// Inline code's ink on its chip (the Markdown path paints the chip; the
+/// plain-text fallback carries the ink alone).
+pub const INLINE_CODE_INK: u32 = TEXT_STRONG;
+/// The inline-code chip reaches 2px past its glyphs and stays 2px inside the
+/// line box top and bottom (18px tall on a 22px line). Painted, never laid
+/// out.
+pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
+pub const INLINE_CODE_INSET_Y: f32 = SPACE_0_5;
+/// A quote's rule and its text inset.
+pub const QUOTE_RULE_W: f32 = 2.0;
+pub const QUOTE_PAD_L: f32 = SPACE_3;
+/// 6px — a table cell's block padding (its inline padding is the vendor's
+/// 8px, which its column measurement assumes).
+pub const TABLE_CELL_PAD_Y: f32 = SPACE_1_5;
+/// The rule under a table's header row: one step stronger than the rows'.
+pub const TABLE_HEAD_RULE: u32 = HAIRLINE_STRONG;
+/// 4px — a horizontal rule's own margin inside its block, so it sits 16px
+/// from its neighbours.
+pub const RULE_MARGIN_Y: f32 = SPACE_1;
+/// A fenced code block: 12px inline, 10px block padding (Zeron's code body;
+/// 10 is off the scale so the 24px header and an 18px line land on even
+/// pixels).
+pub const CODE_PAD_X: f32 = SPACE_3;
+pub const CODE_PAD_Y: f32 = 10.0;
+/// The code header row: language label, html `Preview`, `Copy`/`Copied`.
 pub const CODE_HEADER_H: f32 = 24.;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_H: f32 = 24.;
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-pub const CODE_ACTION_PAD_X: f32 = 8.;
-/// Code blocks: a language label at 5/10/0, then `pre` at 4/10/8.
-#[allow(dead_code)]
-pub const CODE_LANG_PAD_T: f32 = 5.0;
-#[allow(dead_code)]
-pub const CODE_PAD_X: f32 = 10.0;
-#[allow(dead_code)]
-pub const CODE_PRE_PAD_T: f32 = 4.0;
-#[allow(dead_code)]
-pub const CODE_PRE_PAD_B: f32 = 8.0;
-/// Inline code's own padding: 1px block, 4px inline.
-#[allow(dead_code)]
-pub const INLINE_CODE_PAD_X: f32 = 4.0;
-#[allow(dead_code)]
-pub const INLINE_CODE_PAD_Y: f32 = 1.0;
+pub const CODE_ACTION_PAD_X: f32 = SPACE_2;
+/// The html preview dialog: the reading column's width, and a height cap
+/// before its body scrolls.
+pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
+/// An inline file chip: `CHIP_H` tall so it fits a 22px prose line without
+/// moving it; 6px inline padding; a 12px file mark (or a 14px thumbnail) 6px
+/// from the name; clamped between 64 and 280px wide.
+pub const INLINE_FILE_H: f32 = CHIP_H;
+pub const INLINE_FILE_PAD_X: f32 = SPACE_1_5;
+pub const INLINE_FILE_GAP: f32 = SPACE_1_5;
+pub const INLINE_FILE_ICON: f32 = 12.0;
+pub const INLINE_FILE_THUMB: f32 = 14.0;
+pub const INLINE_FILE_MIN_W: f32 = 64.0;
+pub const INLINE_FILE_MAX_W: f32 = 280.0;
+/// **Scrollbars** are a thin overlay with no track, never in layout: a
+/// `SCROLLBAR_GUTTER` hit strip at the scroller's right edge; while
+/// scrolling a 4px `SCROLLBAR` thumb, under the pointer (or dragged) 6px
+/// `SCROLLBAR_HOVER`; idle, nothing. The thumb keeps `SCROLLBAR_INSET` from
+/// the edge and never gets shorter than `SCROLLBAR_MIN_THUMB`.
+pub const SCROLLBAR_GUTTER: f32 = 12.0;
+pub const SCROLLBAR_THUMB_W: f32 = 4.0;
+pub const SCROLLBAR_THUMB_W_HOVER: f32 = 6.0;
+pub const SCROLLBAR_INSET: f32 = 3.0;
+pub const SCROLLBAR_MIN_THUMB: f32 = 40.0;
+const _: () = assert!(SCROLLBAR_GUTTER == 2. * SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
+const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // (end WP-B) — append above this line only
 
 // ======================================== WP-C · pane frame, levels, board, titlebar
 // Owner: WP-C (the pane shell, head, L2/wall cells, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
+//
+// **The Pane frame.** A Pane is a `PANE` sheet with a 1px edge that is always
+// in layout, so a state change recolours it and nothing reflows. The edge
+// says one thing, by precedence (`pane::PaneEdge`): blocked `BLOCKED` >
+// a Decision `ATTENTION` > focused `FOCUS_RING` > at rest `HAIRLINE`, which
+// lifts to `HAIRLINE_STRONG` under the pointer. A *focused* alert Pane also
+// draws a `FOCUS_RING` ring inset by 2px, so focus is never hidden by a
+// state. A Thread that finished while the operator looked elsewhere breathes
+// an `ACCENT` ring until they land on it (still under reduced motion).
+//
+// **The head is one 36px row** on the Pane's own plane, closed by a
+// hairline: dot · title · checkout, the agent tabs, then the right cluster —
+// tasks meter · PR/CI · attention jump · head action. Colour is state: the
+// checkout, drift and PR are `TEXT_MUTED`; only the CI dot, a failure count
+// and the live meter segment carry a hue.
+//
+// **Below L1** (L2 instruments, the wall) brightness sorts cells: a hot cell
+// (working, failing, a Decision, blocked, focused) has a `TEXT_STRONG`
+// title, a quiet one `TEXT_2`. Signals are words, never glyph soup, and a
+// word is coloured only when it is state.
 
-/// The seam's grab band under the pointer: a faint lift over the gutter.
-pub const SEAM_HOVER: u32 = 0xffffff14;
-/// A row's opacity while it is being dragged.
-#[allow(dead_code)]
-pub const DRAGGING_OPACITY: f32 = 0.4;
 /// The Windows caption buttons (`titlebar.rs`), which exist only where the
 /// app draws its own titlebar. 46px is the width Windows gives each of its
 /// own — the snap-layout flyout aligns to it, so a narrower button would
-/// hang the flyout off-centre — and they run the band's full 42px height,
+/// hang the flyout off-centre — and they run the band's full height,
 /// flush to the window's top-right corner.
 #[allow(dead_code)]
 pub const CAPTION_W: f32 = 46.0;
@@ -862,41 +927,105 @@ pub const CAPTION_GLYPH: f32 = 10.0;
 /// nothing.
 #[allow(dead_code)]
 pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
-/// 32px — the Pane head's title row, inside the grounded header band.
-pub const PANE_HEAD_H: f32 = 32.0;
-/// The checkout line beneath the Pane head's title: 20px, sharing the
-/// head's inline padding and its ground, so the two read as one band.
-pub const PANE_CHECKOUT_H: f32 = 20.0;
-/// The gap between the checkout line's own marks — tighter than the head's
-/// gap, because these are one reading, not separate slots.
-pub const CHECKOUT_GAP: f32 = 8.0;
-/// 24px — the tasks strip.
-pub const TASKS_STRIP_H: f32 = 24.0;
-/// The tasks meter: 12 × 4 segments, 1px radius, 3px apart (15px pitch).
+/// Platform chrome, not a Ferrite state colour: Windows' own close-button
+/// field under the pointer and pressed, with its white mark. Muscle memory
+/// wins over "colour is state" for this one control.
 #[allow(dead_code)]
-pub const METER_SEG_W: f32 = 12.0;
+pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 #[allow(dead_code)]
-pub const METER_SEG_H: f32 = 4.0;
+pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 #[allow(dead_code)]
-pub const METER_SEG_GAP: f32 = 3.0;
-#[allow(dead_code)]
+pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
+/// The titlebar location's segments: 6px apart, one mono baseline.
+pub const TITLE_GAP: f32 = SPACE_1_5;
+/// The titlebar's labelled add control: the icon-button face with room for
+/// its mono label, the glyph 6px from it.
+pub const TITLE_ADD_PAD_X: f32 = SPACE_2;
+pub const TITLE_ADD_GAP: f32 = SPACE_1_5;
+/// The development-build tag: a quiet mono `dev` in a hairline box, 18px
+/// high (it sits inside a 20px UI line), 6px inline padding.
+pub const DEV_TAG_H: f32 = 18.0;
+pub const DEV_TAG_PAD_X: f32 = SPACE_1_5;
+/// The smallest window the chrome still lays out in: the nav plus one Pane
+/// at L2, the title, the add control and the Windows caption group.
+pub const WINDOW_MIN_W: f32 = 640.0;
+pub const WINDOW_MIN_H: f32 = 420.0;
+
+/// 36px — the Pane head: one row, no band. At 36 a 24px head control keeps
+/// 6px of air above and below.
+pub const PANE_HEAD_H: f32 = 36.0;
+/// Between the head's dot, title and checkout.
+pub const HEAD_GAP: f32 = SPACE_2;
+/// Between the head's clusters: title → checkout, and between the facts on
+/// the right (tasks · PR/CI · attention · action).
+pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
+/// How much more the checkout shrinks than the title when the head is
+/// narrow. Drift and dirt give way first, then the branch name — never
+/// below a few characters, so a narrow Pane still says where the work is.
+pub const HEAD_CHECKOUT_SHRINK: f32 = 4.0;
+pub const HEAD_BRANCH_MIN_W: f32 = 64.0;
+/// The checkout's floor: its branch mark, the gap and that minimum name.
+pub const HEAD_CHECKOUT_MIN_W: f32 = ROW_ICON + ROW_ICON_GAP + HEAD_BRANCH_MIN_W;
+/// Between a checkout's directory/branch pairs.
+pub const CHECKOUT_GAP: f32 = SPACE_2;
+/// The tasks meter in the head: 6 × 3 segments, 1px radius, 2px apart (an
+/// 8px pitch). Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track —
+/// the same length as the usage lines, so the two readings share a module.
+pub const METER_SEG_W: f32 = 6.0;
+pub const METER_SEG_H: f32 = 3.0;
+pub const METER_SEG_GAP: f32 = SPACE_0_5;
 pub const METER_SEG_R: f32 = 1.0;
-/// The checks card the header's `ci` mark opens (#29): wide enough for a
+pub const METER_SEG_CAP: usize = 12;
+pub const METER_TRACK_W: f32 = 48.0;
+/// Between the meter and its `3/4` count.
+pub const METER_GAP: f32 = SPACE_1_5;
+/// The unread ring's brightest breath (its dimmest is `PULSE_MIN`).
+pub const UNREAD_PULSE_MAX: f32 = 0.7;
+/// The checks card the head's PR/CI chip opens (#29): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
 pub const CHECKS_CARD_W: f32 = 312.0;
-pub const CHECKS_CARD_PAD: f32 = 8.0;
+pub const CHECKS_CARD_PAD: f32 = SPACE_1;
 /// Between the card's heading and its runs.
-pub const CHECKS_CARD_GAP: f32 = 8.0;
-/// One run's line.
-pub const CHECKS_ROW_H: f32 = 22.0;
+pub const CHECKS_CARD_GAP: f32 = SPACE_1;
+/// The card's heading row and one run's row.
+pub const CHECKS_HEAD_H: f32 = 28.0;
+pub const CHECKS_ROW_H: f32 = 24.0;
 /// A workflow's heading above the runs it owns, and the space that sets
 /// that group off from the one before it.
-pub const CHECKS_GROUP_H: f32 = 18.0;
-pub const CHECKS_GROUP_GAP: f32 = 6.0;
-pub const LED_WALL: f32 = 5.0;
+pub const CHECKS_GROUP_H: f32 = 20.0;
+pub const CHECKS_GROUP_GAP: f32 = SPACE_1_5;
+
+/// The wall cell: 8px padding, 4px between rows, an 8px status dot — the
+/// wall's whole job is the signal, so its dot is bigger than a row's.
+pub const WALL_PAD: f32 = SPACE_2;
+pub const WALL_ROW_GAP: f32 = SPACE_1;
+pub const WALL_DOT: f32 = 8.0;
+/// Between a cell's dot and its title (L2 and the wall).
+pub const CELL_DOT_GAP: f32 = SPACE_1_5;
+/// Between an L2 cell's rows, and between the lines of its tail.
+pub const CELL_ROW_GAP: f32 = SPACE_1_5;
+pub const CELL_TAIL_GAP: f32 = SPACE_1;
+/// A completed L2 cell's history, quieted; the header and the Composer
+/// keep full contrast (the header's `done` is the one completion label).
 pub const DONE_CELL_OPACITY: f32 = 0.75;
-pub const DONE_WALL_OPACITY: f32 = 0.6;
+
+/// A seam between Panes: the grab band is transparent, and a 2px line
+/// inset 8px from each end (so it never touches a Pane corner) appears
+/// `TEXT_FAINT` under the pointer and `ACCENT` while held.
+pub const SEAM_LINE_W: f32 = 2.0;
+pub const SEAM_LINE_INSET: f32 = SPACE_2;
+/// A dragged Pane's drop wash: `DROP_WASH` ground, `ACCENT_EDGE` edge, the
+/// Pane's radius; its label is a raised mono tag, 8/4 padded.
+pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
+pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
+/// The badge under the pointer while a Pane is dragged: 26px high, 10px
+/// inline padding, at most 280px before the title truncates.
+pub const DRAG_BADGE_H: f32 = 26.0;
+pub const DRAG_BADGE_PAD_X: f32 = 10.0;
+pub const DRAG_BADGE_MAX_W: f32 = 280.0;
+/// The empty board's hint column: lines 8px apart, a key 8px from its verb.
+pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 // (end WP-C) — append above this line only
 
 // ======================================== WP-D · composer, pickers, usage, draft

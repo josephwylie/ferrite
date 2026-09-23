@@ -243,6 +243,12 @@ fn main() {
                                 px(theme::TRAFFIC_Y),
                             )),
                         }),
+                        // Below this the title, the add control and the
+                        // caption group collide, and no Pane reaches L2.
+                        window_min_size: Some(size(
+                            px(theme::WINDOW_MIN_W),
+                            px(theme::WINDOW_MIN_H),
+                        )),
                         ..Default::default()
                     },
                     |window, cx| {

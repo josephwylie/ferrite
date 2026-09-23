@@ -262,8 +262,11 @@ impl RenderOnce for Attachments {
     }
 }
 
-/// The existing Attachment family, reduced to a single transcript-height row.
-/// The native Markdown flow reserves this size and wraps the card atomically.
+/// A file link in prose, drawn as a chip that fits the prose line: a file
+/// mark (or the image's own thumbnail), then the name in mono `TEXT` and a
+/// `:line` suffix in `TEXT_MUTED`, on `RAISED` (`FILL` under the
+/// pointer). The native Markdown flow reserves the returned size and wraps
+/// the chip atomically, so the width is measured in the face it is drawn in.
 pub fn inline_file(
     file: crate::file_links::FileLink,
     label: &str,
@@ -271,8 +274,10 @@ pub fn inline_file(
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
-    let stock = &cx.global::<Appearance>().0;
-    let tokens = stock.semantic_tokens();
+    use crate::pointer::{Pointer as _, PointerPressed as _};
+    use crate::theme;
+    use gpui::{rgb, SharedString};
+
     let name = file
         .path
         .file_name()
@@ -284,27 +289,39 @@ pub fn inline_file(
         .extension()
         .unwrap_or_default()
         .to_string_lossy()
-        .to_ascii_uppercase();
-    let kind = if extension.is_empty() || extension.len() > 8 {
-        "FILE".to_string()
-    } else {
-        extension
-    };
+        .to_ascii_lowercase();
     let location = file
         .location
         .as_ref()
         .map(|line| format!(":{line}"))
         .unwrap_or_default();
+    let image = gpui::Img::extensions().contains(&extension.as_str());
     let title = format!("{name}{location}");
-    let image = gpui::Img::extensions().contains(&kind.to_ascii_lowercase().as_str());
-    let font_size = px(crate::theme::FS_UI);
-    let run = window.text_style().to_run(title.len() + kind.len());
-    let width = window
+    let mut face = window.text_style();
+    face.font_family = theme::FONT_MONO.into();
+    face.font_weight = theme::W_BODY;
+    face.font_style = gpui::FontStyle::Normal;
+    let text_w = window
         .text_system()
-        .shape_line(format!("{title}{kind}").into(), font_size, &[run], None)
-        .width()
-        + px(46.);
-    let size = gpui::size(width.clamp(px(88.), px(240.)), px(26.));
+        .shape_line(
+            SharedString::from(title),
+            px(theme::FS_UI),
+            &[face.to_run(name.len() + location.len())],
+            None,
+        )
+        .width();
+    let mark = if image {
+        theme::INLINE_FILE_THUMB
+    } else {
+        theme::INLINE_FILE_ICON
+    };
+    let chrome = 2. * theme::INLINE_FILE_PAD_X + mark + theme::INLINE_FILE_GAP;
+    let size = gpui::size(
+        // Whole pixels: a fractional shortfall would ellipsize a name that fits.
+        (text_w.ceil() + px(chrome))
+            .clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W)),
+        px(theme::INLINE_FILE_H),
+    );
     let host = preview.cloned();
     let name_for_open = name.clone();
     let tooltip = format!("{label}\n{}", file.path.display());
@@ -322,79 +339,92 @@ pub fn inline_file(
         }
         file.open(window, cx);
     };
-    let card = Attachment::new()
-        .id("inline-file-open")
-        .xsmall()
-        .axis(Axis::Horizontal)
-        .w_full()
+    let chip = gpui::div()
+        .id("inline-file-chip")
+        .flex()
+        .items_center()
+        .size_full()
         .min_w_0()
-        .h(size.height)
-        .py_0()
-        .px(px(4.))
-        .bg(tokens.colors.background)
-        .text_color(tokens.colors.foreground)
-        .border_color(tokens.colors.border)
-        .rounded(tokens.radius.sm)
-        .font_family(crate::theme::FONT_UI)
-        .text_size(font_size)
-        .media(
-            AttachmentMedia::new()
-                .size(px(16.))
-                .rounded(tokens.radius.sm)
-                .bg(tokens.colors.muted)
-                .text_color(tokens.colors.foreground)
-                .map(|media| {
-                    if image {
-                        media.src(thumbnail.clone())
-                    } else {
-                        media.child(Icon::new(IconName::FileText).size(px(13.)))
-                    }
-                }),
-        )
-        .content(
-            AttachmentContent::new()
+        .px(px(theme::INLINE_FILE_PAD_X))
+        .gap(px(theme::INLINE_FILE_GAP))
+        .bg(rgb(theme::RAISED))
+        .hover_raised()
+        .press_raised()
+        .rounded(px(theme::R_CHIP))
+        .font_family(theme::FONT_MONO)
+        .font_weight(theme::W_BODY)
+        .not_italic()
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .child(if image {
+            gpui::img(thumbnail)
+                .flex_none()
+                .size(px(theme::INLINE_FILE_THUMB))
+                .rounded(px(theme::R_TIGHT))
+                .into_any_element()
+        } else {
+            Icon::new(IconName::FileText)
+                .flex_none()
+                .size(px(theme::INLINE_FILE_ICON))
+                .text_color(rgb(theme::TEXT_MUTED))
+                .into_any_element()
+        })
+        .child(
+            // The name gives way to an ellipsis; the `:line` never does.
+            gpui::div()
+                .flex()
                 .min_w_0()
-                .title(AttachmentTitle::new(title).text_size(font_size)),
-        )
-        .actions(
-            AttachmentActions::new().child(
-                gpui::div()
-                    .text_size(px(9.))
-                    .text_color(tokens.colors.muted_foreground)
-                    .child(kind),
-            ),
+                .child(
+                    gpui::div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(theme::TEXT))
+                        .child(name),
+                )
+                .when(!location.is_empty(), |title| {
+                    title.child(
+                        gpui::div()
+                            .flex_none()
+                            .text_color(rgb(theme::TEXT_MUTED))
+                            .child(location),
+                    )
+                }),
         );
-    let rem_size = stock.font_size;
+    // The click and keyboard target lies over the chip and draws nothing but
+    // the focus ring: the chip itself wears the hover face.
+    let clear: gpui::Hsla = gpui::transparent_black();
+    let target = crate::components::button("inline-file-action")
+        .custom(
+            gpui::component::button::ButtonCustomVariant::new(cx)
+                .color(clear)
+                .hover(clear)
+                .active(clear),
+        )
+        .tab_stop(true)
+        .key_context("PromptAttachment")
+        .accessibility_label(accessibility)
+        .absolute()
+        .inset_0()
+        .size_full()
+        .min_w_0()
+        .p_0()
+        .rounded(px(theme::R_CHIP))
+        .on_click(open);
     (
         size,
-        KitScale {
-            child: gpui::div()
-                .id("inline-file")
-                .debug_selector(move || selector.clone())
-                .relative()
-                .w_full()
-                .h(size.height)
-                .cursor_pointer()
-                .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-                })
-                .child(card)
-                .child(
-                    Button::new("inline-file-action")
-                        .ghost()
-                        .absolute()
-                        .inset_0()
-                        .size_full()
-                        .min_w_0()
-                        .p_0()
-                        .key_context("PromptAttachment")
-                        .accessibility_label(accessibility)
-                        .on_click(open),
-                )
-                .into_any_element(),
-            rem_size,
-        }
-        .into_any_element(),
+        gpui::div()
+            .id("inline-file")
+            .debug_selector(move || selector.clone())
+            .relative()
+            .w_full()
+            .h(size.height)
+            .cursor_pointer()
+            .tooltip(move |window, cx| {
+                gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            })
+            .child(chip)
+            .child(target)
+            .into_any_element(),
     )
 }
 
