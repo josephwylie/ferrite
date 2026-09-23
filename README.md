@@ -77,7 +77,9 @@ or `backspace` on an empty prompt box to remove it.
 Shortcuts below use `cmd`; on Windows use `ctrl`.
 
 - `cmd-t` / `cmd-n` — new Thread. You pick the provider, model, project folder,
-  and whether to use the checkout or a fresh worktree.
+  and where it works: the checkout as it stands, one of the repo's existing
+  worktrees or branches, or a new branch — in the checkout or in a fresh
+  worktree.
 - `cmd-shift-n` — new Thread in its own git worktree
 - `escape` — interrupt whatever's running
 - `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
