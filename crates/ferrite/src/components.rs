@@ -847,14 +847,38 @@ pub fn menu_footer(hints: &[(&str, &str)]) -> Div {
 }
 
 /// The same menu is opened by a chip or a slash command. PopupMenu owns
-/// keyboard navigation, checked rows, scrolling and dismissal.
-#[derive(Clone)]
+/// keyboard navigation, focus, scrolling and dismissal; every row draws in
+/// the one menu grammar (`menu_row_content`, `menu_section`, `menu_note`).
+#[derive(Clone, Default)]
 pub struct Choice {
     pub label: SharedString,
+    /// A section's mark, or a row's own when the menu has no sections.
     pub icon: Option<(&'static str, u32)>,
+    /// The accent check: the standing choice.
     pub checked: bool,
     pub disabled: bool,
+    /// A section title: inert, skipped by the arrows, carrying `icon`.
     pub section: bool,
+    /// A muted mono tag after the label (a section tag, a path).
+    pub detail: Option<SharedString>,
+    /// An inert explanatory line (why the menu is short or locked).
+    pub note: bool,
+}
+
+impl Choice {
+    /// The row's content in the menu grammar.
+    fn item(&self, marked: bool) -> MenuItem {
+        let mut item = MenuItem::new(self.label.clone())
+            .checked(self.checked)
+            .disabled(self.disabled);
+        if let Some(detail) = &self.detail {
+            item = item.detail(detail.clone(), Face::Mono);
+        }
+        if let (true, Some((path, ink))) = (marked, self.icon) {
+            item = item.leading(path, ink);
+        }
+        item
+    }
 }
 
 type OpenChanged = std::rc::Rc<dyn Fn(bool, &mut gpui::Window, &mut gpui::App)>;
@@ -893,39 +917,51 @@ impl gpui::RenderOnce for ChoiceMenu {
                 state.initialized = false;
             });
         } else if retained.read(cx).menu.is_none() {
-            let checked = self
-                .choices
-                .iter()
-                .filter(|choice| !choice.section && !choice.disabled)
-                .position(|choice| choice.checked)
-                .unwrap_or(0);
-            let steps = checked + 1;
+            let steps = cursor_steps(&self.choices);
             let pick = self.on_pick.clone();
+            // A mark rides its section title; only a menu without sections
+            // marks its rows.
+            let marked = !self.choices.iter().any(|choice| choice.section);
             let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
                 menu = menu
                     .action_context(self.return_focus)
-                    .check_side(gpui::component::Side::Right)
-                    .min_w(px(240.))
-                    .max_w(px(320.))
-                    .max_h(px(420.))
+                    .min_w(px(theme::CHOICE_MENU_MIN_W))
+                    .max_w(px(theme::CHOICE_MENU_MAX_W))
+                    .max_h(px(theme::MENU_MAX_H))
                     .scrollable(true);
                 for (index, choice) in self.choices.into_iter().enumerate() {
+                    // Sections and notes are disabled element items: the kit
+                    // skips them on the arrows, so `steps` still counts only
+                    // live rows.
                     if choice.section {
+                        let (title, mark) = (choice.label.clone(), choice.icon);
+                        menu = menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                kit_row(menu_section(title.clone(), mark, None))
+                            })
+                            .disabled(true),
+                        );
                         continue;
                     }
+                    if choice.note {
+                        let text = choice.label.clone();
+                        menu = menu.item(
+                            PopupMenuItem::element(move |_, _| kit_row(menu_note(text.clone())))
+                                .disabled(true),
+                        );
+                        continue;
+                    }
+                    // Our accent check draws inside the row, so the kit's own
+                    // `.checked()` is never set and its check never doubles.
+                    let item = choice.item(marked);
                     let picked = pick.clone();
-                    let item = PopupMenuItem::new(choice.label)
-                        .when_some(choice.icon, |item, (path, color)| {
-                            item.icon(
-                                gpui::component::Icon::empty()
-                                    .path(path)
-                                    .text_color(rgb(color)),
-                            )
+                    menu = menu.item(
+                        PopupMenuItem::element(move |_, _| {
+                            kit_row(menu_row_content(&item, false, false))
                         })
-                        .checked(choice.checked)
                         .disabled(choice.disabled)
-                        .on_click(move |_, window, cx| picked(index, window, cx));
-                    menu = menu.item(item);
+                        .on_click(move |_, window, cx| picked(index, window, cx)),
+                    );
                 }
                 menu
             });
@@ -956,26 +992,60 @@ impl gpui::RenderOnce for ChoiceMenu {
                     use gpui::base::ElementExt as _;
                     let retained = retained.clone();
                     let menu = menu.clone();
-                    div().child(menu.clone()).on_prepaint(move |_, window, cx| {
-                        let steps = retained.update(cx, |state, _| {
-                            if state.initialized {
-                                return None;
+                    // The kit surface keeps its own hairline ring; the one
+                    // float shadow lifts it like every other floating surface.
+                    div()
+                        .rounded(px(theme::R_BLOCK))
+                        .shadow(float_shadow())
+                        .child(menu.clone())
+                        .on_prepaint(move |_, window, cx| {
+                            let steps = retained.update(cx, |state, _| {
+                                if state.initialized {
+                                    return None;
+                                }
+                                state.initialized = true;
+                                Some(state.steps)
+                            });
+                            if let Some(steps) = steps {
+                                menu.focus_handle(cx).focus(window, cx);
+                                for _ in 0..steps {
+                                    window.dispatch_action(
+                                        Box::new(gpui::base::actions::SelectDown),
+                                        cx,
+                                    );
+                                }
                             }
-                            state.initialized = true;
-                            Some(state.steps)
-                        });
-                        if let Some(steps) = steps {
-                            menu.focus_handle(cx).focus(window, cx);
-                            for _ in 0..steps {
-                                window
-                                    .dispatch_action(Box::new(gpui::base::actions::SelectDown), cx);
-                            }
-                        }
-                    })
+                        })
                 });
         }
         popover
     }
+}
+
+/// How many `SelectDown`s land the kit's cursor on the standing choice (or
+/// the first live row). Every choice is one kit item; the first press
+/// selects item 0 whatever it is, each later one the next live item.
+fn cursor_steps(choices: &[Choice]) -> usize {
+    let live = |choice: &Choice| !choice.section && !choice.note && !choice.disabled;
+    let target = choices
+        .iter()
+        .position(|choice| live(choice) && choice.checked)
+        .or_else(|| choices.iter().position(live))
+        .unwrap_or(0);
+    let lives = choices[..=target.min(choices.len().saturating_sub(1))]
+        .iter()
+        .filter(|choice| live(choice))
+        .count();
+    let dead_first = choices.first().is_some_and(|choice| !live(choice));
+    lives.max(1) + usize::from(dead_first && lives > 0)
+}
+
+/// A menu grammar row inside a kit `PopupMenuItem`: the kit item already
+/// insets its content by the row's own inline padding, so the row takes it
+/// back and spans the item edge to edge. The kit draws the hover and cursor
+/// face (`tokens.accent` = `FILL`) on the item itself.
+fn kit_row(row: Div) -> Div {
+    row.flex_1().mx(px(-theme::MENU_ROW_PAD_X))
 }
 
 /// The scrollbar. gpui paints none of its own, so the toolkit's draws it:
@@ -1200,6 +1270,62 @@ mod tests {
         assert_eq!(dead.style().mouse_cursor, None);
         assert_eq!(mono_column_w(1), theme::MENU_NAME_MIN_W);
         assert_eq!(mono_column_w(400), theme::MENU_NAME_MAX_W);
+    }
+
+    #[test]
+    fn a_choice_draws_in_the_menu_grammar() {
+        let choice = Choice {
+            label: "Opus 5.5".into(),
+            icon: Some((icons::CLAUDE, theme::PROVIDER_CLAUDE)),
+            checked: true,
+            detail: Some("1M".into()),
+            ..Default::default()
+        };
+        let item = choice.item(false);
+        assert!(item.checked && !item.disabled);
+        assert_eq!(item.leading, None, "the mark rides the section title");
+        assert_eq!(item.detail, Some(("1M".into(), Face::Mono)));
+        assert_eq!(
+            choice.item(true).leading,
+            Some((icons::CLAUDE, theme::PROVIDER_CLAUDE))
+        );
+        let dead = Choice {
+            label: "Sonnet 5".into(),
+            disabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            row_inks(&dead.item(true), false, false).label,
+            theme::TEXT_MUTED
+        );
+    }
+
+    #[test]
+    fn the_cursor_opens_on_the_standing_choice_past_sections() {
+        let row = |label: &str, checked| Choice {
+            label: label.to_string().into(),
+            checked,
+            ..Default::default()
+        };
+        let section = |label: &str| Choice {
+            label: label.to_string().into(),
+            section: true,
+            ..Default::default()
+        };
+        // Items: Claude, Sonnet, Opus, Codex, GPT. First press → item 0.
+        let menu = [
+            section("Claude"),
+            row("Sonnet", false),
+            row("Opus", false),
+            section("Codex"),
+            row("GPT", false),
+        ];
+        assert_eq!(cursor_steps(&menu), 2, "0 → Sonnet");
+        let mut picked = menu.clone();
+        picked[4].checked = true;
+        assert_eq!(cursor_steps(&picked), 4, "0 → Sonnet → Opus → GPT");
+        assert_eq!(cursor_steps(&[row("a", false), row("b", true)]), 2);
+        assert_eq!(cursor_steps(&[row("a", false)]), 1);
     }
 
     #[test]

@@ -7991,10 +7991,8 @@ impl CockpitView {
             .iter()
             .map(|choice| crate::components::Choice {
                 label: choice.label.clone().into(),
-                icon: None,
                 checked: choice.value == mode,
-                disabled: false,
-                section: false,
+                ..Default::default()
             })
             .collect();
         let values: std::rc::Rc<Vec<String>> =
@@ -8829,6 +8827,9 @@ impl CockpitView {
                             checked: row.active,
                             disabled: row.inert,
                             section,
+                            detail: None,
+                            // Why every row is dead while the turn runs.
+                            note: row.inert && row.name == TUNING_BUSY_HINT,
                             icon: provider.map(|provider| match provider {
                                 Provider::Claude => {
                                     (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE)

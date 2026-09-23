@@ -595,10 +595,8 @@ impl CockpitView {
                         status_label(agent.status(), agent.fresh())
                     )
                     .into(),
-                    icon: None,
                     checked: agent.subject() == pane.selected,
-                    disabled: false,
-                    section: false,
+                    ..Default::default()
                 })
                 .collect();
             let subjects: Vec<_> = hidden.iter().map(|agent| agent.subject()).collect();

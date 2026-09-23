@@ -1160,6 +1160,11 @@ pub const MODAL_GAP: f32 = 12.0;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
+/// A kit-hosted choice menu (model, effort, mode, subagent overflow): wide
+/// enough for a model name beside its check, capped before it crowds the
+/// Composer it opens from.
+pub const CHOICE_MENU_MIN_W: f32 = 240.0;
+pub const CHOICE_MENU_MAX_W: f32 = 320.0;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents
