@@ -18,6 +18,23 @@ const RUST: &[&str] = &[
     "unsafe", "use", "where", "while",
 ];
 
+/// Python's keywords, soft keywords included.
+const PYTHON: &[&str] = &[
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case", "class",
+    "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if",
+    "import", "in", "is", "lambda", "match", "nonlocal", "not", "or", "pass", "raise", "return",
+    "try", "while", "with", "yield",
+];
+
+/// What the lexer knows about one language.
+struct Language {
+    keywords: &'static [&'static str],
+    /// `#` opens a line comment.
+    hash_comments: bool,
+    /// `name!` is a macro call (Rust).
+    bang_calls: bool,
+}
+
 /// Answers highlight requests immediately, onto a channel the caller drains
 /// back into `Transcript::apply` — the same path a slow highlighter on its own
 /// thread would use, so the shipped one cannot be the odd case out.
@@ -54,50 +71,48 @@ pub fn tokens(language: Option<&str>, source: &str) -> Vec<Token> {
             .collect();
     }
 
-    let keywords: &[&str] = match language {
-        Some("rust" | "rs") => RUST,
-        _ => &[],
+    let lang = match language {
+        Some("rust" | "rs") => Language {
+            keywords: RUST,
+            hash_comments: false,
+            bang_calls: true,
+        },
+        _ => Language {
+            keywords: PYTHON,
+            hash_comments: true,
+            bang_calls: false,
+        },
     };
 
     let mut tokens: Vec<Token> = Vec::new();
     let chars: Vec<char> = source.chars().collect();
     let mut at = 0;
-    let mut plain = String::new();
 
     while at < chars.len() {
-        let (class, len) = scan(&chars, at, keywords);
-        if class == Class::Plain {
-            plain.extend(&chars[at..at + len]);
-            at += len;
-            continue;
+        let (class, len) = scan(&chars, at, &lang);
+        let text = chars[at..at + len].iter();
+        // Plain and punctuation runs coalesce, so a line of prose-like code
+        // stays one token rather than one per character.
+        match tokens.last_mut() {
+            Some(last) if last.class == class && matches!(class, Class::Plain | Class::Punct) => {
+                last.text.extend(text)
+            }
+            _ => tokens.push(Token {
+                text: text.collect(),
+                class,
+            }),
         }
-        if !plain.is_empty() {
-            tokens.push(Token {
-                text: std::mem::take(&mut plain),
-                class: Class::Plain,
-            });
-        }
-        tokens.push(Token {
-            text: chars[at..at + len].iter().collect(),
-            class,
-        });
         at += len;
-    }
-    if !plain.is_empty() {
-        tokens.push(Token {
-            text: plain,
-            class: Class::Plain,
-        });
     }
     tokens
 }
 
 /// The run starting at `at`: what it is, and how many chars it spans.
-fn scan(chars: &[char], at: usize, keywords: &[&str]) -> (Class, usize) {
+fn scan(chars: &[char], at: usize, lang: &Language) -> (Class, usize) {
     let rest = &chars[at..];
     match rest {
         ['/', '/', ..] => (Class::Comment, line(rest)),
-        ['#', ..] if keywords.is_empty() => (Class::Comment, line(rest)),
+        ['#', ..] if lang.hash_comments => (Class::Comment, line(rest)),
         ['/', '*', ..] => (Class::Comment, block_comment(rest)),
         ['"', ..] | ['\'', ..] => (Class::Str, string(rest)),
         [c, ..] if c.is_ascii_digit() => (
@@ -107,13 +122,17 @@ fn scan(chars: &[char], at: usize, keywords: &[&str]) -> (Class, usize) {
         [c, ..] if c.is_alphabetic() || *c == '_' => {
             let len = run(rest, |c| c.is_alphanumeric() || c == '_');
             let word: String = rest[..len].iter().collect();
-            let class = if keywords.contains(&word.as_str()) {
-                Class::Keyword
-            } else {
-                Class::Plain
-            };
-            (class, len)
+            if lang.keywords.contains(&word.as_str()) {
+                return (Class::Keyword, len);
+            }
+            match rest.get(len) {
+                Some('(') => (Class::Function, len),
+                Some('!') if lang.bang_calls => (Class::Function, len + 1),
+                _ if rest[0].is_ascii_uppercase() => (Class::Type, len),
+                _ => (Class::Plain, len),
+            }
         }
+        [c, ..] if c.is_ascii_punctuation() => (Class::Punct, 1),
         _ => (Class::Plain, 1),
     }
 }
@@ -170,17 +189,52 @@ mod tests {
             classed("let x = \"hi\"; // note\n"),
             [
                 (Class::Keyword, "let".into()),
-                (Class::Plain, " x = ".into()),
+                (Class::Plain, " x ".into()),
+                (Class::Punct, "=".into()),
+                (Class::Plain, " ".into()),
                 (Class::Str, "\"hi\"".into()),
-                (Class::Plain, "; ".into()),
+                (Class::Punct, ";".into()),
+                (Class::Plain, " ".into()),
                 (Class::Comment, "// note".into()),
                 (Class::Plain, "\n".into()),
             ]
         );
         assert_eq!(
             classed("y = 42"),
-            [(Class::Plain, "y = ".into()), (Class::Number, "42".into()),]
+            [
+                (Class::Plain, "y ".into()),
+                (Class::Punct, "=".into()),
+                (Class::Plain, " ".into()),
+                (Class::Number, "42".into()),
+            ]
         );
+    }
+
+    #[test]
+    fn calls_types_and_punctuation_get_their_own_classes() {
+        assert_eq!(
+            classed("Vec::new(); println!(\"x\")"),
+            [
+                (Class::Type, "Vec".into()),
+                (Class::Punct, "::".into()),
+                (Class::Function, "new".into()),
+                (Class::Punct, "();".into()),
+                (Class::Plain, " ".into()),
+                (Class::Function, "println!".into()),
+                (Class::Punct, "(".into()),
+                (Class::Str, "\"x\"".into()),
+                (Class::Punct, ")".into()),
+            ]
+        );
+        let python: Vec<(Class, String)> = tokens(Some("python"), "def f(x): return None # c")
+            .into_iter()
+            .map(|token| (token.class, token.text))
+            .collect();
+        assert_eq!(python[0], (Class::Keyword, "def".into()));
+        assert_eq!(python[2], (Class::Function, "f".into()));
+        assert!(python.contains(&(Class::Keyword, "return".into())));
+        assert!(python.contains(&(Class::Keyword, "None".into())));
+        assert_eq!(python.last(), Some(&(Class::Comment, "# c".into())));
     }
 
     #[test]

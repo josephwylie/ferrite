@@ -7,7 +7,7 @@ use std::{
 use gpui::{
     AnyElement, App, DefiniteLength, Div, ElementId, FontStyle, FontWeight, HighlightStyle, Hsla,
     Image, ImageFormat, InteractiveElement as _, IntoElement, Length, ObjectFit, Overflow,
-    ParentElement, Pixels, ScrollHandle, SharedString, SharedUri, StatefulInteractiveElement,
+    ParentElement, Pixels, Refineable as _, ScrollHandle, SharedString, SharedUri, StatefulInteractiveElement,
     StyleRefinement, Styled, StyledImage as _, WhiteSpace, Window, div, img,
     prelude::FluentBuilder as _, px, relative, rems,
 };
@@ -1385,6 +1385,10 @@ impl Paragraph {
                 self.inline_flow_items(node_cx, cx),
                 node_cx.link_click_handler.clone(),
             )
+            .code_style(
+                node_cx.style.inline_code_font(),
+                node_cx.style.inline_code_wash(),
+            )
             .render_links(node_cx.link_renderer.as_ref(), _window, cx);
             if self.should_render_inline_flow() || flow.has_elements() {
                 return flow.into_any_element();
@@ -1415,6 +1419,10 @@ impl Paragraph {
                             links.clone(),
                             highlights.clone(),
                             node_cx.link_click_handler.clone(),
+                        )
+                        .code_style(
+                            node_cx.style.inline_code_font(),
+                            node_cx.style.inline_code_wash(),
                         )
                         .into_any_element(),
                     );
@@ -1468,7 +1476,7 @@ impl Paragraph {
 
                     let mut highlight = HighlightStyle::default();
                     if style.bold {
-                        highlight.font_weight = Some(FontWeight::BOLD);
+                        highlight = highlight.highlight(node_cx.style.strong());
                     }
                     if style.italic {
                         highlight.font_style = Some(FontStyle::Italic);
@@ -1496,6 +1504,7 @@ impl Paragraph {
                         highlight.color = Some(node_cx.style.link());
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
+                            color: node_cx.style.link_underline(),
                             ..Default::default()
                         });
 
@@ -1530,6 +1539,10 @@ impl Paragraph {
                     links,
                     highlights,
                     node_cx.link_click_handler.clone(),
+                )
+                .code_style(
+                    node_cx.style.inline_code_font(),
+                    node_cx.style.inline_code_wash(),
                 )
                 .into_any_element(),
             );
@@ -1590,7 +1603,7 @@ impl Paragraph {
 
                     let mut highlight = HighlightStyle::default();
                     if style.bold {
-                        highlight.font_weight = Some(FontWeight::BOLD);
+                        highlight = highlight.highlight(node_cx.style.strong());
                     }
                     if style.italic {
                         highlight.font_style = Some(FontStyle::Italic);
@@ -1618,6 +1631,7 @@ impl Paragraph {
                         highlight.color = Some(node_cx.style.link());
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
+                            color: node_cx.style.link_underline(),
                             ..Default::default()
                         });
 
@@ -1828,6 +1842,7 @@ impl BlockNode {
                         .flex_none()
                         .w(marker_width)
                         .text_right()
+                        .refine_style(style.list_marker(options.ordered))
                         .child(list_item_prefix(
                             ix,
                             options.ordered,
@@ -2380,6 +2395,7 @@ impl BlockNode {
         let content = match self {
             BlockNode::Root { children, .. } => {
                 let last = children.iter().rposition(Self::is_visible);
+                let first = children.iter().position(Self::is_visible);
                 div()
                     .id(("div", ix))
                     .children(children.iter().enumerate().map(move |(ix, node)| {
@@ -2387,6 +2403,7 @@ impl BlockNode {
                             NodeRenderOptions {
                                 ix,
                                 is_last: Some(ix) == last,
+                                after_sibling: first.is_some_and(|first| ix > first),
                                 ..options
                             },
                             node_cx,
@@ -2423,6 +2440,7 @@ impl BlockNode {
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
+                    .refine_style(node_cx.style.heading(*level))
                     .child(children.render(node_cx, window, cx))
                     .into_any_element()
             }
@@ -2437,13 +2455,16 @@ impl BlockNode {
                         .border_color(node_cx.style.border())
                         .px_2()
                         .italic()
+                        .refine_style(node_cx.style.blockquote())
                         .children({
                             let last = children.iter().rposition(Self::is_visible);
+                            let first = children.iter().position(Self::is_visible);
                             children.into_iter().enumerate().map(move |(index, c)| {
                                 let is_last = Some(index) == last;
                                 c.render_block(
                                     NodeRenderOptions {
                                         ix: index,
+                                        after_sibling: first.is_some_and(|first| index > first),
                                         ..options.is_last(is_last)
                                     },
                                     node_cx,
@@ -2491,7 +2512,10 @@ impl BlockNode {
                         } else {
                             let marker =
                                 list_item_prefix(item_index, *ordered, options.depth, *start);
-                            let run = text_style.to_run(marker.len());
+                            // Measure in the marker's own refined face.
+                            let mut marker_style = text_style.clone();
+                            marker_style.refine(&node_cx.style.list_marker(*ordered).text);
+                            let run = marker_style.to_run(marker.len());
                             marker_width = marker_width.max(
                                 window
                                     .text_system()
@@ -2543,7 +2567,8 @@ impl BlockNode {
                     div()
                         .id("horizontal-rule")
                         .bg(node_cx.style.border())
-                        .h(px(2.)),
+                        .h(px(2.))
+                        .refine_style(node_cx.style.rule()),
                 )
                 .into_any_element(),
             BlockNode::Break { .. } => div().id("break").into_any_element(),
@@ -2556,10 +2581,20 @@ impl BlockNode {
                 div().into_any_element()
             }
         };
+        // Ferrite: a heading may carry its own space below (in place of the
+        // paragraph gap) and, after a sibling, space above.
+        let heading = matches!(self, BlockNode::Heading { .. });
+        let gap = match node_cx.style.heading_space_below() {
+            Some(below) if heading && !options.is_last => below,
+            _ => gap,
+        };
         div()
             .id(("markdown-block", ix))
             .w_full()
             .min_w_0()
+            .when(heading && options.after_sibling, |block| {
+                block.pt(node_cx.style.heading_space_above())
+            })
             .pb(gap)
             .child(content)
             .into_any_element()

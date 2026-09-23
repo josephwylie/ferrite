@@ -36,11 +36,42 @@ line breaks instead of dropping them. Ferrite's native geometry tests in
 
 Quotes use a restrained 1px rail and italic text. Table header refinements reach
 individual cells so header centering can override a data column's alignment.
-Ferrite's styles retain the toolkit's table grid and remove raised code chrome;
-prose fonts and heading sizes are unchanged. Heading emphasis is explicit: H1
-bold/italic/underlined, H2–H6 bold. Ferrite opts into the existing adaptive
-horizontal-scroll table renderer for narrow overflow; the track carries a debug
-selector for native geometry acceptance.
+Headings are bold at every level (upstream's H1 italic and underline were
+removed). Ferrite opts into the existing adaptive horizontal-scroll table
+renderer for narrow overflow; the track carries a debug selector for native
+geometry acceptance.
+
+Fenced code actions (language label, `Copy`, html `Preview`) render as a header
+row above the code, in flow, rather than absolutely positioned over its first
+line. Each list measures one marker column (the widest prefix, at least the
+font size; a task checkbox is 1.375rem), so continuations and nested lists
+indent by that width and a new digit (9 → 10) never moves an item's body.
+
+Style knobs on `TextViewStyle`, all additive, every default reproducing the
+look above (they join `PartialEq`, so a change re-keys selection layout):
+
+- `with_heading(level, StyleRefinement)`: refined after the default size and
+  weight (weight, ink, line height).
+- `with_heading_spacing(above, below)`: space above a heading that follows a
+  visible sibling (`NodeRenderOptions::after_sibling`, set by the document,
+  root and blockquote loops; a first block gets none), and optionally the space
+  below it in place of the paragraph gap.
+- `with_strong(HighlightStyle)`: `**strong**` runs (default: bold weight).
+- `with_link_underline(Option<Hsla>)`: the underline's ink (default: the link's).
+- `with_inline_code_font(Option<SharedString>)` and
+  `with_inline_code_wash(Option<InlineCodeWash>)`: inline code shaped in its own
+  family, on a rounded ground painted per wrapped line under the glyphs. The
+  code highlight then carries a zero `fade_out` marker (no pixel effect; it
+  survives highlight merges) that `Inline` and `InlineFlow` run builders use to
+  find code runs; with a wash the square highlight background is dropped.
+- `with_blockquote(StyleRefinement)`, `with_rule(StyleRefinement)`: refined after
+  the defaults (a quote's `not_italic()` wins over the default italic).
+- `with_list_markers(bullet, ordinal)`: marker refinements; their text
+  refinement also measures the shared marker column.
+
+Ferrite's `rich.rs` `vendor_knob_tests` pin these through the real renderer
+(this crate is not a workspace member, so its own tests do not run there).
+Remove each knob when upstream offers an equivalent.
 
 Native selection registration updates one participant at a time, then sweeps
 and publishes once after the frame. `TextSelectionDocument` separates retained

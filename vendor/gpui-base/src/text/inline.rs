@@ -19,6 +19,7 @@ use crate::{
     text::node::LinkMark,
     text::selection::word_range_at,
     text::state::LineSpan,
+    text::style::{INLINE_CODE_MARK, InlineCodeWash},
     text::text_view::{LinkClickHandlerFn, handle_link_click},
     text_selection::TextSelectionDocumentRange,
 };
@@ -33,6 +34,9 @@ pub(super) struct Inline {
     highlights: Vec<(Range<usize>, HighlightStyle)>,
     styled_text: StyledText,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    // Ferrite: inline code's own family and rounded ground (`code_style`).
+    code_font: Option<SharedString>,
+    code_wash: Option<InlineCodeWash>,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -277,6 +281,35 @@ fn selection_for_document_range(
     (start < end).then(|| (start..end).into())
 }
 
+/// The per-line boxes a byte range occupies in a wrapped layout.
+fn code_line_bounds(
+    text: &str,
+    text_layout: &TextLayout,
+    range: Range<usize>,
+    line_height: Pixels,
+) -> Vec<Bounds<Pixels>> {
+    let mut lines: Vec<Bounds<Pixels>> = Vec::new();
+    let end = range.end.min(text.len());
+    let mut offset = range.start.min(end);
+    for c in text[offset..end].chars() {
+        let next = offset + c.len_utf8();
+        if let Some(pos) = text_layout.position_for_index(offset) {
+            let right = text_layout
+                .position_for_index(next)
+                .filter(|next_pos| next_pos.y == pos.y)
+                .map(|next_pos| next_pos.x)
+                .unwrap_or(pos.x + line_height.half());
+            let glyph = Bounds::from_corners(pos, point(right, pos.y + line_height));
+            match lines.last_mut() {
+                Some(line) if line.top() == pos.y => *line = line.union(&glyph),
+                _ => lines.push(glyph),
+            }
+        }
+        offset = next;
+    }
+    lines
+}
+
 fn utf8_boundary_before(text: &str, mut offset: usize) -> usize {
     while offset > 0 && !text.is_char_boundary(offset) {
         offset -= 1;
@@ -304,8 +337,22 @@ impl Inline {
             text: text.clone(),
             styled_text: StyledText::new(text),
             link_click_handler,
+            code_font: None,
+            code_wash: None,
             state,
         }
+    }
+
+    /// Ferrite: shapes inline code runs (marked by [`INLINE_CODE_MARK`]) in
+    /// `font` and paints `wash` under them.
+    pub(super) fn code_style(
+        mut self,
+        font: Option<SharedString>,
+        wash: Option<InlineCodeWash>,
+    ) -> Self {
+        self.code_font = font;
+        self.code_wash = wash;
+        self
     }
 
     /// Get link at given mouse position.
@@ -460,6 +507,37 @@ impl Inline {
         line_bounds
     }
 
+    /// Paints `wash` under every inline code run (the highlights carrying
+    /// [`INLINE_CODE_MARK`]), one rounded quad per wrapped line of the run.
+    /// Skipped when the paragraph lies wholly outside the content mask.
+    fn paint_code_wash(&self, text_layout: &TextLayout, wash: InlineCodeWash, window: &mut Window) {
+        let mask = window.content_mask().bounds;
+        let visible = text_layout.bounds().intersect(&mask);
+        if visible.size.width <= px(0.) || visible.size.height <= px(0.) {
+            return;
+        }
+        let line_height = text_layout.line_height();
+        for (range, highlight) in &self.highlights {
+            if highlight.fade_out != INLINE_CODE_MARK {
+                continue;
+            }
+            for line in code_line_bounds(&self.text, text_layout, range.clone(), line_height) {
+                let bounds = Bounds::from_corners(
+                    point(line.left() - wash.overhang, line.top() + wash.inset_y),
+                    point(line.right() + wash.overhang, line.bottom() - wash.inset_y),
+                );
+                window.paint_quad(quad(
+                    bounds,
+                    wash.radius,
+                    wash.color,
+                    Edges::default(),
+                    gpui::transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+        }
+    }
+
     /// Paint the selection background.
     fn paint_selection(
         selection: &Selection,
@@ -563,6 +641,8 @@ impl Element for Inline {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let text_style = window.text_style();
+        // Ferrite: inline code may be shaped in its own family.
+        let code_font = self.code_font.clone();
 
         let mut runs = Vec::new();
         let mut ix = 0;
@@ -570,7 +650,14 @@ impl Element for Inline {
             if ix < range.start {
                 runs.push(text_style.clone().to_run(range.start - ix));
             }
-            runs.push(text_style.clone().highlight(*highlight).to_run(range.len()));
+            let mut run = text_style.clone().highlight(*highlight).to_run(range.len());
+            if let Some(family) = code_font
+                .as_ref()
+                .filter(|_| highlight.fade_out == INLINE_CODE_MARK)
+            {
+                run.font.family = family.clone();
+            }
+            runs.push(run);
             ix = range.end;
         }
         if ix < self.text.len() {
@@ -636,6 +723,10 @@ impl Element for Inline {
         };
 
         let text_layout = self.styled_text.layout().clone();
+        // Ferrite: a rounded ground under each inline code run, under the text.
+        if let Some(wash) = self.code_wash {
+            self.paint_code_wash(&text_layout, wash, window);
+        }
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
 

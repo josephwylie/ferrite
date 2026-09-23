@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{HighlightStyle, Hsla, Pixels, Rems, StyleRefinement, px, rems};
+use gpui::{FontWeight, HighlightStyle, Hsla, Pixels, Rems, SharedString, StyleRefinement, px, rems};
 
 use crate::ColorTokens;
 
@@ -27,7 +27,37 @@ pub struct TextViewStyle {
     table_cell: StyleRefinement,
     inline_code: HighlightStyle,
     is_dark: bool,
+    // Ferrite knobs (vendor/README.md): every default reproduces upstream.
+    headings: [StyleRefinement; 6],
+    heading_space_above: Rems,
+    heading_space_below: Option<Rems>,
+    strong: HighlightStyle,
+    link_underline: Option<Hsla>,
+    inline_code_font: Option<SharedString>,
+    inline_code_wash: Option<InlineCodeWash>,
+    blockquote: StyleRefinement,
+    rule: StyleRefinement,
+    list_bullet: StyleRefinement,
+    list_ordinal: StyleRefinement,
 }
+
+/// A rounded ground painted under inline code runs, per wrapped line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InlineCodeWash {
+    /// The ground's color, normally translucent.
+    pub color: Hsla,
+    /// Its corner radius.
+    pub radius: Pixels,
+    /// How far it reaches past the run's first and last glyph.
+    pub overhang: Pixels,
+    /// How far it stays inside the line box, top and bottom.
+    pub inset_y: Pixels,
+}
+
+/// The inline-code marker carried in a highlight: a zero fade, which changes
+/// no pixel and survives `HighlightStyle::highlight` merges, so run builders
+/// can find code runs without a second range list.
+pub(crate) const INLINE_CODE_MARK: Option<f32> = Some(0.);
 
 impl PartialEq for TextViewStyle {
     fn eq(&self, other: &Self) -> bool {
@@ -53,6 +83,17 @@ impl PartialEq for TextViewStyle {
             && self.table_cell == other.table_cell
             && self.inline_code == other.inline_code
             && self.is_dark == other.is_dark
+            && self.headings == other.headings
+            && self.heading_space_above == other.heading_space_above
+            && self.heading_space_below == other.heading_space_below
+            && self.strong == other.strong
+            && self.link_underline == other.link_underline
+            && self.inline_code_font == other.inline_code_font
+            && self.inline_code_wash == other.inline_code_wash
+            && self.blockquote == other.blockquote
+            && self.rule == other.rule
+            && self.list_bullet == other.list_bullet
+            && self.list_ordinal == other.list_ordinal
     }
 }
 
@@ -96,6 +137,20 @@ impl TextViewStyle {
                 ..Default::default()
             },
             is_dark,
+            headings: Default::default(),
+            heading_space_above: rems(0.),
+            heading_space_below: None,
+            strong: HighlightStyle {
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+            link_underline: None,
+            inline_code_font: None,
+            inline_code_wash: None,
+            blockquote: StyleRefinement::default(),
+            rule: StyleRefinement::default(),
+            list_bullet: StyleRefinement::default(),
+            list_ordinal: StyleRefinement::default(),
         }
     }
 
@@ -213,6 +268,125 @@ impl TextViewStyle {
         self
     }
 
+    /// Refines headings of `level` (1-6), applied after the default size and
+    /// weight, so it can set weight, ink and line height.
+    pub fn with_heading(mut self, level: u8, style: StyleRefinement) -> Self {
+        if let Some(slot) = self.headings.get_mut(level.clamp(1, 6) as usize - 1) {
+            *slot = style;
+        }
+        self
+    }
+
+    /// Sets the space above a heading that follows a sibling (a first block
+    /// gets none), and optionally the space below a heading in place of the
+    /// paragraph gap. Defaults to no space above and the paragraph gap below.
+    pub fn with_heading_spacing(mut self, above: Rems, below: Option<Rems>) -> Self {
+        self.heading_space_above = above;
+        self.heading_space_below = below;
+        self
+    }
+
+    /// Sets the highlight for `**strong**` runs. Defaults to bold weight.
+    pub fn with_strong(mut self, style: HighlightStyle) -> Self {
+        self.strong = style;
+        self
+    }
+
+    /// Sets a link's underline color. `None` (the default) underlines in the
+    /// link's own ink.
+    pub fn with_link_underline(mut self, color: Option<Hsla>) -> Self {
+        self.link_underline = color;
+        self
+    }
+
+    /// Sets the font family inline code runs are shaped in. `None` (the
+    /// default) keeps the surrounding family.
+    pub fn with_inline_code_font(mut self, family: Option<SharedString>) -> Self {
+        self.inline_code_font = family;
+        self
+    }
+
+    /// Paints a rounded ground under inline code instead of the square
+    /// highlight background. `None` (the default) keeps the highlight.
+    pub fn with_inline_code_wash(mut self, wash: Option<InlineCodeWash>) -> Self {
+        self.inline_code_wash = wash;
+        self
+    }
+
+    /// Refines the blockquote, after its default rail, padding and italic.
+    pub fn with_blockquote(mut self, style: StyleRefinement) -> Self {
+        self.blockquote = style;
+        self
+    }
+
+    /// Refines the horizontal rule (default: a 2px bar in the border color).
+    pub fn with_rule(mut self, style: StyleRefinement) -> Self {
+        self.rule = style;
+        self
+    }
+
+    /// Refines list markers: bullets and ordinals. Their text refinement also
+    /// measures the shared marker column.
+    pub fn with_list_markers(mut self, bullet: StyleRefinement, ordinal: StyleRefinement) -> Self {
+        self.list_bullet = bullet;
+        self.list_ordinal = ordinal;
+        self
+    }
+
+    /// The refinement for headings of `level`.
+    pub fn heading(&self, level: u8) -> &StyleRefinement {
+        &self.headings[level.clamp(1, 6) as usize - 1]
+    }
+
+    /// The space above a heading that follows a sibling.
+    pub fn heading_space_above(&self) -> Rems {
+        self.heading_space_above
+    }
+
+    /// The space below a heading, when it replaces the paragraph gap.
+    pub fn heading_space_below(&self) -> Option<Rems> {
+        self.heading_space_below
+    }
+
+    /// The highlight for `**strong**` runs.
+    pub fn strong(&self) -> HighlightStyle {
+        self.strong
+    }
+
+    /// A link's underline color; `None` is the link's ink.
+    pub fn link_underline(&self) -> Option<Hsla> {
+        self.link_underline
+    }
+
+    /// The family inline code is shaped in, when it differs.
+    pub fn inline_code_font(&self) -> Option<SharedString> {
+        self.inline_code_font.clone()
+    }
+
+    /// The rounded ground under inline code, when set.
+    pub fn inline_code_wash(&self) -> Option<InlineCodeWash> {
+        self.inline_code_wash
+    }
+
+    /// The blockquote refinement.
+    pub fn blockquote(&self) -> &StyleRefinement {
+        &self.blockquote
+    }
+
+    /// The horizontal rule refinement.
+    pub fn rule(&self) -> &StyleRefinement {
+        &self.rule
+    }
+
+    /// The list marker refinement for ordered (`true`) or bullet lists.
+    pub fn list_marker(&self, ordered: bool) -> &StyleRefinement {
+        if ordered {
+            &self.list_ordinal
+        } else {
+            &self.list_bullet
+        }
+    }
+
     /// The default body-text color.
     pub fn foreground(&self) -> Hsla {
         self.foreground
@@ -297,10 +471,19 @@ impl TextViewStyle {
 
     /// Returns the [`HighlightStyle`] to use for inline code, falling back to
     /// the code background when no custom background was supplied.
+    ///
+    /// With a wash configured the square background is dropped (the wash is
+    /// painted instead), and with a wash or a code font the run carries
+    /// [`INLINE_CODE_MARK`] so run builders can find it.
     pub(crate) fn inline_code_highlight(&self) -> HighlightStyle {
         let mut style = self.inline_code;
-        if style.background_color.is_none() {
+        if self.inline_code_wash.is_some() {
+            style.background_color = None;
+        } else if style.background_color.is_none() {
             style.background_color = Some(self.code_background);
+        }
+        if self.inline_code_wash.is_some() || self.inline_code_font.is_some() {
+            style.fade_out = INLINE_CODE_MARK;
         }
         style
     }
@@ -322,6 +505,53 @@ mod tests {
         assert!(base != base.clone().with_table_cell(table));
 
         assert!(base != base.clone().with_dark(true));
+    }
+
+    #[test]
+    fn ferrite_knobs_default_to_upstream_and_join_the_fingerprint() {
+        let base = TextViewStyle::default();
+        assert_eq!(base.strong().font_weight, Some(FontWeight::BOLD));
+        assert_eq!(base.heading(1), &StyleRefinement::default());
+        assert_eq!(base.heading_space_above(), rems(0.));
+        assert_eq!(base.heading_space_below(), None);
+        assert_eq!(base.link_underline(), None);
+        assert_eq!(base.inline_code_font(), None);
+        assert_eq!(base.inline_code_highlight().fade_out, None);
+        assert!(base.clone() == base);
+        let heading = StyleRefinement {
+            font_weight: Some(FontWeight::SEMIBOLD),
+            ..Default::default()
+        };
+        assert!(base != base.clone().with_heading(2, heading.clone()));
+        assert_eq!(base.clone().with_heading(2, heading.clone()).heading(2), &heading);
+        assert!(base != base.clone().with_heading_spacing(rems(1.), None));
+        assert!(base != base.clone().with_strong(HighlightStyle::default()));
+        assert!(base != base.clone().with_link_underline(Some(gpui::red())));
+        assert!(base != base.clone().with_inline_code_font(Some("Mono".into())));
+        assert!(base != base.clone().with_blockquote(heading.clone()));
+        assert!(base != base.clone().with_rule(heading.clone()));
+        assert!(base != base.clone().with_list_markers(heading.clone(), Default::default()));
+    }
+
+    #[test]
+    fn a_code_wash_replaces_the_square_background_and_marks_the_run() {
+        let wash = InlineCodeWash {
+            color: gpui::red(),
+            radius: px(4.),
+            overhang: px(2.),
+            inset_y: px(1.),
+        };
+        let style = TextViewStyle::default().with_inline_code_wash(Some(wash));
+        let code = style.inline_code_highlight();
+        assert_eq!(code.background_color, None);
+        assert_eq!(code.fade_out, INLINE_CODE_MARK);
+        // The marker survives a merge with bold, as the paragraph builder does.
+        let merged = HighlightStyle {
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        }
+        .highlight(code);
+        assert_eq!(merged.fade_out, INLINE_CODE_MARK);
     }
 
     #[test]

@@ -1473,3 +1473,108 @@ mod spacing_tests {
         );
     }
 }
+
+/// The Ferrite knobs in `vendor/gpui-base/src/text` (see `vendor/README.md`),
+/// measured through the real renderer. The vendor crate is not a workspace
+/// member, so its own tests do not run here; these pin the behaviour.
+#[cfg(test)]
+mod vendor_knob_tests {
+    use super::*;
+    use gpui::{div, Context, Render, TestAppContext};
+
+    type Knobs = fn(TextViewStyle) -> TextViewStyle;
+
+    struct KnobRoot {
+        source: String,
+        knobs: Knobs,
+        width: f32,
+    }
+
+    impl Render for KnobRoot {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            window.set_rem_size(px(theme::FS_UI));
+            div().w(px(self.width)).child(
+                div()
+                    .debug_selector(|| "knob-sample".into())
+                    .w_full()
+                    .child(
+                        TextView::markdown("knob-sample", self.source.clone())
+                            .max_lines(usize::MAX)
+                            .style((self.knobs)(
+                                style(window.rem_size()).with_paragraph_gap(rems(0.)),
+                            )),
+                    ),
+            )
+        }
+    }
+
+    fn height(cx: &mut TestAppContext, source: &str, width: f32, knobs: Knobs) -> gpui::Pixels {
+        let (_, cx) = cx.add_window_view(|_, _| KnobRoot {
+            source: source.into(),
+            knobs,
+            width,
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.debug_bounds("knob-sample").unwrap().size.height
+    }
+
+    fn plain(style: TextViewStyle) -> TextViewStyle {
+        style
+    }
+
+    #[gpui::test]
+    fn heading_space_rides_above_a_heading_only_after_a_sibling(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn spaced(style: TextViewStyle) -> TextViewStyle {
+            style.with_heading_spacing(rems(20. / theme::FS_UI), None)
+        }
+        let after = height(cx, "Para\n\n## Heading", 360., spaced)
+            - height(cx, "Para\n\n## Heading", 360., plain);
+        assert!((after - px(20.)).abs() < px(0.5), "space above: {after:?}");
+        let first = height(cx, "## Heading", 360., spaced) - height(cx, "## Heading", 360., plain);
+        assert!(
+            first.abs() < px(0.5),
+            "a first heading takes none: {first:?}"
+        );
+    }
+
+    /// The test text system gives every family one advance, so the family
+    /// itself is checked in the visual-reference captures. Here: the code
+    /// knobs render and paint their wash without moving any layout.
+    #[gpui::test]
+    fn inline_code_knobs_paint_without_moving_layout(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn code(style: TextViewStyle) -> TextViewStyle {
+            style
+                .with_inline_code_font(Some(theme::FONT_MONO.into()))
+                .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
+                    color: rgba(theme::ACCENT_WASH).into(),
+                    radius: px(theme::R_CHIP),
+                    overhang: px(2.),
+                    inset_y: px(1.),
+                }))
+        }
+        for source in [
+            "Run `cargo test` now.".to_string(),
+            format!("Wrapped `{}` code.", "long ".repeat(30)),
+            "A [link](https://example.com) and `code` in a flow.".to_string(),
+        ] {
+            let before = height(cx, &source, 220., plain);
+            let after = height(cx, &source, 220., code);
+            assert_eq!(before, after, "{source:?}");
+        }
+    }
+
+    #[gpui::test]
+    fn the_rule_takes_its_refinement(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn hairline(style: TextViewStyle) -> TextViewStyle {
+            style.with_rule(gpui::StyleRefinement::default().h(px(1.)))
+        }
+        let thinner = height(cx, "---", 360., plain) - height(cx, "---", 360., hairline);
+        assert!((thinner - px(1.)).abs() < px(0.25), "{thinner:?}");
+    }
+}

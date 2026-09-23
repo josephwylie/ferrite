@@ -273,6 +273,12 @@ pub enum Class {
     Str,
     Comment,
     Number,
+    /// A called name: `name(`, and Rust's `name!`.
+    Function,
+    /// A capitalised name.
+    Type,
+    /// ASCII punctuation and operators.
+    Punct,
 }
 
 /// Syntax highlighting, injected. Ferrite never blocks a frame on it: the

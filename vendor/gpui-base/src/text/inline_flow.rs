@@ -32,6 +32,9 @@ pub(super) struct InlineFlow {
     id: ElementId,
     items: Vec<InlineFlowItem>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    // Ferrite: see `Inline::code_style`.
+    code_font: Option<SharedString>,
+    code_wash: Option<crate::text::style::InlineCodeWash>,
 }
 
 pub(super) enum InlineFlowItem {
@@ -126,7 +129,20 @@ impl InlineFlow {
             id: id.into(),
             items,
             link_click_handler,
+            code_font: None,
+            code_wash: None,
         }
+    }
+
+    /// Ferrite: inline code's family and ground, handed to every fragment.
+    pub(super) fn code_style(
+        mut self,
+        font: Option<SharedString>,
+        wash: Option<crate::text::style::InlineCodeWash>,
+    ) -> Self {
+        self.code_font = font;
+        self.code_wash = wash;
+        self
     }
 
     pub(super) fn has_elements(&self) -> bool {
@@ -318,6 +334,7 @@ impl Element for InlineFlow {
             .collect::<Vec<_>>();
         let layout_state = InlineFlowLayoutState::default();
         let layout_ref = layout_state.layout.clone();
+        let code_font = self.code_font.clone();
 
         let layout_id = window.request_measured_layout(Default::default(), {
             move |known_dimensions, available_space, window, _cx| {
@@ -345,6 +362,7 @@ impl Element for InlineFlow {
                     &image_sizes,
                     &text_style,
                     wrap_width,
+                    code_font.as_ref(),
                     window,
                 );
                 let size = layout.size;
@@ -414,6 +432,7 @@ impl Element for InlineFlow {
                         highlights,
                         self.link_click_handler.clone(),
                     )
+                    .code_style(self.code_font.clone(), self.code_wash)
                     .into_any_element();
                     element.prepaint_as_root(
                         bounds.origin + origin,
@@ -594,6 +613,7 @@ fn layout_flow(
     image_sizes: &[Option<Size<Pixels>>],
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
+    code_font: Option<&SharedString>,
     window: &mut Window,
 ) -> InlineFlowLayout {
     let line_height = window.line_height();
@@ -642,7 +662,12 @@ fn layout_flow(
                         let links = slice_ranges(links, local_start, local_end, |range, link| {
                             (range, link.clone())
                         });
-                        let runs = runs_for_highlights(&subtext, text_style, highlights.clone());
+                        let runs = runs_for_highlights(
+                            &subtext,
+                            text_style,
+                            highlights.clone(),
+                            code_font,
+                        );
                         let shaped_line = shape_line(subtext.clone(), font_size, &runs, window);
                         let width = shaped_line.width();
                         line_width += width;
@@ -903,6 +928,7 @@ fn runs_for_highlights(
     text: &str,
     default_style: &TextStyle,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
+    code_font: Option<&SharedString>,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
     let mut ix = 0;
@@ -911,12 +937,17 @@ fn runs_for_highlights(
         if ix < range.start {
             runs.push(default_style.clone().to_run(range.start - ix));
         }
-        runs.push(
-            default_style
-                .clone()
-                .highlight(highlight)
-                .to_run(range.len()),
-        );
+        let mut run = default_style
+            .clone()
+            .highlight(highlight)
+            .to_run(range.len());
+        // Ferrite: measure inline code in the family it paints in.
+        if let Some(family) = code_font.filter(|_| {
+            highlight.fade_out == crate::text::style::INLINE_CODE_MARK
+        }) {
+            run.font.family = family.clone();
+        }
+        runs.push(run);
         ix = range.end;
     }
 

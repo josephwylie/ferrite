@@ -25,6 +25,9 @@ pub(crate) struct NodeRenderOptions {
     pub(crate) list_start: u32,
     pub(crate) depth: usize,
     pub(crate) is_last: bool,
+    /// Ferrite: a visible sibling precedes this block (headings take their
+    /// space above only then).
+    pub(crate) after_sibling: bool,
 }
 
 impl NodeRenderOptions {
@@ -184,6 +187,7 @@ impl ParsedDocument {
     ) -> impl IntoElement {
         let Some(list_state) = list_state else {
             let last = self.blocks.iter().rposition(BlockNode::is_visible);
+            let first = self.blocks.iter().position(BlockNode::is_visible);
             return div()
                 .id("document")
                 .children(self.blocks.iter().enumerate().map(move |(ix, node)| {
@@ -192,6 +196,7 @@ impl ParsedDocument {
                         NodeRenderOptions {
                             ix,
                             is_last,
+                            after_sibling: first.is_some_and(|first| ix > first),
                             ..Default::default()
                         },
                         node_cx,
@@ -216,6 +221,7 @@ impl ParsedDocument {
                 let node_cx = node_cx.clone();
                 let blocks = blocks.clone();
                 let last = blocks.iter().rposition(BlockNode::is_visible);
+                let first = blocks.iter().position(BlockNode::is_visible);
                 move |ix, window, cx| {
                     let is_last = Some(ix) == last;
                     blocks[ix]
@@ -223,6 +229,7 @@ impl ParsedDocument {
                             NodeRenderOptions {
                                 ix,
                                 is_last,
+                                after_sibling: first.is_some_and(|first| ix > first),
                                 ..options
                             },
                             &node_cx,

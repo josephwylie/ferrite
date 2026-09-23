@@ -5537,7 +5537,9 @@ fn code_lines(
 /// Pane's state signals where it can.
 fn class_ink(class: Class) -> u32 {
     match class {
-        Class::Plain => theme::SYN_PLAIN,
+        // The lexer's newer classes paint as plain until WP-B assigns them
+        // `SYN_FUNCTION`, `SYN_TYPE` and `SYN_PUNCT`.
+        Class::Plain | Class::Function | Class::Type | Class::Punct => theme::SYN_PLAIN,
         Class::Keyword => SYN_KEYWORD,
         Class::Str => SYN_STRING,
         Class::Comment => theme::SYN_COMMENT,
