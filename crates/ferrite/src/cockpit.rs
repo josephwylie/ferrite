@@ -95,7 +95,6 @@ pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatu
         },
     }
 }
-use ferrite_core::settings::UsageMeterStyle;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 #[cfg(test)]
@@ -2710,25 +2709,6 @@ impl CockpitView {
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
             prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "cmd-B toggles it any time",
                 settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
-            prefs::choices(
-                "settings-usage-meter",
-                "Usage meter",
-                "The mark the Composer's context, 5-hour and weekly meter wears",
-                [
-                    ("Lines", UsageMeterStyle::Lines),
-                    ("Rings", UsageMeterStyle::Rings),
-                ]
-                .into_iter()
-                .map(|(label, style)| {
-                    (
-                        SharedString::from(label),
-                        settings.usage_meter_style == style,
-                        style,
-                    )
-                })
-                .collect(),
-                self.setting_change(cx, |settings, style| settings.usage_meter_style = style),
-            ),
         ];
         let reading = vec![prefs::choices(
             "settings-solo-answer-size",
@@ -3408,11 +3388,19 @@ impl CockpitView {
         // queues the line behind the turn. At rest it sends (↑). The keys
         // work either way and the tooltip names them. Its selector says
         // which verb it is now.
-        let empty = pane.composer.read(cx).is_empty();
         let stopping = can_stop;
-        let (verb, tooltip) = if stopping {
+        // Tooltips name the verb and its key, nothing else; the longer
+        // sentence is the control's accessibility label.
+        let (verb, label, key, spoken) = if stopping {
+            let empty = pane.composer.read(cx).is_empty();
             (
                 "stop",
+                if starting {
+                    "Cancel startup"
+                } else {
+                    "Interrupt"
+                },
+                "esc",
                 if starting {
                     "Cancel startup (Esc); keep the draft"
                 } else if !empty {
@@ -3426,6 +3414,8 @@ impl CockpitView {
         } else {
             (
                 "send",
+                if queued { "Send or queue" } else { "Send" },
+                "↵",
                 if queued {
                     "Send or queue (Enter). Shift+Enter inserts a newline."
                 } else {
@@ -3433,32 +3423,52 @@ impl CockpitView {
                 },
             )
         };
-        let live = stopping || can_send;
+        // Three faces (C27): an armed Send is the one bright ground, Stop
+        // is a quiet `FILL` square whose `■` brightens under the pointer
+        // (the 150ms blend), and an idle Send is plainly off.
+        let armed = can_send && !stopping;
+        let live = stopping || armed;
         // The element keeps one id across the swap, so the glyph cross-fade
         // below survives it; the selector names the verb in force.
         let id = format!("composer-action-{identity:?}");
         let selector = format!("composer-{verb}-{identity:?}");
+        let blend = SharedString::from(format!("composer-stop-{identity:?}"));
+        let face = send_face(stopping, armed);
+        // Stop's ground and `■` blend toward their hover faces (150ms);
+        // Send's faces snap, and press is instant for both.
+        let blended = |rest: u32, hover: u32| -> gpui::Hsla {
+            if face.blends {
+                crate::motion::hover_blend(&blend, rgb(rest).into(), rgb(hover).into())
+            } else {
+                rgb(rest).into()
+            }
+        };
+        let ground = blended(face.ground, face.hover);
+        let ink = blended(face.ink, face.ink_hover);
+        let (hover, pressed): (gpui::Hsla, gpui::Hsla) = if face.blends {
+            (ground, rgb(face.pressed).into())
+        } else {
+            (rgb(face.hover).into(), rgb(face.pressed).into())
+        };
         let button = {
             use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
             crate::components::button(SharedString::from(id))
                 .custom(
                     ButtonCustomVariant::new(cx)
-                        .foreground(rgb(crate::theme::SEND_INK).into())
-                        .hover(rgb(crate::theme::SEND_HOVER).into())
-                        .active(rgb(crate::theme::SEND_PRESSED).into()),
+                        .foreground(ink)
+                        .hover(hover)
+                        .active(pressed),
                 )
                 .debug_selector(move || selector.clone())
                 .size(px(crate::theme::SEND_BUTTON))
                 .p_0()
                 .rounded(px(crate::theme::COMPOSER_CHIP_R))
-                .bg(rgb(if live {
-                    crate::theme::SEND_GROUND
-                } else {
-                    crate::theme::SEND_IDLE_GROUND
-                }))
+                .bg(ground)
                 .disabled(!live)
-                .tooltip(tooltip)
-                .accessibility_label(tooltip)
+                .accessibility_label(spoken)
+                .when(stopping, |button| {
+                    button.on_hover(crate::motion::hover_listener(blend.clone()))
+                })
                 // ↑ and ■ both stay mounted and cross-fade (`motion::ICON_SWAP`):
                 // the arriving glyph grows from a quarter as the leaving one
                 // shrinks to it. First paint lands on the verb in force.
@@ -3467,18 +3477,14 @@ impl CockpitView {
                     stopping,
                     crate::motion::ICON_SWAP,
                     move |stop| {
-                        let ink = if live {
-                            crate::theme::SEND_INK
-                        } else {
-                            crate::theme::SEND_IDLE_INK
-                        };
                         let glyph = |path, shown: f32| {
                             let scale = crate::motion::lerp(
                                 crate::theme::MOTION_ICON_SWAP_SCALE,
                                 1.0,
                                 shown,
                             );
-                            crate::icons::icon(path, crate::theme::SEND_GLYPH, ink)
+                            crate::icons::icon(path, crate::theme::SEND_GLYPH, 0)
+                                .text_color(ink)
                                 .absolute()
                                 .top_0()
                                 .left_0()
@@ -3499,7 +3505,15 @@ impl CockpitView {
                     view.composer_action(identity, stopping, window, cx);
                 }))
         };
-        Some(button.into_any_element())
+        Some(
+            div()
+                .id(SharedString::from(format!(
+                    "composer-action-tip-{identity:?}"
+                )))
+                .tooltip(crate::components::key_tooltip(label, key))
+                .child(button)
+                .into_any_element(),
+        )
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -5947,13 +5961,17 @@ impl CockpitView {
             )),
             None => SharedString::from(provider_title(provider)),
         };
-        let effort_label = match draft.binding.effort() {
-            Some(effort) => effort_chip_label(effort),
-            None => match self.prefs.settings.effort_for(provider) {
-                Some(effort) => effort_chip_label(effort),
-                None => SharedString::from("effort"),
-            },
-        };
+        // The band is a tab-stop sequence, so its effort chip stays put:
+        // with no effort resolving it reads the picker's own `default` row
+        // — the value in force — never the bare word `effort`.
+        let effort_label = effort_value(
+            draft.binding.effort(),
+            self.prefs.settings.effort_for(provider),
+            provider,
+            draft.binding.provider().model.as_deref(),
+            &self.cockpit.announced_models(provider),
+        )
+        .unwrap_or_else(|| SharedString::from("default"));
         let controls = [
             (
                 pane::BandChip::Provider,
@@ -5969,7 +5987,8 @@ impl CockpitView {
                     "draft-effort-picker",
                     draft.band_focus == Some(pane::BandChip::Effort),
                     pane::effort_picker(effort_label, false),
-                ),
+                )
+                .tooltip("Reasoning effort"),
             ),
         ];
         let mut row = div()
@@ -6937,8 +6956,80 @@ fn effort_title(effort: &str) -> String {
 /// An effort level as its Composer chip reads it: the title, lowercase
 /// (`high`, `extra high`) — the chip is a quiet control, the menu rows keep
 /// their titles.
+/// The send control's faces (C27), as `0xRRGGBB`: rest, hover and pressed
+/// grounds, the glyph at rest and under the pointer, and whether the hover
+/// blends (Stop) or snaps (Send).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SendFace {
+    ground: u32,
+    hover: u32,
+    pressed: u32,
+    ink: u32,
+    ink_hover: u32,
+    blends: bool,
+}
+
+/// Stop is an always-present control, so it never takes the bright ground:
+/// `FILL` with a `TEXT_2` `■`. Only an armed Send (a line that can go) is
+/// `TEXT_STRONG`; an idle Send is plainly off.
+fn send_face(stopping: bool, armed: bool) -> SendFace {
+    use crate::theme::*;
+    if stopping {
+        SendFace {
+            ground: SEND_STOP_GROUND,
+            hover: SEND_STOP_HOVER,
+            pressed: SEND_STOP_HOVER,
+            ink: SEND_STOP_INK,
+            ink_hover: SEND_STOP_INK_HOVER,
+            blends: true,
+        }
+    } else if armed {
+        SendFace {
+            ground: SEND_GROUND,
+            hover: SEND_HOVER,
+            pressed: SEND_PRESSED,
+            ink: SEND_INK,
+            ink_hover: SEND_INK,
+            blends: false,
+        }
+    } else {
+        SendFace {
+            ground: SEND_IDLE_GROUND,
+            hover: SEND_IDLE_GROUND,
+            pressed: SEND_IDLE_GROUND,
+            ink: SEND_IDLE_INK,
+            ink_hover: SEND_IDLE_INK,
+            blends: false,
+        }
+    }
+}
+
 fn effort_chip_label(effort: &str) -> SharedString {
     SharedString::from(effort_title(effort).to_lowercase())
+}
+
+/// The effort a chip shows (rule 2.6.5): the Thread's or draft's own
+/// choice, else the operator's saved default, else the model row's own
+/// default (`medium` for Codex). `None` when nothing resolves: a Thread's
+/// chip then hides rather than reading the bare word `effort` (`/effort`
+/// still reaches the picker), and a draft's band chip reads `default`.
+fn effort_value(
+    chosen: Option<&str>,
+    saved: Option<&str>,
+    provider: Provider,
+    model: Option<&str>,
+    announced: &[ferrite_core::ModelInfo],
+) -> Option<SharedString> {
+    if let Some(effort) = chosen.or(saved) {
+        return Some(effort_chip_label(effort));
+    }
+    let rows = ferrite_core::providers::models::catalog(provider, announced);
+    let row = match model {
+        Some(model) => rows.iter().find(|row| row.is(model)),
+        None => rows.first(),
+    };
+    row.and_then(|row| row.default_effort.as_deref())
+        .map(effort_chip_label)
 }
 
 fn effort_detail(effort: &str) -> &'static str {
@@ -7736,17 +7827,9 @@ impl CockpitView {
                         .into_any_element(),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
-                    // A draft's meter answers "what is left" before the
-                    // prompt is written, but it is the first thing a narrow
-                    // draft gives up: the setup chips and the model pair
-                    // are what the draft cannot start without.
-                    usage_meter: (level == Level::Transcript
-                        && self
-                            .pane_rects(window)
-                            .into_iter()
-                            .find(|(at, _)| *at == index)
-                            .map_or(self.cell(window).width, |(_, rect)| rect.w)
-                            >= crate::theme::DRAFT_METER_MIN_W)
+                    // A draft has spent no context, so it reads nothing
+                    // (no `ctx —`) unless an account window runs tight.
+                    usage_meter: (level == Level::Transcript)
                         .then(|| self.usage_meter(index, cx))
                         .flatten(),
                     menu: (level == Level::Transcript)
@@ -8223,11 +8306,7 @@ impl CockpitView {
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
                 .rounded(px(crate::theme::COMPOSER_CHIP_R))
-                .child(pane::usage_meter_body(
-                    self.prefs.settings.usage_meter_style,
-                    fraction,
-                    limits,
-                ))
+                .child(pane::usage_meter_body(fraction, limits)?)
                 .hover_raised()
                 .press_raised()
                 .on_mouse_down(
@@ -8295,7 +8374,9 @@ impl CockpitView {
         {
             return None;
         }
-        let label = pane::permission_mode_label(mode, &modes);
+        // Hidden at the default: the mode stays reachable in the session
+        // controls card (`•••`) and Settings.
+        let label = pane::permission_mode_label(mode, &modes)?;
         let choices = modes
             .iter()
             .map(|choice| crate::components::Choice {
@@ -9100,24 +9181,33 @@ impl CockpitView {
         let ladder =
             ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
         let effort_chip = (!ladder.is_empty()).then(|| {
-            let label = match open.effort() {
-                Some(effort) => effort_chip_label(effort),
-                None => match self.prefs.settings.effort_for(provider) {
-                    Some(effort) => effort_chip_label(effort),
-                    None => SharedString::from("effort"),
-                },
-            };
-            self.choice_menu(
-                index,
-                Kind::Effort,
-                pane::composer_control(("effort-picker", thread.get() as usize))
-                    .tooltip(if busy {
-                        TUNING_BUSY_HINT
-                    } else {
-                        "Reasoning effort"
-                    })
-                    .child(pane::effort_picker(label, busy)),
-                cx,
+            // With no effort resolving, the chip hides — unless `/effort`
+            // opened its picker, which hangs from the chip: it then reads
+            // the CLI's own `default`.
+            let picking = self.popover.as_ref().is_some_and(|popover| {
+                popover.pane == self.panes[index].identity && matches!(popover.kind, Kind::Effort)
+            });
+            let label = effort_value(
+                open.effort(),
+                self.prefs.settings.effort_for(provider),
+                provider,
+                open.model(),
+                open.models(),
+            )
+            .or_else(|| picking.then(|| SharedString::from("default")))?;
+            Some(
+                self.choice_menu(
+                    index,
+                    Kind::Effort,
+                    pane::composer_control(("effort-picker", thread.get() as usize))
+                        .tooltip(if busy {
+                            TUNING_BUSY_HINT
+                        } else {
+                            "Reasoning effort"
+                        })
+                        .child(pane::effort_picker(label, busy)),
+                    cx,
+                ),
             )
         });
         Some(
@@ -9127,7 +9217,7 @@ impl CockpitView {
                 .items_center()
                 .gap(px(crate::theme::PICKER_GAP))
                 .child(model_chip)
-                .children(effort_chip)
+                .children(effort_chip.flatten())
                 .into_any_element(),
         )
     }
@@ -10350,6 +10440,32 @@ mod tests {
     use ferrite_core::workspace::WorkspaceBinding;
     use ferrite_core::{Decision, SessionEvent};
     use gpui::{KeyBinding, TestAppContext};
+
+    /// C27: Stop is a quiet `FILL` square whose `■` is `TEXT_2`, stepping to
+    /// `FILL_HOVER`/`TEXT_STRONG` through the blend; only an armed Send is
+    /// bright; an idle Send is off. Stop wins whatever is in the line.
+    #[test]
+    fn stop_ground_is_not_text_strong() {
+        use crate::theme::*;
+        for armed in [false, true] {
+            let stop = send_face(true, armed);
+            assert_ne!(stop.ground, TEXT_STRONG);
+            assert_ne!(stop.hover, TEXT_STRONG);
+            assert_eq!(stop.ground, FILL);
+            assert_eq!(stop.hover, FILL_HOVER);
+            assert_eq!(stop.ink, TEXT_2);
+            assert_eq!(stop.ink_hover, TEXT_STRONG);
+            assert!(stop.blends, "the pointer blend, not a snap");
+        }
+        let send = send_face(false, true);
+        assert_eq!(send.ground, TEXT_STRONG);
+        assert_eq!(send.ink, SEND_INK);
+        assert!(!send.blends, "arming is instant");
+        let idle = send_face(false, false);
+        assert_eq!(idle.ground, SEND_IDLE_GROUND);
+        assert_ne!(idle.ground, TEXT_STRONG);
+        assert_eq!(idle.ink, SEND_IDLE_INK);
+    }
 
     #[test]
     fn startup_does_not_make_the_app_directory_a_project() {
@@ -11748,12 +11864,16 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        assert!(cx.debug_bounds("usage-line-context-62").is_some());
-        assert!(cx.debug_bounds("usage-line-five-hour-52").is_some());
-        assert!(cx.debug_bounds("usage-line-weekly-8").is_some());
+        // `ctx 62%` is text, one run; the account windows are not tight, so
+        // the line names only the context, and no meter mark is drawn.
+        assert!(cx.debug_bounds("usage-readout-62").is_some());
+        assert!(cx.debug_bounds("usage-token-ctx 62%").is_some());
+        assert!(cx.debug_bounds("usage-token-5h 52%").is_none());
+        assert!(cx.debug_bounds("usage-token-wk 8%").is_none());
+        assert!(cx.debug_bounds("usage-line-context-62").is_none());
         let meter = cx
             .debug_bounds("usage-meter-1")
-            .expect("usage lines are visible beside the model");
+            .expect("the ctx readout is visible on the status line");
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         assert!(
@@ -11791,6 +11911,25 @@ mod tests {
             cx.debug_bounds("context-usage-maximum-unknown").is_some(),
             "unknown limit is not invented"
         );
+        assert!(
+            cx.debug_bounds("usage-meter-1").is_none(),
+            "an unknown window reads nothing on the status line, not `ctx —`"
+        );
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 32_000,
+                input_tokens: 32_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(100_000),
+            })
+            .unwrap();
+        tick(cx);
+        assert!(cx.debug_bounds("usage-token-ctx 32%").is_some());
+        let meter = cx
+            .debug_bounds("usage-meter-1")
+            .expect("a known window reads again");
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
@@ -11814,26 +11953,47 @@ mod tests {
         view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
     }
 
-    /// A draft Pane carries the same meter (#29): the operator checks what
-    /// is left before writing the prompt that would spend it.
+    /// A draft has spent no context, so its status line reads nothing — no
+    /// `ctx —` — until an account window runs tight; then that window's
+    /// token alone shows, and it opens the same card (#29).
     #[gpui::test]
-    fn a_draft_pane_shows_the_usage_meter_and_its_card(cx: &mut TestAppContext) {
-        let fake = Fake::default();
-        let store = Store::open(scratch("draft-usage")).unwrap();
-        let core = Cockpit::new(store, Box::new(fake));
+    fn a_draft_pane_shows_usage_only_when_a_window_runs_tight(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("draft-usage", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
         tick(cx);
+        let draft = view.read_with(cx, |view, _| {
+            view.panes[view.focused()]
+                .identity
+                .draft()
+                .expect("the draft holds focus")
+        });
+        let key: &'static str =
+            Box::leak(format!("usage-meter-draft-{}", draft.get()).into_boxed_str());
+        assert!(
+            cx.debug_bounds(key).is_none(),
+            "nothing spent, nothing tight: no reading"
+        );
+        assert!(cx.debug_bounds("usage-readout-unknown").is_none());
 
-        // Nothing spent: the context line is drawn empty, not omitted.
-        assert!(cx.debug_bounds("usage-line-context-0").is_some());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::RateLimits {
+                five_hour: Some(ferrite_core::RateLimitWindow {
+                    used_fraction: 0.91,
+                    resets_at: Some(11),
+                }),
+                weekly: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert!(cx.debug_bounds("usage-token-5h 91%").is_some());
         let meter = cx
-            .debug_bounds("usage-meter-draft-1")
-            .expect("a draft's meter rides beside its model picker");
+            .debug_bounds(key)
+            .expect("a tight window rides the draft's status line");
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
-
         assert!(cx.debug_bounds("context-usage-current-0").is_some());
         assert!(
             cx.debug_bounds("context-usage-maximum-unknown").is_some(),
@@ -11844,56 +12004,6 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.context_usage.is_none(), "a second click closes it")
         });
-    }
-
-    /// The Settings choice swaps the mark and nothing else: the same three
-    /// windows, drawn as rings.
-    #[gpui::test]
-    fn the_usage_meter_can_be_drawn_as_rings(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("usage-rings", 1);
-        bind_production_keys(cx);
-        let prefs = Preferences {
-            settings: ferrite_core::settings::Settings {
-                usage_meter_style: UsageMeterStyle::Rings,
-                ..Default::default()
-            },
-            ..Preferences::ephemeral()
-        };
-        let (_view, cx) = add_cockpit_window(cx, |_, cx| {
-            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
-        });
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        fake.streams.borrow()[0]
-            .send(SessionEvent::RateLimits {
-                five_hour: Some(ferrite_core::RateLimitWindow {
-                    used_fraction: 0.52,
-                    resets_at: Some(11),
-                }),
-                weekly: None,
-            })
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TokenUsage {
-                total_tokens: 124_000,
-                input_tokens: 124_000,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                context_window: Some(200_000),
-            })
-            .unwrap();
-        tick(cx);
-
-        assert!(cx.debug_bounds("usage-ring-context-62").is_some());
-        assert!(cx.debug_bounds("usage-ring-five-hour-52").is_some());
-        assert!(
-            cx.debug_bounds("usage-ring-weekly-0").is_some(),
-            "an unreported window keeps its unlit track"
-        );
-        assert!(
-            cx.debug_bounds("usage-line-context-62").is_none(),
-            "the lines are the other mark, not both"
-        );
     }
 
     /// A branch status carrying a PR whose checks are mixed — one Actions
@@ -15294,8 +15404,12 @@ mod tests {
             .debug_bounds("progress-metadata")
             .expect("live metadata shares the pinned line");
         assert!(
-            cx.debug_bounds("progress-caption-Thinking").is_some(),
+            cx.debug_bounds("progress-caption-Working").is_some(),
             "visible reasoning is not duplicated in the pinned row"
+        );
+        assert!(
+            cx.debug_bounds("progress-caption-Thinking").is_none(),
+            "the working line never reads Thinking"
         );
         view.update(cx, |view, cx| {
             view.panes[0]

@@ -14,11 +14,12 @@ pub enum Phase {
 }
 
 impl Phase {
+    /// The working line's word. Thinking and answering are both work: the
+    /// line says `Working` for either, and names only the phases that are
+    /// something else (compacting, retrying, waiting).
     pub fn label(self) -> &'static str {
         match self {
-            Self::Working => "Working",
-            Self::Thinking => "Thinking",
-            Self::Answering => "Answering",
+            Self::Working | Self::Thinking | Self::Answering => "Working",
             Self::Compacting => "Compacting context",
             Self::Retrying => "Retrying",
             Self::Waiting => "Waiting",
@@ -497,6 +498,18 @@ mod duration_tests {
         assert_eq!(duration_label(Duration::from_millis(8_200)), "8.2s");
         assert_eq!(duration_label(Duration::from_secs(42)), "42s");
         assert_eq!(duration_label(Duration::from_secs(134)), "2m14s");
+    }
+
+    /// The working line says `Working` for thinking and answering alike,
+    /// and names only the phases that are something else.
+    #[test]
+    fn thinking_and_answering_read_as_working() {
+        assert_eq!(Phase::Thinking.label(), "Working");
+        assert_eq!(Phase::Answering.label(), "Working");
+        assert_eq!(Phase::Working.label(), "Working");
+        assert_eq!(Phase::Compacting.label(), "Compacting context");
+        assert_eq!(Phase::Retrying.label(), "Retrying");
+        assert_eq!(Phase::Waiting.label(), "Waiting");
     }
 
     #[test]

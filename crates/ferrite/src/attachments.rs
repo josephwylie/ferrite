@@ -2,16 +2,15 @@
 //! module owns presentation and image preview; callers only supply paths
 //! and, for a draft, a removal callback. The prompt codec owns persistence.
 
-use std::{path::PathBuf, rc::Rc, time::Duration};
+use std::{path::PathBuf, rc::Rc};
 
-use gpui::base::motion::{animate_keyframes, Easing, Keyframe, Keyframes, Timing};
 use gpui::component::{
     attachment::{
         Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
         AttachmentMedia, AttachmentTitle,
     },
     button::{Button, ButtonVariants},
-    Icon, IconName, Sizable, Theme,
+    IconName, Sizable, Theme,
 };
 use gpui::{prelude::*, px, App, Axis, ElementId, Global, IntoElement, Window};
 
@@ -35,7 +34,7 @@ pub struct Attachments {
     files: Vec<PathBuf>,
     preview: Preview,
     on_remove: Option<Remove>,
-    island: Option<usize>,
+    island: bool,
 }
 
 impl Attachments {
@@ -45,13 +44,13 @@ impl Attachments {
             files,
             preview: preview.clone(),
             on_remove: None,
-            island: None,
+            island: false,
         }
     }
 
     /// Pending attachments as compact chips on the shelf above the prompt.
-    pub fn in_island(mut self, generation: usize) -> Self {
-        self.island = Some(generation);
+    pub fn in_island(mut self) -> Self {
+        self.island = true;
         self
     }
 
@@ -67,31 +66,16 @@ impl Attachments {
 /// The pending files as chips on the shelf above the Composer — the
 /// background chips' recipe, so files going in and work going on read as
 /// one surface: `ATTACH_CHIP_H`, `R_CHIP`, `FILL` (stepping to `FILL_HOVER`
-/// under the pointer), a 16px thumbnail or file mark, the name in UI type
-/// `FS_SM` `TEXT_2` cut at `ATTACH_CHIP_MAX_W`, and a quiet `×`. The image
-/// thumbnail and the `×` are real buttons (tab stops, Enter/Space) in the
+/// under the pointer), a fixed 12px slot for the thumbnail or the `FILE`
+/// mark, the name in mono `FS_SM` `TEXT_2` cut at `ATTACH_CHIP_MAX_W` (a
+/// file name is machine text), and a quiet Geist `×`. The image thumbnail
+/// and the `×` are real buttons (tab stops, Enter/Space) in the
 /// `PromptAttachment` key context; a click anywhere else on a chip opens
-/// the image preview or the file. A new set eases in over 140ms.
-fn pending_chips(
-    attachments: Attachments,
-    generation: usize,
-    window: &mut Window,
-    cx: &mut App,
-) -> gpui::AnyElement {
+/// the image preview or the file. A new set lands on the frame it arrives.
+fn pending_chips(attachments: Attachments) -> gpui::AnyElement {
     use crate::pointer::Pointer as _;
     use crate::theme;
     use gpui::{div, rgb, SharedString};
-    // The kit retains playback by generation and honors reduced motion.
-    // Typing and image-loading repaints continue the same entrance.
-    let entrance = animate_keyframes(
-        ElementId::from(("attachment-island-enter", generation)),
-        &Keyframes::try_new([Keyframe::new(0., 0_f32), Keyframe::new(1., 1.)])
-            .expect("two ordered entrance keyframes"),
-        Timing::new(Duration::from_millis(140)).ease(Easing::EaseOut),
-        window,
-        cx,
-    )
-    .value;
     let Attachments {
         id,
         files,
@@ -141,11 +125,11 @@ fn pending_chips(
                 .items_center()
                 .justify_center()
                 .size(gpui::px(theme::ATTACH_THUMB))
-                .child(
-                    Icon::new(IconName::File)
-                        .size(gpui::px(theme::ICON_CHEVRON))
-                        .text_color(rgb(theme::TEXT_MUTED)),
-                )
+                .child(crate::icons::icon(
+                    crate::icons::FILE,
+                    theme::ICON_CHEVRON,
+                    theme::TEXT_MUTED,
+                ))
                 .into_any_element()
         };
         let host = preview.clone();
@@ -165,7 +149,6 @@ fn pending_chips(
             .rounded(gpui::px(theme::R_CHIP))
             .bg(rgb(theme::FILL))
             .hover_carried()
-            .font_family(theme::FONT_UI)
             .text_size(gpui::px(theme::FS_SM))
             .line_height(gpui::px(theme::LH_META))
             .text_color(rgb(theme::TEXT_2))
@@ -174,6 +157,7 @@ fn pending_chips(
                 div()
                     .min_w_0()
                     .truncate()
+                    .font_family(theme::FONT_CODE)
                     .child(SharedString::from(name.clone())),
             )
             .when_some(on_remove.clone(), |chip, remove| {
@@ -221,17 +205,14 @@ fn pending_chips(
         .gap(gpui::px(theme::SPACE_1_5))
         .min_w_0()
         .max_w_full()
-        .relative()
-        .top(gpui::px(theme::SPACE_1 * (1. - entrance)))
-        .opacity(0.6 + 0.4 * entrance)
         .children(chips)
         .into_any_element()
 }
 
 impl RenderOnce for Attachments {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        if let Some(generation) = self.island {
-            return pending_chips(self, generation, window, cx);
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.island {
+            return pending_chips(self);
         }
         // A delivered prompt's files: the kit cards, on the kit's own stock
         // tokens (the prompt row owns their placement).
@@ -292,7 +273,11 @@ impl RenderOnce for Attachments {
                                 }),
                         )
                     } else {
-                        media.child(Icon::new(IconName::File))
+                        media.child(crate::icons::icon(
+                            crate::icons::FILE,
+                            crate::theme::ICON_CHEVRON,
+                            crate::theme::TEXT_MUTED,
+                        ))
                     })
                     .content(
                         AttachmentContent::new()

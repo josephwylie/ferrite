@@ -805,19 +805,36 @@ fn the_image_preview_dims_the_whole_window(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(image.parent().unwrap());
 }
 
-/// A draft's body says what to do, as an empty Thread's does.
+/// A draft's body is empty space, and neither it nor an empty Thread
+/// centres a second copy of the guidance: the Composer's placeholder says
+/// how to start, once (rule 2.11.4).
 #[gpui::test]
 fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("draft-empty", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("transcript-empty").is_none(),
+        "an empty Thread has no centred block"
+    );
     view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
     tick(cx);
     let empty = cx
         .debug_bounds("draft-empty")
-        .expect("the draft's guidance");
+        .expect("the draft's body spacer");
     let block = cx.debug_bounds("composer-block").unwrap();
     assert!(empty.bottom() <= block.top(), "{empty:?} / {block:?}");
+    assert!(
+        cx.debug_bounds("transcript-empty").is_none(),
+        "no centred empty state anywhere"
+    );
+    let ghost = cx.debug_bounds("prompt-placeholder").expect("the ghost");
+    assert!(ghost.top() >= block.top(), "the guidance is the Composer's");
+    assert!(
+        cx.debug_bounds("prompt-placeholder-hint").is_some(),
+        "the draft's ghost carries its one hint"
+    );
 }
 
 /// On the empty board the titlebar has no location, and the `dev` tag
@@ -1495,11 +1512,43 @@ fn an_l2_approval_cell_keeps_its_facts_and_mode(cx: &mut TestAppContext) {
     assert_eq!(asked, quiet_facts, "the facts line holds its place");
     assert!(cx.debug_bounds(mode).is_some(), "the approval cell's mode");
 
-    // At L1 the Decision owns the keyboard, and the mode steps aside.
+    // At L1 the status line stays under a Decision (rule 2.6.6): the mode
+    // is what the answer will run under.
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     assert!(
-        cx.debug_bounds(mode).is_none(),
-        "L1 drops the mode under a Decision"
+        cx.debug_bounds(mode).is_some(),
+        "L1 keeps the mode under a Decision"
     );
+}
+
+/// The Solo status line is always present at one `LH_META` line, so the
+/// Composer's top never moves: not when a mode is announced, not under a
+/// Decision (rule 2.6.6).
+#[gpui::test]
+fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("solo-status-line", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let rest = cx.debug_bounds("composer-block").expect("the Composer");
+    let line = cx.debug_bounds("composer-meta").expect("the status line");
+    assert_eq!(line.size.height, px(crate::theme::LH_META));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::PermissionMode {
+            mode: "acceptEdits".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(cx.debug_bounds("composer-block"), Some(rest));
+    fake.streams.borrow()[0]
+        .send(decision("solo-status-line"))
+        .unwrap();
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("composer-block"),
+        Some(rest),
+        "a Decision never moves the Composer"
+    );
+    assert_eq!(cx.debug_bounds("composer-meta"), Some(line));
 }

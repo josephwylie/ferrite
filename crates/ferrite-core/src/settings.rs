@@ -58,9 +58,6 @@ pub struct Settings {
     /// Whether Ferrite predicts a follow-up prompt in the empty Composer.
     /// Default: true.
     pub placeholder_suggestions: bool,
-    /// How the Composer's usage meter draws its three windows.
-    /// Default: three stacked lines.
-    pub usage_meter_style: UsageMeterStyle,
     /// Answer reading size in Solo and fullscreen. Group panes stay compact.
     pub solo_reading_size: SoloReadingSize,
 }
@@ -73,19 +70,6 @@ pub enum SoloReadingSize {
     Standard,
     Comfortable,
     Large,
-}
-
-/// The shape the Composer's usage meter takes. The three windows —
-/// context, five-hour, weekly — are the same either way; only the mark
-/// changes, so an operator who reads rings faster than bars can say so.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UsageMeterStyle {
-    /// Three stacked horizontal lines.
-    #[default]
-    Lines,
-    /// Three rings side by side.
-    Rings,
 }
 
 /// The two useful readings of the Thread list: one activity stream, or
@@ -114,7 +98,6 @@ impl Default for Settings {
             confirm_delete: true,
             auto_title: true,
             placeholder_suggestions: true,
-            usage_meter_style: UsageMeterStyle::Lines,
             solo_reading_size: SoloReadingSize::Standard,
         }
     }
@@ -215,7 +198,6 @@ mod tests {
             confirm_delete: false,
             auto_title: false,
             placeholder_suggestions: false,
-            usage_meter_style: UsageMeterStyle::Rings,
             solo_reading_size: SoloReadingSize::Large,
         }
     }
@@ -263,7 +245,6 @@ mod tests {
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);
-        assert_eq!(settings.usage_meter_style, UsageMeterStyle::Lines);
         assert_eq!(settings.solo_reading_size, SoloReadingSize::Standard);
     }
 
@@ -288,6 +269,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Settings::load(&dir), Settings::default());
+    }
+
+    /// A setting Ferrite no longer has (the retired usage meter style) is
+    /// ignored: the rest of the file still loads.
+    #[test]
+    fn a_retired_setting_is_ignored() {
+        let dir = scratch("retired");
+        fs::write(
+            dir.join(Settings::FILE),
+            br#"{"usage_meter_style": "rings", "confirm_delete": false}"#,
+        )
+        .unwrap();
+        assert!(!Settings::load(&dir).confirm_delete);
     }
 
     /// An unreadable file — here a directory squatting at its path — is the

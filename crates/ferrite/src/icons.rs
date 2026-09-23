@@ -84,6 +84,7 @@ icons![
     // ---- WP-D icons (append names above the end line)
     "arrow-up",
     "stop",
+    "file",
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
@@ -104,6 +105,8 @@ pub const SIDEBAR: &str = "icons/sidebar.svg";
 pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
 pub const CHEVRON_RIGHT: &str = "icons/chevron-right.svg";
 pub const CLOSE: &str = "icons/close.svg";
+/// A pending or delivered file that is not an image: a 12px outline page.
+pub const FILE: &str = "icons/file.svg";
 #[allow(dead_code)]
 pub const FOLDER: &str = "icons/folder.svg";
 #[allow(dead_code)]
@@ -409,7 +412,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            32,
+            33,
             "the prototype and app controls, including close,              and the four Windows caption glyphs"
         );
     }

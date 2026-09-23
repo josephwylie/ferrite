@@ -840,9 +840,8 @@ impl Render for TranscriptView {
             } else {
                 self.input.selection_scope
             });
-        // A Thread with nothing in it yet says what to do, in the column's
-        // centre; the first row replaces it.
-        let empty = self.rows.len() == 0 && self.input.signal_status != Some(Status::Streaming);
+        // A Thread with nothing in it yet shows nothing: the Composer's
+        // placeholder says what to do, once (rule 2.11.4).
         div()
             .relative()
             .flex()
@@ -851,18 +850,6 @@ impl Render for TranscriptView {
             .size_full()
             .min_h_0()
             .child(list)
-            .when(empty, |body| {
-                body.child(
-                    div()
-                        .debug_selector(|| "transcript-empty".into())
-                        .absolute()
-                        .inset_0()
-                        .child(components::empty_state(
-                            "New thread",
-                            Some("type a prompt \u{b7} / for commands".into()),
-                        )),
-                )
-            })
             .child(crate::components::scrollbar(
                 SharedString::from(format!("transcript-scrollbar-{}", self.input.namespace)),
                 self.scroll.list_state(),

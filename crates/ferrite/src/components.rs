@@ -453,8 +453,10 @@ pub fn gutter(mark: impl IntoElement, first_line_h: f32) -> Div {
         .child(glyph_box(mark))
 }
 
-/// An empty surface's one line of guidance, centred: the title in `TEXT_2`
-/// and an optional hint in `TEXT_MUTED` beneath it.
+/// A floating surface's empty list: one line of guidance, centred, the
+/// title in `TEXT_2` and an optional hint in `TEXT_MUTED` beneath it. It is
+/// never a Pane body: an empty Thread or draft shows nothing, and its
+/// Composer's placeholder says what to do (rule 2.11.4).
 pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -> Div {
     div()
         .flex()
@@ -468,6 +470,42 @@ pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -
 }
 
 // --------------------------------------------------------------- controls
+
+/// A control's tooltip that names its verb and key (`Interrupt esc`,
+/// `Send ↵`): the verb in the tooltip's Geist, the key after it as a mono
+/// `TEXT_MUTED` suffix. No punctuation; a longer sentence belongs in the
+/// control's accessibility label.
+pub fn key_tooltip(
+    label: impl Into<SharedString>,
+    key: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let (label, key) = (label.into(), key.into());
+    move |window, cx| {
+        let (label, key) = (label.clone(), key.clone());
+        gpui::component::tooltip::Tooltip::element(move |_, _| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_1_5))
+                .child(label.clone())
+                .child(
+                    div()
+                        .font_family(theme::FONT_CODE)
+                        .text_color(rgb(theme::TEXT_MUTED))
+                        .child(key.clone()),
+                )
+        })
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .px(px(theme::TOOLTIP_PAD_X))
+        .py(px(theme::TOOLTIP_PAD_Y))
+        .max_w(px(theme::TOOLTIP_MAX_W))
+        .rounded(px(theme::R_CONTROL))
+        .shadow(float_shadow())
+        .build(window, cx)
+    }
+}
 
 /// An icon-only control: `ICON_BUTTON` square, the glyph at
 /// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, brightening to `TEXT` under the

@@ -794,7 +794,8 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     click_child(cx, "Atlas");
-    assert!(cx.debug_bounds("progress-caption-Thinking").is_some());
+    assert!(cx.debug_bounds("progress-caption-Working").is_some());
+    assert!(cx.debug_bounds("progress-caption-Thinking").is_none());
     emit(
         &fake,
         ActivityEvent::Content {

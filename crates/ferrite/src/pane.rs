@@ -33,8 +33,8 @@ use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     canvas, deferred, div, point, pulsating_between, px, relative, rgb, rgba, Animation,
-    AnimationExt, AnyElement, Context, Div, Entity, FocusHandle, HighlightStyle, PathBuilder,
-    SharedString, Stateful, Styled, StyledText,
+    AnimationExt, AnyElement, Context, Div, Entity, FocusHandle, HighlightStyle, SharedString,
+    Stateful, Styled, StyledText,
 };
 #[cfg(test)]
 use std::cell::RefCell;
@@ -990,7 +990,7 @@ pub fn render_pane(
         permission_mode: thread.and_then(|thread| {
             thread
                 .permission_mode()
-                .map(|mode| permission_mode_label(mode, &thread.permission_modes()))
+                .and_then(|mode| permission_mode_label(mode, &thread.permission_modes()))
         }),
         suggestion: thread.and_then(|thread| thread.suggestion()),
         received_reasoning_visible,
@@ -1116,6 +1116,8 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
         working_line(
             transcript,
             false,
+            // Solo: this Pane is the one live prompt.
+            true,
             cx.received_reasoning_visible,
             cx.reduce_motion,
         )
@@ -1140,7 +1142,7 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
                     .right_0()
                     .bottom_0()
                     .px(px(theme::PANE_PAD_X))
-                    .pb(px(theme::SPACE_1))
+                    .pb(px(theme::GAP_ROW))
                     .bg(rgb(PANE))
                     .child(components::reading_column(
                         div().px(px(theme::BOX_INSET_X)).child(line),
@@ -1151,7 +1153,7 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
 }
 
 /// The working line's shape while a Session starts: the Ferrite mark (still
-/// under reduced motion) and `Starting session`.
+/// under reduced motion) and `Starting`, in the working line's own row.
 fn starting_line(reduce_motion: bool) -> Div {
     let mark = working_mark(reduce_motion);
     div()
@@ -1165,7 +1167,7 @@ fn starting_line(reduce_motion: bool) -> Div {
         .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT_2))
         .child(components::gutter(mark, theme::LH_UI))
-        .child(div().min_w_0().truncate().child("Starting session"))
+        .child(div().min_w_0().truncate().child("Starting"))
 }
 
 /// WP-C · the tasks strip under the head.
@@ -1202,7 +1204,6 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
         return Some(footer);
     }
     let transcript = cx.transcript?;
-    let alert = composer_alert(cx);
     Some(
         composer_region(
             cx.view,
@@ -1228,7 +1229,6 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 focused: cx.focused,
                 editing: cx.editing,
                 drop_target: cx.drop_target,
-                alert,
             },
         )
         .into_any_element(),
@@ -1239,7 +1239,6 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
 /// keeps its Composer: the operator types into a small Pane as into a big
 /// one. No menu, picker or band at this size; the keys still work.
 fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
-    let alert = composer_alert(cx);
     let composer = cx
         .transcript
         .filter(|_| cx.view.is_main())
@@ -1268,7 +1267,6 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     focused: cx.focused,
                     editing: cx.editing,
                     drop_target: cx.drop_target,
-                    alert,
                 },
             )
         });
@@ -1547,17 +1545,13 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     ..Default::default()
                 },
             ))
-            // The body says what to do, as an empty Thread's does.
+            // The body is empty space: the Composer's placeholder says what
+            // to do, once (rule 2.11.4).
             .child(
                 div()
                     .debug_selector(|| "draft-empty".into())
-                    .flex()
                     .flex_1()
-                    .min_h_0()
-                    .child(components::empty_state(
-                        "New thread",
-                        Some("pick a project and branch below \u{b7} / for commands".into()),
-                    )),
+                    .min_h_0(),
             )
             .children(drop_target.then(crate::prompt_drop::sheet))
             .child(composer_region(
@@ -1585,7 +1579,6 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     focused,
                     editing,
                     drop_target,
-                    alert: false,
                 },
             )),
         framed,
@@ -2041,6 +2034,8 @@ fn l2_cell(
         body = body.child(div().flex_shrink_0().child(working_line(
             transcript,
             true,
+            // P4 wires a cell's own focus here.
+            false,
             false,
             reduce_motion,
         )));
@@ -3088,21 +3083,27 @@ fn working_mark(reduce_motion: bool) -> AnyElement {
     }
 }
 
-/// The working line: one row, the animated Ferrite mark in the gutter (at
-/// rest under reduced motion), the provider's live caption, then `(6s · ↓ 312 tokens)` in metadata ink —
-/// Claude Code's `✻ Thinking… (12s · ↓ 1.2k tokens)`. The caption is what
-/// truncates; the facts keep their room. `esc` is shown once, on Stop. L2
-/// (`compact`) draws the same row without the token count. Command details
-/// stay in the tool rows.
+/// The working line (rule 2.6.2): one row, the animated Ferrite mark in the
+/// gutter (at rest under reduced motion), the provider's live caption —
+/// `Working` unless it has something better to say — then `(3s · ↓ 312
+/// tokens)` in `TEXT_MUTED` at the same size, Claude Code's `✻ Working…
+/// (12s · ↓ 1.2k tokens)`. The seconds are whole (`progress::live_seconds`),
+/// tabular, so the text changes once a second however often the mark's
+/// 33ms tick repaints it. On the focused Pane only (`focused`) it appends
+/// `· esc to interrupt`, dropped whole where the row cannot hold it. The
+/// caption is what truncates; the facts keep their room. L2 (`compact`)
+/// draws the same row without the token count. Command details stay in the
+/// tool rows.
 fn working_line(
     transcript: &Transcript,
     compact: bool,
+    focused: bool,
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
 ) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
-        facts.push(ferrite_core::progress::duration_label(elapsed));
+        facts.push(ferrite_core::progress::live_seconds(elapsed));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
@@ -3127,6 +3128,33 @@ fn working_line(
         .line_height(px(theme::LH_UI));
     if let Some(caption) = caption {
         let selector = format!("progress-caption-{caption}");
+        // The caption and its facts share one piece that may take the whole
+        // row; the esc hint after it wraps onto the clipped second line —
+        // gone, whole — when the row cannot hold both.
+        let main = div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .max_w_full()
+            .child(
+                div()
+                    .debug_selector(|| "progress-reasoning".into())
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT_2))
+                    .child(SharedString::from(caption)),
+            )
+            .when(!facts.is_empty(), |main| {
+                main.child(components::tabular(
+                    div()
+                        .debug_selector(|| "progress-metadata".into())
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .pl(px(theme::WORD_GAP))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(format!("({})", facts.join(" \u{b7} ")))),
+                ))
+            });
         row = row
             .debug_selector(move || selector.clone())
             // The shard snap is this row's liveness signal, so the text
@@ -3137,24 +3165,30 @@ fn working_line(
             ))
             .child(
                 div()
-                    .debug_selector(|| "progress-reasoning".into())
+                    .flex()
+                    .flex_wrap()
+                    .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_color(rgb(TEXT_2))
-                    .child(SharedString::from(caption)),
-            )
-            .when(!facts.is_empty(), |row| {
-                row.child(components::tabular(
-                    div()
-                        .debug_selector(|| "progress-metadata".into())
-                        .flex_shrink_0()
-                        .whitespace_nowrap()
-                        .pl(px(theme::WORD_GAP))
-                        .text_size(px(theme::FS_SM))
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(SharedString::from(format!("({})", facts.join(" \u{b7} ")))),
-                ))
-            });
+                    .h(px(theme::LH_UI))
+                    .overflow_hidden()
+                    .child(main)
+                    .when(focused, |line| {
+                        line.child(
+                            div()
+                                .debug_selector(|| "progress-esc".into())
+                                .flex()
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .child(
+                                    div()
+                                        .px(px(theme::SPACE_1_5))
+                                        .text_color(rgb(TEXT_FAINT))
+                                        .child("\u{b7}"),
+                                )
+                                .child(div().text_color(rgb(TEXT_MUTED)).child("esc to interrupt")),
+                        )
+                    }),
+            );
     }
     div().w_full().min_w_0().flex_shrink_0().child(row)
 }
@@ -3233,17 +3267,13 @@ struct ComposerStack<'a> {
     /// Native files hover the Pane: the block's edge is `ACCENT_EDGE`,
     /// saying where they will land.
     drop_target: bool,
-    /// The Pane's own edge is a state colour (a Decision, a blocker). The
-    /// block then carries the focus edge itself while `editing`, so focus
-    /// never hides behind the amber or red.
-    alert: bool,
 }
 
 /// The Composer: a raised block in the reading column. Its outer edges are
 /// the column's edges and its content sits `BOX_INSET_X` inside them, so
 /// its `❯` shares the transcript's glyph box and its text starts at C1.
 /// `RAISED`, `COMPOSER_R`, a 1px edge that is always in layout
-/// (`COMPOSER_EDGE`, `COMPOSER_EDGE_FOCUS` while editing on an alert Pane),
+/// (`COMPOSER_EDGE`, `ACCENT_EDGE` while files hover it),
 /// padding `COMPOSER_PAD_T/X/END/B`, rows `COMPOSER_GAP` apart:
 ///
 /// - queued prompts, dim `❯` lines in a bounded scroll viewport;
@@ -3280,10 +3310,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         focused,
         editing,
         drop_target,
-        alert,
     } = stack;
-    let blocking = decision.is_some_and(Decision::blocks_execution);
-    let mut block = composer_box(composer_edge(alert, editing, drop_target))
+    let mut block = composer_box(composer_edge(drop_target))
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |block| {
             block.debug_selector(|| "composer-drop-target".into())
@@ -3319,27 +3347,24 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if !queued.is_empty() {
         let count = queued.len();
         let namespace = view.text_namespace();
-        block = block.child(
-            div()
-                .debug_selector({
-                    let namespace = namespace.clone();
-                    move || format!("composer-queue-{namespace}")
-                })
-                .flex_shrink_0()
-                .h(px(queue_height))
-                .child(
-                    div()
-                        .h_full()
-                        .overflow_y_scrollbar()
-                        // Set the wrapper ID: assigning the inner Div's ID
-                        // would leave all Panes sharing call-site scroll state.
-                        .id(SharedString::from(format!("composer-queue-{namespace}")))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(theme::COMPOSER_GAP))
-                                .children(queued.iter().enumerate().map(|(index, held)| {
+        block =
+            block.child(
+                div()
+                    .debug_selector({
+                        let namespace = namespace.clone();
+                        move || format!("composer-queue-{namespace}")
+                    })
+                    .flex_shrink_0()
+                    .h(px(queue_height))
+                    .child(
+                        div()
+                            .h_full()
+                            .overflow_y_scrollbar()
+                            // Set the wrapper ID: assigning the inner Div's ID
+                            // would leave all Panes sharing call-site scroll state.
+                            .id(SharedString::from(format!("composer-queue-{namespace}")))
+                            .child(div().flex().flex_col().children(
+                                queued.iter().enumerate().map(|(index, held)| {
                                     let namespace = namespace.clone();
                                     div()
                                         .flex_shrink_0()
@@ -3347,11 +3372,11 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                                         .debug_selector(move || {
                                             format!("queue-row-{namespace}-{index}")
                                         })
-                                        .child(queued_line(held, index, count, empty))
-                                })),
-                        ),
-                ),
-        );
+                                        .child(queued_line(held, index, count, editing && empty))
+                                }),
+                            )),
+                    ),
+            );
     }
     // The one line that grows: the Composer's element is `COMPOSER_ROW_H`
     // per visual row, so the line height here IS the row pitch. The idle
@@ -3372,8 +3397,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .min_w_0()
         // The input is a terminal line: the code face, placeholder too.
         .font_family(theme::FONT_CODE)
+        .font_weight(theme::W_BODY)
         .line_height(px(theme::COMPOSER_ROW_H))
-        .text_color(rgb(TEXT_STRONG))
+        .text_color(rgb(TEXT))
         .child(view.composer.clone());
     if empty {
         // The Composer paints its own caret at the line origin, so the
@@ -3383,30 +3409,13 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         // clipped second line — gone — when the row has no room for it.
         // A compact (L2) line has no room for a hint beside its ghost; the
         // `/` menu is one key away all the same.
-        let (ghost, hint, keep) = placeholder(decision.is_some(), transcript, suggestion);
-        let hint = hint.filter(|_| !compact);
-        line = line.child(
-            div()
-                .debug_selector(|| "prompt-placeholder".into())
-                .absolute()
-                .left(px(theme::CARET_W))
-                .right_0()
-                .top_0()
-                .h(px(theme::COMPOSER_ROW_H))
-                .flex()
-                .when(!keep, |row| row.flex_wrap())
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_color(rgb(TEXT_MUTED))
-                .child(div().min_w_0().truncate().child(ghost))
-                .children(hint.map(|(key, verb)| {
-                    div()
-                        .debug_selector(|| "prompt-placeholder-hint".into())
-                        .flex_shrink_0()
-                        .ml(px(theme::SPACE_3))
-                        .child(format!("{key} {verb}"))
-                })),
+        let ghost = placeholder(
+            decision.is_some(),
+            setup_controls.is_some(),
+            transcript,
+            suggestion,
         );
+        line = line.child(ghost_row(ghost, compact));
     }
     // The `❯` is always in layout, so the text origin never moves with
     // focus. It hangs centred on the first row while the line grows.
@@ -3416,7 +3425,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .min_h(px(theme::COMPOSER_ROW_H))
         .min_w_0()
         .child(components::gutter(
-            components::prompt_mark(prompt_ink(editing, decision.is_some())),
+            components::prompt_mark(prompt_ink(editing)),
             theme::COMPOSER_ROW_H,
         ))
         .child(line);
@@ -3449,19 +3458,21 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // The meta row, under the box and outside it, quiet `FS_SM`
-    // `TEXT_MUTED`: a draft's setup chips and the Session's mode at left,
-    // the session controls and the usage meter at right. No key hints: the
-    // placeholder carries one, the controls' tooltips name their keys, and
-    // every binding works whether or not it is written down.
+    // The status line (rule 2.6.6), under the box and outside it, quiet
+    // `FS_SM` `TEXT_MUTED`: a draft's setup chips and the Session's mode
+    // word at left, the session controls and `ctx 32%` at right. It is
+    // present in every state — a Decision included — at a fixed `LH_META`,
+    // reserved when empty, so the Composer never moves. Its chips are
+    // `CHIP_H`: they hang 2px into the air above and below the line, inside
+    // a clip that is theirs. No key hints: the placeholder carries one, the
+    // controls' tooltips name their keys, and every binding works whether
+    // or not it is written down.
     let mut meta = div()
-        .debug_selector(|| "composer-meta".into())
         .flex()
-        .flex_shrink_0()
         .items_center()
         .gap(px(theme::SPACE_2))
-        .h(px(theme::COMPOSER_META_H))
-        .mt(px(theme::COMPOSER_META_GAP))
+        .h(px(theme::CHIP_H))
+        .mt(px(-(theme::CHIP_H - theme::COMPOSER_META_H) / 2.))
         .pl(px(theme::COMPOSER_META_START))
         .pr(px(theme::COMPOSER_META_END))
         .min_w_0()
@@ -3472,14 +3483,12 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if let Some(setup) = setup_controls {
         meta = meta.child(setup);
     }
-    // The chip is the live Session's permission mode, so it rides every
-    // Pane whose Session has announced one and, at L1, is not blocked: a
-    // Decision owns the keyboard until it is answered, and a closed Session
-    // has no mode to be in (its chip is None). It is not tied to a turn in
-    // flight — the mode is exactly what an operator changes *between*
-    // prompts. L2 draws it plain (no menu), so a Decision's cell keeps it
-    // like every other cell.
-    if let Some(mode) = mode.filter(|_| compact || !blocking) {
+    // The word is the live Session's permission mode, so it rides every
+    // Pane whose Session has announced one other than the default — a
+    // pending Decision too: the mode is what the answer will run under. A
+    // closed Session has no mode to be in (its word is None). L2 draws it
+    // plain (no menu).
+    if let Some(mode) = mode {
         let key = view.thread().map_or(0, ThreadId::get);
         meta = meta.child(
             div()
@@ -3498,13 +3507,20 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if let Some(meter) = usage_meter {
         meta = meta.child(div().flex_shrink_0().child(meter));
     }
+    let meta = div()
+        .debug_selector(|| "composer-meta".into())
+        .flex_shrink_0()
+        .h(px(theme::COMPOSER_META_H))
+        .mt(px(theme::COMPOSER_META_GAP))
+        .min_w_0()
+        .child(meta);
     let stack = div()
         .flex()
         .flex_col()
         .min_w_0()
         .when(attachments.is_some() || background.is_some(), |stack| {
-            // The shelf floats clear of the block, inset to its content
-            // edges: pending files at left, the background chips at right
+            // The shelf floats `SHELF_GAP` clear of the block: pending
+            // files from its outer left edge, the background chips at right
             // on the Send column. The chips give way first — they cut
             // their labels, the files do not.
             stack.child(
@@ -3514,7 +3530,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     .items_end()
                     .gap(px(theme::SPACE_2))
                     .min_w_0()
-                    .pl(px(theme::BOX_INSET_X))
+                    .pl(px(0.))
                     .pr(px(theme::COMPOSER_CONTROL_INSET))
                     .pb(px(theme::SHELF_GAP))
                     .when_some(attachments, |shelf, attachments| {
@@ -3544,26 +3560,24 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     }
 }
 
-/// The input line's `❯`: `ACCENT` while the keyboard is in the line —
-/// `ATTENTION` when the line is a pending Decision's reply channel, the one
-/// cue besides the placeholder that what is typed answers it — and
-/// `TEXT_MUTED` whenever keys would land elsewhere.
-fn prompt_ink(editing: bool, replying: bool) -> u32 {
-    match (editing, replying) {
-        (false, _) => TEXT_MUTED,
-        (true, true) => ATTENTION,
-        (true, false) => ACCENT,
+/// The input line's `❯`: `ACCENT` while the keyboard is in the line and
+/// `TEXT_MUTED` whenever keys would land elsewhere. A Decision's reply line
+/// lights the same accent: the accent is the prompt's, never a state's.
+fn prompt_ink(editing: bool) -> u32 {
+    if editing {
+        ACCENT
+    } else {
+        TEXT_MUTED
     }
 }
 
-/// The block's edge (as `0xRRGGBBAA`): the resting `COMPOSER_EDGE`, or the
-/// focus ink when the keyboard is in the line on a Pane whose own edge is a
-/// state colour — the one case the Pane ring alone could leave in doubt.
-fn composer_edge(alert: bool, editing: bool, drop_target: bool) -> u32 {
+/// The block's edge (as `0xRRGGBBAA`): `ACCENT_EDGE` while native files
+/// hover it, saying where they will land, and the resting `COMPOSER_EDGE`
+/// otherwise. Focus is the Pane ring, the accent `❯` and the caret; state
+/// never recolours the block.
+fn composer_edge(drop_target: bool) -> u32 {
     if drop_target {
         theme::ACCENT_EDGE
-    } else if alert && editing {
-        (theme::COMPOSER_EDGE_FOCUS << 8) | 0xff
     } else {
         theme::COMPOSER_EDGE
     }
@@ -3574,21 +3588,6 @@ fn composer_edge(alert: bool, editing: bool, drop_target: bool) -> u32 {
 /// (§ theme "Concentric radii"). The Subagent footer draws the same box.
 pub fn composer_box(edge: u32) -> Div {
     components::raised_edged(edge).rounded(px(theme::COMPOSER_R))
-}
-
-/// Whether a Pane's own edge is a state colour: a Decision pending anywhere
-/// in its activity, or the Session closed under it. The same test
-/// `render_pane` makes for the edge.
-fn composer_alert(cx: &PaneCtx) -> bool {
-    let pending = cx
-        .thread
-        .is_some_and(|thread| !thread.activity().pending_decisions().is_empty());
-    pending
-        || wall_state(
-            cx.transcript,
-            cx.decision.is_some_and(Decision::blocks_execution),
-            false,
-        ) == WallState::Blocked
 }
 
 /// A Composer control on the hint row (§ theme "Composer controls"): the
@@ -3615,13 +3614,26 @@ fn chip_chevron() -> gpui::Svg {
     icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON_SM, TEXT_MUTED)
 }
 
-/// The Composer's mode chip: the mode's own word and a chevron when it
-/// opens a menu, on the control-chip recipe. `busy` would mute it; the mode
-/// is never busy today, so callers pass `false`.
+/// The status line's mode word (C17): Geist `FS_SM` `W_BODY` `TEXT_MUTED`
+/// on the control-chip recipe, a value word like `ctx 32%`. When it opens a
+/// menu its chevron shows only under the pointer or keyboard focus, so at
+/// rest the line reads as words, not controls. Hidden at the default: the
+/// mode stays reachable in the session controls card (`•••`).
 pub fn mode_chip(mode: &str, menu: bool) -> Div {
-    control_chip(TEXT_2)
+    control_chip(TEXT_MUTED)
+        .group("mode-chip")
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
         .child(mode.to_owned())
-        .when(menu, |chip| chip.child(chip_chevron()))
+        .when(menu, |chip| {
+            chip.child(
+                div()
+                    .flex()
+                    .opacity(0.)
+                    .group_hover("mode-chip", |chevron| chevron.opacity(1.))
+                    .child(chip_chevron()),
+            )
+        })
 }
 
 /// The button a Composer chip rides in (model, effort, mode, session
@@ -3639,41 +3651,166 @@ pub fn session_chip() -> Div {
     control_chip(TEXT_MUTED).child("•••")
 }
 
-/// The idle line's ghost text (§D.7) and the one hint it carries — the only
-/// key hint the Composer writes down; its controls' tooltips name theirs. A
-/// predicted follow-up is already in the operator's voice and already
-/// filtered, so it is shown verbatim — a draft of their next prompt, not a
-/// description of one — with `⇥ accept`, because an accept key nobody knows
-/// about is the same as no accept key. The resting line points at the `/`
-/// menu, where everything else lives.
+/// The idle line's ghost (§D.7): a ladder of rungs, longest first, of
+/// which the line shows the first that fits — never a word cut in half.
+/// The fullest rung carries the one key hint the Composer writes down
+/// (its controls' tooltips name theirs) after a `TEXT_FAINT` `·`.
 ///
-/// The third value says whether the hint must stay whole: `⇥ accept` is
-/// the only way to learn the accept key, so the ghost truncates before it;
-/// `/ for commands` merely points at a menu the empty state also names, so
-/// it drops out whole where the row cannot hold it.
+/// A predicted follow-up is already in the operator's voice and already
+/// filtered, so it is shown verbatim — a draft of their next prompt, not a
+/// description of one — with `⇥ accept`, which is always kept whole: an
+/// accept key nobody knows about is the same as no accept key, so the
+/// prediction's own words give way to it. The resting line points at the
+/// `/` menu, where everything else lives, and that pointer drops out whole
+/// first where the row cannot hold it.
+#[derive(Clone, Debug, PartialEq)]
+struct Ghost {
+    /// The shortest rung's words, before its ellipsis.
+    head: SharedString,
+    /// The words a fuller rung adds after `head`; they drop out whole.
+    more: Option<&'static str>,
+    /// A verbatim prediction: no ellipsis, and its words give way to the
+    /// accept hint rather than the other way round.
+    verbatim: bool,
+    hint: Option<(&'static str, &'static str)>,
+}
+
+impl Ghost {
+    fn ladder(head: &'static str, more: Option<&'static str>, hint: bool) -> Self {
+        Self {
+            head: head.into(),
+            more,
+            verbatim: false,
+            hint: hint.then_some(("/", "for commands")),
+        }
+    }
+
+    /// Whether the hint stays whole whatever the width (`⇥ accept`).
+    fn keeps_hint(&self) -> bool {
+        self.verbatim
+    }
+
+    /// Every rung the line can show, longest first: the texts `ghost_row`'s
+    /// row-fit check picks from, spelled out for the tests.
+    #[cfg(test)]
+    fn rungs(&self) -> Vec<String> {
+        let hint = |text: &str| match self.hint {
+            Some((key, verb)) => format!("{text} \u{b7} {key} {verb}"),
+            None => text.to_owned(),
+        };
+        if self.verbatim {
+            return vec![hint(&self.head)];
+        }
+        let short = format!("{}\u{2026}", self.head);
+        let full = match self.more {
+            Some(more) => format!("{}{more}\u{2026}", self.head),
+            None => short.clone(),
+        };
+        let mut rungs = Vec::new();
+        if self.hint.is_some() {
+            rungs.push(hint(&full));
+        }
+        rungs.push(full);
+        if self.more.is_some() {
+            rungs.push(short);
+        }
+        rungs
+    }
+}
+
+/// The ghost for this line: a Decision's reply, a dead Session's revival,
+/// a landed prediction, a draft's first prompt, or steering a live Thread.
 fn placeholder(
     pending: bool,
+    draft: bool,
     transcript: Option<&Transcript>,
     suggestion: Option<&str>,
-) -> (SharedString, Option<(&'static str, &'static str)>, bool) {
-    match followup::suggest(pending, transcript, suggestion) {
-        Followup::Decision => (
-            SharedString::from("Reply to the Decision\u{2026}"),
-            None,
-            false,
-        ),
-        Followup::Revive => (
-            SharedString::from("Revive and continue\u{2026}"),
-            None,
-            false,
-        ),
-        Followup::Suggested(text) => (SharedString::from(text), Some(("⇥", "accept")), true),
-        Followup::Steer => (
-            SharedString::from("Steer this Thread\u{2026}"),
-            Some(("/", "for commands")),
-            false,
-        ),
+) -> Ghost {
+    if draft {
+        return Ghost::ladder("Start a thread", None, true);
     }
+    match followup::suggest(pending, transcript, suggestion) {
+        Followup::Decision => Ghost::ladder("Reply to the Decision", None, false),
+        Followup::Revive => Ghost::ladder("Revive", Some(" and continue"), false),
+        Followup::Suggested(text) => Ghost {
+            head: SharedString::from(text),
+            more: None,
+            verbatim: true,
+            hint: Some(("\u{21e5}", "accept")),
+        },
+        Followup::Steer => Ghost::ladder("Steer", Some(" this Thread"), true),
+    }
+}
+
+/// The ghost drawn: rungs as whole pieces on a clipped, wrapping 20px row,
+/// so a piece that does not fit falls to the hidden second line whole and
+/// the row shows the longest rung that fits. `head` comes first with its
+/// ellipsis hung just past it; `more…` follows on the block's own ground,
+/// covering that ellipsis, so the pair reads `head more…`; the hint (`·` in
+/// `TEXT_FAINT`, `SPACE_1_5` either side) last. A prediction instead lets
+/// its own words wrap away whole before the accept hint, which never goes.
+fn ghost_row(ghost: Ghost, compact: bool) -> Div {
+    let hint = ghost.hint.filter(|_| !compact).map(|(key, verb)| {
+        div()
+            .debug_selector(|| "prompt-placeholder-hint".into())
+            .flex()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .px(px(theme::SPACE_1_5))
+                    .text_color(rgb(TEXT_FAINT))
+                    .child("\u{b7}"),
+            )
+            .child(format!("{key} {verb}"))
+    });
+    let row = div()
+        .debug_selector(|| "prompt-placeholder".into())
+        .absolute()
+        .left(px(theme::CARET_W))
+        .right_0()
+        .top_0()
+        .h(px(theme::COMPOSER_ROW_H))
+        .flex()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_color(rgb(TEXT_MUTED));
+    if ghost.keeps_hint() {
+        return row
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(theme::COMPOSER_ROW_H))
+                    .overflow_hidden()
+                    .whitespace_normal()
+                    .child(ghost.head),
+            )
+            .children(hint);
+    }
+    let head = match ghost.more {
+        // The short rung's ellipsis hangs just past `head`, where `more`
+        // (opaque on the block's ground) covers it whenever it fits.
+        Some(_) => div().relative().flex_shrink_0().child(ghost.head).child(
+            div()
+                .absolute()
+                .top_0()
+                .left(relative(1.))
+                .child("\u{2026}"),
+        ),
+        None => div()
+            .flex_shrink_0()
+            .child(format!("{}\u{2026}", ghost.head)),
+    };
+    row.flex_wrap()
+        .child(head)
+        .children(ghost.more.map(|more| {
+            div()
+                .flex_shrink_0()
+                .h(px(theme::COMPOSER_ROW_H))
+                .bg(rgb(RAISED))
+                .child(format!("{more}\u{2026}"))
+        }))
+        .children(hint)
 }
 
 /// #11: whether this Thread still offers adopting a CLI session — no
@@ -3685,17 +3822,24 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }
 
-/// Display the adapter's label for its native mode; unknown values stay visible.
+/// The status line's word for the Session's permission mode (rule 2.11.5):
+/// `None` at the default, which is hidden; a known id's own word
+/// (`theme::mode_word`); else the adapter's label, lowercased; else the id
+/// split at its humps. Never a raw id, never a capital.
 pub fn permission_mode_label(
     mode: &str,
     choices: &[ferrite_core::PermissionModeChoice],
-) -> SharedString {
-    choices
-        .iter()
-        .find(|choice| choice.value == mode)
-        .map(|choice| choice.label.clone())
-        .unwrap_or_else(|| mode.to_owned())
-        .into()
+) -> Option<SharedString> {
+    let word = theme::mode_word(mode)?;
+    if theme::known_mode(mode).is_some() {
+        return Some(word);
+    }
+    Some(
+        choices
+            .iter()
+            .find(|choice| choice.value == mode)
+            .map_or(word, |choice| choice.label.to_lowercase().into()),
+    )
 }
 
 /// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
@@ -3788,15 +3932,13 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) ->
     let budget = height * theme::COMPOSER_MAX_PANE_FRACTION
         - composer_fixed_height(compact)
         - theme::COMPOSER_ROW_H;
-    let fitting = (budget / (theme::QUEUE_ROW_H + theme::COMPOSER_GAP))
-        .floor()
-        .max(1.) as usize;
+    let fitting = (budget / theme::QUEUE_ROW_H).floor().max(1.) as usize;
     let rows = count.min(fitting).min(if compact {
         theme::COMPOSER_COMPACT_QUEUE_ROWS
     } else {
         theme::COMPOSER_QUEUE_ROWS
     });
-    rows as f32 * theme::QUEUE_ROW_H + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
+    rows as f32 * theme::QUEUE_ROW_H
 }
 
 /// The Composer's height less its editor rows and queue: the inset below
@@ -3832,9 +3974,10 @@ pub(crate) fn composer_row_limit(height: f32, compact: bool, queued: usize) -> u
 /// A prompt written while the agent was still working: a dim `❯` line, in
 /// the grammar it will enter the transcript with. `index` counts down the
 /// pile from the top; only the top row (0, the latest) carries the count
-/// and — while the line is empty, the only time they act — the keys that
-/// take it back: ↑ restores it into the line, ⌫ drops it.
-fn queued_line(held: &str, index: usize, count: usize, empty: bool) -> impl IntoElement {
+/// and — while the Composer holds the keyboard and its line is empty, the
+/// only time they act — the keys that take it back: ↑ restores it into the
+/// line, ⌫ drops it.
+fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoElement {
     let latest = index == 0;
     div()
         .debug_selector(move || format!("queued-{index}"))
@@ -3863,15 +4006,15 @@ fn queued_line(held: &str, index: usize, count: usize, empty: bool) -> impl Into
                     .items_center()
                     .gap(px(theme::SPACE_3))
                     .ml(px(theme::SPACE_2))
-                    .child(
-                        components::text_meta().child(SharedString::from(if count > 1 {
+                    .child(components::tabular(components::text_meta().child(
+                        SharedString::from(if count > 1 {
                             format!("{count} queued")
                         } else {
                             "queued".to_owned()
-                        })),
-                    )
-                    .when(empty, |keys| {
-                        keys.child(components::key_hints(&[("↑", "edit"), ("⌫", "drop")]))
+                        }),
+                    )))
+                    .when(keys, |row| {
+                        row.child(components::key_hints(&[("↑", "edit"), ("⌫", "drop")]))
                     }),
             )
         })
@@ -4366,37 +4509,26 @@ pub fn usage_ink(fraction: f32) -> u32 {
     }
 }
 
-/// The Composer meter's body: a terminal readout — `ctx 62%`, plus the
-/// tightest account window once one runs tight (`5h 91%`) — then whichever
-/// mark the operator chose (Settings › Appearance): three stacked lines, or
-/// three rings in a row. Both marks draw the same three windows in the same
-/// fixed order, so the card behind the click explains either one. `context`
-/// is `None` where no window has been reported (a draft, a fresh Session):
-/// the readout says `ctx —` rather than claiming an empty window.
-pub fn usage_meter_body(
-    style: ferrite_core::settings::UsageMeterStyle,
-    context: Option<f32>,
-    limits: ferrite_core::transcript::RateLimits,
-) -> Div {
-    let mark = match style {
-        ferrite_core::settings::UsageMeterStyle::Lines => {
-            usage_lines(context.unwrap_or(0.), limits)
-        }
-        ferrite_core::settings::UsageMeterStyle::Rings => {
-            usage_rings(context.unwrap_or(0.), limits)
-        }
-    };
-    control_chip(TEXT_MUTED)
-        .gap(px(theme::SPACE_2))
-        .child(usage_readout(context, limits))
-        .child(mark)
+/// A usage token's ink: `TEXT_MUTED` like every value word, the whole
+/// token turning `ATTENTION` once its window runs tight
+/// (`USAGE_TIGHT`). The readout has no `BLOCKED` step: the card behind it
+/// carries that (`usage_ink`).
+pub fn readout_ink(fraction: f32) -> u32 {
+    if fraction >= theme::USAGE_TIGHT {
+        ATTENTION
+    } else {
+        TEXT_MUTED
+    }
 }
 
-/// `ctx 62%`: the context window's use in a fixed-width percent column, and
-/// the tightest account window appended only while it runs tight.
-fn usage_readout(context: Option<f32>, limits: ferrite_core::transcript::RateLimits) -> Div {
+/// The tokens the status line reads, in order: `ctx 32%` when the context
+/// window is known, then the tightest account window only while it runs
+/// tight (`5h 91%`). Each is one run and one ink.
+fn usage_tokens(
+    context: Option<f32>,
+    limits: ferrite_core::transcript::RateLimits,
+) -> Vec<(String, f32)> {
     let percent = |fraction: f32| (fraction.clamp(0., 1.) * 100.).round() as u32;
-    let key = context.map_or_else(|| "unknown".to_owned(), |used| percent(used).to_string());
     let worst = [
         ("5h", limits.five_hour.map(|limit| limit.used_fraction)),
         ("wk", limits.weekly.map(|limit| limit.used_fraction)),
@@ -4405,203 +4537,50 @@ fn usage_readout(context: Option<f32>, limits: ferrite_core::transcript::RateLim
     .filter_map(|(name, used)| used.map(|used| (name, used)))
     .filter(|(_, used)| *used >= theme::USAGE_TIGHT)
     .max_by(|a, b| a.1.total_cmp(&b.1));
-    components::tabular(
-        div()
-            .debug_selector(move || format!("usage-readout-{key}"))
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(theme::SPACE_1))
-            .child("ctx")
-            .child(
-                div()
-                    .min_w(px(theme::USAGE_READOUT_W))
-                    .text_color(rgb(context.map_or(TEXT_MUTED, usage_ink)))
-                    .child(SharedString::from(match context {
-                        Some(used) => format!("{}%", percent(used)),
-                        None => "—".to_owned(),
-                    })),
-            )
-            .children(worst.map(|(name, used)| {
-                div().flex().gap(px(theme::SPACE_1)).child(name).child(
+    context
+        .map(|used| ("ctx", used))
+        .into_iter()
+        .chain(worst)
+        .map(|(name, used)| (format!("{name} {}%", percent(used)), used))
+        .collect()
+}
+
+/// The status line's usage readout (rule 2.6.6): text, not a meter — `ctx
+/// 32%` in `FS_SM` tabular `TEXT_MUTED`, plus a tight account window
+/// (`5h 91%`), inside the control chip that opens the usage card. `None`
+/// when there is nothing to read: no reading is ever invented (no `ctx —`).
+pub fn usage_meter_body(
+    context: Option<f32>,
+    limits: ferrite_core::transcript::RateLimits,
+) -> Option<Div> {
+    let tokens = usage_tokens(context, limits);
+    if tokens.is_empty() {
+        return None;
+    }
+    let key = context.map_or_else(
+        || "unknown".to_owned(),
+        |used| ((used.clamp(0., 1.) * 100.).round() as u32).to_string(),
+    );
+    Some(
+        control_chip(TEXT_MUTED).child(components::tabular(
+            div()
+                .debug_selector(move || format!("usage-readout-{key}"))
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(theme::SPACE_2))
+                .whitespace_nowrap()
+                .children(tokens.into_iter().map(|(token, used)| {
                     div()
-                        .text_color(rgb(usage_ink(used)))
-                        .child(SharedString::from(format!("{}%", percent(used)))),
-                )
-            })),
+                        .debug_selector({
+                            let token = token.clone();
+                            move || format!("usage-token-{token}")
+                        })
+                        .text_color(rgb(readout_ink(used)))
+                        .child(SharedString::from(token))
+                })),
+        )),
     )
-}
-
-/// The same three windows as `usage_lines`, drawn as three 14px rings side
-/// by side. A window the provider has not reported keeps its unlit track,
-/// exactly as its line would.
-pub fn usage_rings(context: f32, limits: ferrite_core::transcript::RateLimits) -> Div {
-    let ring = |key: &'static str, fraction: Option<f32>| {
-        let used = fraction.unwrap_or(0.).clamp(0., 1.);
-        let percent = (used * 100.).round() as u32;
-        div()
-            .id(key)
-            .debug_selector(move || format!("usage-ring-{key}-{percent}"))
-            .child(usage_ring(used, usage_ink(used)))
-    };
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::USAGE_RING_GAP))
-        .h(px(theme::CHIP_H))
-        .child(ring("context", Some(context)))
-        .child(ring(
-            "five-hour",
-            limits.five_hour.map(|limit| limit.used_fraction),
-        ))
-        .child(ring(
-            "weekly",
-            limits.weekly.map(|limit| limit.used_fraction),
-        ))
-}
-
-/// Three quiet horizontal lines for context, five-hour and weekly usage.
-/// The fixed order makes the tiny meter scannable; unknown provider values
-/// retain their tracks and are explained as such in the click-through card.
-pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -> Div {
-    let line = |key: &'static str, fraction: Option<f32>| {
-        let used = fraction.unwrap_or(0.).clamp(0., 1.);
-        let percent = (used * 100.).round() as u32;
-        div()
-            .id(key)
-            .debug_selector(move || format!("usage-line-{key}-{percent}"))
-            .w(px(theme::USAGE_LINE_W))
-            .h(px(theme::USAGE_LINE_H))
-            .rounded(px(theme::USAGE_LINE_H / 2.))
-            .bg(rgba(METER_OFF))
-            .child(
-                div()
-                    .h_full()
-                    .w(relative(used))
-                    .rounded(px(theme::USAGE_LINE_H / 2.))
-                    .bg(rgb(usage_ink(used))),
-            )
-    };
-    div()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .justify_center()
-        .gap(px(theme::USAGE_LINE_GAP))
-        .h(px(theme::CHIP_H))
-        .child(line("context", Some(context)))
-        .child(line(
-            "five-hour",
-            limits.five_hour.map(|limit| limit.used_fraction),
-        ))
-        .child(line(
-            "weekly",
-            limits.weekly.map(|limit| limit.used_fraction),
-        ))
-}
-
-/// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
-/// circle — a `--meter-off` track under an arc that sweeps clockwise from
-/// 12 o'clock with the used fraction of the window.
-///
-/// The header stays compact; its caller wires the token card on click.
-///
-/// `PathBuilder::arc_to` draws the real arc — gpui 0.2.2 has an arc
-/// primitive, whatever the old comment here claimed.
-/// The ring takes its ink from the caller: the meter's three rings wear
-/// the same status inks its lines do, so a budget reads the same whichever
-/// mark the operator picked.
-pub fn usage_ring(fraction: f32, ink: u32) -> Div {
-    // A full ring's seam would degenerate the arc; one part in a thousand
-    // is invisible at 14px.
-    let fraction = fraction.clamp(0.0, 1.0).min(0.999);
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(theme::USAGE_RING_D))
-        .h(px(theme::USAGE_RING_D))
-        .child(
-            canvas(
-                |_, _, _| (),
-                move |bounds, _, window, _| {
-                    // The circle the prototype draws is `USAGE_RING_R` /
-                    // `USAGE_RING_W`; these are what gpui has to be *asked*
-                    // for to land on it. lyon's arc approximation pulls the
-                    // curve inward by ~0.32px and the stroke rasterises
-                    // ~0.5px thin, so the ink measured 12.0px across where
-                    // the prototype measures 12.7px. The compensation lives
-                    // here, at the rasteriser, and never in theme.rs.
-                    const ARC_R: f32 = theme::USAGE_RING_R + 0.15;
-                    const ARC_W: f32 = theme::USAGE_RING_W + 0.25;
-                    let radius = px(ARC_R);
-                    let centre = bounds.center();
-                    let sweep = fraction * std::f32::consts::TAU;
-                    let start = -std::f32::consts::FRAC_PI_2;
-                    let at = |angle: f32| {
-                        point(
-                            centre.x + radius * angle.cos(),
-                            centre.y + radius * angle.sin(),
-                        )
-                    };
-                    // The caps are quads, not paths: they rasterise exactly,
-                    // so they sit on the true centreline at the true radius.
-                    let cap_at = |angle: f32| {
-                        point(
-                            centre.x + px(theme::USAGE_RING_R) * angle.cos(),
-                            centre.y + px(theme::USAGE_RING_R) * angle.sin(),
-                        )
-                    };
-                    let stroke = |from: f32, to: f32, large: bool| {
-                        let mut arc = PathBuilder::stroke(px(ARC_W));
-                        arc.move_to(at(from));
-                        arc.arc_to(point(radius, radius), px(0.), large, true, at(to));
-                        arc.build().ok()
-                    };
-                    // The unlit track is the same circle as the used arc —
-                    // painted, not a bordered box, because gpui rounds a
-                    // box's inset to a whole pixel and the ring's radius is
-                    // 5.4. Drawn as two halves; a closed circle would
-                    // degenerate the arc.
-                    if let Some(path) = stroke(start, start + std::f32::consts::PI, false) {
-                        window.paint_path(path, rgba(METER_OFF));
-                    }
-                    if let Some(path) = stroke(
-                        start + std::f32::consts::PI,
-                        start + std::f32::consts::TAU - 0.001,
-                        false,
-                    ) {
-                        window.paint_path(path, rgba(METER_OFF));
-                    }
-                    if fraction <= 0.0 {
-                        return;
-                    }
-                    if let Some(path) = stroke(start, start + sweep, fraction > 0.5) {
-                        window.paint_path(path, rgb(ink));
-                    }
-                    // `.used` carries `stroke-linecap: round`; lyon's
-                    // default is butt and gpui 0.2.2 re-exports no
-                    // `LineCap`, so each cap is painted as its own disc of
-                    // the stroke's radius.
-                    let cap = px(theme::USAGE_RING_W / 2.0);
-                    for angle in [start, start + sweep] {
-                        let end = cap_at(angle);
-                        window.paint_quad(
-                            gpui::fill(
-                                gpui::Bounds::new(
-                                    point(end.x - cap, end.y - cap),
-                                    gpui::size(cap * 2., cap * 2.),
-                                ),
-                                rgb(ink),
-                            )
-                            .corner_radii(gpui::Corners::all(cap)),
-                        );
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
-        )
 }
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
@@ -6321,10 +6300,10 @@ mod tests {
     fn the_placeholder_carries_the_one_key_hint() {
         let live = Transcript::default();
         assert_eq!(
-            placeholder(false, Some(&live), None).1,
+            placeholder(false, false, Some(&live), None).hint,
             Some(("/", "for commands"))
         );
-        assert_eq!(placeholder(true, Some(&live), None).1, None);
+        assert_eq!(placeholder(true, false, Some(&live), None).hint, None);
         let mut answered = Transcript::default();
         answered.apply(Input::Prompt("fix the decoder".into()));
         answered.apply(Input::Event(SessionEvent::TextDelta {
@@ -6335,17 +6314,21 @@ mod tests {
             cost_usd: None,
         }));
         assert_eq!(
-            placeholder(false, Some(&answered), Some("Run the tests")).1,
-            Some(("⇥", "accept"))
+            placeholder(false, false, Some(&answered), Some("Run the tests")).hint,
+            Some(("\u{21e5}", "accept"))
         );
         assert_eq!(
-            placeholder(false, None, Some("Run the tests")).1,
+            placeholder(false, true, None, Some("Run the tests")).hint,
             Some(("/", "for commands")),
             "a draft has no conversation to predict from"
         );
         // The accept key is never cut; the menu pointer may drop out whole.
-        assert!(placeholder(false, Some(&answered), Some("Run the tests")).2);
-        assert!(!placeholder(false, Some(&live), None).2);
+        assert!(placeholder(false, false, Some(&answered), Some("Run the tests")).keeps_hint());
+        assert!(!placeholder(false, false, Some(&live), None).keeps_hint());
+        assert_eq!(
+            placeholder(false, false, Some(&answered), Some("Run the tests")).rungs(),
+            ["Run the tests \u{b7} \u{21e5} accept"]
+        );
     }
     use ferrite_core::transcript::{Input, Lexer, Todos};
     use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
@@ -6358,7 +6341,7 @@ mod tests {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .w_full()
-                .child(working_line(&self.0, false, false, false))
+                .child(working_line(&self.0, false, false, false, false))
         }
     }
 
@@ -7256,13 +7239,65 @@ mod tests {
             label: "Ask for changes".into(),
         }];
         assert_eq!(
-            permission_mode_label("opaque-mode", &choices).as_ref(),
-            "Ask for changes"
+            permission_mode_label("opaque-mode", &choices).as_deref(),
+            Some("ask for changes")
         );
         assert_eq!(
-            permission_mode_label("unknown", &choices).as_ref(),
-            "unknown"
+            permission_mode_label("unknown", &choices).as_deref(),
+            Some("unknown")
         );
+    }
+
+    /// C17: a mode id never renders raw — the known ids read as words, the
+    /// default is hidden, and nothing shown carries a capital or a hump.
+    #[test]
+    fn the_mode_word_is_never_a_raw_id() {
+        let claude = vec![
+            ferrite_core::PermissionModeChoice {
+                value: "acceptEdits".into(),
+                label: "Accept Edits".into(),
+            },
+            ferrite_core::PermissionModeChoice {
+                value: "dontAsk".into(),
+                label: "Don't Ask".into(),
+            },
+        ];
+        assert_eq!(
+            permission_mode_label("acceptEdits", &[]).as_deref(),
+            Some("accept edits")
+        );
+        assert_eq!(
+            permission_mode_label("acceptEdits", &claude).as_deref(),
+            Some("accept edits")
+        );
+        assert_eq!(
+            permission_mode_label("bypassPermissions", &[]).as_deref(),
+            Some("bypass permissions")
+        );
+        assert_eq!(permission_mode_label("plan", &[]).as_deref(), Some("plan"));
+        assert_eq!(permission_mode_label("default", &claude), None);
+        assert_eq!(permission_mode_label("", &[]), None);
+        assert_eq!(
+            permission_mode_label("someNewMode", &[]).as_deref(),
+            Some("some new mode")
+        );
+        for id in [
+            "acceptEdits",
+            "bypassPermissions",
+            "plan",
+            "dontAsk",
+            "someNewMode",
+            "on-request",
+        ] {
+            for choices in [&claude[..], &[]] {
+                let word = permission_mode_label(id, choices).unwrap();
+                assert_eq!(word.to_lowercase(), word.as_ref(), "{word}");
+                if id.chars().any(char::is_uppercase) {
+                    assert_ne!(word.as_ref(), id, "never the raw camelCase id");
+                }
+                assert!(!word.chars().any(char::is_uppercase), "{word}");
+            }
+        }
     }
 
     /// #22 amendment: durations read in the comps' grammar at every scale.
@@ -7639,12 +7674,16 @@ mod tests {
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
         assert_eq!(
-            placeholder(false, Some(&live), None).0,
-            "Steer this Thread\u{2026}"
+            placeholder(false, false, Some(&live), None).rungs(),
+            [
+                "Steer this Thread\u{2026} \u{b7} / for commands",
+                "Steer this Thread\u{2026}",
+                "Steer\u{2026}",
+            ]
         );
         assert_eq!(
-            placeholder(true, Some(&live), None).0,
-            "Reply to the Decision\u{2026}"
+            placeholder(true, false, Some(&live), None).rungs(),
+            ["Reply to the Decision\u{2026}"]
         );
 
         let mut closed = Transcript::default();
@@ -7652,8 +7691,16 @@ mod tests {
             reason: "the CLI exited".into(),
         }));
         assert_eq!(
-            placeholder(false, Some(&closed), None).0,
-            "Revive and continue\u{2026}"
+            placeholder(false, false, Some(&closed), None).rungs(),
+            ["Revive and continue\u{2026}", "Revive\u{2026}"]
+        );
+        // A draft: what the first prompt does, then the menu pointer.
+        assert_eq!(
+            placeholder(false, true, None, None).rungs(),
+            [
+                "Start a thread\u{2026} \u{b7} / for commands",
+                "Start a thread\u{2026}",
+            ]
         );
 
         // A landed prediction is the line, verbatim and unadorned — it is a
@@ -7668,26 +7715,36 @@ mod tests {
             cost_usd: None,
         }));
         assert_eq!(
-            placeholder(false, Some(&answered), Some("Run the tests")).0,
+            placeholder(false, false, Some(&answered), Some("Run the tests")).head,
             "Run the tests"
         );
         // A Decision and a dead Session both outrank it.
         assert_eq!(
-            placeholder(true, Some(&answered), Some("Run the tests")).0,
-            "Reply to the Decision\u{2026}"
+            placeholder(true, false, Some(&answered), Some("Run the tests")).rungs(),
+            ["Reply to the Decision\u{2026}"]
         );
         assert_eq!(
-            placeholder(false, Some(&closed), Some("Run the tests")).0,
-            "Revive and continue\u{2026}"
+            placeholder(false, false, Some(&closed), Some("Run the tests")).rungs(),
+            ["Revive and continue\u{2026}", "Revive\u{2026}"]
         );
 
-        for (line, _, _) in [
-            placeholder(false, Some(&live), None),
-            placeholder(true, Some(&live), None),
-            placeholder(false, Some(&closed), None),
+        // No rung is ever a cut word, names a message, or points at the
+        // menu anywhere but the fullest rung.
+        for ghost in [
+            placeholder(false, false, Some(&live), None),
+            placeholder(true, false, Some(&live), None),
+            placeholder(false, false, Some(&closed), None),
+            placeholder(false, true, None, None),
         ] {
-            assert!(!line.contains("message"), "{line}");
-            assert!(!line.contains("commands"), "{line}");
+            for (index, rung) in ghost.rungs().iter().enumerate() {
+                assert!(!rung.contains("message"), "{rung}");
+                assert_eq!(
+                    rung.contains("commands"),
+                    index == 0 && ghost.hint.is_some(),
+                    "{rung}"
+                );
+                assert!(!rung.contains("this\u{2026}"), "{rung}");
+            }
         }
     }
 
@@ -7702,38 +7759,33 @@ mod tests {
 
     // ---- WP-D tests (append above the end line)
     /// The `❯` says where keys land: accent only while the line holds the
-    /// keyboard, attention when that line answers a Decision.
+    /// keyboard — a Decision's reply line included — muted otherwise.
     #[test]
     fn the_prompt_mark_lights_only_while_the_line_holds_the_keyboard() {
-        assert_eq!(prompt_ink(true, false), ACCENT);
-        assert_eq!(prompt_ink(true, true), ATTENTION);
-        assert_eq!(prompt_ink(false, false), TEXT_MUTED);
-        assert_eq!(prompt_ink(false, true), TEXT_MUTED);
+        assert_eq!(prompt_ink(true), ACCENT);
+        assert_eq!(prompt_ink(false), TEXT_MUTED);
     }
 
-    /// The block draws its own focus edge only where the Pane's edge is a
-    /// state colour and the keyboard is in the line (P0-8); otherwise the
-    /// resting edge, always 1px, always in layout.
+    /// The block's edge answers a file drop and nothing else: `ACCENT_EDGE`
+    /// while files hover it, the resting edge otherwise — always 1px,
+    /// always in layout.
     #[test]
-    fn the_composer_edge_carries_focus_only_on_an_alert_pane() {
-        assert_eq!(
-            composer_edge(true, true, false),
-            (theme::FOCUS_RING << 8) | 0xff
-        );
-        for (alert, editing) in [(false, false), (false, true), (true, false)] {
-            assert_eq!(composer_edge(alert, editing, false), theme::COMPOSER_EDGE);
-        }
+    fn the_composer_edge_answers_only_a_file_drop() {
+        assert_eq!(composer_edge(true), theme::ACCENT_EDGE);
+        assert_eq!(composer_edge(false), theme::COMPOSER_EDGE);
     }
 
     /// The height budget counts exactly what the block draws around its
-    /// editor rows: inset, two edges, padding, the gap and the hint row.
+    /// editor rows: inset, two edges, padding, the gap and the status line
+    /// (one `LH_META` line, rule 2.6.6).
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
+        assert_eq!(theme::COMPOSER_META_H, theme::LH_META);
         let block = 2. * theme::COMPOSER_EDGE_W
             + theme::COMPOSER_PAD_T
             + theme::COMPOSER_PAD_B
-            + theme::COMPOSER_GAP
-            + theme::COMPOSER_ROW_H;
+            + theme::COMPOSER_META_GAP
+            + theme::LH_META;
         assert_eq!(
             composer_fixed_height(false),
             theme::COMPOSER_INSET_B + block
@@ -7756,6 +7808,17 @@ mod tests {
             composer_fixed_height(false) + limit * theme::COMPOSER_ROW_H
                 <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
         );
+        // Queued rows stack at the input's own pitch with no gap between
+        // them: three rows are exactly three lines.
+        assert_eq!(theme::QUEUE_ROW_H, theme::COMPOSER_ROW_H);
+        assert_eq!(
+            composer_queue_height(900., false, 3),
+            3. * theme::COMPOSER_ROW_H
+        );
+        assert_eq!(
+            composer_queue_height(900., true, 3),
+            theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * theme::COMPOSER_ROW_H
+        );
     }
 
     /// Usage is neutral until it runs tight: colour is state.
@@ -7764,6 +7827,42 @@ mod tests {
         assert_eq!(usage_ink(0.62), TEXT_2);
         assert_eq!(usage_ink(theme::USAGE_TIGHT), ATTENTION);
         assert_eq!(usage_ink(theme::USAGE_SPENT), BLOCKED);
+        // The status line's readout: muted, then attention at 80% as a
+        // whole token, and never blocked.
+        assert_eq!(theme::USAGE_TIGHT, 0.80);
+        assert_eq!(readout_ink(0.79), TEXT_MUTED);
+        assert_eq!(readout_ink(theme::USAGE_TIGHT), ATTENTION);
+        assert_eq!(readout_ink(1.0), ATTENTION);
+    }
+
+    /// `ctx 32%` is text: one token per window, no reading invented where
+    /// none was reported, and an account window only while it runs tight.
+    #[test]
+    fn the_usage_readout_is_one_run_per_window() {
+        use ferrite_core::transcript::RateLimits;
+        use ferrite_core::RateLimitWindow;
+        let quiet = RateLimits::default();
+        let tokens = |context, limits| {
+            usage_tokens(context, limits)
+                .into_iter()
+                .map(|(token, _)| token)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tokens(Some(0.32), quiet), ["ctx 32%"]);
+        assert!(tokens(None, quiet).is_empty(), "no `ctx —`");
+        assert!(usage_meter_body(None, quiet).is_none());
+        let tight = RateLimits {
+            five_hour: Some(RateLimitWindow {
+                used_fraction: 0.91,
+                resets_at: None,
+            }),
+            weekly: Some(RateLimitWindow {
+                used_fraction: 0.85,
+                resets_at: None,
+            }),
+        };
+        assert_eq!(tokens(Some(0.52), tight), ["ctx 52%", "5h 91%"]);
+        assert_eq!(tokens(None, tight), ["5h 91%"]);
     }
     // (end WP-D)
 

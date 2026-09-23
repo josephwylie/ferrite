@@ -83,7 +83,6 @@ pub struct Composer {
     files_focus: FocusHandle,
     line: Line,
     files: Vec<PathBuf>,
-    files_generation: usize,
     /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
     /// any occurrence still standing in the text paints as the comp's
     /// @-pill, whichever provider serves the Thread. Display only — the
@@ -137,7 +136,6 @@ impl Composer {
             files_focus: cx.focus_handle(),
             line: Line::default(),
             files: Vec::new(),
-            files_generation: 0,
             mentions: Vec::new(),
             menu_open: false,
             history_available: false,
@@ -165,7 +163,6 @@ impl Composer {
         }
         let files = composer.files.clone();
         let focus = composer.files_focus.clone();
-        let generation = composer.files_generation;
         let composer = entity.downgrade();
         Some(
             div()
@@ -175,7 +172,7 @@ impl Composer {
                 .tab_stop(true)
                 .child(
                     crate::attachments::Attachments::new("prompt-attachments", files, preview)
-                        .in_island(generation)
+                        .in_island()
                         .on_remove(move |remove, window, cx| {
                             let _ = composer.update(cx, |composer, cx| {
                                 composer.files.retain(|path| path != remove);
@@ -246,9 +243,6 @@ impl Composer {
     /// Put a line back into the Composer, ready to edit at its end.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
         let (text, files) = prompt_files::split(text);
-        if !files.is_empty() && files != self.files {
-            self.files_generation = self.files_generation.wrapping_add(1);
-        }
         self.files = files;
         self.line.set(text);
         self.edited(cx);
@@ -280,14 +274,10 @@ impl Composer {
     }
 
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        let before = self.files.len();
         for path in paths {
             if !self.files.contains(path) {
                 self.files.push(path.clone());
             }
-        }
-        if self.files.len() > before {
-            self.files_generation = self.files_generation.wrapping_add(1);
         }
         self.edited(cx);
     }
@@ -1441,6 +1431,10 @@ mod tests {
             "the pill wears the mention wash"
         );
         assert_eq!(runs[1].color, rgb(crate::theme::MENTION_INK).into());
+        // A mention is neutral: body ink on the inline-code wash, never the
+        // accent (rule 2.2.6).
+        assert_eq!(crate::theme::MENTION_INK, crate::theme::TEXT);
+        assert_eq!(crate::theme::MENTION_WASH, crate::theme::INLINE_CODE_WASH);
         assert_ne!(
             crate::theme::MENTION_WASH,
             crate::theme::COMPOSER_SELECTION,
@@ -1461,7 +1455,7 @@ mod tests {
         let base = TextRun {
             len: 0,
             font: gpui::font(crate::theme::FONT_CODE),
-            color: rgb(crate::theme::TEXT_2).into(),
+            color: rgb(crate::theme::TEXT).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
