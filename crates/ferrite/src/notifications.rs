@@ -20,7 +20,7 @@ use gpui::component::notification::Notification;
 use gpui::component::popover::Popover;
 use gpui::component::WindowExt as _;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, Anchor, AnyElement, App, Div, SharedString, Stateful, Window};
+use gpui::{div, px, rgb, Anchor, AnyElement, App, Div, SharedString, Stateful, Window};
 
 use crate::components;
 use crate::icons;
@@ -263,7 +263,7 @@ fn trigger(unread: usize, waiting: bool, open: bool) -> Button {
         .when(unread > 0, |bell| bell.child(badge(unread, waiting)))
 }
 
-/// The unread count pill: UI face, tabular, `99+` past two digits.
+/// The unread count pill: UI `FS_SM`, tabular, `99+` past two digits.
 fn badge(unread: usize, waiting: bool) -> Div {
     let (ground, ink) = badge_inks(waiting);
     let count: SharedString = if unread > 99 {
@@ -285,7 +285,7 @@ fn badge(unread: usize, waiting: bool) -> Div {
             .rounded_full()
             .bg(rgb(ground))
             .font_family(FONT_UI)
-            .text_size(px(FS_BADGE))
+            .text_size(px(FS_SM))
             .line_height(px(BADGE_H))
             .font_weight(W_LABEL)
             .text_color(rgb(ink))
@@ -429,6 +429,10 @@ fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
     )
 }
 
+/// The panel's head: its title on the rows' leading edge (the status
+/// dots' column), the count tabular, and `Clear all` hung so its word ends
+/// where each row's dismiss ends. No rule under it: `NOTICE_HEAD_GAP` of
+/// space sets it off from the rows.
 fn head(clearable: bool, unread: usize, handle: Handle) -> Div {
     div()
         .flex()
@@ -436,12 +440,8 @@ fn head(clearable: bool, unread: usize, handle: Handle) -> Div {
         .justify_between()
         .h(px(MENU_ROW_H))
         .flex_shrink_0()
-        .pl(px(MENU_ROW_PAD_X))
-        .mb(px(FLOAT_PAD))
-        .mx(px(-FLOAT_PAD))
-        .px(px(MENU_ROW_PAD_X + FLOAT_PAD))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
+        .px(px(MENU_ROW_PAD_X))
+        .mb(px(NOTICE_HEAD_GAP))
         .child(
             components::text_meta()
                 .flex()
@@ -453,13 +453,16 @@ fn head(clearable: bool, unread: usize, handle: Handle) -> Div {
                         .child("Notifications"),
                 )
                 .when(unread > 0, |title| {
-                    title.child(format!("· {unread} unread"))
+                    title.child(components::tabular(
+                        div().child(format!("· {unread} unread")),
+                    ))
                 }),
         )
         .children(clearable.then(|| {
             components::button("notifications-clear")
                 .debug_selector(|| "notifications-clear".into())
                 .px(px(SPACE_1_5))
+                .mr(px(-SPACE_1_5))
                 .child(components::text_meta().child("Clear all"))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
@@ -488,6 +491,13 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
         .rounded(px(R_MENU_ROW))
         .hover_raised()
         .press_raised()
+        // Title and detail truncate at the panel's width; the whole of both
+        // stays one hover away.
+        .tooltip(crate::menu::tooltip(format!(
+            "{}\n{}",
+            row.title,
+            row.detail()
+        )))
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             open(target_verb(&target), window, cx)

@@ -176,15 +176,6 @@ pub fn raised_edged(edge: u32) -> Div {
     raised().border_1().border_color(rgba(edge))
 }
 
-/// The one rule weight, horizontal.
-pub fn hairline() -> Div {
-    div()
-        .h(px(1.))
-        .w_full()
-        .flex_shrink_0()
-        .bg(rgba(theme::HAIRLINE))
-}
-
 /// The only shadow in the app, for floating surfaces: a far soft layer and a
 /// near contact layer.
 pub fn float_shadow() -> Vec<BoxShadow> {
@@ -774,33 +765,44 @@ pub fn menu_row(
 }
 
 /// A menu section title: UI `FS_SM` `W_LABEL` `TEXT_MUTED`, an optional
-/// leading mark and an optional note after it.
+/// leading mark and an optional note after it. Its mark and title share the
+/// rows' leading edge. A section that follows rows is set apart from them
+/// by `menu_separator` (space) or `.mt(MENU_GROUP_GAP)`, never a rule.
 pub fn menu_section(
     title: impl Into<SharedString>,
     leading: Option<(&'static str, u32)>,
     note: Option<SharedString>,
 ) -> Div {
+    // The title's line box sits on the row's foot; the mark is centred on
+    // that line box, not on the row, so it rides the text's cap band instead
+    // of hanging below its baseline.
     text_meta()
         .flex()
         .items_end()
-        .gap(px(theme::SPACE_2))
         .h(px(theme::MENU_SECTION_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .pb(px(theme::SPACE_1))
         .cursor_default()
-        .when_some(leading, |row, (path, ink)| {
-            row.child(icons::icon(path, theme::ROW_ICON, ink))
-        })
-        .child(div().font_weight(theme::W_LABEL).child(title.into()))
-        .children(note)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_2))
+                .h(px(theme::LH_META))
+                .min_w_0()
+                .when_some(leading, |line, (path, ink)| {
+                    line.child(icons::icon(path, theme::MENU_SECTION_ICON, ink))
+                })
+                .child(div().font_weight(theme::W_LABEL).child(title.into()))
+                .children(note),
+        )
 }
 
-/// The one separator inside a menu: a full-bleed hairline.
+/// The one separator inside a floating surface: `MENU_GROUP_GAP` of space.
+/// Grouping is space, not a line; the surface's own hairline edge is the
+/// only rule a menu draws.
 pub fn menu_separator() -> Div {
-    hairline()
-        .my(px(theme::MENU_SEP_Y))
-        .mx(px(-theme::FLOAT_PAD))
-        .w_auto()
+    div().flex_shrink_0().h(px(theme::MENU_GROUP_GAP))
 }
 
 /// An inert status line (loading, empty, error) in a menu.
@@ -814,7 +816,7 @@ pub fn menu_note(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// A menu's footer: a separator, then its key hints.
+/// A menu's footer: a group gap, then its key hints on the rows' edge.
 pub fn menu_footer(hints: &[(&str, &str)]) -> Div {
     div().flex().flex_col().child(menu_separator()).child(
         key_hints(hints)
@@ -912,9 +914,16 @@ impl gpui::RenderOnce for ChoiceMenu {
                     // live rows.
                     if choice.section {
                         let (title, mark) = (choice.label.clone(), choice.icon);
+                        // A section after rows stands a group gap off them.
+                        let after = index > 0;
                         menu = menu.item(
                             PopupMenuItem::element(move |_, _| {
-                                kit_row(menu_section(title.clone(), mark, None))
+                                kit_row(
+                                    menu_section(title.clone(), mark, None)
+                                        .when(after, |section| {
+                                            section.mt(px(theme::MENU_GROUP_GAP))
+                                        }),
+                                )
                             })
                             .disabled(true),
                         );
@@ -969,10 +978,11 @@ impl gpui::RenderOnce for ChoiceMenu {
                     use gpui::base::ElementExt as _;
                     let retained = retained.clone();
                     let menu = menu.clone();
-                    // The kit surface keeps its own hairline ring; the one
-                    // float shadow lifts it like every other floating surface.
+                    // The kit surface keeps its own hairline ring and rounds
+                    // to the kit's `radius` (`R_CONTROL`); the wrapper follows
+                    // it, so the one float shadow hugs its corners.
                     div()
-                        .rounded(px(theme::R_BLOCK))
+                        .rounded(px(theme::R_CONTROL))
                         .shadow(float_shadow())
                         .child(menu.clone())
                         .on_prepaint(move |_, window, cx| {

@@ -5,9 +5,12 @@
 //! Cockpit; the sheet `RAISED` with a `HAIRLINE_STRONG` edge, `R_PANE` and
 //! the float shadow; a `MODAL_HEAD_H` head (the one `W_LABEL` title, an
 //! `esc` keycap, the close button) over a hairline; a scrolling body; a
-//! footer pinned under a hairline. Form rows set the label in mono `FS_UI`
-//! and its description in prose at `FS_PROSE_SM`, controls are
-//! `FORM_CONTROL_H`, and a choice shows its selection in the accent.
+//! footer pinned under a hairline. Those two rules are the sheet's structure
+//! (they mark where the body scrolls); nothing inside the body draws one —
+//! pages, groups and rows are set apart by space alone. Form rows set the
+//! label in UI `FS_UI` and its description in prose at `FS_PROSE_SM` on the
+//! same leading edge, controls are `FORM_CONTROL_H`, and a choice shows its
+//! selection in the accent.
 
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, Axis, Div, SharedString};
@@ -200,12 +203,13 @@ pub fn body(pages: Vec<SettingPage>) -> Div {
     div().flex_1().min_h_0().child(settings)
 }
 
-/// A page, its header in the UI voice over the one rule weight.
+/// A page, its header in the UI voice. No rule under it: the header sits a
+/// group's gap above the first group, on the rows' leading edge.
 pub fn page(title: &'static str, groups: Vec<SettingGroup>) -> SettingPage {
     let header = gpui::StyleRefinement::default()
         .px(px(MODAL_PAD))
         .py(px(SPACE_3))
-        .border_color(rgba(HAIRLINE))
+        .border_b_0()
         .text_size(px(FS_UI))
         .text_color(rgb(TEXT_STRONG));
     SettingPage::new(title)
@@ -215,9 +219,13 @@ pub fn page(title: &'static str, groups: Vec<SettingGroup>) -> SettingPage {
 }
 
 /// A group of items. Its title is a section header: UI `FS_SM` in the
-/// kit's muted ink, sentence case (the items set their own type).
+/// kit's muted ink, sentence case (the items set their own type), sitting
+/// closer to its rows than they sit to each other. The group adds the inset
+/// that puts its rows on the page header's edge (`SETTINGS_GROUP_INSET_X`).
 pub fn group(title: Option<&'static str>) -> SettingGroup {
     let group = SettingGroup::new()
+        .px(px(SETTINGS_GROUP_INSET_X))
+        .gap(px(SETTINGS_TITLE_GAP))
         .font_family(FONT_UI)
         .text_size(px(FS_SM));
     match title {
@@ -251,7 +259,7 @@ pub fn choices<T: Clone + 'static>(
                 .flex()
                 .flex_wrap()
                 .max_w(gpui::relative(1.))
-                .gap(px(SPACE_0_5))
+                .gap(px(FORM_CHOICE_PAD))
                 .p(px(FORM_CHOICE_PAD))
                 .rounded(px(R_CONTROL))
                 .border_1()
@@ -448,6 +456,7 @@ fn switch_track(checked: bool) -> u32 {
 /// One option of a segmented choice, inside the tray. Its 1px edge is always
 /// in layout, so selection never moves a neighbour: selected wears the
 /// accent wash and edge with `TEXT_STRONG`, the rest `TEXT_2` on the tray.
+/// `R_CHIP` is the tray's `R_CONTROL` less its `FORM_CHOICE_PAD`: concentric.
 pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (ink, ground, edge) = components::choice_inks(selected);
     components::form_button(id, cx)

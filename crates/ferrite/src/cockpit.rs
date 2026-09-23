@@ -47,9 +47,8 @@ use gpui::component::Disableable;
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnimationExt, AnyElement, ClickEvent,
-    ClipboardItem, Context, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString,
-    Stateful, Window,
+    ClipboardItem, Context, Div, Entity, FocusHandle, Focusable, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -3155,7 +3154,7 @@ impl CockpitView {
                 return div()
                     .min_w_0()
                     .flex_1()
-                    .font_weight(FontWeight::NORMAL)
+                    .font_weight(crate::theme::W_BODY)
                     .child(editor.clone())
                     .on_mouse_down(
                         MouseButton::Left,
@@ -3336,18 +3335,21 @@ impl CockpitView {
                 open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
             });
         let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
-        // One round control at the end of the input row. With text on the
-        // line it sends (↑) — queueing behind a running turn, as Enter does;
-        // over an empty line while a turn runs (or a draft starts) it stops
-        // (■), as Esc does. The keys work either way and the tooltip names
-        // them. Its selector says which verb it is now.
+        // One round control at the end of the input row. While a turn runs
+        // (or a draft starts) it stops (■), as Esc does — whatever is in
+        // the line, so the pointer can always reach Stop; Enter still
+        // queues the line behind the turn. At rest it sends (↑). The keys
+        // work either way and the tooltip names them. Its selector says
+        // which verb it is now.
         let empty = pane.composer.read(cx).is_empty();
-        let stopping = can_stop && (empty || starting);
+        let stopping = can_stop;
         let (verb, tooltip) = if stopping {
             (
                 "stop",
                 if starting {
                     "Cancel startup (Esc); keep the draft"
+                } else if !empty {
+                    "Interrupt Main (Esc). Enter queues the line."
                 } else if has_queue {
                     "Interrupt Main (Esc). Queued prompts remain and may run next."
                 } else {
@@ -3372,18 +3374,18 @@ impl CockpitView {
             crate::components::button(SharedString::from(id))
                 .custom(
                     ButtonCustomVariant::new(cx)
-                        .foreground(rgb(crate::theme::PANE).into())
-                        .hover(rgb(crate::theme::TEXT).into())
-                        .active(rgb(crate::theme::TEXT_2).into()),
+                        .foreground(rgb(crate::theme::SEND_INK).into())
+                        .hover(rgb(crate::theme::SEND_HOVER).into())
+                        .active(rgb(crate::theme::SEND_PRESSED).into()),
                 )
                 .debug_selector(move || selector.clone())
                 .size(px(crate::theme::SEND_BUTTON))
                 .p_0()
                 .rounded_full()
                 .bg(rgb(if live {
-                    crate::theme::TEXT_STRONG
+                    crate::theme::SEND_GROUND
                 } else {
-                    crate::theme::FILL
+                    crate::theme::SEND_IDLE_GROUND
                 }))
                 .disabled(!live)
                 .tooltip(tooltip)
@@ -3396,9 +3398,9 @@ impl CockpitView {
                     },
                     crate::theme::SEND_GLYPH,
                     if live {
-                        crate::theme::PANE
+                        crate::theme::SEND_INK
                     } else {
-                        crate::theme::TEXT_MUTED
+                        crate::theme::SEND_IDLE_INK
                     },
                 ))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -5990,7 +5992,11 @@ impl CockpitView {
                         pane::picker_section(
                             provider_of_title(&row.name).unwrap(),
                             row.detail.clone(),
-                        ),
+                        )
+                        // A section after rows stands a group gap off them.
+                        .when(at > 0, |section| {
+                            section.mt(px(crate::theme::MENU_GROUP_GAP))
+                        }),
                         at,
                         cx,
                     )
@@ -7543,6 +7549,17 @@ impl CockpitView {
         )
     }
 
+    /// Whether a Pane is wider than the reading column (inside its padding
+    /// and edges), so its head lays out on the column's grid.
+    fn head_column(&self, index: usize, window: &Window) -> bool {
+        let width = self
+            .pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .map_or(self.cell(window).width, |(_, rect)| rect.w);
+        width - 2. * (crate::theme::PANE_PAD_X + 1.) > crate::theme::READING_MAX_W
+    }
+
     /// Whether native files hover this Pane right now: the last Pane their
     /// drag moved over, while that drag is still live.
     fn drop_target(&self, index: usize, cx: &gpui::App) -> bool {
@@ -7665,6 +7682,7 @@ impl CockpitView {
                     reduce_motion: cx.reduce_motion(),
                     drop_target: self.drop_target(index, cx),
                     show_focus: self.visible_indices().len() > 1,
+                    head_column: self.head_column(index, window),
                 },
                 level,
             ));
@@ -7715,6 +7733,7 @@ impl CockpitView {
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
             show_focus: self.visible_indices().len() > 1,
+            head_column: self.head_column(index, window),
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
@@ -7774,17 +7793,28 @@ impl CockpitView {
     }
     /// The board with no Pane open: one quiet line and the three keys that
     /// start work, spelled from the platform's own key table. No icon, no
-    /// button — the nav's `+` is the pointer's way in.
+    /// button — the nav's `+` is the pointer's way in. The keys stand in one
+    /// column and their verbs in another, so every verb starts on the same
+    /// edge however long its keys; the line sits twice the hints' own gap
+    /// above them, so it reads as their heading.
     fn empty_board(&self) -> Div {
         use crate::theme::*;
-        let hint = |action: &str, verb: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(EMPTY_BOARD_GAP))
-                .children(Self::key_label(action).map(|keys| crate::components::kbd_keys(&keys)))
-                .child(verb)
-        };
+        let hints = [
+            ("cockpit::NewThread", "new thread"),
+            ("cockpit::NewWorktreeThread", "new worktree thread"),
+            ("cockpit::ReopenThread", "reopen last"),
+        ];
+        let column = || div().flex().flex_col().gap(px(EMPTY_BOARD_GAP));
+        let cell = || div().flex().items_center().h(px(KBD_H));
+        let keys =
+            hints.iter().fold(column(), |keys, (action, _)| {
+                keys.child(cell().children(
+                    Self::key_label(action).map(|keys| crate::components::kbd_keys(&keys)),
+                ))
+            });
+        let verbs = hints.iter().fold(column(), |verbs, (_, verb)| {
+            verbs.child(cell().child(*verb))
+        });
         div()
             .debug_selector(|| "empty-board".into())
             .flex_1()
@@ -7792,7 +7822,6 @@ impl CockpitView {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(EMPTY_BOARD_GAP))
             .font_family(FONT_UI)
             .text_size(px(FS_SM))
             .line_height(px(LH_META))
@@ -7802,7 +7831,7 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .items_start()
-                    .gap(px(EMPTY_BOARD_GAP))
+                    .gap(px(2. * EMPTY_BOARD_GAP))
                     .child(
                         div()
                             .text_size(px(FS_UI))
@@ -7810,9 +7839,13 @@ impl CockpitView {
                             .text_color(rgb(TEXT_2))
                             .child("no thread open"),
                     )
-                    .child(hint("cockpit::NewThread", "new thread"))
-                    .child(hint("cockpit::NewWorktreeThread", "new worktree thread"))
-                    .child(hint("cockpit::ReopenThread", "reopen last")),
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(EMPTY_BOARD_GAP))
+                            .child(keys)
+                            .child(verbs),
+                    ),
             )
     }
 
@@ -8110,7 +8143,7 @@ impl CockpitView {
                     "usage-meter-{key}"
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
-                .rounded(px(crate::theme::R_CONTROL))
+                .rounded(px(crate::theme::COMPOSER_CHIP_R))
                 .child(pane::usage_meter_body(
                     self.prefs.settings.usage_meter_style,
                     fraction,
@@ -8202,10 +8235,8 @@ impl CockpitView {
         Some(
             crate::components::ChoiceMenu {
                 id: format!("mode-picker-{}", thread.get()).into(),
-                trigger: crate::components::button(("mode-picker", thread.get() as usize))
+                trigger: pane::composer_control(("mode-picker", thread.get() as usize))
                     .debug_selector(move || format!("mode-picker-{}", thread.get()))
-                    .p_0()
-                    .h_auto()
                     .tooltip("Permission mode")
                     .child(pane::mode_chip(&label, true)),
                 choices,
@@ -8323,14 +8354,12 @@ impl CockpitView {
                 shown == thread && shown_generation == generation
             });
         Some(
-            crate::components::button(SharedString::from(format!(
+            pane::composer_control(SharedString::from(format!(
                 "session-controls-{}",
                 thread.get()
             )))
             .debug_selector(move || format!("session-controls-{}", thread.get()))
             .tooltip("Session controls")
-            .p_0()
-            .h_auto()
             .child(pane::session_chip())
             .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
@@ -8392,12 +8421,11 @@ impl CockpitView {
                         .child(verb),
                 )
         };
-        let head = |title: &'static str| {
-            crate::components::text_meta()
-                .px(px(crate::theme::MENU_ROW_PAD_X))
-                .pt(px(crate::theme::SPACE_1_5))
-                .pb(px(crate::theme::SPACE_0_5))
-                .child(title)
+        // A section head is the one menu section title; one that follows
+        // rows stands a group gap off them, so it heads what is below it.
+        let head = |title: &'static str, after: bool| {
+            crate::components::menu_section(title, None, None)
+                .when(after, |head| head.mt(px(crate::theme::MENU_GROUP_GAP)))
         };
         let row = || {
             div()
@@ -8414,13 +8442,14 @@ impl CockpitView {
             .w(px(crate::theme::SESSION_CARD_W))
             .max_h(px(crate::theme::MENU_MAX_H))
             .overflow_y_scroll();
-        if let Some((_, _, error)) =
-            self.session_control_error
-                .as_ref()
-                .filter(|(shown, shown_generation, _)| {
-                    *shown == thread && *shown_generation == generation
-                })
-        {
+        let error = self
+            .session_control_error
+            .as_ref()
+            .filter(|(shown, shown_generation, _)| {
+                *shown == thread && *shown_generation == generation
+            });
+        let errored = error.is_some();
+        if let Some((_, _, error)) = error {
             card = card.child(
                 row()
                     .id("session-control-error")
@@ -8443,8 +8472,9 @@ impl CockpitView {
             );
         }
         let modes = open.permission_modes();
-        if !modes.is_empty() {
-            card = card.child(head("mode"));
+        let modes_empty = modes.is_empty();
+        if !modes_empty {
+            card = card.child(head("mode", errored));
         }
         let current = open.permission_mode().map(str::to_owned);
         for (index, mode) in modes.into_iter().enumerate() {
@@ -8497,7 +8527,7 @@ impl CockpitView {
                     })),
             );
         }
-        card = card.child(head("mcp"));
+        card = card.child(head("mcp", errored || !modes_empty));
         if transcript.mcp_servers().is_empty() {
             card = card.child(crate::components::menu_note("no MCP servers reported"));
         }
@@ -8515,10 +8545,14 @@ impl CockpitView {
                 .child(crate::components::status_dot(dot))
                 .child(
                     div()
+                        .id(("mcp-server-name", index))
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(crate::theme::TEXT))
+                        // A long server name gives way to its state and
+                        // actions; the whole of it is one hover away.
+                        .tooltip(crate::menu::tooltip(server.name.clone()))
                         .child(server.name.clone()),
                 )
                 .child(
@@ -8645,7 +8679,7 @@ impl CockpitView {
         }
         let tasks = transcript.progress().background();
         if !tasks.is_empty() || open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
-            card = card.child(head("tasks"));
+            card = card.child(head("tasks", true));
         }
         for (index, task) in tasks.iter().enumerate() {
             let working = task.status == ferrite_core::progress::TaskStatus::Working;
@@ -8948,9 +8982,7 @@ impl CockpitView {
         let model_chip = self.choice_menu(
             index,
             Kind::Provider,
-            crate::components::button(("model-picker", thread.get() as usize))
-                .p_0()
-                .h_auto()
+            pane::composer_control(("model-picker", thread.get() as usize))
                 .tooltip(if busy { TUNING_BUSY_HINT } else { "Model" })
                 .child(pane::model_picker(Some(provider), label, busy)),
             cx,
@@ -8970,9 +9002,7 @@ impl CockpitView {
             self.choice_menu(
                 index,
                 Kind::Effort,
-                crate::components::button(("effort-picker", thread.get() as usize))
-                    .p_0()
-                    .h_auto()
+                pane::composer_control(("effort-picker", thread.get() as usize))
                     .tooltip(if busy {
                         TUNING_BUSY_HINT
                     } else {
@@ -9354,9 +9384,10 @@ impl CockpitView {
                         .border_1()
                         .border_color(rgba(HAIRLINE_STRONG))
                         .font_family(FONT_UI)
-                        .text_size(px(FS_BADGE))
+                        .text_size(px(FS_SM))
                         .text_color(rgb(TEXT_2))
-                        .child(SharedString::from(format!("+{more}"))),
+                        .child(SharedString::from(format!("+{more}")))
+                        .map(crate::components::tabular),
                 )
                 // It arrives with the second toast, so it fades in rather
                 // than popping; a count change keeps it mounted and still.
@@ -14190,7 +14221,7 @@ mod tests {
                     && (control.size.width - px(crate::theme::TOOL_DISCLOSURE_HIT)).abs() <= px(1.)
                     && (summary.left() - control.left() - px(crate::theme::GUTTER_W)).abs()
                         <= px(0.5),
-                "the chevron leads in the gutter, the text at C1: {summary:?} / {control:?}"
+                "the disclosure mark leads in the gutter, the text at C1: {summary:?} / {control:?}"
             );
         }
 
@@ -14368,10 +14399,11 @@ mod tests {
             let bleed = px(crate::theme::PROMPT_HOVER_BLEED);
             assert_eq!(
                 tools.top() - (prompt.bottom() - bleed),
-                px(crate::theme::GAP_SECTION)
+                px(crate::theme::GAP_BLOCK)
             );
-            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_SECTION));
-            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_STAMP));
+            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_BLOCK));
+            // The stamp is one block step under the turn's last block.
+            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_BLOCK));
             // One content edge: the prompt's text, the group summary and the
             // answer's prose all start on C1.
             let prompt_start = caret(&view, cx, 0, 0).x;

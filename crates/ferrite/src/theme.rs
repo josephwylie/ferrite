@@ -257,26 +257,61 @@ pub const SHADOW_NEAR_Y: f32 = 1.0;
 pub const SHADOW_NEAR_BLUR: f32 = 1.5;
 
 // ------------------------------------------------------------------- type
+//
+// **The type scale.** Four sizes, each one role, each paired with one pixel
+// line height (rule 7). Render sites name a role, never a number:
+//
+// | role          | size | line | face          | used for                              |
+// |---------------|------|------|---------------|---------------------------------------|
+// | `FS_PROSE`    | 14   | 22   | UI            | agent prose, the Decision question    |
+// | `FS_UI`       | 12.5 | 20   | UI or code    | every chrome line: rows, titles,      |
+// |               |      |      |               | labels, values, buttons, menu rows    |
+// | `FS_PROSE_SM` | 12.5 | 18   | UI            | a description that wraps (Settings,   |
+// |               |      |      |               | sheets, option descriptions)          |
+// | `FS_SM`       | 11.5 | 16   | UI or code    | metadata: details, hints, section     |
+// |               |      |      |               | titles, keycaps, chips, ages, counts, |
+// |               |      |      |               | badges, tooltips                      |
+//
+// Headings step up from the prose size (`heading_scale`: 18 · 16 · 14) and
+// only inside the transcript. No surface outside it — menus, popovers,
+// sheets, cards, notifications, toasts, tooltips, the titlebar, empty
+// states — uses any size but `FS_UI` and `FS_SM`, plus `FS_PROSE_SM` for a
+// sheet's wrapping descriptions. A surface's hierarchy comes from ink and
+// weight: its one title `W_LABEL`, section titles `FS_SM` `W_LABEL`
+// `TEXT_MUTED`, rows `FS_UI` `W_BODY`, details `FS_SM` `W_BODY`.
+//
+// **Weights:** `W_BODY` (400) for everything that is read; `W_LABEL` (500)
+// for a surface's single title, a section title and an armed row;
+// `W_STRONG` (600) only where prose says so (headings, `**strong**`, the
+// Decision question). 700 is never used, and no render site names a
+// `FontWeight` itself.
+//
+// **Figures:** any number that changes while it is on screen — counts,
+// percentages, ages, durations, costs, tallies — is `components::tabular`,
+// so a tick never moves its neighbours.
 
 /// 14px — agent prose (Geist), the size an operator reads at length; also the
 /// Decision question and option descriptions. Paired with `LH_PROSE`.
 pub const FS_PROSE: f32 = 14.0;
-/// 12.5px — the mono UI size: prompts, tool rows, the Composer, menu rows,
-/// nav and Pane titles, code. Paired with `LH_UI` (single-line rows) or
+/// 12.5px — the UI size: every chrome line (menu rows, nav and Pane titles,
+/// Settings labels, buttons) in Geist, and code in Geist Mono (prompts, tool
+/// output, the Composer). Paired with `LH_UI` (single-line rows) or
 /// `LH_CODE` (multi-line mono blocks).
 pub const FS_UI: f32 = 12.5;
-/// 12.5px — secondary prose (Geist): option labels and descriptions, notes.
-/// Prose is never smaller. Paired with `LH_PROSE_SM`.
+/// 12.5px — secondary prose (Geist): option labels and descriptions, notes,
+/// a Settings row's description. Prose is never smaller. Paired with
+/// `LH_PROSE_SM`.
 pub const FS_PROSE_SM: f32 = 12.5;
 /// 11.5px — metadata: checkout lines, durations, hints, keycaps, chips,
-/// timestamps. Paired with `LH_META`.
+/// timestamps, section titles, badges, tooltips. The floor: nothing is
+/// smaller. Paired with `LH_META`.
 pub const FS_SM: f32 = 11.5;
 
 /// 22px — prose.
 pub const LH_PROSE: f32 = 22.0;
 /// 18px — secondary prose.
 pub const LH_PROSE_SM: f32 = 18.0;
-/// 20px — single-line mono rows.
+/// 20px — single-line UI and mono rows.
 pub const LH_UI: f32 = 20.0;
 /// 18px — multi-line mono blocks: code, diffs, tool output.
 pub const LH_CODE: f32 = 18.0;
@@ -285,8 +320,9 @@ pub const LH_META: f32 = 16.0;
 /// 16px — the stacked two-line rows (a nav row's title over its meta).
 pub const LH_TIGHT: f32 = 16.0;
 
-/// Weights: 400 body; 500 a surface's single title and labels; 600 prose
-/// headings, `**strong**` and the Decision question. 700 is not used.
+/// Weights (see the type scale above): 400 body; 500 a surface's single
+/// title, section titles and labels; 600 prose headings, `**strong**` and
+/// the Decision question. 700 is not used.
 pub const W_BODY: FontWeight = FontWeight::NORMAL;
 pub const W_LABEL: FontWeight = FontWeight::MEDIUM;
 pub const W_STRONG: FontWeight = FontWeight::SEMIBOLD;
@@ -375,16 +411,40 @@ pub const SPACE_6: f32 = 24.0;
 pub const SPACE_8: f32 = 32.0;
 
 // ------------------------------------------------------------------ radii
+//
+// **Radii say role**, and a nested surface is **concentric** with the one
+// it sits in: `inner = outer − inset`, where the inset is the outer
+// surface's padding. Its 1px hairline is not counted — at 1px the arcs
+// still read as one family — except for a child painted flush to the
+// edge, which takes the exact padding-box radius `outer − 1`. Every
+// nesting in the app lands on a token:
+//
+// | outer                         | inset            | inner                    |
+// |-------------------------------|------------------|--------------------------|
+// | floating surface `R_BLOCK` 8  | `FLOAT_PAD` 4    | menu row `R_MENU_ROW` 4  |
+// | checks card `R_BLOCK` 8       | `FLOAT_PAD` 4    | run row `R_CHIP` 4       |
+// | segmented tray `R_CONTROL` 6  | `FORM_CHOICE_PAD` 2 | choice chip `R_CHIP` 4 |
+// | sheet `R_PANE` 10             | flush            | sidebar corner `R_PANE − 1` |
+//
+// Where the inset is at least the outer radius (a field 16px inside a
+// sheet, a chip in a card's row, a keycap in a Decision option) the inner
+// corner no longer shares the outer arc, and the inner surface takes its
+// own role radius. The one exception is the kit's popup menu (the choice
+// menus, the Settings chooser): it rounds its surface and its rows alike
+// from the kit's single `radius` (`R_CONTROL`), and its wrapper follows the
+// surface so the float shadow hugs it.
 
-/// 10px — a Pane.
+/// 10px — a Pane, and a sheet (Settings, the Project editor).
 pub const R_PANE: f32 = 10.0;
 /// 8px — blocks: the Composer, code, cards, menus, popovers, toasts. The
 /// kit's `radius_lg`.
 pub const R_BLOCK: f32 = 8.0;
-/// 6px — controls: buttons, nav rows, pickers. The kit's `radius`.
+/// 6px — controls: buttons, fields, nav rows, pickers, a segmented tray,
+/// tooltips. The kit's `radius`.
 pub const R_CONTROL: f32 = 6.0;
-/// 4px — chips, keycaps, inline code, and a menu's rows (`R_BLOCK` less the
-/// menu's 4px inset).
+/// 4px — chips, keycaps, inline code, and anything nested one inset inside
+/// a larger radius: a menu's rows (`R_BLOCK` less `FLOAT_PAD`), a segmented
+/// choice's chips (`R_CONTROL` less `FORM_CHOICE_PAD`).
 pub const R_CHIP: f32 = 4.0;
 /// 3px — meter segments and other tiny marks only.
 pub const R_TIGHT: f32 = 3.0;
@@ -524,9 +584,18 @@ pub const MENU_MAX_H: f32 = 420.0;
 pub const MENU_ROW_PAD_X: f32 = 8.0;
 pub const MENU_ROW_GAP: f32 = SPACE_3;
 pub const R_MENU_ROW: f32 = R_CHIP;
-/// A menu section title row, and the space either side of a separator.
+/// A menu section title row: 24px, its `FS_SM` title sat on the row's foot
+/// so it hugs the rows it heads.
 pub const MENU_SECTION_H: f32 = 24.0;
-pub const MENU_SEP_Y: f32 = 4.0;
+/// 10px — a section title's mark: the `FS_SM` cap band (`KEY_GLYPH`), so a
+/// provider mark beside an 11.5px title is no heavier than its letters.
+pub const MENU_SECTION_ICON: f32 = KEY_GLYPH;
+/// 8px — what splits one group of rows from the next inside any floating
+/// surface (context-menu groups, a section after rows, a key-hint footer, a
+/// panel's head). Space, never a rule: rows sit flush (their 8px of air is
+/// inside the 28px row), so a group gap doubles the air between two lines
+/// of text — the 2× that makes the split read (`components::menu_separator`).
+pub const MENU_GROUP_GAP: f32 = SPACE_2;
 /// An aligned name column (slash commands): clamped between these.
 pub const MENU_NAME_MIN_W: f32 = 96.0;
 pub const MENU_NAME_MAX_W: f32 = 220.0;
@@ -755,40 +824,61 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **Glyphs are drawn, never typed.** `❯` is `prompt.svg`, `∴` is
 //   `reasoning.svg`, the answer mark is the monochrome `ferrite-mono.svg`,
 //   the tool dot and the elbow are painted. None of them registers text.
-// - **One left edge.** A disclosure's chevron leads, in the gutter where
+// - **One left edge.** A disclosure's `▸` leads, in the gutter where
 //   tool dots hang; nothing sits at the reading column's right but a
-//   settled call's duration.
+//   settled call's trail (its diff stat, then its time, tabular).
 // - **State lives in the dot.** A tool's name is neutral ink whatever
 //   happened; its dot says how it went (`tool_dot`), and a failure colours
 //   the one word that says so. A collapsed group is one muted line whose only
 //   state ink is ` · N failed`.
-// - **Rhythm in three steps.** A turn opens `GAP_TURN` (32) under the one
-//   before it; blocks inside a turn — answer, summary, tool row, stamp —
-//   sit `GAP_SECTION` (12, the block step) apart; rows of one run of work
-//   (and a one-paragraph commentary into the call it introduces) sit
-//   `GAP_TOOL` (4, the row step) apart. The space above a row is chosen
-//   once, at reconcile, from the row before it and its own kind, and is
-//   part of the row's identity, so a changed gap is a changed row and
-//   nothing is measured per frame.
+// - **Rhythm in three steps**, each at least twice the one inside it
+//   (grouping by space, not lines). A turn opens `GAP_TURN` (32) under the
+//   one before it; the blocks inside a turn — a prose answer, a group
+//   summary, a lone tool row, the stamp — sit `GAP_BLOCK` (12, the block
+//   step) apart; the rows of one run of work sit `GAP_ROW` (4, the row
+//   step) apart: tool rows, a group's members under its summary, a
+//   one-paragraph commentary over the call it introduces, and any row that
+//   hangs on an elbow under the row it answers (a decision record, an
+//   interrupted or failed turn's end). A call and its own `⎿` result are
+//   one unit, with no step between them. Paragraphs inside an answer sit a
+//   block step apart too (`PROSE_GAP`, 0.86em), so an answer's paragraphs
+//   and the blocks around it read as siblings of one turn.
+// - **The rhythm scales with the reading size.** The turn and block steps
+//   and the prose gaps are em-proportional to the answer's size
+//   (`reading_step`): exactly the tokens at Standard, 37/14 at Comfortable,
+//   41/15 at Large, so a paragraph gap never outgrows the block step. The
+//   row step spaces UI rows, which do not scale, and stays 4.
+// - **Chosen once.** The space above a row is chosen at reconcile from the
+//   row before it, its own kind and the reading size, and is part of the
+//   row's identity, so a changed gap is a changed row and nothing is
+//   measured per frame.
 // - **The prompt anchors its turn.** The operator's line is the turn's
 //   heading: prose size (`FS_PROSE`/`LH_PROSE`) at `W_LABEL` in
 //   `TEXT_STRONG` under the accent `❯`, over answers at prose size, regular,
-//   in `TEXT`. Structural rows (tool calls, summaries) are `FS_UI`/`LH_UI`;
-//   the stamp and the trail are `FS_SM`/`LH_META`.
+//   in `TEXT`. An answer's own H1/H2 may be larger: they head sections of
+//   one answer, while the prompt heads the turn by place — the turn step
+//   above it, the accent in the gutter — not by size. Structural rows (tool
+//   calls, summaries) are `FS_UI`/`LH_UI`; the stamp and the trail are
+//   `FS_SM`/`LH_META`, their changing digits tabular.
 
 /// 32px — above every prompt but the first: the turn boundary. No rule is
 /// drawn between turns; this space, the prompt's weight and the stamp do the
 /// job.
 pub const GAP_TURN: f32 = SPACE_8;
-/// 12px — a change of voice: prompt → the agent's first row, prose ↔ tools,
-/// anything ↔ reasoning, notices, the turn's changes.
-pub const GAP_SECTION: f32 = SPACE_3;
-/// 4px — tool rows in one run of work, and a one-paragraph commentary that
-/// introduces the tool row under it.
-pub const GAP_TOOL: f32 = SPACE_1;
-/// The last row of a turn → its stamp (and a decision record under the row
-/// it answers): the block step, like any block of the turn.
-pub const GAP_STAMP: f32 = GAP_SECTION;
+/// 12px — the block step: between the blocks of one turn (prompt → the
+/// agent's first row, prose ↔ tools, anything ↔ reasoning, notices, the
+/// turn's changes, the last block → its stamp).
+pub const GAP_BLOCK: f32 = SPACE_3;
+/// 4px — the row step: rows of one run of work, and a row hung on an elbow
+/// under the row it answers.
+pub const GAP_ROW: f32 = SPACE_1;
+
+/// A prose-relative vertical step at answer size `size`: em-proportional to
+/// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
+/// Markdown gaps go through it; UI-row steps do not.
+pub fn reading_step(step: f32, size: f32) -> f32 {
+    (step * size / FS_PROSE).round()
+}
 
 /// 6px — a tool call's state dot, the size of every status dot.
 pub const TOOL_DOT: f32 = STATUS_DOT;
@@ -834,8 +924,10 @@ pub const HUNK_MAX_ROWS: usize = 24;
 /// 20px — an invisible hit area, not a drawn thing: a disclosure's leading
 /// chevron target (the gutter, `GUTTER_W`) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
-/// 10px — the leading disclosure chevron, in the gutter's glyph box.
-pub const DISCLOSURE_CHEVRON: f32 = 10.0;
+/// 12px — the leading disclosure mark (`icons::DISCLOSURE`, a 5×6 filled
+/// `▸` in a 12 box: about the summary's x-height), drawn in the gutter's
+/// glyph box where the prompt's `❯` and the tool dots hang.
+pub const DISCLOSURE_MARK: f32 = GLYPH_BOX;
 /// 4px — how far a prompt's hover wash bleeds past its text on each side.
 pub const PROMPT_HOVER_BLEED: f32 = SPACE_1;
 /// 16px — a fallback list item's hang: `-` at C1, text 16px in.
@@ -857,7 +949,9 @@ pub const UL_INDENT: f32 = SPACE_4;
 /// Code is a `RAISED` block; inline code is mono on an `ACCENT_WASH` chip;
 /// links are `ACCENT` over an `ACCENT_EDGE` underline.
 ///
-/// 12px — between Markdown blocks (`SPACE_3`).
+/// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
+/// step. This and the heading spaces are Standard values; other reading
+/// sizes scale them with `reading_step`.
 pub const PROSE_GAP: f32 = SPACE_3;
 /// 8px — added above a heading that follows a sibling, on top of
 /// `PROSE_GAP`, so a heading opens a section rather than closing one.
@@ -1026,16 +1120,17 @@ pub const UNREAD_PULSE_MAX: f32 = 0.7;
 pub const CHECKS_CARD_W: f32 = 312.0;
 /// The card's widest: it grows to its tally and run names up to here.
 pub const CHECKS_CARD_MAX_W: f32 = 420.0;
-pub const CHECKS_CARD_PAD: f32 = SPACE_1;
-/// Between the card's heading and its runs.
-pub const CHECKS_CARD_GAP: f32 = SPACE_1;
-/// The card's heading row and one run's row.
-pub const CHECKS_HEAD_H: f32 = 28.0;
-pub const CHECKS_ROW_H: f32 = 24.0;
-/// A workflow's heading above the runs it owns, and the space that sets
-/// that group off from the one before it.
-pub const CHECKS_GROUP_H: f32 = 20.0;
-pub const CHECKS_GROUP_GAP: f32 = SPACE_1_5;
+pub const CHECKS_CARD_PAD: f32 = FLOAT_PAD;
+/// Between the card's heading and its runs: space, not a rule
+/// (`MENU_GROUP_GAP`, as between any two groups on a floating surface).
+pub const CHECKS_CARD_GAP: f32 = MENU_GROUP_GAP;
+/// The card's heading row and one run's row: a menu row's height, so the
+/// card lists at the same pitch as every other floating list.
+pub const CHECKS_HEAD_H: f32 = MENU_ROW_H;
+pub const CHECKS_ROW_H: f32 = MENU_ROW_H;
+/// The space that sets a workflow's group off from the one before it. The
+/// heading itself is the menu section title (`MENU_SECTION_H`).
+pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
 /// The wall cell: 8px padding, 4px between rows, an 8px status dot — the
 /// wall's whole job is the signal, so its dot is bigger than a row's.
@@ -1062,7 +1157,8 @@ pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
 pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
 pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
-/// The empty board's hint column: lines 8px apart, a key 8px from its verb.
+/// The empty board's hints: lines 8px apart, the keys in one column 8px
+/// from their verbs' shared edge, the heading twice that above them.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 // (end WP-C) — append above this line only
 
@@ -1083,23 +1179,59 @@ pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 /// Under the box, outside it, the meta row (`COMPOSER_META_H`,
 /// `COMPOSER_META_GAP` below the box): mode and a draft's setup chips at
 /// left, session controls and the usage meter at right, `FS_SM`
-/// `TEXT_MUTED`. The Composer writes one key hint, in its placeholder;
+/// `TEXT_MUTED`. The meta row's ink shares the box's text edges: its first
+/// label starts at C1 (`COMPOSER_META_START`), its last mark ends on the
+/// send control's trailing edge (`COMPOSER_META_END`); the chips' own
+/// padding hangs outside those edges. The Composer writes one key hint, in
+/// its placeholder, and drops it when the line has no room for it whole;
 /// its controls' tooltips name their keys. Any pad, gap, edge or inset
 /// change here must update `pane::composer_fixed_height` in the same commit.
 pub const COMPOSER_PAD_X: f32 = BOX_INSET_X - 1.0;
 pub const COMPOSER_PAD_T: f32 = SPACE_2;
 pub const COMPOSER_PAD_B: f32 = SPACE_2;
+/// The trailing padding equals the vertical one, so the send control sits
+/// `COMPOSER_CONTROL_INSET` from the box's top, bottom and trailing edges —
+/// the even inset concentric corners need. The leading side keeps
+/// `COMPOSER_PAD_X`, which puts the `❯` on the transcript's glyph axis.
+pub const COMPOSER_PAD_END: f32 = COMPOSER_PAD_T;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 pub const COMPOSER_GAP: f32 = SPACE_1;
 pub const COMPOSER_META_H: f32 = CHIP_H;
 pub const COMPOSER_META_GAP: f32 = SPACE_1;
-/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. It sends
-/// (↑) whenever the line has text — queueing behind a running turn — and
-/// stops (■) while a turn runs over an empty line.
+/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. At rest it
+/// sends (↑); while a turn runs it stops (■), whatever is in the line —
+/// Enter is the key that queues a line behind the turn.
 pub const SEND_BUTTON: f32 = COMPOSER_ROW_H;
 pub const SEND_GLYPH: f32 = 10.0;
+/// Live, it is the one bright disc in the Pane: `TEXT_STRONG` with the
+/// glyph in the Pane's ground, stepping down to `TEXT` under the pointer and
+/// `TEXT_2` pressed. Idle (an empty line at rest) it keeps its shape, legible
+/// but plainly off: a `FILL_HOVER` disc, visible on `RAISED`, with a
+/// `TEXT_MUTED` glyph.
+pub const SEND_GROUND: u32 = TEXT_STRONG;
+pub const SEND_INK: u32 = PANE;
+pub const SEND_HOVER: u32 = TEXT;
+pub const SEND_PRESSED: u32 = TEXT_2;
+pub const SEND_IDLE_GROUND: u32 = FILL_HOVER;
+pub const SEND_IDLE_INK: u32 = TEXT_MUTED;
 /// The block's 1px edge, top and bottom: part of its fixed height.
 pub const COMPOSER_EDGE_W: f32 = 1.0;
+/// **Concentric radii.** Every control in and under the box is a
+/// `CHIP_H` pill (`COMPOSER_CHIP_R`, half its height — the send circle's
+/// own radius), and the box's corner is that radius plus the inset between
+/// them (`COMPOSER_CONTROL_INSET`: the edge and the vertical padding), so
+/// a one-line box is itself a pill around its send control. A setup chip's
+/// focus edge wraps its chip one `BAND_EDGE_W` out, so its radius is one
+/// more. The Subagent footer, the Composer's own block, shares the corner.
+pub const COMPOSER_CHIP_R: f32 = CHIP_H / 2.0;
+pub const COMPOSER_CONTROL_INSET: f32 = COMPOSER_EDGE_W + COMPOSER_PAD_T;
+pub const COMPOSER_R: f32 = COMPOSER_CHIP_R + COMPOSER_CONTROL_INSET;
+pub const BAND_EDGE_W: f32 = 1.0;
+/// Where the meta row's ink starts and ends, as padding on the row: C1 and
+/// the send control's trailing edge, less the `PICKER_PAD_X` each chip
+/// hangs outside its label.
+pub const COMPOSER_META_START: f32 = BOX_INSET_X + GUTTER_W - PICKER_PAD_X;
+pub const COMPOSER_META_END: f32 = COMPOSER_CONTROL_INSET - PICKER_PAD_X;
 /// 8px — from the block to the Pane's bottom edge at L1 (the transcript's
 /// own bottom padding supplies the air above it), and the L2 cell's inset
 /// around its compact Composer on three sides. The block's 6px vertical
@@ -1128,9 +1260,9 @@ pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
 /// inline-code ground family — visibly lighter than a selection.
 pub const MENTION_INK: u32 = ACCENT;
 pub const MENTION_WASH: u32 = ACCENT_WASH;
-/// **Composer controls are quiet mono chips** (model, effort, mode, session
-/// `•••`, the usage meter): `CHIP_H`, `PICKER_PAD_X` both sides, `R_CONTROL`,
-/// no ground at rest, `FILL` under the pointer (the hover face on `RAISED`),
+/// **Composer controls are quiet chips** (model, effort, mode, session
+/// `•••`, the usage meter): `CHIP_H`, `PICKER_PAD_X` both sides,
+/// `COMPOSER_CHIP_R`, no ground at rest, `FILL` under the pointer (the hover face on `RAISED`),
 /// label `FS_SM` `TEXT_2`, a `ICON_CHEVRON_SM` chevron in `TEXT_MUTED`. A
 /// busy control reads `TEXT_MUTED`, never faded. The model and effort pair
 /// sits `PICKER_GAP` apart and reads as one unit.
@@ -1144,11 +1276,14 @@ pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
+/// Its padding puts the text on the same edge as a menu row's inside the
+/// floating surface (`FLOAT_PAD` + `MENU_ROW_PAD_X`).
 pub const USAGE_CARD_W: f32 = 216.0;
-pub const USAGE_CARD_PAD: f32 = 10.0;
-/// Between one window's block and the next, and inside one block.
-pub const USAGE_CARD_GAP: f32 = 12.0;
-pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
+pub const USAGE_CARD_PAD: f32 = MENU_ROW_PAD_X;
+/// Between one window's block and the next, and inside one block: the
+/// blocks stand twice as far apart as their own lines.
+pub const USAGE_CARD_GAP: f32 = SPACE_3;
+pub const USAGE_CARD_ROW_GAP: f32 = SPACE_1_5;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage reading turns from neutral to ATTENTION, and from
 /// ATTENTION to BLOCKED — a fraction of the window, not a count. Below
@@ -1203,8 +1338,10 @@ pub const ATTACH_THUMB: f32 = 16.0;
 pub const FORM_CONTROL_H: f32 = 32.0;
 /// Selected-value controls share a comfortable measure inside wider forms.
 pub const FORM_FIELD_W: f32 = 320.0;
-/// Inset around the chips of a segmented choice control.
-pub const FORM_CHOICE_PAD: f32 = SPACE_1;
+/// Inset around the chips of a segmented choice control, and the gap
+/// between them: 2px, so the chips nest concentrically (`R_CHIP` inside the
+/// tray's `R_CONTROL`) and the tray reads as one control.
+pub const FORM_CHOICE_PAD: f32 = SPACE_0_5;
 /// A choice chip's and a chooser's inline padding inside the 32px row.
 pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
 pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
@@ -1220,18 +1357,21 @@ pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
 pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
 /// A sheet text button's inline padding (Add Directory, Remove, Done).
 pub const FORM_BUTTON_PAD_X: f32 = SPACE_3;
-/// A tooltip: mono `FS_SM`, 8px × 4px, at most 280px before it wraps.
+/// A tooltip: UI `FS_SM`, 8px × 4px, `R_CONTROL`, at most 280px before it
+/// wraps. It is how a truncated label keeps its full value reachable.
 pub const TOOLTIP_PAD_X: f32 = SPACE_2;
 pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 280.0;
 /// The notifications panel: 340px holds a title, a detail line and an age
-/// without wrapping; a row is two lines in 6px of air each side.
+/// without wrapping; a row is two lines in 6px of air each side. No rules
+/// inside it: its head sits `NOTICE_HEAD_GAP` above the first row, twice
+/// the 12px of air between two rows' text.
 pub const NOTICE_PANEL_W: f32 = 340.0;
 pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
-/// The bell's unread pill: 14px, 10.5px mono figures, 2px in from the
-/// button's corner.
-pub const BADGE_H: f32 = 14.0;
-pub const FS_BADGE: f32 = 10.5;
+pub const NOTICE_HEAD_GAP: f32 = SPACE_3;
+/// The bell's unread pill: one `FS_SM` line high, tabular UI figures, 2px
+/// in from the button's corner.
+pub const BADGE_H: f32 = LH_META;
 pub const BADGE_INSET: f32 = SPACE_0_5;
 /// With the nav collapsed, toasts stack BottomRight this far up: the
 /// board's padding, the Pane's edge, a one-line Composer and its inset,
@@ -1252,6 +1392,15 @@ pub const FACT_KEY_W: f32 = 136.0;
 pub const MODAL_HEAD_H: f32 = 48.0;
 pub const MODAL_PAD: f32 = 16.0;
 pub const MODAL_GAP: f32 = 12.0;
+/// The kit lays a Settings page out in rems, and its rem is the theme's
+/// font size (`FS_UI`), so the page list's own inset is 12.5px while the
+/// page header keeps `MODAL_PAD`. Each group adds the difference, so labels,
+/// descriptions, controls and the header share one leading edge.
+pub const SETTINGS_GROUP_INSET_X: f32 = MODAL_PAD - FS_UI;
+/// Between a Settings group's title and its first row: closer than the
+/// rows are to each other (the kit's 1rem), so a title belongs to what it
+/// heads, and groups stand 2rem apart.
+pub const SETTINGS_TITLE_GAP: f32 = SPACE_1_5;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;

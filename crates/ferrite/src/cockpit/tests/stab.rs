@@ -472,10 +472,10 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
         .unwrap();
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for name in [
-        "nav-audit",
-        "composer-audit",
-        "settings-audit",
-        "tokens-audit",
+        // Short names: on a wide Pane the head spans the reading column
+        // (720), and the title at its cap, the checkout and all four tabs
+        // must fit there.
+        "nav", "cmp", "set", "tok",
     ] {
         let key = AgentKey::new(Provider::Claude, "ui-fixture", name);
         let mut info = AgentInfo::new(key.clone());
@@ -614,7 +614,9 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
     assert!(
-        effort.right() <= block.right() - px(crate::theme::COMPOSER_PAD_X) + px(0.5),
+        effort.right()
+            <= block.right() - px(crate::theme::COMPOSER_CONTROL_INSET + crate::theme::SEND_BUTTON)
+                + px(0.5),
         "effort {effort:?} stays inside the block {block:?}"
     );
     assert!(model.right() <= effort.left());
@@ -1213,7 +1215,7 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// A group's disclosure chevron leads, in the gutter where tool dots hang,
+/// A group's disclosure mark leads, in the gutter where tool dots hang,
 /// and the summary starts at C1 after it: nothing at the column's right.
 #[gpui::test]
 fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
@@ -1254,7 +1256,7 @@ fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
 /// The Composer is one input row in its box — the line, then the model pair
 /// and the round send control — with a quiet meta row under it (mode at
 /// left, usage at right). Enter still sends and the control turns to Stop
-/// while the turn runs over an empty line.
+/// while the turn runs.
 #[gpui::test]
 fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
@@ -1303,7 +1305,7 @@ fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
 
 /// The prompt heads its turn: the operator's line is at prose size, the
 /// same size as the answer under it, and turns sit `GAP_TURN` apart while
-/// the blocks inside one sit a block step apart.
+/// the blocks inside one (the stamp included) sit a block step apart.
 #[gpui::test]
 fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("prompt-heads-turn", 1);
@@ -1332,24 +1334,41 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
             .unwrap();
         tick(cx);
     }
-    let (namespace, prompts) = view.read_with(cx, |view, _| {
+    let (namespace, prompts, stamps) = view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
         let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
-        let prompts: Vec<_> = thread
-            .transcript()
-            .blocks()
-            .iter()
-            .filter(|block| matches!(block.body, Body::Prompt(_)))
-            .map(|block| block.id)
-            .collect();
-        (pane.text_namespace(), prompts)
+        let ids = |kind: fn(&Body) -> bool| -> Vec<_> {
+            thread
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(|block| kind(&block.body))
+                .map(|block| block.id)
+                .collect()
+        };
+        (
+            pane.text_namespace(),
+            ids(|body| matches!(body, Body::Prompt(_))),
+            ids(|body| matches!(body, Body::TurnEnd(_))),
+        )
     });
     let size = cx.update(|_, cx| {
         crate::rich::testing::font_size(&format!("literal-{namespace}-{:?}-0", prompts[1]), cx)
     });
     assert_eq!(size, Some(px(crate::theme::FS_PROSE)), "prose size");
     assert_eq!(crate::theme::GAP_TURN, 32.);
-    assert_eq!(crate::theme::GAP_STAMP, crate::theme::GAP_SECTION);
+    let mut line = |id| {
+        cx.update(|_, cx| {
+            crate::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx).unwrap()
+        })
+    };
+    // Measured, not just declared: the first turn's stamp to the second
+    // prompt is the turn step.
+    assert_eq!(
+        line(prompts[1]).top() - line(stamps[0]).bottom(),
+        px(crate::theme::GAP_TURN),
+        "turns sit a turn step apart"
+    );
 }
 
 /// A Decision card's head names its kind and says nothing more while it
@@ -1394,5 +1413,36 @@ fn a_compact_placeholder_carries_no_hint(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("prompt-placeholder-hint").is_some(),
         "L1 carries its one hint"
+    );
+}
+
+/// A Pane wider than the reading column lays its head out on the column's
+/// grid: the title starts at the transcript's C1 (where the Composer's line
+/// and every row's text start), so the Pane keeps one left edge. A narrow
+/// Pane keeps the head at its own padding.
+#[gpui::test]
+fn the_head_title_starts_at_c1_on_a_wide_pane(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("head-on-column", 1);
+    let thread = core.threads()[0];
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let title: &'static str =
+        Box::leak(format!("pane-head-title-{}", thread.get()).into_boxed_str());
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let block = cx.debug_bounds("composer-block").unwrap();
+    let c1 = block.left() + px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W);
+    let head = cx.debug_bounds(title).expect("the head title");
+    assert!(
+        (head.left() - c1).abs() <= px(0.5),
+        "the title {head:?} starts at C1 {c1:?}"
+    );
+
+    cx.simulate_resize(gpui::size(px(760.), px(900.)));
+    tick(cx);
+    let head = cx.debug_bounds(title).unwrap();
+    let block = cx.debug_bounds("composer-block").unwrap();
+    assert!(
+        head.left() < block.left() + px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W),
+        "a narrow Pane keeps its head at its own padding"
     );
 }

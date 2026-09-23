@@ -146,7 +146,11 @@ impl TranscriptView {
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
     ) -> Self {
-        let rows = TranscriptRows::new(&input.blocks, input.turn_diff.as_ref());
+        let rows = TranscriptRows::new(
+            &input.blocks,
+            input.turn_diff.as_ref(),
+            theme::answer_text_size(input.reading_size),
+        );
         let scroll = TranscriptScroll::new(rows.len());
         scroll.scroll_to_bottom();
         let scope = if input.focused {
@@ -182,10 +186,14 @@ impl TranscriptView {
         let reading_changed = self.input.reading_size != input.reading_size;
         self.input = input;
         self.selection_source = selection_source;
-        if content_changed {
-            let delta = self
-                .rows
-                .reconcile(&self.input.blocks, self.input.turn_diff.as_ref());
+        // The gap table is part of the rows: a reading-size change
+        // re-projects them, re-spacing every row whose gap scales.
+        if content_changed || reading_changed {
+            let delta = self.rows.reconcile(
+                &self.input.blocks,
+                self.input.turn_diff.as_ref(),
+                theme::answer_text_size(self.input.reading_size),
+            );
             self.scroll.reconcile(&delta);
         }
         if content_changed || display_changed {

@@ -34,10 +34,14 @@ pub(crate) enum RowKind {
     Activity,
     Reasoning,
     Notice,
-    /// A decision record or a revival note.
+    /// A decision record or a revival note: it hangs on an elbow under the
+    /// row it answers.
     Meta,
-    /// A turn's end: its stamp, or the note that it was interrupted or failed.
-    TurnEnd,
+    /// A turn's end: its stamp, or (`hangs`) the elbow note that it was
+    /// interrupted or failed.
+    TurnEnd {
+        hangs: bool,
+    },
     TurnDiff,
     /// A fallback prose or code block.
     Other,
@@ -51,7 +55,9 @@ impl RowKind {
             Body::Thinking(_) => Self::Reasoning,
             Body::Notice(_) => Self::Notice,
             Body::Meta(_) => Self::Meta,
-            Body::TurnEnd(_) => Self::TurnEnd,
+            Body::TurnEnd(end) => Self::TurnEnd {
+                hangs: !matches!(end.outcome, ferrite_core::TurnOutcome::Completed),
+            },
             Body::Paragraph { .. }
             | Body::Heading { .. }
             | Body::Bullet { .. }
@@ -61,18 +67,21 @@ impl RowKind {
 }
 
 /// The space above a row, from the row before it (`None`: the first row,
-/// which carries the body's top padding instead) and its own kind. The one
-/// table of the transcript's vertical rhythm.
-pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind) -> f32 {
+/// which carries the body's top padding instead), its own kind and the
+/// answer size `reading`. The one table of the transcript's vertical rhythm
+/// (see the transcript grammar in `theme.rs`).
+pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
+    use crate::theme::{reading_step, BODY_PAD_T, GAP_BLOCK, GAP_ROW, GAP_TURN};
     use RowKind::*;
     let Some(previous) = previous else {
-        return crate::theme::BODY_PAD_T;
+        return BODY_PAD_T;
     };
     match (previous, kind) {
-        (_, Prompt) => crate::theme::GAP_TURN,
-        (_, TurnEnd | Meta) => crate::theme::GAP_STAMP,
-        (Activity, Activity) | (Answer { commentary: true }, Activity) => crate::theme::GAP_TOOL,
-        _ => crate::theme::GAP_SECTION,
+        (_, Prompt) => reading_step(GAP_TURN, reading),
+        (_, TurnEnd { hangs: true } | Meta)
+        | (Activity, Activity)
+        | (Answer { commentary: true }, Activity) => GAP_ROW,
+        _ => reading_step(GAP_BLOCK, reading),
     }
 }
 
@@ -138,9 +147,10 @@ pub(crate) struct TranscriptRows {
 }
 
 impl TranscriptRows {
-    /// Project the caller-owned retained window into semantic rows.
-    pub(crate) fn new(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Self {
-        let rows = project(blocks, turn_diff);
+    /// Project the caller-owned retained window into semantic rows, spaced
+    /// for answers at `reading` px.
+    pub(crate) fn new(blocks: &[Block], turn_diff: Option<&TurnDiff>, reading: f32) -> Self {
+        let rows = project(blocks, turn_diff, reading);
         Self { rows: rows.into() }
     }
 
@@ -166,9 +176,14 @@ impl TranscriptRows {
     /// The returned splices are applied in order to the old list. Existing
     /// rows whose content changed are named in their final indices for lazy
     /// height invalidation.
-    pub(crate) fn reconcile(&mut self, blocks: &[Block], turn_diff: Option<&TurnDiff>) -> RowDelta {
+    pub(crate) fn reconcile(
+        &mut self,
+        blocks: &[Block],
+        turn_diff: Option<&TurnDiff>,
+        reading: f32,
+    ) -> RowDelta {
         let previous = self.rows.clone();
-        let projected = project(blocks, turn_diff);
+        let projected = project(blocks, turn_diff, reading);
         let old_by_id: HashMap<_, _> = previous
             .iter()
             .map(|row| (row.id.clone(), row.clone()))
@@ -273,7 +288,7 @@ impl RowDelta {
     }
 }
 
-fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptRow>> {
+fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>, reading: f32) -> Vec<Rc<TranscriptRow>> {
     let mut rows = Vec::new();
     let row = |id, blocks: &[Block], source: Option<Rc<str>>, kind| TranscriptRow {
         id,
@@ -335,7 +350,10 @@ fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptR
                 .iter()
                 .rev()
                 .take_while(|row| {
-                    matches!(row.kind, RowKind::TurnEnd | RowKind::Meta | RowKind::Notice)
+                    matches!(
+                        row.kind,
+                        RowKind::TurnEnd { .. } | RowKind::Meta | RowKind::Notice
+                    )
                 })
                 .count();
         rows.insert(
@@ -354,7 +372,7 @@ fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptR
     let live = rows.iter().rposition(|row| row.kind == RowKind::Notice);
     let mut previous = None;
     for (index, row) in rows.iter_mut().enumerate() {
-        row.gap = gap_before(previous, row.kind);
+        row.gap = gap_before(previous, row.kind, reading);
         row.live_notice = live == Some(index);
         previous = Some(row.kind);
     }
@@ -396,6 +414,9 @@ mod tests {
         SessionEvent,
     };
 
+    /// Answers at the Standard reading size.
+    const READING: f32 = crate::theme::FS_PROSE;
+
     fn text(transcript: &mut Transcript, text: &str) {
         transcript.apply(Input::Event(SessionEvent::TextDelta { text: text.into() }));
     }
@@ -419,7 +440,7 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ContentBoundary));
         text(&mut transcript, "second");
 
-        let rows = TranscriptRows::new(transcript.blocks(), None);
+        let rows = TranscriptRows::new(transcript.blocks(), None, READING);
         assert_eq!(rows.len(), 1);
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Markdown(_)));
         assert_eq!(rows.get(0).unwrap().blocks().len(), 2);
@@ -431,11 +452,11 @@ mod tests {
         let mut transcript = Transcript::default();
         text(&mut transcript, "first");
         prompt(&mut transcript, "next");
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(transcript.blocks(), None, READING);
         let first = rows.get(0).unwrap().clone();
 
         text(&mut transcript, "second");
-        let delta = rows.reconcile(transcript.blocks(), None);
+        let delta = rows.reconcile(transcript.blocks(), None, READING);
         assert!(Rc::ptr_eq(&first, rows.get(0).unwrap()));
         assert_eq!(
             delta.splices,
@@ -453,12 +474,12 @@ mod tests {
             prompt(&mut transcript, text_part);
             text(&mut transcript, text_part);
         }
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(transcript.blocks(), None, READING);
         let old = rows.rows().to_vec();
 
         prompt(&mut transcript, "d");
         text(&mut transcript, "d");
-        let delta = rows.reconcile(&transcript.blocks()[2..], None);
+        let delta = rows.reconcile(&transcript.blocks()[2..], None, READING);
         assert_eq!(
             delta.splices,
             vec![
@@ -488,9 +509,9 @@ mod tests {
         prompt(&mut transcript, "b");
         text(&mut transcript, "b");
 
-        let mut rows = TranscriptRows::new(&transcript.blocks()[2..], None);
+        let mut rows = TranscriptRows::new(&transcript.blocks()[2..], None, READING);
         let old = rows.rows().to_vec();
-        let delta = rows.reconcile(transcript.blocks(), None);
+        let delta = rows.reconcile(transcript.blocks(), None, READING);
         assert_eq!(
             delta.splices,
             vec![RowSplice {
@@ -509,11 +530,11 @@ mod tests {
     fn adjacent_tools_merge_into_the_leaders_stable_activity_row() {
         let mut transcript = Transcript::default();
         tool(&mut transcript, "first");
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(transcript.blocks(), None, READING);
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Block(_)));
 
         tool(&mut transcript, "second");
-        let delta = rows.reconcile(transcript.blocks(), None);
+        let delta = rows.reconcile(transcript.blocks(), None, READING);
         assert!(matches!(
             rows.get(0).unwrap().id(),
             RowId::ToolActivity(call) if call == "first"
@@ -528,34 +549,99 @@ mod tests {
     }
 
     #[test]
-    fn the_gap_table_spaces_turns_sections_tool_runs_and_stamps() {
-        use crate::theme::{BODY_PAD_T, GAP_SECTION, GAP_STAMP, GAP_TOOL, GAP_TURN};
+    fn the_gap_table_spaces_turns_blocks_rows_and_stamps() {
+        use crate::theme::{BODY_PAD_T, GAP_BLOCK, GAP_ROW, GAP_TURN};
         use RowKind::*;
         let prose = Answer { commentary: false };
         let commentary = Answer { commentary: true };
+        let stamp = TurnEnd { hangs: false };
+        let hung = TurnEnd { hangs: true };
         for (previous, kind, gap) in [
             (None, Prompt, BODY_PAD_T),
             (None, Activity, BODY_PAD_T),
-            (Some(TurnEnd), Prompt, GAP_TURN),
+            (Some(stamp), Prompt, GAP_TURN),
+            (Some(hung), Prompt, GAP_TURN),
             (Some(prose), Prompt, GAP_TURN),
-            (Some(Prompt), prose, GAP_SECTION),
-            (Some(Prompt), Activity, GAP_SECTION),
-            (Some(Prompt), Reasoning, GAP_SECTION),
-            (Some(Activity), Activity, GAP_TOOL),
-            (Some(commentary), Activity, GAP_TOOL),
-            (Some(prose), Activity, GAP_SECTION),
-            (Some(Activity), prose, GAP_SECTION),
-            (Some(Reasoning), Activity, GAP_SECTION),
-            (Some(Activity), Reasoning, GAP_SECTION),
-            (Some(prose), TurnEnd, GAP_STAMP),
-            (Some(Activity), TurnEnd, GAP_STAMP),
-            (Some(Activity), Meta, GAP_STAMP),
-            (Some(prose), Notice, GAP_SECTION),
-            (Some(prose), TurnDiff, GAP_SECTION),
-            (Some(Other), Other, GAP_SECTION),
+            (Some(Prompt), prose, GAP_BLOCK),
+            (Some(Prompt), Activity, GAP_BLOCK),
+            (Some(Prompt), Reasoning, GAP_BLOCK),
+            (Some(Activity), Activity, GAP_ROW),
+            (Some(commentary), Activity, GAP_ROW),
+            (Some(prose), Activity, GAP_BLOCK),
+            (Some(Activity), prose, GAP_BLOCK),
+            (Some(Reasoning), Activity, GAP_BLOCK),
+            (Some(Activity), Reasoning, GAP_BLOCK),
+            // The stamp is a block of its turn; an elbow note hangs on the
+            // row it answers.
+            (Some(prose), stamp, GAP_BLOCK),
+            (Some(Activity), stamp, GAP_BLOCK),
+            (Some(prose), hung, GAP_ROW),
+            (Some(Activity), hung, GAP_ROW),
+            (Some(Activity), Meta, GAP_ROW),
+            (Some(prose), Notice, GAP_BLOCK),
+            (Some(prose), TurnDiff, GAP_BLOCK),
+            (Some(Other), Other, GAP_BLOCK),
         ] {
-            assert_eq!(gap_before(previous, kind), gap, "{previous:?} → {kind:?}");
+            assert_eq!(
+                gap_before(previous, kind, READING),
+                gap,
+                "{previous:?} → {kind:?}"
+            );
         }
+        // Each step is at least twice the one inside it.
+        assert!(GAP_TURN >= 2. * GAP_BLOCK && GAP_BLOCK >= 2. * GAP_ROW);
+    }
+
+    #[test]
+    fn the_turn_and_block_steps_scale_with_the_reading_size_and_rows_do_not() {
+        use crate::theme::{
+            answer_text_size, reading_step, GAP_BLOCK, GAP_ROW, GAP_TURN, PROSE_GAP,
+        };
+        use ferrite_core::settings::SoloReadingSize;
+        use RowKind::*;
+        let prose = Answer { commentary: false };
+        let mut previous = None;
+        for (size, turn, block) in [
+            (SoloReadingSize::Standard, 32., 12.),
+            (SoloReadingSize::Comfortable, 37., 14.),
+            (SoloReadingSize::Large, 41., 15.),
+        ] {
+            let reading = answer_text_size(size);
+            assert_eq!(gap_before(Some(prose), Prompt, reading), turn, "{size:?}");
+            assert_eq!(gap_before(Some(Prompt), prose, reading), block, "{size:?}");
+            assert_eq!(gap_before(Some(Activity), Activity, reading), GAP_ROW);
+            assert_eq!(reading_step(GAP_TURN, reading), turn);
+            // A paragraph gap inside an answer never outgrows the block
+            // step between it and the next block.
+            assert_eq!(
+                reading_step(PROSE_GAP, reading),
+                reading_step(GAP_BLOCK, reading)
+            );
+            assert!(turn >= 2. * block && block >= 2. * GAP_ROW, "{size:?}");
+            if let Some((turn_before, block_before)) = previous {
+                assert!(turn > turn_before && block > block_before, "{size:?}");
+            }
+            previous = Some((turn, block));
+        }
+    }
+
+    #[test]
+    fn a_reading_size_change_respaces_every_row_after_the_first() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "done");
+        prompt(&mut transcript, "again");
+        let mut rows = TranscriptRows::new(transcript.blocks(), None, READING);
+        let first = rows.get(0).unwrap().clone();
+        let large = crate::theme::answer_text_size(ferrite_core::settings::SoloReadingSize::Large);
+        let delta = rows.reconcile(transcript.blocks(), None, large);
+        assert!(delta.splices.is_empty());
+        assert_eq!(delta.remeasure, vec![1, 2]);
+        assert!(
+            Rc::ptr_eq(&first, rows.get(0).unwrap()),
+            "the body padding does not scale"
+        );
+        assert_eq!(rows.get(2).unwrap().gap(), 41.);
     }
 
     #[test]
@@ -566,7 +652,7 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ContentBoundary));
         tool(&mut transcript, "a");
         tool(&mut transcript, "b");
-        let rows = TranscriptRows::new(transcript.blocks(), None);
+        let rows = TranscriptRows::new(transcript.blocks(), None, READING);
         let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
         assert_eq!(
             kinds,
@@ -581,8 +667,8 @@ mod tests {
             gaps,
             vec![
                 crate::theme::BODY_PAD_T,
-                crate::theme::GAP_SECTION,
-                crate::theme::GAP_TOOL
+                crate::theme::GAP_BLOCK,
+                crate::theme::GAP_ROW
             ]
         );
     }
@@ -591,11 +677,11 @@ mod tests {
     fn only_the_latest_notice_is_live_and_the_hand_off_changes_both_rows() {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Notice("model changed".into()));
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(transcript.blocks(), None, READING);
         assert!(rows.get(0).unwrap().live_notice());
         prompt(&mut transcript, "go");
         transcript.apply(Input::Notice("send failed".into()));
-        let delta = rows.reconcile(transcript.blocks(), None);
+        let delta = rows.reconcile(transcript.blocks(), None, READING);
         let live: Vec<_> = rows.rows().iter().map(|row| row.live_notice()).collect();
         assert_eq!(live, vec![false, false, true]);
         assert!(
@@ -618,7 +704,7 @@ mod tests {
             diff: "+x".into(),
             omitted_bytes: 0,
         };
-        let rows = TranscriptRows::new(transcript.blocks(), Some(&diff));
+        let rows = TranscriptRows::new(transcript.blocks(), Some(&diff), READING);
         let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
         assert_eq!(
             kinds,
@@ -626,7 +712,7 @@ mod tests {
                 RowKind::Prompt,
                 RowKind::Answer { commentary: true },
                 RowKind::TurnDiff,
-                RowKind::TurnEnd
+                RowKind::TurnEnd { hangs: true }
             ]
         );
     }
@@ -637,6 +723,6 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
             text: "   ".into(),
         }));
-        assert!(TranscriptRows::new(transcript.blocks(), None).is_empty());
+        assert!(TranscriptRows::new(transcript.blocks(), None, READING).is_empty());
     }
 }
