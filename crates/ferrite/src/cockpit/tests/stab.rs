@@ -778,3 +778,18 @@ fn the_image_preview_dims_the_whole_window(cx: &mut TestAppContext) {
     assert!((sheet.center().x - px(pane.x + pane.w / 2.)).abs() <= px(2.));
     let _ = std::fs::remove_dir_all(image.parent().unwrap());
 }
+
+/// A draft's body says what to do, as an empty Thread's does.
+#[gpui::test]
+fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("draft-empty", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    let empty = cx
+        .debug_bounds("draft-empty")
+        .expect("the draft's guidance");
+    let block = cx.debug_bounds("composer-block").unwrap();
+    assert!(empty.bottom() <= block.top(), "{empty:?} / {block:?}");
+}

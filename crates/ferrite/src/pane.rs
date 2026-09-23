@@ -1543,7 +1543,18 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     ..Default::default()
                 },
             ))
-            .child(div().flex().flex_1().min_h_0())
+            // The body says what to do, as an empty Thread's does.
+            .child(
+                div()
+                    .debug_selector(|| "draft-empty".into())
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(components::empty_state(
+                        "New thread",
+                        Some("pick a project and branch below \u{b7} / for commands".into()),
+                    )),
+            )
             .children(drop_target.then(crate::prompt_drop::sheet))
             .child(composer_region(
                 view,
