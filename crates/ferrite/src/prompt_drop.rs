@@ -3,7 +3,7 @@
 
 use crate::{composer::Composer, theme};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, App, Div, Entity, ExternalPaths, Focusable, Window};
+use gpui::{div, px, rgb, rgba, App, Div, Entity, ExternalPaths, Focusable, Window};
 
 pub fn target(
     content: Div,
@@ -41,12 +41,17 @@ pub fn target(
                 .flex_col()
                 .items_center()
                 .justify_center()
+                // The whole Pane is the target: a raised sheet with the
+                // accent's non-focus edge, like a Pane drop's wash.
                 .rounded(px(theme::R_PANE))
                 .bg(rgb(theme::RAISED))
+                .border_1()
+                .border_color(rgba(theme::ACCENT_EDGE))
                 .opacity(0.)
                 .drag_over::<ExternalPaths>(|style, _, _, _| style.opacity(0.96))
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
                 .text_color(rgb(theme::TEXT_STRONG))
                 .child("Drop files to add to prompt"),
         )

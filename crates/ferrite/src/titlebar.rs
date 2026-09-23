@@ -27,11 +27,9 @@
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
 //! they read.
 
-use gpui::component::button::Button;
+use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui::prelude::*;
-use gpui::{
-    div, px, rgb, rgba, Div, FontWeight, MouseButton, SharedString, Stateful, WindowControlArea,
-};
+use gpui::{div, px, rgb, rgba, App, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -44,6 +42,16 @@ use crate::theme::*;
 pub struct Title {
     pub project: Option<SharedString>,
     pub group: Option<SharedString>,
+}
+
+/// What the location adds about the board, beside its name.
+#[derive(Clone, Copy, Default)]
+pub struct Board {
+    /// How many Panes the Group shows: cheap orientation beside its name.
+    pub count: Option<usize>,
+    /// One Pane fills the board: the only on-screen cue that its siblings
+    /// are hidden, not gone.
+    pub fullscreen: bool,
 }
 
 /// Whether this build is an unreleased one. `--release` is not the
@@ -74,6 +82,7 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 pub fn strip(
     nav_width: f32,
     title: Title,
+    board: Board,
     add_thread: Button,
     draggable: bool,
     maximized: bool,
@@ -104,22 +113,31 @@ pub fn strip(
         // absorbs spare width and remains the Windows drag target, while the
         // contextual creation door sits at the trailing edge immediately
         // before the caption controls.
-        .child(title_region(title))
+        .child(title_region(title, board))
         .children(DEV.then(dev_badge))
         .child(trailing_drag)
         .child(add_thread)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
-/// The titlebar's contextual creation door. It is a sibling of the Windows
-/// drag region, never a child, so its click reaches the app instead of the
-/// non-client frame. macOS receives the same control in its transparent band.
-pub fn add_thread_button(label: &'static str, tooltip: &'static str) -> Button {
+/// The titlebar's contextual creation door (UI-13): the `+` and its mono
+/// label in the chrome icon-button face — `TEXT_MUTED` glyph, the `HOVER`
+/// face under the pointer, `PRESSED` held, `R_CONTROL`. It is a sibling of
+/// the Windows drag region, never a child, so its click reaches the app
+/// instead of the non-client frame. macOS receives the same control in its
+/// transparent band.
+pub fn add_thread_button(label: &'static str, tooltip: &'static str, cx: &App) -> Button {
     crate::components::button("titlebar-add-thread")
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(rgb(TEXT_2).into())
+                .hover(rgb(HOVER).into())
+                .active(rgb(PRESSED).into()),
+        )
         .debug_selector(|| "titlebar-add-thread".into())
         .flex_shrink_0()
         .h(px(ICON_BUTTON))
-        .px(px(8.))
+        .px(px(TITLE_ADD_PAD_X))
         // Windows follows this control with its caption buttons. macOS has
         // no trailing sibling, so keep the creation door inside the same
         // shell inset as the Pane board instead of flush with the window.
@@ -130,9 +148,13 @@ pub fn add_thread_button(label: &'static str, tooltip: &'static str) -> Button {
             div()
                 .flex()
                 .items_center()
-                .gap(px(5.))
+                .gap(px(TITLE_ADD_GAP))
+                .font_family(FONT_MONO)
+                .text_size(px(FS_UI))
+                .line_height(px(LH_UI))
+                .text_color(rgb(TEXT_2))
                 .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
-                .child(crate::components::label(label, TEXT)),
+                .child(label),
         )
 }
 
@@ -152,7 +174,7 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
                 .id(id)
                 .flex_1()
                 .w_full()
-                .child(title_region(title))
+                .child(title_region(title, Board::default()))
                 // See `button`: the root's focus hitbox must not count as
                 // hovered under a caption region, or the press is marked
                 // handled and Windows never starts the move.
@@ -168,10 +190,12 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
         )
 }
 
-/// The dev-build mark, beside the location it qualifies. It is a sibling
-/// of the drag region rather than a child: anything inside one is
-/// non-client to Windows, and the band's text should not travel with the
-/// two drag stretches that also render a `Title`.
+/// The dev-build mark, beside the location it qualifies: a quiet mono
+/// `dev` in a hairline box. Not a state — `ATTENTION` would say "something
+/// needs you" to every operator of a local build. It is a sibling of the
+/// drag region rather than a child: anything inside one is non-client to
+/// Windows, and the band's text should not travel with the two drag
+/// stretches that also render a `Title`.
 fn dev_badge() -> Div {
     div()
         .debug_selector(|| "titlebar-dev-badge".into())
@@ -179,18 +203,40 @@ fn dev_badge() -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .h(px(17.0))
-        .px(px(5.0))
+        .h(px(DEV_TAG_H))
+        .px(px(DEV_TAG_PAD_X))
         .rounded(px(R_CHIP))
-        .bg(rgba(ATTENTION_WASH))
+        .border_1()
+        .border_color(rgba(HAIRLINE_STRONG))
+        .font_family(FONT_MONO)
         .text_size(px(FS_SM))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(ATTENTION))
-        .child("DEV")
+        .line_height(px(LH_META))
+        .font_weight(W_BODY)
+        .text_color(rgb(TEXT_MUTED))
+        .child("dev")
 }
 
-fn title_region(title: Title) -> Div {
-    let has_both = title.project.is_some() && title.group.is_some();
+/// The location, on one mono baseline: in Solo the Project alone; in a
+/// Group the Project, a faint `/`, the Group's name as the band's one title
+/// and how many Panes it shows; ` · fullscreen` while one Pane fills the
+/// board. The Group's name gives way last.
+fn title_region(title: Title, board: Board) -> Div {
+    let Title { project, group } = title;
+    let Board { count, fullscreen } = board;
+    let solo = group.is_none();
+    let separator = |glyph: &'static str| {
+        div()
+            .flex_shrink_0()
+            .text_color(rgb(TEXT_FAINT))
+            .child(glyph)
+    };
+    let fact = |text: SharedString| {
+        div()
+            .flex_shrink_0()
+            .text_color(rgb(TEXT_MUTED))
+            .child(text)
+    };
+    let has_group = group.is_some();
     div()
         .h_full()
         .flex()
@@ -198,32 +244,44 @@ fn title_region(title: Title) -> Div {
         .justify_start()
         .min_w_0()
         .px(px(GRID_PAD))
-        .gap(px(7.0))
-        .children(title.project.map(|project| {
+        .gap(px(TITLE_GAP))
+        .font_family(FONT_MONO)
+        .text_size(px(FS_UI))
+        .line_height(px(LH_UI))
+        .children(project.map(|project| {
             div()
                 .debug_selector(|| "project-titlebar-name".into())
+                .min_w_0()
+                .flex_shrink(2.)
                 .truncate()
-                .text_size(px(FS_SM))
-                .text_color(rgb(TEXT_MUTED))
+                .when(solo, |name| name.font_weight(W_LABEL))
+                .text_color(rgb(if solo { TEXT_2 } else { TEXT_MUTED }))
                 .child(project)
         }))
-        .when(has_both, |title| {
-            title.child(
-                div()
-                    .text_size(px(FS_SM))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child("/"),
-            )
-        })
-        .children(title.group.map(|group| {
+        .when(has_group, |title| title.child(separator("/")))
+        .children(group.map(|group| {
             div()
                 .debug_selector(|| "group-titlebar-name".into())
+                .min_w_0()
+                .flex_shrink(1.)
                 .truncate()
-                .text_size(px(FS_UI))
-                .font_weight(crate::theme::W_LABEL)
-                .text_color(rgb(TEXT))
+                .font_weight(W_LABEL)
+                .text_color(rgb(TEXT_STRONG))
                 .child(group)
         }))
+        .children(count.map(|count| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .gap(px(TITLE_GAP))
+                .child(separator("·"))
+                .child(fact(SharedString::from(count.to_string())))
+        }))
+        .when(fullscreen, |title| {
+            title
+                .child(separator("·"))
+                .child(fact(SharedString::from("fullscreen")))
+        })
 }
 
 /// Minimise, maximise/restore and close, in the platform's order, flush to
@@ -243,35 +301,41 @@ fn caption_buttons(maximized: bool) -> Div {
             "caption-minimize",
             WindowControlArea::Min,
             icons::WINDOW_MINIMIZE,
-            TEXT,
+            false,
         ))
-        .child(button(zoom_id, WindowControlArea::Max, zoom_glyph, TEXT))
-        // Soft's hover is achromatic and never borrows a signal colour, so
-        // close does not take Windows' red field. The mark takes the red
-        // instead: the danger still reads, and the band keeps one hover
-        // face across all three.
+        .child(button(zoom_id, WindowControlArea::Max, zoom_glyph, false))
+        // Close takes Windows' own red field and white mark under the
+        // pointer: platform muscle memory, not a Ferrite state colour.
         .child(button(
             "caption-close",
             WindowControlArea::Close,
             icons::WINDOW_CLOSE,
-            BLOCKED,
+            true,
         ))
 }
 
 /// One caption button: square-cornered and edge-to-edge, unlike every other
-/// Soft control, because the pointer stops at the window's corner and the
-/// hover face has to be there when it does. Full height — the buttons win
-/// the top edge from the resize border, as Windows' own do.
+/// control, because the pointer stops at the window's corner and the hover
+/// face has to be there when it does. Full height — the buttons win the top
+/// edge from the resize border, as Windows' own do. The mark rests at
+/// `TEXT_2` (a 1px stroke at `TEXT_MUTED` is too faint on the ground) and
+/// brightens under the pointer; `close` lays the platform red under it.
 fn button(
     id: &'static str,
     area: WindowControlArea,
     glyph: &'static str,
-    ink: u32,
+    close: bool,
 ) -> Stateful<Div> {
+    let hover_ink = if close {
+        CAPTION_CLOSE_INK
+    } else {
+        TEXT_STRONG
+    };
     div()
         .id(id)
         .debug_selector(move || id.into())
         .group(id)
+        .relative()
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -296,9 +360,19 @@ fn button(
             gpui::base::GlobalState::suppress_text_selection(cx);
         })
         .window_control_area(area)
+        .when(close, |button| {
+            button.child(
+                div()
+                    .id("caption-close-field")
+                    .absolute()
+                    .inset_0()
+                    .group_hover(id, |style| style.bg(rgb(CAPTION_CLOSE)))
+                    .group_active(id, |style| style.bg(rgb(CAPTION_CLOSE_PRESSED))),
+            )
+        })
         .child(
-            icon(glyph, CAPTION_GLYPH, TEXT_MUTED)
-                .group_hover(id, move |style| style.text_color(rgb(ink))),
+            icon(glyph, CAPTION_GLYPH, TEXT_2)
+                .group_hover(id, move |style| style.text_color(rgb(hover_ink))),
         )
 }
 
@@ -315,7 +389,7 @@ mod tests {
             "caption-close",
             WindowControlArea::Close,
             icons::WINDOW_CLOSE,
-            BLOCKED,
+            true,
         );
         assert_eq!(close.style().size.width, Some(px(CAPTION_W).into()));
         assert!(
@@ -325,21 +399,29 @@ mod tests {
     }
 
     /// The strip claims the band the board already leaves empty — it must
-    /// take no layout of its own, or every Pane would move down by 42px.
-    #[test]
-    fn the_strip_is_an_overlay_of_the_band_the_board_reserves() {
-        let mut strip = strip(
-            crate::nav::WIDTH,
-            Title {
-                project: Some("Ferrite".into()),
-                group: Some("Group Alpha".into()),
-            },
-            add_thread_button("Add Thread", "New Thread in Group"),
-            true,
-            false,
-        );
-        assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
-        assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
+    /// take no layout of its own, or every Pane would move down by
+    /// `WIN_CHROME_H`.
+    #[gpui::test]
+    fn the_strip_is_an_overlay_of_the_band_the_board_reserves(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init_components(cx);
+            let mut strip = strip(
+                crate::nav::WIDTH,
+                Title {
+                    project: Some("Ferrite".into()),
+                    group: Some("Group Alpha".into()),
+                },
+                Board {
+                    count: Some(4),
+                    fullscreen: false,
+                },
+                add_thread_button("Add Thread", "New Thread in Group", cx),
+                true,
+                false,
+            );
+            assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
+            assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
+        });
     }
 
     /// A restored window keeps its top resize edge, which is an inset the

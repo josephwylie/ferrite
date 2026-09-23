@@ -684,13 +684,14 @@ pub struct PaneWiring {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WallState {
     Working,
-    /// Working with a red test suite: red text, green dot, no ring.
+    /// Working with a red test suite: the green dot, the failure in red words.
     Failing,
-    /// A Decision waits: amber dot, amber ring, two-line alert, no bar.
+    /// A Decision waits: amber dot, amber edge, `needs you`.
     Decision,
-    /// The Session closed under the Thread: red dot, red ring, alert.
+    /// The Session closed under the Thread: red dot, red edge, its reason.
     Blocked,
-    /// Turn complete: quiet history, active Composer and green `done`.
+    /// Turn complete: quiet history, active Composer and a muted `done` —
+    /// green never means finished.
     Done,
     Idle,
     /// No transcript in memory at all — the cockpit could not open it.
@@ -720,74 +721,70 @@ pub fn wall_state(
     }
 }
 
-/// The wall cell's folded strings — rebuilt only when the Thread changed,
+/// The wall cell's folded reading — rebuilt only when the Thread changed,
 /// never per frame (the L3 budget: 24 cells × 60fps must not walk Blocks or
-/// format strings).
+/// format strings). Words only: the cells draw their own marks.
 #[derive(Default)]
 pub struct WallCard {
     /// The latest test run failed (from `Instruments`, the one O(blocks)
     /// read the wall needs).
     pub tests_failing: bool,
-    /// The failing line, with the run's own count where it reported one:
-    /// `✗ 2 failing`, else `✗ failing`.
+    /// The failing signal, with the run's own count where it reported one:
+    /// `2 failing`, else `failing`.
     pub failing: SharedString,
-    /// The plan meter's ▰▱ glyph run, empty without a plan (or past the
-    /// glyph cap — the status line already carries the fraction).
-    pub meter: SharedString,
-    /// The working status line: `3/4 · ◐ working` or `◐ working`.
+    /// The plan as (done, total), for the painted meter; `None` without one.
+    pub todos: Option<(usize, usize)>,
+    /// The working signal: the progress caption (`Thinking`, `Working`).
     pub working: SharedString,
-    /// An alert cell's context: the Decision's subject on line two, or the
-    /// close reason promoted to the red first line (`✗ reason`). Empty when
-    /// neither applies.
+    /// An alert cell's context: the Decision's subject, or the reason the
+    /// Session closed. Empty when neither applies.
     pub context: SharedString,
 }
 
 /// Fold one Thread's wall reading. The activity phrase stays a status word —
 /// naming the running tool at L3 would put `Instruments::of` on every wall
-/// cell every rebuild during streaming for a 9px line nobody can read at
+/// cell every rebuild during streaming for a line nobody can read at
 /// distance (sidebar-and-impl §4.2 #6 keeps names at L2).
 pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -> WallCard {
     let Some(transcript) = transcript else {
         return WallCard::default();
     };
-    let todos = transcript.todos();
-    let meter = todos
-        .map(|todos| SharedString::from(meter_run(todos.done, todos.total)))
-        .unwrap_or_default();
-    let caption = transcript
-        .progress()
-        .caption()
-        .unwrap_or_else(|| "Working".into());
-    let working = match todos {
-        Some(todos) => SharedString::from(format!("{}/{} · ◐ {caption}", todos.done, todos.total)),
-        None => SharedString::from(format!("◐ {caption}")),
-    };
+    let todos = transcript
+        .todos()
+        .filter(|todos| todos.total > 0)
+        .map(|todos| (todos.done.min(todos.total), todos.total));
+    let working = SharedString::from(
+        transcript
+            .progress()
+            .caption()
+            .unwrap_or_else(|| "Working".into()),
+    );
     let context = match decision {
         Some(decision) => decision_subject(decision),
         // A closed Thread's context is the reason it closed — the last
-        // Notice the fold pushed — promoted to the alert line (#22 C14).
+        // Notice the fold pushed (#22 C14).
         None if transcript.status() == Status::Closed => transcript
             .blocks()
             .iter()
             .rev()
             .find_map(|block| match &block.body {
-                Body::Notice(reason) => Some(SharedString::from(format!("✗ {reason}"))),
+                Body::Notice(reason) => Some(SharedString::from(reason.clone())),
                 _ => None,
             })
-            .unwrap_or_else(|| SharedString::from("✗ closed")),
+            .unwrap_or_else(|| SharedString::from("closed")),
         None => SharedString::default(),
     };
     let tests = Instruments::of(transcript).tests;
     let failing = match tests {
         Some(Tests::Failed { count: Some(count) }) => {
-            SharedString::from(format!("✗ {count} failing"))
+            SharedString::from(format!("{count} failing"))
         }
-        _ => SharedString::from("✗ failing"),
+        _ => SharedString::from("failing"),
     };
     WallCard {
         tests_failing: matches!(tests, Some(Tests::Failed { .. })),
         failing,
-        meter,
+        todos,
         working,
         context,
     }
@@ -916,39 +913,34 @@ pub fn render_pane(
         wall.tests_failing,
     );
     // Attention and focus are two independent channels, and they no longer
-    // nest (§D.1): the state edge is the Pane's own 1px border — always in
-    // layout, only ever recoloured, so nothing reflows when a Decision
-    // arrives. On alert Panes the neutral focus ring sits inside that edge,
-    // painted separately by `focus_wrapper` below.
+    // nest (§D.1): the edge is the Pane's own 1px border — always in layout,
+    // only ever recoloured, so nothing reflows when a Decision arrives — and
+    // one colour by precedence (`PaneEdge`). A focused alert Pane also draws
+    // the focus ring inset inside that edge (`pane_frame`).
     let attention_pending =
         thread.is_some_and(|thread| !thread.activity().pending_decisions().is_empty());
-    let edge: gpui::Hsla = if attention_pending {
-        rgb(ATTENTION).into()
-    } else if state == WallState::Blocked {
-        rgb(BLOCKED).into()
-    } else {
-        rgba(TRANSPARENT).into()
-    };
-    let alert = attention_pending || state == WallState::Blocked;
-    let mut shell = pane_shell(edge);
+    let blocked = state == WallState::Blocked;
+    let alert = attention_pending || blocked;
+    let edge = PaneEdge::of(focused, attention_pending, blocked);
+    let mut shell = pane_shell(edge.ink()).when(edge == PaneEdge::Rest, |shell| shell.hover_edge());
     let mut activity_attention = activity_attention;
     if level != Level::Transcript {
         if let Some(attention) = activity_attention.take() {
-            shell = shell
-                .relative()
-                .child(div().absolute().top(px(3.)).right(px(5.)).child(attention));
+            shell = shell.relative().child(
+                div()
+                    .absolute()
+                    .top(px(theme::SPACE_1))
+                    .right(px(theme::SPACE_1_5))
+                    .child(attention),
+            );
         }
     }
+    let frame = |shell: Div| pane_frame(shell, focused, alert, pulse, reduce_motion);
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
     if level == Level::Wall {
-        return focus_wrapper(
-            shell.child(wall_cell(view, wall, state, focused, title)),
-            focused,
-            pulse,
-            alert,
-        );
+        return frame(shell.child(wall_cell(view, wall, state, focused, title)));
     }
 
     // Requests occupy the space below this Thread's header and above its
@@ -1003,25 +995,20 @@ pub fn render_pane(
         let composer = l2_composer(&mut cx);
         let decide = cx.decide.take();
         let activity_decisions = cx.activity_decisions.take();
-        return focus_wrapper(
-            shell.child(l2_cell(
-                view,
-                transcript,
-                decision,
-                workspace,
-                branch.as_ref(),
-                state,
-                timings,
-                decide,
-                title,
-                composer,
-                activity_decisions.filter(|_| expand_question.is_none()),
-                expand_question,
-            )),
-            focused,
-            pulse,
-            alert,
-        );
+        return frame(shell.child(l2_cell(
+            view,
+            transcript,
+            decision,
+            workspace,
+            branch.as_ref(),
+            state,
+            timings,
+            decide,
+            title,
+            composer,
+            activity_decisions.filter(|_| expand_question.is_none()),
+            expand_question,
+        )));
     }
 
     let mut pane = shell.child(pane_head(
@@ -1036,12 +1023,12 @@ pub fn render_pane(
             ci,
             attention: activity_attention,
             action: expand_question,
+            tasks: l1_tasks(&mut cx),
+            unfocused: !focused,
         },
     ));
     match transcript {
         Some(_) => {
-            // The tasks strip sits directly under the header, full width.
-            pane = pane.children(l1_tasks(&mut cx));
             view.rich
                 .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
             pane = pane.child(
@@ -1060,7 +1047,7 @@ pub fn render_pane(
                         body.child(deferred(requests_overlay(requests)))
                     }),
             );
-            // The order is head · tasks · body · progress · dock · composer.
+            // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_progress(&mut cx));
             pane = pane.children(l1_dock(&mut cx));
             pane = pane.children(l1_composer(&mut cx));
@@ -1069,7 +1056,7 @@ pub fn render_pane(
             pane = pane.child(parked_body());
         }
     }
-    focus_wrapper(pane, focused, pulse, alert)
+    frame(pane)
 }
 
 // ---------------------------------------------------------- render_pane slots
@@ -1095,9 +1082,18 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
 
 /// WP-C · the tasks strip under the head.
 fn l1_tasks(cx: &mut PaneCtx) -> Option<AnyElement> {
+    // The tasks meter now rides the head's right cluster (one head row).
     let transcript = cx.transcript?;
     let todos = transcript.todos()?;
-    Some(tasks_strip(todos, transcript.current_task()).into_any_element())
+    Some(
+        tasks_strip(
+            cx.view.thread().map_or(0, ThreadId::get),
+            todos,
+            transcript.current_task(),
+            transcript.status() == Status::Streaming,
+        )
+        .into_any_element(),
+    )
 }
 
 /// WP-F · between the body and the Composer: a failed answer's error, the
@@ -1262,7 +1258,9 @@ fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>, alert: bool
         .min_w_0()
         .child(shell)
         .children(focused.then(|| ring().into_any_element()))
-        .children(pulse.filter(|_| !focused).map(|thread| {
+        // The unread ring never covers focus or a state edge: those already
+        // say "look here", and louder.
+        .children(pulse.filter(|_| !focused && !alert).map(|thread| {
             ring()
                 .with_animation(
                     ("attention-ring", thread.get() as usize),
@@ -1272,6 +1270,97 @@ fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>, alert: bool
                     |ring, delta| ring.opacity(delta),
                 )
                 .into_any_element()
+        }))
+}
+
+/// What a Pane's 1px edge says, by precedence: a closed Session beats a
+/// Decision, a Decision beats focus, and a Pane with none of them rests on
+/// the hairline. One colour — focus on an alert Pane is the inset ring
+/// `pane_frame` draws, never a second edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaneEdge {
+    Blocked,
+    Attention,
+    Focused,
+    Rest,
+}
+
+impl PaneEdge {
+    pub(crate) fn of(focused: bool, attention: bool, blocked: bool) -> Self {
+        if blocked {
+            PaneEdge::Blocked
+        } else if attention {
+            PaneEdge::Attention
+        } else if focused {
+            PaneEdge::Focused
+        } else {
+            PaneEdge::Rest
+        }
+    }
+
+    pub(crate) fn ink(self) -> gpui::Hsla {
+        match self {
+            PaneEdge::Blocked => rgb(BLOCKED).into(),
+            PaneEdge::Attention => rgb(ATTENTION).into(),
+            PaneEdge::Focused => rgb(FOCUS_RING).into(),
+            PaneEdge::Rest => rgba(HAIRLINE).into(),
+        }
+    }
+}
+
+/// The Pane inside its non-clipping frame: the edge already says focus on a
+/// calm Pane, so the frame adds only what the edge cannot — the inset focus
+/// ring on a focused alert Pane (2px inside the amber/red edge, UI-21), and
+/// the unread ring that breathes in `ACCENT` over a resting edge until the
+/// operator lands on a Thread that finished while they looked elsewhere
+/// (held still under reduced motion). Rings painted inside the shell's `overflow_hidden()`
+/// would be clipped, so they are absolute siblings here.
+fn pane_frame(
+    shell: Div,
+    focused: bool,
+    alert: bool,
+    pulse: Option<ThreadId>,
+    reduce_motion: bool,
+) -> Div {
+    let ring = |inset: f32, ink: u32| {
+        div()
+            .absolute()
+            .inset(px(inset))
+            .rounded(px(theme::R_PANE - inset))
+            .border(px(theme::FOCUS_RING_W))
+            .border_color(rgb(ink))
+    };
+    div()
+        .relative()
+        .flex()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(shell)
+        .children(
+            (focused && alert)
+                .then(|| ring(theme::FOCUS_RING_W * 2., FOCUS_RING).into_any_element()),
+        )
+        // The unread ring never covers focus or a state edge: those already
+        // say "look here", and louder.
+        .children(pulse.filter(|_| !focused && !alert).map(|thread| {
+            let unread = ring(0., ACCENT);
+            if reduce_motion {
+                unread.opacity(theme::UNREAD_PULSE_MAX).into_any_element()
+            } else {
+                unread
+                    .with_animation(
+                        ("attention-ring", thread.get() as usize),
+                        Animation::new(Duration::from_millis(theme::STATUS_PULSE_MS))
+                            .repeat()
+                            .with_easing(pulsating_between(
+                                theme::PULSE_MIN,
+                                theme::UNREAD_PULSE_MAX,
+                            )),
+                        |ring, delta| ring.opacity(delta),
+                    )
+                    .into_any_element()
+            }
         }))
 }
 
@@ -1506,6 +1595,12 @@ pub fn draft_picker(
         .child(control)
 }
 
+/// The wall's cell (L3): top-anchored rows in priority order, so a short
+/// cell still shows the dot, the title and the signal — an 8px dot and the
+/// title, then the signal word, then one detail (the plan's meter, a
+/// Decision's subject, why a Session closed). Brightness sorts the cells:
+/// a hot cell's title is `TEXT_STRONG`, a quiet one's `TEXT_2`; nothing is
+/// dimmed by opacity, so no text drops under the readable floor.
 fn wall_cell(
     view: &PaneView,
     card: &WallCard,
@@ -1513,131 +1608,114 @@ fn wall_cell(
     focused: bool,
     title: Option<AnyElement>,
 ) -> Div {
-    let (dot_color, hollow) = match state {
-        WallState::Working | WallState::Failing | WallState::Done => (RUNNING, false),
-        WallState::Decision => (ATTENTION, false),
-        WallState::Blocked => (BLOCKED, false),
-        WallState::Idle => (IDLE, false),
-        WallState::Parked => (TEXT_FAINT, true),
+    let hot = focused || cell_is_hot(state);
+    let (signal, ink) = cell_signal(state, card);
+    // Signals and details hang under the title, past the dot.
+    let hang = theme::WALL_DOT + theme::CELL_DOT_GAP;
+    let line = |text: SharedString, ink: u32| {
+        div()
+            .flex_shrink_0()
+            .w_full()
+            .pl(px(hang))
+            .truncate()
+            .text_size(px(theme::FS_SM))
+            .line_height(px(theme::LH_META))
+            .text_color(rgb(ink))
+            .child(text)
     };
-    let mut cell = div()
+    let detail = match state {
+        WallState::Working | WallState::Failing => card.todos.map(|(done, total)| {
+            div()
+                .flex_shrink_0()
+                .pl(px(hang))
+                .text_size(px(theme::FS_SM))
+                .line_height(px(theme::LH_META))
+                .child(meter(done, total, state == WallState::Working))
+        }),
+        WallState::Decision if !card.context.is_empty() => Some(line(card.context.clone(), TEXT_2)),
+        WallState::Blocked => Some(line(SharedString::from("session closed"), TEXT_MUTED)),
+        _ => None,
+    };
+    div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .gap(px(theme::GRID_GAP))
-        .p(px(theme::GRID_PAD))
+        .gap(px(theme::WALL_ROW_GAP))
+        .p(px(theme::WALL_PAD))
         .overflow_hidden()
         .child(
             div()
                 .flex()
+                .flex_shrink_0()
                 .items_center()
-                .gap(px(5.))
+                .gap(px(theme::CELL_DOT_GAP))
                 .min_w_0()
-                .child(if hollow {
-                    components::status_ring(TEXT_FAINT).size(px(theme::LED_WALL))
-                } else {
-                    components::status_dot(dot_color).size(px(theme::LED_WALL))
-                })
+                .child(cell_dot(state).size(px(theme::WALL_DOT)))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
-                        .font_family(theme::FONT_UI)
-                        .text_size(px(theme::FS_SM))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(if focused { TEXT_STRONG } else { TEXT_2 }))
+                        .text_size(px(theme::FS_UI))
+                        .line_height(px(theme::LH_UI))
+                        .font_weight(theme::W_LABEL)
+                        .text_color(rgb(if hot { TEXT_STRONG } else { TEXT_2 }))
                         .child(match title {
                             Some(title) => title,
                             None => div().truncate().child(view.name.clone()).into_any_element(),
                         }),
                 ),
-        );
-    // The meter survives on working cells only; alert cells trade it for
-    // the colored first line (glance.md §3.4). Glyphs, not a bar fill: the
-    // slanted ▰▱ run is the one meter language (#22 operator ruling).
-    if matches!(state, WallState::Working | WallState::Failing) && !card.meter.is_empty() {
-        cell = cell.child(
-            div()
-                .flex_shrink_0()
-                .w_full()
-                .truncate()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_2))
-                .child(card.meter.clone()),
-        );
-    }
-    // `w_full`, not `min_w_0`: a flex-col child measured at its own width
-    // truncates everything to an ellipsis smear (#22 A1).
-    let status_line = |text: SharedString, size: f32, color: u32| {
-        div()
-            .flex_shrink_0()
-            .w_full()
-            .truncate()
-            .text_size(px(size))
-            .text_color(rgb(color))
-            .child(text)
-    };
+        )
+        .child(line(signal, ink))
+        .children(detail)
+}
+
+/// A hot cell asks to be read: work under way, a failure, a Decision, a
+/// closed Session. Quiet cells (done, idle, parked) step their title down.
+fn cell_is_hot(state: WallState) -> bool {
+    matches!(
+        state,
+        WallState::Working | WallState::Failing | WallState::Decision | WallState::Blocked
+    )
+}
+
+/// A cell's status dot, one recipe for L2 and the wall (and the nav's
+/// meaning): running green, a Decision amber, closed red, done and idle the
+/// idle ink — green never means finished — and a parked Thread hollow.
+fn cell_dot(state: WallState) -> Div {
     match state {
-        WallState::Working => {
-            cell = cell.child(status_line(card.working.clone(), theme::FS_SM, TEXT_MUTED));
-        }
-        WallState::Failing => {
-            cell = cell.child(status_line(card.failing.clone(), theme::FS_SM, BLOCKED));
-        }
-        WallState::Decision => {
-            cell = cell.child(status_line(
-                SharedString::from("⚠ needs you"),
-                theme::FS_SM,
-                ATTENTION,
-            ));
-            if !card.context.is_empty() {
-                cell = cell.child(status_line(card.context.clone(), theme::FS_SM, TEXT_MUTED));
-            }
-        }
-        WallState::Blocked => {
-            // The close reason is the alert; the disposition is the
-            // context (#22 C14).
-            cell = cell.child(status_line(card.context.clone(), theme::FS_SM, BLOCKED));
-            cell = cell.child(status_line(
-                SharedString::from("blocked"),
-                theme::FS_SM,
-                TEXT_MUTED,
-            ));
-        }
-        WallState::Done => {
-            cell = cell
-                .child(status_line(
-                    SharedString::from("✓ done"),
-                    theme::FS_SM,
-                    RUNNING,
-                ))
-                .opacity(theme::DONE_WALL_OPACITY);
-        }
-        WallState::Idle => {
-            cell = cell.child(status_line(
-                SharedString::from("❯ idle"),
-                theme::FS_SM,
-                TEXT_MUTED,
-            ));
-        }
-        WallState::Parked => {
-            cell = cell.child(status_line(
-                SharedString::from("parked"),
-                theme::FS_SM,
-                TEXT_FAINT,
-            ));
-        }
+        WallState::Working | WallState::Failing => components::status_dot(RUNNING),
+        WallState::Decision => components::status_dot(ATTENTION),
+        WallState::Blocked => components::status_dot(BLOCKED),
+        WallState::Done | WallState::Idle => components::status_dot(IDLE),
+        WallState::Parked => components::status_ring(TEXT_MUTED),
     }
-    cell
+}
+
+/// The wall's signal: what the cell is doing, in words, and the only ink
+/// that may carry state. Work in progress reads in the body ink; a failure,
+/// a Decision and a closed Session take their state colour on the word
+/// alone; done, idle and parked are metadata.
+fn cell_signal(state: WallState, card: &WallCard) -> (SharedString, u32) {
+    match state {
+        WallState::Working => (card.working.clone(), TEXT_2),
+        WallState::Failing => (card.failing.clone(), BLOCKED),
+        WallState::Decision => (SharedString::from("needs you"), ATTENTION),
+        WallState::Blocked => (card.context.clone(), BLOCKED),
+        WallState::Done => (SharedString::from("done"), TEXT_MUTED),
+        WallState::Idle => (SharedString::from("idle"), TEXT_MUTED),
+        WallState::Parked => (SharedString::from("parked"), TEXT_MUTED),
+    }
 }
 
 // ------------------------------------------------------------- L2 cell
 
-/// The Cockpit board's cell grammar: 24px header (LED · title · right meta),
-/// then instruments — progress row, badge row, and the bottom-pinned
-/// activity line. A pending Decision swaps the body for the y/n card and an
-/// idle Thread centers `❯ idle`.
+/// The Cockpit board's cell grammar (L2): a 24px header (dot · title ·
+/// right meta), then the instruments — the model and checkout, one row of
+/// readings (plan, tests, diff, files), and the conversation's tail, newest
+/// at the bottom — and the compact Composer. A pending Decision swaps the
+/// body for the y/n card. Words, not chips: only a failure's words and the
+/// diff's signs carry a hue.
 #[allow(clippy::too_many_arguments)]
 fn l2_cell(
     view: &PaneView,
@@ -1654,66 +1732,53 @@ fn l2_cell(
     expand_question: Option<AnyElement>,
 ) -> Div {
     let compact_question = expand_question.is_some();
-    let hot = matches!(
-        state,
-        WallState::Working | WallState::Failing | WallState::Decision | WallState::Blocked
-    );
-    let led_color = match state {
-        WallState::Decision => ATTENTION,
-        WallState::Blocked | WallState::Failing => BLOCKED,
-        WallState::Working | WallState::Done => RUNNING,
-        WallState::Idle => IDLE,
-        WallState::Parked => TEXT_FAINT,
-    };
     let mut header = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .h(px(theme::CELL_HEADER_H))
-        .gap(px(6.))
-        .px(px(8.))
-        .child(components::status_dot(led_color))
+        .gap(px(theme::CELL_DOT_GAP))
+        .px(px(theme::CELL_PAD))
+        .child(cell_dot(state))
         .child(
             div()
                 .min_w_0()
                 .truncate()
-                .font_family(theme::FONT_UI)
-                .text_size(px(theme::FS_SM))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(if hot { TEXT_STRONG } else { TEXT_2 }))
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(if cell_is_hot(state) {
+                    TEXT_STRONG
+                } else {
+                    TEXT_2
+                }))
                 .child(match title {
                     Some(title) => title,
                     None => div().truncate().child(view.name.clone()).into_any_element(),
                 }),
         )
         .child(div().flex_1());
-    // The amber ring is the chip (#22 D17): a Decision cell's right meta
-    // keeps the binding like every other cell.
+    let meta = |text: SharedString| {
+        div()
+            .flex_shrink_0()
+            .text_size(px(theme::FS_SM))
+            .line_height(px(theme::LH_META))
+            .text_color(rgb(TEXT_MUTED))
+            .child(text)
+    };
+    // The right meta names the Workspace binding — what an operator running
+    // many Threads actually needs — and a finished turn's one completion
+    // label (muted: green never means finished). A question too big for
+    // the cell puts its expander here instead.
     header = if let Some(expand) = expand_question {
         header.child(div().flex_shrink_0().child(expand))
+    } else if state == WallState::Done {
+        header.child(meta(SharedString::from("done")))
     } else {
-        match state {
-            WallState::Done => header.child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(theme::FS_SM))
-                    .text_color(rgb(RUNNING))
-                    .child("done"),
-            ),
-            // The comp's right-meta slot carries the Thread's id; the name is
-            // already the id here, so the slot names the Workspace binding —
-            // what an operator running many Threads actually needs.
-            _ => header.child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(theme::FS_SM))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(binding_label(workspace)),
-            ),
-        }
+        header.child(meta(binding_label(workspace)))
     };
 
-    let cell = div().flex().flex_col().flex_1().min_h_0();
+    let cell = div().flex().flex_col().flex_1().min_h_0().min_w_0();
     let Some(transcript) = transcript else {
         return cell.child(header).child(parked_body());
     };
@@ -1746,13 +1811,18 @@ fn l2_cell(
         .flex_col()
         .flex_1()
         .min_h_0()
-        .p(px(theme::CELL_PAD))
-        .gap(px(8.));
+        .min_w_0()
+        .px(px(theme::CELL_PAD))
+        .pb(px(theme::SPACE_2))
+        .gap(px(theme::CELL_ROW_GAP))
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(TEXT_MUTED));
 
     // The facts the head has no room for at this size: the model serving
     // and the checkout, one muted line — the two things an operator
     // running nine of these asks first.
-    let meta: Vec<String> = [
+    let facts: Vec<String> = [
         transcript
             .model()
             .map(ferrite_core::providers::models::display_name),
@@ -1762,102 +1832,67 @@ fn l2_cell(
     .flatten()
     .filter(|part| !part.is_empty())
     .collect();
-    if !meta.is_empty() {
+    if !facts.is_empty() {
         body = body.child(
             div()
                 .w_full()
                 .flex_shrink_0()
                 .truncate()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(meta.join(" · "))),
+                .child(SharedString::from(facts.join(" · "))),
         );
     }
 
-    if state == WallState::Idle {
-        // Idle still shows the tail of the conversation: where the Thread
-        // stopped, in its own words, newest at the bottom.
-        body = body.child(l2_tail(transcript, view.text_namespace()));
-        body = body.child(
-            div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child("❯ idle — waiting for work"),
-        );
-        return cell.child(header).child(body).children(composer);
+    // One row of readings: the plan's meter, the latest test run, the diff
+    // and how many files it touched. Omitted when there is nothing to read.
+    let mut readings = div()
+        .flex()
+        .flex_shrink_0()
+        .min_w_0()
+        .overflow_hidden()
+        .items_center()
+        .gap(px(theme::SPACE_3));
+    let mut any = false;
+    if let Some(todos) = read.todos.filter(|todos| todos.total > 0) {
+        readings = readings.child(meter(
+            todos.done,
+            todos.total,
+            transcript.status() == Status::Streaming,
+        ));
+        any = true;
     }
-
-    if let Some(todos) = read.todos {
-        // Meter fill follows health: accent while green, secondary while
-        // the suite is red (the Cockpit board's two data points). Glyphs,
-        // not a bar fill — the ▰▱ run is the one meter language.
-        let fill = if state == WallState::Failing {
-            TEXT_MUTED
-        } else {
-            TEXT_2
-        };
-        body = body.child(
-            div()
-                .w_full()
-                .flex_shrink_0()
-                .truncate()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(fill))
-                .child(meter(todos.done, todos.total)),
-        );
-    }
-
-    let mut badges = div().flex().flex_shrink_0().items_center().gap(px(6.));
-    let mut any_badge = false;
     match read.tests {
         Some(Tests::Passed { count }) => {
-            let label = match count {
-                Some(count) => SharedString::from(format!("✓ {count}")),
-                None => SharedString::from("✓ tests pass"),
-            };
-            badges = badges.child(chip(label, RUNNING, rgba(RUNNING_WASH).into()));
-            any_badge = true;
+            readings = readings.child(div().flex_shrink_0().child(match count {
+                Some(count) => SharedString::from(format!("{count} passed")),
+                None => SharedString::from("tests pass"),
+            }));
+            any = true;
         }
         Some(Tests::Failed { count }) => {
-            let label = match count {
-                Some(count) => SharedString::from(format!("✗ {count} failing")),
-                None => SharedString::from("✗ failing"),
-            };
-            badges = badges.child(chip(label, BLOCKED, rgba(BLOCKED_WASH).into()));
-            any_badge = true;
+            readings = readings.child(div().flex_shrink_0().text_color(rgb(BLOCKED)).child(
+                match count {
+                    Some(count) => SharedString::from(format!("{count} failing")),
+                    None => SharedString::from("tests failing"),
+                },
+            ));
+            any = true;
         }
         None => {}
     }
     if read.added > 0 || read.removed > 0 {
-        badges = badges.child(
-            diff_stat(read.added, read.removed)
-                .text_size(px(theme::FS_SM))
-                .bg(rgb(RAISED))
-                .rounded(px(theme::R_CHIP))
-                .px(px(6.))
-                .py(px(1.)),
-        );
-        any_badge = true;
+        readings = readings.child(diff_stat(read.added, read.removed).flex_shrink_0());
+        any = true;
     }
     if read.files() > 0 {
-        badges = badges.child(
-            div()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(format!(
-                    "{} file{}",
-                    read.files(),
-                    if read.files() == 1 { "" } else { "s" }
-                ))),
-        );
-        any_badge = true;
+        readings = readings.child(div().flex_shrink_0().child(SharedString::from(format!(
+            "{} file{}",
+            read.files(),
+            if read.files() == 1 { "" } else { "s" }
+        ))));
+        any = true;
     }
-    if any_badge {
-        body = body.child(badges);
+    if any {
+        body = body.child(readings);
     }
     // The tail of the conversation fills what is left: prompts, answers
     // and tool rows in one compact column, newest at the bottom — what
@@ -1885,10 +1920,11 @@ const L2_TAIL_BLOCKS: usize = 16;
 const L2_TAIL_LINES: usize = 4;
 
 /// The compact tail of a transcript for an L2 cell: the newest Blocks as
-/// single runs — a prompt on its raised ground, prose in the reading ink,
-/// a tool row as its glyph and call, a Notice in its signal weight — each
-/// clamped to a few lines. Native layout measures each candidate in the
-/// actual remaining slot, then paints only complete rows, newest at bottom.
+/// single runs in the transcript's own grammar — a prompt behind its `❯`,
+/// prose in Geist, a tool row as its dot and call, a Notice behind an amber
+/// dot — each clamped to a few lines. Native layout measures each candidate
+/// in the actual remaining slot, then paints only complete rows, newest at
+/// the bottom.
 fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
     let blocks = transcript.blocks();
     let tail = &blocks[blocks.len().saturating_sub(L2_TAIL_BLOCKS)..];
@@ -1923,6 +1959,41 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                 .text_color(rgb(ink))
                 .child(SharedString::from(text))
         };
+        // A dot-led run (tool, notice): the `●` in its own ink, then the
+        // name in `TEXT_2` and the rest in metadata ink, as one text run so
+        // the line clamp still applies.
+        let dotted = |dot: u32, name: &str, rest: &str| {
+            let text = if rest.is_empty() {
+                format!("● {name}")
+            } else {
+                format!("● {name} {rest}")
+            };
+            let dot_end = '●'.len_utf8();
+            let name_end = dot_end + 1 + name.len();
+            let runs = vec![
+                (
+                    0..dot_end,
+                    HighlightStyle {
+                        color: Some(rgb(dot).into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    dot_end..name_end,
+                    HighlightStyle {
+                        color: Some(rgb(TEXT_2).into()),
+                        ..Default::default()
+                    },
+                ),
+            ];
+            div()
+                .w_full()
+                .flex_shrink_0()
+                .text_size(px(theme::FS_SM))
+                .line_height(px(theme::LH_META))
+                .text_color(rgb(TEXT_MUTED))
+                .child(StyledText::new(text).with_highlights(runs))
+        };
         let prose = |spans: &[Span]| -> String {
             spans
                 .iter()
@@ -1937,56 +2008,69 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                 if text.is_empty() {
                     continue;
                 }
-                line(text.to_string(), TEXT_STRONG)
-                    .px(px(theme::CHIP_PAD_X))
-                    .py(px(theme::CHIP_PAD_Y))
-                    .rounded(px(theme::R_CHIP))
-                    .bg(rgb(RAISED))
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_shrink_0()
+                    .gap(px(theme::SPACE_1_5))
+                    .text_size(px(theme::FS_SM))
+                    .line_height(px(theme::LH_META))
+                    .text_color(rgb(TEXT_STRONG))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .h(px(theme::LH_META))
+                            .child(components::prompt_mark(ACCENT)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .child(SharedString::from(text.to_string())),
+                    )
             }
             Body::Paragraph { spans } | Body::Bullet { spans } => {
                 let text = prose(spans);
                 if text.is_empty() {
                     continue;
                 }
-                line(text, TEXT).font_family(theme::FONT_PROSE)
+                line(text, TEXT_2).font_family(theme::FONT_PROSE)
             }
             Body::Heading { spans, .. } => {
                 let text = prose(spans);
                 if text.is_empty() {
                     continue;
                 }
-                line(text, TEXT_STRONG).font_weight(FontWeight::SEMIBOLD)
+                line(text, TEXT)
+                    .font_family(theme::FONT_PROSE)
+                    .font_weight(theme::W_STRONG)
             }
             Body::Code { language, .. } => line(
                 format!("```{}", language.as_deref().unwrap_or("")),
                 TEXT_MUTED,
             ),
             Body::Tool(tool) => {
-                let glyph = "●";
-                let ink = match tool.state {
+                let dot = match tool.state {
                     ToolState::Failed(_) => BLOCKED,
-                    _ => TEXT_MUTED,
+                    _ => TEXT_FAINT,
                 };
-                line(format!("{glyph} {} {}", tool.name, tool.summary), ink).line_clamp(1)
+                dotted(dot, &tool.name, &tool.summary).line_clamp(1)
             }
-            Body::Notice(text) => line(text.clone(), ATTENTION).font_weight(FontWeight::SEMIBOLD),
-            Body::Meta(text) => line(text.clone(), TEXT_2),
-            Body::TurnEnd(end) => line(end.text(), TEXT_2),
+            Body::Notice(text) => dotted(ATTENTION, text.trim(), ""),
+            Body::Meta(text) => line(text.clone(), TEXT_MUTED),
+            Body::TurnEnd(end) => line(end.text(), TEXT_MUTED),
             Body::Thinking(text) => {
-                line(ferrite_core::progress::headline(text), TEXT_2).line_clamp(1)
+                line(ferrite_core::progress::headline(text), TEXT_MUTED).line_clamp(1)
             }
-        };
-        let padding = if matches!(block.body, Body::Prompt(_)) {
-            theme::CHIP_PAD_Y * 2.
-        } else {
-            0.
         };
         let lines = if matches!(block.body, Body::Tool(_) | Body::Thinking(_)) {
             1
         } else {
             L2_TAIL_LINES
         };
-        rows.push((block.id, drawn, padding, lines));
+        rows.push((block.id, drawn, lines));
     }
     let selector = format!("l2-tail-{namespace}");
     div()
@@ -2000,10 +2084,9 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                 move |bounds, window, cx| {
                     let mut remaining = bounds.size.height;
                     let mut visible = Vec::new();
-                    for (id, row, padding, limit) in rows.into_iter().rev() {
-                        let available_lines = ((f32::from(remaining) - padding) / theme::LH_META)
-                            .floor()
-                            .max(0.) as usize;
+                    for (id, row, limit) in rows.into_iter().rev() {
+                        let available_lines =
+                            (f32::from(remaining) / theme::LH_META).floor().max(0.) as usize;
                         if available_lines == 0 {
                             break;
                         }
@@ -2034,7 +2117,7 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                         let origin = point(bounds.left(), bounds.top() + remaining - size.height);
                         row.prepaint_at(origin, window, cx);
                         visible.push(row);
-                        remaining -= size.height + px(4.);
+                        remaining -= size.height + px(theme::CELL_TAIL_GAP);
                     }
                     visible
                 },
@@ -2085,13 +2168,11 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 
 // ---------------------------------------------------------------- L1 pane
 
-/// The Pane head (§D.2): a banded header on its own `--pane-head` ground,
-/// closed by a single hairline. Its first line is 32px — status dot ·
-/// Thread id · agents · attention — and beneath it, when the checkout is
-/// known, a 20px line saying where the work is: the branch, its drift from
-/// its upstream, its dirt, and its PR and CI. The band is chrome; the
-/// hairline is the one rule Soft draws inside a Pane, and it earns its
-/// place by separating two header lines from the transcript below.
+/// The Pane head (§D.2): **one 36px row** on the Pane's own plane, closed by
+/// the hairline — the one rule drawn inside a Pane. Left: the status dot,
+/// the title and the checkout (the branch gives way first when narrow).
+/// Then the agent tabs, or a spacer. Right, never shrinking: the tasks
+/// meter, the PR and its CI, the attention jump and the head action.
 ///
 /// There is no model chip here (the Composer's picker is the only model
 /// surface) and no window controls (park and zoom stay on the keyboard).
@@ -2106,6 +2187,11 @@ struct PaneHeadState<'a> {
     ci: Option<AnyElement>,
     attention: Option<AnyElement>,
     action: Option<AnyElement>,
+    /// The tasks meter (`l1_tasks`), riding the right cluster.
+    tasks: Option<AnyElement>,
+    /// Another Pane holds focus: the title steps down from `TEXT_STRONG`
+    /// to `TEXT`, the one focus cue that survives a state edge.
+    unfocused: bool,
 }
 
 fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
@@ -2119,6 +2205,8 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         ci,
         attention,
         action,
+        tasks,
+        unfocused,
     } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -2127,19 +2215,17 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         Some(Status::Streaming) => RUNNING,
         Some(Status::Blocked) => ATTENTION,
         Some(Status::Closed) => BLOCKED,
-        _ => TEXT_MUTED,
+        _ => IDLE,
     };
     let has_agents = agents.is_some();
-    let mut top = div()
+    let key = view.thread().map_or(0, ThreadId::get);
+    let left = div()
         .flex()
-        .flex_shrink_0()
+        .min_w_0()
+        .flex_shrink(1.)
+        .overflow_hidden()
         .items_center()
-        .h(px(theme::PANE_HEAD_H))
-        .gap(px(theme::EVENT_GAP))
-        .px(px(theme::PANE_PAD_X))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(TEXT_MUTED))
+        .gap(px(theme::HEAD_GAP))
         .child(components::status_dot(dot_color))
         .child(
             div()
@@ -2148,60 +2234,68 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
                 .when(has_agents, |title| title.max_w(relative(0.32)))
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
-                // gpui seats a run one pixel lower in this 32px head than
-                // CSS half-leading does. 2px of bottom padding grows the
-                // centred box by two and so lifts the glyphs by one.
-                .pb(px(2.))
                 .font_weight(theme::W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(if unfocused { TEXT } else { TEXT_STRONG }))
                 .child(match title {
                     Some(title) => title,
                     None => div().truncate().child(view.name.clone()).into_any_element(),
                 }),
+        )
+        .children(
+            checkout_strip(checkout, branch, project_branches)
+                .map(|checkout| checkout.ml(px(theme::HEAD_CLUSTER_GAP - theme::HEAD_GAP))),
         );
-    if let Some(agents) = agents {
-        top = top.child(agents);
-    }
-    if let Some(attention) = attention {
-        top = top.child(attention);
-    }
-    if let Some(action) = action {
-        top = top.child(action);
-    }
-    // The checkout keeps its own line now, so the title line no longer
-    // has to share its width with a branch name.
-    let checkout_line = checkout_strip(checkout, branch, project_branches, ci);
-    div()
+    // The PR is one fact with its CI: wired where the cockpit could wire
+    // the card, else drawn flat (below L1, pane-only tests, no checks).
+    let pr = checkout
+        .and_then(|status| status.pr.as_ref())
+        .map(|pr| match ci {
+            Some(ci) if pr.checks.is_some() => ci,
+            _ => ci_face(pr, false).into_any_element(),
+        });
+    let right = div()
         .flex()
-        .flex_col()
         .flex_shrink_0()
-        .bg(rgb(PANE_HEAD))
-        // The shell's radius is 8 outside a 1px border, so its padding box
-        // curves at 7 — the band's own ground must follow that curve or it
-        // paints square shoulders into the Pane's rounded top.
-        .rounded_t(px(theme::R_PANE - 1.))
+        .items_center()
+        .gap(px(theme::HEAD_CLUSTER_GAP))
+        .children(tasks)
+        .children(pr)
+        .children(attention)
+        .children(action);
+    div()
+        .debug_selector(move || format!("pane-head-{key}"))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::PANE_HEAD_H))
+        .gap(px(theme::HEAD_CLUSTER_GAP))
+        .px(px(theme::PANE_PAD_X))
         .border_b_1()
         .border_color(rgba(PANE_HEAD_EDGE))
-        .child(top)
-        .children(checkout_line)
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(TEXT_MUTED))
+        .child(left)
+        // The tabs take the free width; without them a growing spacer does
+        // — never `ml_auto`, which collapses every gap in the row (taffy
+        // hands an auto margin the container's gaps too).
+        .child(match agents {
+            Some(agents) => agents,
+            None => div().flex_1().min_w_0().into_any_element(),
+        })
+        .child(right)
 }
 
-/// The header's second line (#29): the branch mark and name, then only
-/// what is actually true of it — `↑2 ↓1` against its upstream, `3±` of
-/// working-tree dirt, its PR by number, and its CI rollup. A branch with
-/// no upstream simply has no drift marks, and a checkout with no PR says
-/// nothing about one — silence here always means unknown or absent, never
-/// "fine".
-///
-/// The one control on the line is the `ci` mark, and only when the cockpit
-/// hands it down wired (`ci`): a press opens the card listing the runs
-/// behind the rollup. Unwired, the same mark is drawn as flat text, so the
-/// line reads identically in a screenshot test and below L1.
+/// The head's checkout (#29): the branch mark and name, then only what is
+/// actually true of it — `↑2 ↓1` against its upstream and `±3` of working
+/// tree dirt. A branch with no upstream simply has no drift marks: silence
+/// here means unknown or absent, never "fine". All of it is metadata ink —
+/// drift and dirt are not the Thread's state. A multi-directory Project
+/// names each directory's branch: `frontend:feat/header  api:main`.
 fn checkout_strip(
     checkout: Option<&BranchStatus>,
     branch: Option<&SharedString>,
     project_branches: &[(SharedString, SharedString)],
-    ci: Option<AnyElement>,
 ) -> Option<Div> {
     // A branch label with no status behind it still deserves the line: the
     // first refresh has simply not landed yet.
@@ -2218,9 +2312,17 @@ fn checkout_strip(
             .map(|(directory, branch)| (Some(directory.clone()), branch.clone()))
             .collect()
     };
+    let mut strip = div()
+        .flex()
+        .min_w(px(theme::HEAD_CHECKOUT_MIN_W))
+        .flex_shrink(theme::HEAD_CHECKOUT_SHRINK)
+        .overflow_hidden()
+        .items_center()
+        .gap(px(theme::ROW_ICON_GAP))
+        .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_FAINT));
     let mut branch_list = div()
         .flex()
-        .min_w_0()
+        .min_w(px(theme::HEAD_BRANCH_MIN_W))
         .flex_shrink(1.)
         .items_center()
         .gap(px(theme::CHECKOUT_GAP));
@@ -2231,142 +2333,110 @@ fn checkout_strip(
                 .flex()
                 .min_w_0()
                 .items_center()
-                .gap(px(theme::ROW_ICON_GAP))
                 .when_some(directory, |item, directory| {
-                    item.child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(directory),
-                    )
+                    item.child(div().flex_shrink_0().child(directory))
+                        .child(div().flex_shrink_0().text_color(rgb(TEXT_FAINT)).child(":"))
                 })
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(TEXT_2))
-                        .child(branch),
-                ),
+                .child(div().min_w_0().truncate().child(branch)),
         );
     }
-    let mut strip = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::CHECKOUT_GAP))
-        .h(px(theme::PANE_CHECKOUT_H))
-        .px(px(theme::PANE_PAD_X))
-        .pb(px(2.))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(TEXT_MUTED))
-        .child(
-            div()
-                .flex()
-                .min_w_0()
-                .flex_shrink(1.)
-                .items_center()
-                .gap(px(theme::ROW_ICON_GAP))
-                .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
-                .child(branch_list),
-        );
+    strip = strip.child(branch_list);
     let Some(status) = checkout else {
         return Some(strip);
     };
-    // Drift, only where there is an upstream to drift from.
-    if status.ahead > 0 || status.behind > 0 {
-        let mut drift = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(theme::ROW_ICON_GAP));
-        if status.ahead > 0 {
-            drift = drift.child(mark(format!("↑{}", status.ahead), TEXT_2));
-        }
-        if status.behind > 0 {
-            drift = drift.child(mark(format!("↓{}", status.behind), ATTENTION));
-        }
-        strip = strip.child(drift);
-    }
-    if status.dirty > 0 {
-        strip = strip.child(mark(format!("{}±", status.dirty), ATTENTION));
-    }
-    // The PR, by number, in the ink of what became of it — and its checks
-    // as a dot beside it, because a rollup is a state, not a count.
-    if let Some(pr) = &status.pr {
-        let ink = match (pr.state, pr.draft) {
-            (PrState::Merged, _) => TEXT_2,
-            (PrState::Closed, _) => BLOCKED,
-            (PrState::Open, true) => TEXT_MUTED,
-            (PrState::Open, false) => RUNNING,
-        };
-        let label = match (pr.state, pr.draft) {
-            (PrState::Merged, _) => format!("#{} merged", pr.number),
-            (PrState::Closed, _) => format!("#{} closed", pr.number),
-            (PrState::Open, true) => format!("#{} draft", pr.number),
-            (PrState::Open, false) => format!("#{}", pr.number),
-        };
-        strip = strip.child(mark(label, ink));
-        if pr.checks.is_some() {
-            strip = strip.child(match ci {
-                Some(ci) => ci,
-                // Unwired — below L1, or in a pane-only test. The face
-                // without the wash: nothing offers a press that no
-                // listener would answer.
-                None => ci_face(pr).into_any_element(),
-            });
-        }
+    let marks: Vec<String> = [
+        (status.ahead, "↑"),
+        (status.behind, "↓"),
+        (status.dirty, "±"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, sign)| format!("{sign}{count}"))
+    .collect();
+    if !marks.is_empty() {
+        strip = strip.child(
+            div()
+                .flex()
+                .min_w_0()
+                .flex_shrink(theme::HEAD_CHECKOUT_SHRINK * 2.)
+                .overflow_hidden()
+                .items_center()
+                .gap(px(theme::ROW_ICON_GAP))
+                .children(marks.into_iter().map(mark)),
+        );
     }
     Some(strip)
 }
 
-/// The CI mark's face: the rollup's dot, the word `ci`, and the one number
-/// that matters most about it — how many runs failed while any has, else
-/// how many of them have settled. A rollup is a state, not a count, so the
-/// ink carries the state and the digits only say how far along it is.
-///
-/// Padded and rounded as a chip, with that padding pulled back out again
-/// by a negative margin: the mark keeps the gap the rest of the line is
-/// spaced on, and its wash still reaches a chip's width around the glyphs.
-fn ci_face(pr: &PullRequest) -> Div {
-    let checks = pr.checks.unwrap_or(CheckState::Pending);
+/// What became of a PR, as the head names it: `#48`, `#48 draft`,
+/// `#48 merged`, `#48 closed` — in metadata ink, because a PR's fate is not
+/// the Thread's state.
+fn pr_label(pr: &PullRequest) -> SharedString {
+    SharedString::from(match (pr.state, pr.draft) {
+        (PrState::Merged, _) => format!("#{} merged", pr.number),
+        (PrState::Closed, _) => format!("#{} closed", pr.number),
+        (PrState::Open, true) => format!("#{} draft", pr.number),
+        (PrState::Open, false) => format!("#{}", pr.number),
+    })
+}
+
+/// A CI rollup's count, as words: how many runs failed while any has, else
+/// how many of them have settled. Only the failure is coloured.
+fn ci_count(pr: &PullRequest) -> (SharedString, u32) {
     let tally = pr.tally();
-    let ink = check_ink(checks);
-    let count = if tally.failing > 0 {
-        format!("{}✗", tally.failing)
+    if tally.failing > 0 {
+        (
+            SharedString::from(format!("{} failed", tally.failing)),
+            BLOCKED,
+        )
     } else {
-        format!("{}/{}", tally.settled(), tally.total())
-    };
-    div()
+        (
+            SharedString::from(format!("{}/{}", tally.settled(), tally.total())),
+            TEXT_MUTED,
+        )
+    }
+}
+
+/// The PR and its CI as one fact: `#48 ● 5/7`. The rollup's dot is the one
+/// place CI colour appears, and legitimately state; the count is words.
+/// Without checks it is the label alone. `open` keeps the `FILL` ground
+/// while the card this chip opened is showing.
+///
+/// Padded and rounded as a chip so its hover face reaches around the
+/// glyphs. (No negative margin to pull the padding back: taffy then sizes
+/// the head's right cluster to nothing and the chip overflows the Pane.)
+fn ci_face(pr: &PullRequest, open: bool) -> Div {
+    let face = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::ROW_ICON_GAP))
         .h(px(theme::CHIP_H))
         .px(px(theme::CHIP_PAD_X))
-        .mx(px(-theme::CHIP_PAD_X))
-        .rounded(px(theme::R_TIGHT))
-        .child(components::status_dot(ink))
-        .child(div().text_color(rgb(ink)).child("ci"))
-        .child(
-            div()
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(count)),
-        )
+        .rounded(px(theme::R_CHIP))
+        .when(open, |face| face.bg(rgb(FILL)))
+        .child(pr_label(pr));
+    let Some(checks) = pr.checks else {
+        return face;
+    };
+    let (count, ink) = ci_count(pr);
+    face.child(components::status_dot(check_ink(checks)))
+        .child(components::tabular(div().text_color(rgb(ink)).child(count)))
 }
 
-/// The CI mark as the control it is: the same face, wearing the hover and
-/// press faces every self-grounded control in the app wears, so the one
-/// pressable thing on the checkout line says so before it is pressed. It
-/// carries its own id — `.active()` needs element identity — and the
-/// cockpit adds only the listener.
+/// The PR/CI chip as the control it is: the same face, wearing the hover
+/// and press faces every self-grounded control in the app wears, so the
+/// one pressable fact in the head says so before it is pressed. It carries
+/// its own id — `.active()` needs element identity — and the cockpit adds
+/// only the listener.
 ///
-/// `key` is the Thread the mark belongs to, which is what makes the id
+/// `key` is the Thread the chip belongs to, which is what makes the id
 /// unique across a board of Panes.
-pub fn ci_mark(pr: &PullRequest, key: u64) -> Stateful<Div> {
-    ci_face(pr)
+pub fn ci_mark(pr: &PullRequest, key: u64, open: bool) -> Stateful<Div> {
+    ci_face(pr, open)
         .id(("ci-mark", key as usize))
         .debug_selector(move || format!("ci-mark-{key}"))
+        .tooltip(|window, cx| gpui::component::tooltip::Tooltip::new("CI checks").build(window, cx))
         .hover_control()
         .press_control()
 }
@@ -2383,6 +2453,15 @@ pub fn check_ink(state: CheckState) -> u32 {
     }
 }
 
+/// A run's state word ink: only a failure is coloured — the dot beside it
+/// already says pending, passed or skipped.
+pub fn check_detail_ink(state: CheckState) -> u32 {
+    match state {
+        CheckState::Failing => BLOCKED,
+        _ => TEXT_MUTED,
+    }
+}
+
 /// The checks card's column, for the cockpit to fill with `checks_head`
 /// and the `check_row`s it has wired. Its own width, because the runs it
 /// lists are named by the forge and a job name is longer than a menu row.
@@ -2391,49 +2470,90 @@ pub fn checks_card() -> Div {
         .flex()
         .flex_col()
         .w(px(theme::CHECKS_CARD_W))
-        .gap(px(theme::CHECKS_CARD_GAP))
         .p(px(theme::CHECKS_CARD_PAD))
-        .text_size(px(theme::FS_SM))
+        .font_family(theme::FONT_MONO)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT))
 }
 
 /// The card's heading: the PR by number at the left, and how its runs
-/// divide at the right — the counts the one-glyph mark on the header line
-/// had no room for. Only states with runs in them are named, so the line
-/// never reads `0 failed`.
+/// divide at the right — the counts the head's chip had no room for. Only
+/// states with runs in them are named, so the line never reads `0 failed`,
+/// and only the failure is coloured. A hairline separates summary from
+/// runs: the one rule the card draws.
 pub fn checks_head(pr: &PullRequest) -> Div {
     let tally = pr.tally();
-    let mut parts: Vec<String> = Vec::new();
-    if tally.failing > 0 {
-        parts.push(format!("{} failed", tally.failing));
+    let parts: Vec<(String, u32)> = [
+        (tally.failing, "failed", BLOCKED),
+        (tally.pending, "running", TEXT_MUTED),
+        (tally.passing, "passed", TEXT_MUTED),
+        (tally.skipped, "skipped", TEXT_MUTED),
+    ]
+    .into_iter()
+    .filter(|(count, _, _)| *count > 0)
+    .map(|(count, word, ink)| (format!("{count} {word}"), ink))
+    .collect();
+    // One run, so a narrow card truncates it with an ellipsis; the `·`
+    // seams are structure ink and only the failure is coloured.
+    let mut text = String::new();
+    let mut runs = Vec::new();
+    for (index, (part, ink)) in parts.into_iter().enumerate() {
+        if index > 0 {
+            let at = text.len();
+            text.push_str(" · ");
+            runs.push((at..text.len(), TEXT_FAINT));
+        }
+        let at = text.len();
+        text.push_str(&part);
+        if ink != TEXT_MUTED {
+            runs.push((at..text.len(), ink));
+        }
     }
-    if tally.pending > 0 {
-        parts.push(format!("{} running", tally.pending));
-    }
-    if tally.passing > 0 {
-        parts.push(format!("{} passed", tally.passing));
-    }
-    if tally.skipped > 0 {
-        parts.push(format!("{} skipped", tally.skipped));
-    }
+    let runs = runs
+        .into_iter()
+        .map(|(range, ink)| {
+            (
+                range,
+                HighlightStyle {
+                    color: Some(rgb(ink).into()),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let tally_line = div()
+        .min_w_0()
+        .truncate()
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(TEXT_MUTED))
+        .child(StyledText::new(text).with_highlights(runs));
     div()
         .flex()
-        .items_baseline()
+        .flex_shrink_0()
+        .items_center()
         .justify_between()
         .gap(px(theme::EVENT_GAP))
+        .h(px(theme::CHECKS_HEAD_H))
+        .px(px(theme::CHIP_PAD_X))
+        .mb(px(theme::CHECKS_CARD_GAP))
+        .border_b_1()
+        .border_color(rgba(HAIRLINE))
         .child(
             div()
+                .flex()
                 .flex_shrink_0()
-                .text_color(rgb(TEXT_STRONG))
-                .child(SharedString::from(format!("#{} checks", pr.number))),
+                .gap(px(theme::SPACE_1_5))
+                .child(
+                    div()
+                        .font_weight(theme::W_LABEL)
+                        .text_color(rgb(TEXT_STRONG))
+                        .child(SharedString::from(format!("#{}", pr.number))),
+                )
+                .child(div().text_color(rgb(TEXT_MUTED)).child("checks")),
         )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(parts.join(" · "))),
-        )
+        .child(tally_line)
 }
 
 /// A workflow's heading in the card, above the runs it owns. Actions
@@ -2446,7 +2566,10 @@ pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
         .flex_shrink_0()
         .items_center()
         .h(px(theme::CHECKS_GROUP_H))
+        .px(px(theme::CHIP_PAD_X))
         .when(!first, |group| group.mt(px(theme::CHECKS_GROUP_GAP)))
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
         .child(SharedString::from(workflow.unwrap_or("status").to_string()))
 }
@@ -2457,150 +2580,159 @@ pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
 /// string and the one the row exists to pair with the name.
 ///
 /// The row is a control only where the run has a log to open; the cockpit
-/// wires the press, and a run with no URL is drawn without the hover wash
-/// so nothing offers a press that would do nothing.
+/// wires the press. A run with no URL is drawn without the hover face and
+/// its name one step dimmer, so nothing offers a press that would do
+/// nothing.
 pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
-    let ink = check_ink(run.state);
     let openable = run.url.is_some();
     div()
         .id(("check-row", index))
         .debug_selector(move || format!("check-row-{index}"))
         .flex()
+        .flex_shrink_0()
         .items_center()
         .gap(px(theme::ROW_ICON_GAP))
         .h(px(theme::CHECKS_ROW_H))
         .px(px(theme::CHIP_PAD_X))
-        .rounded(px(theme::R_TIGHT))
-        .child(components::status_dot(ink))
+        .rounded(px(theme::R_CHIP))
+        .child(components::status_dot(check_ink(run.state)))
         .child(
             div()
                 .min_w_0()
                 .flex_1()
                 .truncate()
+                .text_color(rgb(if openable { TEXT } else { TEXT_2 }))
                 .child(SharedString::from(run.name.clone())),
         )
         .child(
             div()
                 .flex_shrink_0()
-                .text_color(rgb(ink))
+                .text_size(px(theme::FS_SM))
+                .text_color(rgb(check_detail_ink(run.state)))
                 .child(SharedString::from(run.detail.replace('_', " "))),
         )
-        // Only a run with a log to open is a control, and only a control
-        // wears the wash: `hover_control` brings the pointer cursor with
-        // it, and the press face pairs with the hover the same way the
-        // header's own mark does.
-        .when(openable, |row| row.hover_control().press_control())
+        // The card is a raised surface: its rows take the raised faces.
+        .when(openable, |row| row.hover_raised().press_raised())
 }
 
-/// One mark on the checkout line: a short run in its own ink that never
-/// shrinks — these are the facts the line exists to carry, and the branch
-/// name is what gives way when the Pane is narrow.
-fn mark(text: String, ink: u32) -> Div {
-    div()
-        .flex_shrink_0()
-        .text_color(rgb(ink))
-        .child(SharedString::from(text))
+/// One mark on the checkout: a short run that never shrinks — these are
+/// the facts the checkout exists to carry, and the branch name is what
+/// gives way when the Pane is narrow.
+fn mark(text: String) -> Div {
+    components::tabular(div().flex_shrink_0().child(SharedString::from(text)))
 }
 
-/// The head's title, saying it can be renamed: the name in its own ink
-/// with the hover wash every control wears, truncating. Render-only; the
-/// cockpit gives it its id and its double-click.
+/// The head's title, saying it can be renamed: the name in its parent's
+/// ink with the hover face every control wears, truncating. Render-only;
+/// the cockpit gives it its id and its double-click.
 pub fn head_title(name: SharedString) -> Div {
     div()
         .min_w_0()
         .truncate()
         .px(px(theme::CHIP_PAD_X))
         .mx(px(-theme::CHIP_PAD_X))
-        .rounded(px(theme::R_TIGHT))
+        .rounded(px(theme::R_CHIP))
         .child(name)
         .hover_control()
 }
 
-/// The tasks strip (§D.3): 24px, 12px inline padding, a 9px gap — the
-/// segment meter, the done/total count in tabular numerals, the task being
-/// worked, and the kind label riding the trailing edge. No ground, no
-/// border, no separator.
-///
-/// **This meter is the tasks meter and nothing else.** Context usage is the
-/// ring in the head, and never a bar.
-fn tasks_strip(todos: Todos, current: Option<&str>) -> Div {
-    let done = todos.done.min(todos.total);
-    let mut meter = div().flex().flex_shrink_0().gap(px(theme::METER_SEG_GAP));
-    for index in 0..todos.total {
-        meter = meter.child(
-            div()
-                .w(px(theme::METER_SEG_W))
-                .h(px(theme::METER_SEG_H))
-                .rounded(px(theme::METER_SEG_R))
-                .bg(if index < done {
-                    rgb(TEXT_2).into()
-                } else {
-                    rgba(METER_OFF)
-                }),
-        );
+/// How the tasks meter draws a plan: one segment per step up to
+/// `METER_SEG_CAP`, past it one continuous track filled to the fraction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum MeterLayout {
+    Segments { done: usize, total: usize },
+    Track { fraction: f32 },
+}
+
+pub(crate) fn meter_layout(done: usize, total: usize) -> MeterLayout {
+    let done = done.min(total);
+    if total <= theme::METER_SEG_CAP {
+        MeterLayout::Segments { done, total }
+    } else {
+        MeterLayout::Track {
+            fraction: done as f32 / total as f32,
+        }
     }
-    let mut strip = div()
+}
+
+/// The painted meter (the head, L2 and the wall share it; Geist Mono has
+/// no `▰▱`): done steps in `TEXT_2`, the rest unlit. `live` lights the
+/// step being run in `RUNNING` — the one colour on a meter, because a step
+/// in progress is live state. Finishing a plan is not a status: a full
+/// meter is all `TEXT_2`, no check and no green.
+fn meter_bar(done: usize, total: usize, live: bool) -> Div {
+    let segment = |ink: gpui::Hsla| {
+        div()
+            .flex_shrink_0()
+            .w(px(theme::METER_SEG_W))
+            .h(px(theme::METER_SEG_H))
+            .rounded(px(theme::METER_SEG_R))
+            .bg(ink)
+    };
+    match meter_layout(done, total) {
+        MeterLayout::Segments { done, total } => div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::METER_SEG_GAP))
+            .children((0..total).map(|index| {
+                segment(if index < done {
+                    rgb(TEXT_2).into()
+                } else if index == done && live {
+                    rgb(RUNNING).into()
+                } else {
+                    rgba(METER_OFF).into()
+                })
+            })),
+        MeterLayout::Track { fraction } => div()
+            .flex_shrink_0()
+            .w(px(theme::METER_TRACK_W))
+            .h(px(theme::METER_SEG_H))
+            .rounded(px(theme::METER_SEG_R))
+            .bg(rgba(METER_OFF))
+            .child(
+                div()
+                    .h_full()
+                    .w(px(theme::METER_TRACK_W * fraction))
+                    .rounded(px(theme::METER_SEG_R))
+                    .bg(rgb(TEXT_2)),
+            ),
+    }
+}
+
+/// The painted meter and its `3/4` count, in one row.
+fn meter(done: usize, total: usize, live: bool) -> Div {
+    let done = done.min(total);
+    div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(9.))
-        .h(px(theme::TASKS_STRIP_H))
-        .px(px(theme::PANE_PAD_X))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(TEXT_MUTED))
-        .child(meter)
+        .gap(px(theme::METER_GAP))
+        .child(meter_bar(done, total, live))
         .child(components::tabular(
             div()
                 .flex_shrink_0()
-                .child(SharedString::from(format!("{done}/{}", todos.total))),
-        ));
-    if let Some(current) = current {
-        strip = strip.child(
-            div()
-                .min_w_0()
-                .truncate()
-                .child(SharedString::from(current.to_string())),
-        );
-    }
-    // `margin-inline-start: auto` on the kind label — spelled as a growing
-    // spacer, never `ml_auto`: an auto margin on any child makes taffy hand
-    // that child the whole of the free space **including the container's
-    // own gaps**, and every gap in the row silently collapses to 0. Measured
-    // in this build; it is the reason the head, the tasks strip, the event
-    // row and the Composer all lay their trailing element out this way.
-    strip
-        .child(div().flex_1().min_w_0())
-        .child(div().flex_shrink_0().child("todo"))
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(format!("{done}/{total}"))),
+        ))
 }
 
-/// `▰▰▰▱ 3/4` at the instrument levels. The prototype specifies only the
-/// L1 Pane, where the tasks strip now draws real segments — so the glyph
-/// meter survives for L2 and L3 alone, which keep the metrics they have.
-fn meter(done: usize, total: usize) -> SharedString {
-    if total == 0 {
-        return SharedString::default();
-    }
-    let run = meter_run(done, total);
-    let done = done.min(total);
-    if run.is_empty() {
-        return SharedString::from(format!("{done}/{total}"));
-    }
-    SharedString::from(format!("{run} {done}/{total}"))
-}
-
-/// The ▰▱ glyph run alone — the wall's meter, whose status line already
-/// carries the fraction. Empty past the cap or without a plan.
-fn meter_run(done: usize, total: usize) -> String {
-    const GLYPH_CAP: usize = 8;
-    if total == 0 || total > GLYPH_CAP {
-        return String::new();
-    }
-    let done = done.min(total);
-    let mut run = String::new();
-    run.extend(std::iter::repeat_n('▰', done));
-    run.extend(std::iter::repeat_n('▱', total - done));
-    run
+/// The tasks meter in the head's right cluster (it replaced the tasks
+/// row): segments and count, the step being run lit while the transcript
+/// streams, and that step's words in a tooltip — the working line and the
+/// plan's own tool rows carry them in the body.
+fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -> Stateful<Div> {
+    let done = todos.done.min(todos.total);
+    let tip = SharedString::from(match current {
+        Some(current) => format!("{done}/{} · {current}", todos.total),
+        None => format!("{done}/{}", todos.total),
+    });
+    meter(done, todos.total, streaming && current.is_some())
+        .id(("tasks-meter", key as usize))
+        .debug_selector(move || format!("tasks-meter-{key}"))
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+        })
 }
 
 /// The name a model shows under, from any spelling the wire uses:
@@ -6474,7 +6606,7 @@ mod tests {
         // No transcript: an empty card.
         let empty = wall_card(None, None);
         assert!(!empty.tests_failing);
-        assert!(empty.meter.is_empty());
+        assert_eq!(empty.todos, None);
 
         let mut transcript = Transcript::default();
         for (id, subject) in [("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")] {
@@ -6499,8 +6631,8 @@ mod tests {
         }
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
         let card = wall_card(Some(&transcript), None);
-        assert_eq!(card.meter.as_ref(), "▰▰▰▱");
-        assert_eq!(card.working.as_ref(), "3/4 · ◐ Working");
+        assert_eq!(card.todos, Some((3, 4)));
+        assert_eq!(card.working.as_ref(), "Working");
 
         // A red suite flips the folded flag and folds the failing line —
         // with the run's own count when its output reported one.
@@ -6517,7 +6649,7 @@ mod tests {
         }));
         let red = wall_card(Some(&transcript), None);
         assert!(red.tests_failing);
-        assert_eq!(red.failing.as_ref(), "✗ 2 failing");
+        assert_eq!(red.failing.as_ref(), "2 failing");
 
         // A Decision's subject becomes the alert's second line, wearing the
         // tool prefix every Decision surface shares (#22 C7).
@@ -6547,7 +6679,7 @@ mod tests {
         }));
         assert_eq!(
             wall_card(Some(&closed), None).context.as_ref(),
-            "✗ claude CLI exited with code 1"
+            "claude CLI exited with code 1"
         );
     }
 
@@ -6802,21 +6934,57 @@ mod tests {
         );
     }
 
-    /// The instrument levels' ▰▱ meter stays glanceable: glyphs for small
-    /// plans, the bare fraction for long ones, and done never overshoots.
-    /// L1 draws real segments instead; this run is L2/L3's alone.
+    /// The painted tasks meter stays glanceable: a segment per step up to
+    /// the cap, one continuous track past it, and done never overshoots.
+    /// Replaces the ▰▱ glyph run, which Geist Mono cannot draw.
     #[test]
-    fn the_todo_meter_caps_its_glyph_run() {
-        assert_eq!(meter(3, 4).as_ref(), "▰▰▰▱ 3/4");
-        assert_eq!(meter(0, 2).as_ref(), "▱▱ 0/2");
-        assert_eq!(meter(9, 20).as_ref(), "9/20");
-        assert_eq!(meter(5, 4).as_ref(), "▰▰▰▰ 4/4");
-        assert_eq!(meter(0, 0).as_ref(), "");
-        // The wall's bare run: glyphs only, and nothing past the cap — its
-        // status line already carries the fraction.
-        assert_eq!(meter_run(3, 4), "▰▰▰▱");
-        assert_eq!(meter_run(9, 20), "");
-        assert_eq!(meter_run(0, 0), "");
+    fn tasks_meter_draws_segments_until_the_cap_then_a_track() {
+        assert_eq!(
+            meter_layout(3, 4),
+            MeterLayout::Segments { done: 3, total: 4 }
+        );
+        assert_eq!(
+            meter_layout(5, 4),
+            MeterLayout::Segments { done: 4, total: 4 }
+        );
+        assert_eq!(
+            meter_layout(0, theme::METER_SEG_CAP),
+            MeterLayout::Segments {
+                done: 0,
+                total: theme::METER_SEG_CAP
+            }
+        );
+        assert_eq!(meter_layout(5, 20), MeterLayout::Track { fraction: 0.25 });
+        assert_eq!(meter_layout(30, 20), MeterLayout::Track { fraction: 1.0 });
+    }
+
+    /// The Pane's edge says one thing, and state beats focus: a focused
+    /// Pane with a Decision keeps its amber edge (focus is then the inset
+    /// ring), and a calm unfocused Pane rests on the hairline.
+    #[test]
+    fn pane_edge_ranks_state_over_focus() {
+        assert_eq!(PaneEdge::of(true, true, true), PaneEdge::Blocked);
+        assert_eq!(PaneEdge::of(false, true, true), PaneEdge::Blocked);
+        assert_eq!(PaneEdge::of(true, true, false), PaneEdge::Attention);
+        assert_eq!(PaneEdge::of(false, true, false), PaneEdge::Attention);
+        assert_eq!(PaneEdge::of(true, false, false), PaneEdge::Focused);
+        assert_eq!(PaneEdge::of(false, false, false), PaneEdge::Rest);
+        assert_eq!(PaneEdge::Rest.ink(), rgba(HAIRLINE).into());
+        assert_eq!(PaneEdge::Focused.ink(), rgb(FOCUS_RING).into());
+    }
+
+    /// A run's state word is coloured only when it failed; the dot beside
+    /// it carries pending, passing and skipped.
+    #[test]
+    fn check_rows_colour_only_failure() {
+        assert_eq!(check_detail_ink(CheckState::Failing), BLOCKED);
+        for state in [
+            CheckState::Passing,
+            CheckState::Pending,
+            CheckState::Skipped,
+        ] {
+            assert_eq!(check_detail_ink(state), TEXT_MUTED);
+        }
     }
 
     /// #11: import is offered exactly while a Thread has no conversation —
