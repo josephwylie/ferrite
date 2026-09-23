@@ -3255,17 +3255,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .is_some(),
         )
     };
-    // Pairs that do not fit wrap onto a second line the row's height
-    // clips away, so a narrow row drops whole hints, never half of one.
-    controls = controls.child(
-        components::key_hints(hints)
-            .flex_1()
-            .min_w_0()
-            .flex_wrap()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .h(px(theme::COMPOSER_ROW_H)),
-    );
+    controls = controls.child(hint_row(hints));
     if let Some(meter) = usage_meter {
         controls = controls.child(div().flex_shrink_0().child(meter));
     }
@@ -3396,6 +3386,34 @@ pub fn mode_chip(mode: &str, menu: bool) -> Div {
 /// The session-controls trigger: `•••` on the control-chip recipe.
 pub fn session_chip() -> Div {
     control_chip(TEXT_MUTED).child("•••")
+}
+
+/// The hint row's key hints, on `components::key_hints`' recipe (keys
+/// `TEXT_2`, verbs `TEXT_MUTED`, `SPACE_3` between pairs) with one
+/// difference: each pair keeps its width, and pairs that do not fit wrap
+/// onto a second line the row's height clips away — a narrow row drops
+/// whole hints, never half of one. A zero-width lead keeps even the first
+/// pair honest: a line always takes one item, and it is the lead.
+fn hint_row(hints: &[(&'static str, &'static str)]) -> Div {
+    components::text_meta()
+        .flex()
+        .flex_1()
+        .flex_wrap()
+        .min_w_0()
+        .h(px(theme::COMPOSER_ROW_H))
+        .pt(px((theme::COMPOSER_ROW_H - theme::LH_META) / 2.))
+        .overflow_hidden()
+        .child(div().flex_shrink_0().w(px(0.)).h(px(theme::LH_META)))
+        .children(hints.iter().map(|(key, verb)| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .mr(px(theme::SPACE_3))
+                .gap(px(theme::SPACE_1))
+                .whitespace_nowrap()
+                .child(div().text_color(rgb(TEXT_2)).child(*key))
+                .child(*verb)
+        }))
 }
 
 /// The L2 hint row with an empty line: the two menus, nothing else fits.
@@ -4007,7 +4025,7 @@ pub fn context_usage(
         let digits = count.to_string();
         let mut label = String::new();
         for (index, digit) in digits.chars().enumerate() {
-            if index > 0 && (digits.len() - index) % 3 == 0 {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
                 label.push(',');
             }
             label.push(digit);
