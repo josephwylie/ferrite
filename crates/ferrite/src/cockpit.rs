@@ -6970,6 +6970,12 @@ impl Render for CockpitView {
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     // An L2 cell draws a Composer too, and the keys go
                     // where the caret is.
+                    // An L2 Decision cell draws its card in the Composer's
+                    // place; the keyboard goes to the card's own `Decision`
+                    // context, so y/n answer as its keycaps say.
+                    Level::Instruments if self.l2_decision_card(self.focused()) => {
+                        Some(pane.decision_focus.clone())
+                    }
                     Level::Transcript | Level::Instruments if !pane.is_main() => {
                         Some(pane.transcript_focus.clone())
                     }

@@ -6,7 +6,6 @@ use super::*;
 /// the keyboard must land on the card's own `Decision` context: `y` answers
 /// the cell from the keyboard, as its keycap says.
 #[gpui::test]
-#[ignore = "red until the lead lands the render focus arm (routed request 1)"]
 fn an_l2_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-decision-keys", 1);
     bind_production_keys(cx);
