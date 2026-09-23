@@ -314,6 +314,8 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-D)
 
     // ---- WP-E states (append above the end line)
+    ("projectcreator", &["app"]),
+    ("toasts", &["app"]),
     // (end WP-E)
 
     // ---- WP-F states (append above the end line)
@@ -671,6 +673,16 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-D)
 
         // ---- WP-E scene arms (append above the end line)
+        "projectcreator" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, cx| view.open_project_creator(cx));
+            (scene, setup)
+        }
+        // The notifications scene with the panel up: toasts only.
+        "toasts" => {
+            let (scene, _) = notifications();
+            (scene, none)
+        }
         // (end WP-E)
 
         // ---- WP-F scene arms (append above the end line)

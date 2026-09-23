@@ -359,10 +359,21 @@ impl gpui::Render for CodeActions {
                     use gpui::component::WindowExt as _;
                     let html = code.clone();
                     window.open_dialog(cx, move |dialog, window, _| {
+                        // The sheet recipe: raised, the strong edge (the
+                        // kit's border), the Pane radius, a mono title.
                         dialog
-                            .title("HTML preview")
+                            .title(
+                                gpui::div()
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(theme::FS_UI))
+                                    .line_height(px(theme::LH_UI))
+                                    .font_weight(theme::W_LABEL)
+                                    .text_color(rgb(theme::TEXT_STRONG))
+                                    .child("HTML preview"),
+                            )
                             .width(px(theme::READING_MAX_W))
-                            .bg(rgb(theme::MENU))
+                            .bg(rgb(theme::RAISED))
+                            .rounded(px(theme::R_PANE))
                             .child(
                                 gpui::div()
                                     .id("html-preview")

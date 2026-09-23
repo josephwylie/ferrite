@@ -569,16 +569,21 @@ impl Kind {
         matches!(self, Kind::Commands | Kind::Files { .. })
     }
 
-    /// The footer's key hints.
-    fn hints(&self) -> &'static str {
+    /// The footer's key hints: each key, then its verb.
+    fn hints(&self) -> &'static [(&'static str, &'static str)] {
         match self {
-            Kind::Commands => "↑↓ select · ↵ run · esc dismiss",
-            Kind::Files { .. } => "↑↓ select · ↵ insert · esc dismiss",
-            Kind::ImportFile => "↑↓ select · ↵ adopt · esc dismiss",
-            Kind::Band(pane::BandChip::Project) => {
-                "type path <dir> · ↑↓ move · ↵ pick · esc dismiss"
+            Kind::Commands => &[("↑↓", "select"), ("↵", "run"), ("esc", "dismiss")],
+            Kind::Files { .. } => &[("↑↓", "select"), ("↵", "insert"), ("esc", "dismiss")],
+            Kind::ImportFile => &[("↑↓", "select"), ("↵", "adopt"), ("esc", "dismiss")],
+            Kind::Band(pane::BandChip::Project) => &[
+                ("type", "a path"),
+                ("↑↓", "move"),
+                ("↵", "pick"),
+                ("esc", "dismiss"),
+            ],
+            Kind::Provider | Kind::Effort | Kind::Band(_) => {
+                &[("↑↓", "move"), ("↵", "pick"), ("esc", "dismiss")]
             }
-            Kind::Provider | Kind::Effort | Kind::Band(_) => "↑↓ move · ↵ pick · esc dismiss",
         }
     }
 }
@@ -1717,7 +1722,7 @@ impl CockpitView {
                 let live = self.cockpit.thread(thread).is_some();
                 let grouped = self.cockpit.groups().of(thread).is_some();
                 rows.push(Some((
-                    menu::Item::new("Rename").hint("⏎ save · esc cancel"),
+                    menu::Item::new("Rename").shortcut("↵ save · esc cancel"),
                     MenuVerb::Rename,
                 )));
                 if self.cockpit.roster().focused_thread() != Some(thread) {
@@ -1728,13 +1733,13 @@ impl CockpitView {
                 }
                 if shown {
                     rows.push(Some((
-                        menu::Item::new("Toggle Fullscreen").hint("⌘F"),
+                        menu::Item::new("Toggle Fullscreen").shortcut("cmd-F"),
                         MenuVerb::Fullscreen,
                     )));
                 }
                 rows.push(None);
                 rows.push(Some((
-                    menu::Item::new("New Thread in this Project").hint("⌘T"),
+                    menu::Item::new("New Thread in this Project").shortcut("cmd-T"),
                     MenuVerb::NewThread,
                 )));
                 rows.push(Some((
@@ -1745,7 +1750,7 @@ impl CockpitView {
                 rows.push(None);
                 if live {
                     rows.push(Some((
-                        menu::Item::new("Park Thread").hint(if shown { "⌘W" } else { "" }),
+                        menu::Item::new("Park Thread").shortcut(if shown { "cmd-W" } else { "" }),
                         if shown && !grouped {
                             MenuVerb::Close
                         } else {
@@ -1768,7 +1773,9 @@ impl CockpitView {
                 let grouped = self.cockpit.groups().of(thread).is_some();
                 let selected = self.native_copy.is_some();
                 rows.push(Some((
-                    menu::Item::new("Copy").hint("⌘C").disabled(!selected),
+                    menu::Item::new("Copy")
+                        .shortcut("cmd-C")
+                        .disabled(!selected),
                     MenuVerb::CopySelection,
                 )));
                 rows.push(Some((
@@ -1777,11 +1784,11 @@ impl CockpitView {
                 )));
                 rows.push(None);
                 rows.push(Some((
-                    menu::Item::new("Rename").hint("⏎ save · esc cancel"),
+                    menu::Item::new("Rename").shortcut("↵ save · esc cancel"),
                     MenuVerb::Rename,
                 )));
                 rows.push(Some((
-                    menu::Item::new("Toggle Fullscreen").hint("⌘F"),
+                    menu::Item::new("Toggle Fullscreen").shortcut("cmd-F"),
                     MenuVerb::Fullscreen,
                 )));
                 rows.push(None);
@@ -1792,7 +1799,8 @@ impl CockpitView {
                 rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
                 rows.push(None);
                 rows.push(Some((
-                    menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" }).hint("⌘W"),
+                    menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" })
+                        .shortcut("cmd-W"),
                     MenuVerb::Close,
                 )));
                 if grouped {
@@ -1806,7 +1814,7 @@ impl CockpitView {
                     rows.push(Some((menu::Item::new("Open Group"), MenuVerb::EnterGroup)));
                 }
                 rows.push(Some((
-                    menu::Item::new("New Thread in this Group").hint("⌘T"),
+                    menu::Item::new("New Thread in this Group").shortcut("cmd-T"),
                     MenuVerb::NewThread,
                 )));
                 rows.push(None);
@@ -2476,7 +2484,6 @@ impl CockpitView {
 
     /// Searchable toolkit Settings, drawn above the cockpit's overlays.
     fn settings_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use gpui::component::setting::SettingGroup;
         if !self.settings_open {
             return None;
         }
@@ -2499,7 +2506,7 @@ impl CockpitView {
                 settings.default_provider = provider
             }),
         )];
-        let mut new_thread_groups = vec![SettingGroup::new().items(defaults)];
+        let mut new_thread_groups = vec![prefs::group(None).items(defaults)];
         for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
             let model = prefs::chooser(
@@ -2558,11 +2565,8 @@ impl CockpitView {
                     settings.set_effort_for(provider, value)
                 }),
             );
-            new_thread_groups.push(
-                SettingGroup::new()
-                    .title(provider_title(provider))
-                    .items([model, effort]),
-            );
+            new_thread_groups
+                .push(prefs::group(Some(provider_title(provider))).items([model, effort]));
         }
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -2634,7 +2638,7 @@ impl CockpitView {
                 settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
             prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript.",
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
-            prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "⌘B toggles it any time",
+            prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "cmd-B toggles it any time",
                 settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
             prefs::choices(
                 "settings-usage-meter",
@@ -2709,20 +2713,18 @@ impl CockpitView {
         ]);
         let pages = vec![
             prefs::page("New Threads", new_thread_groups),
-            prefs::page("Permissions", vec![SettingGroup::new().items(permissions)]),
+            prefs::page("Permissions", vec![prefs::group(None).items(permissions)]),
             prefs::page(
                 "Behaviour",
                 vec![
-                    SettingGroup::new().title("Reading").items(reading),
-                    SettingGroup::new()
-                        .title("Threads and navigation")
-                        .items(behaviour),
+                    prefs::group(Some("Reading")).items(reading),
+                    prefs::group(Some("Threads and navigation")).items(behaviour),
                 ],
             ),
-            prefs::page("About", vec![SettingGroup::new().items(about)]),
+            prefs::page("About", vec![prefs::group(None).items(about)]),
         ];
 
-        let card = prefs::card()
+        let card = prefs::sheet(prefs::WIDTH, prefs::HEIGHT)
             .id("settings-card")
             .debug_selector(|| "settings-card".into())
             .track_focus(&self.settings_focus)
@@ -2730,13 +2732,16 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(prefs::head(prefs::close_button(cx).on_click(cx.listener(
-                |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.settings_open = false;
-                    cx.notify();
-                },
-            ))))
+            .child(prefs::sheet_head(
+                "Settings",
+                prefs::sheet_close("settings-close", "Close Settings", cx).on_click(cx.listener(
+                    |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.settings_open = false;
+                        cx.notify();
+                    },
+                )),
+            ))
             .child(prefs::body(pages));
         Some(
             deferred(
@@ -2989,8 +2994,9 @@ impl CockpitView {
                 "Directories",
                 "The first directory is the main one. Add the others one at a time.",
             ));
+        let mut rows = Vec::new();
         if directories.is_empty() {
-            body = body.child(project_editor::empty_directories());
+            rows.push(project_editor::empty_directories());
         }
         for (index, directory) in directories.into_iter().enumerate() {
             let mut actions = div().flex().items_center().gap(px(4.));
@@ -3027,7 +3033,7 @@ impl CockpitView {
                     )),
                 );
             }
-            body = body.child(project_editor::directory_row(
+            rows.push(project_editor::directory_row(
                 directory.display().to_string().into(),
                 if index == 0 {
                     "Main directory"
@@ -3037,6 +3043,7 @@ impl CockpitView {
                 actions,
             ));
         }
+        body = body.child(project_editor::directory_list(rows));
         let add = project_editor::action_button("add-project-directory", "Add Directory", cx)
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -5856,10 +5863,40 @@ impl CockpitView {
     /// The open popover for this Pane, rows wired to their picks —
     /// assembled here so its clicks land beside every other pointer wire
     /// (the root selector's precedent); the Pane hangs it above the line.
-    /// Menu and import rows draw as `menu_row`; picker and band rows carry
-    /// the ✓ grammar — what the Thread or draft is on right now — as
-    /// `picker_row`, with the muted detail tagging the section.
+    /// Every row is the one menu row: `/`, `@` and import rows through
+    /// `pane::menu_row` (slash descriptions in one aligned column), band rows
+    /// through `pane::picker_row` with the accent check on the standing
+    /// choice; an inert explanation ("Searching files…", a refusal) is a
+    /// `menu_note`. The rows scroll inside the popover's cap; the footer
+    /// stays.
     fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        fn wire<E: InteractiveElement + IntoElement + 'static>(
+            drawn: E,
+            at: usize,
+            cx: &mut Context<CockpitView>,
+        ) -> AnyElement {
+            drawn
+                .debug_selector(move || format!("composer-menu-row-{at}"))
+                .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
+                    if let Some(open) = &mut view.popover {
+                        if matches!(open.kind, Kind::Commands)
+                            && open.selected != at
+                            && open.rows.get(at).is_some_and(|row| !row.inert)
+                        {
+                            open.selected = at;
+                            cx.notify();
+                        }
+                    }
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.pick(at, cx);
+                    }),
+                )
+                .into_any_element()
+        }
         let open = self
             .popover
             .as_ref()
@@ -5867,56 +5904,74 @@ impl CockpitView {
         if open.kind.picker_slot().is_some() {
             return None;
         }
-        // A press on the popover's own dead space is not a press outside
-        // it: swallowed, so the root's dismissal never sees it.
-        let mut popover = pane::menu_popover().on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-        );
+        // Slash commands align their descriptions in one column sized to
+        // the longest name shown (clamped, so a long `mcp__…` name cuts).
+        let label_w = matches!(open.kind, Kind::Commands).then(|| {
+            crate::components::mono_column_w(
+                open.rows
+                    .iter()
+                    .map(|row| row.name.chars().count())
+                    .max()
+                    .unwrap_or(0),
+            )
+        });
+        let mut rows = div()
+            .id("composer-menu-rows")
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .overflow_y_scroll();
         for (at, row) in open.rows.iter().enumerate() {
+            let cursor = at == open.selected;
+            let explains = row.inert
+                && row.consequence_is_inert()
+                && row.detail.is_empty()
+                && row.matched.is_empty();
             let drawn = match open.kind {
-                Kind::Commands | Kind::Files { .. } | Kind::ImportFile => {
-                    pane::menu_row(&row.row, at == open.selected)
-                }
                 Kind::Provider | Kind::Band(pane::BandChip::Provider)
                     if row.inert
                         && row.consequence_is_inert()
                         && provider_of_title(&row.name).is_some() =>
                 {
-                    pane::picker_section(provider_of_title(&row.name).unwrap(), row.detail.clone())
+                    wire(
+                        pane::picker_section(
+                            provider_of_title(&row.name).unwrap(),
+                            row.detail.clone(),
+                        ),
+                        at,
+                        cx,
+                    )
                 }
-                Kind::Provider | Kind::Effort | Kind::Band(_) => pane::picker_row(
-                    row.name.clone(),
-                    row.detail.clone(),
-                    at == open.selected,
-                    row.active,
-                    row.inert,
+                _ if explains => wire(crate::components::menu_note(row.name.clone()), at, cx),
+                Kind::Commands | Kind::Files { .. } | Kind::ImportFile => wire(
+                    pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
+                    at,
+                    cx,
+                ),
+                Kind::Provider | Kind::Effort | Kind::Band(_) => wire(
+                    pane::picker_row(
+                        ("composer-menu-row", at),
+                        row.name.clone(),
+                        row.detail.clone(),
+                        cursor,
+                        row.active,
+                        row.inert,
+                    ),
+                    at,
+                    cx,
                 ),
             };
-            popover = popover.child(
-                drawn
-                    .debug_selector(move || format!("composer-menu-row-{at}"))
-                    .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
-                        if let Some(open) = &mut view.popover {
-                            if matches!(open.kind, Kind::Commands)
-                                && open.selected != at
-                                && open.rows.get(at).is_some_and(|row| !row.inert)
-                            {
-                                open.selected = at;
-                                cx.notify();
-                            }
-                        }
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.pick(at, cx);
-                        }),
-                    ),
-            );
+            rows = rows.child(drawn);
         }
-        popover = popover.child(pane::popover_footer(open.kind.hints()));
+        // A press on the popover's own dead space is not a press outside
+        // it: swallowed, so the root's dismissal never sees it.
+        let popover = pane::menu_popover()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .child(rows)
+            .child(pane::popover_footer(open.kind.hints()));
         Some(popover.into_any_element())
     }
 
@@ -8016,10 +8071,8 @@ impl CockpitView {
             .iter()
             .map(|choice| crate::components::Choice {
                 label: choice.label.clone().into(),
-                icon: None,
                 checked: choice.value == mode,
-                disabled: false,
-                section: false,
+                ..Default::default()
             })
             .collect();
         let values: std::rc::Rc<Vec<String>> =
@@ -8854,6 +8907,9 @@ impl CockpitView {
                             checked: row.active,
                             disabled: row.inert,
                             section,
+                            detail: None,
+                            // Why every row is dead while the turn runs.
+                            note: row.inert && row.name == TUNING_BUSY_HINT,
                             icon: provider.map(|provider| match provider {
                                 Provider::Claude => {
                                     (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE)
@@ -9084,6 +9140,23 @@ impl CockpitView {
     /// Toast what arrived since the last frame. Render is the one place
     /// with a Window in hand every frame; the pump has none.
     fn present_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Toasts live at the foot of the nav; with the nav collapsed there is
+        // no ground to spare there, so they stack BottomRight above the
+        // Composer. The theme is written only when the side changes.
+        let (placement, bottom) = if self.nav_collapsed {
+            (
+                gpui::Anchor::BottomRight,
+                crate::theme::TOAST_ABOVE_COMPOSER,
+            )
+        } else {
+            (gpui::Anchor::BottomLeft, crate::theme::GRID_PAD)
+        };
+        let toasts = &gpui::component::Theme::global(cx).notification;
+        if toasts.placement != placement || toasts.margins.bottom != px(bottom) {
+            let toasts = &mut gpui::component::Theme::global_mut(cx).notification;
+            toasts.placement = placement;
+            toasts.margins.bottom = px(bottom);
+        }
         let now = std::time::SystemTime::now();
         let rows: Vec<NoticeRow> = self
             .cockpit

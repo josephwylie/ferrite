@@ -84,6 +84,7 @@ icons![
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
+    "command",
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
@@ -168,6 +169,8 @@ pub const BELL: &str = "icons/bell.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
+/// `⌘` (not in Geist Mono): the command key in a menu row's shortcut.
+pub const COMMAND: &str = "icons/command.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
@@ -392,7 +395,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            29,
+            30,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }

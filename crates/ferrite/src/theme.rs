@@ -415,9 +415,9 @@ pub const GRID_PAD: f32 = 10.0;
 /// corner sits directly beneath the caption buttons, and their hover face
 /// — edge-to-edge by design — reads as lying over the Pane.
 pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
-/// 320px — a toast's width: a Thread's name, a detail line, room for the
-/// kit's icon and close button.
-pub const TOAST_W: f32 = 320.0;
+/// A toast's width: the nav column less 8px each side, so a toast stacked at
+/// the foot of the nav covers only the ground and never a Pane.
+pub const TOAST_W: f32 = NAV_WIDTH - 2.0 * SPACE_2;
 
 // -------------------------------------------- pane body and the row column
 
@@ -697,16 +697,17 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    // Toasts stack at the board's top-right corner, inside its own
-    // padding, so they cover a Pane's head and never the nav or the bell
-    // that lists them. Five at once is a wall's worth; the bell holds the
-    // rest.
-    theme.notification.placement = gpui::Anchor::TopRight;
+    // Toasts stack at the foot of the nav column, 8px in from its edges:
+    // the ground is the least valuable space, so no toast covers a Pane's
+    // head or its Composer. With the nav collapsed the cockpit moves the
+    // stack BottomRight, above the Composer (`present_notices`). Five at
+    // once is a wall's worth; the bell holds the rest.
+    theme.notification.placement = gpui::Anchor::BottomLeft;
     theme.notification.margins = gpui::base::Edges {
         top: px(BOARD_TOP),
         right: px(GRID_PAD),
         bottom: px(GRID_PAD),
-        left: px(GRID_PAD),
+        left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
     theme.notification.max_items = 5;
@@ -1158,7 +1159,49 @@ pub const FORM_CONTROL_H: f32 = 32.0;
 /// Selected-value controls share a comfortable measure inside wider forms.
 pub const FORM_FIELD_W: f32 = 320.0;
 /// Inset around the chips of a segmented choice control.
-pub const FORM_CHOICE_PAD: f32 = 3.0;
+pub const FORM_CHOICE_PAD: f32 = SPACE_1;
+/// A choice chip's and a chooser's inline padding inside the 32px row.
+pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
+pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
+/// A switch row's label block takes at most this share of the row, so a
+/// long description wraps before it crowds the switch.
+pub const FORM_TEXT_FRACTION: f32 = 0.6;
+/// The Settings switch: a 28×16 pill (2px inset), a 12px thumb travelling
+/// the pill's inner width.
+pub const SWITCH_W: f32 = 28.0;
+pub const SWITCH_H: f32 = 16.0;
+pub const SWITCH_INSET: f32 = SPACE_0_5;
+pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
+pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
+/// A sheet text button's inline padding (Add Directory, Remove, Done).
+pub const FORM_BUTTON_PAD_X: f32 = SPACE_3;
+/// A tooltip: mono `FS_SM`, 8px × 4px, at most 280px before it wraps.
+pub const TOOLTIP_PAD_X: f32 = SPACE_2;
+pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
+pub const TOOLTIP_MAX_W: f32 = 280.0;
+/// The notifications panel: 340px holds a title, a detail line and an age
+/// without wrapping; a row is two lines in 6px of air each side.
+pub const NOTICE_PANEL_W: f32 = 340.0;
+pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
+/// The bell's unread pill: 14px, 10.5px mono figures, 2px in from the
+/// button's corner.
+pub const BADGE_H: f32 = 14.0;
+pub const FS_BADGE: f32 = 10.5;
+pub const BADGE_INSET: f32 = SPACE_0_5;
+/// With the nav collapsed, toasts stack BottomRight this far up: the
+/// board's padding, the Pane's edge, a one-line Composer and its inset,
+/// then 8px of air, so the stack clears the Composer.
+pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
+    + 1.0
+    + COMPOSER_INSET_B
+    + 2.0 * COMPOSER_EDGE_W
+    + COMPOSER_PAD_T
+    + COMPOSER_PAD_B
+    + COMPOSER_GAP
+    + 2.0 * COMPOSER_ROW_H
+    + SPACE_2;
+/// A fact row's key column (About): the longest key, "Development build".
+pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.
 pub const MODAL_HEAD_H: f32 = 48.0;
 pub const MODAL_PAD: f32 = 16.0;
@@ -1166,6 +1209,17 @@ pub const MODAL_GAP: f32 = 12.0;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
+/// A kit-hosted choice menu (model, effort, mode, subagent overflow): wide
+/// enough for a model name beside its check, capped before it crowds the
+/// Composer it opens from.
+pub const CHOICE_MENU_MIN_W: f32 = 240.0;
+pub const CHOICE_MENU_MAX_W: f32 = 320.0;
+/// 10px — a `⌘` glyph box inside a menu shortcut: the `FS_SM` cap height
+/// band, so the drawn key sits on the letters beside it.
+pub const MENU_KEY_GLYPH: f32 = 10.0;
+/// About 48 characters — how much of a long directory a menu row keeps,
+/// cut at its head behind `…/` (the tail names the place).
+pub const MENU_PATH_TAIL: usize = 48;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents
