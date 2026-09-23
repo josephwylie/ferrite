@@ -308,6 +308,7 @@ const STATES: &[(&str, &[&str])] = &[
     // ---- WP-D states (append above the end line)
     ("usagecard", &["app"]),
     ("sessioncard", &["app"]),
+    ("preview", &["app"]),
     // (end WP-D)
 
     // ---- WP-E states (append above the end line)
@@ -565,6 +566,21 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     ferrite_core::roster::PaneIdentity::Thread(thread),
                     gpui::point(gpui::px(1150.), gpui::px(860.)),
                 ));
+            });
+            (scene, setup)
+        }
+        "preview" => {
+            let (scene, compose) = composer();
+            let setup: Setup = Box::new(move |view, window, cx| {
+                compose(view, window, cx);
+                let prompt = view.panes[0].composer.read(cx).prompt();
+                let shot = ferrite_core::prompt_files::paths(&prompt, None)
+                    .into_iter()
+                    .find(|path| path.extension().is_some_and(|ext| ext == "png"));
+                if let Some(shot) = shot {
+                    let title = shot.file_name().unwrap().to_string_lossy().to_string();
+                    view.panes[0].preview.open(shot, title, window, cx);
+                }
             });
             (scene, setup)
         }

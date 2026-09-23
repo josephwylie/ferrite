@@ -1020,6 +1020,9 @@ pub const USAGE_READOUT_W: f32 = 4.0 * FS_SM * MONO_ADVANCE;
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions.
 pub const SESSION_CARD_W: f32 = 288.0;
+/// 768px — the image preview sheet's widest reading; it otherwise takes
+/// 90% × 85% of its Pane.
+pub const PREVIEW_MAX_W: f32 = 768.0;
 /// Background task chips on the shelf above the Composer: `FILL` (not
 /// `HOVER`, which vanishes on `RAISED`), `R_CHIP`, `CHIP_H`, mono `FS_SM`
 /// `TEXT_2`, the shared pulsing `RUNNING` dot, labels cut at 240px, and a
