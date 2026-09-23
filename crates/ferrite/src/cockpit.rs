@@ -46,10 +46,10 @@ use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::component::Disableable;
 use gpui::prelude::*;
 use gpui::{
-    actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
-    AnyElement, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
-    FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    ScrollHandle, SharedString, Stateful, Window,
+    actions, anchored, deferred, div, px, rgb, rgba, AnimationExt, AnyElement, ClickEvent,
+    ClipboardItem, Context, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString,
+    Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -123,8 +123,6 @@ fn pump_interval() -> Duration {
 const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
-const NAV_OPEN_MS: u64 = 260;
-const NAV_CLOSE_MS: u64 = 190;
 const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
 
 pub struct CockpitView {
@@ -164,10 +162,11 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
-    /// False on launch so a restored preference never performs entrance
-    /// choreography. Once the operator acts, the shell may animate between
-    /// its two widths; the state itself remains immediately authoritative.
-    nav_has_toggled: bool,
+    /// The column's width on its way between its two (`motion::RESIZE`).
+    /// None on launch so a restored preference never performs entrance
+    /// choreography; once the operator acts, a flip mid-flight retargets
+    /// from the width on screen. `nav_collapsed` stays authoritative.
+    nav_tween: Option<crate::motion::Tween>,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
@@ -795,7 +794,7 @@ impl CockpitView {
             session_control_error: None,
             context_checks: None,
             nav_collapsed: prefs.settings.nav_collapsed,
-            nav_has_toggled: false,
+            nav_tween: None,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             drop_preview: None,
@@ -3982,8 +3981,22 @@ impl CockpitView {
         if self.nav_collapsed == collapsed {
             return;
         }
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let (from, to) = if collapsed {
+            (nav::WIDTH, nav::RAIL_WIDTH)
+        } else {
+            (nav::RAIL_WIDTH, nav::WIDTH)
+        };
         self.nav_collapsed = collapsed;
-        self.nav_has_toggled = true;
+        self.nav_tween = Some(crate::motion::Tween::retarget(
+            self.nav_tween,
+            from,
+            to,
+            crate::motion::RESIZE,
+            now,
+            reduced,
+        ));
         cx.notify();
     }
 
@@ -6866,6 +6879,26 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::motion::hover_frame_start(cx);
+        let root = self.render_cockpit(window, cx);
+        // The motion tail: the cockpit is the window's root view, so this
+        // runs once per frame, after every hover blend has been read. A
+        // hover blend or the nav's width mid-flight keeps frames coming;
+        // with neither, nothing is scheduled (the pulse clock drives loops).
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let nav_moving = self
+            .nav_tween
+            .is_some_and(|tween| tween.running(now, reduced));
+        if crate::motion::hover_fades_active() | nav_moving {
+            window.request_animation_frame();
+        }
+        root
+    }
+}
+
+impl CockpitView {
+    fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
         self.present_notices(window, cx);
         self.maximized = window.is_maximized();
@@ -9325,6 +9358,13 @@ impl CockpitView {
                         .text_color(rgb(TEXT_2))
                         .child(SharedString::from(format!("+{more}"))),
                 )
+                // It arrives with the second toast, so it fades in rather
+                // than popping; a count change keeps it mounted and still.
+                .with_animation(
+                    "toast-more",
+                    crate::motion::FADE_QUICK.animation(),
+                    |bubble, t| bubble.opacity(t),
+                )
                 .into_any_element(),
         )
     }
@@ -9439,28 +9479,24 @@ impl CockpitView {
                     )
                 })
         };
-        if !self.nav_has_toggled {
+        let Some(tween) = self.nav_tween else {
             return nav::shell(state.collapsed)
                 .child(content)
                 .into_any_element();
-        }
-        let (from, to, duration) = if state.collapsed {
-            (nav::WIDTH, nav::RAIL_WIDTH, NAV_CLOSE_MS)
-        } else {
-            (nav::RAIL_WIDTH, nav::WIDTH, NAV_OPEN_MS)
         };
-        let content = content.with_animation(
-            ("nav-content", usize::from(state.collapsed)),
-            Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
-            |content, delta| content.opacity(0.35 + 0.65 * delta),
+        // The column's width rides the tween (the render tail keeps frames
+        // coming while it moves); the content swapped at once, so it fades
+        // up rather than popping in at full ink.
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let fade = crate::motion::lerp(
+            crate::theme::MOTION_NAV_CONTENT_FROM,
+            1.0,
+            tween.progress(now, reduced),
         );
         nav::shell(state.collapsed)
-            .child(content)
-            .with_animation(
-                ("nav-resize", usize::from(state.collapsed)),
-                Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
-                move |column, delta| column.w(px(from + (to - from) * delta)),
-            )
+            .w(px(tween.value(now, reduced)))
+            .child(content.opacity(fade))
             .into_any_element()
     }
 

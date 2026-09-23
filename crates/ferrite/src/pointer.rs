@@ -17,9 +17,10 @@
 //! `cx.notify` loop rides a mouse move.
 
 use gpui::prelude::*;
-use gpui::{rgb, rgba, StyleRefinement};
+use gpui::{rgb, rgba, SharedString, StyleRefinement};
 
-use crate::theme::{FILL, FILL_HOVER, HAIRLINE_STRONG, HOVER, PRESSED};
+use crate::motion;
+use crate::theme::{FILL, FILL_HOVER, HAIRLINE_STRONG, HOVER, PRESSED, TRANSPARENT};
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
 /// and interactive can say what role it plays.
@@ -93,6 +94,38 @@ pub trait PointerPressed: Pointer + StatefulInteractiveElement {
 }
 
 impl<E: Pointer + StatefulInteractiveElement> PointerPressed for E {}
+
+/// The row roles with their face blended in over `motion::HOVER_FADE`
+/// (150ms) rather than snapped: the same tokens as `hover_row` and
+/// `hover_carried`, for rows the pointer sweeps across (the nav tree). The
+/// blend is the element's ground, so a `press_*` refinement still replaces
+/// it at once — a press never waits on the fade. `key` names the blend and
+/// must be stable for the row across frames.
+pub trait PointerFaded: PointerPressed {
+    /// `hover_row`, faded: nothing at rest, `HOVER` under the pointer.
+    fn hover_row_faded(self, key: impl Into<SharedString>) -> Self {
+        let key = key.into();
+        let t = motion::hover_t(&key);
+        let row = self.cursor_pointer();
+        let row = if t > 0.0 {
+            row.bg(motion::mix(rgba(TRANSPARENT).into(), rgb(HOVER).into(), t))
+        } else {
+            row
+        };
+        row.on_hover(motion::hover_listener(key))
+    }
+
+    /// `hover_carried`, faded: `FILL` at rest, stepping up to `FILL_HOVER`.
+    fn hover_carried_faded(self, key: impl Into<SharedString>) -> Self {
+        let key = key.into();
+        let ground = motion::hover_blend(&key, rgb(FILL).into(), rgb(FILL_HOVER).into());
+        self.cursor_pointer()
+            .bg(ground)
+            .on_hover(motion::hover_listener(key))
+    }
+}
+
+impl<E: PointerPressed> PointerFaded for E {}
 
 // Free functions, not closures, so the refinement each role stores is
 // assertable as data — gpui keeps the stored hover style crate-private.
