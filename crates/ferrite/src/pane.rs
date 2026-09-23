@@ -92,6 +92,31 @@ pub struct PaneView {
     pub decision_focus: FocusHandle,
     disclosure: ToolDisclosure,
     disclosure_revision: u64,
+    /// Where this Pane's card and Composer were last laid out, so a surface
+    /// summoned from a chip can hang off the Composer's edge and stay inside
+    /// the card (`components::float_place`), whatever the pointer did.
+    pub geometry: std::rc::Rc<std::cell::Cell<PaneGeometry>>,
+}
+
+/// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PaneGeometry {
+    pub card: Option<gpui::Bounds<gpui::Pixels>>,
+    pub composer: Option<gpui::Bounds<gpui::Pixels>>,
+}
+
+impl PaneGeometry {
+    /// The float limits for this Pane: the Composer's top edge (a surface
+    /// opening upward rests `FLOAT_OFFSET` above it) and the card's inner
+    /// right edge (`PANE_PAD_X` in from its right).
+    pub fn float_limits(&self) -> Option<(f32, f32)> {
+        let card = self.card?;
+        let composer = self.composer?;
+        Some((
+            f32::from(composer.top()),
+            f32::from(card.right()) - PANE_PAD_X,
+        ))
+    }
 }
 
 /// View ownership stays with a Subject even while its transcript is hidden.
@@ -222,6 +247,7 @@ impl PaneView {
                 bounds: Rc::new(RefCell::new(HashMap::new())),
             },
             disclosure_revision: 0,
+            geometry: std::rc::Rc::default(),
         }
     }
 
@@ -276,6 +302,7 @@ impl PaneView {
                 bounds: Rc::new(RefCell::new(HashMap::new())),
             },
             disclosure_revision: 0,
+            geometry: std::rc::Rc::default(),
         }
     }
 
@@ -937,9 +964,12 @@ pub fn render_pane(
         show_focus,
         SharedString::from(format!("pane-edge-{key}")),
     );
-    let shell = pane_shell(hover.ink(edge)).when(edge == PaneEdge::Focused, |shell| {
-        shell.debug_selector(move || format!("pane-focus-edge-{key}"))
-    });
+    let shell = record_card(
+        pane_shell(hover.ink(edge)).when(edge == PaneEdge::Focused, |shell| {
+            shell.debug_selector(move || format!("pane-focus-edge-{key}"))
+        }),
+        view,
+    );
     let frame = |shell: Div| pane_frame(shell, framed, alert, hover.clone());
     // The one head recipe for a Group at every tier (rule 2.4.6): what the
     // cell is, and one word for where it stands.
@@ -1316,6 +1346,18 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
 /// UI face is declared once here; code text inside a Pane (tool arguments
 /// and output, diffs, code, the Composer's line) sets the code face where it
 /// is drawn.
+/// Records the card's bounds into the Pane's geometry each prepaint.
+fn record_card(shell: Div, view: &PaneView) -> Div {
+    let geometry = view.geometry.clone();
+    // The canvas fills the padding box: add back the 1px edge.
+    components::on_bounds(shell, move |bounds, _, _| {
+        geometry.set(PaneGeometry {
+            card: Some(bounds.dilate(px(1.))),
+            ..geometry.get()
+        })
+    })
+}
+
 fn pane_shell(edge: gpui::Hsla) -> Div {
     div()
         .relative()
@@ -1523,7 +1565,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         show_focus,
         SharedString::from(format!("draft-edge-{key}")),
     );
-    let mut shell = pane_shell(hover.ink(edge));
+    let mut shell = record_card(pane_shell(hover.ink(edge)), view);
     if show_focus {
         shell = shell.child(group_head(GroupHead {
             key,
@@ -1617,15 +1659,13 @@ pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -
 
 /// Draft setup controls ride the Composer's meta row. In a narrow Pane
 /// they give way first: their labels truncate before the model and effort
-/// pair or the usage meter loses a pixel. The band hangs its chips' focus
-/// edge outside the row's start, so their labels start at C1 as the mode
-/// word does.
+/// pair or the usage meter loses a pixel. Their focus ring is inset and
+/// takes no layout, so their labels start at C1 as the mode word does.
 pub fn draft_band() -> Div {
     div()
         .debug_selector(|| "draft-band".into())
         .flex()
         .flex_shrink(1.)
-        .ml(px(-theme::BAND_EDGE_W))
         .min_w_0()
         .items_center()
         .gap(px(theme::PICKER_GAP))
@@ -1633,8 +1673,8 @@ pub fn draft_band() -> Div {
 }
 
 /// One band chip (project, workspace): the Composer's control chip — the
-/// choice and a chevron that says it opens a menu — wrapped in a 1px edge
-/// that is always in layout and turns `FOCUS_RING` on tab, because the
+/// choice and a chevron that says it opens a menu — ringed by the one
+/// focus recipe (`components::focused`) while tab rests on it, because the
 /// popover opens on ↵ and the chip must say where ↵ will land.
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
     // The label truncates in a narrow Pane; the tooltip keeps the whole
@@ -1648,9 +1688,8 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         .debug_selector(move || format!("band-chip-{slot}"))
         .flex_shrink(1.)
         .min_w_0()
-        .border_1()
-        .border_color(band_edge(focused))
-        .rounded(px(theme::COMPOSER_CHIP_R + theme::BAND_EDGE_W))
+        .rounded(px(theme::COMPOSER_CHIP_R))
+        .map(|chip| components::focused(chip, focused))
         .press_raised()
         .child(
             control_chip(if accent { TEXT } else { TEXT_2 })
@@ -1661,24 +1700,14 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         )
 }
 
-/// A band control's always-in-layout edge: `FOCUS_RING` while tab rests on
-/// it, transparent otherwise.
-fn band_edge(focused: bool) -> gpui::Hsla {
-    if focused {
-        rgb(FOCUS_RING).into()
-    } else {
-        rgba(TRANSPARENT).into()
-    }
-}
-
 /// A band chip's text: the choice itself (the chip draws its own chevron).
 pub fn band_chip_label(choice: &str) -> SharedString {
     SharedString::from(choice.to_owned())
 }
 
 /// A draft's model or effort control: the live Composer's own picker
-/// chip, wrapped in the band chip's focus edge so tab still says where ↵
-/// will land.
+/// chip, ringed like the band chip while tab rests on it, so tab still says
+/// where ↵ will land.
 pub fn draft_picker(
     id: &'static str,
     focused: bool,
@@ -1690,9 +1719,8 @@ pub fn draft_picker(
         .h_auto()
         .flex()
         .flex_shrink_0()
-        .border_1()
-        .border_color(band_edge(focused))
-        .rounded(px(theme::COMPOSER_CHIP_R + theme::BAND_EDGE_W))
+        .rounded(px(theme::COMPOSER_CHIP_R))
+        .map(|chip| components::focused(chip, focused))
         .child(control)
 }
 
@@ -2907,22 +2935,15 @@ pub fn check_word(state: CheckState, detail: &str) -> &'static str {
     }
 }
 
-/// The checks card's column, for the cockpit to fill with `checks_head`
-/// and the `check_row`s it has wired. It grows to its content between
-/// `CHECKS_CARD_W` and `CHECKS_CARD_MAX_W`, because the runs it lists are
-/// named by the forge and a job name — or the tally — is longer than a
-/// menu row.
+/// The checks card: the one floating surface, for the cockpit to fill
+/// with `checks_head` and the `check_row`s it has wired. It grows to its
+/// content between `CHECKS_CARD_W` and `CHECKS_CARD_MAX_W`, because the
+/// runs it lists are named by the forge and a job name — or the tally — is
+/// longer than a menu row.
 pub fn checks_card() -> Div {
-    div()
-        .flex()
-        .flex_col()
+    components::floating_surface()
         .min_w(px(theme::CHECKS_CARD_W))
         .max_w(px(theme::CHECKS_CARD_MAX_W))
-        .p(px(theme::CHECKS_CARD_PAD))
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT))
 }
 
 /// The card's heading: the PR by number at the left, and how its runs
@@ -3567,7 +3588,15 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .border_color(rgba(TRANSPARENT))
             .rounded(px(theme::COMPOSER_R))
     };
-    let mut block = block
+    let geometry = view.geometry.clone();
+    // The canvas fills the padding box: add back the edge held in layout.
+    let mut block = components::on_bounds(block, move |bounds, _, _| {
+        geometry.set(PaneGeometry {
+            composer: Some(bounds.dilate(px(theme::COMPOSER_EDGE_W))),
+            ..geometry.get()
+        })
+    });
+    block = block
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |block| {
             block.debug_selector(|| "composer-drop-target".into())
@@ -4151,8 +4180,9 @@ pub struct MenuRow {
     /// The dimmer text after it: a command's description, or the file's
     /// directory. Empty draws nothing.
     pub detail: SharedString,
-    /// Whether `detail` is a description (cut at its end) or a path (cut at
-    /// its head, so the useful tail survives). Both draw mono.
+    /// Whether `detail` is Ferrite's description (Geist, cut at its end) or
+    /// machine text such as a path (Geist Mono, cut at its head so the
+    /// useful tail survives).
     pub prose_detail: bool,
     /// A row kept visible but dead (#25's locked provider door): muted ink,
     /// no match highlights, and its pick does nothing but dismiss.
@@ -4199,7 +4229,7 @@ pub fn menu_item(row: &MenuRow, cursor: bool, label_w: Option<f32>) -> component
         } else {
             head_truncated(&row.detail, theme::MENU_PATH_TAIL)
         };
-        item = item.detail(detail);
+        item = item.detail(detail).mono(!row.prose_detail);
     }
     // No ↵ on an inert row: enter only dismisses there, and the key would
     // advertise an offer the row does not make.
@@ -4460,20 +4490,15 @@ fn diff_stat(added: usize, removed: usize) -> Div {
 /// A subscription window's plausible Unix reset instant in compact, useful
 /// units. Providers disagree on the field's units, so only a future value
 /// inside the window's own maximum span is safe to present as a countdown.
-fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> SharedString {
-    let Some(resets_at) = resets_at else {
-        return SharedString::from("reset not reported");
-    };
+fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> Option<SharedString> {
     let now = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let Some(remaining) = resets_at
+    // A reset the provider did not report, one already past, or one
+    // outside the window's span reads nothing: a guess is worse than none.
+    let remaining = resets_at?
         .checked_sub(now)
-        .filter(|remaining| *remaining <= span.as_secs())
-    else {
-        return SharedString::from("reset not reported");
-    };
+        .filter(|remaining| (1..=span.as_secs()).contains(remaining))?;
     let label = match remaining {
-        0 => "reset not reported".into(),
-        1..=59 => "resets in <1m".into(),
+        0..=59 => "resets in <1m".into(),
         60..=3_599 => format!("resets in {}m", remaining / 60),
         3_600..=86_399 => {
             let hours = remaining / 3_600;
@@ -4494,14 +4519,65 @@ fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> Share
             }
         }
     };
-    SharedString::from(label)
+    Some(SharedString::from(label))
 }
 
-/// The usage meter's detail card: the meter's own three windows, in the
-/// meter's own order, each a labelled bar over the reading behind it.
-/// Counts are reported values, never estimates — a window the provider has
-/// not reported keeps its empty track and says so, rather than reading as
-/// zero used.
+/// A card's refusal, the one line grammar (rule 2.11.3): `failed` in
+/// `BLOCKED`, the `·` in structure ink, then the message in `TEXT_2`, all
+/// UI `FS_SM` as one run that wraps, on the rows' inset.
+pub fn card_error(message: impl Into<SharedString>) -> Div {
+    let message = message.into();
+    let word = theme::words::FAILED;
+    let seam = " \u{b7} ";
+    let text = format!("{word}{seam}{message}");
+    let ink = |ink: u32| HighlightStyle {
+        color: Some(rgb(ink).into()),
+        ..Default::default()
+    };
+    let runs = vec![
+        (0..word.len(), ink(BLOCKED)),
+        (word.len()..word.len() + seam.len(), ink(TEXT_FAINT)),
+    ];
+    components::text_meta()
+        .flex_shrink_0()
+        .px(px(theme::MENU_ROW_PAD_X))
+        .py(px(theme::SPACE_1))
+        .text_color(rgb(TEXT_2))
+        .whitespace_normal()
+        .child(StyledText::new(text).with_highlights(runs))
+}
+
+/// A token count as the card reads it (rule 2.11.6): only as precise as it
+/// needs to be — `640`, `1.5k`, `64k`, `1.2M`.
+pub(crate) fn compact_count(count: u64) -> String {
+    fn trimmed(value: f64) -> String {
+        let text = format!("{value:.1}");
+        text.strip_suffix(".0").unwrap_or(&text).to_owned()
+    }
+    match count {
+        0..=999 => count.to_string(),
+        1_000..=9_999 => format!("{}k", trimmed(count as f64 / 1_000.)),
+        10_000..=999_999 => format!("{}k", (count as f64 / 1_000.).round() as u64),
+        _ => format!("{}M", trimmed(count as f64 / 1_000_000.)),
+    }
+}
+
+/// A turn's cost as the card reads it: cents, or `<$0.01` below one.
+pub(crate) fn cost_label(cost: f64) -> String {
+    if cost < 0.005 {
+        "<$0.01".into()
+    } else {
+        format!("${cost:.2}")
+    }
+}
+
+/// The usage meter's detail card: the meter's own windows, in the meter's
+/// own order, each a labelled bar over the reading behind it. Counts are
+/// reported values, never estimates. An account window the provider has
+/// not reported is left out; when it reports neither, one line says so
+/// (`Limits not reported by this provider`) in place of two empty bars.
+/// Each block holds the menu rows' inset (`MENU_ROW_PAD_X`) inside the
+/// floating surface's `FLOAT_PAD`.
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     limits: ferrite_core::transcript::RateLimits,
@@ -4524,8 +4600,8 @@ pub fn context_usage(
     let now = SystemTime::now();
     // One 4px bar, full width: the same track and the same status ink as
     // the meter that opened the card, at a size a card can afford.
-    let bar = |fraction: Option<f32>| {
-        let used = fraction.unwrap_or(0.).clamp(0., 1.);
+    let bar = |fraction: f32| {
+        let used = fraction.clamp(0., 1.);
         div()
             .w_full()
             .h(px(theme::USAGE_CARD_BAR_H))
@@ -4540,7 +4616,8 @@ pub fn context_usage(
             )
     };
     // A window's heading: its name at the left, what it reads at the
-    // right — the one line that answers the question at a glance.
+    // right — the one line that answers the question at a glance. The
+    // name is a row's label, not a title: `W_BODY`.
     let heading = |label: &'static str, value: AnyElement| {
         div()
             .flex()
@@ -4550,129 +4627,117 @@ pub fn context_usage(
             .child(
                 div()
                     .flex_shrink_0()
-                    .font_weight(theme::W_LABEL)
+                    .font_weight(theme::W_BODY)
                     .text_color(rgb(TEXT))
                     .child(label),
             )
             .child(value)
     };
-    let percent_value = |key: &'static str, fraction: Option<f32>| {
-        let percent = fraction.map(|fraction| (fraction.clamp(0., 1.) * 100.).round() as u32);
+    let percent_value = |key: &'static str, fraction: f32| {
+        let percent = (fraction.clamp(0., 1.) * 100.).round() as u32;
         div()
             .id(key)
-            .debug_selector(move || {
-                format!(
-                    "context-usage-{key}-{}",
-                    percent.map_or("unknown".into(), |n| n.to_string())
-                )
-            })
+            .debug_selector(move || format!("context-usage-{key}-{percent}"))
             .flex_shrink_0()
-            .when(percent.is_none(), |value| value.text_color(rgb(TEXT_MUTED)))
-            .child(SharedString::from(
-                percent
-                    .map(|percent| format!("{percent}%"))
-                    .unwrap_or_else(|| "not reported".into()),
-            ))
-    };
-    let count_value = |key: &'static str, count: Option<u64>| {
-        div()
-            .id(key)
-            .debug_selector(move || {
-                format!(
-                    "context-usage-{key}-{}",
-                    count.map_or("unknown".into(), |n| n.to_string())
-                )
-            })
-            .flex_shrink_0()
-            .child(SharedString::from(
-                count
-                    .map(count_label)
-                    .unwrap_or_else(|| "not reported".into()),
-            ))
+            .child(SharedString::from(format!("{percent}%")))
     };
     let reset_value = |key: &'static str, resets_at: Option<u64>, span: Duration| {
-        div()
-            .id(SharedString::from(format!("reset-{key}")))
-            .text_size(px(theme::FS_SM))
-            .debug_selector(move || {
-                format!(
-                    "context-usage-{key}-reset-{}",
-                    if resets_at.is_some() {
-                        "reported"
-                    } else {
-                        "unknown"
-                    }
-                )
-            })
-            .text_color(rgb(TEXT_MUTED))
-            .child(reset_label(resets_at, span, now))
-            .into_any_element()
+        reset_label(resets_at, span, now).map(|label| {
+            div()
+                .id(SharedString::from(format!("reset-{key}")))
+                .text_size(px(theme::FS_SM))
+                .debug_selector(move || format!("context-usage-{key}-reset-reported"))
+                .text_color(rgb(TEXT_MUTED))
+                .child(label)
+                .into_any_element()
+        })
     };
-    let window = |label: &'static str,
-                  key: &'static str,
-                  fraction: Option<f32>,
-                  detail: Option<AnyElement>| {
-        let mut block = div()
+    let block = || {
+        div()
             .flex()
             .flex_col()
             .gap(px(theme::USAGE_CARD_ROW_GAP))
-            .child(heading(
-                label,
-                percent_value(key, fraction).into_any_element(),
-            ))
-            .child(bar(fraction));
-        if let Some(detail) = detail {
-            block = block.child(detail);
-        }
-        block
+            .px(px(theme::MENU_ROW_PAD_X))
     };
-    let context_fraction = maximum.map(|maximum| usage.total_tokens as f32 / maximum as f32);
+    let window =
+        |label: &'static str, key: &'static str, fraction: f32, detail: Option<AnyElement>| {
+            block()
+                .child(heading(
+                    label,
+                    percent_value(key, fraction).into_any_element(),
+                ))
+                .child(bar(fraction))
+                .children(detail)
+        };
     // The counts behind the context bar, in the card's quietest ink: the
-    // bar says how full, this says of what.
-    let counts = div()
-        .flex()
-        .gap(px(theme::SPACE_1))
-        .text_size(px(theme::FS_SM))
-        .text_color(rgb(TEXT_MUTED))
-        .child(count_value("current", Some(usage.total_tokens)))
-        .child("/")
-        .child(count_value("maximum", maximum))
-        .child("tokens");
+    // bar says how full, this says of what — `64k / 200k tokens`.
+    let current = usage.total_tokens;
+    let counts = components::tabular(
+        div()
+            .id("context-usage-counts")
+            .text_size(px(theme::FS_SM))
+            .text_color(rgb(TEXT_MUTED))
+            .debug_selector(move || match maximum {
+                Some(maximum) => format!("context-usage-maximum-{maximum}"),
+                None => "context-usage-maximum-unknown".into(),
+            })
+            .child(
+                div()
+                    .debug_selector(move || format!("context-usage-current-{current}"))
+                    .child(SharedString::from(match maximum {
+                        Some(maximum) => format!(
+                            "{} / {} tokens",
+                            compact_count(current),
+                            compact_count(maximum)
+                        ),
+                        None => format!("{} tokens", compact_count(current)),
+                    })),
+            ),
+    );
+    let context = match maximum {
+        Some(maximum) => window(
+            "Context",
+            "context",
+            usage.total_tokens as f32 / maximum as f32,
+            Some(counts.into_any_element()),
+        ),
+        // No window to divide by: the count alone, no empty bar.
+        None => block()
+            .child(heading("Context", div().into_any_element()))
+            .child(counts),
+    };
     let mut card = div()
         .flex()
         .flex_col()
         .w(px(theme::USAGE_CARD_W))
         .gap(px(theme::USAGE_CARD_GAP))
-        .p(px(theme::USAGE_CARD_PAD))
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT))
-        .child(window(
-            "Context",
-            "context",
-            context_fraction,
-            Some(counts.into_any_element()),
-        ))
-        .child(window(
+        .child(context);
+    if limits.five_hour.is_none() && limits.weekly.is_none() {
+        card = card.child(
+            components::menu_note("Limits not reported by this provider")
+                .id("context-usage-limits-unknown")
+                .debug_selector(|| "context-usage-limits-unknown".into()),
+        );
+    }
+    if let Some(limit) = limits.five_hour {
+        card = card.child(window(
             "5-hour limit",
             "five-hour",
-            limits.five_hour.map(|limit| limit.used_fraction),
-            Some(reset_value(
-                "five-hour",
-                limits.five_hour.and_then(|limit| limit.resets_at),
-                Duration::from_secs(5 * 3_600),
-            )),
-        ))
-        .child(window(
+            limit.used_fraction,
+            reset_value("five-hour", limit.resets_at, Duration::from_secs(5 * 3_600)),
+        ));
+    }
+    if let Some(limit) = limits.weekly {
+        card = card.child(window(
             "Weekly limit",
             "weekly",
-            limits.weekly.map(|limit| limit.used_fraction),
-            Some(reset_value(
-                "weekly",
-                limits.weekly.and_then(|limit| limit.resets_at),
-                Duration::from_secs(7 * 86_400),
-            )),
+            limit.used_fraction,
+            reset_value("weekly", limit.resets_at, Duration::from_secs(7 * 86_400)),
         ));
+    }
     // Everything below the windows is a terminal readout: a quiet key at
     // the left, the reported value right-aligned in tabular digits, every
     // count grouped the same way, and a section head where the scope
@@ -4682,6 +4747,7 @@ pub fn context_usage(
             .flex()
             .justify_between()
             .gap(px(theme::SPACE_3))
+            .px(px(theme::MENU_ROW_PAD_X))
             .child(
                 div()
                     .min_w_0()
@@ -4692,10 +4758,11 @@ pub fn context_usage(
             .child(components::tabular(div().flex_shrink_0().child(value)))
     };
     if let Some(details) = details {
-        let mut section = div().flex().flex_col().gap(px(theme::SPACE_0_5)).child(
-            components::menu_section("Context breakdown", None, None)
-                .mx(px(-theme::MENU_ROW_PAD_X)),
-        );
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::SPACE_0_5))
+            .child(components::menu_section("Context breakdown", None, None));
         if let Some(usable) = details.usable_window {
             section = section.child(
                 row("Usable".into(), count_label(usable))
@@ -4737,7 +4804,6 @@ pub fn context_usage(
         };
         let mut section = div().flex().flex_col().gap(px(theme::SPACE_0_5)).child(
             components::menu_section(scope.1, None, None)
-                .mx(px(-theme::MENU_ROW_PAD_X))
                 .debug_selector(move || format!("usage-scope-{}", scope.0)),
         );
         for (key, label, count) in [
@@ -4757,14 +4823,14 @@ pub fn context_usage(
         }
         if let Some(cost) = last_cost {
             section = section.child(
-                row("Last cost".into(), format!("US${cost:.4}"))
+                row("Last turn".into(), cost_label(cost))
                     .debug_selector(move || format!("usage-cost-{cost}")),
             );
         }
         card = card.child(section);
     } else if let Some(cost) = last_cost {
         card = card.child(
-            row("Last cost".into(), format!("US${cost:.4}"))
+            row("Last turn".into(), cost_label(cost))
                 .debug_selector(move || format!("usage-cost-{cost}")),
         );
     }
@@ -4797,21 +4863,21 @@ fn sentence_case(name: &str) -> String {
     words.join(" ")
 }
 
-/// A usage reading's ink: neutral `TEXT_2` until the window runs tight,
-/// then `ATTENTION`, then `BLOCKED` when it is all but spent. Colour is
-/// state; a context half full is not one.
+/// A usage reading's ink: neutral `TEXT_2` until the window runs tight
+/// (`USAGE_TIGHT`), then `ATTENTION`. There is no `BLOCKED` step: a full
+/// window stops nothing until the provider says so. Colour is state; a
+/// context half full is not one.
 pub fn usage_ink(fraction: f32) -> u32 {
-    match fraction {
-        fraction if fraction >= theme::USAGE_SPENT => BLOCKED,
-        fraction if fraction >= theme::USAGE_TIGHT => ATTENTION,
-        _ => TEXT_2,
+    if fraction >= theme::USAGE_TIGHT {
+        ATTENTION
+    } else {
+        TEXT_2
     }
 }
 
 /// A usage token's ink: `TEXT_MUTED` like every value word, the whole
 /// token turning `ATTENTION` once its window runs tight
-/// (`USAGE_TIGHT`). The readout has no `BLOCKED` step: the card behind it
-/// carries that (`usage_ink`).
+/// (`USAGE_TIGHT`), the same step as the card behind it (`usage_ink`).
 pub fn readout_ink(fraction: f32) -> u32 {
     if fraction >= theme::USAGE_TIGHT {
         ATTENTION
@@ -7860,30 +7926,45 @@ mod tests {
         let after = |seconds: u64| Some(1_000_000 + seconds);
         let week = Duration::from_secs(7 * 86_400);
 
-        assert_eq!(reset_label(None, week, now).as_ref(), "reset not reported");
-        assert_eq!(reset_label(after(45), week, now).as_ref(), "resets in <1m");
+        let label = |at| reset_label(at, week, now).map(|label| label.to_string());
+        assert_eq!(label(None), None, "an unreported reset reads nothing");
+        assert_eq!(label(after(0)), None, "a reset due now is already past");
+        assert_eq!(label(after(45)).as_deref(), Some("resets in <1m"));
+        assert_eq!(label(after(42 * 60)).as_deref(), Some("resets in 42m"));
         assert_eq!(
-            reset_label(after(42 * 60), week, now).as_ref(),
-            "resets in 42m"
+            label(after(3 * 3_600 + 14 * 60)).as_deref(),
+            Some("resets in 3h 14m")
         );
         assert_eq!(
-            reset_label(after(3 * 3_600 + 14 * 60), week, now).as_ref(),
-            "resets in 3h 14m"
+            label(after(4 * 86_400 + 2 * 3_600)).as_deref(),
+            Some("resets in 4d 2h")
         );
         assert_eq!(
-            reset_label(after(4 * 86_400 + 2 * 3_600), week, now).as_ref(),
-            "resets in 4d 2h"
-        );
-        assert_eq!(
-            reset_label(Some(999_999), week, now).as_ref(),
-            "reset not reported",
+            label(Some(999_999)),
+            None,
             "an elapsed or relative provider timestamp must not underflow"
         );
         assert_eq!(
-            reset_label(after(8 * 86_400), week, now).as_ref(),
-            "reset not reported",
+            label(after(8 * 86_400)),
+            None,
             "a value outside the window span is not guessed to be Unix seconds"
         );
+    }
+
+    /// The card's numbers are only as precise as they need to be.
+    #[test]
+    fn card_counts_and_costs_read_compactly() {
+        assert_eq!(compact_count(640), "640");
+        assert_eq!(compact_count(1_500), "1.5k");
+        assert_eq!(compact_count(2_000), "2k");
+        assert_eq!(compact_count(64_000), "64k");
+        assert_eq!(compact_count(124_400), "124k");
+        assert_eq!(compact_count(200_000), "200k");
+        assert_eq!(compact_count(1_000_000), "1M");
+        assert_eq!(compact_count(1_200_000), "1.2M");
+        assert_eq!(cost_label(0.42), "$0.42");
+        assert_eq!(cost_label(0.004), "<$0.01");
+        assert_eq!(cost_label(1.5), "$1.50");
     }
 
     /// The painted tasks meter stays glanceable: a segment per step up to
@@ -8302,8 +8383,11 @@ mod tests {
     #[test]
     fn usage_reads_neutral_until_it_runs_tight() {
         assert_eq!(usage_ink(0.62), TEXT_2);
+        assert_eq!(usage_ink(0.79), TEXT_2);
         assert_eq!(usage_ink(theme::USAGE_TIGHT), ATTENTION);
-        assert_eq!(usage_ink(theme::USAGE_SPENT), BLOCKED);
+        assert_eq!(usage_ink(0.9), ATTENTION);
+        assert_eq!(usage_ink(0.95), ATTENTION);
+        assert_eq!(usage_ink(1.0), ATTENTION);
         // The status line's readout: muted, then attention at 80% as a
         // whole token, and never blocked.
         assert_eq!(theme::USAGE_TIGHT, 0.80);

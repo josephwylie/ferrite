@@ -355,17 +355,14 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
 
         let card = cx.debug_bounds("project-editor-card").unwrap();
         let confirm = cx.debug_bounds("project-confirm").unwrap();
-        let add = cx.debug_bounds("project-Add Directory").unwrap();
-        for action in [confirm, add] {
-            assert!(
-                action.size.height > px(0.)
-                    && action.left() >= card.left()
-                    && action.top() >= card.top()
-                    && action.right() <= card.right()
-                    && action.bottom() <= card.bottom(),
-                "the full footer action must be inside the compact card: {action:?}, {card:?}"
-            );
-        }
+        assert!(
+            confirm.size.height > px(0.)
+                && confirm.left() >= card.left()
+                && confirm.top() >= card.top()
+                && confirm.right() <= card.right()
+                && confirm.bottom() <= card.bottom(),
+            "the full footer action must be inside the compact card: {confirm:?}, {card:?}"
+        );
         let first_id = format!("project-directory:{}", directories[0].display());
         let first = debug_bounds(cx, first_id.clone()).unwrap();
         assert!(first.top() >= card.top() && first.bottom() < confirm.top());
@@ -377,7 +374,18 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         });
         tick(cx);
         assert_eq!(cx.debug_bounds("project-confirm").unwrap(), confirm);
-        assert_eq!(cx.debug_bounds("project-Add Directory").unwrap(), add);
+        // `+ Add directory` rides the body under the list: scrolled to the
+        // end, it sits under the last directory and above the pinned footer.
+        let add = cx
+            .debug_bounds("project-add-directory")
+            .expect("the add control follows the list");
+        assert!(
+            add.size.height > px(0.)
+                && add.left() >= card.left()
+                && add.right() <= card.right()
+                && add.bottom() < confirm.top(),
+            "{add:?} inside {card:?}, above {confirm:?}"
+        );
         let last = debug_bounds(
             cx,
             format!(
@@ -387,6 +395,10 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         )
         .expect("scrolling reveals the last directory");
         assert!(last.top() >= card.top() && last.bottom() < confirm.top());
+        assert!(
+            last.bottom() <= add.top(),
+            "the add control is under the list"
+        );
         if let Some(scrolled_first) = debug_bounds(cx, first_id) {
             assert!(
                 scrolled_first.top() < first.top(),

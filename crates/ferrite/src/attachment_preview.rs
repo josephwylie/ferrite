@@ -7,13 +7,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use gpui::component::{
-    dialog::{DialogContent, DialogHeader, DialogTitle},
-    Theme,
-};
 use gpui::{
-    canvas, div, prelude::*, px, relative, rgb, rgba, App, Bounds, Div, FocusHandle, IntoElement,
-    Pixels, Window,
+    canvas, div, prelude::*, px, App, Bounds, Div, FocusHandle, IntoElement, Pixels, Window,
 };
 
 #[derive(Default)]
@@ -129,95 +124,78 @@ impl RenderOnce for PreviewLayer {
         let close_button = preview.clone();
         let close_dialog = preview.clone();
         let original = path.clone();
-        // A floating sheet on Ferrite's own tokens: the raised ground, the
-        // strong hairline, the block radius and the float shadow; a mono
-        // title, the sheet's ghost button for Open Original, and the image
-        // in a recessed well.
-        let content = div()
+        // The image's own proportions size the sheet: decoded once through
+        // the same cache the `img` element reads, so it costs nothing twice.
+        let natural = window
+            .use_asset::<gpui::ImgResourceLoader>(&gpui::Resource::from(path.clone()), cx)
+            .and_then(Result::ok)
+            .map(|image| {
+                let size = image.size(0);
+                (size.width.0 as f32, size.height.0 as f32)
+            });
+        let (width, height) = sheet_size(
+            natural,
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+        );
+        // The sheet recipe (`prefs::sheet`): `RAISED`, the strong hairline,
+        // `R_PANE`, the float shadow; the 48px head with its title and the
+        // one close control over a hairline; then the image itself on the
+        // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
+        // sheet is darker than the sheet.
+        let open = crate::components::form_button("open-original-attachment", cx)
+            .flex_shrink_0()
+            .h(px(crate::theme::CONTROL_H))
+            .px(px(crate::theme::CONTROL_PAD_X))
+            .child(crate::components::form_label(
+                "Open original",
+                crate::theme::TEXT_2,
+            ))
+            .accessibility_label("Open original image in the default app")
+            .tooltip("Open full-size image in the default app")
+            .debug_selector(|| "open-original-attachment".into())
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                open_original(&original, window, cx);
+            });
+        let close =
+            crate::prefs::sheet_close("close-attachment-preview", "Close image preview", cx)
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    close_button.close(window, cx);
+                });
+        let head =
+            crate::prefs::sheet_head(title, div().flex().items_center().child(open).child(close));
+        let sheet = crate::prefs::sheet(width, height)
             .debug_selector(|| "attachment-preview-content".into())
-            .w(relative(0.9))
-            .h(relative(0.85))
-            .max_w(px(crate::theme::PREVIEW_MAX_W))
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(head)
             .child(
-                DialogContent::new()
-                    .size_full()
-                    .bg(rgb(crate::theme::RAISED))
-                    .border_1()
-                    .border_color(rgba(crate::theme::HAIRLINE_STRONG))
-                    .rounded(px(crate::theme::R_BLOCK))
-                    .shadow(crate::components::float_shadow())
-                    .p(px(crate::theme::SPACE_3))
-                    .gap(px(crate::theme::SPACE_2))
-                    .child(
-                        DialogHeader::new()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(crate::theme::SPACE_2))
-                            .flex_shrink_0()
-                            .child(
-                                DialogTitle::new()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_family(crate::theme::FONT_UI)
-                                    .text_size(px(crate::theme::FS_UI))
-                                    .font_weight(crate::theme::W_LABEL)
-                                    .text_color(rgb(crate::theme::TEXT_STRONG))
-                                    .child(title),
-                            )
-                            .child(
-                                crate::components::form_button("open-original-attachment", cx)
-                                    .flex_shrink_0()
-                                    .h(px(crate::theme::CONTROL_H))
-                                    .px(px(crate::theme::CONTROL_PAD_X))
-                                    .child(crate::components::form_label(
-                                        "Open Original",
-                                        crate::theme::TEXT_2,
-                                    ))
-                                    .accessibility_label("Open original image in the default app")
-                                    .tooltip("Open full-size image in the default app")
-                                    .debug_selector(|| "open-original-attachment".into())
-                                    .on_click(move |_, window, cx| {
-                                        cx.stop_propagation();
-                                        open_original(&original, window, cx);
-                                    }),
-                            )
-                            .child(
-                                crate::components::icon_button(
-                                    "close-attachment-preview",
-                                    crate::icons::CLOSE,
-                                    "Close image preview",
-                                    cx,
-                                )
-                                .flex_shrink_0()
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    close_button.close(window, cx);
-                                }),
-                            ),
-                    )
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .p(px(crate::theme::MODAL_PAD))
                     .child(
                         div()
-                            .flex()
+                            .relative()
                             .flex_1()
                             .min_h_0()
-                            .w_full()
-                            .p(px(crate::theme::SPACE_2))
+                            .min_w_0()
                             .rounded(px(crate::theme::R_CHIP))
-                            .bg(rgb(crate::theme::GROUND))
                             .overflow_hidden()
                             .child(
-                                div().relative().flex_1().min_h_0().min_w_0().child(
-                                    gpui::img(path)
-                                        .absolute()
-                                        .inset_0()
-                                        .size_full()
-                                        .object_fit(gpui::ObjectFit::Contain),
-                                ),
+                                gpui::img(path)
+                                    .absolute()
+                                    .inset_0()
+                                    .size_full()
+                                    .rounded(px(crate::theme::R_CHIP))
+                                    .object_fit(gpui::ObjectFit::Contain),
                             ),
                     ),
             );
+        let content = crate::motion::dialog_in("attachment-preview-in", sheet);
         // The scrim is the window's, as under Settings and the Project
         // sheet: the nav and the titlebar dim too. The sheet itself stays
         // centred on, and sized by, the Pane that owns it.
@@ -228,12 +206,12 @@ impl RenderOnce for PreviewLayer {
             .top(px(0.))
             .w(window_size.width)
             .h(window_size.height)
-            .backdrop(
+            .backdrop(crate::motion::veil_in(
+                "attachment-preview-veil",
                 div()
                     .debug_selector(|| "attachment-preview-scrim".into())
-                    .size_full()
-                    .bg(Theme::global(cx).overlay),
-            )
+                    .size_full(),
+            ))
             .popup(
                 div()
                     .absolute()
@@ -248,5 +226,57 @@ impl RenderOnce for PreviewLayer {
             )
             .request_close(move |_, window, cx| close_dialog.close(window, cx))
             .into_any_element()
+    }
+}
+
+/// The sheet's size for an image of `natural` pixels in a Pane of
+/// `pane_w` × `pane_h`: within `min(0.9 × pane_w, PREVIEW_MAX_W)` ×
+/// `0.85 × pane_h`, the image area (inside the head and `MODAL_PAD`) takes
+/// the image's aspect ratio, never scaled up past its own size. Until the
+/// image is decoded, the sheet takes the whole box.
+fn sheet_size(natural: Option<(f32, f32)>, pane_w: f32, pane_h: f32) -> (f32, f32) {
+    use crate::theme::{MODAL_HEAD_H, MODAL_PAD, PREVIEW_MAX_W};
+    let max_w = (pane_w * 0.9).clamp(0., PREVIEW_MAX_W);
+    let max_h = (pane_h * 0.85).max(0.);
+    // The frame around the image: the sheet's 1px edges, the head and its
+    // rule, and the inset on every side.
+    let frame_w = 2. + 2. * MODAL_PAD;
+    let frame_h = 2. + MODAL_HEAD_H + 1. + 2. * MODAL_PAD;
+    let Some((image_w, image_h)) = natural.filter(|(w, h)| *w > 0. && *h > 0.) else {
+        return (max_w, max_h);
+    };
+    let room_w = (max_w - frame_w).max(1.);
+    let room_h = (max_h - frame_h).max(1.);
+    let scale = (room_w / image_w).min(room_h / image_h).min(1.);
+    // A tiny image keeps a sheet wide enough for its head.
+    let width = (image_w * scale + frame_w).max(PREVIEW_MIN_W.min(max_w));
+    (width, image_h * scale + frame_h)
+}
+
+/// The narrowest preview sheet: room for a title beside its two controls.
+const PREVIEW_MIN_W: f32 = 320.;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sheet_takes_the_image_aspect_inside_the_pane_box() {
+        let (w, h) = sheet_size(Some((1600., 900.)), 1000., 800.);
+        assert!(w <= 768. && h <= 680.);
+        let frame_h = 2. + crate::theme::MODAL_HEAD_H + 1. + 2. * crate::theme::MODAL_PAD;
+        let frame_w = 2. + 2. * crate::theme::MODAL_PAD;
+        let ratio = (w - frame_w) / (h - frame_h);
+        assert!((ratio - 16. / 9.).abs() < 0.01, "{ratio}");
+        // A tall image is bounded by the height.
+        let (_, tall) = sheet_size(Some((400., 4000.)), 1000., 800.);
+        assert!((tall - 680.).abs() < 0.5);
+        // Never scaled up; still wide enough for the head.
+        assert_eq!(
+            sheet_size(Some((100., 50.)), 1000., 800.),
+            (320., 50. + frame_h)
+        );
+        // Undecoded: the whole box.
+        assert_eq!(sheet_size(None, 1000., 800.), (768., 680.));
     }
 }

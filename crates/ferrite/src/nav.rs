@@ -747,16 +747,17 @@ pub fn project_edit_button() -> gpui::component::button::Button {
         .child(icon(icons::PENCIL, ROW_ICON, TEXT_MUTED))
 }
 
-/// The filter menu's last row: a verb, not an option — `Add project…`
-/// with a `+` mark. The caller sets a separator above it and wires the
-/// press to the folder picker.
+/// The filter menu's last row: a verb, not an option — `Add project…`,
+/// its label on the rows' own edge (no mark), `TEXT_MUTED` at rest and
+/// `TEXT` under the pointer, on the raised hover face. The caller sets a
+/// separator above it and wires the press to the folder picker.
 pub fn filter_action(index: usize, label: &'static str) -> Stateful<Div> {
-    components::menu_row(
-        ("nav-filter-action", index),
-        &components::MenuItem::new(label).leading(icons::PLUS, TEXT_MUTED),
-        false,
-        false,
-    )
+    components::menu_row_content(&components::MenuItem::new(label), false, false)
+        .id(("nav-filter-action", index))
+        .text_color(rgb(TEXT_MUTED))
+        .cursor_pointer()
+        .hover(|row| row.bg(rgb(FILL)).text_color(rgb(TEXT)))
+        .press_raised()
 }
 
 /// The scrolling tree. It is the only thing in the column that scrolls, and

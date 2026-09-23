@@ -593,7 +593,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // failing, with its checks card open under the chip.
         "chrome" => {
             let (scene, _) = legacy("live");
-            let setup: Setup = Box::new(|view, window, cx| {
+            let setup: Setup = Box::new(|view, _, cx| {
                 use ferrite_core::workspace::{
                     BranchStatus, Check, CheckState, PrState, PullRequest,
                 };
@@ -637,9 +637,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         }),
                     }),
                 )]);
-                let width = f32::from(window.viewport_size().width);
-                view.context_checks =
-                    Some((thread, gpui::point(gpui::px(width - 24.), gpui::px(118.))));
+                view.context_checks = Some(thread);
                 cx.notify();
             });
             (scene, setup)
@@ -684,11 +682,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         }),
                     }),
                 )]);
-                let x = crate::theme::NAV_WIDTH + 520.;
-                view.context_checks = Some((
-                    thread,
-                    gpui::point(gpui::px(x), gpui::px(crate::theme::WIN_CHROME_H)),
-                ));
+                view.context_checks = Some(thread);
                 cx.notify();
             });
             (scene, setup)
@@ -711,10 +705,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let scene = conversation(label);
             let setup: Setup = Box::new(|view, _, _| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.context_usage = Some((
-                    ferrite_core::roster::PaneIdentity::Thread(thread),
-                    gpui::point(gpui::px(1150.), gpui::px(860.)),
-                ));
+                view.context_usage = Some(ferrite_core::roster::PaneIdentity::Thread(thread));
             });
             (scene, setup)
         }
@@ -738,11 +729,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, _| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let generation = view.cockpit.thread(thread).expect("open").generation();
-                view.session_controls = Some((
-                    thread,
-                    generation,
-                    gpui::point(gpui::px(1250.), gpui::px(860.)),
-                ));
+                view.session_controls = Some((thread, generation));
             });
             (scene, setup)
         }

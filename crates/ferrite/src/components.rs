@@ -38,9 +38,10 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         .cursor_pointer()
 }
 
-/// Keyboard focus, the one recipe: a 2px inset `FOCUS_RING` outline. It
-/// survives hover's border/background refinements and stays inside clipped
-/// forms without taking any layout space.
+/// Keyboard focus, the one recipe: a `FOCUS_RING_W` (1px) inset
+/// `FOCUS_RING` outline. It survives hover's border/background refinements
+/// and stays inside clipped forms without taking any layout space, so a
+/// control never swaps a border to say it has focus.
 pub fn control_focus(style: StyleRefinement) -> StyleRefinement {
     focus_outline(style, theme::FOCUS_RING)
 }
@@ -51,8 +52,18 @@ fn focus_outline(style: StyleRefinement, ink: u32) -> StyleRefinement {
         color: rgb(ink).into(),
         offset: point(px(0.), px(0.)),
         blur_radius: px(0.),
-        spread_radius: px(2.),
+        spread_radius: px(theme::FOCUS_RING_W),
     }])
+}
+
+/// `control_focus` on an element whose focus is a state the caller tracks
+/// (tab resting on a band chip, an editing field), not the element's own.
+pub fn focused<E: Styled>(mut element: E, focused: bool) -> E {
+    if focused {
+        let ring = control_focus(StyleRefinement::default());
+        element.style().refine(&ring);
+    }
+    element
 }
 
 /// Form actions need an opaque hover face on the modal's raised ground.
@@ -107,6 +118,7 @@ fn primary_ink(disabled: bool) -> u32 {
 /// their labels. Dense pane chrome continues to use `label`.
 pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
     div()
+        .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_UI))
         .line_height(gpui::px(theme::LH_UI))
         .text_color(rgb(ink))
@@ -635,16 +647,19 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         )
 }
 
-/// A choice chip's ink, ground (`0xRRGGBBAA`) and edge.
+/// A choice chip's ink, ground (`0xRRGGBB`) and edge (`0xRRGGBBAA`). The
+/// selection is neutral — a `FILL` chip with the strong hairline — because
+/// the accent is only for focus, links, the caret and the primary button
+/// (rule 2.2.6). An unselected chip's edge is held in layout, transparent.
 pub fn choice_inks(selected: bool) -> (u32, Option<u32>, u32) {
     if selected {
         (
             theme::TEXT_STRONG,
-            Some(theme::ACCENT_WASH),
-            theme::ACCENT_EDGE,
+            Some(theme::FILL),
+            theme::HAIRLINE_STRONG,
         )
     } else {
-        (theme::TEXT_2, None, theme::HAIRLINE_STRONG)
+        (theme::TEXT_2, None, theme::TRANSPARENT)
     }
 }
 
@@ -660,13 +675,18 @@ pub struct MenuItem {
     pub label_w: Option<f32>,
     /// A 12px leading mark and its ink.
     pub leading: Option<(&'static str, u32)>,
-    /// A trailing mono detail: a description, a path, a tag. Menus are
-    /// chrome, so descriptions align in one mono column as in a terminal.
+    /// A trailing detail: Ferrite's description of the row in Geist
+    /// `FS_UI` (`TEXT_MUTED`, `TEXT_2` on the cursor row), or — when `mono`
+    /// — machine text such as an `@` path, in Geist Mono `FS_SM`
+    /// `TEXT_MUTED`, cut at its head so the useful tail survives.
     pub detail: Option<SharedString>,
+    /// `detail` is machine text (rule 2.1.1): drawn in the code face.
+    pub mono: bool,
     /// The key that does the same thing, faint at the right edge.
     pub shortcut: Option<SharedString>,
     pub checked: bool,
-    /// Arms before it runs, and wears the blocked ink.
+    /// Arms before it runs: at rest it reads like any row; armed, its label
+    /// turns `BLOCKED` and asks for the second press.
     pub destructive: bool,
     pub disabled: bool,
 }
@@ -692,6 +712,10 @@ impl MenuItem {
     }
     pub fn detail(mut self, text: impl Into<SharedString>) -> Self {
         self.detail = Some(text.into());
+        self
+    }
+    pub fn mono(mut self, mono: bool) -> Self {
+        self.mono = mono;
         self
     }
     /// An empty shortcut is no shortcut.
@@ -724,7 +748,10 @@ pub struct RowInks {
     pub ground: Option<u32>,
 }
 
-/// The row state table, as data: rest, cursor, disabled, destructive, armed.
+/// The row state table, as data: rest, cursor, disabled, armed. A
+/// destructive row reads like any other until it arms; armed, it holds the
+/// cursor's `FILL` ground and its label alone turns `BLOCKED` — colour on
+/// the word, never a wash (rule 2.2.4).
 pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if item.disabled {
         return RowInks {
@@ -736,16 +763,16 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     }
     if armed {
         return RowInks {
-            label: theme::TEXT_STRONG,
+            label: theme::BLOCKED,
             detail: theme::TEXT_2,
             shortcut: theme::TEXT_MUTED,
-            ground: Some(theme::BLOCKED_WASH),
+            ground: Some((theme::FILL << 8) | 0xff),
         };
     }
-    let label = match (item.destructive, cursor) {
-        (true, _) => theme::BLOCKED,
-        (false, true) => theme::TEXT_STRONG,
-        (false, false) => theme::TEXT,
+    let label = if cursor {
+        theme::TEXT_STRONG
+    } else {
+        theme::TEXT
     };
     RowInks {
         label,
@@ -789,19 +816,29 @@ pub fn code_column_w(chars: usize) -> f32 {
     (chars as f32 * theme::CODE_CELL).clamp(theme::MENU_NAME_MIN_W, theme::MENU_NAME_MAX_W)
 }
 
+/// What an armed destructive row adds to its label.
+const ARMED_SEAM: &str = " · ";
+const ARMED_ASK: &str = "press again";
+
 /// A menu row's content with no id and no pointer role, for kit hosts
 /// (`PopupMenuItem::element`) that own the row's interaction.
 pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
     let inks = row_inks(item, cursor, armed);
-    let label: SharedString = if armed {
-        format!("Confirm: {}", item.label).into()
+    // Armed, the label asks for the second press in the one line grammar:
+    // `Delete thread · press again`, the `·` in structure ink.
+    let (label, highlights): (SharedString, _) = if armed {
+        let at = item.label.len();
+        let text = format!("{}{ARMED_SEAM}{ARMED_ASK}", item.label);
+        let seam = HighlightStyle {
+            color: Some(rgb(theme::TEXT_FAINT).into()),
+            ..Default::default()
+        };
+        (text.into(), vec![(at..at + ARMED_SEAM.len(), seam)])
     } else {
-        item.label.clone()
-    };
-    let highlights = if armed {
-        Vec::new()
-    } else {
-        match_highlights(&item.matched, item.disabled)
+        (
+            item.label.clone(),
+            match_highlights(&item.matched, item.disabled),
+        )
     };
     text_ui()
         .flex()
@@ -830,16 +867,18 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                 .child(gpui::StyledText::new(label).with_highlights(highlights)),
         )
         .when_some(item.detail.clone(), |row, detail| {
-            row.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(theme::FONT_UI)
+            let cell = div().flex_1().min_w_0().truncate();
+            let cell = if item.mono {
+                cell.font_family(theme::FONT_CODE)
                     .text_size(px(theme::FS_SM))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .text_ellipsis_start()
+            } else {
+                cell.font_family(theme::FONT_UI)
+                    .text_size(px(theme::FS_UI))
                     .text_color(rgb(inks.detail))
-                    .child(detail),
-            )
+            };
+            row.child(cell.child(detail))
         })
         .when(item.detail.is_none(), |row| row.child(div().flex_1()))
         .when_some(item.shortcut.clone(), |row, key| {
@@ -907,6 +946,24 @@ pub fn menu_section(
                 .child(div().font_weight(theme::W_LABEL).child(title.into()))
                 .children(note),
         )
+}
+
+/// Reports `element`'s laid-out bounds to `record` in prepaint, through an
+/// absolute canvas pinned to all four edges of its padding box, so padding
+/// never offsets it. A border is outside that box: an edged caller adds it
+/// back. What a summoned surface measures its trigger and limits by.
+pub fn on_bounds<E: ParentElement>(
+    element: E,
+    record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
+) -> E {
+    element.child(
+        gpui::canvas(
+            move |bounds, window, cx| record(bounds, window, cx),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0(),
+    )
 }
 
 /// The one separator inside a floating surface: `MENU_GROUP_GAP` of space.
@@ -983,6 +1040,10 @@ pub struct ChoiceMenu {
     pub return_focus: gpui::FocusHandle,
     pub on_open: OpenChanged,
     pub on_pick: Picked,
+    /// Where the menu may rest (`FloatPlace`): its foot `FLOAT_OFFSET`
+    /// above the Composer's edge, its right edge inside the Pane's. `None`
+    /// hangs it off the trigger alone.
+    pub place: Option<FloatPlace>,
 }
 
 #[derive(Default)]
@@ -990,6 +1051,51 @@ struct ChoiceMenuState {
     menu: Option<gpui::Entity<gpui::component::menu::PopupMenu>>,
     steps: usize,
     initialized: bool,
+    /// How far the menu is lifted and pulled left of where the kit hangs
+    /// it, and whether that has been measured yet (unmeasured, it is
+    /// drawn at zero opacity for its one frame).
+    lift: f32,
+    shift: f32,
+    placed: bool,
+}
+
+/// The limits a summoned surface rests within (rule 2.4.3): `floor` is the
+/// Composer's top edge, which a surface opening upward rests `FLOAT_OFFSET`
+/// above so the Composer's edge stays whole; `limit_right` is the Pane's
+/// inner edge (`PANE_PAD_X` in from its right), which it never crosses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloatPlace {
+    pub floor: f32,
+    pub limit_right: f32,
+}
+
+impl FloatPlace {
+    /// A card's anchor point, from its trigger's bounds and never the
+    /// pointer: opening up, its foot rests `FLOAT_OFFSET` above the floor;
+    /// opening down, its head `FLOAT_OFFSET` under the trigger. It hangs by
+    /// its right corner at the trigger's right edge, pulled left to stay
+    /// inside the Pane.
+    pub fn card_corner(
+        &self,
+        trigger: gpui::Bounds<gpui::Pixels>,
+        up: bool,
+    ) -> gpui::Point<gpui::Pixels> {
+        let x = f32::from(trigger.right()).min(self.limit_right);
+        let y = if up {
+            self.floor - theme::FLOAT_OFFSET
+        } else {
+            f32::from(trigger.bottom()) + theme::FLOAT_OFFSET
+        };
+        point(px(x), px(y))
+    }
+
+    /// How far a surface laid out at `natural` must lift (up is positive)
+    /// and shift left to rest on its floor inside the Pane.
+    fn offsets(&self, natural: gpui::Bounds<gpui::Pixels>) -> (f32, f32) {
+        let lift = f32::from(natural.bottom()) - (self.floor - theme::FLOAT_OFFSET);
+        let shift = (f32::from(natural.right()) - self.limit_right).max(0.);
+        (lift, shift)
+    }
 }
 
 impl gpui::RenderOnce for ChoiceMenu {
@@ -1005,6 +1111,9 @@ impl gpui::RenderOnce for ChoiceMenu {
             retained.update(cx, |state, _| {
                 state.menu = None;
                 state.initialized = false;
+                state.placed = false;
+                state.lift = 0.;
+                state.shift = 0.;
             });
         } else if retained.read(cx).menu.is_none() {
             let steps = cursor_steps(&self.choices);
@@ -1054,7 +1163,12 @@ impl gpui::RenderOnce for ChoiceMenu {
                     let picked = pick.clone();
                     menu = menu.item(
                         PopupMenuItem::element(move |_, _| {
+                            // The kit item does not shrink its content, so
+                            // the row holds the menu's widest itself and a
+                            // long detail truncates inside it.
                             kit_row(menu_row_content(&item, false, false))
+                                .max_w(px(theme::CHOICE_MENU_MAX_W - 2. * theme::FLOAT_PAD))
+                                .debug_selector(move || format!("choice-row-{index}"))
                         })
                         .disabled(choice.disabled)
                         .on_click(move |_, window, cx| picked(index, window, cx)),
@@ -1073,7 +1187,11 @@ impl gpui::RenderOnce for ChoiceMenu {
                 state.steps = steps;
             });
         }
-        let menu = retained.read(cx).menu.clone();
+        let (menu, lift, shift, placed) = {
+            let state = retained.read(cx);
+            (state.menu.clone(), state.lift, state.shift, state.placed)
+        };
+        let place = self.place;
         let on_open = self.on_open;
         let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
             .appearance(false)
@@ -1082,38 +1200,72 @@ impl gpui::RenderOnce for ChoiceMenu {
             .trigger(self.trigger)
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx));
+        if place.is_some() {
+            // The kit hangs the menu off the chip; the measured offsets move
+            // it onto the Composer's edge and inside the Pane.
+            popover = popover
+                .bottom(px(lift))
+                .left(px(-shift))
+                .when(!placed, |popover| popover.opacity(0.));
+        }
         if let Some(menu) = menu {
             popover = popover
                 .track_focus(&menu.focus_handle(cx))
                 .content(move |_, _, _| {
-                    use gpui::base::ElementExt as _;
                     let retained = retained.clone();
                     let menu = menu.clone();
-                    // The kit surface keeps its own hairline ring and rounds
-                    // to the kit's `radius` (`R_CONTROL`); the wrapper follows
-                    // it, so the one float shadow hugs its corners.
-                    div()
-                        .rounded(px(theme::R_CONTROL))
-                        .shadow(float_shadow())
-                        .child(menu.clone())
-                        .on_prepaint(move |_, window, cx| {
-                            let steps = retained.update(cx, |state, _| {
-                                if state.initialized {
-                                    return None;
+                    // The one floating recipe. The kit menu's own inset
+                    // (`p_1`, 4px) is the `FLOAT_PAD`, so the surface adds
+                    // none; its hairline ring and radius are clipped away
+                    // at its own edge, so the only edge is the surface's.
+                    let surface = floating_surface()
+                        .debug_selector(|| "choice-menu".into())
+                        .p(px(0.))
+                        .child(div().overflow_hidden().child(menu.clone()));
+                    on_bounds(surface, move |bounds, window, cx| {
+                        if let Some(place) = place {
+                            // Inside the surface's 1px edge: add it back.
+                            let bounds = bounds.dilate(px(1.));
+                            let moved = retained.update(cx, |state, _| {
+                                // Undo the offsets in force to find where
+                                // the kit laid it, then solve from there.
+                                let natural = gpui::Bounds {
+                                    origin: point(
+                                        bounds.origin.x + px(state.shift),
+                                        bounds.origin.y + px(state.lift),
+                                    ),
+                                    size: bounds.size,
+                                };
+                                let (lift, shift) = place.offsets(natural);
+                                let moved = (lift - state.lift).abs() > 0.5
+                                    || (shift - state.shift).abs() > 0.5
+                                    || !state.placed;
+                                state.placed = true;
+                                if moved {
+                                    state.lift = lift;
+                                    state.shift = shift;
                                 }
-                                state.initialized = true;
-                                Some(state.steps)
+                                moved
                             });
-                            if let Some(steps) = steps {
-                                menu.focus_handle(cx).focus(window, cx);
-                                for _ in 0..steps {
-                                    window.dispatch_action(
-                                        Box::new(gpui::base::actions::SelectDown),
-                                        cx,
-                                    );
-                                }
+                            if moved {
+                                window.refresh();
                             }
-                        })
+                        }
+                        let steps = retained.update(cx, |state, _| {
+                            if state.initialized {
+                                return None;
+                            }
+                            state.initialized = true;
+                            Some(state.steps)
+                        });
+                        if let Some(steps) = steps {
+                            menu.focus_handle(cx).focus(window, cx);
+                            for _ in 0..steps {
+                                window
+                                    .dispatch_action(Box::new(gpui::base::actions::SelectDown), cx);
+                            }
+                        }
+                    })
                 });
         }
         popover
@@ -1143,7 +1295,7 @@ fn cursor_steps(choices: &[Choice]) -> usize {
 /// back and spans the item edge to edge. The kit draws the hover and cursor
 /// face (`tokens.accent` = `FILL`) on the item itself.
 pub fn kit_row(row: Div) -> Div {
-    row.flex_1().mx(px(-theme::MENU_ROW_PAD_X))
+    row.flex_1().mx(px(-theme::MENU_ROW_PAD_X)).py(px(0.))
 }
 
 /// The scrollbar. gpui paints none of its own, so the toolkit's draws it:
@@ -1248,10 +1400,15 @@ mod tests {
     #[test]
     fn keyboard_focus_is_the_focus_ring_ink_and_primary_is_steel() {
         let focus = control_focus(StyleRefinement::default());
-        let shadow = &focus.box_shadow.expect("an inset outline")[0];
+        let shadow = &focus.box_shadow.clone().expect("an inset outline")[0];
         assert!(shadow.inset);
         assert_eq!(shadow.color, solid(theme::FOCUS_RING));
-        assert_eq!(shadow.spread_radius, px(2.));
+        assert_eq!(shadow.spread_radius, px(theme::FOCUS_RING_W));
+        assert_eq!(theme::FOCUS_RING_W, 1.);
+        let mut ringed = focused(div(), true);
+        assert_eq!(ringed.style().box_shadow, focus.box_shadow);
+        let mut plain = focused(div(), false);
+        assert_eq!(plain.style().box_shadow, None);
         assert_eq!(primary_face(false), theme::ACCENT_STRONG);
         assert_eq!(primary_ink(false), theme::ON_ACCENT);
         assert_eq!(primary_face(true), theme::FILL);
@@ -1280,18 +1437,18 @@ mod tests {
     }
 
     #[test]
-    fn a_choice_wears_the_accent_only_when_selected() {
+    fn a_selected_choice_is_neutral_and_the_rest_hold_a_clear_edge() {
         assert_eq!(
             choice_inks(true),
             (
                 theme::TEXT_STRONG,
-                Some(theme::ACCENT_WASH),
-                theme::ACCENT_EDGE
+                Some(theme::FILL),
+                theme::HAIRLINE_STRONG
             )
         );
         assert_eq!(
             choice_inks(false),
-            (theme::TEXT_2, None, theme::HAIRLINE_STRONG)
+            (theme::TEXT_2, None, theme::TRANSPARENT)
         );
     }
 
@@ -1314,13 +1471,10 @@ mod tests {
             (theme::TEXT_STRONG, Some(fill))
         );
         let delete = MenuItem::new("Delete Thread").destructive();
-        assert_eq!(row_inks(&delete, false, false).label, theme::BLOCKED);
-        assert_eq!(row_inks(&delete, true, false).label, theme::BLOCKED);
+        assert_eq!(row_inks(&delete, false, false).label, theme::TEXT);
+        assert_eq!(row_inks(&delete, true, false).label, theme::TEXT_STRONG);
         let armed = row_inks(&delete, false, true);
-        assert_eq!(
-            (armed.label, armed.ground),
-            (theme::TEXT_STRONG, Some(theme::BLOCKED_WASH))
-        );
+        assert_eq!((armed.label, armed.ground), (theme::BLOCKED, Some(fill)));
         let dead = MenuItem::new("Reveal").disabled(true);
         let inks = row_inks(&dead, true, false);
         assert_eq!((inks.label, inks.ground), (theme::TEXT_MUTED, None));

@@ -5,6 +5,10 @@
 
 pub(crate) mod subagents;
 
+/// Card triggers' bounds by key, recorded in prepaint.
+type FloatTriggers =
+    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "visual-reference")]
 #[path = "visual_reference.rs"]
@@ -358,20 +362,23 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
-    /// The usage meter's detail card, tied to the Pane that opened it and
-    /// the click position. A draft Pane has a meter too — its account
-    /// windows are real before the first prompt — so this is a
-    /// `PaneIdentity`, not a Thread.
-    context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
-    session_controls: Option<(ThreadId, u64, gpui::Point<gpui::Pixels>)>,
+    /// The usage meter's detail card, tied to the Pane that opened it. A
+    /// draft Pane has a meter too — its account windows are real before the
+    /// first prompt — so this is a `PaneIdentity`, not a Thread. Like every
+    /// card it hangs off its trigger's bounds (`float_triggers`), never the
+    /// pointer, so a click and a key open it in the same place.
+    context_usage: Option<PaneIdentity>,
+    session_controls: Option<(ThreadId, u64)>,
     /// The Composer's mode menu, open on one Thread's Session generation.
     mode_picker: Option<(ThreadId, u64)>,
     session_control_error: Option<(ThreadId, u64, String)>,
-    /// The header `ci` mark's checks card, tied to its Thread and click
-    /// position (#29). The runs it lists are read from the same cached
+    /// The header `ci` mark's checks card, tied to its Thread (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
     /// disagree with the mark that opened it.
-    context_checks: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
+    context_checks: Option<ThreadId>,
+    /// Each card trigger's bounds as last laid out (`usage-…`,
+    /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
+    float_triggers: FloatTriggers,
     /// A seam being dragged: the Group, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
@@ -496,6 +503,8 @@ struct ProjectEditor {
     staged: Vec<std::path::PathBuf>,
     /// A refusal, shown on the card that caused it.
     error: Option<SharedString>,
+    /// The body's scroll, for its overlay scrollbar.
+    scroll: ScrollHandle,
 }
 
 impl ProjectEditor {
@@ -560,6 +569,43 @@ enum DraftPlacement {
     Loose,
     CurrentGroup,
     NewGroupWith(ThreadId),
+}
+
+/// About's Version: the package version, and ` · dev` on a development
+/// build, so a release is never labelled.
+fn version_label(version: &str, dev: bool) -> String {
+    if dev {
+        format!("{version} · dev")
+    } else {
+        version.to_string()
+    }
+}
+
+/// A rename editor with its keys beside it while it edits: `↵ save · esc
+/// cancel` in mono `TEXT_MUTED`, the `·` in structure ink. The keys live
+/// here, where they act, rather than on the menu row that opened it.
+fn rename_field(editor: Entity<crate::composer::Composer>) -> Div {
+    let text = "↵ save · esc cancel";
+    let at = text.find(" · ").unwrap_or(0);
+    let hint = crate::components::text_meta()
+        .debug_selector(|| "rename-hint".into())
+        .flex_shrink_0()
+        .font_family(crate::theme::FONT_CODE)
+        .child(gpui::StyledText::new(text).with_highlights(vec![(
+            at..at + " · ".len(),
+            gpui::HighlightStyle {
+                color: Some(rgb(crate::theme::TEXT_FAINT).into()),
+                ..Default::default()
+            },
+        )]));
+    div()
+        .flex()
+        .items_center()
+        .gap(px(crate::theme::SPACE_2))
+        .min_w_0()
+        .flex_1()
+        .child(div().min_w_0().flex_1().child(editor))
+        .child(hint)
 }
 
 /// The context menu up on screen.
@@ -714,9 +760,14 @@ impl Kind {
                 ("↵", "pick"),
                 ("esc", "dismiss"),
             ],
-            Kind::Provider | Kind::Effort | Kind::Band(_) => {
+            Kind::Band(pane::BandChip::Workspace) => {
                 &[("↑↓", "move"), ("↵", "pick"), ("esc", "dismiss")]
             }
+            // The pickers are `ChoiceMenu`s: the kit keys them, and the
+            // slot's footer never draws for them.
+            Kind::Provider
+            | Kind::Effort
+            | Kind::Band(pane::BandChip::Provider | pane::BandChip::Effort) => &[],
         }
     }
 }
@@ -926,6 +977,7 @@ impl CockpitView {
             mode_picker: None,
             session_control_error: None,
             context_checks: None,
+            float_triggers: FloatTriggers::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_rail: std::cell::Cell::new(false),
             nav_forced_open: false,
@@ -2039,10 +2091,7 @@ impl CockpitView {
     ) -> AnyElement {
         if let Some((RenameTarget::Group(editing), editor)) = &self.rename {
             if *editing == group {
-                return div()
-                    .min_w_0()
-                    .flex_1()
-                    .child(editor.clone())
+                return rename_field(editor.clone())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -2097,10 +2146,7 @@ impl CockpitView {
                 let shown = self.pane_for(thread).is_some();
                 let live = self.cockpit.thread(thread).is_some();
                 let grouped = self.cockpit.groups().of(thread).is_some();
-                rows.push(Some((
-                    menu::Item::new("Rename").shortcut("↵ save · esc cancel"),
-                    MenuVerb::Rename,
-                )));
+                rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
                 if self.cockpit.roster().focused_thread() != Some(thread) {
                     rows.push(Some((
                         menu::Item::new(if live { "Open" } else { "Resume" }),
@@ -2159,10 +2205,7 @@ impl CockpitView {
                     MenuVerb::CopyTranscript,
                 )));
                 rows.push(None);
-                rows.push(Some((
-                    menu::Item::new("Rename").shortcut("↵ save · esc cancel"),
-                    MenuVerb::Rename,
-                )));
+                rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
                 rows.push(Some((
                     menu::Item::new("Toggle Fullscreen").shortcut("cmd-F"),
                     MenuVerb::Fullscreen,
@@ -2898,12 +2941,9 @@ impl CockpitView {
                 } else {
                     "settings-codex-model"
                 },
-                if provider == Provider::Claude {
-                    "Claude model"
-                } else {
-                    "Codex model"
-                },
-                "The model new Threads use. CLI default follows the Provider's own choice.",
+                // The group names the provider: `Claude › Model`.
+                "Model",
+                "",
                 prefs::model_options(self.cockpit.model_catalog(provider), chosen.as_deref()),
                 self.setting_change(cx, move |settings, value| {
                     settings.set_model_for(provider, value)
@@ -2928,19 +2968,20 @@ impl CockpitView {
                 } else {
                     "settings-codex-effort"
                 },
+                "Effort",
+                // Said once, in the first group: it holds for both.
                 if provider == Provider::Claude {
-                    "Claude effort"
+                    "Each thread can change its own"
                 } else {
-                    "Codex effort"
+                    ""
                 },
-                "Reasoning depth for new Threads. Each Thread can change its own.",
                 std::iter::once(None)
                     .chain(ladder.into_iter().map(Some))
                     .map(|value| {
                         let label = value
                             .as_deref()
                             .map(effort_title)
-                            .unwrap_or_else(|| "Default".into());
+                            .unwrap_or_else(|| prefs::CLI_DEFAULT.into());
                         (label.into(), effort == value, value)
                     })
                     .collect(),
@@ -2963,26 +3004,26 @@ impl CockpitView {
                 })
                 .collect()
         };
-        let permissions = vec![
-            prefs::choices(
-                "settings-claude-mode",
-                "Claude permissions",
-                "When Claude asks before acting",
-                modes(
-                    &[
-                        ("CLI default", None),
-                        ("Ask", Some("default")),
-                        ("Accept edits", Some("acceptEdits")),
-                        ("Plan", Some("plan")),
-                        ("Bypass", Some("bypassPermissions")),
-                    ],
-                    settings.claude_permission_mode.as_deref(),
-                ),
-                self.setting_change(cx, |s, v| s.claude_permission_mode = v),
+        let claude_permissions = vec![prefs::choices(
+            "settings-claude-mode",
+            "Permissions",
+            "When Claude asks before acting",
+            modes(
+                &[
+                    (prefs::CLI_DEFAULT, None),
+                    ("Ask", Some("default")),
+                    ("Accept edits", Some("acceptEdits")),
+                    ("Plan", Some("plan")),
+                    ("Bypass permissions", Some("bypassPermissions")),
+                ],
+                settings.claude_permission_mode.as_deref(),
             ),
+            self.setting_change(cx, |s, v| s.claude_permission_mode = v),
+        )];
+        let codex_permissions = vec![
             prefs::choices(
                 "settings-codex-approval",
-                "Codex approvals",
+                "Approvals",
                 "When Codex asks before acting",
                 modes(
                     &[
@@ -2998,11 +3039,11 @@ impl CockpitView {
             ),
             prefs::choices(
                 "settings-codex-sandbox",
-                "Codex sandbox",
+                "Sandbox",
                 "What Codex may touch",
                 modes(
                     &[
-                        ("Codex default", None),
+                        (prefs::CLI_DEFAULT, None),
                         ("Read only", Some("read-only")),
                         ("Workspace write", Some("workspace-write")),
                         ("Full access", Some("danger-full-access")),
@@ -3014,12 +3055,12 @@ impl CockpitView {
         ];
         let behaviour = vec![
             prefs::toggle("settings-auto-title", "Name Threads automatically",
-                "Use the first prompt, then a short title from the Thread's Provider. Renaming a Thread keeps your title.",
+                "Use the first prompt, then a short title from the Thread's Provider. Renaming a Thread keeps your title",
                 settings.auto_title, self.setting_change(cx, |s, v| s.auto_title = v)),
             prefs::toggle("settings-placeholder-suggestions", "Suggest follow-up prompts",
-                "Predict a possible next prompt in the empty Composer. Tab accepts it without sending.",
+                "Predict a possible next prompt in the empty Composer. Tab accepts it without sending",
                 settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
-            prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript.",
+            prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript",
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
             prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "cmd-B toggles it any time",
                 settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
@@ -3027,7 +3068,7 @@ impl CockpitView {
         let reading = vec![prefs::choices(
             "settings-solo-answer-size",
             "Solo answer size",
-            "Answer text in Solo and fullscreen. Group panes keep their compact size.",
+            "Answer text in Solo and fullscreen. Group panes keep their compact size",
             [
                 (
                     "Standard",
@@ -3054,10 +3095,10 @@ impl CockpitView {
             .cli_versions
             .clone()
             .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
-        let mut about = vec![prefs::fact("Version", env!("CARGO_PKG_VERSION").into())];
-        if crate::titlebar::DEV {
-            about.push(prefs::fact("Development build", "Yes".into()));
-        }
+        let mut about = vec![prefs::fact(
+            "Version",
+            version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV).into(),
+        )];
         about.extend([
             prefs::fact("Claude CLI", claude),
             prefs::fact("Codex CLI", codex),
@@ -3076,8 +3117,14 @@ impl CockpitView {
             ),
         ]);
         let pages = vec![
-            prefs::page("New Threads", new_thread_groups),
-            prefs::page("Permissions", vec![prefs::group(None).items(permissions)]),
+            prefs::page("New threads", new_thread_groups),
+            prefs::page(
+                "Permissions",
+                vec![
+                    prefs::group(Some(provider_title(Provider::Claude))).items(claude_permissions),
+                    prefs::group(Some(provider_title(Provider::Codex))).items(codex_permissions),
+                ],
+            ),
             prefs::page(
                 "Behaviour",
                 vec![
@@ -3144,6 +3191,7 @@ impl CockpitView {
                 name,
                 staged: Vec::new(),
                 error: None,
+                scroll: ScrollHandle::new(),
             },
             cx,
         );
@@ -3159,6 +3207,7 @@ impl CockpitView {
                 name,
                 staged: Vec::new(),
                 error: None,
+                scroll: ScrollHandle::new(),
             },
             cx,
         );
@@ -3234,7 +3283,7 @@ impl CockpitView {
             }
             Err(error) => {
                 self.project_editor = Some(ProjectEditor {
-                    error: Some(format!("Project unchanged: {error}").into()),
+                    error: Some(format!("project unchanged · {error}").into()),
                     ..editor
                 });
             }
@@ -3250,7 +3299,7 @@ impl CockpitView {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Add Directory".into()),
+            prompt: Some("Add directory".into()),
         });
         cx.spawn(async move |this, cx| {
             let path = match receiver.await {
@@ -3279,7 +3328,7 @@ impl CockpitView {
                 editor.error = None;
                 if let Err(error) = self.cockpit.add_project_directories(project, &[path]) {
                     if let Some(editor) = self.project_editor.as_mut() {
-                        editor.error = Some(format!("directory unchanged: {error}").into());
+                        editor.error = Some(format!("directory unchanged · {error}").into());
                     }
                 }
             }
@@ -3347,7 +3396,7 @@ impl CockpitView {
                 .collect(),
             None => editor.staged.clone(),
         };
-        let directory_count = directories.len();
+        let empty = directories.is_empty();
         let editing = editor.target;
 
         let close = project_editor::close_button(cx).on_click(cx.listener(
@@ -3358,18 +3407,16 @@ impl CockpitView {
             },
         ));
         let mut body = project_editor::body()
+            .track_scroll(&editor.scroll)
             .child(project_editor::name_field(
                 editor.name.clone(),
                 editor.name.read(cx).focus_handle(cx).is_focused(window),
             ))
             .child(project_editor::section_label(
                 "Directories",
-                "The first directory is the main one. Add the others one at a time.",
+                "The first is the main directory",
             ));
         let mut rows = Vec::new();
-        if directories.is_empty() {
-            rows.push(project_editor::empty_directories());
-        }
         for (index, directory) in directories.into_iter().enumerate() {
             let mut actions = div().flex().items_center().gap(px(4.));
             // An existing Project's main directory is fixed: Threads,
@@ -3395,7 +3442,7 @@ impl CockpitView {
                                 .remove_project_directory(project, index)
                                 .err()
                                 .map(|error| {
-                                    SharedString::from(format!("directory unchanged: {error}"))
+                                    SharedString::from(format!("directory unchanged · {error}"))
                                 });
                             if let Some(editor) = view.project_editor.as_mut() {
                                 editor.error = refusal;
@@ -3406,28 +3453,36 @@ impl CockpitView {
                 );
             }
             rows.push(project_editor::directory_row(
+                index,
                 directory.display().to_string().into(),
-                if index == 0 {
-                    "Main directory"
-                } else {
-                    "Additional directory"
-                },
+                index == 0,
                 actions,
             ));
         }
-        body = body.child(project_editor::directory_list(rows));
-        let add = project_editor::action_button("add-project-directory", "Add Directory", cx)
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.browse_for_project_directory(cx);
-            }));
-        let mut right = div().flex().items_center().gap(px(8.));
+        // Its own flex row, so the control hugs its label on the list's edge.
+        body = body.child(project_editor::directory_list(rows)).child(
+            div().flex().child(
+                project_editor::add_directory(
+                    if empty {
+                        "+ Add main directory"
+                    } else {
+                        "+ Add directory"
+                    },
+                    cx,
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.browse_for_project_directory(cx);
+                })),
+            ),
+        );
+        let mut left = div().flex().items_center();
         if let Some(project) = editing {
             let in_use = self.project_in_use(project);
-            right = right.child(
+            left = left.child(
                 // The verb stays the verb while it cannot run; why it cannot
                 // is the tooltip's to say.
-                project_editor::destructive_button("remove-project", "Remove Project", in_use, cx)
+                project_editor::destructive_button("remove-project", "Remove project", in_use, cx)
                     .debug_selector(|| "remove-project".into())
                     .when(in_use, |button| {
                         button.tooltip("Park or move its Threads first")
@@ -3440,7 +3495,7 @@ impl CockpitView {
                         match view.cockpit.remove_project(project) {
                             Err(error) => {
                                 if let Some(editor) = view.project_editor.as_mut() {
-                                    editor.error = Some(format!("remove refused: {error}").into());
+                                    editor.error = Some(format!("not removed · {error}").into());
                                 }
                             }
                             Ok(()) => {
@@ -3456,7 +3511,7 @@ impl CockpitView {
             );
         }
         let ready = self.project_editor_ready();
-        right = right.child(
+        let right = div().flex().items_center().child(
             project_editor::primary_button(
                 "confirm-project",
                 if editing.is_some() { "Done" } else { "Create" },
@@ -3470,12 +3525,12 @@ impl CockpitView {
                 }
             })),
         );
-        let footer = project_editor::footer(add, right);
+        let footer = project_editor::footer(left, right);
         if let Some(error) = editor.error.clone() {
             body = body.child(project_editor::error_line(error));
         }
 
-        let card = project_editor::card(directory_count)
+        let card = project_editor::card(f32::from(window.viewport_size().height))
             .id("project-editor-card")
             .debug_selector(|| "project-editor-card".into())
             .track_focus(&self.project_editor_focus)
@@ -3484,7 +3539,20 @@ impl CockpitView {
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
             .child(project_editor::head(title, close))
-            .child(body)
+            .child(
+                // The body scrolls under an overlay bar, never a gutter.
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink(1.)
+                    .min_h_0()
+                    .child(body)
+                    .child(crate::components::scrollbar(
+                        "project-editor-scrollbar",
+                        &editor.scroll,
+                    )),
+            )
             .child(footer);
         Some(
             deferred(crate::motion::veil_in(
@@ -3512,11 +3580,8 @@ impl CockpitView {
     fn pane_title(&self, index: usize, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::PaneTitle(editing), editor)) = &self.rename {
             if *editing == thread {
-                return div()
-                    .min_w_0()
-                    .flex_1()
+                return rename_field(editor.clone())
                     .font_weight(crate::theme::W_BODY)
-                    .child(editor.clone())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -3569,10 +3634,7 @@ impl CockpitView {
     ) -> AnyElement {
         if let Some((RenameTarget::Thread(editing), editor)) = &self.rename {
             if *editing == thread {
-                return div()
-                    .min_w_0()
-                    .flex_1()
-                    .child(editor.clone())
+                return rename_field(editor.clone())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -4504,7 +4566,7 @@ impl CockpitView {
                         if !standalone {
                             return None;
                         }
-                        let row = local_row(filter, "import", "adopt a CLI session file", false)?;
+                        let row = local_row(filter, "import", "Adopt a CLI session file", false)?;
                         return Some(Popover {
                             scroll: ScrollHandle::new(),
                             revealed: Default::default(),
@@ -4544,7 +4606,7 @@ impl CockpitView {
                     })
                     .collect();
                 if let Some(row) = standalone
-                    .then(|| local_row(filter, "import", "adopt a CLI session file", false))
+                    .then(|| local_row(filter, "import", "Adopt a CLI session file", false))
                     .flatten()
                 {
                     rows.retain(|existing| existing.row.name != row.name);
@@ -4614,7 +4676,7 @@ impl CockpitView {
                 rows.truncate(MENU_ROWS_MAX);
             };
             if standalone && pane::offers_import(Some(open.transcript())) {
-                if let Some(row) = local_row(filter, "import", "adopt a CLI session file", false) {
+                if let Some(row) = local_row(filter, "import", "Adopt a CLI session file", false) {
                     push_local(
                         &mut rows,
                         Row {
@@ -4629,13 +4691,9 @@ impl CockpitView {
             // after the first prompt the other one starts a fresh
             // conversation with the earlier one handed over as context,
             // which the picker itself explains.
-            let detail = if open.first_prompt_sent() {
-                "switch model · hand over to the other provider"
-            } else {
-                "switch provider / model"
-            };
+            let detail = "Switch model or hand over to the other provider";
             if let Some(row) = standalone
-                .then(|| local_row(filter, "effort", "switch reasoning effort", false))
+                .then(|| local_row(filter, "effort", "Switch reasoning effort", false))
                 .flatten()
             {
                 push_local(
@@ -5838,7 +5896,7 @@ impl CockpitView {
                     SharedString::from("Default"),
                     SharedString::from(match default {
                         Some(default) => format!("{} · from Settings", effort_title(default)),
-                        None => "the CLI's own choice".to_string(),
+                        None => "The CLI's own choice".to_string(),
                     }),
                     draft.binding.effort().is_none(),
                     BandChoice::Effort(None),
@@ -7593,7 +7651,7 @@ impl CockpitView {
         // zooming below L1, or the refresh that drops the PR out of the
         // header takes the card with it. A card outliving its mark would be
         // claiming CI for a Pane that is no longer saying anything about it.
-        if self.context_checks.is_some_and(|(thread, _)| {
+        if self.context_checks.is_some_and(|thread| {
             level != Level::Transcript
                 || self.focused_thread() != Some(thread)
                 || self.settings_open
@@ -7608,18 +7666,15 @@ impl CockpitView {
             self.context_checks = None;
         }
 
-        if self
-            .session_controls
-            .is_some_and(|(thread, generation, _)| {
-                level != Level::Transcript
-                    || self.settings_open
-                    || self.focused_thread() != Some(thread)
-                    || self
-                        .cockpit
-                        .thread(thread)
-                        .is_none_or(|open| open.generation() != generation)
-            })
-        {
+        if self.session_controls.is_some_and(|(thread, generation)| {
+            level != Level::Transcript
+                || self.settings_open
+                || self.focused_thread() != Some(thread)
+                || self
+                    .cockpit
+                    .thread(thread)
+                    .is_none_or(|open| open.generation() != generation)
+        }) {
             self.session_controls = None;
         }
 
@@ -7635,7 +7690,7 @@ impl CockpitView {
             self.mode_picker = None;
         }
 
-        if self.context_usage.is_some_and(|(identity, _)| {
+        if self.context_usage.is_some_and(|identity| {
             level != Level::Transcript
                 || self.settings_open
                 || self.project_editor.is_some()
@@ -8157,9 +8212,9 @@ impl CockpitView {
                 ))
             })
             .children(self.context_menu_element(cx))
-            .children(self.context_usage_element(cx))
-            .children(self.session_controls_element(cx))
-            .children(self.context_checks_element(cx))
+            .children(self.context_usage_element(window, cx))
+            .children(self.session_controls_element(window, cx))
+            .children(self.context_checks_element(window, cx))
             .children(self.settings_element(cx))
             .children(self.project_editor_element(window, cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
@@ -8791,9 +8846,7 @@ impl CockpitView {
         // Account-wide and remembered across launches, so the meter is
         // not blank until this Thread's first turn happens to report.
         let limits = self.cockpit.account_limits(provider);
-        let was_open = self
-            .context_usage
-            .is_some_and(|(shown, _)| shown == identity);
+        let was_open = self.context_usage.is_some_and(|shown| shown == identity);
         let selector = key.clone();
         Some(
             div()
@@ -8803,11 +8856,17 @@ impl CockpitView {
                 .debug_selector(move || format!("usage-meter-{selector}"))
                 .rounded(px(crate::theme::COMPOSER_CHIP_R))
                 .child(pane::usage_meter_body(fraction, limits)?)
+                .map(|meter| {
+                    crate::components::on_bounds(
+                        meter,
+                        self.record_trigger(format!("usage-{identity:?}").into()),
+                    )
+                })
                 .hover_raised()
                 .press_raised()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         view.focus_pane(index);
                         if !was_open && can_refresh {
@@ -8827,13 +8886,65 @@ impl CockpitView {
                         view.session_controls = None;
                         // Outside-click dismissal runs in capture phase, before this
                         // toggle. Use the state of the meter that received the press.
-                        view.context_usage = (!was_open)
-                            .then_some((identity, event.position - gpui::point(px(0.), px(12.))));
+                        view.context_usage = (!was_open).then_some(identity);
                         cx.notify();
                     }),
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Records a card trigger's laid-out bounds under `key`.
+    fn record_trigger(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static {
+        let sink = self.float_triggers.clone();
+        move |bounds, _, _| {
+            sink.borrow_mut().insert(key, bounds);
+        }
+    }
+
+    /// Where a card opened from trigger `key` in Pane `identity` hangs
+    /// (`FloatPlace::card_corner`). Until the Pane has been laid out once,
+    /// it waits a frame rather than guess.
+    fn card_corner(
+        &self,
+        key: String,
+        identity: PaneIdentity,
+        up: bool,
+        window: &mut Window,
+    ) -> Option<Point<Pixels>> {
+        let trigger = self.float_triggers.borrow().get(key.as_str()).copied();
+        let geometry = self
+            .index_of(identity)
+            .map(|index| self.panes[index].geometry.get())
+            .unwrap_or_default();
+        // A card opening down needs only the card's edge, not a Composer.
+        let place = geometry.card.and_then(|card| {
+            let limit_right = f32::from(card.right()) - crate::theme::PANE_PAD_X;
+            match geometry.composer {
+                Some(composer) => Some(crate::components::FloatPlace {
+                    floor: f32::from(composer.top()),
+                    limit_right,
+                }),
+                None if !up => Some(crate::components::FloatPlace {
+                    floor: 0.,
+                    limit_right,
+                }),
+                None => None,
+            }
+        });
+        // A card opened with no chip on screen (a slash command, a scene)
+        // hangs off the Composer's right edge, or the card's top.
+        let trigger = trigger.or(if up { geometry.composer } else { geometry.card });
+        match (trigger, place) {
+            (Some(trigger), Some(place)) => Some(place.card_corner(trigger, up)),
+            _ => {
+                window.request_animation_frame();
+                None
+            }
+        }
     }
 
     fn run_session_control(
@@ -8926,6 +9037,7 @@ impl CockpitView {
                         cx.notify();
                     });
                 }),
+                place: self.float_place(index),
             }
             .into_any_element(),
         )
@@ -9006,7 +9118,7 @@ impl CockpitView {
         }
         let was_open = self
             .session_controls
-            .is_some_and(|(shown, shown_generation, _)| {
+            .is_some_and(|(shown, shown_generation)| {
                 shown == thread && shown_generation == generation
             });
         Some(
@@ -9017,7 +9129,7 @@ impl CockpitView {
             .debug_selector(move || format!("session-controls-{}", thread.get()))
             .tooltip("Session controls")
             .child(pane::session_chip())
-            .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
                 if !was_open
@@ -9036,22 +9148,33 @@ impl CockpitView {
                 view.context_menu = None;
                 view.context_usage = None;
                 view.context_checks = None;
-                view.session_controls = (!was_open).then_some((
-                    thread,
-                    generation,
-                    match event {
-                        ClickEvent::Mouse(event) => event.up.position,
-                        _ => window.mouse_position(),
-                    },
-                ));
+                view.session_controls = (!was_open).then_some((thread, generation));
                 cx.notify();
             }))
+            // The card hangs off the chip's bounds, so a key opens it where
+            // a click does.
+            .map(|chip| {
+                crate::components::on_bounds(
+                    div().relative().flex_shrink_0().child(chip),
+                    self.record_trigger(format!("session-{}", thread.get()).into()),
+                )
+            })
             .into_any_element(),
         )
     }
 
-    fn session_controls_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (thread, generation, at) = self.session_controls?;
+    fn session_controls_element(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (thread, generation) = self.session_controls?;
+        let at = self.card_corner(
+            format!("session-{}", thread.get()),
+            PaneIdentity::Thread(thread),
+            true,
+            window,
+        )?;
         let open = self.cockpit.thread(thread)?;
         if open.generation() != generation {
             return None;
@@ -9074,6 +9197,32 @@ impl CockpitView {
                 .child(
                     crate::components::text_meta()
                         .text_color(rgb(crate::theme::TEXT_2))
+                        .child(verb),
+                )
+        };
+        // A card-wide verb is a whole menu row: `MENU_ROW_H`, the rows'
+        // inset, UI type in `TEXT`, the `FILL` hover.
+        let action_row = |id: SharedString, verb: &'static str| {
+            use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
+            crate::components::button(id)
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .foreground(rgb(crate::theme::TEXT).into())
+                        .hover(rgb(crate::theme::FILL).into())
+                        .active(rgb(crate::theme::FILL_HOVER).into()),
+                )
+                .tab_stop(true)
+                .w_full()
+                .h(px(crate::theme::MENU_ROW_H))
+                .px(px(crate::theme::MENU_ROW_PAD_X))
+                .rounded(px(crate::theme::R_MENU_ROW))
+                .child(
+                    div()
+                        .flex()
+                        .w_full()
+                        .text_size(px(crate::theme::FS_UI))
+                        .line_height(px(crate::theme::LH_UI))
+                        .text_color(rgb(crate::theme::TEXT))
                         .child(verb),
                 )
         };
@@ -9106,26 +9255,7 @@ impl CockpitView {
             });
         let errored = error.is_some();
         if let Some((_, _, error)) = error {
-            card = card.child(
-                row()
-                    .id("session-control-error")
-                    .items_start()
-                    .py(px(crate::theme::SPACE_1))
-                    .text_size(px(crate::theme::FS_SM))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(crate::theme::BLOCKED))
-                            .child("error"),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .whitespace_normal()
-                            .text_color(rgb(crate::theme::TEXT_2))
-                            .child(error.clone()),
-                    ),
-            );
+            card = card.child(pane::card_error(error.clone()).id("session-control-error"));
         }
         let modes = open.permission_modes();
         let modes_empty = modes.is_empty();
@@ -9187,19 +9317,39 @@ impl CockpitView {
                     })),
             );
         }
-        card = card.child(head("MCP servers", errored || !modes_empty));
+        // With no servers the note alone says so; a `MCP servers` head over
+        // `No MCP servers reported` would say it twice.
         if transcript.mcp_servers().is_empty() {
-            card = card.child(crate::components::menu_note("no MCP servers reported"));
+            card = card.child(
+                crate::components::menu_note("No MCP servers reported")
+                    .when(errored || !modes_empty, |note| {
+                        note.mt(px(crate::theme::MENU_GROUP_GAP))
+                    }),
+            );
+        } else {
+            card = card.child(head("MCP servers", errored || !modes_empty));
         }
         for (index, server) in transcript.mcp_servers().iter().enumerate() {
             let name = server.name.clone();
-            let (status, dot) = match server.status {
-                ferrite_core::McpStatus::Connected => ("connected", crate::theme::RUNNING),
-                ferrite_core::McpStatus::Connecting => ("connecting", crate::theme::ATTENTION),
-                ferrite_core::McpStatus::NeedsAuth => ("needs-auth", crate::theme::ATTENTION),
-                ferrite_core::McpStatus::Failed => ("failed", crate::theme::BLOCKED),
-                ferrite_core::McpStatus::Disabled => ("disabled", crate::theme::TEXT_FAINT),
-                ferrite_core::McpStatus::Unknown => ("unknown", crate::theme::TEXT_FAINT),
+            // (selector key, the word drawn, the dot's ink). Connecting is
+            // work in progress, not a stop: only a sign-in waits on you.
+            let (status, word, dot) = match server.status {
+                ferrite_core::McpStatus::Connected => {
+                    ("connected", "connected", crate::theme::RUNNING)
+                }
+                ferrite_core::McpStatus::Connecting => {
+                    ("connecting", "connecting", crate::theme::RUNNING)
+                }
+                ferrite_core::McpStatus::NeedsAuth => {
+                    ("needs-auth", "needs sign-in", crate::theme::ATTENTION)
+                }
+                ferrite_core::McpStatus::Failed => ("failed", "failed", crate::theme::BLOCKED),
+                ferrite_core::McpStatus::Disabled => {
+                    ("disabled", "disabled", crate::theme::TEXT_FAINT)
+                }
+                ferrite_core::McpStatus::Unknown => {
+                    ("unknown", "unknown", crate::theme::TEXT_FAINT)
+                }
             };
             let connected = server.status == ferrite_core::McpStatus::Connected;
             let mut line = row()
@@ -9230,7 +9380,7 @@ impl CockpitView {
                             } else {
                                 crate::theme::TEXT_MUTED
                             }))
-                            .child(status),
+                            .child(word),
                     )
                 });
             if server.status == ferrite_core::McpStatus::NeedsAuth
@@ -9238,7 +9388,7 @@ impl CockpitView {
             {
                 let login_name = server.name.clone();
                 line = line.child(
-                    text_action(SharedString::from(format!("mcp-login-{index}")), "sign in")
+                    text_action(SharedString::from(format!("mcp-login-{index}")), "Sign in")
                         .debug_selector(move || format!("mcp-login-{index}"))
                         .tab_stop(true)
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -9272,7 +9422,7 @@ impl CockpitView {
                 line = line.child(
                     text_action(
                         SharedString::from(format!("mcp-authorize-{index}")),
-                        "open sign-in",
+                        "Open sign-in page",
                     )
                     .debug_selector(move || format!("mcp-authorize-{index}"))
                     .tab_stop(true)
@@ -9283,7 +9433,7 @@ impl CockpitView {
                 line = line.child(
                     text_action(
                         SharedString::from(format!("mcp-reconnect-{index}")),
-                        "reconnect",
+                        "Reconnect",
                     )
                     .debug_selector(move || format!("mcp-reconnect-{index}"))
                     // A healthy server's reconnect waits under the pointer,
@@ -9335,19 +9485,16 @@ impl CockpitView {
         }
         if open.supports_control(ferrite_core::ControlKind::ReloadMcp) {
             card = card.child(
-                row().child(
-                    text_action("mcp-reload".into(), "Reload MCP servers")
-                        .debug_selector(|| "mcp-reload".into())
-                        .tab_stop(true)
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            view.run_session_control(
-                                thread,
-                                generation,
-                                ferrite_core::SessionControl::ReloadMcp,
-                            );
-                            cx.notify();
-                        })),
-                ),
+                action_row("mcp-reload".into(), "Reload MCP servers")
+                    .debug_selector(|| "mcp-reload".into())
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::ReloadMcp,
+                        );
+                        cx.notify();
+                    })),
             );
         }
         let tasks = transcript.progress().background();
@@ -9375,7 +9522,7 @@ impl CockpitView {
                 line = line.child(
                     text_action(
                         SharedString::from(format!("background-stop-{index}")),
-                        "stop",
+                        "Stop",
                     )
                     .debug_selector(move || format!("background-stop-{index}"))
                     .on_click(cx.listener(
@@ -9405,18 +9552,18 @@ impl CockpitView {
             card = card.child(line);
         }
         if open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
-            card = card.child(row().child(
-                text_action("background-all".into(), "Run tasks in background").on_click(
-                    cx.listener(move |view, _: &ClickEvent, _, cx| {
+            card = card.child(
+                action_row("background-all".into(), "Run tasks in background")
+                    .debug_selector(|| "background-all".into())
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         view.run_session_control(
                             thread,
                             generation,
                             ferrite_core::SessionControl::BackgroundTasks,
                         );
                         cx.notify();
-                    }),
-                ),
-            ));
+                    })),
+            );
         }
         let card = card
             .on_mouse_down(
@@ -9432,7 +9579,7 @@ impl CockpitView {
             deferred(
                 anchored()
                     .anchor(gpui::Anchor::BottomRight)
-                    .position(at - gpui::point(px(0.), px(crate::theme::FLOAT_OFFSET)))
+                    .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
                     .child(crate::motion::menu_in(
                         "session-controls-in",
@@ -9458,32 +9605,29 @@ impl CockpitView {
             .and_then(|facts| facts.status.as_ref())
             .and_then(|status| status.pr.as_ref())?;
         pr.checks?;
-        let was_open = self
-            .context_checks
-            .is_some_and(|(shown, _)| shown == thread);
+        let was_open = self.context_checks.is_some_and(|shown| shown == thread);
         Some(
-            pane::ci_mark(pr, thread.get(), was_open)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.focus_pane(index);
-                        view.popover = None;
-                        view.context_menu = None;
-                        view.context_usage = None;
-                        // Outside-click dismissal runs in the capture phase,
-                        // before this toggle: read the mark that was pressed.
-                        // The card hangs from under the press by its
-                        // top-right corner, so a chip at the head's right
-                        // edge opens its card into the Pane.
-                        view.context_checks = (!was_open).then_some((
-                            thread,
-                            event.position + gpui::point(px(0.), px(crate::theme::FLOAT_OFFSET)),
-                        ));
-                        cx.notify();
-                    }),
-                )
-                .into_any_element(),
+            crate::components::on_bounds(
+                pane::ci_mark(pr, thread.get(), was_open),
+                self.record_trigger(format!("ci-{}", thread.get()).into()),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.focus_pane(index);
+                    view.popover = None;
+                    view.context_menu = None;
+                    view.context_usage = None;
+                    // Outside-click dismissal runs in the capture phase,
+                    // before this toggle: read the mark that was pressed.
+                    // The card hangs under the mark by its top-right
+                    // corner, so it opens into the Pane.
+                    view.context_checks = (!was_open).then_some(thread);
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
         )
     }
 
@@ -9491,8 +9635,18 @@ impl CockpitView {
     /// the workflow that owns it, each row opening its own log. Built here
     /// rather than in `pane.rs` because the rows are controls and a
     /// listener needs this view's `Context`.
-    fn context_checks_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (thread, at) = self.context_checks?;
+    fn context_checks_element(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let thread = self.context_checks?;
+        let at = self.card_corner(
+            format!("ci-{}", thread.get()),
+            PaneIdentity::Thread(thread),
+            false,
+            window,
+        )?;
         let pr = self
             .facts
             .get(thread)
@@ -9522,13 +9676,9 @@ impl CockpitView {
                 None => row,
             });
         }
-        let card = menu::shell()
+        let card = card
             .id("context-checks-card")
             .debug_selector(|| "context-checks-card".into())
-            .min_w(px(crate::theme::CHECKS_CARD_W))
-            .max_w(px(crate::theme::CHECKS_CARD_MAX_W))
-            .p(px(0.))
-            .child(card)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -9555,8 +9705,13 @@ impl CockpitView {
         )
     }
 
-    fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (identity, at) = self.context_usage?;
+    fn context_usage_element(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let identity = self.context_usage?;
+        let at = self.card_corner(format!("usage-{identity:?}"), identity, true, window)?;
         let (usage, provider, details, usage_details, last_cost) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
@@ -9611,14 +9766,7 @@ impl CockpitView {
                     }),
                     PaneIdentity::Draft(_) => None,
                 },
-                |card, error| {
-                    card.child(
-                        div()
-                            .id("session-control-error")
-                            .text_color(rgb(crate::theme::ATTENTION))
-                            .child(error),
-                    )
-                },
+                |card, error| card.child(pane::card_error(error).id("session-control-error")),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -9632,7 +9780,7 @@ impl CockpitView {
         Some(
             deferred(
                 anchored()
-                    .anchor(gpui::Anchor::BottomLeft)
+                    .anchor(gpui::Anchor::BottomRight)
                     .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
                     .child(crate::motion::menu_in(
@@ -9749,7 +9897,9 @@ impl CockpitView {
                             checked: row.active,
                             disabled: row.inert,
                             section,
-                            detail: None,
+                            // What a row resolves to (`Opus 5.5 (1M) · from
+                            // Settings`); a section's handover note too.
+                            detail: (!row.detail.is_empty()).then(|| row.detail.clone()),
                             // Why every row is dead while the turn runs.
                             note: row.inert && row.name == TUNING_BUSY_HINT,
                             icon: provider.map(|provider| match provider {
@@ -9812,7 +9962,15 @@ impl CockpitView {
             on_pick: std::rc::Rc::new(move |at, _, cx| {
                 let _ = picker.update(cx, |view, cx| view.pick(at, cx));
             }),
+            place: self.float_place(index),
         }
+    }
+
+    /// The limits a surface summoned from Pane `index` rests within: the
+    /// Composer's edge and the card's inner right edge, as last laid out.
+    fn float_place(&self, index: usize) -> Option<crate::components::FloatPlace> {
+        let (floor, limit_right) = self.panes.get(index)?.geometry.get().float_limits()?;
+        Some(crate::components::FloatPlace { floor, limit_right })
     }
 
     /// The effort chip's click: the root chip's toggle grammar.
@@ -9840,7 +9998,7 @@ impl CockpitView {
                 matched: Vec::new(),
                 detail: SharedString::from(match &default {
                     Some(default) => format!("{} · from Settings", effort_title(default)),
-                    None => "the CLI's own choice".to_string(),
+                    None => "The CLI's own choice".to_string(),
                 }),
                 prose_detail: true,
                 inert: false,
@@ -9948,8 +10106,17 @@ impl CockpitView {
             Verb::DismissDecision(id) => {
                 self.cockpit.dismiss_decision_notice(&id);
             }
+            // Finished turns only: a live request is cleared by answering it.
             Verb::Clear => {
-                self.cockpit.clear_notices();
+                let finished: Vec<_> = self
+                    .cockpit
+                    .notifications()
+                    .notices()
+                    .map(|notice| notice.id)
+                    .collect();
+                for id in finished {
+                    self.cockpit.dismiss_notice(id);
+                }
                 self.bell.open = false;
             }
         }
@@ -10042,17 +10209,27 @@ impl CockpitView {
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = std::time::SystemTime::now();
         let notifications = self.cockpit.notifications();
+        // Requests in the order the answer keys take them (the Needs-you
+        // queue), then finished turns newest first, each Thread folded.
+        let queue = self.cockpit.needs_you();
         let mut rows: Vec<NoticeRow> = notifications
             .decisions()
             .take(50)
             .map(|notice| self.decision_row(notice, now))
             .collect();
-        rows.extend(
+        rows.sort_by_key(|row| {
+            queue
+                .iter()
+                .position(|thread| *thread == row.thread)
+                .unwrap_or(usize::MAX)
+        });
+        rows.extend(crate::notifications::fold(
             notifications
                 .notices()
                 .take(50)
-                .map(|notice| self.notice_row(notice, now)),
-        );
+                .map(|notice| self.notice_row(notice, now))
+                .collect(),
+        ));
         let handle = self.notice_handle(cx);
         let view = cx.entity().downgrade();
         self.bell
@@ -11880,8 +12057,8 @@ mod tests {
             .debug_bounds("project-editor-card")
             .expect("the card is up");
         let add = cx
-            .debug_bounds("project-Add Directory")
-            .expect("the Add Directory button is on screen");
+            .debug_bounds("project-add-directory")
+            .expect("the add-directory control is on screen");
         assert!(
             add.size.height > px(0.) && card.contains(&add.origin),
             "the body is inside the card, not clipped under it:              card {card:?}, button {add:?}"
@@ -12528,15 +12705,20 @@ mod tests {
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        // Resets inside their windows: a reset already past reads nothing.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         fake.streams.borrow()[0]
             .send(SessionEvent::RateLimits {
                 five_hour: Some(ferrite_core::RateLimitWindow {
                     used_fraction: 0.52,
-                    resets_at: Some(11),
+                    resets_at: Some(now + 3_600),
                 }),
                 weekly: Some(ferrite_core::RateLimitWindow {
                     used_fraction: 0.08,
-                    resets_at: Some(22),
+                    resets_at: Some(now + 2 * 86_400),
                 }),
             })
             .unwrap();
@@ -12579,6 +12761,10 @@ mod tests {
         assert!(cx
             .debug_bounds("context-usage-weekly-reset-reported")
             .is_some());
+        assert!(
+            cx.debug_bounds("context-usage-limits-unknown").is_none(),
+            "both windows reported: no note"
+        );
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 31_000,
@@ -12640,6 +12826,94 @@ mod tests {
         view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
     }
 
+    /// A card hangs off its trigger, never the pointer: wherever the meter
+    /// is pressed, the usage card rests at the same place, its foot
+    /// `FLOAT_OFFSET` above the Composer's edge and its right edge inside
+    /// the Pane's. With no account windows reported, one line says so.
+    #[gpui::test]
+    fn the_usage_card_origin_is_independent_of_the_pointer(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("usage-card-origin", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 64_000,
+                input_tokens: 64_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(200_000),
+            })
+            .unwrap();
+        tick(cx);
+        let meter = cx.debug_bounds("usage-meter-1").expect("the ctx readout");
+        let mut origins = Vec::new();
+        for at in [
+            meter.origin + gpui::point(px(1.), px(1.)),
+            meter.bottom_right() - gpui::point(px(1.), px(1.)),
+        ] {
+            cx.simulate_mouse_down(at, MouseButton::Left, gpui::Modifiers::none());
+            cx.run_until_parked();
+            // Let the entrance settle.
+            cx.executor().advance_clock(Duration::from_millis(300));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+            let card = cx
+                .debug_bounds("context-usage-card")
+                .expect("the press opens the card");
+            origins.push(card.origin);
+            let composer = cx.debug_bounds("composer-block").unwrap();
+            assert_eq!(
+                card.bottom(),
+                composer.top() - px(crate::theme::FLOAT_OFFSET),
+                "the card rests FLOAT_OFFSET above the Composer's edge"
+            );
+            let pane = cx.debug_bounds("pane-body-1").unwrap();
+            assert!(card.right() <= pane.right() - px(crate::theme::PANE_PAD_X) + px(1.5));
+            assert!(
+                cx.debug_bounds("context-usage-limits-unknown").is_some(),
+                "no account window reported: one line, no bars"
+            );
+            assert!(cx.debug_bounds("context-usage-five-hour-0").is_none());
+            cx.simulate_keystrokes("escape");
+            view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
+        }
+        assert_eq!(origins[0], origins[1], "the pointer does not move the card");
+    }
+
+    /// The model picker rests on the Composer's edge, not over it: its foot
+    /// `FLOAT_OFFSET` above the Composer, its right edge inside the Pane,
+    /// every row one menu row high.
+    #[gpui::test]
+    fn the_model_picker_rests_above_the_composer_inside_the_pane(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("model-picker-place", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(900.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+        for _ in 0..3 {
+            cx.executor().advance_clock(Duration::from_millis(300));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
+        let composer = cx.debug_bounds("composer-block").unwrap();
+        assert_eq!(
+            menu.bottom(),
+            composer.top() - px(crate::theme::FLOAT_OFFSET),
+            "the Composer's edge stays whole under the picker"
+        );
+        let pane = cx.debug_bounds("pane-body-1").unwrap();
+        assert!(menu.right() <= pane.right() - px(crate::theme::PANE_PAD_X) + px(1.5));
+        let row = cx
+            .debug_bounds("choice-row-1")
+            .expect("a live row under the section");
+        assert_eq!(row.size.height, px(crate::theme::MENU_ROW_H));
+    }
+
     /// A draft has spent no context, so its status line reads nothing — no
     /// `ctx —` — until an account window runs tight; then that window's
     /// token alone shows, and it opens the same card (#29).
@@ -12685,6 +12959,12 @@ mod tests {
         assert!(
             cx.debug_bounds("context-usage-maximum-unknown").is_some(),
             "a draft has no reported window, and none is invented"
+        );
+        assert!(cx.debug_bounds("context-usage-five-hour-91").is_some());
+        assert!(
+            cx.debug_bounds("context-usage-weekly-0").is_none()
+                && cx.debug_bounds("context-usage-limits-unknown").is_none(),
+            "an unreported window is left out, not drawn empty"
         );
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
@@ -18612,8 +18892,11 @@ mod tests {
                 .expect("/ offers import on a fresh Thread");
             let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(names, ["/model", "/effort", "/import"]);
-            assert_eq!(menu.rows[0].detail.as_ref(), "switch provider / model");
-            assert_eq!(menu.rows[2].detail.as_ref(), "adopt a CLI session file");
+            assert_eq!(
+                menu.rows[0].detail.as_ref(),
+                "Switch model or hand over to the other provider"
+            );
+            assert_eq!(menu.rows[2].detail.as_ref(), "Adopt a CLI session file");
         });
 
         // The Session announces its own commands: import rides on top, and
@@ -18670,7 +18953,7 @@ mod tests {
             assert!(!menu.rows[0].inert, "the model door stays open");
             assert_eq!(
                 menu.rows[0].detail.as_ref(),
-                "switch model · hand over to the other provider"
+                "Switch model or hand over to the other provider"
             );
             assert_eq!(menu.rows[1].name.as_ref(), "/effort");
             assert_eq!(menu.rows.len(), 6);
@@ -19576,7 +19859,7 @@ mod tests {
             assert!(!row.inert);
             assert_eq!(
                 row.detail.as_ref(),
-                "switch model · hand over to the other provider"
+                "Switch model or hand over to the other provider"
             );
         });
         cx.simulate_keystrokes("enter");
@@ -19801,9 +20084,14 @@ mod tests {
             cx.debug_bounds("settings-fact-Version").is_some(),
             "About shows the Ferrite version"
         );
+        assert!(
+            cx.debug_bounds("settings-fact-Development build").is_none(),
+            "a development build says so on its Version, not in a row of its own"
+        );
+        assert_eq!(version_label("0.3.0", true), "0.3.0 · dev");
         assert_eq!(
-            cx.debug_bounds("settings-fact-Development build").is_some(),
-            crate::titlebar::DEV,
+            version_label("0.3.0", false),
+            "0.3.0",
             "About identifies development builds without labeling releases"
         );
         assert!(
@@ -19836,11 +20124,15 @@ mod tests {
         );
         cx.simulate_input("Solo answer size");
         tick(cx);
-        let comfortable = cx
-            .debug_bounds("settings-solo-answer-size-1")
-            .unwrap()
+        // Three sizes are a chooser (more than two options), not a tray:
+        // the second row is Comfortable.
+        let sizes = cx
+            .debug_bounds("settings-solo-answer-size")
+            .expect("the size chooser")
             .center();
-        cx.simulate_click(comfortable, gpui::Modifiers::none());
+        cx.simulate_click(sizes, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down down enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(
@@ -21007,10 +21299,13 @@ mod tests {
 
     #[gpui::test]
     fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("bell-scroll", 1);
-        for _ in 0..50 {
-            core.send(core.threads()[0], "go".into());
-            fake.streams.borrow()[0]
+        // One finish per Thread: a Thread's repeats fold into one row, so
+        // a long list is many Threads.
+        const THREADS: usize = 24;
+        let (mut core, fake) = cockpit("bell-scroll", THREADS);
+        for index in 0..THREADS {
+            core.send(core.threads()[index], "go".into());
+            fake.streams.borrow()[index]
                 .send(SessionEvent::TurnEnded {
                     outcome: ferrite_core::TurnOutcome::Completed,
                     cost_usd: None,
@@ -21032,7 +21327,9 @@ mod tests {
             touch_phase: gpui::TouchPhase::default(),
         });
         cx.run_until_parked();
-        let last = cx.debug_bounds("notice-row-49").unwrap();
+        let last = cx
+            .debug_bounds("notice-row-23")
+            .expect("one row per Thread");
         assert!(
             last.bottom() < px(1080.),
             "oldest Notice must scroll into the window: {last:?}"

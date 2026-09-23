@@ -606,7 +606,10 @@ pub const EVENT_GAP: f32 = 8.0;
 /// 1px — the focused Pane's ring (`FOCUS_RING` ink), lying exactly on the
 /// Pane's own border box: focus changes colour and nothing else. It is an
 /// absolutely positioned overlay inside a non-clipping wrapper, since a ring
-/// drawn inside the shell's `overflow_hidden()` would be clipped.
+/// drawn inside the shell's `overflow_hidden()` would be clipped. Every
+/// control's keyboard focus is the same 1px of the same ink, inset
+/// (`components::control_focus`); only the primary button's outline is
+/// `TEXT_STRONG`, on its steel face.
 pub const FOCUS_RING_W: f32 = 1.0;
 
 // ------------------------------------------------ shared controls and rows
@@ -826,7 +829,8 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.drop_target = rgba(ACCENT_WASH).into();
     theme.sidebar = rgb(GROUND).into();
     theme.sidebar_foreground = rgb(TEXT_2).into();
-    theme.sidebar_accent = rgb(HOVER).into();
+    // The selected Settings page is the carried `FILL` row.
+    theme.sidebar_accent = rgb(FILL).into();
     theme.sidebar_accent_foreground = rgb(TEXT_STRONG).into();
     theme.sidebar_border = rgba(TRANSPARENT).into();
     // No track: only the thumb is ever ink, and it lightens rather than
@@ -1279,7 +1283,6 @@ pub const METER_GAP: f32 = SPACE_1_5;
 pub const CHECKS_CARD_W: f32 = 312.0;
 /// The card's widest: it grows to its tally and run names up to here.
 pub const CHECKS_CARD_MAX_W: f32 = 420.0;
-pub const CHECKS_CARD_PAD: f32 = FLOAT_PAD;
 /// Between the card's heading and its runs: space, not a rule
 /// (`MENU_GROUP_GAP`, as between any two groups on a floating surface).
 pub const CHECKS_CARD_GAP: f32 = MENU_GROUP_GAP;
@@ -1383,13 +1386,12 @@ pub const COMPOSER_EDGE_W: f32 = 1.0;
 /// every raised block, and its controls (chips, the send square) sit on
 /// `R_CHIP`. The inset between them (`COMPOSER_CONTROL_INSET`: the edge and
 /// the vertical padding) is wider than the box's corner, so by the radius
-/// rule the controls take their own role radius. A setup chip's focus edge
-/// wraps its chip one `BAND_EDGE_W` out, so its radius is one more. The
+/// rule the controls take their own role radius. A setup chip's focus is
+/// the one inset ring (`components::control_focus`), inside its corner. The
 /// Subagent footer, the Composer's own block, shares the corner.
 pub const COMPOSER_CHIP_R: f32 = R_CHIP;
 pub const COMPOSER_CONTROL_INSET: f32 = COMPOSER_EDGE_W + COMPOSER_PAD_T;
 pub const COMPOSER_R: f32 = R_BLOCK;
-pub const BAND_EDGE_W: f32 = 1.0;
 /// Where the meta row's ink starts and ends, as padding on the row: C1 and
 /// the send control's trailing edge, less the `PICKER_PAD_X` each chip
 /// hangs outside its label.
@@ -1445,22 +1447,20 @@ pub const PICKER_GAP: f32 = SPACE_1;
 pub const ICON_CHEVRON_SM: f32 = 10.0;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
-/// Its padding puts the text on the same edge as a menu row's inside the
-/// floating surface (`FLOAT_PAD` + `MENU_ROW_PAD_X`).
+/// Each block insets its text by `MENU_ROW_PAD_X`, so it sits on a menu
+/// row's edge inside the floating surface's `FLOAT_PAD`.
 pub const USAGE_CARD_W: f32 = 288.0;
-pub const USAGE_CARD_PAD: f32 = MENU_ROW_PAD_X;
 /// Between one window's block and the next, and inside one block: the
 /// blocks stand twice as far apart as their own lines.
 pub const USAGE_CARD_GAP: f32 = SPACE_3;
 pub const USAGE_CARD_ROW_GAP: f32 = SPACE_1_5;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage reading turns from neutral to ATTENTION (80%, rule
-/// 2.6.6), and, on the usage card only, from ATTENTION to BLOCKED — a
-/// fraction of the window, not a count. Below tight the status line's `ctx
-/// 32%` is `TEXT_MUTED`: colour is state, and a context half full is not a
-/// state.
+/// 2.6.6) — a fraction of the window, not a count — on the status line and
+/// the card alike. There is no BLOCKED step: a full window stops nothing
+/// until the provider says so. Below tight the status line's `ctx 32%` is
+/// `TEXT_MUTED`: colour is state, and a context half full is not a state.
 pub const USAGE_TIGHT: f32 = 0.80;
-pub const USAGE_SPENT: f32 = 0.9;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions.
@@ -1490,8 +1490,9 @@ pub const ATTACH_THUMB: f32 = 12.0;
 /// Form fields and segmented choices share a 32px row. Compact pane and
 /// navigation controls keep their own smaller chrome metrics.
 pub const FORM_CONTROL_H: f32 = 32.0;
-/// Selected-value controls share a comfortable measure inside wider forms.
-pub const FORM_FIELD_W: f32 = 320.0;
+/// A chooser's width at the right of its setting row: wide enough for a
+/// model's name, narrow enough to leave the label block its measure.
+pub const FORM_FIELD_W: f32 = 224.0;
 /// Inset around the chips of a segmented choice control, and the gap
 /// between them: 2px, so the chips nest concentrically (`R_CHIP` inside the
 /// tray's `R_CONTROL`) and the tray reads as one control.
@@ -1499,8 +1500,8 @@ pub const FORM_CHOICE_PAD: f32 = SPACE_0_5;
 /// A choice chip's and a chooser's inline padding inside the 32px row.
 pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
 pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
-/// A switch row's label block takes at most this share of the row, so a
-/// long description wraps before it crowds the switch.
+/// A setting row's label block takes at most this share of the row, so a
+/// long description wraps before it crowds the control.
 pub const FORM_TEXT_FRACTION: f32 = 0.6;
 /// The Settings switch: a 28×16 pill (2px inset), a 12px thumb travelling
 /// the pill's inner width.
@@ -1518,11 +1519,11 @@ pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 280.0;
 /// The notifications panel: 340px holds a title, a detail line and an age
 /// without wrapping; a row is two lines in 6px of air each side. No rules
-/// inside it: its head sits `NOTICE_HEAD_GAP` above the first row, twice
-/// the 12px of air between two rows' text.
+/// and no head row inside it: each section (`Needs you N`, `Earlier`) is a
+/// `MENU_ROW_H` label sitting directly on its rows, and the sections stand
+/// `GAP_BLOCK` apart.
 pub const NOTICE_PANEL_W: f32 = 340.0;
 pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
-pub const NOTICE_HEAD_GAP: f32 = SPACE_3;
 /// 30px — a notification row's age slot: `12mo` at tabular `FS_SM`, kept
 /// even while a fresh request's age says nothing (`facts::since_label`).
 pub const NOTICE_AGE_W: f32 = 30.0;
@@ -1545,7 +1546,8 @@ pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + COMPOSER_META_GAP
     + COMPOSER_META_H
     + SPACE_2;
-/// A fact row's key column (About): the longest key, "Development build".
+/// A fact row's key column (About): room for its longest key (`Settings
+/// file`, `Claude CLI`) so every value starts on one edge.
 pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.
 pub const MODAL_HEAD_H: f32 = 48.0;
@@ -1560,6 +1562,10 @@ pub const SETTINGS_GROUP_INSET_X: f32 = MODAL_PAD - FS_UI;
 /// rows are to each other (the kit's 1rem), so a title belongs to what it
 /// heads, and groups stand 2rem apart.
 pub const SETTINGS_TITLE_GAP: f32 = SPACE_1_5;
+/// Settings stand `SPACE_6` apart with no rule between them: the kit sets
+/// its rows `SPACE_4` apart, and each row pads the difference, half above
+/// and half below.
+pub const SETTINGS_ROW_PAD_Y: f32 = (SPACE_6 - SPACE_4) / 2.0;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;

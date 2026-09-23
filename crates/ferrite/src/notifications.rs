@@ -70,6 +70,12 @@ pub struct Row {
     pub kind: RowKind,
     pub when: SharedString,
     pub read: bool,
+    /// How many of this Thread's completions the row stands for: the
+    /// panel folds a Thread's repeats into its newest (`fold`).
+    pub repeat: u32,
+    /// The older Notices folded under this row; dismissing the row
+    /// dismisses them too.
+    pub folded: Vec<NoticeId>,
 }
 
 impl Row {
@@ -87,6 +93,8 @@ impl Row {
             kind: RowKind::Completion(notice.outcome.clone()),
             when,
             read: notice.read,
+            repeat: 1,
+            folded: Vec::new(),
         }
     }
 
@@ -106,12 +114,15 @@ impl Row {
             kind: RowKind::Request(notice.kind),
             when,
             read: notice.read,
+            repeat: 1,
+            folded: Vec::new(),
         }
     }
 
     /// The detail split for drawing: its lexicon lead word, that word's ink
     /// (only a failure or a waiting Decision is coloured), and the rest,
-    /// which starts at its first ` · ` seam.
+    /// which starts at its first ` · ` seam. `detail_line` draws it so.
+    #[cfg(test)]
     fn detail_parts(&self) -> (SharedString, u32, SharedString) {
         let lead = self.lead();
         let detail = self.detail();
@@ -393,43 +404,88 @@ fn badge_inks(tone: BadgeTone) -> (u32, u32) {
     (FILL_HOVER, ink)
 }
 
-/// A row's or toast's status mark: attention while a Decision waits, blocked
-/// for a failure, and no colour for a plain finish (green never means
-/// finished).
+/// An unread row's or toast's status mark, static: attention while a
+/// Decision waits, blocked for a failure, the accent for a turn that
+/// finished well (unread, like the nav's unread dot — green never means
+/// finished), and a quiet mark for one that was interrupted. A read row
+/// draws none.
 fn mark_ink(row: &Row) -> u32 {
     match &row.kind {
         RowKind::Request(_) => ATTENTION,
         RowKind::Completion(TurnOutcome::Error(_)) => BLOCKED,
-        RowKind::Completion(_) => TEXT_MUTED,
+        RowKind::Completion(TurnOutcome::Completed) => ACCENT,
+        RowKind::Completion(TurnOutcome::Interrupted) => TEXT_MUTED,
     }
 }
 
-/// The detail line with only its state word coloured.
+/// The detail line: `<state> · <what> · <project>`, only the state word
+/// coloured. What a turn failed with is machine text — Geist Mono, and the
+/// run that gives way — so the project after it never truncates.
 fn detail_line(row: &Row) -> Div {
-    let (lead, ink, rest) = row.detail_parts();
-    components::text_meta()
+    let (lead, ink) = (row.lead(), word_ink(row.lead()));
+    let seam = || {
+        div()
+            .flex_shrink_0()
+            .text_color(rgb(TEXT_FAINT))
+            .child(" \u{b7} ")
+    };
+    let middle = match &row.kind {
+        RowKind::Completion(TurnOutcome::Error(error)) => Some(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(FONT_CODE)
+                .text_size(px(FS_SM))
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(error.clone())),
+        ),
+        RowKind::Completion(_) => None,
+        RowKind::Request(kind) => Some(div().min_w_0().truncate().child(match kind {
+            RequestKind::Question => words::QUESTION,
+            RequestKind::Permission => words::APPROVAL,
+        })),
+    };
+    let mut line = components::text_meta()
         .flex()
         .min_w_0()
-        .child(div().flex_shrink_0().text_color(rgb(ink)).child(lead))
-        .child(div().min_w_0().truncate().child(seamed(rest)))
+        .child(div().flex_shrink_0().text_color(rgb(ink)).child(lead));
+    if let Some(middle) = middle {
+        line = line.child(seam()).child(middle);
+    }
+    if let Some(project) = row.project.clone() {
+        line = line
+            .child(seam())
+            .child(div().flex_shrink_0().child(project));
+    }
+    line
 }
 
-/// A detail's tail with each `·` seam in `TEXT_FAINT`: highlighted in place,
-/// so the line stays one run and copies back exactly as written.
-fn seamed(text: SharedString) -> gpui::StyledText {
-    let seams: Vec<_> = text
-        .match_indices('\u{b7}')
-        .map(|(at, dot)| {
-            (
-                at..at + dot.len(),
-                gpui::HighlightStyle {
-                    color: Some(rgb(TEXT_FAINT).into()),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect();
-    gpui::StyledText::new(text).with_highlights(seams)
+/// Folds each Thread's completions into its newest (`rows` are newest
+/// first): the survivor counts them in `repeat` and carries the older ids
+/// in `folded`. Requests are never folded — each is its own question.
+pub fn fold(rows: Vec<Row>) -> Vec<Row> {
+    let mut kept: Vec<Row> = Vec::with_capacity(rows.len());
+    let mut by_thread: std::collections::HashMap<ThreadId, usize> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let (RowKind::Completion(_), RowTarget::Notice(id)) = (&row.kind, &row.target) else {
+            kept.push(row);
+            continue;
+        };
+        match by_thread.get(&row.thread) {
+            Some(&at) => {
+                kept[at].repeat += 1;
+                kept[at].folded.push(*id);
+                // Unread if any of it is.
+                kept[at].read &= row.read;
+            }
+            None => {
+                by_thread.insert(row.thread, kept.len());
+                kept.push(row);
+            }
+        }
+    }
+    kept
 }
 
 /// A toast's body in the UI voice: the status mark, the Thread's
@@ -508,65 +564,100 @@ fn request_toast(row: &Row, handle: Handle) -> Notification {
         .on_click(move |_, window, cx| handle(Verb::OpenDecision(id.clone()), window, cx))
 }
 
-/// The panel under the bell: a head with the clear verb, then the rows
-/// newest first, on the one floating surface every menu stands on.
+/// The panel under the bell, on the one floating surface: `Needs you N`
+/// first (the live requests, in the order the answer keys take them),
+/// then `Earlier` (finished turns, each Thread folded to its newest), a
+/// block's gap between. No head row and no rules.
 fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
-    let unread = rows.iter().filter(|row| !row.read).count();
     let panel = components::floating_surface()
         .w(px(NOTICE_PANEL_W))
-        .max_h(px(MENU_MAX_H))
-        .child(head(!rows.is_empty(), unread, handle.clone()));
+        .max_h(px(MENU_MAX_H));
     if rows.is_empty() {
         return panel.child(div().py(px(SPACE_6)).child(components::empty_state(
             "No notifications",
-            Some("Finished turns and waiting Decisions land here.".into()),
+            Some("Finished turns and requests land here".into()),
         )));
     }
-    panel.child(
-        div()
-            .id("notifications-list")
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .overflow_y_scroll()
+    let requests: Vec<(usize, &Row)> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| matches!(row.kind, RowKind::Request(_)))
+        .collect();
+    let earlier: Vec<(usize, &Row)> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| matches!(row.kind, RowKind::Completion(_)))
+        .collect();
+    let mut list = div()
+        .id("notifications-list")
+        .flex()
+        .flex_col()
+        .min_h_0()
+        .overflow_y_scroll();
+    if !requests.is_empty() {
+        list = list.child(needs_you_label(requests.len())).children(
+            requests
+                .iter()
+                .map(|(index, row)| row_element(*index, row, handle.clone())),
+        );
+    }
+    if !earlier.is_empty() {
+        list = list
+            .child(
+                earlier_label(handle.clone())
+                    .when(!requests.is_empty(), |label| label.mt(px(GAP_BLOCK))),
+            )
             .children(
-                rows.iter()
-                    .enumerate()
-                    .map(|(index, row)| row_element(index, row, handle.clone())),
-            ),
-    )
+                earlier
+                    .iter()
+                    .map(|(index, row)| row_element(*index, row, handle.clone())),
+            );
+    }
+    panel.child(list)
 }
 
-/// The panel's head: its title on the rows' leading edge (the status
-/// dots' column), the count tabular, and `Clear all` hung so its word ends
-/// where each row's dismiss ends. No rule under it: `NOTICE_HEAD_GAP` of
-/// space sets it off from the rows.
-fn head(clearable: bool, unread: usize, handle: Handle) -> Div {
-    div()
+/// A section's label row: `MENU_ROW_H`, on the rows' edge, UI `FS_SM`
+/// `W_LABEL` `TEXT_MUTED`, with a trailing slot at the right.
+fn section_label(id: &'static str) -> Div {
+    components::text_meta()
+        .debug_selector(move || id.into())
         .flex()
         .items_center()
         .justify_between()
+        .gap(px(SPACE_2))
         .h(px(MENU_ROW_H))
         .flex_shrink_0()
         .px(px(MENU_ROW_PAD_X))
-        .mb(px(NOTICE_HEAD_GAP))
-        .child(
-            components::text_meta()
-                .flex()
-                .gap(px(SPACE_1))
-                .child(
-                    div()
-                        .font_weight(W_LABEL)
-                        .text_color(rgb(TEXT_2))
-                        .child("Notifications"),
-                )
-                .when(unread > 0, |title| {
-                    title.child(components::tabular(
-                        div().child(format!("· {unread} unread")),
-                    ))
-                }),
+}
+
+/// `Needs you N`: the count in `ATTENTION`, tabular, and the key that
+/// takes the first of them at the right (`⌘D`), in mono `TEXT_MUTED`.
+fn needs_you_label(count: usize) -> Div {
+    let title = div()
+        .flex()
+        .gap(px(SPACE_1))
+        .font_weight(W_LABEL)
+        .child("Needs you")
+        .child(components::tabular(
+            div()
+                .debug_selector(|| "notifications-needs-you-count".into())
+                .text_color(rgb(ATTENTION))
+                .child(count.to_string()),
+        ));
+    section_label("notifications-needs-you")
+        .child(title)
+        .children(
+            components::bound_chord("cockpit::NextDecision")
+                .map(|keys| components::key_combo(&keys, TEXT_MUTED)),
         )
-        .children(clearable.then(|| {
+}
+
+/// `Earlier`, with `Clear all` at its right: it clears the finished turns
+/// only — a live request is cleared by answering it.
+fn earlier_label(handle: Handle) -> Div {
+    section_label("notifications-earlier")
+        .child(div().font_weight(W_LABEL).child("Earlier"))
+        .child(
             components::button("notifications-clear")
                 .debug_selector(|| "notifications-clear".into())
                 .px(px(SPACE_1_5))
@@ -575,21 +666,24 @@ fn head(clearable: bool, unread: usize, handle: Handle) -> Div {
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     handle(Verb::Clear, window, cx)
-                })
-        }))
+                }),
+        )
 }
 
 fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
     let target = row.target.clone();
     let open = handle.clone();
     let dismiss = row.target.clone();
-    let group: SharedString = format!("notice-row-{index}").into();
+    let folded = row.folded.clone();
+    let key: SharedString = format!("notice-row-{index}").into();
+    // The dismiss control fades in with the row's hover (the one 150ms
+    // blend); its box is always in layout, so nothing moves.
+    let shown = crate::motion::hover_t(&key);
     div()
         .id(("notice-row", index))
         .debug_selector(move || format!("notice-row-{index}"))
-        .group(group.clone())
         .flex()
-        .items_center()
+        .items_start()
         .w_full()
         .flex_shrink_0()
         .min_h(px(NOTICE_ROW_H))
@@ -599,6 +693,7 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
         .rounded(px(R_MENU_ROW))
         .hover_raised()
         .press_raised()
+        .on_hover(crate::motion::hover_listener(key))
         // Title and detail truncate at the panel's width; the whole of both
         // stays one hover away.
         .tooltip(crate::menu::tooltip(format!(
@@ -610,11 +705,15 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
             cx.stop_propagation();
             open(target_verb(&target), window, cx)
         })
-        // The mark's column stays when the row is read, so titles align.
+        // The mark's column stays when the row is read, so titles align;
+        // it is one title line high, the mark centred on it.
         .child(
             div()
+                .flex()
                 .flex_shrink_0()
+                .items_center()
                 .w(px(STATUS_DOT))
+                .h(px(LH_UI))
                 .when(!row.read, |slot| {
                     slot.child(components::status_dot(mark_ink(row)))
                 }),
@@ -626,39 +725,71 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 .flex_1()
                 .min_w_0()
                 .child(
-                    components::text_ui()
-                        .text_color(rgb(if row.read { TEXT_2 } else { TEXT_STRONG }))
-                        .truncate()
-                        .child(row.title.clone()),
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .min_w_0()
+                        .child(
+                            components::text_ui()
+                                .min_w_0()
+                                .text_color(rgb(if row.read { TEXT_2 } else { TEXT_STRONG }))
+                                .truncate()
+                                .child(row.title.clone()),
+                        )
+                        .when(row.repeat > 1, |title| {
+                            let repeat = row.repeat;
+                            title.child(components::tabular(
+                                components::text_meta()
+                                    .flex_shrink_0()
+                                    .debug_selector(move || format!("notice-repeat-{repeat}"))
+                                    .child(format!(" \u{d7}{repeat}")),
+                            ))
+                        }),
                 )
                 .child(detail_line(row)),
         )
+        // The age and the dismiss share one right slot, one title line
+        // high: the age at rest, the × under the pointer or keyboard focus.
         // The age's slot keeps its width in a request's first minute, when
         // it says nothing, so the rows' ages align.
-        .child(components::tabular(
-            components::text_meta()
-                .flex_shrink_0()
+        .child(
+            div()
+                .relative()
                 .flex()
+                .flex_shrink_0()
+                .items_center()
                 .justify_end()
                 .min_w(px(NOTICE_AGE_W))
-                .child(row.when.clone()),
-        ))
-        // The dismiss × keeps its width at rest, so the age never moves; it
-        // shows under the pointer.
-        .child(
-            components::button(("notice-dismiss", index))
-                .p_0()
-                .w(px(ICON_BUTTON_GLYPH))
-                .h(px(ICON_BUTTON_GLYPH))
-                .opacity(0.)
-                .group_hover(group, |style| style.opacity(1.))
-                .tooltip("Dismiss")
-                .accessibility_label("Dismiss")
-                .child(icons::icon(icons::CLOSE, ROW_ICON, TEXT_MUTED))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    handle(dismiss_verb(&dismiss), window, cx)
-                }),
+                .h(px(LH_UI))
+                .child(components::tabular(
+                    components::text_meta()
+                        .opacity(1. - shown)
+                        .child(row.when.clone()),
+                ))
+                .child(
+                    components::button(("notice-dismiss", index))
+                        .debug_selector(move || format!("notice-dismiss-{index}"))
+                        .absolute()
+                        .right(px(0.))
+                        .p_0()
+                        .size(px(CHIP_H))
+                        .rounded(px(R_CHIP))
+                        .tab_stop(true)
+                        // The ghost button's own faces: `FILL` under the
+                        // pointer, `FILL_HOVER` pressed.
+                        .opacity(shown)
+                        .focus_visible(|style| components::control_focus(style).opacity(1.))
+                        .tooltip("Dismiss")
+                        .accessibility_label("Dismiss")
+                        .child(icons::icon(icons::CLOSE, ROW_ICON, TEXT_MUTED))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            handle(dismiss_verb(&dismiss), window, cx);
+                            for id in &folded {
+                                handle(Verb::Dismiss(*id), window, cx);
+                            }
+                        }),
+                ),
         )
 }
 
@@ -689,6 +820,8 @@ mod tests {
             kind: RowKind::Completion(outcome),
             when: "2m".into(),
             read: false,
+            repeat: 1,
+            folded: Vec::new(),
         }
     }
 
@@ -705,7 +838,12 @@ mod tests {
         );
         let done = row(TurnOutcome::Completed, None);
         assert_eq!(done.detail_parts(), ("done".into(), TEXT_MUTED, "".into()));
-        assert_eq!(mark_ink(&done), TEXT_MUTED, "green never means finished");
+        assert_eq!(
+            mark_ink(&done),
+            ACCENT,
+            "an unread good finish is the accent — green never means finished"
+        );
+        assert_eq!(mark_ink(&row(TurnOutcome::Interrupted, None)), TEXT_MUTED);
         assert_eq!(mark_ink(&failed), BLOCKED);
         let waiting = Row {
             kind: RowKind::Request(RequestKind::Permission),
@@ -805,5 +943,40 @@ mod tests {
                 SharedString::from(words::NEEDS_YOU)
             );
         }
+    }
+
+    /// A Thread's repeats fold into its newest completion, counted; a
+    /// request is never folded; dismissal reaches every folded Notice.
+    #[test]
+    fn completions_fold_per_thread_and_requests_stand_alone() {
+        let at = |id: u64, thread: u64, read: bool| Row {
+            target: RowTarget::Notice(NoticeId::from_u64(id)),
+            thread: ThreadId::new(thread),
+            read,
+            ..row(TurnOutcome::Completed, None)
+        };
+        let request = Row {
+            kind: RowKind::Request(RequestKind::Question),
+            ..at(9, 3, false)
+        };
+        let folded = fold(vec![
+            request.clone(),
+            at(5, 3, true),
+            at(4, 7, true),
+            at(3, 3, false),
+            at(2, 3, true),
+        ]);
+        assert_eq!(folded.len(), 3);
+        assert!(matches!(folded[0].kind, RowKind::Request(_)));
+        assert_eq!(folded[0].repeat, 1);
+        assert!(matches!(folded[1].target, RowTarget::Notice(id) if id == NoticeId::from_u64(5)));
+        assert_eq!(folded[1].repeat, 3);
+        assert_eq!(
+            folded[1].folded,
+            vec![NoticeId::from_u64(3), NoticeId::from_u64(2)]
+        );
+        assert!(!folded[1].read, "unread if any folded Notice is");
+        assert_eq!(folded[2].repeat, 1);
+        assert!(folded[2].folded.is_empty());
     }
 }

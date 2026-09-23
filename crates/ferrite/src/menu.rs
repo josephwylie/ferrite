@@ -6,8 +6,8 @@
 //! (`MENU_GROUP_GAP`), never a rule.
 //!
 //! A destructive verb never runs on one press: its row arms on the first
-//! (the label becomes the confirmation, on the blocked wash) and runs on
-//! the second. Anything else pressed disarms it.
+//! (the cursor's `FILL`, the label `BLOCKED` and `· press again` after it)
+//! and runs on the second. Anything else pressed disarms it.
 
 use gpui::prelude::*;
 use gpui::{px, Div, SharedString, Stateful};
@@ -33,8 +33,8 @@ pub fn gap() -> Div {
     components::menu_separator()
 }
 
-/// One row, its shortcut hard right. `armed` is a destructive row on its
-/// second press — the confirmation, on the blocked wash.
+/// One row, its shortcut hard right. `armed` is a destructive row waiting
+/// for its second press: `<label> · press again`, the label `BLOCKED`.
 pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
     let keys = item.shortcut.clone();
     let face = MenuItem {
@@ -79,7 +79,7 @@ pub fn tooltip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{deferred, div, rgba, Context, CursorStyle, Render};
+    use gpui::{deferred, div, rgb, Context, CursorStyle, Render};
     use std::{cell::Cell, rc::Rc};
 
     struct OcclusionHarness {
@@ -157,16 +157,21 @@ mod tests {
     }
 
     #[test]
-    fn an_armed_destructive_row_wears_the_wash() {
+    fn an_armed_destructive_row_holds_the_fill_and_colours_its_word() {
         let delete = Item::new("Delete Thread").destructive();
         let mut drawn = row(2, &delete, true);
-        assert_eq!(drawn.style().background, Some(rgba(BLOCKED_WASH).into()));
+        assert_eq!(drawn.style().background, Some(rgb(FILL).into()));
         let mut calm = row(2, &delete, false);
         assert_eq!(calm.style().background, None);
         assert_eq!(
             components::row_inks(&delete, false, false).label,
+            TEXT,
+            "a destructive verb reads like any row before it arms"
+        );
+        assert_eq!(
+            components::row_inks(&delete, false, true).label,
             BLOCKED,
-            "a destructive verb wears the blocked ink before it arms"
+            "armed, the word alone turns blocked"
         );
     }
 }
