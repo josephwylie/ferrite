@@ -2953,19 +2953,41 @@ impl Cockpit {
         self.replace_session(thread, provider, model, effort, ReplacementKind::Retune)
     }
 
-    /// The next Thread waiting on the operator, after `from`, wrapping. One
-    /// key held down walks every Decision in the cockpit and stops nowhere
-    /// else.
+    /// The next Thread waiting on the operator, after `from` in the answer
+    /// order (`needs_you`), wrapping. One key held down walks every Decision
+    /// in the cockpit, in the order the nav's Needs-you strip lists them,
+    /// and stops nowhere else. From a Thread that waits on nothing it lands
+    /// on the strip's first row, the answer target.
     pub fn next_blocked(&self, from: Option<ThreadId>) -> Option<ThreadId> {
-        let blocked = self.blocked();
-        match from {
-            Some(after) => blocked
-                .iter()
-                .find(|id| **id > after)
-                .copied()
-                .or_else(|| blocked.first().copied()),
-            None => blocked.first().copied(),
-        }
+        let queue = self.needs_you();
+        let next = from
+            .and_then(|from| queue.iter().position(|thread| *thread == from))
+            .map_or(0, |at| (at + 1) % queue.len().max(1));
+        queue.get(next).copied()
+    }
+
+    /// **The answer order** (C8): every Thread waiting on the operator, the
+    /// first request raised first. It is the nav's Needs-you strip, top to
+    /// bottom, so the strip's first row is exactly what ⌘D and the wall's
+    /// `y`/`n`/`a` act on. A Thread whose request has not reached the
+    /// notification record yet queues behind the rest, in Thread order.
+    pub fn needs_you(&self) -> Vec<ThreadId> {
+        let mut queue = self.blocked();
+        queue.sort_by_key(|thread| {
+            (
+                self.notifications
+                    .first_request(*thread)
+                    .map_or(u64::MAX, |notice| notice.seq),
+                *thread,
+            )
+        });
+        queue
+    }
+
+    /// The Thread the answer keys act on when the focused Pane waits on
+    /// nothing: the Needs-you strip's first row.
+    pub fn answer_target(&self) -> Option<ThreadId> {
+        self.needs_you().first().copied()
     }
 
     /// Threads waiting on the operator — what the wall badges.
@@ -6745,7 +6767,37 @@ mod tests {
         // Past the last, back to the first — the operator keeps pressing one
         // key until the cockpit is quiet.
         assert_eq!(cockpit.next_blocked(Some(three)), Some(one));
-        // A Thread with nothing pending is still a valid place to jump from.
+        // A Thread with nothing pending is still a valid place to jump
+        // from: it lands on the head of the queue, the answer target.
+        assert_eq!(cockpit.next_blocked(Some(two)), Some(one));
+        assert_eq!(cockpit.answer_target(), Some(one));
+    }
+
+    /// The answer order is the order requests arrived, not ThreadId order:
+    /// the strip's first row is the answer target, and ⌘D walks the strip.
+    #[test]
+    fn the_answer_target_is_the_oldest_request_not_the_lowest_thread() {
+        let (mut cockpit, fake) = cockpit("answer-order");
+        let one = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let two = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let three = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert_eq!(cockpit.answer_target(), None);
+        assert!(cockpit.needs_you().is_empty());
+
+        fake.streams.borrow()[2]
+            .send(decision("perm_03", "Bash"))
+            .unwrap();
+        cockpit.pump();
+        fake.streams.borrow()[0]
+            .send(decision("perm_01", "Write"))
+            .unwrap();
+        cockpit.pump();
+
+        assert_eq!(cockpit.needs_you(), vec![three, one]);
+        assert_eq!(cockpit.answer_target(), Some(three));
+        assert_eq!(cockpit.next_blocked(None), Some(three));
+        assert_eq!(cockpit.next_blocked(Some(three)), Some(one));
+        assert_eq!(cockpit.next_blocked(Some(one)), Some(three));
         assert_eq!(cockpit.next_blocked(Some(two)), Some(three));
     }
 

@@ -511,6 +511,7 @@ fn compact_live_reasoning_appears_once_and_returns_to_history(cx: &mut TestAppCo
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     // A 2×2 board of instrument cells: the default grid takes 1×4 at the
     // transcript Level when the window is tall enough for it.
     cx.simulate_resize(gpui::size(px(860.), px(700.)));

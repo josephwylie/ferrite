@@ -351,6 +351,7 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
     let thread = core.threads()[0];
     core.send(thread, "Line the marks up".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {

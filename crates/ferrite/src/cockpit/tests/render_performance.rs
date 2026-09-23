@@ -582,6 +582,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     let (core, fake) = cockpit("selection-resize-reflow", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
 
     let selected = "βeta🙂 exact selection";
@@ -995,6 +996,7 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         })
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     let mut heights = Vec::new();
     for width in [1200., 700.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));

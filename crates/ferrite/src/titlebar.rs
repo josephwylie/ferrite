@@ -34,6 +34,7 @@ use gpui::{
     WindowControlArea,
 };
 
+use crate::components;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
@@ -80,11 +81,14 @@ pub struct Board {
     /// One Pane fills the board: the only on-screen cue that its siblings
     /// are hidden, not gone.
     pub fullscreen: bool,
+    /// How many Threads wait on the operator anywhere (the nav's Needs-you
+    /// strip): `· N need you` after the location, a door to ⌘D.
+    pub need_you: usize,
 }
 
 /// Whether this build is an unreleased one. `--release` is not the
 /// question — a locally built release binary is still a dev build, and
-/// wants the badge. Only the release pipeline ships without it, which it
+/// wants the `dev` mark. Only the release pipeline ships without it, which it
 /// says by setting `FERRITE_RELEASE` for the compile (`build.rs` tracks
 /// the variable so a cached build cannot keep a stale answer). Settings
 /// reports the same fact under About.
@@ -113,7 +117,7 @@ pub fn strip(
     title: Title,
     board: Board,
     trailing: Option<AnyElement>,
-    add_thread: Button,
+    add_thread: AnyElement,
     draggable: bool,
     maximized: bool,
 ) -> Div {
@@ -136,39 +140,37 @@ pub fn strip(
         // absorbs spare width and remains the Windows drag target, while the
         // contextual creation door sits at the trailing edge immediately
         // before the caption controls.
-        // An empty location (the empty board) takes no slot, so the `dev`
-        // tag keeps the location's own inset instead of trailing an empty
-        // region and its gap.
-        .map(|strip| {
-            if title.project.is_none() && title.group.is_none() && title.thread.is_none() {
-                strip.children(DEV.then(|| dev_badge().ml(px(GRID_PAD))))
-            } else {
-                strip
-                    .child(title_region(title, board))
-                    .children(DEV.then(dev_badge))
-            }
-        })
+        // The need-you count and `dev` are the location's last segments,
+        // siblings of the drag region, never inside it.
+        .child(title_region(title, board, true))
         .child(trailing_drag)
         .children(trailing)
         .child(add_thread)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
+/// The hover blend's key and the group name the add control's words ride.
+const ADD_GROUP: &str = "titlebar-add-thread";
+
 /// The titlebar's contextual creation door (UI-13): the `+` and its UI
-/// label in the chrome icon-button face — `TEXT_MUTED` glyph, the `HOVER`
-/// face under the pointer, `PRESSED` held, `R_CONTROL`. It is a sibling of
-/// the Windows drag region, never a child, so its click reaches the app
-/// instead of the non-client frame. macOS receives the same control in its
-/// transparent band.
-pub fn add_thread_button(label: &'static str, tooltip: &'static str, cx: &App) -> Button {
-    crate::components::button("titlebar-add-thread")
+/// label as words on the band, with no ground box. Both rest at
+/// `TEXT_MUTED` and blend to `TEXT` under the pointer over the one 150ms
+/// hover blend; a press turns the label `TEXT_STRONG` at once. The 28px hit area stays.
+/// It is a sibling of the Windows drag region, never a child, so its click
+/// reaches the app instead of the non-client frame. macOS receives the same
+/// control in its transparent band. The cockpit wires the click and hangs
+/// the tooltip (`add_thread`).
+pub fn add_thread_button(label: &'static str, cx: &App) -> Button {
+    let ink = crate::motion::hover_blend(ADD_GROUP, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
+    components::button("titlebar-add-thread")
         .custom(
             ButtonCustomVariant::new(cx)
-                .foreground(rgb(TEXT_2).into())
-                .hover(rgb(HOVER).into())
-                .active(rgb(PRESSED).into()),
+                .foreground(rgb(TEXT_MUTED).into())
+                .hover(rgba(TRANSPARENT).into())
+                .active(rgba(TRANSPARENT).into()),
         )
         .debug_selector(|| "titlebar-add-thread".into())
+        .group(ADD_GROUP)
         .flex_shrink_0()
         .h(px(ICON_BUTTON))
         .px(px(TITLE_ADD_PAD_X))
@@ -176,8 +178,8 @@ pub fn add_thread_button(label: &'static str, tooltip: &'static str, cx: &App) -
         // no trailing sibling, so keep the creation door inside the same
         // shell inset as the Pane board instead of flush with the window.
         .when(cfg!(target_os = "macos"), |button| button.mr(px(GRID_PAD)))
-        .tooltip(tooltip)
-        .accessibility_label(tooltip)
+        .on_hover(crate::motion::hover_listener(ADD_GROUP.into()))
+        .accessibility_label(label)
         .child(
             div()
                 .flex()
@@ -186,10 +188,28 @@ pub fn add_thread_button(label: &'static str, tooltip: &'static str, cx: &App) -
                 .font_family(FONT_UI)
                 .text_size(px(FS_UI))
                 .line_height(px(LH_UI))
-                .text_color(rgb(TEXT_2))
-                .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
-                .child(label),
+                .text_color(ink)
+                .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(ink))
+                .child(
+                    div()
+                        .id("titlebar-add-thread-label")
+                        .group_active(ADD_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
+                        .child(label),
+                ),
         )
+}
+
+/// The add control with its tooltip: what the click makes, and the chord
+/// after it only where the click is exactly that key's action
+/// (`components::chord_tooltip`).
+pub fn add_thread(button: Button, tooltip: &'static str, chord: Option<String>) -> AnyElement {
+    let tip = div().id("titlebar-add-thread-tip").flex_shrink_0();
+    match chord {
+        Some(keys) => tip.tooltip(components::chord_tooltip(tooltip, keys)),
+        None => tip.tooltip(crate::menu::tooltip(tooltip)),
+    }
+    .child(button)
+    .into_any_element()
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -208,7 +228,7 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
                 .id(id)
                 .flex_1()
                 .w_full()
-                .child(title_region(title, Board::default()))
+                .child(title_region(title, Board::default(), false))
                 // See `button`: the root's focus hitbox must not count as
                 // hovered under a caption region, or the press is marked
                 // handled and Windows never starts the move.
@@ -224,30 +244,57 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
         )
 }
 
-/// The dev-build mark, beside the location it qualifies: a quiet UI
-/// `dev` in a hairline box. Not a state — `ATTENTION` would say "something
-/// needs you" to every operator of a local build. It is a sibling of the
-/// drag region rather than a child: anything inside one is non-client to
-/// Windows, and the band's text should not travel with the two drag
-/// stretches that also render a `Title`.
-fn dev_badge() -> Div {
+/// The dev-build mark, the location's last segment: plain `dev` in `FS_SM`
+/// `W_BODY` `TEXT_MUTED` after a faint `·` (`seam`, false when nothing
+/// precedes it), with no box. Not a state — `ATTENTION` would say
+/// "something needs you" to every operator of a local build. It rides the
+/// location region, a sibling of the drag region rather than a child:
+/// anything inside one is non-client to Windows.
+fn dev_badge(seam: bool) -> Div {
     div()
         .debug_selector(|| "titlebar-dev-badge".into())
         .flex_shrink_0()
         .flex()
         .items_center()
-        .justify_center()
-        .h(px(DEV_TAG_H))
-        .px(px(DEV_TAG_PAD_X))
-        .rounded(px(R_CHIP))
-        .border_1()
-        .border_color(rgba(HAIRLINE_STRONG))
-        .font_family(FONT_UI)
+        .gap(px(TITLE_GAP))
+        .children(seam.then(|| div().text_color(rgb(TEXT_FAINT)).child("·")))
+        .child(
+            div()
+                .text_size(px(FS_SM))
+                .font_weight(W_BODY)
+                .text_color(rgb(TEXT_MUTED))
+                .child("dev"),
+        )
+}
+
+/// `· N need you` (rule 2.7.6): how many Threads wait on the operator,
+/// `ATTENTION` `FS_SM` tabular, never shrinking. A press runs the ⌘D jump
+/// from wherever the keyboard is; the tooltip names the key.
+fn need_you(count: usize) -> Div {
+    let label = div()
+        .id("titlebar-need-you")
+        .debug_selector(|| "titlebar-need-you".into())
+        .flex_shrink_0()
+        .cursor_pointer()
         .text_size(px(FS_SM))
-        .line_height(px(LH_META))
         .font_weight(W_BODY)
-        .text_color(rgb(TEXT_MUTED))
-        .child("dev")
+        .text_color(rgb(ATTENTION))
+        .child(SharedString::from(format!("{count} need you")))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, window, cx| {
+            window.dispatch_action(Box::new(crate::cockpit::NextDecision), cx)
+        });
+    let label = match components::bound_chord("cockpit::NextDecision") {
+        Some(keys) => label.tooltip(components::chord_tooltip("Next decision", keys)),
+        None => label.tooltip(crate::menu::tooltip("Next decision")),
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(TITLE_GAP))
+        .child(div().text_color(rgb(TEXT_FAINT)).child("·"))
+        .child(components::tabular(label))
 }
 
 /// The location, on one UI baseline, segments `TITLE_GAP` apart. In Solo:
@@ -256,14 +303,21 @@ fn dev_badge() -> Div {
 /// band's one title and how many Panes it shows; while one Pane fills the
 /// board the Thread follows the Group in place of the count, and how many
 /// Threads that hides is the Group name's tooltip. Truncation order: the
-/// branch first, then the Project, then the title.
-fn title_region(title: Title, board: Board) -> Div {
+/// branch first, then the Project, then the title. The band's own copy
+/// (`chrome`, never inside a drag region) closes it: `· N need you`, then
+/// `· dev` in a development build.
+fn title_region(title: Title, board: Board, chrome: bool) -> Div {
     let Title {
         project,
         group,
         thread,
     } = title;
-    let Board { count, fullscreen } = board;
+    let Board {
+        count,
+        fullscreen,
+        need_you: waiting,
+    } = board;
+    let located = project.is_some() || group.is_some() || thread.is_some();
     let separator = |glyph: &'static str| {
         div()
             .flex_shrink_0()
@@ -341,6 +395,12 @@ fn title_region(title: Title, board: Board) -> Div {
         }))
         .when(has_group && has_thread, |title| title.child(separator("/")))
         .children(thread.map(thread_crumb))
+        .when(chrome && waiting > 0, |title| {
+            title.child(need_you(waiting))
+        })
+        .when(chrome && DEV, |title| {
+            title.child(dev_badge(located || waiting > 0))
+        })
 }
 
 /// The Thread in the titlebar: a 6px status dot in a 12px box, the title
@@ -586,9 +646,14 @@ mod tests {
                 Board {
                     count: Some(4),
                     fullscreen: false,
+                    need_you: 2,
                 },
                 None,
-                add_thread_button("Add Thread", "New Thread in Group", cx),
+                add_thread(
+                    add_thread_button("Add thread", cx),
+                    "New thread in this group",
+                    Some("cmd-T".into()),
+                ),
                 true,
                 false,
             );

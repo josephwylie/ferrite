@@ -10,6 +10,7 @@ fn an_l2_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-decision-keys", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     tick(cx);
     assert_eq!(

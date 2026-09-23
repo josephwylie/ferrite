@@ -305,6 +305,44 @@ pub fn checkout_branch(cwd: &Path) -> Option<String> {
     (!head.is_empty()).then(|| head.to_string())
 }
 
+/// The branch a repo calls its default: what `origin/HEAD` points at, else
+/// `main` when that branch exists, else `master` when it does, else `main`.
+/// Each probe is a `git` call, so the UI reads it once per Project into its
+/// facts cache and never from a frame.
+pub fn default_branch(cwd: &Path) -> String {
+    let origin = git(
+        cwd,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .ok();
+    pick_default_branch(origin.as_deref(), |name| {
+        git(
+            cwd,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{name}"),
+            ],
+        )
+        .is_ok()
+    })
+}
+
+/// `default_branch`'s ladder over what git answered: the remote's HEAD
+/// (`origin/main` → `main`), else the first of `main` and `master` that
+/// exists locally, else `main`, the name a fresh clone would use.
+pub fn pick_default_branch(origin_head: Option<&str>, has_branch: impl Fn(&str) -> bool) -> String {
+    if let Some(head) = origin_head.map(str::trim).filter(|head| !head.is_empty()) {
+        return head.strip_prefix("origin/").unwrap_or(head).to_string();
+    }
+    ["main", "master"]
+        .into_iter()
+        .find(|name| has_branch(name))
+        .unwrap_or("main")
+        .to_string()
+}
+
 /// How far a checkout has drifted, and what the forge says about it — the
 /// Pane header's second line (#29). Every field is `Option`-ish in spirit:
 /// a tree with no upstream reports no ahead/behind, and a repo with no
@@ -1213,6 +1251,26 @@ mod tests {
 
     /// #29: the display-only header's source — the branch by name, the
     /// short id for a detached HEAD, and nothing at all outside a checkout.
+    #[test]
+    fn the_default_branch_follows_origin_then_main_then_master() {
+        assert_eq!(
+            pick_default_branch(Some("origin/trunk\n"), |_| true),
+            "trunk"
+        );
+        assert_eq!(pick_default_branch(Some("origin/main"), |_| false), "main");
+        assert_eq!(pick_default_branch(None, |name| name == "main"), "main");
+        assert_eq!(pick_default_branch(None, |name| name == "master"), "master");
+        assert_eq!(pick_default_branch(Some(""), |_| true), "main");
+        assert_eq!(pick_default_branch(None, |_| false), "main");
+        let root = scratch("default-branch");
+        let repo = init_repo(&root);
+        assert_eq!(
+            default_branch(&repo),
+            "main",
+            "no origin: the local main is the default"
+        );
+    }
+
     #[test]
     fn checkout_branch_names_the_branch_the_detached_head_or_nothing() {
         let root = scratch("branch-of");

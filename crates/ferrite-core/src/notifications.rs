@@ -88,6 +88,12 @@ pub struct DecisionNotice {
     pub subject: Option<Subject>,
     pub kind: RequestKind,
     pub read: bool,
+    /// When the request was first seen: what its age in the bell counts
+    /// from, and — with `seq` — the order the Needs-you queue answers in.
+    pub at: SystemTime,
+    /// Arrival order across every Thread: the first request raised is the
+    /// first answered (`Cockpit::needs_you`).
+    pub seq: u64,
     dismissed: bool,
 }
 
@@ -121,6 +127,8 @@ pub struct Notifications {
     decisions: BTreeMap<DecisionNoticeId, DecisionNotice>,
     phases: BTreeMap<ThreadId, Phase>,
     next: u64,
+    /// The last request's arrival number (`DecisionNotice::seq`).
+    raised: u64,
     grace: Duration,
 }
 
@@ -137,6 +145,7 @@ impl Notifications {
             decisions: BTreeMap::new(),
             phases: BTreeMap::new(),
             next: 0,
+            raised: 0,
             grace,
         }
     }
@@ -269,6 +278,11 @@ impl Notifications {
                         RequestKind::Permission
                     },
                     read: false,
+                    at: SystemTime::now(),
+                    seq: {
+                        self.raised += 1;
+                        self.raised
+                    },
                     dismissed: false,
                 });
             notice.subject = pending.subject.clone();
@@ -371,6 +385,16 @@ impl Notifications {
     /// Every live Decision attention record, ordered by its stable key.
     pub fn decisions(&self) -> impl Iterator<Item = &DecisionNotice> {
         self.decisions.values().filter(|notice| !notice.dismissed)
+    }
+
+    /// A Thread's oldest live request, dismissed or not: when it started
+    /// waiting on the operator, and what it waits for. The Needs-you queue
+    /// orders by it (`Cockpit::needs_you`).
+    pub fn first_request(&self, thread: ThreadId) -> Option<&DecisionNotice> {
+        self.decisions
+            .values()
+            .filter(|notice| notice.id.thread == thread)
+            .min_by_key(|notice| notice.seq)
     }
 
     pub fn decision(&self, id: &DecisionNoticeId) -> Option<&DecisionNotice> {

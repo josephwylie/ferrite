@@ -173,6 +173,17 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("]"), "cockpit::NextPane", None),
         (with_primary("["), "cockpit::PreviousPane", None),
         (with_primary("d"), "cockpit::NextDecision", None),
+        // The rail's ordinals: ⌘1…⌘9 land on its first nine Threads (those
+        // that need you first, then the tree's order).
+        (with_primary("1"), "cockpit::FocusThread1", None),
+        (with_primary("2"), "cockpit::FocusThread2", None),
+        (with_primary("3"), "cockpit::FocusThread3", None),
+        (with_primary("4"), "cockpit::FocusThread4", None),
+        (with_primary("5"), "cockpit::FocusThread5", None),
+        (with_primary("6"), "cockpit::FocusThread6", None),
+        (with_primary("7"), "cockpit::FocusThread7", None),
+        (with_primary("8"), "cockpit::FocusThread8", None),
+        (with_primary("9"), "cockpit::FocusThread9", None),
         (with_primary("n"), "cockpit::NewThread", None),
         // #20: browser-tab muscle memory — cmd-t is the same new Thread,
         // and cmd-n stays as an alias beside it.

@@ -223,7 +223,9 @@ pub enum Level {
 /// 120px tall; under that, the wall's one signal.
 const TRANSCRIPT_WIDTH: f32 = 300.0;
 const TRANSCRIPT_HEIGHT: f32 = 220.0;
-const INSTRUMENTS_WIDTH: f32 = 200.0;
+/// The L2 floor's width: the UI folds the nav to its rail rather than let a
+/// board cell drop under it.
+pub const INSTRUMENTS_WIDTH: f32 = 200.0;
 const INSTRUMENTS_HEIGHT: f32 = 120.0;
 
 impl Level {

@@ -59,7 +59,6 @@ icons![
     "ferrite-lower",
     "plus",
     "gear",
-    "list-filter",
     "group",
     "subagents",
     "window-minimize",
@@ -96,6 +95,7 @@ icons![
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
+    "arrow-up-down",
     // (end WP-G)
 ];
 
@@ -127,8 +127,6 @@ const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
 pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
-/// Sort and grouping choices for the Thread list.
-pub const LIST_FILTER: &str = "icons/list-filter.svg";
 /// Four Panes held together as one durable Group.
 pub const GROUP: &str = "icons/group.svg";
 /// A parent Agent branching to two children.
@@ -191,6 +189,8 @@ pub const DIAMOND: &str = "icons/diamond.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
+/// Lucide's `arrow-up-down`: the order the Thread list is shown in.
+pub const SORT: &str = "icons/arrow-up-down.svg";
 // (end WP-G)
 
 pub struct Assets;
@@ -388,7 +388,7 @@ mod tests {
             FERRITE_UPPER,
             FERRITE_LOWER,
             GEAR,
-            LIST_FILTER,
+            SORT,
             GROUP,
             SUBAGENTS,
             WINDOW_MINIMIZE,
@@ -432,7 +432,7 @@ mod tests {
             PENCIL,
             CHECK,
             GEAR,
-            LIST_FILTER,
+            SORT,
             GROUP,
             SUBAGENTS,
             COPY,

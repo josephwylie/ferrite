@@ -11,6 +11,7 @@ fn the_working_mark_rests_under_reduced_motion_at_l1_and_l2(cx: &mut TestAppCont
     let thread = core.threads()[0];
     core.send(thread, "Inspect progress".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryDelta {
@@ -371,11 +372,11 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
     );
 }
 
-/// While toasts stand at the foot of the nav, the nav gives their ground
-/// up: the Parked fold sits above the whole stack, never under it, and gets
-/// its place back once the toasts are gone.
+/// The bottom-left toast card is gone (C8): with the nav open, finishes off
+/// the board toast nothing — the tree and the bell say it — so the Parked
+/// fold never moves and there is no `+N` bubble. The bell still lists them.
 #[gpui::test]
-fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
+fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toast-parked", 5);
     let threads = core.threads();
     core.park(threads[4]).unwrap();
@@ -388,7 +389,6 @@ fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let resting = cx.debug_bounds("nav-parked").expect("the Parked fold");
-    assert!(cx.debug_bounds("nav-toast-reserve").is_none());
 
     for stream in &fake.streams.borrow()[1..4] {
         stream
@@ -407,53 +407,28 @@ fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
     }
-    let layers = view.read_with(cx, |view, _| view.toasts);
-    assert!(layers >= 2, "the premise: a stack of toasts ({layers})");
-    let parked = cx.debug_bounds("nav-parked").expect("the Parked fold");
-    let window_h = cx.update(|window, _| window.viewport_size().height);
-    let stack_top = window_h - px(crate::theme::toast_reserve(layers) - crate::theme::SPACE_2);
-    assert!(
-        parked.bottom() <= stack_top,
-        "the fold {parked:?} ends above the stack's top {stack_top:?}"
-    );
-    for thread in &threads[1..4] {
-        if let Some(toast) = cx.debug_bounds(Box::leak(
-            format!("toast-{}", thread.get()).into_boxed_str(),
-        )) {
-            assert!(
-                parked.bottom() <= toast.top() - px(crate::theme::SPACE_3),
-                "the fold {parked:?} clears the toast {toast:?}"
-            );
-        }
-    }
-    // Collapsed, only the front toast shows; the rest are a `+N` bubble on
-    // its top-right corner.
-    let more = cx.debug_bounds("toast-more").expect("the +N bubble");
-    let corner = gpui::point(
-        px(crate::theme::SPACE_2 + crate::theme::TOAST_W),
-        window_h - px(crate::theme::GRID_PAD + crate::theme::TOAST_H),
-    );
-    assert!(
-        (more.center().x - corner.x).abs() <= px(1.)
-            && (more.center().y - corner.y).abs() <= px(1.),
-        "the bubble straddles the front toast's corner: {more:?} / {corner:?}"
-    );
-    assert!(
-        parked.top() < resting.top(),
-        "the fold moved up to make room"
-    );
-
     cx.update(|window, cx| {
         use gpui::component::WindowExt as _;
-        window.clear_notifications(cx)
+        assert_eq!(
+            window.notifications(cx).len(),
+            0,
+            "the nav is open: the tree and the bell say it, nothing toasts"
+        );
     });
-    cx.executor().advance_clock(Duration::from_secs(1));
-    tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.toasts), 0);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.cockpit.notifications().unread()),
+        3,
+        "the bell lists every finish"
+    );
+    for thread in &threads[1..4] {
+        let toast: &'static str = format!("toast-{}", thread.get()).leak();
+        assert!(cx.debug_bounds(toast).is_none(), "no toast for {thread}");
+    }
+    assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
     assert_eq!(
         cx.debug_bounds("nav-parked"),
         Some(resting),
-        "room given back"
+        "the fold never moves"
     );
 }
 
@@ -539,6 +514,7 @@ fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContex
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(860.), px(480.)));
     tick(cx);
     assert_eq!(
@@ -589,6 +565,7 @@ fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContex
 fn l2_tail_tool_rows_stay_inside_the_cell(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-tail-inside", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     fake.streams.borrow()[0]
         .send(SessionEvent::ToolStarted {
@@ -729,6 +706,7 @@ fn an_l2_approval_cell_keeps_its_composer(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-approval-composer", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     tick(cx);
     assert_eq!(
@@ -979,6 +957,7 @@ fn an_l2_approval_allows_on_y_with_the_card_or_the_composer_focused(cx: &mut Tes
     let (core, fake) = cockpit("l2-approval-focus", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     tick(cx);
     assert_eq!(
@@ -1455,6 +1434,7 @@ fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
 fn a_compact_placeholder_carries_no_hint(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("compact-placeholder", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     tick(cx);
     assert_eq!(
@@ -1531,6 +1511,7 @@ fn an_l2_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("l2-approval-facts", 2);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     for event in [
         SessionEvent::Init {

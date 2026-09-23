@@ -58,6 +58,11 @@ pub struct ThreadFacts {
     /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
     /// cannot be stat'd; such a row claims nothing and sorts last.
     pub last_used: Option<SystemTime>,
+    /// The Project's default branch (`workspace::default_branch`), read
+    /// once per Project and shared by every Thread in it. `None` until
+    /// read, or for a Thread no Project claims: then `main` and `master`
+    /// stand in for it.
+    pub default_branch: Option<SharedString>,
     /// Subagents observed for this Thread. Retained while parked so
     /// its navigation row keeps the last known count without reopening logs.
     pub subagents: usize,
@@ -68,6 +73,26 @@ pub struct ThreadFacts {
     selected_wall: Option<(Subject, WallCard)>,
 }
 impl ThreadFacts {
+    /// Whether `branch` is the Project's default, which the nav row and the
+    /// titlebar crumb leave unsaid.
+    pub fn is_default_branch(&self, branch: &str) -> bool {
+        match &self.default_branch {
+            Some(default) => branch == default.as_ref(),
+            None => matches!(branch, "main" | "master"),
+        }
+    }
+
+    /// The checkout's branch, only when it says something: not the
+    /// Project's default. The live status's branch wins over the cached one.
+    pub fn off_default_branch(&self) -> Option<SharedString> {
+        self.status
+            .as_ref()
+            .and_then(|status| status.branch.clone())
+            .map(SharedString::from)
+            .or_else(|| self.branch.clone())
+            .filter(|branch| !self.is_default_branch(branch))
+    }
+
     pub fn wall_for(&self, subject: &Subject) -> Option<&WallCard> {
         match subject {
             Subject::Main => Some(&self.wall),
@@ -82,6 +107,9 @@ impl ThreadFacts {
 
 pub struct Facts {
     threads: HashMap<ThreadId, ThreadFacts>,
+    /// Each Project's default branch, read once (a `git` call or two) the
+    /// first time a Thread of it is refreshed, never from a frame.
+    default_branches: HashMap<ProjectId, SharedString>,
     /// The nav's parked Threads, in the Cockpit's stable park order (#21).
     parked: Vec<ThreadId>,
     /// Whether an untitled Thread is named from its first prompt (a
@@ -99,6 +127,7 @@ impl Facts {
     pub fn with_auto_title(auto_title: bool) -> Self {
         Self {
             threads: HashMap::new(),
+            default_branches: HashMap::new(),
             parked: Vec::new(),
             auto_title,
         }
@@ -203,6 +232,13 @@ impl Facts {
             };
             facts.provider = Some(meta.provider);
             facts.project = meta.project_id;
+            let checkout = match meta.workspace.as_ref() {
+                Some(WorkspaceBinding::Worktree { repo, .. }) => Some(repo.as_path()),
+                Some(WorkspaceBinding::Main { checkout }) => Some(checkout.as_path()),
+                None => None,
+            };
+            facts.default_branch =
+                default_branch_of(&mut self.default_branches, meta.project_id, checkout);
             facts.project_label = project_label(cockpit, meta.project_id, meta.workspace.as_ref());
             facts.subagents = cockpit.subagent_count(*thread).unwrap_or_default();
             // The checkout, for a parked Thread, in the order that costs
@@ -239,7 +275,8 @@ impl Facts {
         )
         .map(std::path::Path::to_path_buf);
         let branch = cwd
-            .and_then(|cwd| ferrite_core::workspace::checkout_branch(&cwd))
+            .as_deref()
+            .and_then(ferrite_core::workspace::checkout_branch)
             .map(SharedString::from);
         let (project, project_label) = match cockpit.peek(thread) {
             Ok(meta) => (
@@ -248,11 +285,13 @@ impl Facts {
             ),
             Err(_) => (None, None),
         };
+        let default_branch = default_branch_of(&mut self.default_branches, project, cwd.as_deref());
         let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
         facts.last_used = last_used;
         facts.branch = branch;
+        facts.default_branch = default_branch;
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
@@ -336,6 +375,22 @@ impl Facts {
     }
 }
 
+/// A Project's default branch from the cache, read from `checkout` the
+/// first time the Project is seen. A Thread no Project claims has none.
+fn default_branch_of(
+    cache: &mut HashMap<ProjectId, SharedString>,
+    project: Option<ProjectId>,
+    checkout: Option<&std::path::Path>,
+) -> Option<SharedString> {
+    let project = project?;
+    if let Some(known) = cache.get(&project) {
+        return Some(known.clone());
+    }
+    let read = SharedString::from(ferrite_core::workspace::default_branch(checkout?));
+    cache.insert(project, read.clone());
+    Some(read)
+}
+
 fn project_label(
     cockpit: &Cockpit,
     project: Option<ProjectId>,
@@ -354,10 +409,12 @@ fn project_label(
     Some(SharedString::from(leaf.to_string_lossy().to_string()))
 }
 
-/// How long ago, in the nav's own shorthand: `now`, `40m`, `2h`, `3d`,
-/// `1w`, then `12mo` and `2y`. One unit, never two — the row has a line's
-/// tail to spend, and "2h" is the whole answer at a glance. A time in the
-/// future (a clock that moved) reads `now` rather than a negative.
+/// How long ago, in the nav's own shorthand: `1m`, `40m`, `2h`, `3d`, `1w`,
+/// then `12mo` and `2y`. One unit, never two — the row has a line's tail to
+/// spend, and "2h" is the whole answer at a glance. Under a minute it says
+/// nothing at all (C10: never `now`), and callers keep the slot's width so
+/// the first minute moves nothing. A time in the future (a clock that
+/// moved) says nothing rather than a negative.
 pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
     let secs = now.duration_since(last_used).unwrap_or_default().as_secs();
     const MINUTE: u64 = 60;
@@ -370,7 +427,7 @@ pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
     const MONTH: u64 = 2_629_746;
     const YEAR: u64 = 12 * MONTH;
     let text = match secs {
-        s if s < MINUTE => "now".to_string(),
+        s if s < MINUTE => String::new(),
         s if s < HOUR => format!("{}m", s / MINUTE),
         s if s < DAY => format!("{}h", s / HOUR),
         s if s < WEEK => format!("{}d", s / DAY),
@@ -393,9 +450,11 @@ mod tests {
 
     #[test]
     fn the_shorthand_climbs_one_unit_at_a_time() {
-        assert_eq!(ago(0), "now");
-        assert_eq!(ago(59), "now");
+        assert_eq!(ago(0), "");
+        assert_eq!(ago(59), "");
         assert_eq!(ago(60), "1m");
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        assert_eq!(since_label(then, then + Duration::from_secs(90)), "1m");
         assert_eq!(ago(40 * 60), "40m");
         assert_eq!(ago(2 * 3600), "2h");
         assert_eq!(ago(3 * 24 * 3600), "3d");
@@ -406,8 +465,25 @@ mod tests {
 
     /// A clock that moved backwards must not print a negative age.
     #[test]
-    fn a_future_stamp_reads_now() {
+    fn a_future_stamp_says_nothing() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-        assert_eq!(since_label(now + Duration::from_secs(500), now), "now");
+        assert_eq!(since_label(now + Duration::from_secs(500), now), "");
+    }
+
+    /// The Project's default is left unsaid; anything else is named. With
+    /// no default read, `main` and `master` stand in for it.
+    #[test]
+    fn only_a_branch_off_the_default_is_named() {
+        let mut facts = ThreadFacts {
+            branch: Some("feat/nav".into()),
+            ..ThreadFacts::default()
+        };
+        assert_eq!(facts.off_default_branch().as_deref(), Some("feat/nav"));
+        facts.branch = Some("master".into());
+        assert_eq!(facts.off_default_branch(), None);
+        facts.default_branch = Some("trunk".into());
+        assert_eq!(facts.off_default_branch().as_deref(), Some("master"));
+        facts.branch = Some("trunk".into());
+        assert_eq!(facts.off_default_branch(), None);
     }
 }

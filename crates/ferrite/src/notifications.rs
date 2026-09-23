@@ -90,10 +90,13 @@ impl Row {
         }
     }
 
+    /// A live request's row. `when` is its age from when it was raised
+    /// (`facts::since_label`), empty in its first minute.
     pub fn decision(
         notice: &DecisionNotice,
         title: SharedString,
         project: Option<SharedString>,
+        when: SharedString,
     ) -> Self {
         Self {
             target: RowTarget::Decision(notice.id.clone()),
@@ -101,7 +104,7 @@ impl Row {
             title,
             project,
             kind: RowKind::Request(notice.kind),
-            when: "now".into(),
+            when,
             read: notice.read,
         }
     }
@@ -148,12 +151,23 @@ impl Row {
 struct Finished;
 struct Request;
 
-/// The window's side of the bell: whether its panel is down, and which
-/// Notices it has toasted already.
+/// The window's side of the bell: whether its panel is down, which Notices
+/// and requests it has seen, and which of them stand as toasts right now.
+///
+/// **A toast is the rail's voice only** (C8). With the nav open, the
+/// Needs-you strip and the tree already say everything a toast would, so
+/// nothing toasts; the cockpit passes `toastable` as "the nav is folded to
+/// the rail **and** this Thread is off the board". A standing toast goes
+/// the moment its Thread lands on the board or is read. The bell's panel
+/// still lists everything either way.
 pub struct Bell {
     pub open: bool,
     presented: Option<NoticeId>,
     presented_requests: BTreeSet<DecisionNoticeId>,
+    /// The Threads whose completion toast stands now.
+    finished: BTreeSet<ThreadId>,
+    /// The requests whose toast stands now.
+    requests: BTreeSet<DecisionNoticeId>,
 }
 
 impl Bell {
@@ -162,20 +176,23 @@ impl Bell {
             open: false,
             presented: None,
             presented_requests: BTreeSet::new(),
+            finished: BTreeSet::new(),
+            requests: BTreeSet::new(),
         }
     }
 
-    /// The watermark: Notices at or below it have had their toast.
+    /// The watermark: Notices at or below it have been seen.
     pub fn presented(&self) -> Option<NoticeId> {
         self.presented
     }
 
-    /// Toast every unread Notice born since the last frame and move the
-    /// watermark past all of them. A Notice born read — the operator was
-    /// on that Pane — has nothing to shout about.
+    /// Move the watermark past every Notice born since the last frame, and
+    /// toast each unread one whose Thread is `toastable`. A Notice born
+    /// read — the operator was on that Pane — has nothing to shout about.
     pub fn present(
         &mut self,
         rows: impl IntoIterator<Item = Row>,
+        toastable: &dyn Fn(ThreadId) -> bool,
         handle: &Handle,
         window: &mut Window,
         cx: &mut App,
@@ -186,24 +203,51 @@ impl Bell {
             };
             let id = *id;
             self.presented = Some(self.presented.map_or(id, |seen| seen.max(id)));
-            if row.read {
+            if row.read || !toastable(row.thread) {
                 continue;
             }
+            self.finished.insert(row.thread);
             window.push_notification(toast(&row, handle.clone()), cx);
+        }
+    }
+
+    /// Take down every standing completion toast whose Thread `keep` no
+    /// longer admits: it landed on the board, or its Notice was read.
+    pub fn retract(&mut self, keep: &dyn Fn(ThreadId) -> bool, window: &mut Window, cx: &mut App) {
+        let gone: Vec<ThreadId> = self
+            .finished
+            .iter()
+            .copied()
+            .filter(|thread| !keep(*thread))
+            .collect();
+        for thread in gone {
+            self.finished.remove(&thread);
+            window.remove_notification1::<Finished>(thread.get() as usize, cx);
         }
     }
 
     /// Keep live request toasts in lockstep with their generation-scoped
     /// records. Completion uses its monotonic watermark above; requests use
-    /// their own opaque identities and vanish as soon as Activity resolves them.
+    /// their own opaque identities. A request is toasted once, on arrival,
+    /// if its Thread is `toastable`, and its toast goes as soon as Activity
+    /// resolves it, it is read, or its Thread stops being toastable.
     pub fn present_requests(
         &mut self,
         rows: impl IntoIterator<Item = Row>,
+        toastable: &dyn Fn(ThreadId) -> bool,
         handle: &Handle,
         window: &mut Window,
         cx: &mut App,
     ) {
         let rows: Vec<_> = rows.into_iter().collect();
+        let standing: BTreeSet<_> = rows
+            .iter()
+            .filter(|row| !row.read && toastable(row.thread))
+            .filter_map(|row| match &row.target {
+                RowTarget::Decision(id) => Some(id.clone()),
+                RowTarget::Notice(_) => None,
+            })
+            .collect();
         let live: BTreeSet<_> = rows
             .iter()
             .filter_map(|row| match &row.target {
@@ -211,15 +255,18 @@ impl Bell {
                 RowTarget::Notice(_) => None,
             })
             .collect();
-        for id in self.presented_requests.difference(&live) {
-            window.remove_notification1::<Request>(request_key(id), cx);
+        let retracted: Vec<_> = self.requests.difference(&standing).cloned().collect();
+        for id in retracted {
+            self.requests.remove(&id);
+            window.remove_notification1::<Request>(request_key(&id), cx);
         }
         let presented = std::mem::replace(&mut self.presented_requests, live);
         for row in rows {
             let RowTarget::Decision(id) = &row.target else {
                 continue;
             };
-            if !presented.contains(id) && !row.read {
+            if !presented.contains(id) && standing.contains(id) {
+                self.requests.insert(id.clone());
                 window.push_notification(request_toast(&row, handle.clone()), cx);
             }
         }
@@ -234,14 +281,12 @@ impl Bell {
         handle: Handle,
         on_open: impl Fn(bool, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
-        let waiting = rows
-            .iter()
-            .any(|row| !row.read && matches!(row.kind, RowKind::Request(_)));
+        let tone = badge_tone(&rows);
         let rows = Rc::new(rows);
         Popover::new("notifications-bell")
             .anchor(Anchor::TopLeft)
             .appearance(false)
-            .trigger(trigger(unread, waiting, self.open))
+            .trigger(trigger(unread, tone, self.open))
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx))
             .content(move |_, _, _| {
@@ -261,26 +306,53 @@ impl Default for Bell {
     }
 }
 
+/// What the badge's digits say beyond a count (rule 2.2.9): nothing, an
+/// unread request waiting on the operator, or an unread failure while
+/// nothing waits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BadgeTone {
+    Plain,
+    NeedsYou,
+    Failed,
+}
+
+/// The badge's tone from the unread rows: any unread request is `NeedsYou`;
+/// otherwise any unread failed turn is `Failed`; otherwise `Plain`.
+fn badge_tone(rows: &[Row]) -> BadgeTone {
+    let unread = || rows.iter().filter(|row| !row.read);
+    if unread().any(|row| matches!(row.kind, RowKind::Request(_))) {
+        BadgeTone::NeedsYou
+    } else if unread().any(|row| matches!(row.kind, RowKind::Completion(TurnOutcome::Error(_)))) {
+        BadgeTone::Failed
+    } else {
+        BadgeTone::Plain
+    }
+}
+
 /// The 28×28 bell button in the nav's chrome band, with the unread count
-/// riding its corner: `ATTENTION` while a Decision waits among the unread,
-/// steel otherwise, hidden at zero.
-fn trigger(unread: usize, waiting: bool, open: bool) -> Button {
-    let glyph = if open { ACCENT } else { TEXT_MUTED };
+/// riding its top edge, hidden at zero. The glyph is `TEXT_MUTED` at rest
+/// and `TEXT` while the panel is down, when the `FILL` ground alone says it
+/// is open: the bell never borrows the accent.
+fn trigger(unread: usize, tone: BadgeTone, open: bool) -> Button {
+    let glyph = if open { TEXT } else { TEXT_MUTED };
     components::button("notifications-bell")
         .debug_selector(|| "notifications-bell".into())
         .relative()
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .p_0()
+        .when(open, |bell| bell.bg(rgb(FILL)))
         .tooltip("Notifications")
         .accessibility_label("Notifications")
         .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, glyph))
-        .when(unread > 0, |bell| bell.child(badge(unread, waiting)))
+        .when(unread > 0, |bell| bell.child(badge(unread, tone)))
 }
 
-/// The unread count pill: UI `FS_SM`, tabular, `99+` past two digits.
-fn badge(unread: usize, waiting: bool) -> Div {
-    let (ground, ink) = badge_inks(waiting);
+/// The unread count: UI `FS_SM` `W_BODY`, tabular, `99+` past two digits,
+/// on the neutral `FILL_HOVER` ground — the colour, when there is one, is
+/// on the digits, never the ground.
+fn badge(unread: usize, tone: BadgeTone) -> Div {
+    let (ground, ink) = badge_inks(tone);
     let count: SharedString = if unread > 99 {
         "99+".into()
     } else {
@@ -288,9 +360,10 @@ fn badge(unread: usize, waiting: bool) -> Div {
     };
     components::tabular(
         div()
+            .debug_selector(|| "notifications-badge".into())
             .absolute()
-            .top(px(BADGE_INSET))
-            .right(px(BADGE_INSET))
+            .top(px(0.))
+            .left(px(BADGE_LEFT))
             .flex()
             .items_center()
             .justify_center()
@@ -302,20 +375,22 @@ fn badge(unread: usize, waiting: bool) -> Div {
             .font_family(FONT_UI)
             .text_size(px(FS_SM))
             .line_height(px(BADGE_H))
-            .font_weight(W_LABEL)
+            .font_weight(W_BODY)
             .text_color(rgb(ink))
             .child(count),
     )
 }
 
-/// The badge's ground and ink: a waiting Decision is attention, plain
-/// completions are steel.
-fn badge_inks(waiting: bool) -> (u32, u32) {
-    if waiting {
-        (ATTENTION, GROUND)
-    } else {
-        (ACCENT_STRONG, ON_ACCENT)
-    }
+/// The badge's ground and ink: always the neutral `FILL_HOVER` ground;
+/// `TEXT_STRONG` digits, `ATTENTION` while a request waits unread, or
+/// `BLOCKED` for an unread failure when nothing waits.
+fn badge_inks(tone: BadgeTone) -> (u32, u32) {
+    let ink = match tone {
+        BadgeTone::Plain => TEXT_STRONG,
+        BadgeTone::NeedsYou => ATTENTION,
+        BadgeTone::Failed => BLOCKED,
+    };
+    (FILL_HOVER, ink)
 }
 
 /// A row's or toast's status mark: attention while a Decision waits, blocked
@@ -558,9 +633,14 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 )
                 .child(detail_line(row)),
         )
+        // The age's slot keeps its width in a request's first minute, when
+        // it says nothing, so the rows' ages align.
         .child(components::tabular(
             components::text_meta()
                 .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .min_w(px(NOTICE_AGE_W))
                 .child(row.when.clone()),
         ))
         // The dismiss × keeps its width at rest, so the age never moves; it
@@ -607,7 +687,7 @@ mod tests {
             title: "fix the bell".into(),
             project: project.map(SharedString::from),
             kind: RowKind::Completion(outcome),
-            when: "now".into(),
+            when: "2m".into(),
             read: false,
         }
     }
@@ -636,8 +716,32 @@ mod tests {
             ("needs you".into(), ATTENTION, " \u{b7} approval".into())
         );
         assert_eq!(mark_ink(&waiting), ATTENTION);
-        assert_eq!(badge_inks(true), (ATTENTION, GROUND));
-        assert_eq!(badge_inks(false), (ACCENT_STRONG, ON_ACCENT));
+        assert_eq!(badge_inks(BadgeTone::Plain), (FILL_HOVER, TEXT_STRONG));
+        assert_eq!(badge_inks(BadgeTone::NeedsYou), (FILL_HOVER, ATTENTION));
+        assert_eq!(badge_inks(BadgeTone::Failed), (FILL_HOVER, BLOCKED));
+    }
+
+    /// Any unread request tones the badge; failing that, an unread failure;
+    /// read rows never do.
+    #[test]
+    fn the_badge_tone_follows_the_unread_rows() {
+        let done = row(TurnOutcome::Completed, None);
+        let failed = row(TurnOutcome::Error("x".into()), None);
+        let waiting = Row {
+            kind: RowKind::Request(RequestKind::Question),
+            ..done.clone()
+        };
+        assert_eq!(badge_tone(std::slice::from_ref(&done)), BadgeTone::Plain);
+        assert_eq!(
+            badge_tone(&[done.clone(), failed.clone()]),
+            BadgeTone::Failed
+        );
+        assert_eq!(
+            badge_tone(&[failed.clone(), waiting.clone()]),
+            BadgeTone::NeedsYou
+        );
+        let read = |row: Row| Row { read: true, ..row };
+        assert_eq!(badge_tone(&[read(failed), read(waiting)]), BadgeTone::Plain);
     }
 
     #[test]
