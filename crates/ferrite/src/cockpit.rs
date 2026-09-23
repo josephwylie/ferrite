@@ -10837,11 +10837,16 @@ impl CockpitView {
         };
         let title = self.editable_thread_title(thread, row.name.clone(), cx);
         // One row builder; Project order adds the membership glyph.
+        let editing = matches!(
+            &self.rename,
+            Some((RenameTarget::Thread(editing), _)) if *editing == thread
+        );
         let head = nav::project_thread_row_with_title(
             row,
             title,
             compact && group.is_some(),
             cx.reduce_motion(),
+            editing,
         );
         let badge = self.facts.name(thread);
         drop_feedback(head, self.cockpit.groups().clone(), target)

@@ -92,15 +92,19 @@ pub fn tooltip_with_key(
     move |window, cx| {
         let (label, key) = (label.clone(), key.clone());
         gpui::component::tooltip::Tooltip::element(move |_, _| {
+            // The label comes first: it wraps whole rather than cut, and
+            // the key beside it never gives way either (a rail item's
+            // tooltip is the one place its Thread's title is read).
             gpui::div()
                 .flex()
                 .items_center()
                 .gap(px(SPACE_1_5))
-                .child(label.clone())
-                .children(
-                    key.as_ref()
-                        .map(|key| components::key_combo(key, TEXT_MUTED).text_size(px(FS_SM))),
-                )
+                .child(gpui::div().min_w_0().child(label.clone()))
+                .children(key.as_ref().map(|key| {
+                    components::key_combo(key, TEXT_MUTED)
+                        .flex_shrink_0()
+                        .text_size(px(FS_SM))
+                }))
         })
         .font_family(FONT_UI)
         .text_size(px(FS_SM))

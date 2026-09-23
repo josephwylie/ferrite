@@ -663,6 +663,126 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
 
 // ------------------------------------------------------ operator rulings
 
+/// Discover `count` subagents under a Thread's Main.
+fn subagents(fake: &Fake, stream: usize, count: usize) {
+    for n in 0..count {
+        let key = ferrite_core::activity::AgentKey::new(
+            Provider::Claude,
+            "title-first",
+            &format!("child-{stream}-{n}"),
+        );
+        let mut info = ferrite_core::activity::AgentInfo::new(key);
+        info.parent = Some(ferrite_core::activity::Subject::Main);
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::Activity(
+                ferrite_core::activity::ActivityEvent::Discovered(info),
+            ))
+            .unwrap();
+    }
+}
+
+/// The nav title comes first. At the nav's own width, a Group member on a
+/// long worktree branch that runs five subagents keeps its title at its
+/// floor or whole, the branch gives way first, and the count gives way
+/// before the title drops under its floor. A short title keeps its own
+/// width, and then the branch and the count both fit beside it. The word
+/// or age and the provider mark are never squeezed.
+#[gpui::test]
+fn a_nav_title_keeps_its_floor_before_the_branch_and_the_count(cx: &mut TestAppContext) {
+    use crate::theme::{NAV_TITLE_FLOOR, PROVIDER_MARK};
+    let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
+    subagents(&fake, 0, 5);
+    subagents(&fake, 1, 5);
+    tick(cx);
+    let threads = view.read_with(cx, |view, _| {
+        [
+            view.panes[0].thread().unwrap(),
+            view.panes[1].thread().unwrap(),
+        ]
+    });
+    let long_branch = "worktree-pay-api-migration-cleanup-and-retry";
+    view.update(cx, |view, cx| {
+        for (thread, title) in threads.iter().zip([
+            "Switch the payment worker to the new settlement queue",
+            "Fix",
+        ]) {
+            view.cockpit.rename_thread(*thread, title).unwrap();
+            view.facts.renamed(&view.cockpit, *thread);
+        }
+        view.facts.set_branches(
+            threads
+                .iter()
+                .map(|thread| {
+                    (
+                        *thread,
+                        Some(ferrite_core::workspace::BranchStatus {
+                            branch: Some(long_branch.into()),
+                            ..Default::default()
+                        }),
+                    )
+                })
+                .collect(),
+        );
+        cx.notify();
+    });
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_width()),
+        crate::nav::WIDTH,
+        "the nav at its default width"
+    );
+    let on_line = |cx: &mut gpui::VisualTestContext, id: String, fit: gpui::Bounds<Pixels>| {
+        debug_bounds(cx, id)
+            .filter(|bounds| bounds.top() < fit.bottom() && bounds.size.width > px(0.))
+    };
+    for (index, thread) in threads.iter().enumerate() {
+        let id = thread.get();
+        let row = view.read_with(cx, |view, _| view.thread_row(*thread));
+        assert_eq!(row.subagents, 5);
+        assert_eq!(row.branch.as_deref(), Some(long_branch));
+        let fit = bounds(cx, format!("nav-title-fit-{id}"));
+        let title = bounds(cx, format!("nav-title-{id}"));
+        let branch = on_line(cx, format!("nav-branch-{id}"), fit);
+        let count = on_line(cx, format!("nav-subagents-{id}"), fit);
+        let mark = bounds(cx, format!("nav-mark-{id}"));
+        let tail = bounds(cx, format!("nav-since-{id}"));
+        let whole_row = bounds(cx, format!("nav-thread-{id}"));
+        assert!(title.left() >= fit.left() && title.right() <= fit.right() + px(0.5));
+        assert!(
+            tail.left() >= fit.right() && mark.left() >= tail.right(),
+            "the tail and the mark sit after the title's line"
+        );
+        assert!(mark.right() <= whole_row.right(), "the mark is whole");
+        assert_eq!(mark.size.width, px(PROVIDER_MARK), "the mark never shrinks");
+        assert!(tail.size.width >= px(crate::theme::NAV_TAIL_MIN_W));
+        if index == 0 {
+            assert!(
+                title.size.width >= px(NAV_TITLE_FLOOR),
+                "a long title keeps its floor: {title:?}"
+            );
+            if let Some(branch) = branch {
+                assert!(branch.right() <= fit.right(), "the branch truncates");
+            }
+            if let Some(count) = count {
+                assert!(count.left() >= title.right(), "{count:?} after {title:?}");
+            }
+        } else {
+            assert!(
+                title.size.width < px(NAV_TITLE_FLOOR),
+                "a short title keeps its own width: {title:?}"
+            );
+            let branch = branch.expect("beside a short title the branch fits");
+            assert!(branch.left() >= title.right() && branch.right() <= fit.right());
+            assert!(
+                branch.size.width > px(crate::theme::NAV_BRANCH_MIN_W),
+                "the branch takes what the title leaves: {branch:?}"
+            );
+            let count = count.expect("beside a short title the count fits");
+            assert!(count.left() >= branch.right() && count.right() <= fit.right());
+        }
+    }
+}
+
 /// Fix 2: a Thread whose turn ended in an error reads `failed` in the nav,
 /// and its dot is `BLOCKED` there, in the rail and in the titlebar — never
 /// the idle grey beside a red word.

@@ -1744,6 +1744,14 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // Project's default, then the tail, then the provider mark in its brand
 // colour. There is no `project · branch` line.
 //
+// **The title comes first** (`nav::title_fit`). It keeps a floor of
+// `min(its whole text, NAV_TITLE_FLOOR)`; the branch gives way first — it
+// truncates, and below `NAV_BRANCH_MIN_W` it leaves the row whole — then
+// the subagent count drops out whole; the tail's word or age and the
+// provider mark never give way. The same order holds in a Group's member
+// rows, the Needs-you strip and the rail's tooltip; the row's tooltip
+// always names the whole title and the count.
+//
 // **The tail is one word or an age** (C10, `nav::NavTail`): `needs you`
 // (`ATTENTION`), `failing N`/`failed` (`BLOCKED`), `done` (`TEXT_MUTED`,
 // unread only), otherwise the age once it reaches a minute (`FS_SM`
@@ -1790,6 +1798,14 @@ pub const NAV_MARK_GAP: f32 = SPACE_2;
 /// 4px — between a title and its inline branch, between the subagent count
 /// and the tail, and between a fact and its `·` seam.
 pub const NAV_TAIL_GAP: f32 = SPACE_1;
+/// 120px — the floor a nav title keeps before the subagent count gives way
+/// (about nineteen characters at `FS_UI`): off the space scale because it
+/// is a reading measure, not a gap. A shorter title keeps its own width.
+pub const NAV_TITLE_FLOOR: f32 = 120.0;
+/// 40px — the narrowest an inline branch is drawn (`·` and a few letters);
+/// with less room it leaves the row whole rather than show a sliver. A
+/// reading measure, off the space scale like `NAV_TITLE_FLOOR`.
+pub const NAV_BRANCH_MIN_W: f32 = 40.0;
 /// 55px — the tail's box: `needs you` at `FS_SM` in Geist (54.7px, ceiled),
 /// the longest word the tail says, so no word arriving moves the title.
 pub const NAV_TAIL_MIN_W: f32 = 55.0;

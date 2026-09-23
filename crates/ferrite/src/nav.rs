@@ -950,19 +950,21 @@ pub fn members(rows: Vec<AnyElement>) -> Div {
 /// provider is unknown, so the title never widens.
 #[cfg(test)]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
-    project_thread_row_with_title(row, row.name.clone(), false, false)
+    project_thread_row_with_title(row, row.name.clone(), false, false, false)
 }
 
 /// The one Thread row builder, with the title leaf supplied by the caller —
 /// see `group_row_with_title`. `grouped` is Project order's membership
 /// mark: a Thread that is still a Group member says so with the Group
 /// glyph after its title, so every title keeps the same x.
-/// `reduce_motion` holds an unread dot's breath at full ink.
+/// `reduce_motion` holds an unread dot's breath at full ink. `editing` is
+/// a rename in progress: the field takes the whole title line.
 pub fn project_thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
     grouped: bool,
     reduce_motion: bool,
+    editing: bool,
 ) -> Stateful<Div> {
     row_frame(
         ("nav-thread", row.thread.get() as usize),
@@ -975,15 +977,96 @@ pub fn project_thread_row_with_title(
     })
     .tooltip(row_tooltip(row))
     .child(lead(status_dot(row, reduce_motion)))
-    .child(title_cell(row, title).ml(px(NAV_LEAD_GAP)))
-    .children(
-        row.branch
-            .clone()
-            .map(|branch| branch_cell(row.thread, branch)),
-    )
-    .children(grouped.then(|| group_membership_indicator(row.thread)))
+    .child(title_fit(row, title, grouped, editing).ml(px(NAV_LEAD_GAP)))
     .child(tail_cell(row))
     .child(mark_cell(row))
+}
+
+/// The row's text between its dot and its tail, in priority order: the
+/// title first, then the branch, then the subagent count (rule: the title
+/// comes first, WP-G in `theme.rs`). Two clipped, wrapping 20px lines do
+/// the ranking without measuring a glyph:
+///
+/// - The outer line holds the title box and the count. The title box's
+///   own width is an invisible copy of the title capped at
+///   `NAV_TITLE_FLOOR` — `min(title, floor)` — so the count stays on the
+///   line only while that floor still fits beside it; otherwise it wraps
+///   whole onto the hidden second line. The title box then grows into
+///   whatever the count leaves.
+/// - Inside the title box, the visible line holds the title, Project
+///   order's Group glyph and the branch. The title is the first item and
+///   never yields to them: the glyph and the branch stay on the line only
+///   while the whole title and the branch's `NAV_BRANCH_MIN_W` fit beside
+///   it, and otherwise wrap away whole.
+///
+/// While `editing`, the rename field takes the whole visible line.
+fn title_fit(row: &ThreadRow, title: impl IntoElement, grouped: bool, editing: bool) -> Div {
+    let thread = row.thread;
+    let count = (!row.tail.is_word())
+        .then(|| subagent_label(row.subagents))
+        .flatten();
+    if editing {
+        return div()
+            .flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .h(px(TITLE_H))
+            .child(title_cell(row, title).flex_1());
+    }
+    let line = div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .content_start()
+        .items_center()
+        .h(px(TITLE_H))
+        .overflow_hidden()
+        .child(title_cell(row, title))
+        .children(grouped.then(|| group_membership_indicator(row.thread)))
+        .children(
+            row.branch
+                .clone()
+                .map(|branch| branch_cell(row.thread, branch)),
+        );
+    let floor = div()
+        .invisible()
+        .h(px(TITLE_H))
+        .max_w(px(NAV_TITLE_FLOOR))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_size(px(FS_UI))
+        .font_weight(W_BODY)
+        .line_height(px(TITLE_H))
+        .child(row.name.clone());
+    div()
+        .debug_selector(move || format!("nav-title-fit-{}", thread.get()))
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .content_start()
+        .items_center()
+        .flex_1()
+        .min_w_0()
+        .h(px(TITLE_H))
+        .overflow_hidden()
+        .child(
+            div()
+                .relative()
+                .flex_grow(1.)
+                .flex_shrink(1.)
+                .min_w_0()
+                .h(px(TITLE_H))
+                .child(floor)
+                .child(line),
+        )
+        .children(count.map(|count| {
+            subagent_tail(thread, count)
+                .flex_shrink_0()
+                .pl(px(NAV_TAIL_GAP))
+        }))
 }
 
 /// One row of the Needs-you strip: the Thread's own row shape, 28px, with
@@ -1074,10 +1157,14 @@ fn row_tooltip(row: &ThreadRow) -> impl Fn(&mut gpui::Window, &mut App) -> gpui:
 }
 
 /// A Thread row's title: one UI line in body weight that truncates, in
-/// `title_ink`. The box sets the 20px line the rename editor inherits.
+/// `title_ink`. The box sets the 20px line the rename editor inherits. At
+/// its own width by default, it gives way only after the row's lesser
+/// facts (`title_fit`).
 fn title_cell(row: &ThreadRow, title: impl IntoElement) -> Div {
+    let thread = row.thread;
     div()
-        .flex_1()
+        .debug_selector(move || format!("nav-title-{}", thread.get()))
+        .flex_initial()
         .min_w_0()
         .truncate()
         .h(px(TITLE_H))
@@ -1104,43 +1191,39 @@ fn title_ink(row: &ThreadRow) -> u32 {
 
 /// The branch, inline after the title (only ever a branch that is not the
 /// Project's default): a faint `·`, then the name in `FS_SM` `TEXT_MUTED`.
-/// It takes at most 40% of the row and truncates before the title does.
+/// It takes what the title leaves, truncates before the title does, and
+/// leaves the row whole below `NAV_BRANCH_MIN_W` (`title_fit`).
 fn branch_cell(thread: ThreadId, branch: SharedString) -> Div {
     components::text_meta()
         .debug_selector(move || format!("nav-branch-{}", thread.get()))
         .flex()
-        .flex_shrink(1.)
-        .min_w_0()
-        .max_w(relative(0.4))
+        // It asks for its floor alone, so the line keeps it only when the
+        // whole title and that floor fit; then it grows into what is left.
+        .flex_basis(px(NAV_BRANCH_MIN_W))
+        .flex_grow(1.)
+        .flex_shrink_0()
+        .min_w(px(NAV_BRANCH_MIN_W))
         .items_center()
         .gap(px(NAV_TAIL_GAP))
-        .ml(px(NAV_TAIL_GAP))
+        .pl(px(NAV_TAIL_GAP))
         .child(seam())
         .child(div().min_w_0().truncate().child(branch))
 }
 
-/// The tail: the subagent count (only beside an age or nothing, never a
-/// state word), then the one word or age, right-aligned in a box that
-/// keeps `NAV_TAIL_MIN_W` so a word arriving moves nothing.
+/// The tail: the one word or age, right-aligned in a box that keeps
+/// `NAV_TAIL_MIN_W` so a word arriving moves nothing. It never gives way;
+/// the subagent count before it rides the title's line (`title_fit`).
 fn tail_cell(row: &ThreadRow) -> Div {
     let thread = row.thread;
     let face = row.tail.face();
-    let word = components::tabular(components::text_meta())
+    components::tabular(components::text_meta())
         .debug_selector(move || format!("nav-since-{thread}", thread = thread.get()))
         .flex()
         .flex_shrink_0()
         .justify_end()
         .min_w(px(NAV_TAIL_MIN_W))
-        .children(face.map(|(text, ink)| div().text_color(rgb(ink)).child(text)));
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .ml_auto()
-        .pl(px(NAV_TAIL_GAP))
-        .gap(px(NAV_TAIL_GAP))
-        .children((!row.tail.is_word()).then(|| subagent_tail(thread, row.subagents)))
-        .child(word)
+        .ml(px(NAV_TAIL_GAP))
+        .children(face.map(|(text, ink)| div().text_color(rgb(ink)).child(text)))
 }
 
 /// The provider mark's fixed slot at a row's right edge.
@@ -1192,17 +1275,14 @@ fn group_membership_indicator(thread: ThreadId) -> Stateful<Div> {
 /// The number of subagents attached to a Thread: the `SUBAGENTS` mark in
 /// `TEXT_FAINT` and a tabular digit in `TEXT_MUTED`. Threads without
 /// children spend no space here; the row's tooltip names the count.
-fn subagent_tail(thread: ThreadId, count: usize) -> Div {
-    let cell = components::tabular(components::text_meta())
+fn subagent_tail(thread: ThreadId, label: SharedString) -> Div {
+    components::tabular(components::text_meta())
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(NAV_TAIL_GAP))
-        .debug_selector(move || format!("nav-subagents-{}", thread.get()));
-    let Some(label) = subagent_label(count) else {
-        return cell;
-    };
-    cell.child(icon(icons::SUBAGENTS, ROW_ICON, TEXT_FAINT))
+        .debug_selector(move || format!("nav-subagents-{}", thread.get()))
+        .child(icon(icons::SUBAGENTS, ROW_ICON, TEXT_FAINT))
         .child(label)
 }
 
@@ -1726,6 +1806,7 @@ mod tests {
                 &current_thread(None, true),
                 "thread-08",
                 true,
+                false,
                 false
             )),
             Some(rgb(FILL).into()),
@@ -1864,6 +1945,7 @@ mod tests {
             height(project_thread_row_with_title(
                 &bare,
                 "thread-09",
+                false,
                 false,
                 false
             )),
