@@ -42,13 +42,14 @@ use wire::ThreadHandshake;
 /// Vendor releases below this break loudly at spawn, not weirdly mid-turn.
 pub const CODEX_CLI_MIN_VERSION: [u64; 3] = [0, 149, 1];
 
-/// Exclusive ceiling: Ferrite is proven against the 0.x wire, and a new major
-/// is a new protocol until someone re-runs the fixture captures against it.
-pub const CODEX_CLI_MAX_VERSION_EXCLUSIVE: [u64; 3] = [1, 0, 0];
+/// Soft ceiling: Ferrite is proven against the 0.x wire, and a new major may
+/// be a new protocol until someone re-runs the fixture captures against it.
+/// A 1.x CLI still spawns, with an untested warning (see the Claude ceiling).
+pub const CODEX_CLI_TESTED_BELOW: [u64; 3] = [1, 0, 0];
 
-/// The supported window as it is shown to operators.
+/// The window as it is shown to operators.
 const MIN_VERSION_DISPLAY: &str = "0.149.1";
-const MAX_VERSION_DISPLAY: &str = "1.0.0";
+const TESTED_BELOW_DISPLAY: &str = "1.0.0";
 
 /// One frame of UI drains far less than this; the depth exists so a stalled
 /// frame throttles the server instead of losing its output.
@@ -147,12 +148,6 @@ pub enum CodexSpawnError {
         found: String,
         required: &'static str,
     },
-    /// The CLI is a major release beyond what Ferrite has been proven against.
-    /// The operator upgrades Ferrite — the CLI is fine.
-    CliVersionUnsupported {
-        found: String,
-        supported_below: &'static str,
-    },
     /// `--version` ran but produced nothing parseable.
     VersionCheckFailed {
         detail: String,
@@ -178,16 +173,6 @@ impl std::fmt::Display for CodexSpawnError {
                     f,
                     "codex CLI {found} is older than the pinned minimum {required}; \
                      upgrade the CLI"
-                )
-            }
-            CodexSpawnError::CliVersionUnsupported {
-                found,
-                supported_below,
-            } => {
-                write!(
-                    f,
-                    "codex CLI {found} is a newer major release than Ferrite is proven \
-                     against (below {supported_below}); upgrade Ferrite"
                 )
             }
             CodexSpawnError::VersionCheckFailed { detail } => {
@@ -1342,11 +1327,11 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
             required: MIN_VERSION_DISPLAY,
         });
     }
-    if version >= CODEX_CLI_MAX_VERSION_EXCLUSIVE {
-        return Err(CodexSpawnError::CliVersionUnsupported {
-            found,
-            supported_below: MAX_VERSION_DISPLAY,
-        });
+    if version >= CODEX_CLI_TESTED_BELOW {
+        eprintln!(
+            "ferrite: codex CLI {found} is newer than Ferrite is tested against \
+             (below {TESTED_BELOW_DISPLAY}); running it anyway"
+        );
     }
     Ok(())
 }
@@ -1459,19 +1444,19 @@ mod tests {
             Some(CODEX_CLI_MIN_VERSION)
         );
         assert_eq!(
-            parse_version(MAX_VERSION_DISPLAY).map(|(_, v)| v),
-            Some(CODEX_CLI_MAX_VERSION_EXCLUSIVE)
+            parse_version(TESTED_BELOW_DISPLAY).map(|(_, v)| v),
+            Some(CODEX_CLI_TESTED_BELOW)
         );
-        assert!(CODEX_CLI_MIN_VERSION < CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(CODEX_CLI_MIN_VERSION < CODEX_CLI_TESTED_BELOW);
     }
 
-    /// The window is closed at the bottom and open at the top.
+    /// The tested window is closed at the bottom and open at the top.
     #[test]
-    fn the_next_major_is_out_and_the_release_before_it_is_in() {
-        let last_supported = parse_version("0.999.999").unwrap().1;
+    fn the_next_major_is_untested_and_the_release_before_it_is_tested() {
+        let last_tested = parse_version("0.999.999").unwrap().1;
         let next_major = parse_version("1.0.0").unwrap().1;
-        assert!(last_supported < CODEX_CLI_MAX_VERSION_EXCLUSIVE);
-        assert!(next_major >= CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(last_tested < CODEX_CLI_TESTED_BELOW);
+        assert!(next_major >= CODEX_CLI_TESTED_BELOW);
     }
 
     /// The version Ferrite is developed against has to sit inside its own
@@ -1480,7 +1465,7 @@ mod tests {
     fn the_captured_fixture_version_is_supported() {
         let captured = parse_version("codex-cli 0.149.1").unwrap().1;
         assert!(captured >= CODEX_CLI_MIN_VERSION);
-        assert!(captured < CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(captured < CODEX_CLI_TESTED_BELOW);
     }
 
     #[test]

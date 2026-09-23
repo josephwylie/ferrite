@@ -270,6 +270,8 @@ pub struct CockpitView {
     /// The CLIs' versions as `--version` reports them, probed once when the
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
+    /// Where each provider CLI stands against its newest release.
+    cli_updates: crate::cli_updates::CliUpdates,
     group_error: Option<SharedString>,
     /// The bell: whether its panel is down, and which Notices have had
     /// their toast. The Notices themselves are core's.
@@ -302,6 +304,10 @@ pub struct Preferences {
     /// cheap model, one turn). False in the test and demo constructors,
     /// so no suite ever spawns a real CLI for a name.
     pub titler: bool,
+    /// Whether the window checks for newer provider CLIs and installs
+    /// them. False in the test and demo constructors, so no suite reaches
+    /// the registry or runs an installer.
+    pub cli_updates: bool,
 }
 
 impl Preferences {
@@ -314,6 +320,7 @@ impl Preferences {
                 crate::session::SessionDefaults::default(),
             )),
             titler: false,
+            cli_updates: false,
         }
     }
 }
@@ -920,6 +927,25 @@ impl CockpitView {
         // inside the platform's shutdown budget. Otherwise a Codex
         // app-server outlives Ferrite for a moment holding its thread's
         // writer lock, and the relaunch's resume is refused.
+        if prefs.cli_updates {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(crate::cli_updates::FIRST_CHECK_AFTER)
+                    .await;
+                loop {
+                    if this
+                        .update(cx, |view, cx| view.tick_cli_updates(cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(crate::cli_updates::TICK)
+                        .await;
+                }
+            })
+            .detach();
+        }
         cx.on_app_quit(|view, _cx| {
             view.cockpit.halt_sessions();
             async {}
@@ -987,6 +1013,7 @@ impl CockpitView {
             settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
+            cli_updates: Default::default(),
             group_error: None,
             bell: Bell::new(),
             transcript_entities: Default::default(),
@@ -2811,22 +2838,135 @@ impl CockpitView {
             self.context_menu = None;
             self.nav_filter_open = false;
             if self.cli_versions.is_none() {
-                cx.spawn(async move |this, cx| {
-                    let versions = cx
-                        .background_executor()
-                        .spawn(async {
-                            ferrite_core::providers::discover::rediscover();
-                            (cli_version(Provider::Claude), cli_version(Provider::Codex))
-                        })
-                        .await;
-                    this.update(cx, |view, cx| {
-                        view.cli_versions = Some((versions.0.into(), versions.1.into()));
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
+                self.probe_cli_versions(cx);
             }
+        }
+    }
+
+    /// Ask the CLIs their versions again, off the UI thread.
+    fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let versions = cx
+                .background_executor()
+                .spawn(async {
+                    ferrite_core::providers::discover::rediscover();
+                    (cli_version(Provider::Claude), cli_version(Provider::Codex))
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                view.cli_versions = Some((versions.0.into(), versions.1.into()));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// One beat of the updater: ask the registry when due, then install
+    /// whatever automatic updating may install now.
+    fn tick_cli_updates(&mut self, cx: &mut Context<Self>) {
+        if !self.cli_updates.begin_check(std::time::Instant::now()) {
+            self.auto_update_clis(cx);
+            return;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async {
+                    [Provider::Claude, Provider::Codex].map(|provider| {
+                        (provider, ferrite_core::providers::update::check(provider))
+                    })
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                let auto = view.prefs.settings.auto_update_clis;
+                for (provider, result) in results {
+                    view.cli_updates.checked(provider, result, auto);
+                }
+                view.auto_update_clis(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Install each ready upgrade whose provider has no Session running,
+    /// when the operator lets Ferrite update on its own.
+    fn auto_update_clis(&mut self, cx: &mut Context<Self>) {
+        if !self.prefs.settings.auto_update_clis {
+            return;
+        }
+        for provider in self.cli_updates.ready() {
+            if self.cockpit.live_sessions(provider) == 0 {
+                self.update_cli(provider, cx);
+            }
+        }
+    }
+
+    /// Install `provider`'s newest CLI now. Once it lands, the model menus
+    /// are asked again and every open Thread of that provider restarts on
+    /// its own conversation — at once when idle, otherwise when its turn
+    /// ends — so nothing keeps running the old release.
+    fn update_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        let Some(upgrade) = self.cli_updates.begin_update(provider) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { ferrite_core::providers::update::run(provider, &upgrade) })
+                .await;
+            this.update(cx, |view, cx| {
+                if result.is_ok() {
+                    // Open Threads restart on the new CLI as each goes
+                    // idle, and the pickers ask for its menu now.
+                    view.cockpit.restart_sessions(provider);
+                    view.cockpit.rediscover_models();
+                }
+                view.cli_updates.updated(provider, result);
+                view.probe_cli_versions(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The updater's toasts. Like the bell's, they wait for render, the
+    /// one place with a Window in hand.
+    fn present_cli_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::cli_updates::{name, Toast};
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        for toast in self.cli_updates.take_toasts() {
+            let notification = match toast {
+                Toast::Offer { provider, latest } => {
+                    let view = cx.entity().downgrade();
+                    Notification::new()
+                        .title(format!("{} {latest} is available", name(provider)))
+                        .message("Click to update. Newer releases bring newer models.")
+                        .with_type(NotificationType::Info)
+                        .autohide(false)
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |view, cx| view.update_cli(provider, cx))
+                                .ok();
+                        })
+                }
+                Toast::Updated { provider, version } => Notification::new()
+                    .title(format!("{} updated to {version}", name(provider)))
+                    .message("Open Threads restart on it as each finishes its turn.")
+                    .with_type(NotificationType::Success)
+                    .autohide(true),
+                Toast::Failed { provider, detail } => Notification::new()
+                    .title(format!("{} update failed", name(provider)))
+                    .message(detail)
+                    .with_type(NotificationType::Error)
+                    .autohide(false),
+            };
+            window.push_notification(notification, cx);
         }
         cx.notify();
     }
@@ -2870,6 +3010,27 @@ impl CockpitView {
                 view.change_settings(|settings| write(settings, value), cx);
             });
         }
+    }
+
+    /// Settings' update line for one provider, with its button when there
+    /// is a release Ferrite can install.
+    fn cli_update_row(
+        &self,
+        id: &'static str,
+        provider: Provider,
+        cx: &Context<Self>,
+    ) -> gpui::component::setting::SettingItem {
+        let (detail, button) = crate::cli_updates::describe(
+            provider,
+            self.cli_updates.state(provider),
+            self.prefs.settings.auto_update_clis,
+            self.cockpit.live_sessions(provider),
+        );
+        let view = cx.entity().downgrade();
+        prefs::action(id, "Updates", detail, button, move |cx| {
+            view.update(cx, |view, cx| view.update_cli(provider, cx))
+                .ok();
+        })
     }
 
     /// Searchable toolkit Settings, drawn above the cockpit's overlays.
@@ -3088,9 +3249,22 @@ impl CockpitView {
         if crate::titlebar::DEV {
             about.push(prefs::fact("Development build", "Yes".into()));
         }
+        let auto = settings.auto_update_clis;
+        let claude_update = self.cli_update_row("settings-update-claude", Provider::Claude, cx);
+        let codex_update = self.cli_update_row("settings-update-codex", Provider::Codex, cx);
         about.extend([
             prefs::fact("Claude CLI", claude),
+            claude_update,
             prefs::fact("Codex CLI", codex),
+            codex_update,
+            prefs::toggle(
+                "settings-auto-update-clis",
+                "Update the CLIs automatically",
+                "Install a newer Claude or Codex CLI once none of its Threads is running. \
+                 New models arrive only with a newer CLI.",
+                auto,
+                self.setting_change(cx, |s, v| s.auto_update_clis = v),
+            ),
             prefs::fact(
                 "Threads",
                 self.prefs.dir.join("threads").display().to_string().into(),
@@ -7158,6 +7332,7 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
         self.present_notices(window, cx);
+        self.present_cli_updates(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -9507,6 +9682,46 @@ impl CockpitView {
         self.bell.present_requests(decisions, &handle, window, cx);
     }
 
+    /// The update button beside the bell: shown only while a newer CLI
+    /// can be installed (pressing it installs every ready one) or while
+    /// one is installing (the glyph breathes, and the button waits).
+    fn update_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::cli_updates::Badge;
+        use crate::icons::{icon, UPDATE};
+        use crate::theme::{ATTENTION, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT_MUTED};
+        let badge = self.cli_updates.badge()?;
+        let button = crate::components::button("cli-update")
+            .debug_selector(|| "cli-update".into())
+            .w(px(ICON_BUTTON))
+            .h(px(ICON_BUTTON))
+            .p_0();
+        Some(match badge {
+            Badge::Ready(tooltip) => button
+                .tooltip(tooltip)
+                .child(icon(UPDATE, ICON_BUTTON_GLYPH, ATTENTION))
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    for provider in view.cli_updates.ready() {
+                        view.update_cli(provider, cx);
+                    }
+                }))
+                .into_any_element(),
+            Badge::Installing(tooltip) => button
+                .tooltip(tooltip)
+                .cursor_default()
+                .child(
+                    icon(UPDATE, ICON_BUTTON_GLYPH, TEXT_MUTED).with_animation(
+                        "cli-update-installing",
+                        Animation::new(std::time::Duration::from_millis(1200))
+                            .repeat()
+                            .with_easing(gpui::pulsating_between(0.35, 1.0)),
+                        |glyph, delta| glyph.opacity(delta),
+                    ),
+                )
+                .into_any_element(),
+        })
+    }
+
     /// The bell in the nav's chrome band, its badge, and its panel.
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = std::time::SystemTime::now();
@@ -9578,7 +9793,10 @@ impl CockpitView {
         // In the rail, utilities move to its foot; titlebar controls should
         // never become the navigation hierarchy.
         if !state.collapsed {
-            chrome = chrome.child(self.bell_element(cx)).child(gear);
+            chrome = chrome
+                .children(self.update_element(cx))
+                .child(self.bell_element(cx))
+                .child(gear);
         }
         let content = div()
             .flex()
@@ -10191,6 +10409,7 @@ impl CockpitView {
                 }),
             ));
         let utilities = nav::rail_utilities()
+            .children(self.update_element(cx))
             .child(self.bell_element(cx))
             .child(prefs::gear_button().on_click(cx.listener(
                 |view, _: &ClickEvent, _, cx| {

@@ -17,6 +17,7 @@ mod elicitation;
 pub mod limits;
 pub mod models;
 pub(crate) mod oneshot;
+pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.
 #[cfg(any(windows, test))]
@@ -280,15 +281,15 @@ pub use claude::discovery::list as claude_sessions;
 /// whichever the Thread's Provider is.
 pub use claude::title as claude_title;
 pub use claude::{
-    ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError,
-    CLAUDE_CLI_MAX_VERSION_EXCLUSIVE, CLAUDE_CLI_MIN_VERSION,
+    ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError, CLAUDE_CLI_MIN_VERSION,
+    CLAUDE_CLI_TESTED_BELOW,
 };
 pub use codex::catalog::list as codex_models;
 pub use codex::discovery::list as codex_sessions;
 pub use codex::title as codex_title;
 pub use codex::{
-    CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MAX_VERSION_EXCLUSIVE,
-    CODEX_CLI_MIN_VERSION,
+    CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MIN_VERSION,
+    CODEX_CLI_TESTED_BELOW,
 };
 
 #[cfg(test)]

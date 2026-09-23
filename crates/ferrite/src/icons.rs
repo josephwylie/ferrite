@@ -67,6 +67,7 @@ icons![
     "window-close",
     "copy",
     "resend",
+    "update",
 ];
 
 #[allow(dead_code)]
@@ -116,6 +117,8 @@ pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
 pub const RESEND: &str = "icons/resend.svg";
+/// A newer provider CLI is ready to install.
+pub const UPDATE: &str = "icons/update.svg";
 
 pub struct Assets;
 

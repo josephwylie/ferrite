@@ -6,6 +6,7 @@
 mod attachment_preview;
 mod attachments;
 mod background_chips;
+mod cli_updates;
 mod cockpit;
 mod components;
 mod composer;
@@ -248,6 +249,7 @@ fn main() {
                                     dir: settings_dir.clone(),
                                     defaults: defaults.clone(),
                                     titler: true,
+                                    cli_updates: true,
                                 },
                                 cx,
                             );
