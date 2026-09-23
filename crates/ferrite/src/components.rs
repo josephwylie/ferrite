@@ -337,6 +337,36 @@ impl RenderOnce for PulsingDot {
     }
 }
 
+/// A status dot whose own opacity breathes on the one breath
+/// (`MOTION_BREATH_MS`, read off `motion::pulse_phase`, so every breathing
+/// dot on screen shares one ~30fps tick and a board of them costs no more
+/// than one). Unread is the only state that breathes (rule 2.10.3). Held at
+/// its start under reduced motion.
+pub fn breathing_dot(ink: u32, reduce_motion: bool) -> AnyElement {
+    BreathingDot { ink, reduce_motion }.into_any_element()
+}
+
+#[derive(IntoElement)]
+struct BreathingDot {
+    ink: u32,
+    reduce_motion: bool,
+}
+
+impl RenderOnce for BreathingDot {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let breath = pulsating_between(theme::PULSE_MIN, 1.0);
+        let phase = if self.reduce_motion {
+            0.0
+        } else {
+            let period = Duration::from_millis(theme::MOTION_BREATH_MS);
+            motion::pulse_phase(period, window.current_view(), cx)
+        };
+        status_dot(self.ink)
+            .debug_selector(|| "breathing-dot".into())
+            .opacity(breath(phase))
+    }
+}
+
 /// The one keycap: `KBD_H`, at least square, `RAISED_2`, mono `FS_SM`
 /// `TEXT_2`, centred.
 pub fn kbd(key: impl Into<SharedString>) -> Div {
@@ -505,6 +535,50 @@ pub fn key_tooltip(
         .shadow(float_shadow())
         .build(window, cx)
     }
+}
+
+/// `key_tooltip` for a key table's chord (`cmd-D`): the label, then the
+/// chord as `key_combo` draws it (`⌘D`) in mono `TEXT_MUTED` — no
+/// parentheses.
+pub fn chord_tooltip(
+    label: impl Into<SharedString>,
+    keys: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let (label, keys) = (label.into(), keys.into());
+    move |window, cx| {
+        let (label, keys) = (label.clone(), keys.clone());
+        gpui::component::tooltip::Tooltip::element(move |_, _| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_1_5))
+                .child(label.clone())
+                .child(key_combo(&keys, theme::TEXT_MUTED))
+        })
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .px(px(theme::TOOLTIP_PAD_X))
+        .py(px(theme::TOOLTIP_PAD_Y))
+        .max_w(px(theme::TOOLTIP_MAX_W))
+        .rounded(px(theme::R_CONTROL))
+        .shadow(float_shadow())
+        .build(window, cx)
+    }
+}
+
+/// The chord an action is bound to with no key context, as a menu shortcut
+/// spells it (`cmd-D`, the last key upper-cased): `None` when nothing binds
+/// it, so a tooltip never names a key that would not act.
+pub fn bound_chord(action: &str) -> Option<String> {
+    let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
+        .into_iter()
+        .find(|(_, bound, context)| *bound == action && context.is_none())?;
+    let mut parts: Vec<String> = keys.split('-').map(str::to_string).collect();
+    if let Some(key) = parts.last_mut() {
+        *key = key.to_uppercase();
+    }
+    Some(parts.join("-"))
 }
 
 /// An icon-only control: `ICON_BUTTON` square, the glyph at

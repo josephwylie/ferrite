@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::layout::Tree;
+use crate::layout::{Rect, Tree};
 use crate::store::Store;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
@@ -49,10 +49,14 @@ impl Group {
         }
     }
 
-    /// Fit a stored layout to the membership after it changed.
+    /// Fit a stored layout to the membership after it changed. A tree that
+    /// can no longer be fitted (corrupt, or every leaf gone) is dropped: the
+    /// Group falls back to the default grid, computed at draw time.
     fn reconcile_layout(&mut self) {
         if let Some(tree) = &mut self.layout {
-            tree.reconcile(&self.members);
+            if !tree.fit(&self.members) {
+                self.layout = None;
+            }
         }
     }
 }
@@ -304,10 +308,10 @@ impl Groups {
                 healed = true;
                 continue;
             }
-            let layout = stored.layout.clone().map(|mut tree| {
-                tree.reconcile(&members);
-                tree
-            });
+            let layout = stored
+                .layout
+                .clone()
+                .and_then(|mut tree| tree.fit(&members).then_some(tree));
             healed |= layout != stored.layout;
             groups.push(Group {
                 id: stored.id,
@@ -342,18 +346,43 @@ impl Groups {
             .find(|group| group.members.contains(&thread))
     }
 
-    /// The Group's Pane arrangement, fit to its current members: the stored
-    /// tree reconciled, or the even grid when none was stored.
-    pub fn layout(&self, group: GroupId) -> Option<Tree> {
+    /// The Group's Pane arrangement in `bounds`, fit to its current
+    /// members: the tree the operator made, reconciled, or — when none was
+    /// stored, or after a reset — the default grid (`Tree::grid`), computed
+    /// here at draw time so it follows the window.
+    pub fn layout(&self, group: GroupId, bounds: Rect) -> Option<Tree> {
         let group = self.get(group)?;
         Some(match &group.layout {
             Some(tree) => {
                 let mut tree = tree.clone();
-                tree.reconcile(&group.members);
+                tree.reconcile(&group.members, bounds);
                 tree
             }
-            None => Tree::even(&group.members),
+            None => Tree::grid(&group.members, bounds),
         })
+    }
+
+    /// Whether the operator arranged this Group by hand (a stored tree).
+    pub fn has_custom_layout(&self, group: GroupId) -> bool {
+        self.get(group).is_some_and(|group| group.layout.is_some())
+    }
+
+    /// Forget the operator's arrangement: the Group goes back to the
+    /// default grid. A Group with no stored tree is left as it is.
+    pub fn reset_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
+        let index = self
+            .groups
+            .iter()
+            .position(|item| item.id == group)
+            .ok_or(ApplyError::MissingGroup)?;
+        let Some(before) = self.groups[index].layout.take() else {
+            return Ok(());
+        };
+        if let Err(error) = self.persist() {
+            self.groups[index].layout = Some(before);
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// Store an arrangement the operator made (a seam drag, a swap, a split).
@@ -458,7 +487,9 @@ impl Groups {
                     id,
                     title: String::new(),
                     members: vec![first, second],
-                    layout: Some(Tree::even(&[first, second])),
+                    // No stored tree: the default grid is drawn until the
+                    // operator drags a seam, swaps or splits.
+                    layout: None,
                 });
                 Ok(Applied {
                     group: Some(id),
@@ -615,26 +646,20 @@ fn group_gap_after_removal(old: usize, gap: usize, remaining: usize) -> usize {
     gap.saturating_sub(usize::from(gap > old)).min(remaining)
 }
 
-/// Near-square row × column packing, with the long edge horizontal.
-pub fn grid(count: usize) -> (usize, usize) {
-    if count == 0 {
-        return (0, 0);
-    }
-    let floor = (count as f64).sqrt() as usize;
-    let columns = if floor < count.div_ceil(floor.max(1)) {
-        floor + 1
-    } else {
-        floor.max(1)
-    };
-    (count.div_ceil(columns), columns)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::layout::{Node, SeamId};
     use crate::store::Provider;
     use crate::workspace::{registry::Registry, WorkspaceBinding};
+
+    /// A laptop board, for the default grids these tests compare against.
+    const BOUNDS: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 1134.0,
+        h: 838.0,
+    };
 
     fn leaf_set(tree: &Tree) -> BTreeSet<ThreadId> {
         tree.leaves().into_iter().collect()
@@ -653,16 +678,18 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        let even = Tree::even(&[threads[0], threads[1]]);
-        assert_eq!(groups.get(group).unwrap().layout, Some(even.clone()));
+        // A new pair stores no tree: it draws the default grid.
+        let even = Tree::grid(&[threads[0], threads[1]], BOUNDS);
+        assert_eq!(groups.get(group).unwrap().layout, None);
+        assert_eq!(groups.layout(group, BOUNDS), Some(even.clone()));
 
         let mut custom = even.clone();
         assert!(custom.set_ratio(&SeamId(vec![]), 0.3));
         groups.set_layout(group, custom.clone()).unwrap();
         let reloaded = Groups::load(&dir).unwrap();
         assert_eq!(reloaded.get(group).unwrap().layout, Some(custom.clone()));
-        assert_eq!(reloaded.layout(group), Some(custom));
-        assert_eq!(reloaded.layout(GroupId::new(99)), None);
+        assert_eq!(reloaded.layout(group, BOUNDS), Some(custom));
+        assert_eq!(reloaded.layout(GroupId::new(99), BOUNDS), None);
 
         // A file written before layouts existed: no `layout` key at all.
         let older = serde_json::json!({
@@ -676,7 +703,7 @@ mod tests {
         std::fs::write(dir.join(FILE_NAME), serde_json::to_vec(&older).unwrap()).unwrap();
         let mut groups = Groups::load(&dir).unwrap();
         assert_eq!(groups.get(group).unwrap().layout, None);
-        assert_eq!(groups.layout(group), Some(even));
+        assert_eq!(groups.layout(group, BOUNDS), Some(even.clone()));
         // Untouched, it persists without one; a stored tree writes the key.
         groups
             .apply(GroupChange::Rename {
@@ -687,10 +714,21 @@ mod tests {
         let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(!written.contains("layout"), "{written}");
         groups
-            .set_layout(group, Tree::even(&[threads[1], threads[0]]))
+            .set_layout(group, Tree::grid(&[threads[1], threads[0]], BOUNDS))
             .unwrap();
         let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(written.contains("\"layout\""), "{written}");
+        assert!(groups.has_custom_layout(group));
+        // A reset forgets the arrangement and persists without the key.
+        groups.reset_layout(group).unwrap();
+        assert!(!groups.has_custom_layout(group));
+        assert_eq!(groups.layout(group, BOUNDS), Some(even));
+        let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(!written.contains("layout"), "{written}");
+        assert_eq!(
+            groups.reset_layout(GroupId::new(99)),
+            Err(ApplyError::MissingGroup)
+        );
     }
 
     #[test]
@@ -750,7 +788,7 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        let mut custom = Tree::even(&[threads[0], threads[1]]);
+        let mut custom = Tree::grid(&[threads[0], threads[1]], BOUNDS);
         assert!(custom.set_ratio(&SeamId(vec![]), 0.3));
         groups.set_layout(group, custom).unwrap();
 
@@ -774,7 +812,7 @@ mod tests {
         let stored = groups.get(group).unwrap().layout.clone().unwrap();
         assert!(!stored.is_corrupt());
         assert_eq!(leaf_set(&stored), threads[1..3].iter().copied().collect());
-        assert_eq!(groups.layout(group), Some(stored.clone()));
+        assert_eq!(groups.layout(group, BOUNDS), Some(stored.clone()));
 
         groups
             .apply(GroupChange::ReorderMember {
@@ -790,11 +828,11 @@ mod tests {
         );
 
         assert_eq!(
-            groups.set_layout(group, Tree::even(&[threads[1], threads[3]])),
+            groups.set_layout(group, Tree::grid(&[threads[1], threads[3]], BOUNDS)),
             Err(ApplyError::InvalidLayout),
             "a tree naming a non-member is refused"
         );
-        let mut corrupt = Tree::even(&[threads[1], threads[2]]);
+        let mut corrupt = Tree::grid(&[threads[1], threads[2]], BOUNDS);
         if let Some(Node::Split { ratio, .. }) = &mut corrupt.root {
             *ratio = 2.0;
         }
@@ -803,7 +841,10 @@ mod tests {
             Err(ApplyError::InvalidLayout)
         );
         assert_eq!(
-            groups.set_layout(GroupId::new(99), Tree::even(&[threads[1], threads[2]])),
+            groups.set_layout(
+                GroupId::new(99),
+                Tree::grid(&[threads[1], threads[2]], BOUNDS)
+            ),
             Err(ApplyError::MissingGroup)
         );
         assert_eq!(groups.get(group).unwrap().layout, Some(stored));
@@ -1083,7 +1124,6 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(groups.get(group).unwrap().members, ids[..100]);
-        assert_eq!(grid(100), (10, 10));
         let join = groups.preview_drop(
             Drag::Thread {
                 thread: ids[100],

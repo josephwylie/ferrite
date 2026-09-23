@@ -283,6 +283,7 @@ const STATES: &[(&str, &[&str])] = &[
     ("group4", &["app"]),
     ("group9", &["app"]),
     ("group12", &["app"]),
+    ("group12-dragged", &["app"]),
     ("subagents", &["app"]),
     ("subagent", &["app"]),
     ("composer", &["app"]),
@@ -308,6 +309,7 @@ const STATES: &[(&str, &[&str])] = &[
 
     // ---- WP-C states (append above the end line)
     ("chrome", &["narrow", "wide", "app"]),
+    ("checkscard", &["app"]),
     ("emptyboard", &["app"]),
     // (end WP-C)
 
@@ -495,7 +497,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "nav" => nav(),
         "group4" => group4(),
         "group9" => group9(),
-        "group12" => group12(),
+        "group12" => group12(false),
+        "group12-dragged" => group12(true),
         "subagents" => subagents(),
         "composer" => composer(),
         "menu" => menu(),
@@ -637,6 +640,55 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 let width = f32::from(window.viewport_size().width);
                 view.context_checks =
                     Some((thread, gpui::point(gpui::px(width - 24.), gpui::px(118.))));
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // The Solo titlebar's `· #48 ●` with its checks card open under it:
+        // CI keeps a home when the Pane has no head.
+        "checkscard" => {
+            let (scene, _) = legacy("live");
+            let setup: Setup = Box::new(|view, _, cx| {
+                use ferrite_core::workspace::{
+                    BranchStatus, Check, CheckState, PrState, PullRequest,
+                };
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                let run = |name: &str, state, detail: &str| Check {
+                    name: name.into(),
+                    workflow: Some("CI".into()),
+                    state,
+                    detail: detail.into(),
+                    url: Some("https://example.com/run".into()),
+                };
+                view.facts.set_branches(vec![(
+                    thread,
+                    Some(BranchStatus {
+                        branch: Some("feat/pane-chrome".into()),
+                        upstream: None,
+                        ahead: 0,
+                        behind: 0,
+                        dirty: 0,
+                        pr: Some(PullRequest {
+                            number: 212,
+                            state: PrState::Open,
+                            draft: false,
+                            checks: Some(CheckState::Failing),
+                            runs: vec![
+                                run("test (windows-latest)", CheckState::Failing, "failure"),
+                                run("test (macos-latest)", CheckState::Pending, "in_progress"),
+                                run("docs", CheckState::Pending, "queued"),
+                                run("fmt", CheckState::Passing, "success"),
+                                run("clippy", CheckState::Skipped, "skipped"),
+                                run("release", CheckState::Failing, "cancelled"),
+                            ],
+                        }),
+                    }),
+                )]);
+                let x = crate::theme::NAV_WIDTH + 520.;
+                view.context_checks = Some((
+                    thread,
+                    gpui::point(gpui::px(x), gpui::px(crate::theme::WIN_CHROME_H)),
+                ));
                 cx.notify();
             });
             (scene, setup)
@@ -1198,8 +1250,7 @@ fn members(scene: &mut Scene, checkout: &Path, titles: &[&str]) -> Vec<ThreadId>
     threads
 }
 
-/// Four members side by side: each cell is narrow enough for L2
-/// instruments at the app size.
+/// Four members on the default grid: 2×2 at L1 at the app size.
 fn group4() -> (Scene, Setup) {
     let mut scene = Scene::new("group4");
     let ferrite = scene.project("ferrite");
@@ -1214,20 +1265,11 @@ fn group4() -> (Scene, Setup) {
         ],
     );
     let group = scene.group(&threads, "Perf sweep");
-    scene
-        .core
-        .set_group_layout(
-            group,
-            Tree {
-                root: Some(chain(leaves(&threads), Axis::Row)),
-            },
-        )
-        .expect("lay out fixture Group");
     scene.core.enter_group(group).expect("enter fixture Group");
     (scene, Box::new(|_, _, _| {}))
 }
 
-/// Nine members in a three-by-three grid, one of them asking a Question.
+/// Nine members on the default grid (3×3), one of them asking a Question.
 fn group9() -> (Scene, Setup) {
     let mut scene = Scene::new("group9");
     let ferrite = scene.project("ferrite");
@@ -1246,19 +1288,6 @@ fn group9() -> (Scene, Setup) {
     // "Board recipes" (spawned fifth) stops to ask.
     Feed(scene.feeds.borrow()[4].clone()).ev(questions("board-question", "ask"));
     let group = scene.group(&threads, "Grid of nine");
-    let rows = threads
-        .chunks(3)
-        .map(|row| chain(leaves(row), Axis::Row))
-        .collect();
-    scene
-        .core
-        .set_group_layout(
-            group,
-            Tree {
-                root: Some(chain(rows, Axis::Column)),
-            },
-        )
-        .expect("lay out fixture Group");
     scene.core.enter_group(group).expect("enter fixture Group");
     (scene, Box::new(|_, _, _| {}))
 }
@@ -1285,10 +1314,15 @@ fn error_turn(label: &str) -> Scene {
     scene
 }
 
-/// Twelve members: a row of five at L2 instruments over a row of seven
-/// narrow enough for the L3 wall.
-fn group12() -> (Scene, Setup) {
-    let mut scene = Scene::new("group12");
+/// Twelve members on the default grid (4×3, one Level for the board); or,
+/// `dragged`, the operator's own row of five over a row of seven, which the
+/// board keeps as it was left — at the one Level its smallest cell allows.
+fn group12(dragged: bool) -> (Scene, Setup) {
+    let mut scene = Scene::new(if dragged {
+        "group12-dragged"
+    } else {
+        "group12"
+    });
     let ferrite = scene.project("ferrite");
     let titles = [
         "Perf: layout cache",
@@ -1306,17 +1340,19 @@ fn group12() -> (Scene, Setup) {
     ];
     let threads = members(&mut scene, &ferrite, &titles);
     let group = scene.group(&threads, "Wall of twelve");
-    let top = chain(leaves(&threads[..5]), Axis::Row);
-    let bottom = chain(leaves(&threads[5..]), Axis::Row);
-    scene
-        .core
-        .set_group_layout(
-            group,
-            Tree {
-                root: Some(chain(vec![top, bottom], Axis::Column)),
-            },
-        )
-        .expect("lay out fixture Group");
+    if dragged {
+        let top = chain(leaves(&threads[..5]), Axis::Row);
+        let bottom = chain(leaves(&threads[5..]), Axis::Row);
+        scene
+            .core
+            .set_group_layout(
+                group,
+                Tree {
+                    root: Some(chain(vec![top, bottom], Axis::Column)),
+                },
+            )
+            .expect("lay out fixture Group");
+    }
     scene.core.enter_group(group).expect("enter fixture Group");
     (scene, Box::new(|_, _, _| {}))
 }

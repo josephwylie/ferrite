@@ -22,7 +22,7 @@ use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
-use crate::roster::{DraftId, DraftScope, Layout, PaneIdentity, Roster, View};
+use crate::roster::{DraftId, DraftScope, PaneIdentity, Roster, View};
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::suggest::Suggestion;
@@ -683,8 +683,18 @@ impl Cockpit {
 
     /// A Group's Pane layout, reconciled to its members; None for a Group
     /// that no longer exists.
-    pub fn group_layout(&self, group: GroupId) -> Option<crate::layout::Tree> {
-        self.groups.layout(group)
+    pub fn group_layout(
+        &self,
+        group: GroupId,
+        bounds: crate::layout::Rect,
+    ) -> Option<crate::layout::Tree> {
+        self.groups.layout(group, bounds)
+    }
+
+    /// Put a Group back on the default grid, forgetting the arrangement the
+    /// operator dragged, swapped or split.
+    pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
+        self.groups.reset_layout(group)
     }
 
     /// Persist a Group's Pane layout — a seam dragged, a Pane dropped.
@@ -3284,11 +3294,6 @@ impl Cockpit {
     /// The Panes on screen, in order — see `Roster::visible`.
     pub fn visible(&self) -> Vec<PaneIdentity> {
         self.roster.visible(&self.groups)
-    }
-
-    /// The grid the visible Panes lay out on — see `Roster::layout`.
-    pub fn layout(&self) -> Layout {
-        self.roster.layout(&self.groups)
     }
 
     /// The one door to focus: every move — keys, clicks, nav rows — lands
@@ -8167,7 +8172,19 @@ mod tests {
         assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[0])]);
         assert!(cockpit.focus(PaneIdentity::Thread(threads[2])));
         assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[2])]);
-        assert_eq!(cockpit.layout().columns, 1);
+        assert_eq!(
+            crate::layout::grid_shape(
+                cockpit.visible().len(),
+                crate::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1134.0,
+                    h: 838.0
+                }
+            )
+            .0,
+            1
+        );
         cockpit.park(threads[2]).unwrap();
         assert_eq!(
             cockpit.roster().panes().len(),
@@ -8194,7 +8211,19 @@ mod tests {
             })
             .unwrap();
         cockpit.enter_group(group).unwrap();
-        assert_eq!(cockpit.layout().columns, 2);
+        assert_eq!(
+            crate::layout::grid_shape(
+                cockpit.visible().len(),
+                crate::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1134.0,
+                    h: 838.0
+                }
+            )
+            .0,
+            2
+        );
         cockpit.focus(PaneIdentity::Thread(threads[1]));
 
         cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
@@ -8287,7 +8316,19 @@ mod tests {
             "the pending pair is visible before the Draft becomes durable"
         );
         assert_eq!(cockpit.roster().focused(), Some(PaneIdentity::Draft(draft)));
-        assert_eq!(cockpit.layout().columns, 2);
+        assert_eq!(
+            crate::layout::grid_shape(
+                cockpit.visible().len(),
+                crate::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1134.0,
+                    h: 838.0
+                }
+            )
+            .0,
+            2
+        );
         assert!(cockpit.groups().of(first).is_none());
         let done = cockpit
             .bootstrap_draft(

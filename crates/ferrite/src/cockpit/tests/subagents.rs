@@ -354,7 +354,7 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
         );
     }
     tick(cx);
-    let attention = cx.debug_bounds("agent-attention-1").unwrap().center();
+    let attention = cx.debug_bounds("titlebar-needs-you").unwrap().center();
     cx.simulate_click(attention, gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
@@ -692,7 +692,7 @@ fn attention_and_global_navigation_visit_every_distinct_pending_subject_then_wra
     );
     tick(cx);
     for name in ["Atlas", "Cedar", "Finch", "Atlas"] {
-        let attention = cx.debug_bounds("agent-attention-1").unwrap().center();
+        let attention = cx.debug_bounds("titlebar-needs-you").unwrap().center();
         cx.simulate_click(attention, gpui::Modifiers::none());
         cx.run_until_parked();
         assert_eq!(

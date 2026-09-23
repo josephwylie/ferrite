@@ -147,6 +147,9 @@ fn compact_group_paints_complete_latest_rows_after_composer_growth(cx: &mut Test
                     .transcript()
                     .blocks()
                     .iter()
+                    // What the tail draws: a completed turn leaves no row
+                    // (the head's `done` says it).
+                    .filter(|block| pane::tail_text(&block.body, false).is_some())
                     .map(|block| block.id)
                     .collect::<Vec<_>>(),
             )
@@ -233,8 +236,9 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
     assert_eq!(fake.sent.borrow().as_slice(), ["Inspect output"]);
 }
 
-/// Compact Questions use the fixed header to reach the retained full form;
-/// a tall draft must never cover this path or clear a selected answer.
+/// Compact Questions name themselves in the fixed head's slot and open the
+/// retained full form with the expand key; a tall draft must never cover
+/// that head or clear a selected answer.
 #[gpui::test]
 fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("polish-l2-question-expand", 4);
@@ -280,21 +284,26 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
             cx.debug_bounds("question-island").is_none(),
             "L2 must not paint an unusable compressed form"
         );
-        let expand = cx
-            .debug_bounds("question-expand")
-            .expect("compact Question has an explicit action");
-        assert!(expand.left() >= px(pane.x) && expand.right() <= px(pane.x + pane.w));
+        // The fixed head's slot says what the cell needs and jumps to it;
+        // the expand key opens the full form.
+        let slot = cx
+            .debug_bounds("head-slot-1")
+            .expect("a compact Question names itself in the head's slot");
+        assert!(slot.left() >= px(pane.x) && slot.right() <= px(pane.x + pane.w));
         assert!(
-            expand.top() >= px(pane.y)
-                && expand.bottom() <= px(pane.y + crate::theme::CELL_HEADER_H + 1.),
-            "expansion remains in the fixed header even with an eight-line draft: {expand:?} / {pane:?}"
+            slot.top() >= px(pane.y)
+                && slot.bottom() <= px(pane.y + crate::theme::PANE_HEAD_H + 1.),
+            "the slot remains in the fixed head even with an eight-line draft: {slot:?} / {pane:?}"
         );
         assert_eq!(composer_text(&view, cx), draft);
-        if iteration == 1 {
-            cx.simulate_keystrokes("cmd-f");
-        } else {
-            cx.simulate_click(expand.center(), gpui::Modifiers::none());
+        if iteration != 1 {
+            // A press on `needs you` runs the ⌘D jump: it lands on the
+            // Pane that asks.
+            cx.simulate_click(slot.center(), gpui::Modifiers::none());
+            tick(cx);
+            view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
         }
+        cx.simulate_keystrokes("cmd-f");
         tick(cx);
         cx.update(|window, cx| {
             let view = view.read(cx);
@@ -308,8 +317,8 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
             .debug_bounds("question-choice-0-0")
             .unwrap_or_else(|| panic!("expanded form has choices with draft {iteration}"));
         assert!(
-            cx.debug_bounds("question-expand").is_none(),
-            "fullscreen never offers a no-op expansion action"
+            cx.debug_bounds("pane-head-1").is_none(),
+            "fullscreen has no head: the titlebar carries the Thread"
         );
         let answering_editor = cx.debug_bounds("focused-prompt-editor").unwrap();
         let content = cx.debug_bounds("question-scroll-content").unwrap();
@@ -336,10 +345,11 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
                 "returning to a compact Pane keeps the draft viewport bounded"
             );
         }
-        let expand = cx
-            .debug_bounds("question-expand")
-            .expect("returning to Group restores expansion action");
-        cx.simulate_click(expand.center(), gpui::Modifiers::none());
+        assert!(
+            cx.debug_bounds("question-expand").is_some(),
+            "returning to Group says the question answers expanded"
+        );
+        cx.simulate_keystrokes("cmd-f");
         tick(cx);
         let (thread, serial) = view.read_with(cx, |view, _| {
             let thread = view.panes[0].thread().unwrap();
@@ -441,8 +451,8 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
         cx.debug_bounds("question-island").is_none(),
         "insufficient Group body space uses the expansion action"
     );
-    let expand = cx.debug_bounds("question-expand").unwrap();
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
+    assert!(cx.debug_bounds("question-expand").is_some());
+    cx.simulate_keystrokes("cmd-f");
     tick(cx);
     assert_eq!(composer_text(&view, cx), draft);
     let first = cx.debug_bounds("question-choice-0-0").unwrap();
@@ -501,7 +511,9 @@ fn compact_live_reasoning_appears_once_and_returns_to_history(cx: &mut TestAppCo
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(860.), px(1000.)));
+    // A 2×2 board of instrument cells: the default grid takes 1×4 at the
+    // transcript Level when the window is tall enough for it.
+    cx.simulate_resize(gpui::size(px(860.), px(700.)));
     for (item, text) in [
         ("earlier", "The earlier observation is still relevant"),
         ("current", "Checking the remaining interactions"),

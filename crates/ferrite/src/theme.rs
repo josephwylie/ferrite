@@ -236,6 +236,8 @@ pub mod words {
     pub const STARTING: &str = "starting";
     /// Held by the operator.
     pub const PAUSED: &str = "paused";
+    /// Parked: no Session in memory, one keystroke from coming back.
+    pub const PARKED: &str = "parked";
     /// Ferrite cannot observe it.
     pub const UNAVAILABLE: &str = "unavailable";
 }
@@ -562,7 +564,7 @@ pub const TRAFFIC_Y: f32 = 14.0;
 /// (The prototype's own render reserves 58px at the bottom for its
 /// mode-switcher; that is prototype-only chrome and its `data-view="window"`
 /// rule restores 10px. Port 10px.)
-pub const GRID_GAP: f32 = 8.0;
+pub const GRID_GAP: f32 = ferrite_core::layout::GRID_GAP;
 pub const GRID_PAD: f32 = 10.0;
 /// Where the board starts: under the titlebar band, then the same 10px it
 /// keeps on its other three sides. Flush to the band, a Pane's top-right
@@ -701,9 +703,6 @@ pub const PROVIDER_MARK_SM: f32 = 12.0;
 pub const DRAG_BADGE_H: f32 = 26.0;
 pub const DRAG_BADGE_PAD_X: f32 = 10.0;
 pub const DRAG_BADGE_MAX_W: f32 = 280.0;
-/// 24px — an L2 cell's header row; 10px its padding.
-pub const CELL_HEADER_H: f32 = 24.0;
-pub const CELL_PAD: f32 = 10.0;
 /// 20px — one queued prompt's row pitch in the Composer's queue viewport:
 /// the input line's own row, stacked with no gap, one `COMPOSER_GAP` above
 /// the input.
@@ -1193,25 +1192,35 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // **The Pane frame.** A Pane is a `PANE` sheet with a 1px edge that is always
 // in layout, so a state change recolours it and nothing reflows. The edge
 // says one thing, by precedence (`pane::PaneEdge`): blocked `BLOCKED` >
-// a Decision `ATTENTION` > focused `FOCUS_RING` > at rest `HAIRLINE`, which
-// lifts to `HAIRLINE_STRONG` under the pointer. Focus is drawn only while
-// more than one Pane is on the board: a lone Pane is plainly the one with
-// the keyboard and rests on its hairline. A *focused* alert Pane beside
-// others also draws a `FOCUS_RING` ring inset by 2px, so focus is never
-// hidden by a state. A Thread that finished while the operator looked elsewhere breathes
-// an `ACCENT` ring until they land on it (still under reduced motion).
+// a Decision `ATTENTION` > focused `FOCUS_RING` > at rest `HAIRLINE`. On a
+// board the resting hairline blends to `HAIRLINE_STRONG` under the pointer
+// over the one 150ms hover blend; in Solo the frame never reacts to hover.
+// Focus is drawn only while more than one Pane is on the board: a lone Pane
+// is plainly the one with the keyboard and rests on its hairline. A
+// *focused* alert Pane beside others also draws a `FOCUS_RING` ring inset
+// by 2px, so focus is never hidden by a state. There is no other ring:
+// unread breathes on the head dot (`ACCENT`, on the shared pulse clock at
+// `MOTION_BREATH_MS`, held still under reduced motion).
 //
-// **The head is one 36px row** on the Pane's own plane, with no rule under
-// it (the body's top padding separates them): dot · title (`W_LABEL`
-// `TEXT`) · checkout, the agent tabs, then the right cluster —
-// tasks meter · PR/CI · attention jump · head action. Colour is state: the
-// checkout, drift and PR are `TEXT_MUTED`; only the CI dot, a failure count
-// and the live meter segment carry a hue.
+// **Solo has no head** (C2): the titlebar carries the Thread —
+// `project / ● title ⎇ branch · state` — and the body starts at the card
+// edge. A strip of `PANE_HEAD_H` appears only while subagent tabs exist.
 //
-// **Below L1** (L2 instruments, the wall) brightness sorts cells: a hot cell
-// (working, failing, a Decision, blocked, focused) has a `TEXT_STRONG`
-// title, a quiet one `TEXT_2`. Signals are words, never glyph soup, and a
-// word is coloured only when it is state.
+// **The Group head is one 32px line** (`PANE_HEAD_H`, rule 2.4.6) at every
+// tier — L1, L2 and the wall — closed by a permanent `HAIRLINE` rule the
+// body clips at: the status dot in the glyph box at `PANE_PAD_X` (every
+// board's dots on one vertical), the title at C1 (`W_LABEL` `TEXT_STRONG`,
+// flexing, never under `HEAD_TITLE_MIN_W`), the branch only when it is not
+// the default, the provider mark only when it differs from the board's
+// majority, then a fixed right slot with one lexicon word
+// (`pane::HeadSlot`): `needs you · approval` > `failing 2` > `working 12s`
+// > `done` > `ctx 84%` > a mode word. Nothing else rides the head.
+//
+// **One Level per board** (rule 2.3.5): the default Group tree is the
+// aspect-aware grid (`layout::Tree::grid`), and every Pane on a board draws
+// at the smallest Level its cells allow, with `LEVEL_HYSTERESIS`. Below L1
+// the cells keep the L1 axes — marks at `PANE_PAD_X`, text at C1 — and a
+// title is always `TEXT_STRONG`: the slot's word is the only signal.
 
 /// The Windows caption buttons (`titlebar.rs`), which exist only where the
 /// app draws its own titlebar. 46px is the width Windows gives each of its
@@ -1237,6 +1246,9 @@ pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
 /// The titlebar location's segments: 6px apart, one mono baseline.
 pub const TITLE_GAP: f32 = SPACE_1_5;
+/// The Project's floor in a narrow titlebar: it truncates after the branch
+/// but keeps a few letters, so the `/` never stands alone.
+pub const TITLE_PROJECT_MIN_W: f32 = 48.0;
 /// The titlebar's labelled add control: the icon-button face with room for
 /// its mono label, the glyph 6px from it.
 pub const TITLE_ADD_PAD_X: f32 = SPACE_2;
@@ -1250,28 +1262,26 @@ pub const DEV_TAG_PAD_X: f32 = SPACE_1_5;
 pub const WINDOW_MIN_W: f32 = 640.0;
 pub const WINDOW_MIN_H: f32 = 420.0;
 
-/// 36px — the Pane head: one row, no band. At 36 a 24px head control keeps
-/// 6px of air above and below.
-pub const PANE_HEAD_H: f32 = 36.0;
-/// The head title's cap before it truncates, and the floor it keeps however
-/// narrow the head (a shorter title keeps its whole text): the checkout and
-/// the agent tabs give way first.
-pub const HEAD_TITLE_MAX_W: f32 = 240.0;
+/// How far every cell must clear a Level's size threshold, on both axes,
+/// before the board steps *up* to it (`CockpitView::board_level`); it steps
+/// down at the plain threshold. 24px keeps a resize that hovers at an edge
+/// from flickering the whole board between tiers.
+pub const LEVEL_HYSTERESIS: f32 = 24.0;
+
+/// 32px — the Group head (and the Solo tab strip): one `LH_UI` line with 6px
+/// of air, a 24px control (a draft's ×) fitting inside it.
+pub const PANE_HEAD_H: f32 = 32.0;
+/// The floor a head title keeps however narrow the head (a shorter title
+/// keeps its whole text): the branch gives way first. There is no cap — a
+/// long title takes the width the head has.
 pub const HEAD_TITLE_MIN_W: f32 = 96.0;
-/// Between the head's dot, title and checkout.
+/// Between the head's title, branch, provider mark and slot.
 pub const HEAD_GAP: f32 = SPACE_2;
-/// Between the head's clusters: title → checkout, and between the facts on
-/// the right (tasks · PR/CI · attention · action).
+/// Between the tab strip's tabs and the plan's meter at its right.
 pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
-/// How much more the checkout shrinks than the title when the head is
-/// narrow. Drift and dirt give way first, then the branch name — never
-/// below a few characters, so a narrow Pane still says where the work is.
+/// How much more the branch shrinks than the title when the head is
+/// narrow: the branch gives way first.
 pub const HEAD_CHECKOUT_SHRINK: f32 = 4.0;
-pub const HEAD_BRANCH_MIN_W: f32 = 64.0;
-/// The checkout's floor: its branch mark, the gap and that minimum name.
-pub const HEAD_CHECKOUT_MIN_W: f32 = ROW_ICON + ROW_ICON_GAP + HEAD_BRANCH_MIN_W;
-/// Between a checkout's directory/branch pairs.
-pub const CHECKOUT_GAP: f32 = SPACE_2;
 /// The tasks meter in the head: 6 × 3 segments, 1px radius, 2px apart (an
 /// 8px pitch). Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track.
 pub const METER_SEG_W: f32 = 6.0;
@@ -1282,8 +1292,6 @@ pub const METER_SEG_CAP: usize = 12;
 pub const METER_TRACK_W: f32 = 48.0;
 /// Between the meter and its `3/4` count.
 pub const METER_GAP: f32 = SPACE_1_5;
-/// The unread ring's brightest breath (its dimmest is `PULSE_MIN`).
-pub const UNREAD_PULSE_MAX: f32 = 0.7;
 /// The checks card the head's PR/CI chip opens (#29): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
@@ -1302,19 +1310,9 @@ pub const CHECKS_ROW_H: f32 = MENU_ROW_H;
 /// heading itself is the menu section title (`MENU_SECTION_H`).
 pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
-/// The wall cell: 8px padding, 4px between rows, an 8px status dot — the
-/// wall's whole job is the signal, so its dot is bigger than a row's.
-pub const WALL_PAD: f32 = SPACE_2;
+/// The wall's signal line hangs 4px under the head rule, at the text
+/// column (C1); its rows sit 4px apart. The dot is the head's own.
 pub const WALL_ROW_GAP: f32 = SPACE_1;
-pub const WALL_DOT: f32 = 8.0;
-/// Between a cell's dot and its title (L2 and the wall).
-pub const CELL_DOT_GAP: f32 = SPACE_1_5;
-/// Between an L2 cell's rows, and between the lines of its tail.
-pub const CELL_ROW_GAP: f32 = SPACE_1_5;
-pub const CELL_TAIL_GAP: f32 = SPACE_1;
-/// A completed L2 cell's history, quieted; the header and the Composer
-/// keep full contrast (the header's `done` is the one completion label).
-pub const DONE_CELL_OPACITY: f32 = 0.75;
 
 /// A seam between Panes: the grab band is transparent, and a 2px line
 /// inset 8px from each end (so it never touches a Pane corner) appears
@@ -1422,6 +1420,17 @@ pub const COMPOSER_META_END: f32 = COMPOSER_CONTROL_INSET - PICKER_PAD_X;
 /// padding keeps a one-line Composer at 58px + this inset.
 pub const COMPOSER_INSET_B: f32 = SPACE_2;
 pub const COMPOSER_INSET_L2: f32 = SPACE_2;
+/// 7px — the L2 box's inline padding: `PANE_PAD_X` less the inset and the
+/// edge (16 − 8 − 1), so the compact Composer's `❯` sits on the glyph
+/// column at x = 16, over the tail's marks.
+pub const COMPOSER_PAD_X_L2: f32 = PANE_PAD_X - COMPOSER_INSET_L2 - COMPOSER_EDGE_W;
+/// **The grid Composer line** (C4): every board cell's Composer is one
+/// fixed 32px line — `COMPOSER_GRID_PAD_Y` above and below one
+/// `COMPOSER_ROW_H` row, inside the 1px edge — with no status row, so
+/// cmd-] across a board moves no tail. Only the focused cell's line is
+/// raised, edged and carries a caret; the others lie flat.
+pub const COMPOSER_GRID_PAD_Y: f32 = 5.0;
+pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_EDGE_W + 2.0 * COMPOSER_GRID_PAD_Y + COMPOSER_ROW_H;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
@@ -1654,12 +1663,10 @@ pub const BUSY_DOT_GAP: f32 = SPACE_0_5;
 pub const BUSY_DOT_LIFT: f32 = SPACE_0_5;
 pub const BUSY_DOTS_MS: u64 = 650;
 pub const BUSY_DOTS_W: f32 = 3.0 * BUSY_DOT_D + 2.0 * BUSY_DOT_GAP;
-/// The one needs-you dot: a waiting tab and the head's jump control.
+/// The one needs-you dot: a waiting tab and the tab overflow.
 pub const ATTENTION_DOT: f32 = 5.0;
 /// A failed agent's drawn `✗`, in `BLOCKED`, beside its label.
 pub const SUBJECT_FAILED_MARK: f32 = SPACE_2;
-/// The head's jump control: a `CHIP_H` square around the dot.
-pub const ATTENTION_JUMP: f32 = CHIP_H;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav
@@ -1836,6 +1843,10 @@ pub const MOTION_COLLAPSE_MS: u64 = 180;
 pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
+/// 2.4s — the one breath (rule 2.10.3): unread breathing on a head dot
+/// reads `motion::pulse_phase` on this period, so every breathing dot on
+/// screen shares one ~30fps tick. Held at its start under reduced motion.
+pub const MOTION_BREATH_MS: u64 = 2_400;
 /// A contextual icon swap (send ⇄ stop): 300ms, the leaving glyph shrinking
 /// to a quarter as the arriving one grows from it.
 pub const MOTION_ICON_SWAP_MS: u64 = 300;

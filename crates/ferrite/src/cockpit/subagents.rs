@@ -362,7 +362,7 @@ fn tab_width(label: f32, marks: Marks) -> f32 {
         + mark(marks.failed, theme::SUBJECT_FAILED_MARK)
 }
 
-/// The one needs-you dot: a waiting tab, the overflow, the head's jump.
+/// The one needs-you dot: a waiting tab, the overflow.
 fn attention_dot() -> Div {
     div()
         .flex_shrink_0()
@@ -890,51 +890,6 @@ impl CockpitView {
             .into_any_element()
     }
 
-    pub(super) fn activity_attention(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        let thread = pane.thread()?;
-        let activity = self.cockpit.thread(thread)?.activity();
-        let children = activity.children();
-        if children.is_empty() {
-            return None;
-        }
-        let pending = activity.pending_decisions();
-        if pending.is_empty() {
-            return None;
-        }
-        let text = match CockpitView::key_label("cockpit::NextDecision") {
-            Some(key) => format!("Jump to next request ({key})"),
-            None => "Jump to next request".into(),
-        };
-        let target = next_request(
-            pending
-                .iter()
-                .map(|request| request.subject.clone().unwrap_or(Subject::Main)),
-            Some(&pane.selected),
-        )?;
-        Some(
-            native_keys(
-                components::button(("agent-attention", thread.get()))
-                    .tab_stop(true)
-                    .debug_selector(move || format!("agent-attention-{}", thread.get()))
-                    .size(px(theme::ATTENTION_JUMP))
-                    .p_0()
-                    .rounded(px(theme::R_CHIP))
-                    .accessibility_label("Jump to next request")
-                    .tooltip(text)
-                    .child(attention_dot())
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.select_subject(thread, target.clone(), window, cx)
-                    })),
-            )
-            .into_any_element(),
-        )
-    }
-
     pub(super) fn child_footer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pane = &self.panes[index];
         if pane.is_main() {
@@ -1072,22 +1027,22 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Small Panes keep a clear path to the retained form instead of compressing
-    /// Question chrome into a viewport too small for an option. The fixed Pane
-    /// header owns this button, so even a tall draft cannot cover it.
-    pub(super) fn activity_question_expander(
-        &self,
-        index: usize,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    /// Whether this Pane's question is too big for its body: it answers in
+    /// fullscreen (the expand key, `ToggleFullscreen`), and the body keeps
+    /// its transcript meanwhile. The head's slot says `needs you ·
+    /// question`; there is no head chip.
+    pub(super) fn question_needs_expansion(&self, index: usize, compact: bool) -> bool {
         let pane = &self.panes[index];
         if self.cockpit.roster().fullscreen() == Some(pane.identity) {
-            return None;
+            return false;
         }
-        let thread = pane.thread()?;
-        let pending = self.cockpit.thread(thread)?.activity().pending_decisions();
-        if !pending.iter().any(|request| {
+        let Some(thread) = pane.thread() else {
+            return false;
+        };
+        let Some(open) = self.cockpit.thread(thread) else {
+            return false;
+        };
+        open.activity().pending_decisions().iter().any(|request| {
             (request.subject.as_ref() == Some(&pane.selected)
                 || (request.subject.is_none() && pane.is_main()))
                 && pane::questions_of(&request.decision).is_some()
@@ -1098,50 +1053,7 @@ impl CockpitView {
                         .borrow()
                         .get(&request.handle)
                         .is_some_and(|form| form.fit.needs_expansion()))
-        }) {
-            return None;
-        }
-        Some(
-            native_keys(
-                components::button(("expand-question", thread.get()))
-                    .tab_stop(true)
-                    .h(px(theme::CHIP_H))
-                    .px(px(theme::CHIP_PAD_X))
-                    .rounded(px(theme::R_CHIP))
-                    .bg(rgba(theme::ATTENTION_WASH))
-                    .accessibility_label("Expand this Thread to answer its question")
-                    .tooltip(match CockpitView::key_label("cockpit::ToggleFullscreen") {
-                        Some(key) => format!("Expand this Thread to answer its question ({key})"),
-                        None => "Expand this Thread to answer its question".into(),
-                    })
-                    .debug_selector(|| "question-expand".into())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(theme::SPACE_1_5))
-                            .text_size(px(theme::FS_SM))
-                            .line_height(px(theme::LH_META))
-                            .text_color(rgb(theme::ATTENTION))
-                            .child(decision::mark())
-                            // One word: the tooltip carries the sentence,
-                            // and the chip never outgrows the title.
-                            .child("expand"),
-                    )
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        if let Some(index) = view.pane_for(thread) {
-                            view.focus_pane(index);
-                            if view.cockpit.roster().fullscreen()
-                                != Some(view.panes[index].identity)
-                            {
-                                view.cockpit.toggle_fullscreen();
-                            }
-                            cx.notify();
-                        }
-                    })),
-            )
-            .into_any_element(),
-        )
+        })
     }
 
     pub(super) fn activity_question_measurement(

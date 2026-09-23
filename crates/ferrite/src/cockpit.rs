@@ -298,6 +298,13 @@ pub struct CockpitView {
     /// A seam being dragged: the Group, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
+    /// The board's bounds as the last frame laid it out: what the default
+    /// grid of a Group with no stored tree is computed in when an act (a
+    /// seam press, a drop) has no window to measure.
+    board: std::cell::Cell<layout::Rect>,
+    /// The board's one Level (`board_level`), held with 24px of hysteresis
+    /// so a resize hovering at a threshold never flickers the tier.
+    board_level: std::cell::Cell<Level>,
     /// A Pane being dragged over another: the target and what a release
     /// there would do, for the preview wash.
     drop_preview: Option<(ThreadId, Zone)>,
@@ -853,6 +860,8 @@ impl CockpitView {
             nav_tween: None,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
+            board: std::cell::Cell::new(layout::Rect::default()),
+            board_level: std::cell::Cell::new(Level::Transcript),
             drop_preview: None,
             pane_drag_source: None,
             toasts: 0,
@@ -1500,24 +1509,20 @@ impl CockpitView {
         self.panes[index].prune_tools(&valid);
     }
 
-    /// One cell of the grid, as the window is right now. Size is the only
-    /// input semantic zoom takes — there is no mode to switch, and the nav
-    /// is simply part of the size: opening it can legitimately drop Panes a
-    /// Level (#21).
+    /// One cell of the board, as the window is right now: the focused
+    /// Pane's rect (`pane_rects`), else the first, else the whole board.
+    /// Size is the only input semantic zoom takes — there is no mode to
+    /// switch, and the nav is simply part of the size: opening it can
+    /// legitimately drop Panes a Level (#21).
     fn cell(&self, window: &Window) -> Cell {
-        let viewport = window.viewport_size();
-        let layout = self.cockpit.layout();
-        // The nav, the grid's own padding, and the gaps between cells are
-        // not the Pane's to render in. Above the board sits the titlebar
-        // band (see `board_bounds`).
-        let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
-        let width =
-            (f32::from(viewport.width) - chrome) / layout.columns as f32 - crate::theme::GRID_GAP;
-        let height =
-            (f32::from(viewport.height) - crate::theme::BOARD_TOP - crate::theme::GRID_PAD)
-                / layout.rows as f32
-                - crate::theme::GRID_GAP;
-        Cell::new(width.max(0.0), height.max(0.0))
+        let rects = self.pane_rects(window);
+        let focused = self.focused();
+        let rect = rects
+            .iter()
+            .find(|(index, _)| *index == focused)
+            .or_else(|| rects.first())
+            .map_or_else(|| self.board_bounds(window), |(_, rect)| *rect);
+        Cell::new(rect.w.max(0.0), rect.h.max(0.0))
     }
 
     /// Whether something floats over the cockpit: a menu, a popover, the
@@ -1546,17 +1551,47 @@ impl CockpitView {
         }
     }
 
-    /// The level this cockpit is rendering at right now — size, with one
-    /// exception: fullscreen forces Transcript (#20). A whole-window cell
-    /// would pick L1 at any sane size anyway; the force is what keeps
-    /// "fullscreen = L1 regardless" true on a tiny window too. Routed here,
-    /// not in render, so the pointer math (`block_at`) reads the same level
-    /// the frame drew.
+    /// The level this cockpit is rendering at right now: the board's one
+    /// Level (`board_level`) — fullscreen forces Transcript inside it (#20).
+    /// Routed here, not in render, so the pointer math (`block_at`) reads
+    /// the same level the frame drew.
     fn level_now(&self, window: &Window) -> Level {
+        self.board_level(window)
+    }
+
+    /// **One Level per board** (rule 2.3.5): the smallest `Level::for_cell`
+    /// over every Pane's rect, so a board never mixes tiers and fewer Panes
+    /// never draw at a lower tier than more. Fullscreen forces Transcript (a
+    /// whole-window cell would pick L1 at any sane size anyway; the force
+    /// keeps "fullscreen = L1 regardless" true on a tiny window too).
+    ///
+    /// Hysteresis: the board steps down the moment any cell falls under a
+    /// threshold, but steps up only once every cell clears the next tier's
+    /// threshold by `LEVEL_HYSTERESIS` on both axes — a resize that hovers
+    /// at the edge never flickers between tiers.
+    fn board_level(&self, window: &Window) -> Level {
         if self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
-        self.level_of(self.focused(), window)
+        let rects = self.pane_rects(window);
+        let lowest = |slack: f32| {
+            rects
+                .iter()
+                .map(|(_, rect)| Level::for_cell(Cell::new(rect.w - slack, rect.h - slack)))
+                .min()
+        };
+        let Some(plain) = lowest(0.0) else {
+            let bounds = self.board_bounds(window);
+            return Level::for_cell(Cell::new(bounds.w, bounds.h));
+        };
+        let held = self.board_level.get();
+        let level = if plain <= held {
+            plain
+        } else {
+            held.max(lowest(crate::theme::LEVEL_HYSTERESIS).unwrap_or(held))
+        };
+        self.board_level.set(level);
+        level
     }
 
     /// The board the Panes lay out in, in window coordinates: right of the
@@ -1569,26 +1604,46 @@ impl CockpitView {
         let viewport = window.viewport_size();
         let pad = crate::theme::GRID_PAD;
         let top = crate::theme::BOARD_TOP;
-        layout::Rect {
+        let bounds = layout::Rect {
             x: self.nav_width() + pad,
             y: top,
             w: (f32::from(viewport.width) - self.nav_width() - pad * 2.0).max(0.0),
             h: (f32::from(viewport.height) - top - pad).max(0.0),
-        }
+        };
+        self.board.set(bounds);
+        bounds
+    }
+
+    /// A Group's tree in the board as the last frame laid it out: the
+    /// operator's stored arrangement, or the default grid (`Tree::grid`).
+    fn group_layout(&self, group: GroupId) -> Option<Tree> {
+        self.cockpit.group_layout(group, self.board.get())
     }
 
     /// The Group's tree as it should draw right now: the one mid-drag,
-    /// else the persisted one reconciled to the members — with a pending
-    /// draft spliced in under a stand-in id, since a draft is no Thread.
-    fn group_tree(&self, group: GroupId) -> Option<Tree> {
+    /// else the persisted one reconciled to the members (or the default
+    /// grid over `bounds`) — with a pending draft spliced in under a
+    /// stand-in id, since a draft is no Thread. A draft on a default grid
+    /// joins the grid rather than splitting one Pane.
+    fn group_tree(&self, group: GroupId, bounds: layout::Rect) -> Option<Tree> {
+        let drafts: Vec<ThreadId> = self
+            .cockpit
+            .visible()
+            .into_iter()
+            .filter_map(|identity| identity.draft().map(draft_leaf))
+            .collect();
         let mut tree = match &self.seam_drag {
             Some(drag) if drag.group == group => drag.tree.clone(),
-            _ => self.cockpit.group_layout(group)?,
-        };
-        for identity in self.cockpit.visible() {
-            if let PaneIdentity::Draft(draft) = identity {
-                tree.insert(draft_leaf(draft));
+            _ if !drafts.is_empty() && !self.cockpit.groups().has_custom_layout(group) => {
+                let members = &self.cockpit.groups().get(group)?.members;
+                let mut all = members.clone();
+                all.extend(drafts.iter().copied());
+                return Some(Tree::grid(&all, bounds));
             }
+            _ => self.cockpit.group_layout(group, bounds)?,
+        };
+        for draft in drafts {
+            tree.insert(draft);
         }
         Some(tree)
     }
@@ -1606,7 +1661,7 @@ impl CockpitView {
         }
         match self.cockpit.roster().view() {
             View::Group(group) => {
-                let Some(tree) = self.group_tree(group) else {
+                let Some(tree) = self.group_tree(group, bounds) else {
                     return Vec::new();
                 };
                 tree.rects(bounds, crate::theme::GRID_GAP)
@@ -1617,25 +1672,166 @@ impl CockpitView {
                     })
                     .collect()
             }
-            View::Solo => self
-                .visible_indices()
-                .into_iter()
-                .map(|index| (index, bounds))
-                .collect(),
+            // Solo is one Pane — or a pending pair (a draft beside its
+            // Thread), laid out on the same default grid a Group gets.
+            View::Solo => {
+                let visible = self.visible_indices();
+                let (columns, rows) = layout::grid_shape(visible.len(), bounds);
+                let gap = crate::theme::GRID_GAP;
+                let height = layout::grid_cell(bounds, columns, rows).height;
+                visible
+                    .chunks(columns.max(1))
+                    .enumerate()
+                    .flat_map(|(row, line)| {
+                        let width = (bounds.w - (line.len() - 1) as f32 * gap) / line.len() as f32;
+                        line.iter().enumerate().map(move |(column, index)| {
+                            (
+                                *index,
+                                layout::Rect {
+                                    x: bounds.x + column as f32 * (width + gap),
+                                    y: bounds.y + row as f32 * (height + gap),
+                                    w: width.max(0.0),
+                                    h: height,
+                                },
+                            )
+                        })
+                    })
+                    .collect()
+            }
         }
     }
 
-    /// The level one Pane draws at: its own rect's, or the shared cell's
-    /// where no tree governs.
-    fn level_of(&self, index: usize, window: &Window) -> Level {
-        if self.cockpit.roster().fullscreen().is_some() {
-            return Level::Transcript;
+    /// The level one Pane draws at: the board's one Level (`board_level`).
+    /// `index` is kept so call sites read as the Pane they ask about.
+    fn level_of(&self, _index: usize, window: &Window) -> Level {
+        self.board_level(window)
+    }
+
+    /// The titlebar's Thread for the Pane the board shows alone (C2): its
+    /// dot, title, branch, PR/CI and state word — or, for a draft, `New
+    /// thread` with its discard × in the titlebar's trailing slot.
+    fn titlebar_crumb(
+        &self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> (Option<crate::titlebar::ThreadCrumb>, Option<AnyElement>) {
+        let pane = &self.panes[index];
+        let reduce_motion = cx.reduce_motion();
+        let Some(thread) = pane.thread() else {
+            let discard = pane
+                .identity
+                .draft()
+                .map(|draft| self.draft_discard(draft, cx));
+            return (
+                Some(crate::titlebar::ThreadCrumb {
+                    dot: None,
+                    unread: false,
+                    reduce_motion,
+                    title: pane.name.clone(),
+                    branches: Vec::new(),
+                    tasks: None,
+                    ci: None,
+                    state: None,
+                }),
+                discard,
+            );
+        };
+        let facts = self.facts.get(thread);
+        let unread = index != self.focused() && self.cockpit.notifications().attention(thread);
+        let (dot, state) = match self.cockpit.thread(thread) {
+            Some(open) => {
+                let (dot, state) = pane::thread_face(open, facts.map(|facts| &facts.wall), unread);
+                (Some(dot), state)
+            }
+            None => (
+                Some(thread_status(pane::WallState::Parked, false)),
+                Some(pane::HeadSlot::Parked),
+            ),
+        };
+        let branches = match facts {
+            Some(facts) if facts.project_branches.len() > 1 => facts
+                .project_branches
+                .iter()
+                .map(|(directory, branch)| (Some(directory.clone()), branch.clone()))
+                .collect(),
+            Some(facts) => facts
+                .status
+                .as_ref()
+                .and_then(|status| status.branch.clone())
+                .map(SharedString::from)
+                .or_else(|| facts.branch.clone())
+                .filter(|branch| !pane::is_default_branch(branch))
+                .map(|branch| vec![(None, branch)])
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        (
+            Some(crate::titlebar::ThreadCrumb {
+                dot,
+                unread,
+                reduce_motion,
+                title: pane.name.clone(),
+                branches,
+                tasks: self
+                    .cockpit
+                    .thread(thread)
+                    .and_then(|open| pane::tasks_meter(thread, open.transcript())),
+                ci: self.ci_mark(index, cx),
+                state,
+            }),
+            None,
+        )
+    }
+
+    /// More than one Pane is on the board and none fills it: every Composer
+    /// is the grid's one fixed line (C4).
+    fn grid_board(&self) -> bool {
+        self.cockpit.roster().fullscreen().is_none() && self.visible_indices().len() > 1
+    }
+
+    /// The provider most Panes on the board run, when there is one: a Group
+    /// head names a provider only where it differs from this.
+    fn board_provider(&self) -> Option<ferrite_core::store::Provider> {
+        let mut claude = 0usize;
+        let mut codex = 0usize;
+        for index in self.visible_indices() {
+            let provider = self.panes[index]
+                .thread()
+                .and_then(|thread| self.cockpit.thread(thread))
+                .map(|thread| thread.provider());
+            match provider {
+                Some(ferrite_core::store::Provider::Claude) => claude += 1,
+                Some(ferrite_core::store::Provider::Codex) => codex += 1,
+                None => {}
+            }
         }
-        self.pane_rects(window)
-            .into_iter()
-            .find(|(at, _)| *at == index)
-            .map(|(_, rect)| Level::for_cell(Cell::new(rect.w, rect.h)))
-            .unwrap_or_else(|| Level::for_cell(self.cell(window)))
+        match claude.cmp(&codex) {
+            std::cmp::Ordering::Greater => Some(ferrite_core::store::Provider::Claude),
+            std::cmp::Ordering::Less => Some(ferrite_core::store::Provider::Codex),
+            // A tie has no majority: every head keeps its mark.
+            std::cmp::Ordering::Equal => None,
+        }
+    }
+
+    /// A draft's discard ×, wired to cmd-w's own close, its tooltip naming
+    /// the key where one is bound.
+    fn draft_discard(
+        &self,
+        draft: ferrite_core::roster::DraftId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let button = pane::draft_close_button(draft)
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.close_pane(PaneIdentity::Draft(draft), cx);
+            }))
+            .into_any_element();
+        pane::draft_discard(
+            draft,
+            button,
+            crate::components::bound_chord("cockpit::CloseThread"),
+        )
+        .into_any_element()
     }
 
     /// The Panes on screen, as indices into the mirror — the roster's
@@ -2224,11 +2420,13 @@ impl CockpitView {
             ..rect
         };
         let mut board = div().relative().flex_1().min_w_0().min_h_0();
+        // One Level for the whole board: no Pane draws a tier its
+        // neighbours do not (rule 2.3.5).
+        let level = self.board_level(window);
         for (leaf, rect) in tree.rects(bounds, crate::theme::GRID_GAP) {
             let Some(index) = self.index_of(leaf_identity(leaf)) else {
                 continue;
             };
-            let level = Level::for_cell(Cell::new(rect.w, rect.h));
             let rect = local(rect);
             board = board.child(
                 self.pane_cell(index, level, window, cx)
@@ -2355,7 +2553,7 @@ impl CockpitView {
     /// A press on a seam: the drag begins from the persisted tree, and
     /// the moves until release re-derive the ratio from the pointer.
     fn begin_seam_drag(&mut self, group: GroupId, seam: SeamId, cx: &mut Context<Self>) {
-        let Some(tree) = self.cockpit.group_layout(group) else {
+        let Some(tree) = self.group_layout(group) else {
             return;
         };
         self.seam_drag = Some(SeamDrag { group, seam, tree });
@@ -2461,7 +2659,7 @@ impl CockpitView {
         if !self.same_group(source, target) || source == target {
             return;
         }
-        let Some(mut tree) = self.cockpit.group_layout(group) else {
+        let Some(mut tree) = self.group_layout(group) else {
             return;
         };
         let changed = match zone {
@@ -3216,22 +3414,21 @@ impl CockpitView {
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
             .debug_selector(move || format!("pane-title-{}", thread.get()))
+            .tooltip(crate::menu::tooltip("Rename \u{b7} double-click"))
             // In a Group the title is the Pane's handle: drag it onto
-            // another Pane to swap or split.
+            // another Pane to swap or split. It keeps the default cursor —
+            // a name, not a button.
             .when(grouped, |title| {
-                title.cursor(gpui::CursorStyle::OpenHand).on_drag(
-                    PaneDrag { thread },
-                    move |_, _, _, cx| {
-                        // The drag has begun: its source dims until the
-                        // release (the root's mouse-up) ends it.
-                        let _ = this.update(cx, |view, cx| {
-                            view.pane_drag_source = Some(thread);
-                            cx.notify();
-                        });
-                        let badge = badge.clone();
-                        cx.new(|_| PaneDragPreview(badge))
-                    },
-                )
+                title.on_drag(PaneDrag { thread }, move |_, _, _, cx| {
+                    // The drag has begun: its source dims until the
+                    // release (the root's mouse-up) ends it.
+                    let _ = this.update(cx, |view, cx| {
+                        view.pane_drag_source = Some(thread);
+                        cx.notify();
+                    });
+                    let badge = badge.clone();
+                    cx.new(|_| PaneDragPreview(badge))
+                })
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -7233,18 +7430,19 @@ impl CockpitView {
         // ComposerMenu: the focused node, where enter and escape can win
         // their tie against Submit and Interrupt.
         let pane_rects = self.pane_rects(window);
+        let board_level = self.board_level(window);
+        let grid = self.grid_board();
         for (index, pane) in self.panes.iter().enumerate() {
             let row_limit = pane_rects
                 .iter()
                 .find(|(at, _)| *at == index)
                 .map(|(_, rect)| {
-                    let compact = fullscreen.is_none()
-                        && Level::for_cell(Cell::new(rect.w, rect.h)) == Level::Instruments;
+                    let compact = fullscreen.is_none() && board_level == Level::Instruments;
                     let queued = pane
                         .thread()
                         .and_then(|thread| self.cockpit.thread(thread))
                         .map_or(0, |thread| thread.queued_all().len());
-                    pane::composer_row_limit(rect.h, compact, queued)
+                    pane::composer_row_limit(rect.h, compact, grid, queued)
                 })
                 .unwrap_or(crate::composer::MAX_ROWS);
             // Derive this every frame so answering, leaving fullscreen, or
@@ -7395,7 +7593,7 @@ impl CockpitView {
                 .pt(px(crate::theme::BOARD_TOP))
         };
         let visible = self.visible_indices();
-        let layout = self.cockpit.layout();
+        let board = self.board_bounds(window);
         let grid = if let Some(index) = fullscreen {
             // The fullscreened Pane takes the whole window. The other Panes
             // are not laid out at all — hidden siblings would still cost
@@ -7406,7 +7604,7 @@ impl CockpitView {
                 .flex_col()
                 .child(self.pane_cell(index, level, window, cx))
         } else if let Some((group, tree)) = match self.cockpit.roster().view() {
-            View::Group(group) => self.group_tree(group).map(|tree| (group, tree)),
+            View::Group(group) => self.group_tree(group, board).map(|tree| (group, tree)),
             View::Solo => None,
         } {
             // A Group's board is its split tree (SwarmDeck's mosaic): every
@@ -7420,7 +7618,7 @@ impl CockpitView {
             // blank.
             frame().flex().child(self.empty_board())
         } else {
-            let columns = layout.columns;
+            let columns = layout::grid_shape(visible.len(), board).0.max(1);
             let mut grid = frame().flex().flex_col();
             for row in visible.chunks(columns) {
                 let mut line = div()
@@ -7636,16 +7834,28 @@ impl CockpitView {
                         cx.stop_propagation();
                         view.open_draft_with_placement(DraftTarget::Main, placement, cx);
                     }));
+                // The Thread the board shows alone — Solo, or fullscreen —
+                // rides the titlebar: its Pane has no head (C2).
+                let alone = fullscreen.or_else(|| {
+                    let visible = self.visible_indices();
+                    (visible.len() == 1).then(|| visible[0])
+                });
+                let (thread, trailing) = match alone {
+                    Some(index) => self.titlebar_crumb(index, cx),
+                    None => (None, None),
+                };
                 root.child(crate::titlebar::strip(
                     self.nav_width(),
                     crate::titlebar::Title {
                         project: project_title,
                         group: group_title.clone(),
+                        thread,
                     },
                     crate::titlebar::Board {
                         count: group_title.is_some().then(|| self.visible_indices().len()),
                         fullscreen: fullscreen.is_some(),
                     },
+                    trailing,
                     add_thread,
                     !self.overlay_open(),
                     self.maximized,
@@ -7819,12 +8029,7 @@ impl CockpitView {
                 pane::DraftState {
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     composer_actions: self.composer_actions(index, cx),
-                    discard: pane::draft_close_button(draft_id)
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.close_pane(PaneIdentity::Draft(draft_id), cx);
-                        }))
-                        .into_any_element(),
+                    discard: self.draft_discard(draft_id, cx),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
                     // A draft has spent no context, so it reads nothing
@@ -7843,8 +8048,7 @@ impl CockpitView {
                         && pane.composer.read(cx).focus_handle(cx).is_focused(window),
                     reduce_motion: cx.reduce_motion(),
                     drop_target: self.drop_target(index, cx),
-                    show_focus: self.visible_indices().len() > 1,
-                    head_column: self.head_column(index, window),
+                    show_focus: self.grid_board(),
                 },
                 level,
             ));
@@ -7874,9 +8078,6 @@ impl CockpitView {
             // The cached checkout label (#29) — display-only.
             branch: cached.and_then(|facts| facts.branch.clone()),
             checkout: cached.and_then(|facts| facts.status.as_ref()),
-            project_branches: cached
-                .map(|facts| facts.project_branches.as_slice())
-                .unwrap_or_default(),
             composer_empty: pane.composer.read(cx).is_empty(),
             composer_queue_height: pane::composer_queue_height(
                 self.pane_rects(window)
@@ -7884,6 +8085,7 @@ impl CockpitView {
                     .find(|(at, _)| *at == index)
                     .map_or(self.cell(window).height, |(_, rect)| rect.h),
                 level == Level::Instruments,
+                self.grid_board(),
                 open.map_or(0, |thread| thread.queued_all().len()),
             ),
             focused,
@@ -7894,8 +8096,11 @@ impl CockpitView {
                 && window.is_window_active()
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
-            show_focus: self.visible_indices().len() > 1,
+            show_focus: self.grid_board(),
             head_column: self.head_column(index, window),
+            provider_mark: open
+                .map(|thread| thread.provider())
+                .filter(|provider| Some(*provider) != self.board_provider()),
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
@@ -7933,14 +8138,11 @@ impl CockpitView {
             // handle could not be rearranged at all.
             title: Some(self.activity_title(index, cx)),
             agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
-            ci: self.ci_mark(index, cx),
-            activity_attention: self.activity_attention(index, cx),
             activity_decisions: (level != Level::Wall)
                 .then(|| self.activity_decisions(index, window, cx))
                 .flatten(),
-            expand_question: (level != Level::Wall)
-                .then(|| self.activity_question_expander(index, level == Level::Instruments, cx))
-                .flatten(),
+            expand_question: level != Level::Wall
+                && self.question_needs_expansion(index, level == Level::Instruments),
             question_measurement: l1
                 .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
@@ -9656,10 +9858,7 @@ impl CockpitView {
             chrome = chrome.child(if crate::titlebar::CUSTOM {
                 crate::titlebar::drag_region(
                     "nav-chrome-drag",
-                    crate::titlebar::Title {
-                        project: None,
-                        group: None,
-                    },
+                    crate::titlebar::Title::default(),
                     self.maximized,
                 )
             } else {
@@ -10929,7 +11128,10 @@ mod tests {
                 [PaneIdentity::Thread(original), PaneIdentity::Draft(draft)],
                 "the loose Thread and its focused Draft are shown together"
             );
-            assert_eq!(view.cockpit.layout().columns, 2);
+            assert_eq!(
+                layout::grid_shape(view.cockpit.visible().len(), view.board.get()).0,
+                2
+            );
         });
 
         cx.simulate_input("work beside the original thread");
@@ -12825,12 +13027,12 @@ mod tests {
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
-        // A 24-member Group lays out on `groups::grid`, which gives 5 columns
-        // here, not the 6 the old global wall's `columns()` gave — so 1440
-        // now leaves ~219px cells, one band above the wall. 1200 puts the
-        // same 5 columns at ~171px, under the 200px threshold, which is the
-        // range this test is about.
-        cx.simulate_resize(gpui::size(px(1200.), px(900.)));
+        // A 24-member Group lays out on the default grid, which picks the
+        // highest Level every cell can hold: at 1200×900 a 4×6 grid still
+        // keeps ~217×133px instruments. 1100×800 leaves no grid whose cells
+        // clear the 200×120px instruments floor, which is the range this
+        // test is about.
+        cx.simulate_resize(gpui::size(px(1100.), px(800.)));
         view.update(cx, |view, _| {
             assert_eq!(view.panes.len(), 24);
         });
@@ -12863,23 +13065,32 @@ mod tests {
         });
     }
 
-    /// A Group's grid is near-square with the long edge horizontal, and it
-    /// is the *only* grid now: with the global wall gone (#28) there is no
-    /// board-specific shape to follow and no six-column ceiling — a Group
-    /// is as wide as its own membership makes it. `group_grid` returns
-    /// (rows, columns); the cockpit reads the second.
+    /// A Group's default grid is the aspect rule (`layout::grid_shape`), and
+    /// it is the *only* grid: with the global wall gone (#28) there is no
+    /// board-specific shape to follow and no six-column ceiling — a Group is
+    /// as wide as its own membership and the window make it. The app
+    /// window's board (1440×900 less the nav and chrome) is 1134×838;
+    /// `grid_shape` returns (columns, rows).
     #[test]
     fn the_grid_follows_the_groups_own_membership() {
-        assert_eq!(ferrite_core::groups::grid(1), (1, 1));
-        assert_eq!(ferrite_core::groups::grid(2), (1, 2));
-        assert_eq!(ferrite_core::groups::grid(6), (2, 3));
-        // The prototype's tall-left board is four Panes, laid 2×2 here and
-        // overridden to 2×3 by `tall_left_board` in the cockpit itself.
-        assert_eq!(ferrite_core::groups::grid(4), (2, 2));
+        let board = layout::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1134.0,
+            h: 838.0,
+        };
+        let shape = |count| layout::grid_shape(count, board);
+        assert_eq!(shape(1), (1, 1));
+        assert_eq!(shape(2), (2, 1));
+        assert_eq!(shape(6), (3, 2));
+        // Four is a plain 2×2 now — the prototype's tall-left 2×3 is gone.
+        assert_eq!(shape(4), (2, 2));
+        assert_eq!(shape(9), (3, 3));
+        assert_eq!(shape(12), (4, 3));
         // Past the old wall's 24, and past its six columns: nothing clamps.
-        assert_eq!(ferrite_core::groups::grid(24), (5, 5));
-        assert_eq!(ferrite_core::groups::grid(48), (7, 7));
-        assert_eq!(ferrite_core::groups::grid(100), (10, 10));
+        assert_eq!(shape(24), (5, 5));
+        assert_eq!(shape(48), (7, 7));
+        assert_eq!(shape(100), (10, 10));
     }
 
     /// AC1: no mode switch — the same cockpit renders at a different altitude
@@ -19554,7 +19765,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(view.seam_drag.is_none(), "released");
-            let tree = view.cockpit.group_layout(group).unwrap();
+            let tree = view.group_layout(group).unwrap();
             let ratio = match tree.root.as_ref().unwrap() {
                 ferrite_core::layout::Node::Split { ratio, .. } => *ratio,
                 _ => panic!("two members make a split"),
@@ -19565,10 +19776,10 @@ mod tests {
         // A drop on the centre swaps; on an edge splits the target's slot.
         view.update(cx, |view, cx| {
             view.apply_pane_drop(threads[0], threads[1], Zone::Swap, cx);
-            let tree = view.cockpit.group_layout(group).unwrap();
+            let tree = view.group_layout(group).unwrap();
             assert_eq!(tree.leaves(), vec![threads[1], threads[0]], "swapped");
             view.apply_pane_drop(threads[0], threads[1], Zone::Split(Edge::Top), cx);
-            let tree = view.cockpit.group_layout(group).unwrap();
+            let tree = view.group_layout(group).unwrap();
             match tree.root.as_ref().unwrap() {
                 ferrite_core::layout::Node::Split { axis, .. } => {
                     assert_eq!(*axis, ferrite_core::layout::Axis::Column, "stacked now")
@@ -19632,7 +19843,7 @@ mod tests {
         tick(cx);
 
         let bounds = cx.update(|window, cx| view.read(cx).board_bounds(window));
-        let tree = view.read_with(cx, |view, _| view.cockpit.group_layout(group).unwrap());
+        let tree = view.read_with(cx, |view, _| view.group_layout(group).unwrap());
         let seams = tree.seams(bounds, crate::theme::GRID_GAP, SEAM_GRAB);
         assert_eq!(seams.len(), count - 1, "{label}: n leaves make n-1 seams");
         for seam in &seams {
@@ -19661,7 +19872,7 @@ mod tests {
             cx.run_until_parked();
             view.read_with(cx, |view, _| {
                 assert!(view.seam_drag.is_none(), "{label}: released");
-                let now = view.cockpit.group_layout(group).unwrap();
+                let now = view.group_layout(group).unwrap();
                 let along = |s: &layout::Seam| match s.axis {
                     layout::Axis::Row => s.band.x,
                     layout::Axis::Column => s.band.y,
@@ -19707,9 +19918,8 @@ mod tests {
             let target = (source + count / 2) % count;
             {
                 let (a, b) = (threads[source], threads[target]);
-                let before = view.read_with(cx, |view, _| {
-                    view.cockpit.group_layout(group).unwrap().leaves()
-                });
+                let before =
+                    view.read_with(cx, |view, _| view.group_layout(group).unwrap().leaves());
                 let selector: &'static str =
                     Box::leak(format!("pane-title-{}", a.get()).into_boxed_str());
                 let title = cx
@@ -19741,9 +19951,8 @@ mod tests {
                 cx.simulate_mouse_up(drop, gpui::MouseButton::Left, gpui::Modifiers::none());
                 cx.run_until_parked();
                 tick(cx);
-                let after = view.read_with(cx, |view, _| {
-                    view.cockpit.group_layout(group).unwrap().leaves()
-                });
+                let after =
+                    view.read_with(cx, |view, _| view.group_layout(group).unwrap().leaves());
                 let mut expected = before.clone();
                 let ia = expected.iter().position(|t| *t == a).unwrap();
                 let ib = expected.iter().position(|t| *t == b).unwrap();

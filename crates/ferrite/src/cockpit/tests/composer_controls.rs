@@ -417,7 +417,13 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             cx,
             format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
         );
-        assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
+        assert!(
+            queue.size.height
+                <= px(
+                    crate::theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * crate::theme::QUEUE_ROW_H
+                        + 1.
+                )
+        );
         assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
         assert!(queue.bottom() <= editor.top());
         if width == 860. {

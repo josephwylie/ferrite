@@ -29,7 +29,10 @@
 
 use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, Div, MouseButton, SharedString, Stateful, WindowControlArea};
+use gpui::{
+    div, px, rgb, rgba, AnyElement, App, Div, MouseButton, SharedString, Stateful,
+    WindowControlArea,
+};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -38,10 +41,35 @@ use crate::theme::*;
 /// The active location named in the window chrome. A Group may span
 /// Projects, so the Project follows the focused Pane rather than trying to
 /// summarize the whole Group.
-#[derive(Clone)]
+#[derive(Default)]
 pub struct Title {
     pub project: Option<SharedString>,
     pub group: Option<SharedString>,
+    /// The Thread the board shows alone — Solo, or one Pane fullscreen:
+    /// the Solo Pane has no head (C2), so its identity rides here.
+    pub thread: Option<ThreadCrumb>,
+}
+
+/// One Thread's identity in the titlebar: `● title ⎇ branch · #212 ● ·
+/// state`, fed from the one status truth (`cockpit::thread_status`).
+pub struct ThreadCrumb {
+    /// The Thread's status dot; a draft, which runs nothing yet, has none.
+    pub dot: Option<crate::cockpit::ThreadStatus>,
+    /// Unread breathes on the dot, as it does on a Group head.
+    pub unread: bool,
+    pub reduce_motion: bool,
+    pub title: SharedString,
+    /// The checkout, only when it says something: a single branch that is
+    /// not the default, or every directory's branch of a multi-directory
+    /// Project (`frontend:feat/header  api:main`).
+    pub branches: Vec<(Option<SharedString>, SharedString)>,
+    /// The plan's meter, while the Thread works to one.
+    pub tasks: Option<AnyElement>,
+    /// The PR and its CI, wired to open the checks card.
+    pub ci: Option<AnyElement>,
+    /// The state word (`needs you · approval`, `failed`, `working 12s`);
+    /// nothing when idle.
+    pub state: Option<crate::pane::HeadSlot>,
 }
 
 /// What the location adds about the board, beside its name.
@@ -79,23 +107,18 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
+#[allow(clippy::too_many_arguments)]
 pub fn strip(
     nav_width: f32,
     title: Title,
     board: Board,
+    trailing: Option<AnyElement>,
     add_thread: Button,
     draggable: bool,
     maximized: bool,
 ) -> Div {
     let trailing_drag = if CUSTOM && draggable {
-        drag_region(
-            "titlebar-drag",
-            Title {
-                project: None,
-                group: None,
-            },
-            maximized,
-        )
+        drag_region("titlebar-drag", Title::default(), maximized)
     } else {
         div().flex_1().h_full()
     };
@@ -117,7 +140,7 @@ pub fn strip(
         // tag keeps the location's own inset instead of trailing an empty
         // region and its gap.
         .map(|strip| {
-            if title.project.is_none() && title.group.is_none() {
+            if title.project.is_none() && title.group.is_none() && title.thread.is_none() {
                 strip.children(DEV.then(|| dev_badge().ml(px(GRID_PAD))))
             } else {
                 strip
@@ -126,6 +149,7 @@ pub fn strip(
             }
         })
         .child(trailing_drag)
+        .children(trailing)
         .child(add_thread)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
@@ -226,14 +250,20 @@ fn dev_badge() -> Div {
         .child("dev")
 }
 
-/// The location, on one UI baseline: in Solo the Project alone; in a
-/// Group the Project, a faint `/`, the Group's name as the band's one title
-/// and how many Panes it shows; ` · fullscreen` while one Pane fills the
-/// board. The Group's name gives way last.
+/// The location, on one UI baseline, segments `TITLE_GAP` apart. In Solo:
+/// the Project in `TEXT_MUTED`, a faint `/`, then the Thread
+/// (`thread_crumb`). In a Group: the Project, `/`, the Group's name as the
+/// band's one title and how many Panes it shows; while one Pane fills the
+/// board the Thread follows the Group in place of the count, and how many
+/// Threads that hides is the Group name's tooltip. Truncation order: the
+/// branch first, then the Project, then the title.
 fn title_region(title: Title, board: Board) -> Div {
-    let Title { project, group } = title;
+    let Title {
+        project,
+        group,
+        thread,
+    } = title;
     let Board { count, fullscreen } = board;
-    let solo = group.is_none();
     let separator = |glyph: &'static str| {
         div()
             .flex_shrink_0()
@@ -246,7 +276,12 @@ fn title_region(title: Title, board: Board) -> Div {
             .text_color(rgb(TEXT_MUTED))
             .child(text)
     };
+    let has_project = project.is_some();
     let has_group = group.is_some();
+    let has_thread = thread.is_some();
+    let hidden = count
+        .filter(|_| fullscreen)
+        .map(|count| count.saturating_sub(1));
     div()
         .h_full()
         .flex()
@@ -264,28 +299,37 @@ fn title_region(title: Title, board: Board) -> Div {
             div()
                 .id("project-titlebar-name")
                 .debug_selector(|| "project-titlebar-name".into())
-                .min_w_0()
+                .min_w(px(TITLE_PROJECT_MIN_W))
                 .flex_shrink(2.)
                 .truncate()
                 .tooltip(crate::menu::tooltip(project.clone()))
-                .when(solo, |name| name.font_weight(W_LABEL))
-                .text_color(rgb(if solo { TEXT_2 } else { TEXT_MUTED }))
+                .font_weight(W_BODY)
+                .text_color(rgb(TEXT_MUTED))
                 .child(project)
         }))
-        .when(has_group, |title| title.child(separator("/")))
+        .when(has_group || (has_thread && has_project), |title| {
+            title.child(separator("/"))
+        })
         .children(group.map(|group| {
+            let tip = match hidden {
+                Some(hidden) => SharedString::from(format!(
+                    "{group} \u{b7} {hidden} thread{} hidden",
+                    if hidden == 1 { "" } else { "s" }
+                )),
+                None => group.clone(),
+            };
             div()
                 .id("group-titlebar-name")
                 .debug_selector(|| "group-titlebar-name".into())
                 .min_w_0()
                 .flex_shrink(1.)
                 .truncate()
-                .tooltip(crate::menu::tooltip(group.clone()))
+                .tooltip(crate::menu::tooltip(tip))
                 .font_weight(W_LABEL)
                 .text_color(rgb(TEXT_STRONG))
                 .child(group)
         }))
-        .children(count.map(|count| {
+        .children(count.filter(|_| !fullscreen).map(|count| {
             div()
                 .flex()
                 .flex_shrink_0()
@@ -295,11 +339,120 @@ fn title_region(title: Title, board: Board) -> Div {
                     count.to_string(),
                 ))))
         }))
-        .when(fullscreen, |title| {
-            title
+        .when(has_group && has_thread, |title| title.child(separator("/")))
+        .children(thread.map(thread_crumb))
+}
+
+/// The Thread in the titlebar: a 6px status dot in a 12px box, the title
+/// (`W_LABEL` `TEXT_STRONG`, truncating, the whole of it one hover away),
+/// `⎇ branch` in `TEXT_MUTED` when it says something, the plan's meter, the
+/// PR and its CI,
+/// then `·` and the state word in `FS_SM`, which never shrinks. A draft is
+/// `New thread`, with no dot.
+fn thread_crumb(thread: ThreadCrumb) -> Div {
+    let ThreadCrumb {
+        dot,
+        unread,
+        reduce_motion,
+        title,
+        branches,
+        tasks,
+        ci,
+        state,
+    } = thread;
+    let separator = |glyph: &'static str| {
+        div()
+            .flex_shrink_0()
+            .text_color(rgb(TEXT_FAINT))
+            .child(glyph)
+    };
+    let dot = dot.map(|dot| {
+        let mark = if unread && dot.shape == crate::cockpit::DotShape::Solid {
+            crate::components::breathing_dot(dot.ink, reduce_motion)
+        } else {
+            dot.dot().into_any_element()
+        };
+        crate::components::glyph_box(mark).debug_selector(|| "titlebar-thread-dot".into())
+    });
+    let branch = (!branches.is_empty()).then(|| {
+        div()
+            .debug_selector(|| "titlebar-thread-branch".into())
+            .flex()
+            .flex_shrink(4.)
+            .min_w_0()
+            .overflow_hidden()
+            .items_center()
+            .gap(px(ROW_ICON_GAP))
+            .text_color(rgb(TEXT_MUTED))
+            .child(icon(icons::BRANCH, ROW_ICON, TEXT_MUTED))
+            .children(
+                branches
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (directory, branch))| {
+                        div()
+                            .debug_selector(move || format!("project-branch-{index}"))
+                            .flex()
+                            .min_w_0()
+                            .items_center()
+                            .when(index > 0, |item| item.ml(px(TITLE_GAP)))
+                            .when_some(directory, |item, directory| {
+                                item.child(div().flex_shrink_0().child(directory)).child(
+                                    div().flex_shrink_0().text_color(rgb(TEXT_FAINT)).child(":"),
+                                )
+                            })
+                            .child(div().min_w_0().truncate().child(branch))
+                    }),
+            )
+    });
+    div()
+        .debug_selector(|| "titlebar-thread".into())
+        .flex()
+        .flex_shrink(1.)
+        .min_w_0()
+        .items_center()
+        .gap(px(TITLE_GAP))
+        .children(dot)
+        .child(
+            div()
+                .id("thread-titlebar-name")
+                .debug_selector(|| "thread-titlebar-name".into())
+                .min_w_0()
+                .flex_shrink(1.)
+                .truncate()
+                .tooltip(crate::menu::tooltip(title.clone()))
+                .font_weight(W_LABEL)
+                .text_color(rgb(TEXT_STRONG))
+                .child(title),
+        )
+        .children(branch)
+        .children(tasks.map(|tasks| div().flex_shrink_0().child(tasks)))
+        .children(ci.map(|ci| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .text_color(rgb(TEXT_MUTED))
                 .child(separator("·"))
-                .child(fact(SharedString::from("fullscreen")))
-        })
+                .child(ci)
+        }))
+        .children(state.map(|state| {
+            div()
+                .debug_selector(|| "titlebar-thread-state".into())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(TITLE_GAP))
+                .child(separator("·"))
+                .child(match state {
+                    crate::pane::HeadSlot::NeedsYou(_) => crate::pane::needs_you_door(
+                        "titlebar-needs-you".into(),
+                        "titlebar-needs-you".into(),
+                        crate::pane::head_slot_face(&state),
+                    ),
+                    _ => crate::pane::head_slot_face(&state).into_any_element(),
+                })
+        }))
 }
 
 /// Minimise, maximise/restore and close, in the platform's order, flush to
@@ -428,11 +581,13 @@ mod tests {
                 Title {
                     project: Some("Ferrite".into()),
                     group: Some("Group Alpha".into()),
+                    thread: None,
                 },
                 Board {
                     count: Some(4),
                     fullscreen: false,
                 },
+                None,
                 add_thread_button("Add Thread", "New Thread in Group", cx),
                 true,
                 false,

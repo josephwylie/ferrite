@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::groups::{grid, GroupId, Groups};
+use crate::groups::{GroupId, Groups};
 use crate::ThreadId;
 
 /// A draft Pane's identity (#29): a Composer and a pre-prompt band with no
@@ -75,18 +75,6 @@ pub struct DraftScope {
     pub group: Option<GroupId>,
     pub new_group_with: Option<ThreadId>,
     pub pending_leave: Option<ThreadId>,
-}
-
-/// The grid the visible Panes lay out on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Layout {
-    pub columns: usize,
-    pub rows: usize,
-    /// The prototype's tall-left board: exactly four Panes of a Group, two
-    /// columns and three rows with the left Pane spanning all of them. The
-    /// prototype specifies a board for four Panes and no other count, so
-    /// every other count keeps the chunked rows (R-01).
-    pub tall_left: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -218,31 +206,6 @@ impl Roster {
                     }))
                     .collect()
             }
-        }
-    }
-
-    /// The grid the visible Panes lay out on: one column in Solo, the
-    /// near-square `groups::grid` for a Group, and the prototype's
-    /// tall-left board for exactly four.
-    pub fn layout(&self, groups: &Groups) -> Layout {
-        let visible = self.visible(groups).len();
-        let tall_left = matches!(self.view, View::Group(_)) && visible == 4;
-        if tall_left {
-            return Layout {
-                columns: 2,
-                rows: 3,
-                tall_left,
-            };
-        }
-        let columns = match self.view {
-            View::Solo if self.pending_pair().is_some() => grid(visible).1.max(1),
-            View::Solo => 1,
-            View::Group(_) => grid(visible).1.max(1),
-        };
-        Layout {
-            columns,
-            rows: visible.div_ceil(columns).max(1),
-            tall_left,
         }
     }
 
@@ -532,7 +495,19 @@ mod tests {
         assert_eq!(roster.visible(&groups), [PaneIdentity::Thread(threads[0])]);
         roster.focus(PaneIdentity::Thread(threads[3]));
         assert_eq!(roster.visible(&groups), [PaneIdentity::Thread(threads[3])]);
-        assert_eq!(roster.layout(&groups).columns, 1);
+        assert_eq!(
+            crate::layout::grid_shape(
+                roster.visible(&groups).len(),
+                crate::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1134.0,
+                    h: 838.0
+                }
+            )
+            .0,
+            1
+        );
 
         roster.set_view(View::Group(group));
         assert_eq!(
@@ -555,48 +530,6 @@ mod tests {
             roster.visible(&groups),
             [PaneIdentity::Thread(threads[0]), PaneIdentity::Draft(draft)],
             "a member whose leave waits on the draft is already gone"
-        );
-    }
-
-    #[test]
-    fn four_of_a_group_lay_out_on_the_tall_left_board_and_others_on_the_grid() {
-        let (mut groups, threads) = groups("layout", 6);
-        let group = groups
-            .apply(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        for thread in &threads[2..] {
-            groups
-                .apply(GroupChange::Join {
-                    thread: *thread,
-                    group,
-                    index: None,
-                })
-                .unwrap();
-        }
-        let mut roster = roster(&threads[..4]);
-        roster.set_view(View::Group(group));
-        assert_eq!(
-            roster.layout(&groups),
-            Layout {
-                columns: 2,
-                rows: 3,
-                tall_left: true
-            }
-        );
-        roster.insert_thread(threads[4]);
-        roster.insert_thread(threads[5]);
-        assert_eq!(
-            roster.layout(&groups),
-            Layout {
-                columns: 3,
-                rows: 2,
-                tall_left: false
-            }
         );
     }
 

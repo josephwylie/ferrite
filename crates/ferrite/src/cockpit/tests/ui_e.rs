@@ -45,7 +45,10 @@ fn toasts_follow_the_nav_to_the_side_with_ground_to_spare(cx: &mut TestAppContex
 /// Pane's head or the focused Composer.
 #[gpui::test]
 fn the_toast_column_clears_every_pane_head_and_the_composer(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("toast-geometry", 2);
+    // A board: Solo has no head (the titlebar carries the Thread).
+    let (mut core, _fake) = cockpit("toast-geometry", 2);
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);

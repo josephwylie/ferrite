@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::docview::{Cell, Level};
 use crate::ThreadId;
 
 /// The smallest share `set_ratio` lets either side of a split hold. A seam
@@ -147,11 +148,16 @@ pub enum Zone {
 }
 
 impl Tree {
-    /// A near-square grid: `rows = max(1, floor(sqrt(n)))`, `cols =
-    /// ceil(n / rows)`, filled row by row. Rows stack in a Column at equal
-    /// shares; each row is a Row at equal shares (right-nested, the head
-    /// taking `1 / remaining`). A member listed twice is packed once.
-    pub fn even(members: &[ThreadId]) -> Tree {
+    /// The default (and reset) board: an aspect-aware grid over `bounds`.
+    /// Every column count from 1 to n is tried, rows = ceil(n / cols), and
+    /// each cell measured with `GRID_GAP` between cells. The count that
+    /// gives the highest uniform `Level` wins, then the one whose cell is
+    /// closest to `GRID_ASPECT` — so 4 → 2×2, 9 → 3×3 and 12 → 4×3 on a
+    /// laptop window, and a portrait window stacks rows. Rows stack in a
+    /// Column at equal shares and each row is an equal Row chain, so column
+    /// seams align across rows; a short last row hands its Panes full-width
+    /// cells, never 5 over 7. A member listed twice is packed once.
+    pub fn grid(members: &[ThreadId], bounds: Rect) -> Tree {
         let mut seen = BTreeSet::new();
         let members: Vec<ThreadId> = members
             .iter()
@@ -161,14 +167,19 @@ impl Tree {
         if members.is_empty() {
             return Tree::default();
         }
-        let rows = ((members.len() as f64).sqrt().floor() as usize).max(1);
-        let columns = members.len().div_ceil(rows);
+        let (columns, _) = grid_shape(members.len(), bounds);
         let rows: Vec<Node> = members
             .chunks(columns)
-            .map(|row| even_chain(row.iter().map(|id| Node::Leaf(*id)).collect(), Axis::Row))
+            .map(|row| {
+                even_chain(
+                    row.iter().map(|id| Node::Leaf(*id)).collect(),
+                    Axis::Row,
+                    bounds.w,
+                )
+            })
             .collect();
         Tree {
-            root: Some(even_chain(rows, Axis::Column)),
+            root: Some(even_chain(rows, Axis::Column, bounds.h)),
         }
     }
 
@@ -287,14 +298,26 @@ impl Tree {
     }
 
     /// Fit the tree to exactly `members`: a corrupt or empty tree is rebuilt
-    /// as the even grid; otherwise stale leaves go and missing members come
-    /// in (in `members` order), keeping the operator's shape. Idempotent.
-    pub fn reconcile(&mut self, members: &[ThreadId]) {
+    /// as the default grid over `bounds`; otherwise stale leaves go and
+    /// missing members come in (in `members` order), keeping the operator's
+    /// shape. Idempotent.
+    pub fn reconcile(&mut self, members: &[ThreadId], bounds: Rect) {
+        if !self.fit(members) {
+            *self = Tree::grid(members, bounds);
+        }
+    }
+
+    /// `reconcile` without a fallback: keep the operator's shape while it
+    /// can be kept. False — the tree untouched — when it is corrupt, empty,
+    /// or would lose every leaf, where only a rebuilt grid fits.
+    pub fn fit(&mut self, members: &[ThreadId]) -> bool {
         if self.root.is_none() || self.is_corrupt() {
-            *self = Tree::even(members);
-            return;
+            return false;
         }
         let wanted: BTreeSet<ThreadId> = members.iter().copied().collect();
+        if !self.leaves().iter().any(|leaf| wanted.contains(leaf)) {
+            return false;
+        }
         for stale in self
             .leaves()
             .into_iter()
@@ -302,13 +325,10 @@ impl Tree {
         {
             self.remove(stale);
         }
-        if self.root.is_none() {
-            *self = Tree::even(members);
-            return;
-        }
         for member in members {
             self.insert(*member);
         }
+        true
     }
 
     /// Set a split's ratio, clamped to `MIN_SHARE..=1 - MIN_SHARE`. False
@@ -667,15 +687,74 @@ impl Node {
     }
 }
 
-/// Right-nested equal shares: the head takes `1 / remaining`.
-fn even_chain(mut nodes: Vec<Node>, axis: Axis) -> Node {
+/// The gap between two Panes on the board, both axes (px).
+pub const GRID_GAP: f32 = 8.0;
+
+/// The cell aspect (w / h) the default grid prefers once every candidate
+/// draws at the same `Level`: a little wider than tall, like a terminal.
+pub const GRID_ASPECT: f32 = 1.4;
+
+/// (columns, rows) of the default grid for `count` Panes in `bounds`
+/// (`Tree::grid`): the highest uniform `Level::for_cell` first, then the
+/// cell aspect closest to `GRID_ASPECT`, fewer columns on a tie.
+pub fn grid_shape(count: usize, bounds: Rect) -> (usize, usize) {
+    if count == 0 {
+        return (0, 0);
+    }
+    let mut best: Option<(Level, f32, usize, usize)> = None;
+    for columns in 1..=count {
+        let rows = count.div_ceil(columns);
+        let cell = grid_cell(bounds, columns, rows);
+        let level = Level::for_cell(cell);
+        let aspect = if cell.height > 0.0 {
+            (cell.width / cell.height - GRID_ASPECT).abs()
+        } else {
+            f32::INFINITY
+        };
+        let better = match best {
+            None => true,
+            Some((best_level, best_aspect, _, _)) => {
+                level > best_level || (level == best_level && aspect < best_aspect)
+            }
+        };
+        if better {
+            best = Some((level, aspect, columns, rows));
+        }
+    }
+    let (_, _, columns, rows) = best.expect("count > 0 tries a column count");
+    (columns, rows)
+}
+
+/// One full cell of a `columns` × `rows` grid in `bounds`, `GRID_GAP` apart.
+pub fn grid_cell(bounds: Rect, columns: usize, rows: usize) -> Cell {
+    let columns = columns.max(1) as f32;
+    let rows = rows.max(1) as f32;
+    Cell::new(
+        ((bounds.w - (columns - 1.0) * GRID_GAP) / columns).max(0.0),
+        ((bounds.h - (rows - 1.0) * GRID_GAP) / rows).max(0.0),
+    )
+}
+
+/// Right-nested equal cells along `length`, `GRID_GAP` apart: every node
+/// gets `(length - (k - 1) * gap) / k`, so the head's ratio of what its split
+/// shares (`length - gap`) is that cell over it — not `1 / k`, which would
+/// hand the head the gaps the chain after it still has to give up.
+fn even_chain(mut nodes: Vec<Node>, axis: Axis, length: f32) -> Node {
+    let count = nodes.len();
+    let cell = (length - (count.saturating_sub(1)) as f32 * GRID_GAP) / count.max(1) as f32;
     let mut node = nodes.pop().expect("a chain has at least one node");
-    let mut count = 1;
+    let mut tail = 1;
     while let Some(head) = nodes.pop() {
-        count += 1;
+        tail += 1;
+        let span = tail as f32 * cell + (tail - 1) as f32 * GRID_GAP;
+        let ratio = if cell > 0.0 && span - GRID_GAP > 0.0 {
+            cell / (span - GRID_GAP)
+        } else {
+            1.0 / tail as f32
+        };
         node = Node::Split {
             axis,
-            ratio: 1.0 / count as f32,
+            ratio,
             first: Box::new(head),
             second: Box::new(node),
         };
@@ -901,36 +980,84 @@ mod tests {
         (rows.len(), columns)
     }
 
+    /// The laptop window the board geometry is specified in.
+    const LAPTOP: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 1134.0,
+        h: 838.0,
+    };
+
     #[test]
-    fn even_grids_pack_the_spec_locked_rows_and_columns() {
-        let expected = [(1, 1), (1, 2), (1, 3), (2, 2), (2, 3), (2, 3)];
+    fn grids_pick_the_highest_uniform_level_then_the_aspect_nearest_the_rule() {
+        let expected = [(1, 1), (1, 2), (2, 2), (2, 2), (2, 3), (2, 3)];
         for (index, want) in expected.iter().enumerate() {
             let members = ids(1..index as u64 + 2);
-            let tree = Tree::even(&members);
+            let tree = Tree::grid(&members, LAPTOP);
             assert_eq!(shape(&tree), *want, "n = {}", members.len());
             assert_eq!(tree.leaves(), members);
             assert!(!tree.is_corrupt());
         }
-        assert_eq!(Tree::even(&[]), Tree::default());
-        assert_eq!(shape(&Tree::even(&ids(1..10))), (3, 3));
-        assert_eq!(shape(&Tree::even(&ids(1..101))), (10, 10));
+        assert_eq!(Tree::grid(&[], LAPTOP), Tree::default());
+        // The specified boards: 4 → 2×2, 9 → 3×3, 12 → 4×3 (rows × columns
+        // below), every cell of 4 and 9 at the transcript Level.
+        assert_eq!(shape(&Tree::grid(&ids(1..5), LAPTOP)), (2, 2));
+        assert_eq!(shape(&Tree::grid(&ids(1..10), LAPTOP)), (3, 3));
+        assert_eq!(shape(&Tree::grid(&ids(1..13), LAPTOP)), (3, 4));
+        for count in [4, 9] {
+            let (columns, rows) = grid_shape(count, LAPTOP);
+            assert_eq!(
+                Level::for_cell(grid_cell(LAPTOP, columns, rows)),
+                Level::Transcript,
+                "n = {count}"
+            );
+        }
+        // A portrait window stacks rows: 12 go two across.
+        let portrait = rect(0.0, 0.0, 694.0, 1338.0);
+        assert_eq!(grid_shape(12, portrait).0, 2);
+        assert_eq!(shape(&Tree::grid(&ids(1..13), portrait)), (6, 2));
     }
 
     #[test]
-    fn even_grids_hand_every_pane_an_equal_cell() {
-        let rects = Tree::even(&ids(1..7)).rects(UNIT, 0.0);
-        for (_, cell) in &rects {
-            assert!(close(cell.w, 1.0 / 3.0) && close(cell.h, 0.5), "{cell:?}");
+    fn grid_rows_align_their_seams_and_a_short_last_row_takes_full_cells() {
+        let rects = Tree::grid(&ids(1..7), LAPTOP).rects(LAPTOP, GRID_GAP);
+        let cell = grid_cell(LAPTOP, 3, 2);
+        for (_, found) in &rects {
+            assert!(
+                close(found.w, cell.width) && close(found.h, cell.height),
+                "{found:?}"
+            );
         }
-        assert!(same(rects[0].1, rect(0.0, 0.0, 1.0 / 3.0, 0.5)));
-        assert!(same(rects[3].1, rect(0.0, 0.5, 1.0 / 3.0, 0.5)));
-        assert!(same(rects[5].1, rect(2.0 / 3.0, 0.5, 1.0 / 3.0, 0.5)));
-        // A short last row stretches across.
-        let five = Tree::even(&ids(1..6)).rects(UNIT, 0.0);
-        assert!(same(five[3].1, rect(0.0, 0.5, 0.5, 0.5)));
-        assert!(same(five[4].1, rect(0.5, 0.5, 0.5, 0.5)));
+        // Column seams line up across rows.
+        for column in 0..3 {
+            assert!(close(rects[column].1.x, rects[column + 3].1.x));
+        }
+        assert!(same(rects[0].1, rect(0.0, 0.0, cell.width, cell.height)));
+        assert!(same(
+            rects[5].1,
+            rect(
+                2.0 * (cell.width + GRID_GAP),
+                cell.height + GRID_GAP,
+                cell.width,
+                cell.height
+            )
+        ));
+        // A short last row stretches across: 5 in 3 + 2, the two sharing the
+        // full width at equal shares.
+        let five = Tree::grid(&ids(1..6), LAPTOP).rects(LAPTOP, GRID_GAP);
+        let half = (LAPTOP.w - GRID_GAP) / 2.0;
+        assert!(close(five[3].1.w, half) && close(five[4].1.w, half));
+        assert!(close(five[3].1.x, 0.0));
+        assert!(close(five[4].1.x + five[4].1.w, LAPTOP.w));
+        // Every row of a full grid is an equal chain: 12 is never 5 over 7.
+        let twelve = Tree::grid(&ids(1..13), LAPTOP).rects(LAPTOP, GRID_GAP);
+        let widths: BTreeSet<u32> = twelve.iter().map(|(_, r)| r.w.round() as u32).collect();
+        assert_eq!(widths.len(), 1, "{widths:?}");
         // A member listed twice is packed once.
-        assert_eq!(Tree::even(&[id(1), id(1), id(2)]).leaves(), [id(1), id(2)]);
+        assert_eq!(
+            Tree::grid(&[id(1), id(1), id(2)], LAPTOP).leaves(),
+            [id(1), id(2)]
+        );
     }
 
     #[test]
@@ -1066,17 +1193,17 @@ mod tests {
         let members = ids(1..4);
         let mut duplicate = of(split(Row, 0.5, leaf(1), leaf(1)));
         assert!(duplicate.is_corrupt());
-        duplicate.reconcile(&members);
-        assert_eq!(duplicate, Tree::even(&members));
+        duplicate.reconcile(&members, LAPTOP);
+        assert_eq!(duplicate, Tree::grid(&members, LAPTOP));
         for bad in [0.0, 1.0, -0.2, 1.5, f32::NAN] {
             let mut tree = of(split(Row, bad, leaf(1), leaf(2)));
             assert!(tree.is_corrupt(), "ratio {bad}");
-            tree.reconcile(&members);
-            assert_eq!(tree, Tree::even(&members));
+            tree.reconcile(&members, LAPTOP);
+            assert_eq!(tree, Tree::grid(&members, LAPTOP));
         }
         let mut empty = Tree::default();
-        empty.reconcile(&members);
-        assert_eq!(empty, Tree::even(&members));
+        empty.reconcile(&members, LAPTOP);
+        assert_eq!(empty, Tree::grid(&members, LAPTOP));
         // Stale leaves go, missing members come, the operator's shape stays.
         let mut stale = of(split(
             Row,
@@ -1084,7 +1211,7 @@ mod tests {
             leaf(1),
             split(Column, 0.6, leaf(2), leaf(9)),
         ));
-        stale.reconcile(&members);
+        stale.reconcile(&members, LAPTOP);
         assert_eq!(
             stale,
             of(split(
@@ -1095,13 +1222,13 @@ mod tests {
             ))
         );
         let again = stale.clone();
-        stale.reconcile(&members);
+        stale.reconcile(&members, LAPTOP);
         assert_eq!(stale, again, "idempotent");
         let mut gone = of(split(Row, 0.5, leaf(8), leaf(9)));
-        gone.reconcile(&members);
-        assert_eq!(gone, Tree::even(&members), "all leaves stale");
-        let mut tree = Tree::even(&members);
-        tree.reconcile(&[]);
+        gone.reconcile(&members, LAPTOP);
+        assert_eq!(gone, Tree::grid(&members, LAPTOP), "all leaves stale");
+        let mut tree = Tree::grid(&members, LAPTOP);
+        tree.reconcile(&[], LAPTOP);
         assert_eq!(tree, Tree::default(), "no members");
     }
 
@@ -1143,7 +1270,7 @@ mod tests {
     #[test]
     fn rects_share_the_bounds_minus_the_gap_and_stay_inside() {
         let bounds = rect(10.0, 20.0, 300.0, 200.0);
-        let tree = Tree::even(&ids(1..7));
+        let tree = Tree::grid(&ids(1..7), LAPTOP);
         let rects = tree.rects(bounds, 4.0);
         assert_eq!(rects.len(), 6);
         for (_, cell) in &rects {
@@ -1205,7 +1332,7 @@ mod tests {
         assert!(same(narrow[0].band, rect(48.0, 0.0, 4.0, 50.0)));
         // Every seam of a grid runs between the rects on its two sides.
         let bounds = rect(10.0, 20.0, 300.0, 200.0);
-        let grid = Tree::even(&ids(1..7));
+        let grid = Tree::grid(&ids(1..7), LAPTOP);
         let cells = grid.rects(bounds, 4.0);
         let seams = grid.seams(bounds, 4.0, 8.0);
         assert_eq!(seams.len(), 5);
