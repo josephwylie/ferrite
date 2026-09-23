@@ -71,17 +71,6 @@ pub struct InlineCodeWash {
 /// can find code runs without a second range list.
 pub(crate) const INLINE_CODE_MARK: Option<f32> = Some(0.);
 
-/// Ferrite: a highlight that marks its range as code — shaped in the style's
-/// inline-code family — and changes nothing else. A code block's highlighter
-/// may return it to set part of a line in the code face (a tool call's
-/// arguments beside its proportional name).
-pub fn code_run() -> HighlightStyle {
-    HighlightStyle {
-        fade_out: INLINE_CODE_MARK,
-        ..Default::default()
-    }
-}
-
 impl PartialEq for TextViewStyle {
     fn eq(&self, other: &Self) -> bool {
         self.paragraph_gap == other.paragraph_gap

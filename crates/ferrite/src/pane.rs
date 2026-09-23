@@ -2443,11 +2443,12 @@ fn l2_tail_rows(transcript: &Transcript, namespace: &str, docked: bool) -> Vec<T
                         theme::LH_UI,
                     )
                     .child(
-                        // `Name(args)`: the name in body ink, the arguments
-                        // machine text, wrapping inside the cell — never cut.
+                        // `Name(args)`: one mono line, the name in body
+                        // ink, wrapping inside the cell — never cut.
                         div()
                             .flex_1()
                             .min_w_0()
+                            .font_family(theme::FONT_CODE)
                             .text_size(px(theme::FS_UI))
                             .line_height(px(theme::LH_UI))
                             .font_weight(theme::W_BODY)
@@ -5687,25 +5688,19 @@ fn tool_dot(tool: &ToolBlock) -> AnyElement {
     }
 }
 
-/// A call's name and arguments as one line, `Name(args)` with the parens
-/// touching: the name in body ink, the rest muted.
-/// A call line `Name(args)`: the name is UI text in `TEXT`, the arguments
-/// — a command, a path — are machine text in the code face (rule 6), one
-/// selectable line either way.
+/// A call line `Name(args)`, all of it one CLI token in the code face at
+/// `W_BODY` (rule 6, the operator's Q1): the name in `TEXT`, the parens and
+/// arguments in the line's `TEXT_MUTED`, one selectable line that copies
+/// back exactly as it reads.
 fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
-    let label = text::tool_label(tool).len();
-    let name = tool.name.len().min(label);
-    let mut highlights = vec![(
+    let name = tool.name.len().min(text::tool_label(tool).len());
+    vec![(
         0..name,
         HighlightStyle {
             color: Some(rgb(TEXT).into()),
             ..Default::default()
         },
-    )];
-    if name < label {
-        highlights.push((name..label, gpui::base::text::code_run()));
-    }
-    highlights
+    )]
 }
 
 /// A call's time in its trail: a live call ticks whole seconds from `1s`
@@ -5829,11 +5824,12 @@ fn render_tool(
 ) -> AnyElement {
     let has_disclosure = disclosure.is_some();
     let (overlay, chevron, targeted) = disclosure_parts(disclosure);
-    let call = div().min_w_0().truncate().child(selection.line(
-        block,
-        text::tool_label(tool),
-        call_highlights(tool),
-    ));
+    let call = div()
+        .min_w_0()
+        .truncate()
+        .font_family(theme::FONT_CODE)
+        .font_weight(theme::W_BODY)
+        .child(selection.line(block, text::tool_label(tool), call_highlights(tool)));
     let mut trail = components::tabular(
         div()
             .flex()
@@ -6088,8 +6084,8 @@ where
         group = group.child(if expanded {
             running.into_any_element()
         } else {
-            // One line, never the raw multi-line input: the name in body
-            // ink, its arguments muted in the code face, as a call line.
+            // One line, never the raw multi-line input: a call line, all
+            // mono, the name in body ink and its arguments muted.
             running
                 .w_full()
                 .min_w_0()
@@ -6098,23 +6094,17 @@ where
                     let name = tool.name.len().min(label.len());
                     result_line(TEXT_MUTED).child(
                         div()
-                            .flex()
                             .min_w_0()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_color(rgb(TEXT))
-                                    .child(SharedString::from(label[..name].to_owned())),
-                            )
-                            .when(name < label.len(), |line| {
-                                line.child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_family(theme::FONT_CODE)
-                                        .child(SharedString::from(label[name..].to_owned())),
-                                )
-                            }),
+                            .truncate()
+                            .font_family(theme::FONT_CODE)
+                            .font_weight(theme::W_BODY)
+                            .child(StyledText::new(label).with_highlights(vec![(
+                                0..name,
+                                HighlightStyle {
+                                    color: Some(rgb(TEXT).into()),
+                                    ..Default::default()
+                                },
+                            )])),
                     )
                 })
                 .into_any_element()
@@ -8006,13 +7996,20 @@ mod tests {
             };
             assert_eq!(text::tool_label(&tool), "Bash(cargo test)");
             let highlights = call_highlights(&tool);
-            assert_eq!(highlights.len(), 2);
+            assert_eq!(
+                highlights.len(),
+                1,
+                "one line, one face: only the name is lifted"
+            );
             assert_eq!(highlights[0].0, 0..4, "only the name is lifted");
-            assert_eq!(highlights[0].1.color, Some(rgb(TEXT).into()));
-            assert_eq!(highlights[0].1.font_weight, None, "names are never bold");
-            // The arguments are set in the code face and nothing else.
-            assert_eq!(highlights[1].0, 4..16);
-            assert_eq!(highlights[1].1, gpui::base::text::code_run());
+            assert_eq!(
+                highlights[0].1,
+                HighlightStyle {
+                    color: Some(rgb(TEXT).into()),
+                    ..Default::default()
+                },
+                "the name changes ink only: never a weight, never a face"
+            );
         }
         assert_eq!(result_ink(&ToolState::Ok), (TEXT_MUTED, theme::FONT_UI));
         assert_eq!(

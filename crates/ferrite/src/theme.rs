@@ -60,9 +60,10 @@
 //!    notifications, chips, buttons, empty states, and agent prose.
 //!    `FONT_CODE` (Geist Mono) is only for literal code and machine text:
 //!    fenced blocks and inline `code`, diffs and their number column, a tool
-//!    call's arguments and every line of its output (the tool's name is UI,
-//!    Geist `W_BODY` `TEXT`: the split stands until the operator rules on
-//!    the all-mono tool line, Q1),
+//!    call line and every line of its output — the whole call line is one
+//!    CLI token, `Bash(cargo test -p ferrite nav::)`, set in Geist Mono at
+//!    400: the name in `TEXT`, the parens and arguments in `TEXT_MUTED`, on
+//!    the shared line box, at every tier (the operator's ruling, Q1) —
 //!    the Composer's input line, placeholder and queued prompts (a terminal
 //!    line), a Decision's command well, keycaps, and the aligned `/command`
 //!    names. A metric that assumes a fixed advance (`CODE_CELL`) is only ever

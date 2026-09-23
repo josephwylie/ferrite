@@ -1312,22 +1312,17 @@ impl CodeBlock {
                     .text_size(cx.theme().tokens.typography.mono_md.size)
                     .relative()
                     .refine_style(&style.code_block())
-                    .child(
-                        Inline::new(
-                            "code",
-                            self.state.clone(),
-                            vec![],
-                            node_cx
-                                .code_block_highlighter
-                                .as_ref()
-                                .map(|highlighter| self.highlighted_styles(highlighter))
-                                .unwrap_or_default(),
-                            node_cx.link_click_handler.clone(),
-                        )
-                        // Ferrite: highlighter ranges marked `code_run()` are
-                        // shaped in the inline-code family, with no wash.
-                        .code_style(node_cx.style.inline_code_font(), None),
-                    )
+                    .child(Inline::new(
+                        "code",
+                        self.state.clone(),
+                        vec![],
+                        node_cx
+                            .code_block_highlighter
+                            .as_ref()
+                            .map(|highlighter| self.highlighted_styles(highlighter))
+                            .unwrap_or_default(),
+                        node_cx.link_click_handler.clone(),
+                    ))
                     // Ferrite: actions are an overlay over the whole block,
                     // painted after the code and taking no layout, so a block
                     // with actions is exactly as tall as one without. The
