@@ -5470,6 +5470,53 @@ mod tests {
     /// A finished Main turn buys exactly one prediction, carrying both sides
     /// of the exchange. Recorded rather than spawned: the suite must never
     /// shell out to a real CLI, let alone pay one.
+    /// The completion observation now times every outcome, so an
+    /// interrupted turn's row reads `Interrupted · 4.1s`. Timing it must not
+    /// make it a completion: no completed stamp, no "finished" notice, no
+    /// follow-up prediction, and the transcript still reads not-completed.
+    #[test]
+    fn a_timed_interruption_is_never_read_as_a_completion() {
+        let (mut cockpit, fake) = cockpit("timed-interruption");
+        cockpit.set_notification_grace(Duration::ZERO);
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "work".into());
+        fake.streams.borrow()[0].send(text("partial")).unwrap();
+        cockpit.pump();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Interrupted,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        cockpit.pump();
+        let transcript = cockpit.thread(thread).unwrap().transcript();
+        let ends: Vec<_> = transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::TurnEnd(end) => Some(end.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ends.len(), 1, "the observation times the row, adds none");
+        assert_eq!(ends[0].outcome, crate::TurnOutcome::Interrupted);
+        assert!(ends[0].elapsed_ms.is_some(), "the interruption is timed");
+        assert!(ends[0].text().starts_with("Interrupted · "));
+        assert!(!transcript.turn_completed());
+        assert!(
+            cockpit
+                .notifications()
+                .notices()
+                .all(|notice| notice.thread != thread),
+            "an interruption raises no finished notice"
+        );
+        assert!(
+            fake.suggest_calls().is_empty(),
+            "an interruption buys no follow-up prediction"
+        );
+    }
+
     #[test]
     fn a_finished_turn_asks_for_one_follow_up_prediction() {
         let (mut cockpit, fake) = cockpit("suggest-trigger");
