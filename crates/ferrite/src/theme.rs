@@ -994,6 +994,12 @@ pub fn init_components(cx: &mut gpui::App) {
 //   calls, summaries) are `FS_UI`/`LH_UI`; the stamp and the trail are
 //   `FS_SM`/`LH_META`, their changing digits tabular.
 
+/// 66px — the tallest remnant of a cut row the transcript hides under its
+/// top edge while it follows the tail (three prose lines): a prompt, a tool
+/// row or a short paragraph cut under the head rule goes whole, so the
+/// body reads from a whole row; a long block read mid-way stays, since
+/// hiding more would open a void (rule 2.3.4).
+pub const TRANSCRIPT_TOP_SNAP_MAX: f32 = 3.0 * LH_PROSE;
 /// 32px — above every prompt but the first: the turn boundary. No rule is
 /// drawn between turns; this space, the prompt's weight and the stamp do the
 /// job.

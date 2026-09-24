@@ -16,6 +16,9 @@ pub(crate) struct TranscriptScroll {
     list: ListState,
     // A fully visible row's inset, sampled from native layout for width reflow.
     resize_anchor: Rc<Cell<Option<(Pixels, usize, Pixels)>>>,
+    // How much of the viewport's top a cut row's remnant is hidden under
+    // (`cut_row_mask`), sampled after layout and painted next frame.
+    top_mask: Rc<Cell<Pixels>>,
 }
 
 impl TranscriptScroll {
@@ -27,6 +30,7 @@ impl TranscriptScroll {
         Self {
             list,
             resize_anchor: Default::default(),
+            top_mask: Rc::new(Cell::new(px(0.))),
         }
     }
 
@@ -106,6 +110,32 @@ impl TranscriptScroll {
         adjusted
     }
 
+    /// The first visible row is never cut under the head rule while the
+    /// tail is followed: after layout, the top row's remnant — when its
+    /// content, not just its gap, is cut — is measured for the mask the
+    /// view paints over it (`cut_row_mask`). `gap_of` is a row's space
+    /// above its content. Whether the mask changed, so the caller repaints
+    /// once; an unchanged frame schedules nothing.
+    pub(crate) fn settle_top(&self, gap_of: impl Fn(usize) -> f32) -> bool {
+        let mask = if self.list.is_following_tail() {
+            let viewport = self.list.viewport_bounds();
+            let top = self.list.logical_scroll_top().item_ix;
+            self.list.bounds_for_item(top).map_or(px(0.), |row| {
+                cut_row_mask(viewport.top(), row.top(), row.bottom(), px(gap_of(top)))
+            })
+        } else {
+            px(0.)
+        };
+        let changed = (self.top_mask.get() - mask).abs() > px(0.5);
+        self.top_mask.set(mask);
+        changed
+    }
+
+    /// The mask over the viewport's top (`settle_top`).
+    pub(crate) fn top_mask(&self) -> Pixels {
+        self.top_mask.get()
+    }
+
     /// Freeze tail following while retaining its automatic re-engagement rule.
     #[cfg(test)]
     pub(crate) fn pause_following_tail(&self) {
@@ -135,5 +165,65 @@ impl TranscriptScroll {
         // Nothing else moves: a row's gap is part of the row (see
         // `rows::gap_before`), so a neighbour's arrival or eviction reaches
         // the list as that row's own change in `remeasure`.
+    }
+}
+
+/// How much of a viewport's top to hide so its first row is never cut: the
+/// remnant of a row whose content (below its `gap`) starts above
+/// `viewport_top`, so the body reads from the next whole row. A row cut
+/// only in its gap is whole already. A remnant taller than
+/// `theme::TRANSCRIPT_TOP_SNAP_MAX` is a long block read mid-way, and
+/// hiding it would open a void, so it stays.
+pub(crate) fn cut_row_mask(
+    viewport_top: Pixels,
+    row_top: Pixels,
+    row_bottom: Pixels,
+    gap: Pixels,
+) -> Pixels {
+    let remnant = row_bottom - viewport_top;
+    if row_top + gap >= viewport_top || remnant <= px(0.) {
+        return px(0.);
+    }
+    if remnant <= px(crate::theme::TRANSCRIPT_TOP_SNAP_MAX) {
+        remnant
+    } else {
+        px(0.)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::TRANSCRIPT_TOP_SNAP_MAX;
+
+    /// group9's clipped prompt: a one-line row cut under the head rule is
+    /// hidden whole; a row cut only in its gap, a row wholly below the top
+    /// and a long block read mid-way are left alone.
+    #[test]
+    fn a_row_cut_under_the_head_rule_is_hidden_whole() {
+        let top = px(100.);
+        // A prompt: 32px turn gap, a 22px line; its content starts 6px
+        // above the viewport, so 16px of it would show cut.
+        assert_eq!(cut_row_mask(top, px(62.), px(116.), px(32.)), px(16.));
+        // Cut only in its gap: the content is whole.
+        assert_eq!(cut_row_mask(top, px(80.), px(134.), px(32.)), px(0.));
+        // Starts below the top: nothing is cut.
+        assert_eq!(cut_row_mask(top, px(100.), px(154.), px(32.)), px(0.));
+        // Scrolled wholly past.
+        assert_eq!(cut_row_mask(top, px(20.), px(100.), px(12.)), px(0.));
+        // A long answer read mid-way keeps its lines rather than a void.
+        assert_eq!(
+            cut_row_mask(
+                top,
+                px(-400.),
+                px(100. + TRANSCRIPT_TOP_SNAP_MAX + 1.),
+                px(12.)
+            ),
+            px(0.)
+        );
+        assert_eq!(
+            cut_row_mask(top, px(-400.), px(100. + TRANSCRIPT_TOP_SNAP_MAX), px(12.)),
+            px(TRANSCRIPT_TOP_SNAP_MAX)
+        );
     }
 }

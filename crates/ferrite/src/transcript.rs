@@ -896,9 +896,13 @@ impl Render for TranscriptView {
         .size_full()
         .min_h_0();
         let scroll = self.scroll.clone();
+        let gaps = self.rows.clone();
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
-                if scroll.did_layout() {
+                let anchored = scroll.did_layout();
+                let settled =
+                    scroll.settle_top(|index| gaps.get(index).map_or(0., |row| row.gap()));
+                if anchored || settled {
                     window.defer(cx, |window, _| window.refresh());
                 }
             })
@@ -938,6 +942,19 @@ impl Render for TranscriptView {
             .size_full()
             .min_h_0()
             .child(list)
+            // The first visible row is never cut under the head rule: a
+            // cut row's short remnant lies under the Pane's own ground, so
+            // the body reads from its first whole row (`settle_top`).
+            .children((self.scroll.top_mask() > px(0.)).then(|| {
+                div()
+                    .debug_selector(|| "transcript-top-mask".into())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(self.scroll.top_mask())
+                    .bg(gpui::rgb(theme::PANE))
+            }))
             .child(crate::components::scrollbar(
                 SharedString::from(format!("transcript-scrollbar-{}", self.input.namespace)),
                 self.scroll.list_state(),
