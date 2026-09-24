@@ -631,6 +631,9 @@ pub struct PaneFacts<'a> {
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
+    /// How many files wait in the Composer's draft: an unfocused board
+    /// cell counts them on its flat line instead of drawing their shelf.
+    pub composer_files: usize,
     /// Queue viewport derived from this Pane's actual available height.
     pub composer_queue_height: f32,
     pub focused: bool,
@@ -851,6 +854,7 @@ pub(crate) struct PaneCtx<'a> {
     pub queued: Vec<&'a str>,
     pub queue_height: f32,
     pub composer_empty: bool,
+    pub composer_files: usize,
     pub permission_mode: Option<SharedString>,
     pub suggestion: Option<&'a str>,
     pub received_reasoning_visible: bool,
@@ -903,6 +907,7 @@ pub fn render_pane(
         branch,
         checkout,
         composer_empty,
+        composer_files,
         composer_queue_height,
         focused,
         attention,
@@ -1073,6 +1078,7 @@ pub fn render_pane(
         queued: thread.map(|thread| thread.queued_all()).unwrap_or_default(),
         queue_height: composer_queue_height,
         composer_empty,
+        composer_files,
         permission_mode: thread.and_then(|thread| {
             thread
                 .permission_mode()
@@ -1300,6 +1306,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 queued: std::mem::take(&mut cx.queued),
                 queue_height: cx.queue_height,
                 empty: cx.composer_empty,
+                files: cx.composer_files,
                 attachments: cx.attachments.take(),
                 actions: cx.composer_actions.take(),
                 background: cx.background.take(),
@@ -1340,6 +1347,7 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     queued: std::mem::take(&mut cx.queued),
                     queue_height: cx.queue_height,
                     empty: cx.composer_empty,
+                    files: cx.composer_files,
                     attachments: cx.attachments.take(),
                     actions: cx.composer_actions.take(),
                     background: cx.background.take(),
@@ -1556,6 +1564,8 @@ pub struct DraftState<'a> {
     /// The open band popover, hung above the Composer like every menu.
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
+    /// How many files wait in the draft (`PaneFacts::composer_files`).
+    pub composer_files: usize,
     pub focused: bool,
     /// A failed bootstrap's words, shown where the band is.
     pub error: Option<&'a SharedString>,
@@ -1593,6 +1603,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         picker,
         menu,
         composer_empty,
+        composer_files,
         focused,
         error,
         usage_meter,
@@ -1639,6 +1650,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             queued: Vec::new(),
             queue_height: 0.,
             empty: composer_empty,
+            files: composer_files,
             attachments,
             actions: composer_actions,
             background: None,
@@ -3537,6 +3549,9 @@ struct ComposerStack<'a> {
     queued: Vec<&'a str>,
     queue_height: f32,
     empty: bool,
+    /// How many files the draft holds: what the flat line counts while
+    /// the shelf (`attachments`) waits for the live Composer.
+    files: usize,
     attachments: Option<AnyElement>,
     actions: Option<AnyElement>,
     /// Running background tasks as chips, hung at the right edge of the
@@ -3597,6 +3612,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         queued,
         queue_height,
         empty,
+        files,
         attachments,
         actions,
         background,
@@ -3619,6 +3635,15 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // caret or placeholder, their controls held in layout unseen. The
     // switch is instant: focus moves by keyboard.
     let live = !grid || focused || drop_target;
+    // The shelf and the queue belong to the live Composer. A flat line
+    // keeps them — the draft is untouched — and says them in words after
+    // its `❯` (`flat_facts`); focus brings them back as they were.
+    let flat = (!live).then(|| flat_facts(files, queued.len())).flatten();
+    let (attachments, queued) = if live {
+        (attachments, queued)
+    } else {
+        (None, Vec::new())
+    };
     let (pad_t, pad_b) = if grid {
         (theme::COMPOSER_GRID_PAD_Y, theme::COMPOSER_GRID_PAD_Y)
     } else {
@@ -3757,6 +3782,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         );
         line = line.child(ghost_row(ghost, compact));
     }
+
     // The `❯` is always in layout, so the text origin never moves with
     // focus. It hangs centred on the first row while the line grows.
     let line_selector = format!(
@@ -3777,6 +3803,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             )
             .debug_selector(|| "composer-mark".into()),
         )
+        // A flat line's facts come straight after its `❯`, before any
+        // draft text it holds.
+        .children(flat.map(|facts| facts.pl(px(theme::CARET_W)).mr(px(theme::SPACE_2))))
         .child(line);
     // The box's one row: `❯` and the line at left; the model pair and the
     // send control at right, on the first line's box however the line
@@ -4129,6 +4158,46 @@ fn placeholder(
         },
         Followup::Steer => Ghost::ladder("Steer", Some(" this thread"), true),
     }
+}
+
+/// What an unfocused board cell's flat line says in place of the shelf and
+/// the queue it keeps for the live Composer: `1 attachment`, `3
+/// attachments`, `2 queued`, joined by a faint `·`, in Geist `FS_SM`
+/// `TEXT_MUTED` with tabular digits — words, no chip and no ×. Nothing
+/// when the draft holds neither.
+fn flat_facts(files: usize, queued: usize) -> Option<Div> {
+    let text = flat_facts_text(files, queued);
+    (!text.is_empty()).then(|| {
+        let seams = separators(&text);
+        components::tabular(
+            div()
+                .debug_selector(|| "composer-flat-facts".into())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .h(px(theme::COMPOSER_ROW_H))
+                .whitespace_nowrap()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_SM))
+                .text_color(rgb(TEXT_MUTED))
+                .child(StyledText::new(text).with_highlights(seams)),
+        )
+    })
+}
+
+/// `flat_facts`' words: empty when there is nothing to say.
+pub(crate) fn flat_facts_text(files: usize, queued: usize) -> String {
+    let mut facts = Vec::new();
+    if files > 0 {
+        facts.push(format!(
+            "{files} attachment{}",
+            if files == 1 { "" } else { "s" }
+        ));
+    }
+    if queued > 0 {
+        facts.push(format!("{queued} queued"));
+    }
+    facts.join(" \u{b7} ")
 }
 
 /// The ghost drawn: rungs as whole pieces on a clipped, wrapping 20px row,

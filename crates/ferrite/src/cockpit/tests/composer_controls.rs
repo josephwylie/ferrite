@@ -402,7 +402,29 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
         let queue = bounds(cx, format!("composer-queue-{namespace}"));
-        let other_queue = bounds(cx, format!("composer-queue-{other_namespace}"));
+        // Fix 5: the queue belongs to the live Composer. The unfocused
+        // cell keeps its eight prompts and says `8 queued` on its flat line.
+        assert!(
+            cx.debug_bounds(format!("composer-queue-{other_namespace}").leak())
+                .is_none(),
+            "an unfocused cell draws no queue rows"
+        );
+        let other_cell = cx.update(|window, cx| {
+            view.read(cx)
+                .pane_rects(window)
+                .into_iter()
+                .find(|(at, _)| *at == 1)
+                .unwrap()
+                .1
+        });
+        let facts = cx
+            .debug_bounds("composer-flat-facts")
+            .expect("the flat line counts the queue");
+        assert!(
+            facts.left() >= px(other_cell.x) && facts.right() <= px(other_cell.x + other_cell.w),
+            "{facts:?} rides the unfocused cell {other_cell:?}"
+        );
+        assert_eq!(crate::pane::flat_facts_text(0, 8), "8 queued");
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: queue.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(1000.))),
@@ -410,7 +432,6 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         });
         tick(cx);
         let latest = bounds(cx, format!("queue-row-{namespace}-0"));
-        let other_latest = bounds(cx, format!("queue-row-{other_namespace}-0"));
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
         // The turn runs, so the one control is Stop, text in the line or not.
         let send = bounds(
@@ -448,14 +469,30 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             oldest.top() >= queue.top() - px(1.) && oldest.bottom() <= queue.bottom() + px(1.),
             "oldest {oldest:?} must fit queue {queue:?}"
         );
+        // Focus the other cell: its queue comes back at its own position
+        // — the latest on top — untouched by this Pane's scroll.
+        let focus = |index: usize, cx: &mut gpui::VisualTestContext| {
+            view.update_in(cx, |view, window, cx| {
+                view.focus_pane(index);
+                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+            tick(cx);
+        };
+        focus(1, cx);
+        let other_queue = bounds(cx, format!("composer-queue-{other_namespace}"));
         let unaffected = bounds(cx, format!("queue-row-{other_namespace}-0"));
-        assert_eq!(
-            unaffected, other_latest,
-            "another Pane keeps its own scroll position"
+        assert!(
+            unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom(),
+            "another Pane keeps its own scroll position: {unaffected:?} in {other_queue:?}"
         );
         assert!(
-            unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom()
+            cx.debug_bounds(format!("composer-queue-{namespace}").leak())
+                .is_none(),
+            "and the Pane that lost focus folds its queue"
         );
+        focus(0, cx);
     }
     view.update(cx, |view, cx| {
         view.panes[0]

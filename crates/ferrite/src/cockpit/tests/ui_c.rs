@@ -901,3 +901,88 @@ fn one_answer_target_wears_full_ink_and_solo_wears_no_state_edge(cx: &mut TestAp
         );
     }
 }
+
+/// Fix 5: the attachment shelf belongs to the live Composer. A file
+/// attached in cell A stays in A's draft while B holds focus; A's flat
+/// line draws no chip and says `1 attachment` after its `❯` instead. Focus
+/// back on A brings the chip back, and the file still sends.
+#[gpui::test]
+fn an_unfocused_cell_counts_its_attachments_on_the_flat_line(cx: &mut TestAppContext) {
+    assert_eq!(pane::flat_facts_text(1, 0), "1 attachment");
+    assert_eq!(pane::flat_facts_text(3, 0), "3 attachments");
+    assert_eq!(pane::flat_facts_text(0, 2), "2 queued");
+    assert_eq!(pane::flat_facts_text(1, 2), "1 attachment \u{b7} 2 queued");
+    assert_eq!(pane::flat_facts_text(0, 0), "");
+
+    let (view, fake, cx, _group) = board("flat-attachments", 4, cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Transcript
+    );
+    let file = std::path::PathBuf::from("/tmp/CleanShot 2026-09-24 at 10.12.03.png");
+    let focus_composer =
+        |view: &Entity<CockpitView>, index: usize, cx: &mut gpui::VisualTestContext| {
+            view.update_in(cx, |view, window, cx| {
+                view.focus_pane(index);
+                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+            tick(cx);
+        };
+    focus_composer(&view, 0, cx);
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.add_files(&[file.clone()], cx));
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("pending-attachment-tray").is_some());
+    assert!(cx.debug_bounds("composer-flat-facts").is_none());
+
+    focus_composer(&view, 1, cx);
+    let cell = cx.update(|window, cx| {
+        view.read(cx)
+            .pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == 0)
+            .unwrap()
+            .1
+    });
+    assert!(
+        cx.debug_bounds("pending-attachment-tray").is_none(),
+        "no chip shelf over an unfocused cell's flat line"
+    );
+    let facts = cx
+        .debug_bounds("composer-flat-facts")
+        .expect("the flat line counts the attachment");
+    assert!(
+        facts.left() >= px(cell.x)
+            && facts.right() <= px(cell.x + cell.w)
+            && facts.bottom() <= px(cell.y + cell.h),
+        "{facts:?} rides cell A's flat line {cell:?}"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).file_count()),
+        1,
+        "focus moves never touch the draft"
+    );
+
+    focus_composer(&view, 0, cx);
+    assert!(
+        cx.debug_bounds("pending-attachment-tray").is_some(),
+        "focus brings the chip back"
+    );
+    assert!(cx.debug_bounds("composer-flat-facts").is_none());
+    cx.simulate_input("look at this");
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let sent = fake.sent.borrow().clone();
+    assert!(
+        sent.iter().any(
+            |prompt| prompt.contains("look at this") && prompt.contains("CleanShot 2026-09-24")
+        ),
+        "the attachment still sends: {sent:?}"
+    );
+}

@@ -8357,6 +8357,7 @@ impl CockpitView {
                         .then(|| self.popover_element(index, cx))
                         .flatten(),
                     composer_empty: pane.composer.read(cx).is_empty(),
+                    composer_files: pane.composer.read(cx).file_count(),
                     focused,
                     error: draft.error.as_ref(),
                     editing: focused
@@ -8395,6 +8396,7 @@ impl CockpitView {
             branch: cached.and_then(|facts| facts.branch.clone()),
             checkout: cached.and_then(|facts| facts.status.as_ref()),
             composer_empty: pane.composer.read(cx).is_empty(),
+            composer_files: pane.composer.read(cx).file_count(),
             composer_queue_height: pane::composer_queue_height(
                 self.pane_rects(window)
                     .into_iter()

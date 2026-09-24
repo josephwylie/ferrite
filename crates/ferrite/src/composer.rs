@@ -152,6 +152,11 @@ impl Composer {
     }
 
     /// Files stay separate from editable prose until the send/history seam.
+    /// How many files the draft holds.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
     pub fn attachments(
         entity: &Entity<Self>,
         preview: &crate::attachment_preview::Preview,
