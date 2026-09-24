@@ -1527,6 +1527,9 @@ pub const USAGE_TIGHT: f32 = 0.80;
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions.
 pub const SESSION_CARD_W: f32 = 320.0;
+/// The changed-files card: wide enough for a file name, a short directory
+/// and its `+N −N` on one menu row.
+pub const CHANGED_FILES_CARD_W: f32 = 360.0;
 /// One row of the usage card's legend, its colour square, and the share
 /// column the percentages right-align in.
 pub const USAGE_LEGEND_ROW_H: f32 = 20.0;

@@ -381,6 +381,8 @@ pub struct CockpitView {
     /// `BranchStatus` the mark was drawn from, so the card can never
     /// disagree with the mark that opened it.
     context_checks: Option<ThreadId>,
+    /// The changed-files card, opened from the status line's `N files`.
+    changed_files_card: Option<ThreadId>,
     /// Each card trigger's bounds as last laid out (`usage-…`,
     /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
     float_triggers: FloatTriggers,
@@ -1208,6 +1210,7 @@ impl CockpitView {
             mode_picker: None,
             session_control_error: None,
             context_checks: None,
+            changed_files_card: None,
             float_triggers: FloatTriggers::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_rail: std::cell::Cell::new(false),
@@ -1923,6 +1926,7 @@ impl CockpitView {
             || self.nav_order_open
             || self.popover.is_some()
             || self.context_checks.is_some()
+            || self.changed_files_card.is_some()
             || self.context_menu.is_some()
             || self.bell.open
     }
@@ -2489,6 +2493,7 @@ impl CockpitView {
     fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.popover = None;
         self.context_checks = None;
+        self.changed_files_card = None;
         self.nav_filter_open = false;
         if self.rename.is_some() {
             self.finish_rename(false, cx);
@@ -4418,6 +4423,7 @@ impl CockpitView {
         self.focus_pane(index);
         self.popover = None;
         self.context_checks = None;
+        self.changed_files_card = None;
         self.context_usage = None;
         self.session_controls = None;
         self.context_menu = None;
@@ -4688,6 +4694,10 @@ impl CockpitView {
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
         if self.context_checks.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.changed_files_card.take().is_some() {
             cx.notify();
             return;
         }
@@ -8373,6 +8383,7 @@ impl CockpitView {
                     .is_none_or(|pr| pr.checks.is_none())
         }) {
             self.context_checks = None;
+            self.changed_files_card = None;
         }
 
         if self.session_controls.is_some_and(|(thread, generation)| {
@@ -8953,6 +8964,7 @@ impl CockpitView {
             .children(self.context_usage_element(window, cx))
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
+            .children(self.changed_files_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
@@ -9177,13 +9189,12 @@ impl CockpitView {
         let background = (level != Level::Wall)
             .then(|| self.background_chips(index, cx))
             .flatten();
-        let changed_files = l1.then(|| self.changed_file_links(index, cx)).flatten();
+        let changed_files = l1.then(|| self.changed_files_chip(index, cx)).flatten();
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
         let joins = pane.is_main()
             && attachments.is_none()
             && background.is_none()
-            && changed_files.is_none()
             && (!self.grid_board() || focused);
         let activity_decisions = (level != Level::Wall)
             .then(|| self.activity_decisions(index, joins, window, cx))
@@ -9429,104 +9440,138 @@ impl CockpitView {
         Some(self.slot_drop_target(reader, leaf, cx))
     }
 
-    /// The Composer's changed-files shelf: the `FILE` mark and a quiet
-    /// `files changed`, then one chip per file on the pending-file chip
-    /// recipe (`FILL`, `R_CHIP`, `CHIP_H`, mono `FS_SM` `TEXT_2`, cut at
-    /// `ATTACH_CHIP_MAX_W`) with its `+N −N`. A click opens the file in the
-    /// reader beside the Pane.
-    fn changed_file_links(&self, index: usize, cx: &gpui::App) -> Option<AnyElement> {
+    /// The status line's `N files`: the files this Thread edited, a quiet
+    /// reading that opens the changed-files card above it. None until the
+    /// Thread has changed a file.
+    fn changed_files_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes.get(index)?.thread()?;
+        let count = self.facts.get(thread)?.changed_files.len();
+        if count == 0 {
+            return None;
+        }
+        let was_open = self.changed_files_card == Some(thread);
+        Some(
+            pane::composer_control(("changed-files", thread.get() as usize), cx)
+                .tip("Files changed")
+                .child(pane::files_chip(count))
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.focus_pane(index);
+                    view.popover = None;
+                    view.context_menu = None;
+                    view.context_usage = None;
+                    view.session_controls = None;
+                    view.context_checks = None;
+                    view.changed_files_card = (!was_open).then_some(thread);
+                    cx.notify();
+                }))
+                // The card hangs off the word's bounds, so it opens in the
+                // same place however it was pressed.
+                .map(|chip| {
+                    crate::components::on_bounds(
+                        div().relative().flex_shrink_0().child(chip),
+                        self.record_trigger(format!("files-{}", thread.get()).into()),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// The changed-files card: every file this Thread (and its subagents)
+    /// edited, one menu row each with its `+N −N`. A row opens the file in
+    /// the reader beside the Pane and closes the card.
+    fn changed_files_element(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         use crate::theme::*;
-        let pane = self.panes.get(index)?;
-        let thread = pane.thread()?;
-        let changed_files = self.facts.get(thread)?.changed_files.clone();
-        if changed_files.is_empty() {
+        use gpui::component::scroll::ScrollableElement as _;
+        let thread = self.changed_files_card?;
+        let at = self.card_corner(
+            format!("files-{}", thread.get()),
+            PaneIdentity::Thread(thread),
+            true,
+            window,
+        )?;
+        let index = self.pane_for(thread)?;
+        let files = self.facts.get(thread)?.changed_files.clone();
+        if files.is_empty() {
             return None;
         }
         let cwd = self.thread_path(thread)?;
-        let preview = pane.preview.clone();
-        let mut links = div()
-            .id(("thread-documents", thread.get() as usize))
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .overflow_x_scroll();
-        for (file_index, file) in changed_files.into_iter().enumerate() {
+        let preview = self.panes[index].preview.clone();
+        let max_h = (f32::from(at.y) - GRID_PAD)
+            .min(f32::from(window.viewport_size().height) - 2. * GRID_PAD)
+            .max(MENU_ROW_H * 4.);
+        let mut rows = div().flex().flex_col().min_w_0();
+        for (row, file) in files.into_iter().enumerate() {
             let raw = std::path::PathBuf::from(&file.path);
             let path = if raw.is_absolute() {
                 raw
             } else {
-                cwd.join(raw)
+                cwd.join(&raw)
             };
-            let title = path
+            let name = path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let title_for_open = title.clone();
-            let path_for_open = path.clone();
+            // The directory as the operator knows it: under the Thread's
+            // checkout, from there; elsewhere, whole.
+            let dir = path
+                .parent()
+                .map(|dir| dir.strip_prefix(&cwd).unwrap_or(dir).display().to_string())
+                .filter(|dir| !dir.is_empty())
+                .map(SharedString::from);
             let host = preview.clone();
-            links = links.child(
-                div()
-                    .id(("thread-document-tip", file_index))
-                    .debug_selector(move || format!("thread-document-{file_index}"))
-                    .tooltip(crate::menu::tooltip(format!("Open {}", path.display())))
-                    .child(
-                        crate::components::faded_button(
-                            ("thread-document", file_index),
-                            rgb(FILL).into(),
-                            rgb(FILL_HOVER).into(),
-                            rgb(PRESSED).into(),
-                            rgb(TEXT_2).into(),
-                            cx,
-                        )
-                        .max_w(px(ATTACH_CHIP_MAX_W))
-                        .h(px(ATTACH_CHIP_H))
-                        .px(px(CHIP_PAD_X))
-                        .rounded(px(R_CHIP))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(SPACE_1_5))
-                                .min_w_0()
-                                .font_family(FONT_CODE)
-                                .text_size(px(FS_SM))
-                                .line_height(px(LH_META))
-                                .text_color(rgb(TEXT_2))
-                                .child(div().min_w_0().truncate().child(title))
-                                .child(pane::diff_stat(file.added, file.removed)),
-                        )
-                        .on_click(move |_, window, cx| {
-                            cx.stop_propagation();
-                            host.open_document(
-                                path_for_open.clone(),
-                                title_for_open.clone(),
-                                window,
-                                cx,
-                            );
-                        }),
-                    ),
+            let title = name.clone();
+            rows = rows.child(
+                pane::changed_file_row(row, name.into(), dir, file.added, file.removed).on_click(
+                    cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        view.changed_files_card = None;
+                        host.open_document(path.clone(), title.clone(), window, cx);
+                        cx.notify();
+                    }),
+                ),
             );
         }
+        let card = crate::components::floating_surface()
+            .id("changed-files-card")
+            .debug_selector(|| "changed-files-card".into())
+            .w(px(CHANGED_FILES_CARD_W))
+            .child(crate::components::menu_section("Files changed", None, None))
+            .child(
+                div()
+                    .min_w_0()
+                    .max_h(px(max_h - 2. * FLOAT_PAD - MENU_SECTION_H))
+                    .overflow_y_scrollbar()
+                    .child(rows),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                if view.changed_files_card.take().is_some() {
+                    cx.notify();
+                }
+            }));
         Some(
-            div()
-                .debug_selector(|| "thread-documents".into())
-                .flex()
-                .items_center()
-                .flex_shrink_0()
-                .min_w_0()
-                .h(px(COMPOSER_ROW_H))
-                .gap(px(SPACE_2))
-                .child(crate::icons::icon(crate::icons::FILE, ROW_ICON, TEXT_MUTED))
-                .child(
-                    crate::components::text_meta()
-                        .flex_shrink_0()
-                        .child("files changed"),
-                )
-                .child(links)
-                .into_any_element(),
+            deferred(
+                anchored()
+                    .anchor(gpui::Anchor::BottomRight)
+                    .position(at)
+                    .snap_to_window_with_margin(px(GRID_PAD))
+                    .child(crate::motion::menu_in(
+                        "changed-files-in",
+                        card,
+                        crate::motion::Opens::Up,
+                    )),
+            )
+            .with_priority(2)
+            .into_any_element(),
         )
     }
 
@@ -10167,6 +10212,7 @@ impl CockpitView {
                 view.context_menu = None;
                 view.context_usage = None;
                 view.context_checks = None;
+                view.changed_files_card = None;
                 view.session_controls = (!was_open).then_some((thread, generation));
                 cx.notify();
             }))
@@ -10689,6 +10735,7 @@ impl CockpitView {
                         cx.stop_propagation();
                         cx.open_url(&url);
                         view.context_checks = None;
+                        view.changed_files_card = None;
                         cx.notify();
                     }),
                 ),
@@ -17719,7 +17766,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn edited_files_stay_one_click_away_above_the_prompt(cx: &mut TestAppContext) {
+    fn edited_files_are_a_status_line_word_and_one_click_away(cx: &mut TestAppContext) {
         let (core, fake, workspace) = bound_cockpit("thread-documents", Provider::Claude);
         let document = workspace.join("docs").join("generated.md");
         let source = workspace.join("src").join("generated.rs");
@@ -17781,13 +17828,25 @@ mod tests {
         drop(stream);
         tick(cx);
 
-        let shelf = debug_bounds(cx, "thread-documents".to_string()).unwrap();
+        // The files are a reading on the status line, under the prompt —
+        // what the Thread has done, apart from what is being typed.
+        let word = debug_bounds(cx, "changed-files-2".to_string())
+            .expect("the status line counts the edited files");
         let prompt = debug_bounds(cx, "focused-prompt-editor".to_string()).unwrap();
         assert!(
-            shelf.origin.y < prompt.origin.y,
-            "files sit above typed input"
+            word.origin.y > prompt.origin.y,
+            "the word sits below the prompt"
         );
-        let link = debug_bounds(cx, "thread-document-0".to_string())
+        let open_card = |cx: &mut gpui::VisualTestContext| {
+            let word = debug_bounds(cx, "changed-files-2".to_string()).unwrap();
+            cx.simulate_click(word.center(), gpui::Modifiers::none());
+            assert!(
+                debug_bounds(cx, "changed-files-card".to_string()).is_some(),
+                "the word opens the card"
+            );
+        };
+        open_card(cx);
+        let link = debug_bounds(cx, "changed-file-0".to_string())
             .expect("the edited Markdown file is listed in its Thread");
         cx.simulate_click(link.center(), gpui::Modifiers::none());
         assert_eq!(
@@ -17797,9 +17856,14 @@ mod tests {
                 .map(|document| document.path)),
             Some(document)
         );
+        assert!(
+            debug_bounds(cx, "changed-files-card".to_string()).is_none(),
+            "opening a file closes the card"
+        );
         let close = debug_bounds(cx, "close-markdown-reader".to_string()).unwrap();
         cx.simulate_click(close.center(), gpui::Modifiers::none());
-        let code = debug_bounds(cx, "thread-document-1".to_string())
+        open_card(cx);
+        let code = debug_bounds(cx, "changed-file-1".to_string())
             .expect("a non-Markdown file is listed too");
         cx.simulate_click(code.center(), gpui::Modifiers::none());
         assert_eq!(

@@ -315,6 +315,7 @@ const STATES: &[(&str, &[&str])] = &[
 
     // ---- WP-D states (append above the end line)
     ("usagecard", &["app"]),
+    ("filescard", &["app"]),
     ("sessioncard", &["app"]),
     ("preview", &["app"]),
     // (end WP-D)
@@ -731,6 +732,14 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, _| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 view.context_usage = Some(ferrite_core::roster::PaneIdentity::Thread(thread));
+            });
+            (scene, setup)
+        }
+        "filescard" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, _| {
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                view.changed_files_card = Some(thread);
             });
             (scene, setup)
         }

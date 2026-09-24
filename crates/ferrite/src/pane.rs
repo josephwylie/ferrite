@@ -3735,11 +3735,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
     }
-    // The files this Thread edited: one quiet line inside the block, above
-    // the prompt, apart from anything typed.
-    if let Some(changed_files) = changed_files {
-        block = block.child(changed_files);
-    }
+
     // The queue shares the Composer's height budget. Keep the latest on
     // top and every earlier prompt reachable by scrolling; a long queue
     // must never push the editor or the Thread's status out of its Pane.
@@ -3931,6 +3927,12 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         );
     }
     meta = meta.child(div().flex_1());
+    // What the Thread has already done sits with the other readings, not
+    // in the box that holds what is about to be sent: `3 files`, a word
+    // that opens the changed-files card.
+    if let Some(changed_files) = changed_files {
+        meta = meta.child(div().flex_shrink_0().child(changed_files));
+    }
     if let Some(session_controls) = session_controls {
         meta = meta.child(div().flex_shrink_0().child(session_controls));
     }
@@ -4094,6 +4096,71 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
         rgb(TEXT_2).into(),
         cx,
     )
+}
+
+/// The status line's changed-files word: `3 files` (`1 file`) on the
+/// control-chip recipe, Geist `FS_SM` `W_BODY` `TEXT_MUTED` in tabular
+/// figures — a reading like `ctx 32%` that opens the changed-files card.
+pub fn files_chip(count: usize) -> Div {
+    let word = if count == 1 { "file" } else { "files" };
+    control_chip(TEXT_MUTED)
+        .debug_selector(move || format!("changed-files-{count}"))
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
+        .child(components::tabular(div().child(format!("{count} {word}"))))
+}
+
+/// One row of the changed-files card, on the menu row recipe: the file's
+/// name in the code face, its directory muted after it, and its `+N −N`
+/// hard right. The whole row opens the file in the reader.
+pub fn changed_file_row(
+    index: usize,
+    name: SharedString,
+    dir: Option<SharedString>,
+    added: usize,
+    removed: usize,
+) -> gpui::Stateful<Div> {
+    let id = gpui::ElementId::from(SharedString::from(format!("changed-file-{index}")));
+    let key = crate::pointer::hover_key(&id);
+    components::text_ui()
+        .id(id)
+        .debug_selector(move || format!("changed-file-{index}"))
+        .flex()
+        .items_center()
+        .gap(px(theme::MENU_ROW_GAP))
+        .min_w_0()
+        .h(px(theme::MENU_ROW_H))
+        .px(px(theme::MENU_ROW_PAD_X))
+        .rounded(px(theme::R_MENU_ROW))
+        .cursor_pointer()
+        .hover_raised(key)
+        .press_raised()
+        .child(
+            div()
+                .flex_shrink(1.)
+                .min_w_0()
+                .truncate()
+                .font_family(theme::FONT_CODE)
+                .text_color(rgb(TEXT))
+                .child(name),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(theme::FONT_CODE)
+                .text_size(px(theme::FS_SM))
+                .text_color(rgb(TEXT_MUTED))
+                .children(dir),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .font_family(theme::FONT_CODE)
+                .text_size(px(theme::FS_SM))
+                .child(diff_stat(added, removed)),
+        )
 }
 
 /// The session-controls trigger: `•••` on the control-chip recipe.
