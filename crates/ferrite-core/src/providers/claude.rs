@@ -680,6 +680,10 @@ fn read_stdout(
         let mut line = Vec::new();
         let mut handshake = Some(handshake);
         let mut menu = menu::McpMenu::default();
+        // Claude states the context window only on a turn's result, so a
+        // new Session would read no window for its whole first turn. The
+        // first usage report without one asks the CLI directly, once.
+        let mut window_asked = false;
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -835,6 +839,29 @@ fn read_stdout(
             // ring has moved by the time the line's own event lands — and
             // the result's count is in before the turn is over.
             let events = lock(&decoder).decode(text);
+            if !window_asked
+                && events.iter().any(|event| {
+                    matches!(
+                        event,
+                        SessionEvent::TokenUsage {
+                            context_window: None,
+                            ..
+                        }
+                    )
+                })
+            {
+                window_asked = true;
+                let id = "ferrite_context_window".to_owned();
+                lock(&control_replies).insert(id.clone(), SessionControl::RefreshContext);
+                let request = serde_json::json!({
+                    "type": "control_request",
+                    "request_id": id,
+                    "request": {"subtype": "get_context_usage", "detail": "summary"},
+                });
+                if write_stdin_line(&stdin, &request).is_err() {
+                    lock(&control_replies).remove("ferrite_context_window");
+                }
+            }
             for event in events {
                 if let SessionEvent::Commands { commands } = &event {
                     menu.announced(commands);

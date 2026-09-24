@@ -1501,6 +1501,14 @@ pub const MENTION_WASH: u32 = INLINE_CODE_WASH;
 pub const PICKER_PAD_X: f32 = SPACE_1_5;
 pub const PICKER_GAP: f32 = SPACE_1;
 pub const ICON_CHEVRON_SM: f32 = 10.0;
+/// The usage ring: a 14px box, 5.4px radius, 2px stroke, sweeping
+/// clockwise from 12 o'clock with a round cap. No text, ever.
+pub const USAGE_RING_D: f32 = 14.0;
+pub const USAGE_RING_R: f32 = 5.4;
+pub const USAGE_RING_W: f32 = 2.0;
+/// Between the meter's three rings: tight enough that the trio reads as
+/// one control, wide enough that the three readings stay separate.
+pub const USAGE_RING_GAP: f32 = 4.0;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
 /// Each block insets its text by `MENU_ROW_PAD_X`, so it sits on a menu
@@ -1514,8 +1522,8 @@ pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage reading turns from neutral to ATTENTION (80%, rule
 /// 2.6.6) — a fraction of the window, not a count — on the status line and
 /// the card alike. There is no BLOCKED step: a full window stops nothing
-/// until the provider says so. Below tight the status line's `ctx 32%` is
-/// `TEXT_MUTED`: colour is state, and a context half full is not a state.
+/// until the provider says so. Below tight a status-line ring is `TEXT_2`:
+/// colour is state, and a context half full is not a state.
 pub const USAGE_TIGHT: f32 = 0.80;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside

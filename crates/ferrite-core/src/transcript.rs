@@ -719,6 +719,13 @@ impl Transcript {
         self.status == Status::Idle && self.turn_outcome == Some(TurnOutcome::Completed)
     }
 
+    /// A report that does not state the window (Claude's per-message
+    /// frames never do; only a turn's result or a context query does)
+    /// keeps the last one stated: the window did not become unknown.
+    fn known_window(&self, reported: Option<u64>) -> Option<u64> {
+        reported.or_else(|| self.usage.and_then(|usage| usage.context_window))
+    }
+
     pub fn usage(&self) -> Option<Usage> {
         self.usage
     }
@@ -1099,7 +1106,7 @@ impl Transcript {
             }) => {
                 self.usage = Some(Usage {
                     total_tokens,
-                    context_window,
+                    context_window: self.known_window(context_window),
                 });
                 // A report that grew continues the last message (a running
                 // total); one that shrank is a new message's own count.
@@ -1117,7 +1124,7 @@ impl Transcript {
             }) => {
                 self.usage = Some(Usage {
                     total_tokens,
-                    context_window,
+                    context_window: self.known_window(context_window),
                 });
                 Update::default()
             }
@@ -2663,6 +2670,20 @@ mod tests {
             .usage()
             .expect("usage after the provider reports");
         assert_eq!(usage.total_tokens, 12_400);
+        assert_eq!(usage.context_window, Some(200_000));
+
+        // Claude's per-message frames never state the window; the next
+        // turn's reports keep the one its last result stated.
+        transcript.apply(Input::Event(SessionEvent::TokenUsage {
+            total_tokens: 15_000,
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            context_window: None,
+        }));
+        let usage = transcript.usage().unwrap();
+        assert_eq!(usage.total_tokens, 15_000);
         assert_eq!(usage.context_window, Some(200_000));
     }
 

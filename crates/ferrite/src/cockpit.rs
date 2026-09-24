@@ -9130,8 +9130,8 @@ impl CockpitView {
                     discard: self.draft_discard(draft_id, cx),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
-                    // A draft has spent no context, so it reads nothing
-                    // (no `ctx —`) unless an account window runs tight.
+                    // A draft has spent no context: its context ring is
+                    // unlit beside the account windows.
                     usage_meter: (level == Level::Transcript)
                         .then(|| self.usage_meter(index, cx))
                         .flatten(),
@@ -9907,18 +9907,22 @@ impl CockpitView {
         Some(cluster.into_any_element())
     }
 
-    /// The Composer meter opens the latest reported usage on click.
-    /// No reading is invented when the provider has not reported usage.
+    /// The Composer meter opens the latest reported usage on click. It is
+    /// always drawn; a window not yet reported keeps its unlit ring.
     fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let identity = self.panes[index].identity;
         let (fraction, provider, key, can_refresh) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
-                let usage = open.transcript().usage()?;
-                let fraction = usage
-                    .context_window
-                    .filter(|window| *window > 0)
-                    .map(|window| usage.total_tokens as f32 / window as f32);
+                // A Thread that has not reported a window yet still wears
+                // the meter, its context ring unlit, so the card is always
+                // one click away.
+                let fraction = open.transcript().usage().and_then(|usage| {
+                    usage
+                        .context_window
+                        .filter(|window| *window > 0)
+                        .map(|window| usage.total_tokens as f32 / window as f32)
+                });
                 (
                     fraction,
                     open.provider(),
@@ -9948,7 +9952,7 @@ impl CockpitView {
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
                 .rounded(px(crate::theme::COMPOSER_CHIP_R))
-                .child(pane::usage_meter_body(fraction, limits)?)
+                .child(pane::usage_meter_body(fraction, limits))
                 .map(|meter| {
                     crate::components::on_bounds(
                         meter,
@@ -10819,7 +10823,12 @@ impl CockpitView {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
                 (
-                    open.transcript().usage()?,
+                    open.transcript()
+                        .usage()
+                        .unwrap_or(ferrite_core::transcript::Usage {
+                            total_tokens: 0,
+                            context_window: None,
+                        }),
                     open.provider(),
                     open.transcript().context_details(),
                     open.transcript().usage_details(),
@@ -14034,16 +14043,13 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        // `ctx 62%` is text, one run; the account windows are not tight, so
-        // the line names only the context, and no meter mark is drawn.
-        assert!(cx.debug_bounds("usage-readout-62").is_some());
-        assert!(cx.debug_bounds("usage-token-ctx 62%").is_some());
-        assert!(cx.debug_bounds("usage-token-5h 52%").is_none());
-        assert!(cx.debug_bounds("usage-token-wk 8%").is_none());
-        assert!(cx.debug_bounds("usage-line-context-62").is_none());
+        // Three rings in a fixed order: context, five-hour, weekly.
+        assert!(cx.debug_bounds("usage-ring-context-62").is_some());
+        assert!(cx.debug_bounds("usage-ring-five-hour-52").is_some());
+        assert!(cx.debug_bounds("usage-ring-weekly-8").is_some());
         let meter = cx
             .debug_bounds("usage-meter-1")
-            .expect("the ctx readout is visible on the status line");
+            .expect("the usage rings are visible on the status line");
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         assert!(
@@ -14082,13 +14088,10 @@ mod tests {
             "open card follows live usage"
         );
         assert!(
-            cx.debug_bounds("context-usage-maximum-unknown").is_some(),
-            "unknown limit is not invented"
+            cx.debug_bounds("context-usage-maximum-200000").is_some(),
+            "a report that does not state the window keeps the last one stated"
         );
-        assert!(
-            cx.debug_bounds("usage-meter-1").is_none(),
-            "an unknown window reads nothing on the status line, not `ctx —`"
-        );
+        assert!(cx.debug_bounds("usage-ring-context-16").is_some());
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 32_000,
@@ -14100,10 +14103,10 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        assert!(cx.debug_bounds("usage-token-ctx 32%").is_some());
+        assert!(cx.debug_bounds("usage-ring-context-32").is_some());
         let meter = cx
             .debug_bounds("usage-meter-1")
-            .expect("a known window reads again");
+            .expect("the meter stays on the status line");
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
@@ -14148,7 +14151,7 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        let meter = cx.debug_bounds("usage-meter-1").expect("the ctx readout");
+        let meter = cx.debug_bounds("usage-meter-1").expect("the usage rings");
         let mut origins = Vec::new();
         for at in [
             meter.origin + gpui::point(px(1.), px(1.)),
@@ -14215,11 +14218,11 @@ mod tests {
         assert_eq!(row.size.height, px(crate::theme::MENU_ROW_H));
     }
 
-    /// A draft has spent no context, so its status line reads nothing — no
-    /// `ctx —` — until an account window runs tight; then that window's
-    /// token alone shows, and it opens the same card (#29).
+    /// A draft has spent no context: its status line wears the meter with
+    /// every ring unlit, the account windows light as they report, and it
+    /// opens the same card (#29).
     #[gpui::test]
-    fn a_draft_pane_shows_usage_only_when_a_window_runs_tight(cx: &mut TestAppContext) {
+    fn a_draft_pane_shows_the_usage_rings(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("draft-usage", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -14234,11 +14237,11 @@ mod tests {
         });
         let key: &'static str =
             Box::leak(format!("usage-meter-draft-{}", draft.get()).into_boxed_str());
+        assert!(cx.debug_bounds(key).is_some(), "the meter is always drawn");
         assert!(
-            cx.debug_bounds(key).is_none(),
-            "nothing spent, nothing tight: no reading"
+            cx.debug_bounds("usage-ring-context-unknown").is_some(),
+            "no window reported: the context ring is unlit, not invented"
         );
-        assert!(cx.debug_bounds("usage-readout-unknown").is_none());
 
         fake.streams.borrow()[0]
             .send(SessionEvent::RateLimits {
@@ -14250,10 +14253,9 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        assert!(cx.debug_bounds("usage-token-5h 91%").is_some());
-        let meter = cx
-            .debug_bounds(key)
-            .expect("a tight window rides the draft's status line");
+        assert!(cx.debug_bounds("usage-ring-five-hour-91").is_some());
+        assert!(cx.debug_bounds("usage-ring-weekly-unknown").is_some());
+        let meter = cx.debug_bounds(key).expect("the draft's usage rings");
         cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         assert!(cx.debug_bounds("context-usage-current-0").is_some());

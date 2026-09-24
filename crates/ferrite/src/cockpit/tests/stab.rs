@@ -634,8 +634,11 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
         band.top() >= block.bottom(),
         "the setup chips ride the meta row under the box: {band:?} / {block:?}"
     );
-    // The meter gives way first, so the setup chips keep their names.
-    assert!(cx.debug_bounds("usage-meter-draft-1").is_none());
+    // The rings sit beside the setup chips, and the chips keep their names.
+    let meter = cx
+        .debug_bounds("usage-meter-draft-1")
+        .expect("the usage rings");
+    assert!(meter.right() <= block.right() + px(0.5));
     for chip in ["band-chip-0", "band-chip-1"] {
         let chip = cx.debug_bounds(chip).expect("a setup chip");
         assert!(

@@ -33,7 +33,7 @@ use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, Context, Div, Entity,
-    FocusHandle, HighlightStyle, SharedString, Stateful, Styled, StyledText,
+    FocusHandle, HighlightStyle, PathBuilder, SharedString, Stateful, Styled, StyledText,
 };
 #[cfg(test)]
 use std::cell::RefCell;
@@ -5407,77 +5407,146 @@ pub fn usage_ink(fraction: f32) -> u32 {
     }
 }
 
-/// A usage token's ink: `TEXT_MUTED` like every value word, the whole
-/// token turning `ATTENTION` once its window runs tight
-/// (`USAGE_TIGHT`), the same step as the card behind it (`usage_ink`).
-pub fn readout_ink(fraction: f32) -> u32 {
-    if fraction >= theme::USAGE_TIGHT {
-        ATTENTION
-    } else {
-        TEXT_MUTED
-    }
+/// The status line's usage meter: three 14px rings in a fixed order —
+/// context, five-hour, weekly — inside the control chip that opens the
+/// usage card. No text: the card behind the click carries the numbers.
+/// A window nobody has reported yet (a draft, a Thread before its first
+/// window report) keeps its unlit track; no reading is invented.
+pub fn usage_meter_body(context: Option<f32>, limits: ferrite_core::transcript::RateLimits) -> Div {
+    control_chip(TEXT_MUTED).child(usage_rings(context, limits))
 }
 
-/// The tokens the status line reads, in order: `ctx 32%` when the context
-/// window is known, then the tightest account window only while it runs
-/// tight (`5h 91%`). Each is one run and one ink.
-fn usage_tokens(
-    context: Option<f32>,
-    limits: ferrite_core::transcript::RateLimits,
-) -> Vec<(String, f32)> {
-    let percent = |fraction: f32| (fraction.clamp(0., 1.) * 100.).round() as u32;
-    let worst = [
-        ("5h", limits.five_hour.map(|limit| limit.used_fraction)),
-        ("wk", limits.weekly.map(|limit| limit.used_fraction)),
-    ]
-    .into_iter()
-    .filter_map(|(name, used)| used.map(|used| (name, used)))
-    .filter(|(_, used)| *used >= theme::USAGE_TIGHT)
-    .max_by(|a, b| a.1.total_cmp(&b.1));
-    context
-        .map(|used| ("ctx", used))
-        .into_iter()
-        .chain(worst)
-        .map(|(name, used)| (format!("{name} {}%", percent(used)), used))
-        .collect()
+/// The three windows as rings side by side. A window the provider has not
+/// reported keeps its unlit track.
+pub fn usage_rings(context: Option<f32>, limits: ferrite_core::transcript::RateLimits) -> Div {
+    let ring = |key: &'static str, fraction: Option<f32>| {
+        let used = fraction.unwrap_or(0.).clamp(0., 1.);
+        let reading = fraction.map_or_else(
+            || "unknown".to_owned(),
+            |_| ((used * 100.).round() as u32).to_string(),
+        );
+        div()
+            .debug_selector(move || format!("usage-ring-{key}-{reading}"))
+            .child(usage_ring(used, usage_ink(used)))
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::USAGE_RING_GAP))
+        .h(px(theme::CHIP_H))
+        .child(ring("context", context))
+        .child(ring(
+            "five-hour",
+            limits.five_hour.map(|limit| limit.used_fraction),
+        ))
+        .child(ring(
+            "weekly",
+            limits.weekly.map(|limit| limit.used_fraction),
+        ))
 }
 
-/// The status line's usage readout (rule 2.6.6): text, not a meter — `ctx
-/// 32%` in `FS_SM` tabular `TEXT_MUTED`, plus a tight account window
-/// (`5h 91%`), inside the control chip that opens the usage card. `None`
-/// when there is nothing to read: no reading is ever invented (no `ctx —`).
-pub fn usage_meter_body(
-    context: Option<f32>,
-    limits: ferrite_core::transcript::RateLimits,
-) -> Option<Div> {
-    let tokens = usage_tokens(context, limits);
-    if tokens.is_empty() {
-        return None;
-    }
-    let key = context.map_or_else(
-        || "unknown".to_owned(),
-        |used| ((used.clamp(0., 1.) * 100.).round() as u32).to_string(),
-    );
-    Some(
-        control_chip(TEXT_MUTED).child(components::tabular(
-            div()
-                .debug_selector(move || format!("usage-readout-{key}"))
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(theme::SPACE_2))
-                .whitespace_nowrap()
-                .children(tokens.into_iter().map(|(token, used)| {
-                    div()
-                        .debug_selector({
-                            let token = token.clone();
-                            move || format!("usage-token-{token}")
-                        })
-                        .text_color(rgb(readout_ink(used)))
-                        .child(SharedString::from(token))
-                })),
-        )),
-    )
+/// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
+/// circle — a `--meter-off` track under an arc that sweeps clockwise from
+/// 12 o'clock with the used fraction of the window.
+///
+/// The header stays compact; its caller wires the token card on click.
+///
+/// `PathBuilder::arc_to` draws the real arc — gpui 0.2.2 has an arc
+/// primitive, whatever the old comment here claimed.
+/// The ring takes its ink from the caller: the meter's three rings wear
+/// the same status inks its lines do, so a budget reads the same whichever
+/// mark the operator picked.
+pub fn usage_ring(fraction: f32, ink: u32) -> Div {
+    // A full ring's seam would degenerate the arc; one part in a thousand
+    // is invisible at 14px.
+    let fraction = fraction.clamp(0.0, 1.0).min(0.999);
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(theme::USAGE_RING_D))
+        .h(px(theme::USAGE_RING_D))
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    // The circle the prototype draws is `USAGE_RING_R` /
+                    // `USAGE_RING_W`; these are what gpui has to be *asked*
+                    // for to land on it. lyon's arc approximation pulls the
+                    // curve inward by ~0.32px and the stroke rasterises
+                    // ~0.5px thin, so the ink measured 12.0px across where
+                    // the prototype measures 12.7px. The compensation lives
+                    // here, at the rasteriser, and never in theme.rs.
+                    const ARC_R: f32 = theme::USAGE_RING_R + 0.15;
+                    const ARC_W: f32 = theme::USAGE_RING_W + 0.25;
+                    let radius = px(ARC_R);
+                    let centre = bounds.center();
+                    let sweep = fraction * std::f32::consts::TAU;
+                    let start = -std::f32::consts::FRAC_PI_2;
+                    let at = |angle: f32| {
+                        point(
+                            centre.x + radius * angle.cos(),
+                            centre.y + radius * angle.sin(),
+                        )
+                    };
+                    // The caps are quads, not paths: they rasterise exactly,
+                    // so they sit on the true centreline at the true radius.
+                    let cap_at = |angle: f32| {
+                        point(
+                            centre.x + px(theme::USAGE_RING_R) * angle.cos(),
+                            centre.y + px(theme::USAGE_RING_R) * angle.sin(),
+                        )
+                    };
+                    let stroke = |from: f32, to: f32, large: bool| {
+                        let mut arc = PathBuilder::stroke(px(ARC_W));
+                        arc.move_to(at(from));
+                        arc.arc_to(point(radius, radius), px(0.), large, true, at(to));
+                        arc.build().ok()
+                    };
+                    // The unlit track is the same circle as the used arc —
+                    // painted, not a bordered box, because gpui rounds a
+                    // box's inset to a whole pixel and the ring's radius is
+                    // 5.4. Drawn as two halves; a closed circle would
+                    // degenerate the arc.
+                    if let Some(path) = stroke(start, start + std::f32::consts::PI, false) {
+                        window.paint_path(path, rgba(METER_OFF));
+                    }
+                    if let Some(path) = stroke(
+                        start + std::f32::consts::PI,
+                        start + std::f32::consts::TAU - 0.001,
+                        false,
+                    ) {
+                        window.paint_path(path, rgba(METER_OFF));
+                    }
+                    if fraction <= 0.0 {
+                        return;
+                    }
+                    if let Some(path) = stroke(start, start + sweep, fraction > 0.5) {
+                        window.paint_path(path, rgb(ink));
+                    }
+                    // `.used` carries `stroke-linecap: round`; lyon's
+                    // default is butt and gpui 0.2.2 re-exports no
+                    // `LineCap`, so each cap is painted as its own disc of
+                    // the stroke's radius.
+                    let cap = px(theme::USAGE_RING_W / 2.0);
+                    for angle in [start, start + sweep] {
+                        let end = cap_at(angle);
+                        window.paint_quad(
+                            gpui::fill(
+                                gpui::Bounds::new(
+                                    point(end.x - cap, end.y - cap),
+                                    gpui::size(cap * 2., cap * 2.),
+                                ),
+                                rgb(ink),
+                            )
+                            .corner_radii(gpui::Corners::all(cap)),
+                        );
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
 }
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
@@ -9004,42 +9073,7 @@ mod tests {
         assert_eq!(usage_ink(0.9), ATTENTION);
         assert_eq!(usage_ink(0.95), ATTENTION);
         assert_eq!(usage_ink(1.0), ATTENTION);
-        // The status line's readout: muted, then attention at 80% as a
-        // whole token, and never blocked.
         assert_eq!(theme::USAGE_TIGHT, 0.80);
-        assert_eq!(readout_ink(0.79), TEXT_MUTED);
-        assert_eq!(readout_ink(theme::USAGE_TIGHT), ATTENTION);
-        assert_eq!(readout_ink(1.0), ATTENTION);
-    }
-
-    /// `ctx 32%` is text: one token per window, no reading invented where
-    /// none was reported, and an account window only while it runs tight.
-    #[test]
-    fn the_usage_readout_is_one_run_per_window() {
-        use ferrite_core::transcript::RateLimits;
-        use ferrite_core::RateLimitWindow;
-        let quiet = RateLimits::default();
-        let tokens = |context, limits| {
-            usage_tokens(context, limits)
-                .into_iter()
-                .map(|(token, _)| token)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(tokens(Some(0.32), quiet), ["ctx 32%"]);
-        assert!(tokens(None, quiet).is_empty(), "no `ctx —`");
-        assert!(usage_meter_body(None, quiet).is_none());
-        let tight = RateLimits {
-            five_hour: Some(RateLimitWindow {
-                used_fraction: 0.91,
-                resets_at: None,
-            }),
-            weekly: Some(RateLimitWindow {
-                used_fraction: 0.85,
-                resets_at: None,
-            }),
-        };
-        assert_eq!(tokens(Some(0.52), tight), ["ctx 52%", "5h 91%"]);
-        assert_eq!(tokens(None, tight), ["5h 91%"]);
     }
     // (end WP-D)
 
