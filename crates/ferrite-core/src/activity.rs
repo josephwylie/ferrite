@@ -322,6 +322,9 @@ pub struct ActivityUpdate {
     pub changed: Vec<Subject>,
     pub blocks: Vec<(Subject, transcript::Update)>,
     pub accepted: Vec<ActivityEvent>,
+    /// Duration of this input's accepted live tool completion, for persistence.
+    /// It survives removal of the completed clock from the transcript cache.
+    pub completed_tool_duration: Option<Duration>,
     pub main_turn_ended: bool,
     /// A live Main turn ended this frame and settled Main — the root
     /// signal, or an autonomous turn's end that was not undone by a
@@ -441,14 +444,13 @@ impl SubjectState {
                     }
                 }
             }
-            Input::Event(SessionEvent::ToolCompleted { id, result, .. }) => {
-                if let Some(duration_ms) = result.duration_ms() {
-                    self.timings.insert(id.clone(), ToolTiming::Done(Duration::from_millis(duration_ms)));
-                } else if let Some(ToolTiming::Running(since)) = self.timings.get(id) {
-                    self.timings.insert(
-                        id.clone(),
-                        ToolTiming::Done(at.saturating_duration_since(*since)),
-                    );
+            Input::Event(SessionEvent::ToolCompleted { id, .. }) => {
+                if !self.retained {
+                    // Completed timings belong to cached transcript history.
+                    // An evicted child still publishes durable facts and status.
+                    self.timings.remove(id);
+                } else if let Some(duration) = self.completed_tool_duration(input, at) {
+                    self.timings.insert(id.clone(), ToolTiming::Done(duration));
                 }
             }
             Input::Event(SessionEvent::TurnEnded { outcome, .. }) => {
@@ -498,7 +500,23 @@ impl SubjectState {
         }
     }
 
+    fn completed_tool_duration(&self, input: &Input, at: Instant) -> Option<Duration> {
+        let Input::Event(SessionEvent::ToolCompleted { id, result, .. }) = input else {
+            return None;
+        };
+        result.duration_ms().map(Duration::from_millis).or_else(|| {
+            self.timings.get(id).map(|timing| match timing {
+                ToolTiming::Running(since) => at.saturating_duration_since(*since),
+                ToolTiming::Done(total) => *total,
+            })
+        })
+    }
+
     fn stop_timings(&mut self, at: Instant) {
+        if !self.retained {
+            self.timings = HashMap::new();
+            return;
+        }
         for timing in self.timings.values_mut() {
             if let ToolTiming::Running(since) = timing {
                 *timing = ToolTiming::Done(at.saturating_duration_since(*since));
@@ -889,7 +907,8 @@ impl Activity {
                 if let Some(state) = self.state_mut(&subject) {
                     let mut timings_changed = false;
                     for (id, elapsed) in timings {
-                        if (!connected || !state.timings.contains_key(&id))
+                        if state.retained
+                            && (!connected || !state.timings.contains_key(&id))
                             && !matches!(state.timings.get(&id), Some(ToolTiming::Running(_)))
                             && !matches!(state.timings.get(&id), Some(ToolTiming::Done(total)) if *total == elapsed)
                         {
@@ -1004,6 +1023,13 @@ impl Activity {
         agent.state.seen.clear();
         agent.state.seen_order.clear();
         agent.state.retained = false;
+        // Keep only clocks that began before eviction and are still running.
+        // Release the completed entries and their table allocation with history.
+        agent
+            .state
+            .timings
+            .retain(|_, timing| matches!(timing, ToolTiming::Running(_)));
+        agent.state.timings.shrink_to_fit();
         agent.state.truncated = true;
         agent.state.coverage = TranscriptCoverage::Partial;
         let blocks = agent.state.rebuild(self.limits);
@@ -1069,6 +1095,9 @@ impl Activity {
         let closed = matches!(input, Input::Event(SessionEvent::Closed { .. }));
         let mut update = ActivityUpdate {
             changed: vec![Subject::Main],
+            completed_tool_duration: live
+                .then(|| self.main.completed_tool_duration(&input, at))
+                .flatten(),
             main_turn_ended: live && ended,
             main_settled: live && ended,
             ..ActivityUpdate::default()
@@ -1534,6 +1563,7 @@ impl Activity {
         if state.coverage == TranscriptCoverage::Unavailable {
             state.coverage = TranscriptCoverage::Live;
         }
+        let mut completed_tool_duration = None;
         let blocks = match event {
             ExecutionEvent::TextSnapshot { text } => {
                 state.snapshot(id, text, false, sequence, at, live, limits)
@@ -1550,12 +1580,17 @@ impl Activity {
                     }
                     _ => None,
                 };
-                state.append(event.into_input(), stream, id, sequence, at, live, limits)
+                let input = event.into_input();
+                if live {
+                    completed_tool_duration = state.completed_tool_duration(&input, at);
+                }
+                state.append(input, stream, id, sequence, at, live, limits)
             }
         };
         let mut update = ActivityUpdate {
             changed: vec![subject.clone()],
             blocks: vec![(subject.clone(), blocks)],
+            completed_tool_duration,
             main_turn_ended: live && root_signal && ended && subject == Subject::Main,
             main_settled: live && ended && subject == Subject::Main,
             ..ActivityUpdate::default()

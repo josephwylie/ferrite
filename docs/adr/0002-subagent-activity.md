@@ -20,7 +20,8 @@ Requirements, provider evidence, and review findings live on
   provider prompt, start, or resume command.
 - [`Activity::apply/view`](../../crates/ferrite-core/src/activity.rs) owns
   per-Subject projections and returns accepted facts, scoped block changes,
-  identity redirects, and Main-only lifecycle signals. Cockpit retains the
+  completed tool durations for persistence, identity redirects, and Main-only
+  lifecycle signals. Cockpit retains the
   Session, provider settings, workspace, Title, Composer queue, and Store.
 - `AgentKey` is namespaced by provider and root conversation. Native aliases
   join only with explicit correlation evidence; names and equal text are not

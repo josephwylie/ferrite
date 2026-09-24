@@ -1125,6 +1125,144 @@ fn evicted_child_history_merges_frozen_prefix_and_live_tail_once_without_changin
 }
 
 #[test]
+fn tool_durations_survive_eviction_and_history_reload() {
+    use ferrite_core::activity::ToolTiming;
+
+    let mut h = Harness::new();
+    let key = h.child("timed-child");
+    let subject = Subject::Subagent(key.clone());
+    h.content(
+        0,
+        &key,
+        "local-start",
+        ExecutionEvent::ToolStarted {
+            id: "local".into(),
+            name: "Bash".into(),
+            input: json!({}),
+        },
+    );
+    // Keep every child Working so selecting the overflow child evicts the
+    // oldest, including its still-running locally measured tool.
+    let mut last = key.clone();
+    for index in 0..128 {
+        last = h.child(&format!("working-{index}"));
+        h.content(
+            0,
+            &last,
+            "working",
+            ExecutionEvent::Text {
+                text: "WORKING".into(),
+            },
+        );
+    }
+    let last_subject = Subject::Subagent(last.clone());
+    let thread = h.thread;
+    pump_until(&mut h, |cockpit| {
+        let view = cockpit.thread(thread).unwrap().activity();
+        view.children().len() == 129
+            && view.subject(&last_subject).unwrap().status() == AgentStatus::Working
+    });
+    assert!(!h
+        .cockpit
+        .thread(thread)
+        .unwrap()
+        .activity()
+        .subject(&last_subject)
+        .unwrap()
+        .retained());
+
+    let completed = |id: &str, duration_ms| ExecutionEvent::ToolCompleted {
+        id: id.into(),
+        output: String::new(),
+        is_error: false,
+        result: ToolResult::Command {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            duration_ms,
+        },
+    };
+    h.content(
+        0,
+        &last,
+        "never-retained-done",
+        completed("native", Some(17)),
+    );
+    h.cockpit.pump();
+    assert!(h
+        .cockpit
+        .ensure_subject_history(thread, &last_subject)
+        .unwrap());
+    pump_until(&mut h, |cockpit| {
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .subject(&last_subject)
+            .unwrap()
+            .retained()
+    });
+    let view = h.cockpit.thread(thread).unwrap().activity();
+    assert!(
+        matches!(
+            view.subject(&last_subject).unwrap().timings().get("native"),
+            Some(ToolTiming::Done(elapsed)) if *elapsed == Duration::from_millis(17)
+        ),
+        "never-retained native durations must be recoverable from disk"
+    );
+    let child = view.subject(&subject).unwrap();
+    assert!(!child.retained());
+    assert!(matches!(
+        child.timings().get("local"),
+        Some(ToolTiming::Running(_))
+    ));
+    let minimum_elapsed =
+        Duration::from_millis(child.timings()["local"].elapsed().as_millis() as u64);
+
+    h.content(0, &key, "native-done", completed("native", Some(42)));
+    h.content(0, &key, "local-done", completed("local", None));
+    h.content(0, &key, "finished", child_ended());
+    h.cockpit.pump();
+    assert!(h
+        .cockpit
+        .thread(thread)
+        .unwrap()
+        .activity()
+        .subject(&subject)
+        .unwrap()
+        .timings()
+        .is_empty());
+
+    assert!(h.cockpit.ensure_subject_history(thread, &subject).unwrap());
+    pump_until(&mut h, |cockpit| {
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .subject(&subject)
+            .unwrap()
+            .retained()
+    });
+    let view = h.cockpit.thread(thread).unwrap().activity();
+    let child = view.subject(&subject).unwrap();
+    assert!(
+        matches!(
+            child.timings().get("native"),
+            Some(ToolTiming::Done(elapsed)) if *elapsed == Duration::from_millis(42)
+        ),
+        "an evicted child's native duration must survive history reload"
+    );
+    assert!(
+        matches!(
+            child.timings().get("local"),
+            Some(ToolTiming::Done(elapsed)) if *elapsed >= minimum_elapsed
+        ),
+        "the clock started before eviction must be persisted on completion"
+    );
+    assert!(h.control.sent(0).is_empty());
+}
+
+#[test]
 fn header_rewrite_invalidates_old_history_read_and_a_fresh_selection_recovers() {
     let mut h = Harness::new();
     let key = evicted_oldest(&mut h);
