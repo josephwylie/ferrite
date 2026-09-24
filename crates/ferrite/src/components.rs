@@ -284,31 +284,6 @@ pub fn floating_surface() -> Div {
         .shadow(float_shadow())
 }
 
-/// The badge that follows the pointer while a Pane or a nav row is
-/// dragged, so the two drags read as one gesture: a raised UI tag with a
-/// strong edge and the float shadow, the dragged title in `TEXT_STRONG`,
-/// truncating rather than trailing a banner. Its face is set here because a
-/// drag preview is its own window-level view and inherits nothing.
-pub fn drag_badge(label: SharedString) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .h(px(theme::DRAG_BADGE_H))
-        .max_w(px(theme::DRAG_BADGE_MAX_W))
-        .px(px(theme::DRAG_BADGE_PAD_X))
-        .rounded(px(theme::R_CONTROL))
-        .bg(rgb(theme::RAISED))
-        .border_1()
-        .border_color(rgba(theme::HAIRLINE_STRONG))
-        .shadow(float_shadow())
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .font_weight(theme::W_LABEL)
-        .text_color(rgb(theme::TEXT_STRONG))
-        .child(div().min_w_0().truncate().child(label))
-}
-
 /// The modal veil: covers its parent, takes every press, centres its child.
 pub fn veil() -> Div {
     div()
@@ -1060,6 +1035,10 @@ type Picked = std::rc::Rc<dyn Fn(usize, &mut gpui::Window, &mut gpui::App)>;
 pub struct ChoiceMenu {
     pub id: SharedString,
     pub trigger: Button,
+    /// Which corner of the menu meets the trigger: `BottomLeft` for a
+    /// control at the left of its row, `BottomRight` at the right, so the
+    /// menu opens over its own Pane rather than across the next one.
+    pub anchor: gpui::Anchor,
     pub choices: Vec<Choice>,
     pub open: bool,
     pub return_focus: gpui::FocusHandle,
@@ -1221,7 +1200,7 @@ impl gpui::RenderOnce for ChoiceMenu {
         let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
             .appearance(false)
             .overlay_closable(false)
-            .anchor(gpui::Anchor::BottomLeft)
+            .anchor(self.anchor)
             .trigger(self.trigger)
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx));

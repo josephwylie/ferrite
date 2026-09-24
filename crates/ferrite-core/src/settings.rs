@@ -60,6 +60,11 @@ pub struct Settings {
     pub placeholder_suggestions: bool,
     /// Answer reading size in Solo and fullscreen. Group panes stay compact.
     pub solo_reading_size: SoloReadingSize,
+    /// Whether a newer provider CLI is installed without asking, once no
+    /// Session of that provider is running — new models arrive only
+    /// through a newer CLI. Off, Ferrite still offers each update.
+    /// Default: true.
+    pub auto_update_clis: bool,
 }
 
 /// The operator's reading preference, independent of provider and Thread.
@@ -99,6 +104,7 @@ impl Default for Settings {
             auto_title: true,
             placeholder_suggestions: true,
             solo_reading_size: SoloReadingSize::Standard,
+            auto_update_clis: true,
         }
     }
 }
@@ -199,6 +205,7 @@ mod tests {
             auto_title: false,
             placeholder_suggestions: false,
             solo_reading_size: SoloReadingSize::Large,
+            auto_update_clis: false,
         }
     }
 

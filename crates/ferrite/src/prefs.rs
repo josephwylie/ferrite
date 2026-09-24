@@ -947,6 +947,40 @@ pub fn fact(title: &'static str, value: SharedString) -> Row {
     .fact()
 }
 
+/// A row that says where something stands (its hint) and, when there is
+/// something to do about it, offers the one button that does it: the
+/// primary face at `SETTINGS_CONTROL_H`, hugging its label. With nothing to
+/// do, the row reads its `value` as a fact does.
+pub fn action(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    value: SharedString,
+    button: Option<SharedString>,
+    act: impl Fn(&mut App) + 'static,
+) -> Row {
+    let act = Rc::new(act);
+    let words = std::iter::once(value.clone())
+        .chain(button.iter().cloned())
+        .collect();
+    Row::new(title, detail, words, move |_, cx| match button.clone() {
+        Some(label) => {
+            let act = act.clone();
+            components::primary_button(id, false, cx)
+                .debug_selector(move || id.into())
+                .h(px(SETTINGS_CONTROL_H))
+                .px(px(FORM_FIELD_PAD_X))
+                .child(components::form_label(label, ON_ACCENT))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    act(cx);
+                })
+                .into_any_element()
+        }
+        None => fact_value(title, value.clone()).into_any_element(),
+    })
+}
+
 /// A path fact: shown from `~` when it lies under the home directory, and
 /// copied whole on a click. The copy mark sits after it in structure ink,
 /// brightening under the pointer, and turns to a check once `copied`.

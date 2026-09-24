@@ -189,6 +189,7 @@ actions!(
         NextDecision,
         NewThread,
         NewWorktreeThread,
+        NewGroup,
         BandCycle,
         ToolCyclePrevious,
         ToggleTool,
@@ -366,6 +367,9 @@ pub struct CockpitView {
     /// card it hangs off its trigger's bounds (`float_triggers`), never the
     /// pointer, so a click and a key open it in the same place.
     context_usage: Option<PaneIdentity>,
+    /// Whether the usage card's context legend is open. Kept across
+    /// openings: an operator who wants the breakdown wants it every time.
+    context_usage_expanded: bool,
     session_controls: Option<(ThreadId, u64)>,
     /// The Composer's mode menu, open on one Thread's Session generation.
     mode_picker: Option<(ThreadId, u64)>,
@@ -377,7 +381,7 @@ pub struct CockpitView {
     /// Each card trigger's bounds as last laid out (`usage-…`,
     /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
     float_triggers: FloatTriggers,
-    /// A seam being dragged: the Group, the seam, and the tree as it
+    /// A seam being dragged: the board, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
     /// The board's bounds as the last frame laid it out: what the default
@@ -387,15 +391,25 @@ pub struct CockpitView {
     /// The board's one Level (`board_level`), held with 24px of hysteresis
     /// so a resize hovering at a threshold never flickers the tier.
     board_level: std::cell::Cell<Level>,
-    /// A Pane being dragged over another: the target and what a release
-    /// there would do, for the preview wash.
+    /// A Pane (or reader, or nav row) being dragged over a board slot: the
+    /// target leaf and what a release there would do, for the preview wash.
     drop_preview: Option<(ThreadId, Zone)>,
-    /// The Pane a live drag picked up: its cell dims until the release.
-    pane_drag_source: Option<ThreadId>,
     /// The Pane native files were last dragged over. Read only while a drag
     /// is live (`drop_target`), so a drag that leaves the window leaves no
     /// sheet behind.
     file_drop_over: Option<PaneIdentity>,
+    /// Boards whose arrangement includes a reader slot, as the operator
+    /// left them. Session-only: the persisted Group layout names Threads
+    /// alone, so a reader's place is remembered here until quit.
+    board_layouts: std::collections::HashMap<Board, Tree>,
+    /// Every board slot's size as this frame laid it out, for the ghost a
+    /// drag of it shows. Written while the board draws.
+    slot_sizes: std::cell::RefCell<std::collections::HashMap<ThreadId, (f32, f32)>>,
+    /// The board slot being dragged: it dims in place while its ghost
+    /// moves, until the release.
+    dragging: Option<ThreadId>,
+    /// The nav row being dragged, dimmed in the tree the same way.
+    nav_dragging: Option<Drag>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// The Settings panel is up.
@@ -422,6 +436,8 @@ pub struct CockpitView {
     /// The CLIs' versions as `--version` reports them, probed once when the
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
+    /// Where each provider CLI stands against its newest release.
+    cli_updates: crate::cli_updates::CliUpdates,
     group_error: Option<SharedString>,
     /// The bell: whether its panel is down, and which Notices have had
     /// their toast. The Notices themselves are core's.
@@ -454,6 +470,10 @@ pub struct Preferences {
     /// cheap model, one turn). False in the test and demo constructors,
     /// so no suite ever spawns a real CLI for a name.
     pub titler: bool,
+    /// Whether the window checks for newer provider CLIs and installs
+    /// them. False in the test and demo constructors, so no suite reaches
+    /// the registry or runs an installer.
+    pub cli_updates: bool,
 }
 
 impl Preferences {
@@ -466,31 +486,174 @@ impl Preferences {
                 crate::session::SessionDefaults::default(),
             )),
             titler: false,
+            cli_updates: false,
         }
     }
 }
 
 /// A seam mid-drag.
 struct SeamDrag {
-    group: GroupId,
+    board: Board,
     seam: SeamId,
     tree: Tree,
 }
 
-/// A Pane on the move: its title is the handle. Dropped on another Pane
-/// of the same Group it swaps with it (the centre) or splits its slot
-/// (an edge).
-#[derive(Clone, Copy, Debug)]
-struct PaneDrag {
-    thread: ThreadId,
+/// A board the Panes lay out on by a split tree: a Group's, or Solo's
+/// while its Pane has a reader open beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Board {
+    Group(GroupId),
+    Solo(PaneIdentity),
 }
 
-/// The badge that follows the pointer while a Pane is dragged.
-struct PaneDragPreview(SharedString);
+/// What one leaf of a board's tree stands for: a Pane, or the reader a
+/// Pane has open (one per Pane).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    Pane(PaneIdentity),
+    Reader(PaneIdentity),
+}
 
-impl Render for PaneDragPreview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        crate::components::drag_badge(self.0.clone())
+/// A board slot on the move: its head is the handle. Dropped on another
+/// slot of the same board it swaps with it (the centre) or splits its
+/// slot (an edge). `leaf` is the slot's leaf in the board's tree.
+#[derive(Clone, Copy, Debug)]
+struct PaneDrag {
+    leaf: ThreadId,
+}
+
+/// What a dragged slot's ghost draws: its name, the line under it (a
+/// Pane's branch, a reader's kind), and the size the slot has on the board.
+#[derive(Clone)]
+struct GhostFace {
+    title: SharedString,
+    detail: Option<SharedString>,
+    reader: bool,
+    size: (f32, f32),
+}
+
+/// The longest a ghost gets on either side: a big Pane shrinks to a card
+/// the board stays readable around, keeping the slot's proportions.
+const GHOST_MAX_W: f32 = 300.0;
+const GHOST_MAX_H: f32 = 200.0;
+/// A ghost's skeleton lines, as shares of its body's width.
+const GHOST_LINES: [f32; 4] = [0.82, 0.64, 0.74, 0.46];
+
+/// The ghost that follows the pointer while a slot is dragged: a scaled,
+/// see-through miniature of the slot, held at the point it was grabbed.
+struct PaneGhost {
+    face: GhostFace,
+    /// Where the pointer was in the grabbed handle, which gpui keeps under
+    /// the pointer. The miniature is shifted so the same point of the
+    /// scaled slot sits there instead.
+    grab: gpui::Point<Pixels>,
+    /// A nav drag's ghost folds back to its row while the pointer is over
+    /// the nav (left of this x), so it never hides the rows it is being
+    /// dropped among.
+    row_left_of: Option<(f32, NavChip)>,
+}
+
+impl PaneGhost {
+    fn scale(&self) -> f32 {
+        let (w, h) = self.face.size;
+        if w <= 0.0 || h <= 0.0 {
+            return 1.0;
+        }
+        (GHOST_MAX_W / w).min(GHOST_MAX_H / h).min(1.0)
+    }
+}
+
+impl Render for PaneGhost {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::theme;
+        if let Some((_, chip)) = self
+            .row_left_of
+            .as_ref()
+            .filter(|(edge, _)| f32::from(window.mouse_position().x) < *edge)
+        {
+            return chip.element();
+        }
+        let scale = self.scale();
+        let (w, h) = self.face.size;
+        let (w, h) = ((w * scale).max(160.0), (h * scale).max(90.0));
+        let shift = |at: Pixels| px(f32::from(at) * (1.0 - scale));
+        // A miniature Pane in the board's own recipe: its head line (the
+        // mark in the glyph column, the title in `W_LABEL`, the branch as
+        // meta), a hairline, then a few quiet skeleton lines for its body.
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .gap(px(theme::SPACE_2))
+            .px(px(theme::PANE_PAD_X))
+            .py(px(theme::SPACE_3));
+        for share in GHOST_LINES {
+            body = body.child(
+                div()
+                    .h(px(theme::SPACE_1_5))
+                    .w(gpui::relative(share))
+                    .rounded(px(theme::R_TIGHT))
+                    .bg(rgb(theme::FILL)),
+            );
+        }
+        let marker = if self.face.reader {
+            crate::icons::icon(crate::icons::FILE, theme::ROW_ICON, theme::TEXT_MUTED)
+                .into_any_element()
+        } else {
+            crate::components::status_dot(theme::TEXT_MUTED).into_any_element()
+        };
+        let head = div()
+            .flex()
+            .items_center()
+            .flex_shrink_0()
+            .gap(px(theme::SPACE_2))
+            .h(px(theme::PANE_HEAD_H))
+            .px(px(theme::PANE_PAD_X))
+            .border_b_1()
+            .border_color(rgba(theme::HAIRLINE))
+            .font_family(theme::FONT_UI)
+            .child(marker)
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .truncate()
+                    .font_weight(theme::W_LABEL)
+                    .text_size(px(theme::FS_UI))
+                    .line_height(px(theme::LH_UI))
+                    .text_color(rgb(theme::TEXT_STRONG))
+                    .child(self.face.title.clone()),
+            )
+            .children(self.face.detail.clone().map(|detail| {
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .truncate()
+                    .text_size(px(theme::FS_SM))
+                    .line_height(px(theme::LH_META))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(detail)
+            }));
+        let card = div()
+            .flex()
+            .flex_col()
+            .w(px(w))
+            .h(px(h))
+            .overflow_hidden()
+            .rounded(px(theme::R_PANE))
+            .border_1()
+            .border_color(rgb(theme::FOCUS_RING))
+            .bg(rgb(theme::PANE))
+            .opacity(theme::DRAG_GHOST_OPACITY)
+            .shadow(crate::components::float_shadow())
+            .child(head)
+            .child(body);
+        div()
+            .pl(shift(self.grab.x))
+            .pt(shift(self.grab.y))
+            .child(card)
     }
 }
 
@@ -624,7 +787,37 @@ struct ContextMenu {
     armed: Option<usize>,
 }
 
-struct NavDragPreview(SharedString);
+/// What rides the pointer while a nav row is dragged: that row itself, as
+/// the tree drew it — the Thread row of whichever list order is showing,
+/// or the Group's header.
+#[derive(Clone)]
+enum NavChip {
+    Thread {
+        row: nav::ThreadRow,
+        /// The by-Project list's compact row, not the grouped tree's.
+        compact: bool,
+        grouped: bool,
+    },
+    Group(nav::GroupBlock),
+}
+
+impl NavChip {
+    fn element(&self) -> Div {
+        nav::drag_row(match self {
+            NavChip::Thread {
+                row,
+                compact: true,
+                grouped,
+            } => nav::project_thread_row_with_title(row, row.name.clone(), *grouped, true, false),
+            NavChip::Thread { row, .. } => {
+                nav::project_thread_row_with_title(row, row.name.clone(), false, true, false)
+            }
+            NavChip::Group(group) => nav::group_row_with_title(group, group.title.clone()),
+        })
+    }
+}
+
+struct NavDragPreview(NavChip);
 
 /// A nav drag, plus the View it started from. The row's own mouse-down
 /// fires before the drag does — clicking a Group row enters it — so by the
@@ -640,7 +833,7 @@ struct NavDrag {
 
 impl Render for NavDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        crate::components::drag_badge(self.0.clone())
+        self.0.element()
     }
 }
 
@@ -933,6 +1126,25 @@ impl CockpitView {
         // inside the platform's shutdown budget. Otherwise a Codex
         // app-server outlives Ferrite for a moment holding its thread's
         // writer lock, and the relaunch's resume is refused.
+        if prefs.cli_updates {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(crate::cli_updates::FIRST_CHECK_AFTER)
+                    .await;
+                loop {
+                    if this
+                        .update(cx, |view, cx| view.tick_cli_updates(cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(crate::cli_updates::TICK)
+                        .await;
+                }
+            })
+            .detach();
+        }
         cx.on_app_quit(|view, _cx| {
             view.cockpit.halt_sessions();
             async {}
@@ -981,6 +1193,7 @@ impl CockpitView {
             rename: None,
             context_menu: None,
             context_usage: None,
+            context_usage_expanded: false,
             session_controls: None,
             mode_picker: None,
             session_control_error: None,
@@ -998,8 +1211,11 @@ impl CockpitView {
             board: std::cell::Cell::new(layout::Rect::default()),
             board_level: std::cell::Cell::new(Level::Transcript),
             drop_preview: None,
-            pane_drag_source: None,
             file_drop_over: None,
+            board_layouts: std::collections::HashMap::new(),
+            slot_sizes: Default::default(),
+            dragging: None,
+            nav_dragging: None,
             prefs,
             settings_open: false,
             settings_page: prefs::PageKey::default(),
@@ -1010,6 +1226,7 @@ impl CockpitView {
             settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
+            cli_updates: Default::default(),
             group_error: None,
             bell: Bell::new(),
             transcript_entities: Default::default(),
@@ -1024,7 +1241,7 @@ impl CockpitView {
         // every Thread it did not open is a parked row from the first
         // frame — a launch that opens nothing has no change to notice.
         view.sync_panes(cx);
-        view.facts.parked_changed(&view.cockpit);
+        view.parked_changed(cx);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
@@ -1075,9 +1292,32 @@ impl CockpitView {
         // A Thread that came or went moved between the grid and the nav's
         // parked rows.
         if opened || self.panes.len() != before {
-            self.facts.parked_changed(&self.cockpit);
+            self.parked_changed(cx);
         }
         self.refresh_names();
+    }
+
+    /// The parked set changed: rebuild the nav's parked rows now, from
+    /// peeks, and fetch what only `git` or a whole-log replay can say on the
+    /// background executor — the rows fill in when it answers.
+    fn parked_changed(&mut self, cx: &mut Context<Self>) {
+        let lookups = self.facts.parked_changed(&self.cockpit);
+        if lookups.is_empty() {
+            return;
+        }
+        let logs = self.cockpit.log_reader();
+        cx.spawn(async move |this, cx| {
+            let answers = cx
+                .background_executor()
+                .spawn(async move { lookups.run(&logs) })
+                .await;
+            this.update(cx, |view, cx| {
+                view.facts.parked_looked_up(&view.cockpit, answers);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Compare a visible Subject's key every root render, and only then copy
@@ -1803,36 +2043,146 @@ impl CockpitView {
         self.cockpit.group_layout(group, self.board.get())
     }
 
-    /// The Group's tree as it should draw right now: the one mid-drag,
-    /// else the persisted one reconciled to the members (or the default
-    /// grid over `bounds`) — with a pending draft spliced in under a
-    /// stand-in id, since a draft is no Thread. A draft on a default grid
-    /// joins the grid rather than splitting one Pane.
-    fn group_tree(&self, group: GroupId, bounds: layout::Rect) -> Option<Tree> {
-        let drafts: Vec<ThreadId> = self
-            .cockpit
-            .visible()
+    /// The board on screen, when a tree lays it out: the Group being
+    /// shown, or Solo while its one Pane has a reader open. Fullscreen and
+    /// a plain Solo Pane have none.
+    fn board(&self) -> Option<Board> {
+        if self.cockpit.roster().fullscreen().is_some() {
+            return None;
+        }
+        match self.cockpit.roster().view() {
+            View::Group(group) => Some(Board::Group(group)),
+            View::Solo => match self.visible_indices().as_slice() {
+                [index] if self.panes[*index].preview.document().is_some() => {
+                    Some(Board::Solo(self.panes[*index].identity))
+                }
+                _ => None,
+            },
+        }
+    }
+
+    /// A board's tree as it should draw right now: the one mid-drag, else
+    /// the operator's arrangement fitted to what is open — a Group's
+    /// members (or the default grid over the board's bounds), a pending
+    /// draft spliced in under a stand-in id since a draft is no Thread, and
+    /// a reader slot for every visible Pane with a document open. A draft
+    /// on a default grid joins the grid rather than splitting one Pane; a
+    /// reader the tree has not placed yet opens beside its Pane, on the
+    /// right.
+    fn board_tree(&self, board: Board) -> Option<Tree> {
+        if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
+            return Some(drag.tree.clone());
+        }
+        let bounds = self.board.get();
+        let readers: Vec<PaneIdentity> = self
+            .visible_indices()
             .into_iter()
-            .filter_map(|identity| identity.draft().map(draft_leaf))
+            .filter(|index| self.panes[*index].preview.document().is_some())
+            .map(|index| self.panes[index].identity)
             .collect();
-        let mut tree = match &self.seam_drag {
-            Some(drag) if drag.group == group => drag.tree.clone(),
-            _ if !drafts.is_empty() && !self.cockpit.groups().has_custom_layout(group) => {
-                let members = &self.cockpit.groups().get(group)?.members;
-                let mut all = members.clone();
-                all.extend(drafts.iter().copied());
-                return Some(Tree::grid(&all, bounds));
+        let (base, mut panes) = match board {
+            Board::Group(group) => {
+                let drafts: Vec<ThreadId> = self
+                    .cockpit
+                    .visible()
+                    .into_iter()
+                    .filter(|identity| matches!(identity, PaneIdentity::Draft(_)))
+                    .map(pane_leaf)
+                    .collect();
+                if readers.is_empty()
+                    && !drafts.is_empty()
+                    && !self.cockpit.groups().has_custom_layout(group)
+                {
+                    let mut all = self.cockpit.groups().get(group)?.members.clone();
+                    all.extend(drafts.iter().copied());
+                    return Some(Tree::grid(&all, bounds));
+                }
+                let persisted = self.cockpit.group_layout(group, bounds)?;
+                let mut panes = persisted.leaves();
+                panes.extend(drafts);
+                let base = match self.board_layouts.get(&board) {
+                    Some(session) if !readers.is_empty() => session.clone(),
+                    _ => persisted,
+                };
+                (base, panes)
             }
-            _ => self.cockpit.group_layout(group, bounds)?,
+            Board::Solo(identity) => {
+                let base = self.board_layouts.get(&board).cloned().unwrap_or_default();
+                (base, vec![pane_leaf(identity)])
+            }
         };
-        for draft in drafts {
-            tree.insert(draft);
+        let readers: Vec<(ThreadId, ThreadId)> = readers
+            .into_iter()
+            .map(|owner| (pane_leaf(owner), reader_leaf(owner)))
+            .filter(|(owner, _)| panes.contains(owner))
+            .collect();
+        let mut tree = base;
+        let wanted: std::collections::BTreeSet<ThreadId> = panes
+            .iter()
+            .copied()
+            .chain(readers.iter().map(|(_, reader)| *reader))
+            .collect();
+        for stale in tree
+            .leaves()
+            .into_iter()
+            .filter(|leaf| !wanted.contains(leaf))
+        {
+            tree.remove(stale);
+        }
+        panes.retain(|leaf| !tree.contains(*leaf));
+        for leaf in panes {
+            tree.insert(leaf);
+        }
+        for (owner, reader) in readers {
+            if !tree.contains(reader) {
+                tree.split_share(owner, Edge::Right, reader, READER_SHARE);
+            }
         }
         Some(tree)
     }
 
+    /// Keep an arrangement the operator made on a board. A Group persists
+    /// its Threads' part of it (readers and drafts are not members); the
+    /// whole tree, reader slots included, is kept for the session while
+    /// any reader is in it.
+    fn commit_board(&mut self, board: Board, tree: Tree) {
+        let slots: Vec<(ThreadId, Slot)> = tree
+            .leaves()
+            .into_iter()
+            .map(|leaf| (leaf, leaf_slot(leaf)))
+            .collect();
+        if slots
+            .iter()
+            .any(|(_, slot)| matches!(slot, Slot::Reader(_)))
+        {
+            self.board_layouts.insert(board, tree.clone());
+        } else {
+            self.board_layouts.remove(&board);
+        }
+        if let Board::Group(group) = board {
+            let mut threads = tree;
+            for (leaf, slot) in slots {
+                if !matches!(slot, Slot::Pane(PaneIdentity::Thread(_))) {
+                    threads.remove(leaf);
+                }
+            }
+            if let Err(error) = self.cockpit.set_group_layout(group, threads) {
+                self.group_error = Some(error.to_string().into());
+            }
+        }
+    }
+
+    /// Whether the board has somewhere to move a slot to — a head is a
+    /// drag handle only then.
+    fn board_is_movable(&self) -> bool {
+        self.board()
+            .and_then(|board| self.board_tree(board))
+            .is_some_and(|tree| tree.leaves().len() > 1)
+    }
+
     /// Every visible Pane's rect on the board, in window coordinates —
-    /// from the Group's tree, or the one Solo cell. Fullscreen is the
+    /// from the board's tree, or the one Solo cell. Reader slots are no
+    /// Panes and are left out. Fullscreen is the
     /// whole board.
     fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
         let bounds = self.board_bounds(window);
@@ -1842,46 +2192,43 @@ impl CockpitView {
                 .map(|index| vec![(index, bounds)])
                 .unwrap_or_default();
         }
-        match self.cockpit.roster().view() {
-            View::Group(group) => {
-                let Some(tree) = self.group_tree(group, bounds) else {
-                    return Vec::new();
-                };
-                tree.rects(bounds, crate::theme::GRID_GAP)
-                    .into_iter()
-                    .filter_map(|(leaf, rect)| {
-                        let identity = leaf_identity(leaf);
-                        self.index_of(identity).map(|index| (index, rect))
-                    })
-                    .collect()
-            }
-            // Solo is one Pane — or a pending pair (a draft beside its
-            // Thread), laid out on the same default grid a Group gets.
-            View::Solo => {
-                let visible = self.visible_indices();
-                let (columns, rows) = layout::grid_shape(visible.len(), bounds);
-                let gap = crate::theme::GRID_GAP;
-                let height = layout::grid_cell(bounds, columns, rows).height;
-                visible
-                    .chunks(columns.max(1))
-                    .enumerate()
-                    .flat_map(|(row, line)| {
-                        let width = (bounds.w - (line.len() - 1) as f32 * gap) / line.len() as f32;
-                        line.iter().enumerate().map(move |(column, index)| {
-                            (
-                                *index,
-                                layout::Rect {
-                                    x: bounds.x + column as f32 * (width + gap),
-                                    y: bounds.y + row as f32 * (height + gap),
-                                    w: width.max(0.0),
-                                    h: height,
-                                },
-                            )
-                        })
-                    })
-                    .collect()
-            }
+        if let Some(board) = self.board() {
+            let Some(tree) = self.board_tree(board) else {
+                return Vec::new();
+            };
+            return tree
+                .rects(bounds, crate::theme::GRID_GAP)
+                .into_iter()
+                .filter_map(|(leaf, rect)| match leaf_slot(leaf) {
+                    Slot::Pane(identity) => self.index_of(identity).map(|index| (index, rect)),
+                    Slot::Reader(_) => None,
+                })
+                .collect();
         }
+        // Solo is one Pane — or a pending pair (a draft beside its Thread),
+        // laid out on the same default grid a Group gets.
+        let visible = self.visible_indices();
+        let (columns, rows) = layout::grid_shape(visible.len(), bounds);
+        let gap = crate::theme::GRID_GAP;
+        let height = layout::grid_cell(bounds, columns, rows).height;
+        visible
+            .chunks(columns.max(1))
+            .enumerate()
+            .flat_map(|(row, line)| {
+                let width = (bounds.w - (line.len() - 1) as f32 * gap) / line.len() as f32;
+                line.iter().enumerate().map(move |(column, index)| {
+                    (
+                        *index,
+                        layout::Rect {
+                            x: bounds.x + column as f32 * (width + gap),
+                            y: bounds.y + row as f32 * (height + gap),
+                            w: width.max(0.0),
+                            h: height,
+                        },
+                    )
+                })
+            })
+            .collect()
     }
 
     /// The level one Pane draws at: the board's one Level (`board_level`).
@@ -2408,7 +2755,7 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.facts.parked_changed(&self.cockpit);
+                self.parked_changed(cx);
             }
             (MenuTarget::Pane(_), MenuVerb::CopySelection) => {
                 if let Some(text) = self.native_copy.clone() {
@@ -2501,7 +2848,7 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.facts.parked_changed(&self.cockpit);
+                self.parked_changed(cx);
             }
             _ => {}
         }
@@ -2530,7 +2877,7 @@ impl CockpitView {
             }
         };
         self.sync_panes(cx);
-        self.facts.parked_changed(&self.cockpit);
+        self.parked_changed(cx);
     }
 
     /// The context menu, floated at the pointer and clamped inside the
@@ -2572,13 +2919,13 @@ impl CockpitView {
         )
     }
 
-    /// The Group's board: Panes at their tree rects, seams over the gaps,
-    /// the drop preview on top. Coordinates are the board's own — the
+    /// A board: Panes and readers at their tree rects, seams over the
+    /// gaps, the drop preview on top. Coordinates are the board's own — the
     /// frame is `relative`, its origin the nav's right edge — so the rects
     /// the tree computes for the window are shifted back by that origin.
     fn tree_board(
         &self,
-        group: GroupId,
+        on: Board,
         tree: Tree,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2593,14 +2940,38 @@ impl CockpitView {
         // One Level for the whole board: no Pane draws a tier its
         // neighbours do not (rule 2.3.5).
         let level = self.board_level(window);
-        for (leaf, rect) in tree.rects(bounds, crate::theme::GRID_GAP) {
-            let Some(index) = self.index_of(leaf_identity(leaf)) else {
-                continue;
+        let rects = tree.rects(bounds, crate::theme::GRID_GAP);
+        *self.slot_sizes.borrow_mut() = rects
+            .iter()
+            .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
+            .collect();
+        for (leaf, rect) in rects {
+            let cell = match leaf_slot(leaf) {
+                Slot::Pane(identity) => {
+                    let Some(index) = self.index_of(identity) else {
+                        continue;
+                    };
+                    self.pane_cell(index, level, window, cx)
+                }
+                Slot::Reader(owner) => {
+                    let Some(cell) = self.reader_cell(owner, leaf, cx) else {
+                        continue;
+                    };
+                    cell
+                }
             };
             let rect = local(rect);
+            // The grabbed slot stays put, dimmed as lifted out of its slot,
+            // while its ghost travels: the board keeps its shape until the
+            // drop changes it.
+            let cell = if self.dragging == Some(leaf) {
+                cell.opacity(crate::theme::DRAG_SOURCE_OPACITY)
+                    .debug_selector(move || format!("pane-drag-source-{}", leaf.get()))
+            } else {
+                cell
+            };
             board = board.child(
-                self.pane_cell(index, level, window, cx)
-                    .absolute()
+                cell.absolute()
                     .left(px(rect.x))
                     .top(px(rect.y))
                     .w(px(rect.w))
@@ -2621,7 +2992,7 @@ impl CockpitView {
             let dragging = self
                 .seam_drag
                 .as_ref()
-                .is_some_and(|drag| drag.group == group && drag.seam == seam.id);
+                .is_some_and(|drag| drag.board == on && drag.seam == seam.id);
             // The line stops short of both ends so it never touches a Pane
             // corner; it exists at rest only so the band's hover can light
             // it (`TEXT_FAINT`), and it takes the accent while held.
@@ -2665,7 +3036,7 @@ impl CockpitView {
                         MouseButton::Left,
                         cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            view.begin_seam_drag(group, id.clone(), cx);
+                            view.begin_seam_drag(on, id.clone(), cx);
                         }),
                     ),
             );
@@ -2722,11 +3093,11 @@ impl CockpitView {
 
     /// A press on a seam: the drag begins from the persisted tree, and
     /// the moves until release re-derive the ratio from the pointer.
-    fn begin_seam_drag(&mut self, group: GroupId, seam: SeamId, cx: &mut Context<Self>) {
-        let Some(tree) = self.group_layout(group) else {
+    fn begin_seam_drag(&mut self, board: Board, seam: SeamId, cx: &mut Context<Self>) {
+        let Some(tree) = self.board_tree(board) else {
             return;
         };
-        self.seam_drag = Some(SeamDrag { group, seam, tree });
+        self.seam_drag = Some(SeamDrag { board, seam, tree });
         cx.notify();
     }
 
@@ -2760,14 +3131,12 @@ impl CockpitView {
         let Some(drag) = self.seam_drag.take() else {
             return;
         };
-        if let Err(error) = self.cockpit.set_group_layout(drag.group, drag.tree) {
-            self.group_error = Some(error.to_string().into());
-        }
+        self.commit_board(drag.board, drag.tree);
         cx.notify();
     }
 
-    /// A Pane dragged over another: what a release here would do, for the
-    /// wash — nothing over itself, nothing across Groups.
+    /// A slot dragged over another: what a release here would do, for the
+    /// wash — nothing over itself, nothing across boards.
     fn preview_pane_drop(
         &mut self,
         source: ThreadId,
@@ -2776,37 +3145,117 @@ impl CockpitView {
         bounds: gpui::Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let preview = (source != target && self.same_group(source, target)).then(|| {
-            let rect = layout::Rect {
-                x: f32::from(bounds.origin.x),
-                y: f32::from(bounds.origin.y),
-                w: f32::from(bounds.size.width),
-                h: f32::from(bounds.size.height),
-            };
-            let pointer = layout::Point {
-                x: f32::from(position.x),
-                y: f32::from(position.y),
-            };
+        let on_board = self
+            .board()
+            .and_then(|board| self.board_tree(board))
+            .is_some_and(|tree| tree.contains(source) && tree.contains(target));
+        let preview = (source != target && on_board).then(|| {
+            let (pointer, rect) = drop_geometry(position, bounds);
             (target, layout::zone(pointer, rect))
         });
+        self.set_drop_preview(preview, cx);
+    }
+
+    fn set_drop_preview(&mut self, preview: Option<(ThreadId, Zone)>, cx: &mut Context<Self>) {
         if self.drop_preview != preview {
             self.drop_preview = preview;
             cx.notify();
         }
     }
 
-    fn same_group(&self, a: ThreadId, b: ThreadId) -> bool {
-        match (self.cockpit.groups().of(a), self.cockpit.groups().of(b)) {
-            (Some(x), Some(y)) => x.id == y.id,
-            _ => false,
-        }
+    /// A nav row dragged over a board slot: it can only split in beside
+    /// it (swapping would push the slot off the board), so every point
+    /// reads as the nearest edge. A Thread over its own Pane means nothing.
+    fn preview_nav_drop(
+        &mut self,
+        drag: Drag,
+        target: ThreadId,
+        position: gpui::Point<Pixels>,
+        bounds: gpui::Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let preview = match drag {
+            Drag::Thread { thread, .. } if thread != target => {
+                let (pointer, rect) = drop_geometry(position, bounds);
+                Some((target, Zone::Split(layout::nearest_edge(pointer, rect))))
+            }
+            _ => None,
+        };
+        self.set_drop_preview(preview, cx);
     }
 
-    /// The release of a dragged Pane on another: the centre swaps the two
-    /// leaves, an edge moves the source beside the target — the tree
-    /// persists either way. Reads the preview the last move computed.
+    /// A nav row released on a board slot: the Thread joins the board's
+    /// Group — or, on a Solo board, founds one with the Thread shown — and
+    /// lands beside the slot, on the edge the preview named. A member
+    /// already on the board just moves there.
+    fn drop_nav_on_board(&mut self, drag: Drag, target: ThreadId, cx: &mut Context<Self>) {
+        self.nav_dragging = None;
+        let preview = self.drop_preview.take();
+        let (Some((_, Zone::Split(edge))), Drag::Thread { thread, .. }) =
+            (preview.filter(|(previewed, _)| *previewed == target), drag)
+        else {
+            cx.notify();
+            return;
+        };
+        let view = self.cockpit.roster().view();
+        let shown = match leaf_slot(target) {
+            Slot::Pane(PaneIdentity::Thread(shown)) | Slot::Reader(PaneIdentity::Thread(shown)) => {
+                Some(shown)
+            }
+            _ => None,
+        };
+        let group_of =
+            |view: &Self, thread: ThreadId| view.cockpit.groups().of(thread).map(|group| group.id);
+        let group = match view {
+            View::Group(group) => Some(group),
+            View::Solo => shown.and_then(|shown| group_of(self, shown)),
+        };
+        if group.is_none_or(|group| group_of(self, thread) != Some(group)) {
+            let joined = match (group, shown) {
+                (Some(group), _) => self
+                    .cockpit
+                    .drop(drag, view, DropTarget::GroupHeader(group)),
+                (None, Some(shown)) => self.cockpit.drop(
+                    drag,
+                    view,
+                    DropTarget::ThreadRow {
+                        thread: shown,
+                        group: None,
+                        index: 0,
+                    },
+                ),
+                (None, None) => Ok(()),
+            };
+            if let Err(error) = joined {
+                self.group_error = Some(error.to_string().into());
+                self.sync_panes(cx);
+                cx.notify();
+                return;
+            }
+            self.group_error = None;
+        }
+        let Some(group) = group.or_else(|| shown.and_then(|shown| group_of(self, shown))) else {
+            self.sync_panes(cx);
+            cx.notify();
+            return;
+        };
+        // Entering revives a parked newcomer and shows the Group it joined.
+        self.enter_group(group, cx);
+        let board = Board::Group(group);
+        if let Some(mut tree) = self.board_tree(board) {
+            if tree.split(target, edge, thread) {
+                self.commit_board(board, tree);
+            }
+        }
+        self.focus_thread(thread, cx);
+        cx.notify();
+    }
+
+    /// The release of a dragged slot on another: the centre swaps the two
+    /// leaves, an edge moves the source beside the target — the tree is
+    /// kept either way. Reads the preview the last move computed.
     fn drop_pane(&mut self, source: ThreadId, target: ThreadId, cx: &mut Context<Self>) {
-        self.pane_drag_source = None;
+        self.dragging = None;
         let preview = self.drop_preview.take();
         let Some((previewed, zone)) = preview.filter(|(previewed, _)| *previewed == target) else {
             cx.notify();
@@ -2823,23 +3272,21 @@ impl CockpitView {
         zone: Zone,
         cx: &mut Context<Self>,
     ) {
-        let Some(group) = self.cockpit.groups().of(source).map(|group| group.id) else {
+        let Some(board) = self.board() else {
             return;
         };
-        if !self.same_group(source, target) || source == target {
+        let Some(mut tree) = self.board_tree(board) else {
+            return;
+        };
+        if source == target || !tree.contains(source) || !tree.contains(target) {
             return;
         }
-        let Some(mut tree) = self.group_layout(group) else {
-            return;
-        };
         let changed = match zone {
             Zone::Swap => tree.swap(source, target),
             Zone::Split(edge) => tree.split(target, edge, source),
         };
         if changed {
-            if let Err(error) = self.cockpit.set_group_layout(group, tree) {
-                self.group_error = Some(error.to_string().into());
-            }
+            self.commit_board(board, tree);
         }
         cx.notify();
     }
@@ -2861,22 +3308,136 @@ impl CockpitView {
             self.context_menu = None;
             self.nav_filter_open = false;
             if self.cli_versions.is_none() {
-                cx.spawn(async move |this, cx| {
-                    let versions = cx
-                        .background_executor()
-                        .spawn(async {
-                            ferrite_core::providers::discover::rediscover();
-                            (cli_version(Provider::Claude), cli_version(Provider::Codex))
-                        })
-                        .await;
-                    this.update(cx, |view, cx| {
-                        view.cli_versions = Some((versions.0.into(), versions.1.into()));
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
+                self.probe_cli_versions(cx);
             }
+        }
+        cx.notify();
+    }
+
+    /// Ask the CLIs their versions again, off the UI thread.
+    fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let versions = cx
+                .background_executor()
+                .spawn(async {
+                    ferrite_core::providers::discover::rediscover();
+                    (cli_version(Provider::Claude), cli_version(Provider::Codex))
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                view.cli_versions = Some((versions.0.into(), versions.1.into()));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// One beat of the updater: ask the registry when due, then install
+    /// whatever automatic updating may install now.
+    fn tick_cli_updates(&mut self, cx: &mut Context<Self>) {
+        if !self.cli_updates.begin_check(std::time::Instant::now()) {
+            self.auto_update_clis(cx);
+            return;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async {
+                    [Provider::Claude, Provider::Codex].map(|provider| {
+                        (provider, ferrite_core::providers::update::check(provider))
+                    })
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                let auto = view.prefs.settings.auto_update_clis;
+                for (provider, result) in results {
+                    view.cli_updates.checked(provider, result, auto);
+                }
+                view.auto_update_clis(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Install each ready upgrade whose provider has no Session running,
+    /// when the operator lets Ferrite update on its own.
+    fn auto_update_clis(&mut self, cx: &mut Context<Self>) {
+        if !self.prefs.settings.auto_update_clis {
+            return;
+        }
+        for provider in self.cli_updates.ready() {
+            if self.cockpit.live_sessions(provider) == 0 {
+                self.update_cli(provider, cx);
+            }
+        }
+    }
+
+    /// Install `provider`'s newest CLI now. Once it lands, the model menus
+    /// are asked again and every open Thread of that provider restarts on
+    /// its own conversation — at once when idle, otherwise when its turn
+    /// ends — so nothing keeps running the old release.
+    fn update_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        let Some(upgrade) = self.cli_updates.begin_update(provider) else {
+            return;
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { ferrite_core::providers::update::run(provider, &upgrade) })
+                .await;
+            this.update(cx, |view, cx| {
+                if result.is_ok() {
+                    // Open Threads restart on the new CLI as each goes
+                    // idle, and the pickers ask for its menu now.
+                    view.cockpit.restart_sessions(provider);
+                    view.cockpit.rediscover_models();
+                }
+                view.cli_updates.updated(provider, result);
+                view.probe_cli_versions(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The updater's toasts. Like the bell's, they wait for render, the
+    /// one place with a Window in hand.
+    fn present_cli_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::cli_updates::{name, Toast};
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        for toast in self.cli_updates.take_toasts() {
+            let notification = match toast {
+                Toast::Offer { provider, latest } => {
+                    let view = cx.entity().downgrade();
+                    Notification::new()
+                        .title(format!("{} {latest} is available", name(provider)))
+                        .message("Click to update. Newer releases bring newer models.")
+                        .with_type(NotificationType::Info)
+                        .autohide(false)
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |view, cx| view.update_cli(provider, cx))
+                                .ok();
+                        })
+                }
+                Toast::Updated { provider, version } => Notification::new()
+                    .title(format!("{} updated to {version}", name(provider)))
+                    .message("Open Threads restart on it as each finishes its turn.")
+                    .with_type(NotificationType::Success)
+                    .autohide(true),
+                Toast::Failed { provider, detail } => Notification::new()
+                    .title(format!("{} update failed", name(provider)))
+                    .message(detail)
+                    .with_type(NotificationType::Error)
+                    .autohide(false),
+            };
+            window.push_notification(notification, cx);
         }
         cx.notify();
     }
@@ -2899,7 +3460,7 @@ impl CockpitView {
             *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
         }
         if self.facts.set_auto_title(self.prefs.settings.auto_title) {
-            self.facts.parked_changed(&self.cockpit);
+            self.parked_changed(cx);
             for thread in self.cockpit.threads() {
                 self.facts.renamed(&self.cockpit, thread);
             }
@@ -2920,6 +3481,33 @@ impl CockpitView {
                 view.change_settings(|settings| write(settings, value), cx);
             });
         }
+    }
+
+    /// Settings' line for one provider CLI: its installed version, what
+    /// the update check found, and the button when there is a release
+    /// Ferrite can install.
+    fn cli_update_row(
+        &self,
+        id: &'static str,
+        provider: Provider,
+        version: SharedString,
+        cx: &Context<Self>,
+    ) -> prefs::Row {
+        let (detail, button) = crate::cli_updates::describe(
+            provider,
+            self.cli_updates.state(provider),
+            self.prefs.settings.auto_update_clis,
+            self.cockpit.live_sessions(provider),
+        );
+        let title = match provider {
+            Provider::Claude => "Claude CLI",
+            Provider::Codex => "Codex CLI",
+        };
+        let view = cx.entity().downgrade();
+        prefs::action(id, title, detail, version, button, move |cx| {
+            view.update(cx, |view, cx| view.update_cli(provider, cx))
+                .ok();
+        })
     }
 
     /// The searchable Settings sheet, drawn above the cockpit's overlays.
@@ -3148,13 +3736,23 @@ impl CockpitView {
                 });
             }
         };
+        let clis = vec![
+            self.cli_update_row("settings-update-claude", Provider::Claude, claude, cx),
+            self.cli_update_row("settings-update-codex", Provider::Codex, codex, cx),
+            prefs::toggle(
+                "settings-auto-update-clis",
+                "Update the CLIs automatically",
+                "Install a newer Claude or Codex CLI once none of its Threads is running. \
+                 New models arrive only with a newer CLI.",
+                settings.auto_update_clis,
+                self.setting_change(cx, |s, v| s.auto_update_clis = v),
+            ),
+        ];
         let about = vec![
             prefs::fact(
                 "Version",
                 version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV).into(),
             ),
-            prefs::fact("Claude CLI", claude),
-            prefs::fact("Codex CLI", codex),
             prefs::path_fact(
                 "Threads",
                 self.prefs.dir.join("threads").display().to_string(),
@@ -3190,7 +3788,10 @@ impl CockpitView {
             ),
             prefs::page(
                 prefs::PageKey::About,
-                vec![prefs::Group::new(None).rows(about)],
+                vec![
+                    prefs::Group::new(None).rows(about),
+                    prefs::Group::new(Some("Provider CLIs")).rows(clis),
+                ],
             ),
         ];
 
@@ -3675,26 +4276,23 @@ impl CockpitView {
                     .into_any_element();
             }
         }
-        let badge = self.panes[index].name.clone();
-        let grouped = self.cockpit.groups().of(thread).is_some();
-        let this = cx.entity().downgrade();
+        let face = self.pane_ghost(index);
+        let movable = self.board_is_movable();
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
             .debug_selector(move || format!("pane-title-{}", thread.get()))
             .tooltip(crate::menu::tooltip("Rename \u{b7} double-click"))
-            // In a Group the title is the Pane's handle: drag it onto
-            // another Pane to swap or split. It keeps the default cursor —
-            // a name, not a button.
-            .when(grouped, |title| {
-                title.on_drag(PaneDrag { thread }, move |_, _, _, cx| {
-                    // The drag has begun: its source dims until the
-                    // release (the root's mouse-up) ends it.
-                    let _ = this.update(cx, |view, cx| {
-                        view.pane_drag_source = Some(thread);
-                        cx.notify();
-                    });
-                    let badge = badge.clone();
-                    cx.new(|_| PaneDragPreview(badge))
+            // On a board the title is a handle too (the L1 head around it
+            // is the other): drag it onto another slot to swap or split. It
+            // keeps the default cursor — a name, not a button.
+            .when(movable, |title| {
+                title.on_drag(PaneDrag { leaf: thread }, move |_, grab, _, cx| {
+                    let face = face.clone();
+                    cx.new(|_| PaneGhost {
+                        face,
+                        grab,
+                        row_left_of: None,
+                    })
                 })
             })
             .on_mouse_down(
@@ -5581,7 +6179,7 @@ impl CockpitView {
                 // mirror saw nothing open; a Thread that would not open is
                 // a fresh parked row.
                 if adopted.not_opened.is_some() {
-                    self.facts.parked_changed(&self.cockpit);
+                    self.parked_changed(cx);
                 } else if from.draft().is_some() {
                     self.facts.opened(&self.cockpit, adopted.thread);
                 }
@@ -6998,6 +7596,7 @@ impl CockpitView {
     /// A nav drop: the core plans and applies it in the View the drag
     /// started from; a refusal lands in the nav's banner.
     fn apply_drop(&mut self, drag: NavDrag, target: DropTarget, cx: &mut Context<Self>) {
+        self.nav_dragging = None;
         match self.cockpit.drop(drag.drag, drag.origin, target) {
             Ok(()) => self.group_error = None,
             Err(error) => {
@@ -7044,6 +7643,20 @@ impl CockpitView {
     /// the first send bootstraps.
     fn new_thread(&mut self, _: &NewThread, _window: &mut Window, cx: &mut Context<Self>) {
         self.open_draft_in_current_view(DraftTarget::Main, cx);
+    }
+
+    /// cmd-g: the titlebar's New Group — a draft that founds a Group with
+    /// the focused Thread on its first send. Only a Thread in no Group can
+    /// found one, so elsewhere the key does nothing, as the button is not
+    /// offered there either.
+    fn new_group(&mut self, _: &NewGroup, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self
+            .focused_thread()
+            .filter(|thread| self.cockpit.groups().of(*thread).is_none())
+        else {
+            return;
+        };
+        self.open_draft_with_placement(DraftTarget::Main, DraftPlacement::NewGroupWith(thread), cx);
     }
 
     /// Reopen the Thread parked most recently — the one the operator just
@@ -7657,6 +8270,7 @@ impl CockpitView {
         self.update_auto_rail(window);
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_notices(window, cx);
+        self.present_cli_updates(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -7936,9 +8550,16 @@ impl CockpitView {
                     && !pane.controls_focus.is_focused(window)
                     && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
         });
+        // A reader sits beside its Pane, outside the transcript, so its text
+        // needs its own exemption or a click to select in it is undone.
+        let reader_text_focused = self
+            .panes
+            .iter()
+            .any(|pane| pane.preview.reader_text_focused(window, cx));
         if window.has_active_dialog(cx)
             || self.bell.open
             || native_text_focused
+            || reader_text_focused
             || pane_control_focused
         {
             // Native text, dialogs, and the bell keep their own keyboard focus.
@@ -7983,16 +8604,16 @@ impl CockpitView {
                 .flex()
                 .flex_col()
                 .child(self.pane_cell(index, level, window, cx))
-        } else if let Some((group, tree)) = match self.cockpit.roster().view() {
-            View::Group(group) => self.group_tree(group, board).map(|tree| (group, tree)),
-            View::Solo => None,
-        } {
-            // A Group's board is its split tree (SwarmDeck's mosaic): every
-            // Pane at the rect the tree gives it, a grab band over every
-            // seam, and — while a Pane is being dragged — the wash that
-            // says what a release would do. Absolute geometry, so a seam
-            // drag moves exactly the two sides it sits between.
-            self.tree_board(group, tree, window, cx)
+        } else if let Some((board, tree)) = self
+            .board()
+            .and_then(|board| self.board_tree(board).map(|tree| (board, tree)))
+        {
+            // A board is its split tree (SwarmDeck's mosaic): every Pane
+            // and reader at the rect the tree gives it, a grab band over
+            // every seam, and — while a slot is being dragged — the wash
+            // that says what a release would do. Absolute geometry, so a
+            // seam drag moves exactly the two sides it sits between.
+            self.tree_board(board, tree, window, cx)
         } else if visible.is_empty() {
             // Nothing open: the board says how to start instead of lying
             // blank.
@@ -8049,6 +8670,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::next_decision))
             .on_action(cx.listener(Self::new_thread))
             .on_action(cx.listener(Self::new_worktree_thread))
+            .on_action(cx.listener(Self::new_group))
             .on_action(cx.listener(Self::band_cycle))
             .on_action(cx.listener(Self::tool_cycle_previous))
             .on_action(cx.listener(Self::toggle_tool_action))
@@ -8094,8 +8716,21 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseUpEvent, _, cx| {
                     view.end_seam_drag(cx);
-                    let dragged = view.pane_drag_source.take().is_some();
-                    if view.drop_preview.take().is_some() || dragged {
+                    if view.drop_preview.take().is_some()
+                        | view.dragging.take().is_some()
+                        | view.nav_dragging.take().is_some()
+                    {
+                        cx.notify();
+                    }
+                }),
+            )
+            // Every drag move reaches every listener, so the root hears a
+            // nav drag wherever the pointer is — the tree dims its row.
+            .on_drag_move(
+                cx.listener(|view, event: &gpui::DragMoveEvent<NavDrag>, _, cx| {
+                    let drag = event.drag(cx).drag;
+                    if view.nav_dragging != Some(drag) {
+                        view.nav_dragging = Some(drag);
                         cx.notify();
                     }
                 }),
@@ -8234,9 +8869,14 @@ impl CockpitView {
                     }
                     View::Solo => ("New thread", "New thread", DraftPlacement::CurrentGroup),
                 };
-                let chord = matches!(placement, DraftPlacement::CurrentGroup)
-                    .then_some(new_thread_chord)
-                    .flatten();
+                // `New group` rides cmd-G, its own key (`NewGroup`).
+                let chord = match placement {
+                    DraftPlacement::CurrentGroup => new_thread_chord,
+                    DraftPlacement::NewGroupWith(_) => {
+                        crate::components::bound_chord("cockpit::NewGroup")
+                    }
+                    _ => None,
+                };
                 let add_thread = crate::titlebar::add_thread(
                     crate::titlebar::add_thread_button(add_label, cx).on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
@@ -8298,10 +8938,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         let content = self.pane_content(index, level, window, cx);
-        if self.settings_open || self.project_editor.is_some() || !self.panes[index].is_main() {
+        if self.settings_open || self.project_editor.is_some() {
             return content;
         }
         let content = self.panes[index].preview.mount(content);
+        if !self.panes[index].is_main() {
+            return content;
+        }
         let composer = self.panes[index].composer.clone();
         let identity = self.panes[index].identity;
         let view = cx.entity().downgrade();
@@ -8397,41 +9040,7 @@ impl CockpitView {
                     view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
                 }),
             );
-        // A Thread Pane is a drop target for another Pane of its Group:
-        // the moves over it compute the preview, the release applies it.
-        let cell = match pane.thread() {
-            Some(target) => cell
-                .on_drag_move(cx.listener(
-                    move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
-                        // gpui hands every drag move to every listener, not
-                        // just the one under the pointer: a Pane only
-                        // previews while the pointer is inside it, and
-                        // drops its own preview once the pointer has left
-                        // — else the first Pane crossed keeps saying
-                        // "split left" while the drag is somewhere else.
-                        let source = event.drag(cx).thread;
-                        if event.bounds.contains(&event.event.position) {
-                            view.preview_pane_drop(
-                                source,
-                                target,
-                                event.event.position,
-                                event.bounds,
-                                cx,
-                            );
-                        } else if view
-                            .drop_preview
-                            .is_some_and(|(previewed, _)| previewed == target)
-                        {
-                            view.drop_preview = None;
-                            cx.notify();
-                        }
-                    },
-                ))
-                .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
-                    view.drop_pane(drag.thread, target, cx);
-                })),
-            None => cell,
-        };
+        let cell = self.slot_drop_target(cell, pane_leaf(pane.identity), cx);
         // A draft Pane (#29): the band and its popover instead of a
         // transcript — nothing in core exists to read yet.
         let Some(thread) = pane.thread() else {
@@ -8534,11 +9143,13 @@ impl CockpitView {
         let background = (level != Level::Wall)
             .then(|| self.background_chips(index, cx))
             .flatten();
+        let changed_files = l1.then(|| self.changed_file_links(index)).flatten();
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
         let joins = pane.is_main()
             && attachments.is_none()
             && background.is_none()
+            && changed_files.is_none()
             && (!self.grid_board() || focused);
         let activity_decisions = (level != Level::Wall)
             .then(|| self.activity_decisions(index, joins, window, cx))
@@ -8551,6 +9162,7 @@ impl CockpitView {
             && !(level == Level::Instruments && expand_question);
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
+            changed_files,
             received_reasoning_visible,
             attachments,
             composer_actions: (level != Level::Wall)
@@ -8578,12 +9190,10 @@ impl CockpitView {
                 .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
             child_footer: self.child_footer(index, cx),
+            head_drag: self
+                .board_is_movable()
+                .then(|| head_drag(pane_leaf(pane.identity), self.pane_ghost(index))),
         };
-        // The Pane a live drag picked up reads as lifted out of its slot.
-        let cell = cell.when(self.pane_drag_source == Some(thread), |cell| {
-            cell.opacity(crate::theme::DRAG_SOURCE_OPACITY)
-                .debug_selector(move || format!("pane-drag-source-{}", thread.get()))
-        });
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
     /// The board with no Pane open: the Ferrite mark and the three keys that
@@ -8649,6 +9259,223 @@ impl CockpitView {
     /// draws tight with glyph modifiers, `⌘⇧N` (`components::kbd_keys`).
     fn key_label(action: &str) -> Option<SharedString> {
         crate::components::bound_chord(action).map(SharedString::from)
+    }
+
+    /// A board slot as a drop target, for a slot dragged from the board
+    /// and for a Thread dragged from the nav: the moves over it compute
+    /// the preview, the release applies it.
+    fn slot_drop_target(&self, cell: Div, target: ThreadId, cx: &mut Context<Self>) -> Div {
+        // gpui hands every drag move to every listener, not just the one
+        // under the pointer: a slot only previews while the pointer is
+        // inside it, and drops its own preview once the pointer has left —
+        // else the first slot crossed keeps saying "split left" while the
+        // drag is somewhere else.
+        fn left(view: &mut CockpitView, target: ThreadId, cx: &mut Context<CockpitView>) {
+            if view
+                .drop_preview
+                .is_some_and(|(previewed, _)| previewed == target)
+            {
+                view.drop_preview = None;
+                cx.notify();
+            }
+        }
+        cell.on_drag_move(
+            cx.listener(move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
+                let source = event.drag(cx).leaf;
+                if view.dragging != Some(source) {
+                    view.dragging = Some(source);
+                    cx.notify();
+                }
+                if event.bounds.contains(&event.event.position) {
+                    view.preview_pane_drop(source, target, event.event.position, event.bounds, cx);
+                } else {
+                    left(view, target, cx);
+                }
+            }),
+        )
+        .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
+            view.drop_pane(drag.leaf, target, cx);
+        }))
+        .on_drag_move(
+            cx.listener(move |view, event: &gpui::DragMoveEvent<NavDrag>, _, cx| {
+                let drag = event.drag(cx).drag;
+                if event.bounds.contains(&event.event.position) {
+                    view.preview_nav_drop(drag, target, event.event.position, event.bounds, cx);
+                } else {
+                    left(view, target, cx);
+                }
+            }),
+        )
+        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+            view.drop_nav_on_board(drag.drag, target, cx);
+        }))
+    }
+
+    /// The size a slot was laid out at this frame, for its ghost.
+    fn slot_size(&self, leaf: ThreadId) -> (f32, f32) {
+        self.slot_sizes
+            .borrow()
+            .get(&leaf)
+            .copied()
+            .unwrap_or((GHOST_MAX_W, GHOST_MAX_H))
+    }
+
+    /// A Pane's ghost: its name, its branch, its size on the board.
+    fn pane_ghost(&self, index: usize) -> GhostFace {
+        let pane = &self.panes[index];
+        GhostFace {
+            title: pane.name.clone(),
+            detail: pane
+                .thread()
+                .and_then(|thread| self.facts.get(thread))
+                .and_then(|facts| facts.branch.clone()),
+            reader: false,
+            size: self.slot_size(pane_leaf(pane.identity)),
+        }
+    }
+
+    /// A nav row's ghost: the Thread as its Pane would look — its size on
+    /// the board when it is there, the largest ghost when it is not.
+    fn thread_ghost(&self, thread: ThreadId) -> GhostFace {
+        GhostFace {
+            title: self.facts.name(thread),
+            detail: self
+                .facts
+                .get(thread)
+                .and_then(|facts| facts.branch.clone()),
+            reader: false,
+            size: self.slot_size(thread),
+        }
+    }
+
+    /// A Pane's open document as its own board slot: the reader, its head
+    /// the slot's drag handle, a press anywhere in it landing on the Pane
+    /// that opened it.
+    fn reader_cell(
+        &self,
+        owner: PaneIdentity,
+        leaf: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let pane = &self.panes[self.index_of(owner)?];
+        let document = pane.preview.document()?;
+        pane.document_rich
+            .file_context(document.path.parent(), &pane.preview);
+        let face = GhostFace {
+            title: document.title.clone().into(),
+            detail: Some(SharedString::from(document.kind())),
+            reader: true,
+            size: self.slot_size(leaf),
+        };
+        let body = crate::rich::document_body(document, pane.document_rich.clone());
+        let reader = pane
+            .preview
+            .reader(body, head_drag(leaf, face))?
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    if let Some(index) = view.index_of(owner) {
+                        view.focus_pane(index);
+                        cx.notify();
+                    }
+                }),
+            );
+        Some(self.slot_drop_target(reader, leaf, cx))
+    }
+
+    fn changed_file_links(&self, index: usize) -> Option<AnyElement> {
+        use gpui::component::{Icon, IconName};
+
+        let pane = self.panes.get(index)?;
+        let thread = pane.thread()?;
+        let changed_files = self.facts.get(thread)?.changed_files.clone();
+        if changed_files.is_empty() {
+            return None;
+        }
+        let cwd = self.thread_path(thread)?;
+        let preview = pane.preview.clone();
+        let mut links = div()
+            .id(("thread-documents", thread.get() as usize))
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap(px(4.))
+            .overflow_x_scroll();
+        for (file_index, file) in changed_files.into_iter().enumerate() {
+            let raw = std::path::PathBuf::from(&file.path);
+            let path = if raw.is_absolute() {
+                raw
+            } else {
+                cwd.join(raw)
+            };
+            let title = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let title_for_open = title.clone();
+            let path_for_open = path.clone();
+            let host = preview.clone();
+            links = links.child(
+                div()
+                    .debug_selector(move || format!("thread-document-{file_index}"))
+                    .child(
+                        crate::components::button(("thread-document", file_index))
+                            .max_w(px(240.))
+                            .h(px(crate::theme::COMPOSER_ROW_H))
+                            .px(px(6.))
+                            .bg(rgb(crate::theme::PANE))
+                            .rounded(px(crate::theme::R_CHIP))
+                            .tooltip(format!("Open {}", path.display()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .min_w_0()
+                                    .text_size(px(crate::theme::FS_SM))
+                                    .text_color(rgb(crate::theme::TEXT))
+                                    .child(div().min_w_0().truncate().child(title))
+                                    .child(pane::diff_stat(file.added, file.removed)),
+                            )
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                host.open_document(
+                                    path_for_open.clone(),
+                                    title_for_open.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                    ),
+            );
+        }
+        Some(
+            div()
+                .debug_selector(|| "thread-documents".into())
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .min_w_0()
+                .h(px(crate::theme::COMPOSER_ROW_H))
+                .gap(px(6.))
+                .child(
+                    Icon::new(IconName::FileText)
+                        .size(px(crate::theme::ROW_ICON))
+                        .text_color(rgb(crate::theme::TEXT_2)),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(crate::theme::FONT_UI)
+                        .text_size(px(crate::theme::FS_SM))
+                        .text_color(rgb(crate::theme::TEXT_2))
+                        .child("Files changed"),
+                )
+                .child(links)
+                .into_any_element(),
+        )
     }
 
     fn toggle_tool(
@@ -9141,6 +9968,7 @@ impl CockpitView {
         Some(
             crate::components::ChoiceMenu {
                 id: format!("mode-picker-{}", thread.get()).into(),
+                anchor: gpui::Anchor::BottomLeft,
                 trigger: pane::composer_control(("mode-picker", thread.get() as usize), cx)
                     .debug_selector(move || format!("mode-picker-{}", thread.get()))
                     .tip("Permission mode")
@@ -9827,6 +10655,8 @@ impl CockpitView {
                     cx.notify();
                 }
             }));
+        // The mark rides the Pane head's checkout line: the card drops
+        // below it, from its left edge.
         Some(
             deferred(
                 anchored()
@@ -9851,6 +10681,11 @@ impl CockpitView {
     ) -> Option<AnyElement> {
         let identity = self.context_usage?;
         let at = self.card_corner(format!("usage-{identity:?}"), identity, true, window)?;
+        // The card opens upward from `at`: it grows into the room above,
+        // inside the window's margin, and scrolls past that.
+        let max_h = (f32::from(at.y) - crate::theme::GRID_PAD)
+            .min(f32::from(window.viewport_size().height) - 2. * crate::theme::GRID_PAD)
+            .max(crate::theme::MENU_ROW_H * 4.);
         let (usage, provider, details, usage_details, last_cost) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
@@ -9886,12 +10721,22 @@ impl CockpitView {
         let card = crate::components::floating_surface()
             .id("context-usage-card")
             .debug_selector(|| "context-usage-card".into())
+            // The shell's own width is the context menu's; this card sizes
+            // to its content plus the shell's padding, or its right edge
+            // is clipped.
+            .w(px(crate::theme::USAGE_CARD_W + 2. * crate::theme::MENU_PAD))
             .child(pane::context_usage(
                 usage,
                 self.cockpit.account_limits(provider),
                 details,
                 usage_details,
                 last_cost,
+                self.context_usage_expanded,
+                max_h - 2. * crate::theme::FLOAT_PAD,
+                cx.listener(|view, _: &ClickEvent, _, cx| {
+                    view.context_usage_expanded = !view.context_usage_expanded;
+                    cx.notify();
+                }),
             ))
             .when_some(
                 match identity {
@@ -9916,6 +10761,8 @@ impl CockpitView {
                     cx.notify();
                 }
             }));
+        // The meter sits toward the right of the Composer's row, beside
+        // the model: the card opens upward, its right edge on the meter's.
         Some(
             deferred(
                 anchored()
@@ -10064,6 +10911,13 @@ impl CockpitView {
         crate::components::ChoiceMenu {
             // Rebuild the retained native menu when availability changes.
             id: format!("choice-{identity:?}-{effort}-{busy}").into(),
+            // The model and effort chips end the Composer's row; a draft's
+            // band starts its own.
+            anchor: if band {
+                gpui::Anchor::BottomLeft
+            } else {
+                gpui::Anchor::BottomRight
+            },
             trigger,
             choices,
             open: open.is_some(),
@@ -10344,6 +11198,66 @@ impl CockpitView {
         )
     }
 
+    /// The update button beside the bell: shown only while a newer CLI
+    /// can be installed (pressing it installs every ready one) or while
+    /// one is installing (the glyph breathes, and the button waits).
+    fn update_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::cli_updates::Badge;
+        use crate::icons::{icon, UPDATE};
+        use crate::theme::{
+            ACCENT, HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, MOTION_BREATH_MS, PRESSED, PULSE_MIN,
+            TEXT_MUTED, TRANSPARENT,
+        };
+        let badge = self.cli_updates.badge()?;
+        // The chrome band's icon button (the gear's recipe): no ground at
+        // rest, `HOVER` under the pointer.
+        let button = crate::components::faded_button(
+            "cli-update",
+            rgba(TRANSPARENT).into(),
+            rgb(HOVER).into(),
+            rgb(PRESSED).into(),
+            rgb(TEXT_MUTED).into(),
+            cx,
+        )
+        .debug_selector(|| "cli-update".into())
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0();
+        Some(match badge {
+            // Something new, not something that needs you: the accent, the
+            // unread ink, never the attention ochre.
+            Badge::Ready(tooltip) => button
+                .tooltip(tooltip)
+                .child(icon(UPDATE, ICON_BUTTON_GLYPH, ACCENT))
+                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    for provider in view.cli_updates.ready() {
+                        view.update_cli(provider, cx);
+                    }
+                }))
+                .into_any_element(),
+            // Installing: the glyph breathes on the shared clock (still
+            // under reduced motion) and the button waits.
+            Badge::Installing(tooltip) => {
+                let breath = gpui::pulsating_between(PULSE_MIN, 1.0);
+                let phase = if cx.reduce_motion() {
+                    0.0
+                } else {
+                    crate::motion::pulse_phase(
+                        std::time::Duration::from_millis(MOTION_BREATH_MS),
+                        cx.entity_id(),
+                        cx,
+                    )
+                };
+                button
+                    .tooltip(tooltip)
+                    .cursor_default()
+                    .child(icon(UPDATE, ICON_BUTTON_GLYPH, TEXT_MUTED).opacity(breath(phase)))
+                    .into_any_element()
+            }
+        })
+    }
+
     /// The bell in the nav's chrome band, its badge, and its panel.
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = std::time::SystemTime::now();
@@ -10422,7 +11336,10 @@ impl CockpitView {
         // In the rail, utilities move to its foot; titlebar controls should
         // never become the navigation hierarchy.
         if !state.collapsed {
-            chrome = chrome.child(self.bell_element(cx)).child(gear);
+            chrome = chrome
+                .children(self.update_element(cx))
+                .child(self.bell_element(cx))
+                .child(gear);
         }
         let content = div()
             .flex()
@@ -10789,8 +11706,12 @@ impl CockpitView {
             group,
             self.editable_group_title(id, group.title.clone(), cx),
         );
-        let badge = group.title.clone();
+        let chip = NavChip::Group(group.clone());
+        let lifted = self.nav_dragging == Some(Drag::Group(id));
         let mut block = nav::group_block()
+            .when(lifted, |block| {
+                block.opacity(crate::theme::DRAG_SOURCE_OPACITY)
+            })
             // A Group separates itself from whatever is above it: nothing
             // when it opens the tree, the 16px band from another Group —
             // prepended below, because that band is a drop target and not a
@@ -10810,8 +11731,8 @@ impl CockpitView {
                         origin,
                     },
                     move |_, _, _, cx| {
-                        let badge = badge.clone();
-                        cx.new(|_| NavDragPreview(badge))
+                        let chip = chip.clone();
+                        cx.new(|_| NavDragPreview(chip))
                     },
                 )
                 .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
@@ -10947,36 +11868,54 @@ impl CockpitView {
             cx.reduce_motion(),
             editing,
         );
-        let badge = self.facts.name(thread);
+        let face = self.thread_ghost(thread);
+        let nav_edge = self.nav_width();
+        let chip = NavChip::Thread {
+            row: row.clone(),
+            compact,
+            grouped: group.is_some(),
+        };
+        let lifted = matches!(
+            self.nav_dragging,
+            Some(Drag::Thread { thread: dragged, .. }) if dragged == thread
+        );
         drop_feedback(head, self.cockpit.groups().clone(), target)
+            // The row being dragged stays in the tree, dimmed, while its
+            // copy rides the pointer.
+            .when(lifted, |row| row.opacity(crate::theme::DRAG_SOURCE_OPACITY))
             .on_drag(
                 NavDrag {
                     drag: Drag::Thread { thread, group },
                     origin,
                 },
-                move |_, _, _, cx| {
-                    let badge = badge.clone();
-                    cx.new(|_| NavDragPreview(badge))
+                move |_, grab, _, cx| {
+                    let face = face.clone();
+                    let chip = chip.clone();
+                    cx.new(|_| PaneGhost {
+                        face,
+                        grab,
+                        row_left_of: Some((nav_edge, chip)),
+                    })
                 },
             )
             .on_drop(
                 cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, target, cx)),
             )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    if let Some(group) = group {
-                        view.enter_group(group, cx);
-                        view.focus_thread(thread, cx);
-                        return;
-                    }
-                    if open {
-                        view.focus_thread(thread, cx);
-                        return;
-                    }
-                    view.revive_thread(thread, cx);
-                }),
-            )
+            // A click, not a press: pressing a row to drag it onto the
+            // board must leave the board showing, not switch to the row's
+            // own view before the drag begins.
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                if let Some(group) = group {
+                    view.enter_group(group, cx);
+                    view.focus_thread(thread, cx);
+                    return;
+                }
+                if open {
+                    view.focus_thread(thread, cx);
+                    return;
+                }
+                view.revive_thread(thread, cx);
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -11038,6 +11977,7 @@ impl CockpitView {
                     ),
             );
         let utilities = nav::rail_utilities()
+            .children(self.update_element(cx))
             .child(self.bell_element(cx))
             .child(prefs::gear(
                 prefs::gear_button(cx).on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
@@ -11055,18 +11995,84 @@ impl CockpitView {
 
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
-/// A draft's stand-in leaf in a Group's tree: drafts are no Threads and
-/// never persist, so the high ids stand in for them for one frame.
-fn draft_leaf(draft: ferrite_core::roster::DraftId) -> ThreadId {
-    ThreadId::new(u64::MAX - draft.get())
+/// A slot's leaf in a board's tree. A Thread's Pane is its own id; drafts
+/// and readers are no Threads and never persist, so stand-in ids nothing
+/// real reaches name them: a draft counts down from the top, and a reader
+/// is its Pane's number under the `READER_LEAF` bit (`READER_DRAFT` marks
+/// a draft's reader).
+const READER_LEAF: u64 = 1 << 62;
+const READER_DRAFT: u64 = 1 << 61;
+
+/// A reader's share of its Pane's slot when it first opens beside it.
+const READER_SHARE: f32 = 0.46;
+
+fn pane_leaf(identity: PaneIdentity) -> ThreadId {
+    match identity {
+        PaneIdentity::Thread(thread) => thread,
+        PaneIdentity::Draft(draft) => ThreadId::new(u64::MAX - draft.get()),
+    }
 }
 
-fn leaf_identity(leaf: ThreadId) -> PaneIdentity {
-    if leaf.get() > u64::MAX / 2 {
-        PaneIdentity::Draft(ferrite_core::roster::DraftId::new(u64::MAX - leaf.get()))
-    } else {
-        PaneIdentity::Thread(leaf)
+fn reader_leaf(owner: PaneIdentity) -> ThreadId {
+    ThreadId::new(match owner {
+        PaneIdentity::Thread(thread) => READER_LEAF | thread.get(),
+        PaneIdentity::Draft(draft) => READER_LEAF | READER_DRAFT | draft.get(),
+    })
+}
+
+fn leaf_slot(leaf: ThreadId) -> Slot {
+    let raw = leaf.get();
+    if raw > u64::MAX / 2 {
+        return Slot::Pane(PaneIdentity::Draft(ferrite_core::roster::DraftId::new(
+            u64::MAX - raw,
+        )));
     }
+    if raw & READER_LEAF == 0 {
+        return Slot::Pane(PaneIdentity::Thread(leaf));
+    }
+    let number = raw & !(READER_LEAF | READER_DRAFT);
+    Slot::Reader(if raw & READER_DRAFT != 0 {
+        PaneIdentity::Draft(ferrite_core::roster::DraftId::new(number))
+    } else {
+        PaneIdentity::Thread(ThreadId::new(number))
+    })
+}
+
+/// A drag move's pointer and the hovered slot's bounds, in the tree's units.
+fn drop_geometry(
+    position: gpui::Point<Pixels>,
+    bounds: gpui::Bounds<Pixels>,
+) -> (layout::Point, layout::Rect) {
+    (
+        layout::Point {
+            x: f32::from(position.x),
+            y: f32::from(position.y),
+        },
+        layout::Rect {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            w: f32::from(bounds.size.width),
+            h: f32::from(bounds.size.height),
+        },
+    )
+}
+
+/// A slot's head as its drag handle: the whole band picks the slot up,
+/// with its ghost riding the pointer.
+fn head_drag(leaf: ThreadId, face: GhostFace) -> pane::HeadDrag {
+    Box::new(move |head: Div| {
+        head.id(("slot-head", leaf.get() as usize))
+            .cursor(gpui::CursorStyle::OpenHand)
+            .on_drag(PaneDrag { leaf }, move |_, grab, _, cx| {
+                let face = face.clone();
+                cx.new(|_| PaneGhost {
+                    face,
+                    grab,
+                    row_left_of: None,
+                })
+            })
+            .into_any_element()
+    })
 }
 
 /// The copy of a Provider's CLI Ferrite runs — the newest it found — as
@@ -13311,6 +14317,76 @@ mod tests {
                 suggestions: vec![],
             },
         }
+    }
+
+    fn many_questions(id: &str) -> SessionEvent {
+        let questions = (0..4)
+            .map(|index| ferrite_core::questions::Question {
+                id: None,
+                question: format!("Question {} needs an answer", index + 1),
+                header: format!("Question {}", index + 1),
+                multi_select: false,
+                secret: false,
+                allow_other: false,
+                options: vec![
+                    ferrite_core::questions::Choice {
+                        label: "First choice".into(),
+                        description: "The first available answer".into(),
+                        preview: None,
+                    },
+                    ferrite_core::questions::Choice {
+                        label: "Second choice".into(),
+                        description: "The second available answer".into(),
+                        preview: None,
+                    },
+                ],
+            })
+            .collect::<Vec<_>>();
+        SessionEvent::DecisionRequested {
+            decision: Decision {
+                delivery: Default::default(),
+                kind: ferrite_core::DecisionKind::Questions(questions),
+                policy: Default::default(),
+                id: id.into(),
+                tool_use_id: "toolu_many_questions".into(),
+                tool_name: "AskUserQuestion".into(),
+                description: String::new(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        }
+    }
+
+    #[gpui::test]
+    fn a_long_question_form_scrolls_to_the_next_question(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("question-scroll", 1);
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(900.), px(600.)));
+        fake.streams.borrow()[0]
+            .send(many_questions("q_scroll"))
+            .unwrap();
+        tick(cx);
+
+        let viewport = cx.debug_bounds("question-scroll-content").unwrap();
+        let before = cx.debug_bounds("question-choice-3-1").unwrap();
+        assert!(
+            before.bottom() > viewport.bottom(),
+            "the last question must begin below the question viewport"
+        );
+
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        cx.run_until_parked();
+
+        let after = cx.debug_bounds("question-choice-3-1").unwrap();
+        assert!(
+            after.bottom() <= viewport.bottom() && after.top() >= viewport.top(),
+            "wheel scrolling must reveal the next question: {after:?} in {viewport:?}"
+        );
     }
 
     /// Main and child questions share native controls; composer input stays chat.
@@ -16582,6 +17658,99 @@ mod tests {
             cx.debug_bounds("progress-caption-Checking fold call sites")
                 .is_none(),
             "completed turns stop their live indication"
+        );
+    }
+
+    #[gpui::test]
+    fn edited_files_stay_one_click_away_above_the_prompt(cx: &mut TestAppContext) {
+        let (core, fake, workspace) = bound_cockpit("thread-documents", Provider::Claude);
+        let document = workspace.join("docs").join("generated.md");
+        let source = workspace.join("src").join("generated.rs");
+        std::fs::create_dir_all(document.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&document, "# Generated guide\n").unwrap();
+        std::fs::write(&source, "fn generated() {}\n").unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let stream = fake.streams.borrow();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "edit-doc".into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "docs/generated.md" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "edit-doc".into(),
+                output: "updated".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "docs/generated.md".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 0,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["+# Generated guide".into()],
+                    }],
+                },
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "edit-code".into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "src/generated.rs" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "edit-code".into(),
+                output: "updated".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "src/generated.rs".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["-fn old() {}".into(), "+fn generated() {}".into()],
+                    }],
+                },
+            })
+            .unwrap();
+        drop(stream);
+        tick(cx);
+
+        let shelf = debug_bounds(cx, "thread-documents".to_string()).unwrap();
+        let prompt = debug_bounds(cx, "focused-prompt-editor".to_string()).unwrap();
+        assert!(
+            shelf.origin.y < prompt.origin.y,
+            "files sit above typed input"
+        );
+        let link = debug_bounds(cx, "thread-document-0".to_string())
+            .expect("the edited Markdown file is listed in its Thread");
+        cx.simulate_click(link.center(), gpui::Modifiers::none());
+        assert_eq!(
+            view.read_with(cx, |view, _| view.panes[0]
+                .preview
+                .document()
+                .map(|document| document.path)),
+            Some(document)
+        );
+        let close = debug_bounds(cx, "close-markdown-reader".to_string()).unwrap();
+        cx.simulate_click(close.center(), gpui::Modifiers::none());
+        let code = debug_bounds(cx, "thread-document-1".to_string())
+            .expect("a non-Markdown file is listed too");
+        cx.simulate_click(code.center(), gpui::Modifiers::none());
+        assert_eq!(
+            view.read_with(cx, |view, _| view.panes[0]
+                .preview
+                .document()
+                .map(|document| document.path)),
+            Some(source)
         );
     }
 

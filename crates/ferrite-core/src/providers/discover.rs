@@ -128,14 +128,14 @@ fn probe(path: &Path, parse: fn(&str) -> Option<(String, [u64; 3])>) -> Option<(
     parse(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn parser(provider: Provider) -> fn(&str) -> Option<(String, [u64; 3])> {
+pub(crate) fn parser(provider: Provider) -> fn(&str) -> Option<(String, [u64; 3])> {
     match provider {
         Provider::Claude => super::claude::parse_version,
         Provider::Codex => super::codex::parse_version,
     }
 }
 
-fn bare_name(provider: Provider) -> &'static str {
+pub(crate) fn bare_name(provider: Provider) -> &'static str {
     match provider {
         Provider::Claude => "claude",
         Provider::Codex => "codex",

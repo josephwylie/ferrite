@@ -70,7 +70,9 @@ _Avoid_: layout (that is what the Roster's grid computes), tab list.
 A Group's arrangement of its Panes: a binary split tree (each split a row
 or a column with a share for its first side), persisted with the Group.
 Seams between Panes resize it; dropping a Pane on another swaps them (the
-centre) or splits that slot (an edge).
+centre) or splits that slot (an edge). A Pane's open reader takes a slot of
+its own in the same tree (in Solo too), placed for the session only — the
+persisted Layout names Threads alone.
 _Avoid_: grid (that is what an even Layout happens to be), mosaic.
 
 **Title**

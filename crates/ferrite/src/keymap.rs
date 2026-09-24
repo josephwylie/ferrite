@@ -202,6 +202,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
+        // The titlebar's New Group: the focused solo Thread plus a new one,
+        // beside cmd-n's plain new Thread.
+        (with_primary("g"), "cockpit::NewGroup", None),
         // Tab accepts a highlighted command first, then keeps #29's draft-band
         // walk or L1 tool disclosure walk. Shift-Tab is the reverse Thread walk.
         ("tab".into(), "cockpit::BandCycle", Some("Ferrite")),
@@ -291,6 +294,7 @@ mod tests {
             ("cockpit::ToggleNav", "b"),
             ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
+            ("cockpit::NewGroup", "g"),
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),
             ("ferrite::Quit", "q"),

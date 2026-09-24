@@ -720,12 +720,6 @@ pub const ROW_ICON: f32 = 12.0;
 pub const ROW_ICON_GAP: f32 = 5.0;
 /// 12px — the provider logomark in a picker row and the Composer's chip.
 pub const PROVIDER_MARK_SM: f32 = 12.0;
-/// The badge under the pointer while a Pane or a nav row is dragged
-/// (`components::drag_badge`): 26px high, 10px inline padding, at most
-/// 280px before the title truncates.
-pub const DRAG_BADGE_H: f32 = 26.0;
-pub const DRAG_BADGE_PAD_X: f32 = 10.0;
-pub const DRAG_BADGE_MAX_W: f32 = 280.0;
 /// 20px — one queued prompt's row pitch in the Composer's queue viewport:
 /// the input line's own row, stacked with no gap, one `COMPOSER_GAP` above
 /// the input.
@@ -836,6 +830,12 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.popover_foreground = rgb(TEXT).into();
     theme.ring = rgb(FOCUS_RING).into();
     theme.caret = rgb(ACCENT).into();
+    // The reader's line numbers sit on the Pane itself, not a raised gutter.
+    // The gutter is painted opaque over the text, so it takes the Pane's own
+    // colour rather than none.
+    let mut highlight = (*theme.highlight_theme).clone();
+    highlight.style.editor_gutter_background = Some(rgb(PANE).into());
+    theme.highlight_theme = std::sync::Arc::new(highlight);
     theme.selection = rgba(TEXT_SELECTION_WASH).into();
     theme.link = rgb(ACCENT).into();
     theme.link_hover = rgb(ACCENT_HI).into();
@@ -1360,6 +1360,9 @@ pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
 pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
 pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
+/// The miniature that rides the pointer while a slot is dragged: see-through
+/// enough that the board under it still reads.
+pub const DRAG_GHOST_OPACITY: f32 = 0.86;
 /// The empty board's hints: lines 8px apart, the keys in one column 8px
 /// from their verbs' shared edge.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
@@ -1524,6 +1527,27 @@ pub const USAGE_TIGHT: f32 = 0.80;
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions.
 pub const SESSION_CARD_W: f32 = 320.0;
+/// One row of the usage card's legend, its colour square, and the share
+/// column the percentages right-align in.
+pub const USAGE_LEGEND_ROW_H: f32 = 20.0;
+pub const USAGE_SWATCH: f32 = 8.0;
+pub const USAGE_SHARE_W: f32 = 44.0;
+/// What fills the context window, one ink per category in the stacked bar
+/// and its legend. The inks are the palette's own quiet hues, not new ones:
+/// the breakdown has to tell categories apart, not shout. What the operator
+/// wrote leads (accent), the machine's work follows in the muted state hues,
+/// and the fixed overheads fade through grey to the free space. Anything
+/// else a provider reports takes `CTX_CYCLE`.
+pub const CTX_MESSAGES: u32 = ACCENT;
+pub const CTX_TOOLS: u32 = 0xc4a58e;
+pub const CTX_MCP: u32 = RUNNING;
+pub const CTX_SKILLS: u32 = ATTENTION;
+pub const CTX_PROMPT: u32 = 0x9aa0a8;
+pub const CTX_MEMORY: u32 = 0x7c828b;
+pub const CTX_BUFFER: u32 = 0x5c6168;
+pub const CTX_FREE: u32 = 0x33373d;
+pub const CTX_DEFERRED: u32 = 0x464a51;
+pub const CTX_CYCLE: [u32; 4] = [0xa79fc4, 0xc39cab, 0x8fb2b8, 0xb5b48e];
 /// 768px — the image preview sheet's widest reading; it otherwise takes
 /// 90% × 85% of its Pane.
 pub const PREVIEW_MAX_W: f32 = 768.0;

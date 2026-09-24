@@ -33,16 +33,16 @@ use super::FileSuggestion;
 /// mid-turn.
 pub const CLAUDE_CLI_MIN_VERSION: [u64; 3] = [2, 1, 224];
 
-/// Exclusive ceiling: Ferrite is proven against the 2.x wire, and a new major
-/// is a new protocol until someone re-runs the fixture captures against it. A
-/// 3.x CLI is refused at spawn rather than trusted into a Session, because a
-/// silently changed wire fails somewhere deep in a turn where the cause is
-/// invisible.
-pub const CLAUDE_CLI_MAX_VERSION_EXCLUSIVE: [u64; 3] = [3, 0, 0];
+/// Soft ceiling: Ferrite is proven against the 2.x wire, and a new major may
+/// be a new protocol until someone re-runs the fixture captures against it.
+/// A 3.x CLI still spawns — refusing it would strand the operator on old
+/// models until Ferrite ships — but spawn says it is untested, and Settings
+/// marks it, so a turn that fails oddly has a named suspect.
+pub const CLAUDE_CLI_TESTED_BELOW: [u64; 3] = [3, 0, 0];
 
-/// The supported window as it is shown to operators.
+/// The window as it is shown to operators.
 const MIN_VERSION_DISPLAY: &str = "2.1.224";
-const MAX_VERSION_DISPLAY: &str = "3.0.0";
+const TESTED_BELOW_DISPLAY: &str = "3.0.0";
 
 /// One frame of UI drains far less than this; the depth exists so a stalled
 /// frame throttles the CLI instead of losing its output.
@@ -122,12 +122,6 @@ pub enum ClaudeSpawnError {
         found: String,
         required: &'static str,
     },
-    /// The CLI is a major release beyond what Ferrite has been proven against.
-    /// The operator upgrades Ferrite — the CLI is fine.
-    CliVersionUnsupported {
-        found: String,
-        supported_below: &'static str,
-    },
     /// `--version` ran but produced nothing parseable.
     VersionCheckFailed {
         detail: String,
@@ -146,16 +140,6 @@ impl std::fmt::Display for ClaudeSpawnError {
                     f,
                     "claude CLI {found} is older than the pinned minimum {required}; \
                      upgrade the CLI"
-                )
-            }
-            ClaudeSpawnError::CliVersionUnsupported {
-                found,
-                supported_below,
-            } => {
-                write!(
-                    f,
-                    "claude CLI {found} is a newer major release than Ferrite is proven \
-                     against (below {supported_below}); upgrade Ferrite"
                 )
             }
             ClaudeSpawnError::VersionCheckFailed { detail } => {
@@ -1047,11 +1031,11 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
             required: MIN_VERSION_DISPLAY,
         });
     }
-    if version >= CLAUDE_CLI_MAX_VERSION_EXCLUSIVE {
-        return Err(ClaudeSpawnError::CliVersionUnsupported {
-            found,
-            supported_below: MAX_VERSION_DISPLAY,
-        });
+    if version >= CLAUDE_CLI_TESTED_BELOW {
+        eprintln!(
+            "ferrite: claude CLI {found} is newer than Ferrite is tested against \
+             (below {TESTED_BELOW_DISPLAY}); running it anyway"
+        );
     }
     Ok(())
 }
@@ -1130,19 +1114,19 @@ mod tests {
             Some(CLAUDE_CLI_MIN_VERSION)
         );
         assert_eq!(
-            parse_version(MAX_VERSION_DISPLAY).map(|(_, v)| v),
-            Some(CLAUDE_CLI_MAX_VERSION_EXCLUSIVE)
+            parse_version(TESTED_BELOW_DISPLAY).map(|(_, v)| v),
+            Some(CLAUDE_CLI_TESTED_BELOW)
         );
-        assert!(CLAUDE_CLI_MIN_VERSION < CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(CLAUDE_CLI_MIN_VERSION < CLAUDE_CLI_TESTED_BELOW);
     }
 
-    /// The window is closed at the bottom and open at the top.
+    /// The tested window is closed at the bottom and open at the top.
     #[test]
-    fn the_next_major_is_out_and_the_release_before_it_is_in() {
-        let last_supported = parse_version("2.99.99").unwrap().1;
+    fn the_next_major_is_untested_and_the_release_before_it_is_tested() {
+        let last_tested = parse_version("2.99.99").unwrap().1;
         let next_major = parse_version("3.0.0").unwrap().1;
-        assert!(last_supported < CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
-        assert!(next_major >= CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(last_tested < CLAUDE_CLI_TESTED_BELOW);
+        assert!(next_major >= CLAUDE_CLI_TESTED_BELOW);
     }
 
     /// The version Ferrite is developed against has to sit inside its own pins.
@@ -1150,7 +1134,7 @@ mod tests {
     fn the_captured_fixture_version_is_supported() {
         let captured = parse_version("2.1.243").unwrap().1;
         assert!(captured >= CLAUDE_CLI_MIN_VERSION);
-        assert!(captured < CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(captured < CLAUDE_CLI_TESTED_BELOW);
     }
 
     #[test]

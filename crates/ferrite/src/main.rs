@@ -6,6 +6,7 @@
 mod attachment_preview;
 mod attachments;
 mod background_chips;
+mod cli_updates;
 mod cockpit;
 mod components;
 mod composer;
@@ -251,6 +252,11 @@ fn main() {
                             px(theme::WINDOW_MIN_W),
                             px(theme::WINDOW_MIN_H),
                         )),
+                        // Windows draws a DirectComposition window with no
+                        // redirection bitmap: shown before gpui presents,
+                        // it is an empty see-through frame. It opens hidden
+                        // and is shown with its first frame (below).
+                        show: !cfg!(target_os = "windows"),
                         ..Default::default()
                     },
                     |window, cx| {
@@ -263,6 +269,7 @@ fn main() {
                                     dir: settings_dir.clone(),
                                     defaults: defaults.clone(),
                                     titler: true,
+                                    cli_updates: true,
                                 },
                                 cx,
                             );
@@ -277,7 +284,14 @@ fn main() {
                 .unwrap();
 
             window
-                .update(cx, |_, _window, cx| cx.activate(true))
+                .update(cx, |_, window, cx| {
+                    // A hidden window is sent no frames: `open_window` has
+                    // drawn the first one, and showing it presents it.
+                    if cfg!(target_os = "windows") {
+                        window.activate_window();
+                    }
+                    cx.activate(true)
+                })
                 .unwrap();
         });
 }
@@ -411,7 +425,7 @@ fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
 /// menu so the standard cut/copy/paste/select-all reach the Composer.
 fn app_menus() -> Vec<Menu> {
     use cockpit::{
-        CloseThread, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
+        CloseThread, NewGroup, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
         PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav, ToggleNotifications,
     };
     vec![
@@ -432,6 +446,7 @@ fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Thread", NewThread),
                 MenuItem::action("New Thread in a Worktree", NewWorktreeThread),
+                MenuItem::action("New Group with New Thread", NewGroup),
                 MenuItem::separator(),
                 MenuItem::action("Close Pane", CloseThread),
                 MenuItem::action("Reopen Parked Thread", ReopenThread),

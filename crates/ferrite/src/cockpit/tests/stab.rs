@@ -88,7 +88,7 @@ fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
         cx.run_until_parked();
         cx.simulate_mouse_move(release, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
-        view.read_with(cx, |view, _| assert_eq!(view.pane_drag_source, Some(a)));
+        view.read_with(cx, |view, _| assert_eq!(view.dragging, Some(a)));
         assert!(
             cx.debug_bounds(source).is_some(),
             "the source cell dims while the drag is live"
@@ -96,7 +96,7 @@ fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
         cx.simulate_mouse_up(release, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         tick(cx);
-        view.read_with(cx, |view, _| assert_eq!(view.pane_drag_source, None));
+        view.read_with(cx, |view, _| assert_eq!(view.dragging, None));
         assert!(cx.debug_bounds(source).is_none(), "the release restores it");
     }
 }

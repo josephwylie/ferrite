@@ -24,6 +24,7 @@ struct RequestForm {
     form_inputs: HashMap<String, Entity<InputState>>,
     values: serde_json::Map<String, serde_json::Value>,
     fit: QuestionFit,
+    scroll: ScrollHandle,
 }
 
 #[derive(Default)]
@@ -673,6 +674,8 @@ impl CockpitView {
             let picking = weak.clone();
             strip = strip.child(components::ChoiceMenu {
                 id: format!("subject-overflow-{}", thread.get()).into(),
+                // The strip runs across the Pane's top: the list drops below it.
+                anchor: gpui::Anchor::TopLeft,
                 trigger: components::button(("subject-overflow", thread.get()))
                     .tab_stop(true)
                     .h(px(theme::CHIP_H))
@@ -1393,6 +1396,7 @@ impl CockpitView {
                     form_inputs,
                     values: form_defaults(&fields),
                     fit: Default::default(),
+                    scroll: ScrollHandle::new(),
                 },
             );
         }
@@ -1749,11 +1753,13 @@ impl CockpitView {
                     form_inputs: Default::default(),
                     values: Default::default(),
                     fit: Default::default(),
+                    scroll: ScrollHandle::new(),
                 },
             );
         }
         let sending = request.submitting;
         let answers = forms.0.borrow()[&handle].answers.clone();
+        let scroll = forms.0.borrow()[&handle].scroll.clone();
         // The question the digit keys pick in; only its rows show digits.
         let target = digit_question(&answers, &questions);
         let mut content = div()
@@ -1773,7 +1779,9 @@ impl CockpitView {
             } else {
                 theme::DECISION_BODY_MAX_H
             }))
-            .overflow_y_scrollbar()
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .vertical_scrollbar(&scroll)
             .pr(px(theme::DECISION_SCROLL_GUTTER))
             .flex()
             .flex_col()

@@ -75,6 +75,7 @@ pub struct PaneView {
     pub selected: Subject,
     pub generation: u64,
     pub rich: crate::rich::TextCache,
+    pub document_rich: crate::rich::TextCache,
     pub agent_menu_open: bool,
     pub subject_strip_width: f32,
     pub tab_interaction: crate::cockpit::subagents::TabInteraction,
@@ -227,6 +228,7 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
+            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -282,6 +284,7 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
+            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -677,6 +680,8 @@ pub struct PaneWiring {
     /// The retained L1 transcript. Its cached entity owns native text and
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
+    /// Files edited by this Thread, as one-click preview entries.
+    pub changed_files: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
     /// Pointer equivalents of the owning Composer's send and interrupt keys.
     pub composer_actions: Option<AnyElement>,
@@ -717,7 +722,14 @@ pub struct PaneWiring {
     pub expand_question: bool,
     pub question_measurement: Option<AnyElement>,
     pub child_footer: Option<AnyElement>,
+    /// Wires the whole L1 head as the Pane's drag handle (the cockpit
+    /// supplies it while the board has somewhere to move the Pane to).
+    pub head_drag: Option<HeadDrag>,
 }
+
+/// Turns the Pane head's band into its drag handle: the cockpit gives it an
+/// id and the drag payload, since only the cockpit knows the board.
+pub type HeadDrag = Box<dyn FnOnce(Div) -> AnyElement>;
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
 /// folded tests flag. Pure so the matrix is assertable without a window.
@@ -881,6 +893,8 @@ pub(crate) struct PaneCtx<'a> {
     pub attachments: Option<AnyElement>,
     pub composer_actions: Option<AnyElement>,
     pub background: Option<AnyElement>,
+    /// Files this Thread edited: the Composer's shelf above the prompt.
+    pub changed_files: Option<AnyElement>,
     pub menu: Option<AnyElement>,
     pub model_picker: Option<AnyElement>,
     pub usage_meter: Option<AnyElement>,
@@ -925,6 +939,7 @@ pub fn render_pane(
     let wall = wall.unwrap_or(&empty);
     let PaneWiring {
         transcript: retained_transcript,
+        changed_files,
         attachments,
         composer_actions,
         background,
@@ -941,6 +956,7 @@ pub fn render_pane(
         expand_question,
         question_measurement,
         child_footer,
+        head_drag,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
     let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
@@ -1017,10 +1033,11 @@ pub fn render_pane(
         }),
     });
     // Solo (fullscreen included) has no head at any tier: the titlebar
-    // carries the Thread (C2).
+    // carries the Thread (C2). A Group's head is the Pane's drag handle
+    // whenever the cockpit wires one.
     let head = |title: Option<AnyElement>, slot: Option<HeadSlot>| {
         show_focus.then(|| {
-            group_head(GroupHead {
+            let head = group_head(GroupHead {
                 key,
                 name: view.name.clone(),
                 dot: Some(head_dot(
@@ -1042,7 +1059,11 @@ pub fn render_pane(
                 slot,
                 action: None,
                 expand_question,
-            })
+            });
+            match head_drag {
+                Some(drag) => drag(head),
+                None => head.into_any_element(),
+            }
         })
     };
 
@@ -1095,6 +1116,7 @@ pub fn render_pane(
         attachments,
         composer_actions,
         background,
+        changed_files,
         menu,
         model_picker,
         usage_meter,
@@ -1310,6 +1332,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 attachments: cx.attachments.take(),
                 actions: cx.composer_actions.take(),
                 background: cx.background.take(),
+                changed_files: cx.changed_files.take(),
                 menu: cx.menu.take(),
                 mode: cx.permission_mode.as_deref(),
                 mode_picker: cx.mode_picker.take(),
@@ -1351,6 +1374,7 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     attachments: cx.attachments.take(),
                     actions: cx.composer_actions.take(),
                     background: cx.background.take(),
+                    changed_files: None,
                     menu: None,
                     // On a board a non-default mode is the head slot's word;
                     // a Solo cell keeps its status line.
@@ -1654,6 +1678,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             attachments,
             actions: composer_actions,
             background: None,
+            changed_files: None,
             menu,
             mode: None,
             mode_picker: None,
@@ -3557,6 +3582,9 @@ struct ComposerStack<'a> {
     /// Running background tasks as chips, hung at the right edge of the
     /// same shelf the pending files sit on.
     background: Option<AnyElement>,
+    /// A compact shelf of files touched by this Thread. It belongs inside
+    /// the Composer but above the prompt, separated from typed text.
+    changed_files: Option<AnyElement>,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
     /// The mode chip wired to its menu; `None` draws the plain chip.
@@ -3616,6 +3644,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         attachments,
         actions,
         background,
+        changed_files,
         menu,
         mode,
         mode_picker,
@@ -3705,6 +3734,11 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .text_color(rgb(BLOCKED))
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
+    }
+    // The files this Thread edited: one quiet line inside the block, above
+    // the prompt, apart from anything typed.
+    if let Some(changed_files) = changed_files {
+        block = block.child(changed_files);
     }
     // The queue shares the Composer's height budget. Keep the latest on
     // top and every earlier prompt reachable by scrolling; a long queue
@@ -4690,9 +4724,9 @@ pub fn questions_of(decision: &Decision) -> Option<&[ferrite_core::questions::Qu
 
 /// `+N −N`: a change's size. Only the signs carry the diff hues — the
 /// counts are metadata — and it is one text run, so gpui's per-run pixel
-/// rounding cannot widen it. Drawn in a tool row's trail and a changed-strip
-/// chip.
-fn diff_stat(added: usize, removed: usize) -> Div {
+/// rounding cannot widen it. Shared by a tool row's trail, a changed-strip
+/// chip, aggregate instruments and the Composer's file shelf.
+pub(crate) fn diff_stat(added: usize, removed: usize) -> Div {
     let text = format!("+{added} \u{2212}{removed}");
     let removed_at = format!("+{added} ").len();
     let sign = |at: usize, len: usize, ink: u32| {
@@ -4803,6 +4837,42 @@ pub(crate) fn cost_label(cost: f64) -> String {
     }
 }
 
+/// A context category's ink in the card's stacked bar and in its legend
+/// (`CTX_*`: the palette's own quiet hues). The categories a provider
+/// usually reports keep one ink each; any other name takes the next from a
+/// fixed cycle, so a new category still reads as distinct.
+fn category_ink(name: &str, index: usize) -> u32 {
+    let name = name.to_ascii_lowercase();
+    if name.contains("deferred") {
+        theme::CTX_DEFERRED
+    } else if name.contains("free") {
+        theme::CTX_FREE
+    } else if name.contains("buffer") || name.contains("compact") {
+        theme::CTX_BUFFER
+    } else if name.contains("message") {
+        theme::CTX_MESSAGES
+    } else if name.contains("mcp") {
+        theme::CTX_MCP
+    } else if name.contains("tool") {
+        theme::CTX_TOOLS
+    } else if name.contains("skill") {
+        theme::CTX_SKILLS
+    } else if name.contains("prompt") {
+        theme::CTX_PROMPT
+    } else if name.contains("memory") {
+        theme::CTX_MEMORY
+    } else {
+        theme::CTX_CYCLE[index % theme::CTX_CYCLE.len()]
+    }
+}
+
+/// Free space and deferred tools are reported beside the window's
+/// contents but take none of it: they are listed, never drawn in the bar.
+fn category_in_window(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    !name.contains("free") && !name.contains("deferred")
+}
+
 /// The usage meter's detail card: the meter's own windows, in the meter's
 /// own order, each a labelled bar over the reading behind it. Counts are
 /// reported values, never estimates. An account window the provider has
@@ -4810,24 +4880,22 @@ pub(crate) fn cost_label(cost: f64) -> String {
 /// (`Limits not reported by this provider`) in place of two empty bars.
 /// Each block holds the menu rows' inset (`MENU_ROW_PAD_X`) inside the
 /// floating surface's `FLOAT_PAD`.
+///
+/// The context bar is stacked by category when the provider says what
+/// fills the window, and its heading is a row that opens the legend: every
+/// category with its ink, its count and its share of the window. The card
+/// grows to `max_h` (the window's room) and scrolls past it.
+#[allow(clippy::too_many_arguments)]
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     limits: ferrite_core::transcript::RateLimits,
     details: Option<&ferrite_core::ContextDetails>,
     usage_details: Option<&ferrite_core::UsageDetails>,
     last_cost: Option<f64>,
+    expanded: bool,
+    max_h: f32,
+    on_toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
-    fn count_label(count: u64) -> String {
-        let digits = count.to_string();
-        let mut label = String::new();
-        for (index, digit) in digits.chars().enumerate() {
-            if index > 0 && (digits.len() - index).is_multiple_of(3) {
-                label.push(',');
-            }
-            label.push(digit);
-        }
-        label
-    }
     let maximum = usage.context_window.filter(|limit| *limit > 0);
     let now = SystemTime::now();
     // One 4px bar, full width: the same track and the same status ink as
@@ -4888,6 +4956,7 @@ pub fn context_usage(
         div()
             .flex()
             .flex_col()
+            .flex_shrink_0()
             .gap(px(theme::USAGE_CARD_ROW_GAP))
             .px(px(theme::MENU_ROW_PAD_X))
     };
@@ -4901,12 +4970,38 @@ pub fn context_usage(
                 .child(bar(fraction))
                 .children(detail)
         };
+    let categories = details.map_or(&[][..], |details| details.categories.as_slice());
+    let expandable = details.is_some_and(|details| {
+        !details.categories.is_empty()
+            || details.usable_window.is_some()
+            || details.auto_compact_threshold.is_some()
+    });
+    // Shares are of the whole window when the provider reports one; of
+    // what the categories add up to when it does not.
+    let denominator = maximum.unwrap_or_else(|| {
+        categories
+            .iter()
+            .filter(|category| category_in_window(&category.name))
+            .map(|category| category.tokens)
+            .sum()
+    });
+    let share_of = |tokens: u64| -> f32 {
+        if denominator == 0 {
+            0.
+        } else {
+            tokens as f32 / denominator as f32
+        }
+    };
     // The counts behind the context bar, in the card's quietest ink: the
-    // bar says how full, this says of what — `64k / 200k tokens`.
+    // bar says how full, this says of what — `64k / 200k tokens`. When
+    // there is a legend behind it, a chevron after the counts says so.
     let current = usage.total_tokens;
     let counts = components::tabular(
         div()
             .id("context-usage-counts")
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_1))
             .text_size(px(theme::FS_SM))
             .text_color(rgb(TEXT_MUTED))
             .debug_selector(move || match maximum {
@@ -4926,19 +5021,178 @@ pub fn context_usage(
                     })),
             ),
     );
-    let context = match maximum {
-        Some(maximum) => window(
-            "Context",
-            "context",
-            usage.total_tokens as f32 / maximum as f32,
-            Some(counts.into_any_element()),
-        ),
+    let context_fraction = maximum.map(|maximum| current as f32 / maximum as f32);
+    // The bar: stacked by category when the provider says what fills the
+    // window, one status-ink fill when it only reports the total.
+    let in_window: Vec<(u32, f32)> = categories
+        .iter()
+        .enumerate()
+        .filter(|(_, category)| category_in_window(&category.name) && category.tokens > 0)
+        .map(|(index, category)| {
+            (
+                category_ink(&category.name, index),
+                share_of(category.tokens),
+            )
+        })
+        .collect();
+    let context_bar = if !in_window.is_empty() {
+        Some(
+            div()
+                .flex()
+                .w_full()
+                .h(px(theme::USAGE_CARD_BAR_H))
+                .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
+                .overflow_hidden()
+                .bg(rgba(METER_OFF))
+                .children(in_window.into_iter().map(|(ink, share)| {
+                    div()
+                        .flex_shrink_0()
+                        .h_full()
+                        .w(relative(share.clamp(0., 1.)))
+                        .bg(rgb(ink))
+                }))
+                .into_any_element(),
+        )
+    } else {
         // No window to divide by: the count alone, no empty bar.
-        None => block()
-            .child(heading("Context", div().into_any_element()))
-            .child(counts),
+        context_fraction.map(|fraction| bar(fraction).into_any_element())
     };
+    // The context heading is the legend's door when there is one: the
+    // whole line is the hit row, lifting to the hover face like a menu row,
+    // with the chevron after the reading.
+    let context_heading = heading(
+        "Context",
+        div()
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_1))
+            .children(context_fraction.map(|fraction| percent_value("context", fraction)))
+            .when(expandable, |reading| {
+                reading.child(icon(
+                    if expanded {
+                        icons::CHEVRON_DOWN
+                    } else {
+                        icons::CHEVRON_RIGHT
+                    },
+                    theme::ICON_CHEVRON_SM,
+                    TEXT_MUTED,
+                ))
+            })
+            .into_any_element(),
+    );
+    let context_heading = if expandable {
+        let id = gpui::ElementId::from("context-window-toggle");
+        let key = crate::pointer::hover_key(&id);
+        div()
+            .id(id)
+            .debug_selector(|| "context-window-toggle".into())
+            .mx(px(-theme::MENU_ROW_PAD_X))
+            .px(px(theme::MENU_ROW_PAD_X))
+            .rounded(px(theme::R_CONTROL))
+            .cursor_pointer()
+            .hover_raised(key)
+            .press_raised()
+            .on_click(on_toggle)
+            .child(context_heading)
+            .into_any_element()
+    } else {
+        context_heading.into_any_element()
+    };
+    let mut context = block()
+        .child(context_heading)
+        .children(context_bar)
+        .child(counts);
+    // The legend: an ink square, the name, the count muted and the share
+    // at the right edge, in tabular figures so the column lines up.
+    let legend = |selector: String,
+                  swatch: Option<u32>,
+                  label: SharedString,
+                  count: String,
+                  share: SharedString| {
+        components::tabular(
+            div()
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector.clone())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(theme::SPACE_2))
+                .h(px(theme::USAGE_LEGEND_ROW_H))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .size(px(theme::USAGE_SWATCH))
+                        .rounded(px(theme::R_TIGHT))
+                        .when_some(swatch, |square, ink| square.bg(rgb(ink))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_2))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(count),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .flex_shrink_0()
+                        .w(px(theme::USAGE_SHARE_W))
+                        .text_color(rgb(TEXT))
+                        .child(share),
+                ),
+        )
+    };
+    if let Some(details) = details.filter(|_| expanded && expandable) {
+        let mut rows = div().flex().flex_col().pt(px(theme::SPACE_1));
+        for (index, category) in details.categories.iter().enumerate() {
+            let tokens = category.tokens;
+            // Deferred tools are loaded on demand: listed, but no share.
+            let share = if category.name.to_ascii_lowercase().contains("deferred") {
+                "\u{2014}".into()
+            } else {
+                format!("{:.1}%", share_of(tokens) * 100.)
+            };
+            rows = rows.child(legend(
+                format!("context-category-{index}-{tokens}"),
+                Some(category_ink(&category.name, index)),
+                sentence_case(&category.name).into(),
+                compact_count(tokens),
+                share.into(),
+            ));
+        }
+        if let Some(usable) = details.usable_window {
+            rows = rows.child(legend(
+                format!("context-usable-{usable}"),
+                None,
+                "Usable window".into(),
+                compact_count(usable),
+                "".into(),
+            ));
+        }
+        if let Some(threshold) = details.auto_compact_threshold {
+            rows = rows.child(legend(
+                format!("context-compaction-{threshold}"),
+                None,
+                "Auto-compact at".into(),
+                compact_count(threshold),
+                match details.is_auto_compact_enabled {
+                    Some(false) => "off".into(),
+                    _ => "".into(),
+                },
+            ));
+        }
+        context = context.child(rows);
+    }
     let mut card = div()
+        .id("context-usage-body")
         .flex()
         .flex_col()
         .w(px(theme::USAGE_CARD_W))
@@ -4971,12 +5225,12 @@ pub fn context_usage(
         ));
     }
     // Everything below the windows is a terminal readout: a quiet key at
-    // the left, the reported value right-aligned in tabular digits, every
-    // count grouped the same way, and a section head where the scope
-    // changes.
+    // the left, the reported value right-aligned in tabular digits, and a
+    // section head where the scope changes.
     let row = |key: String, value: String| {
         div()
             .flex()
+            .flex_shrink_0()
             .justify_between()
             .gap(px(theme::SPACE_3))
             .px(px(theme::MENU_ROW_PAD_X))
@@ -4989,55 +5243,21 @@ pub fn context_usage(
             )
             .child(components::tabular(div().flex_shrink_0().child(value)))
     };
-    if let Some(details) = details {
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(theme::SPACE_0_5))
-            .child(components::menu_section("Context breakdown", None, None));
-        if let Some(usable) = details.usable_window {
-            section = section.child(
-                row("Usable".into(), count_label(usable))
-                    .id(SharedString::from(format!("context-usable-{usable}")))
-                    .debug_selector(move || format!("context-usable-{usable}")),
-            );
-        }
-        if let Some(threshold) = details.auto_compact_threshold {
-            let key = match details.is_auto_compact_enabled {
-                Some(true) => "Compacts at",
-                Some(false) => "Compaction off at",
-                None => "Compaction threshold",
-            };
-            section = section.child(
-                row(key.into(), count_label(threshold))
-                    .id(SharedString::from(format!(
-                        "context-compaction-{threshold}"
-                    )))
-                    .debug_selector(move || format!("context-compaction-{threshold}")),
-            );
-        }
-        for (index, category) in details.categories.iter().enumerate() {
-            let tokens = category.tokens;
-            section = section.child(
-                row(sentence_case(&category.name), count_label(tokens))
-                    .id(SharedString::from(format!(
-                        "context-category-{index}-{tokens}"
-                    )))
-                    .debug_selector(move || format!("context-category-{index}-{tokens}")),
-            );
-        }
-        card = card.child(section);
-    }
     if let Some(details) = usage_details {
         let scope = match details.scope {
             ferrite_core::UsageScope::Message => ("message", "This message"),
             ferrite_core::UsageScope::Turn => ("turn", "This turn"),
             ferrite_core::UsageScope::Session => ("session", "This session"),
         };
-        let mut section = div().flex().flex_col().gap(px(theme::SPACE_0_5)).child(
-            components::menu_section(scope.1, None, None)
-                .debug_selector(move || format!("usage-scope-{}", scope.0)),
-        );
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .gap(px(theme::SPACE_0_5))
+            .child(
+                components::menu_section(scope.1, None, None)
+                    .debug_selector(move || format!("usage-scope-{}", scope.0)),
+            );
         for (key, label, count) in [
             ("input", "Input", details.input_tokens),
             ("cached-input", "Cached input", details.cached_input_tokens),
@@ -5049,7 +5269,7 @@ pub fn context_usage(
             ),
         ] {
             section = section.child(
-                row(label.into(), count_label(count))
+                row(label.into(), compact_count(count))
                     .debug_selector(move || format!("usage-{key}-{count}")),
             );
         }
@@ -5066,9 +5286,11 @@ pub fn context_usage(
                 .debug_selector(move || format!("usage-cost-{cost}")),
         );
     }
-    // Counts, percentages and the cost tick while the card is open.
+    // Counts, percentages and the cost tick while the card is open. Every
+    // block holds its height (`flex_shrink_0`): once the open legend
+    // outgrows the room the card scrolls rather than squeezing its rows.
     components::tabular(card)
-        .max_h(px(theme::MENU_MAX_H))
+        .max_h(px(max_h))
         .overflow_y_scrollbar()
 }
 

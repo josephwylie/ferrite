@@ -104,6 +104,7 @@ icons![
     // ---- WP-G icons (append names above the end line)
     "arrow-up-down",
     // (end WP-G)
+    "update",
 ];
 
 #[allow(dead_code)]
@@ -211,6 +212,8 @@ pub const DIAMOND: &str = "icons/diamond.svg";
 /// Lucide's `arrow-up-down`: the order the Thread list is shown in.
 pub const SORT: &str = "icons/arrow-up-down.svg";
 // (end WP-G)
+/// A newer provider CLI is ready to install.
+pub const UPDATE: &str = "icons/update.svg";
 
 pub struct Assets;
 
@@ -438,9 +441,10 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            40,
+            41,
             "the prototype and app controls, including close, the four Windows caption glyphs, \
-             the option and control key glyphs and the Settings sheet's five marks"
+             the option and control key glyphs, the Settings sheet's five marks and the CLI \
+             update mark"
         );
     }
 

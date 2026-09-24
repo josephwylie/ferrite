@@ -297,6 +297,30 @@ impl Tree {
         true
     }
 
+    /// `split`, with `source` taking `share` of the target's slot rather
+    /// than half (clamped like `set_ratio`).
+    pub fn split_share(
+        &mut self,
+        target: ThreadId,
+        edge: Edge,
+        source: ThreadId,
+        share: f32,
+    ) -> bool {
+        if !self.split(target, edge, source) {
+            return false;
+        }
+        let mut path = Vec::new();
+        let root = self.root.as_ref().expect("the split just landed");
+        assert!(root.path_to(source, &mut path));
+        path.pop();
+        let first_share = match edge {
+            Edge::Left | Edge::Top => share,
+            Edge::Right | Edge::Bottom => 1.0 - share,
+        };
+        self.set_ratio(&SeamId(path), first_share);
+        true
+    }
+
     /// Fit the tree to exactly `members`: a corrupt or empty tree is rebuilt
     /// as the default grid over `bounds`; otherwise stale leaves go and
     /// missing members come in (in `members` order), keeping the operator's
@@ -839,12 +863,18 @@ pub fn zone(pointer: Point, rect: Rect) -> Zone {
     if dx <= half && dy <= half {
         return Zone::Swap;
     }
+    Zone::Split(nearest_edge(pointer, rect))
+}
+
+/// The side of `rect` closest to `pointer` — where a drop that can only
+/// split (never swap) lands. Ties go Top, Bottom, Left, Right.
+pub fn nearest_edge(pointer: Point, rect: Rect) -> Edge {
     let left = pointer.x - rect.x;
     let right = rect.x + rect.w - pointer.x;
     let top = pointer.y - rect.y;
     let bottom = rect.y + rect.h - pointer.y;
     let nearest = left.min(right).min(top).min(bottom);
-    let edge = if nearest == top {
+    if nearest == top {
         Edge::Top
     } else if nearest == bottom {
         Edge::Bottom
@@ -852,8 +882,7 @@ pub fn zone(pointer: Point, rect: Rect) -> Zone {
         Edge::Left
     } else {
         Edge::Right
-    };
-    Zone::Split(edge)
+    }
 }
 
 /// The preview a drop paints: the whole Pane for a swap, the half the dropped

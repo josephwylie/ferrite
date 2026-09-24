@@ -81,6 +81,8 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
   worktrees or branches, or a new branch — in the checkout or in a fresh
   worktree.
 - `cmd-shift-n` — new Thread in its own git worktree
+- `cmd-g` — new Group: the focused Thread plus a new one beside it (the
+  titlebar's **New Group**, when the Thread is in no Group yet)
 - `escape` — interrupt whatever's running
 - `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
   the focused Pane or from any Pane, however small.
@@ -142,6 +144,15 @@ their task finishes, and the tray goes with the last one.
 directories, or delete the project. The directory it was created from stays
 primary, and you can't delete a project that still has Threads.
 
+**Click a text file card** in the transcript to open the native reader in
+its own slot beside the Thread, in Solo or in a Group. It resizes and moves
+like any Pane, and keeps its place until you quit. Rust, Python, JavaScript,
+TypeScript, Go, C/C++, Java, shell, TOML, YAML and JSON files are syntax
+highlighted. Markdown links resolve from
+the document's folder, and opening another file replaces that Thread's
+reader. Files edited by the Thread or its subagents stay listed in the
+**Files changed** row above the prompt for quick access.
+
 **Right-click** a Thread or Group in the sidebar for: rename, open or resume,
 fullscreen, new Thread in the same project, reveal in Finder, copy path, park,
 leave or dissolve a Group, and delete (press twice). Right-click a transcript
@@ -166,9 +177,10 @@ inside the app.
 closed, dim idle, hollow parked.
 
 **In a Group**, drag the divider between two Panes to resize them. Drag a
-Pane's title onto another Pane to swap them (drop in the middle) or split that
+Pane's header onto another Pane to swap them (drop in the middle) or split that
 slot (drop near an edge). Works at any Pane size. Each Group remembers its own
-arrangement. Medium Panes keep their prompt box, so you can still tell a small
+arrangement. Drag a Thread from the sidebar onto a Pane to add it to the Group
+on that side; on a lone Thread, that starts a Group. Medium Panes keep their prompt box, so you can still tell a small
 Pane what to do.
 
 **The model picker** sits at the right edge of the prompt box and lists each

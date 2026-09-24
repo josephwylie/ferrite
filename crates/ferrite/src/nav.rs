@@ -209,6 +209,7 @@ pub struct FilterOption {
 }
 
 /// One Group and the Threads indented under it.
+#[derive(Clone)]
 pub struct GroupBlock {
     pub id: GroupId,
     pub title: SharedString,
@@ -1527,6 +1528,21 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .min_w_0()
         .truncate()
         .child(title)
+}
+
+/// A nav row lifted off the tree while it is dragged: the same row the
+/// tree draws, at the tree's row width, on the nav's own ground and
+/// floating on the menu shadow — so what rides the pointer is recognisably
+/// the row that was picked up.
+pub fn drag_row(row: Stateful<Div>) -> Div {
+    div()
+        .w(px(WIDTH - NAV_TREE_PAD * 2.0))
+        .rounded(px(R_CONTROL))
+        .bg(rgb(NAV))
+        .border_1()
+        .border_color(rgba(HAIRLINE_STRONG))
+        .shadow(crate::components::float_shadow())
+        .child(row)
 }
 
 /// The collapsed rail. Primary navigation actions sit at the top, recent
