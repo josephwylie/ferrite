@@ -932,9 +932,9 @@ fn an_unfocused_cell_counts_its_attachments_on_the_flat_line(cx: &mut TestAppCon
         };
     focus_composer(&view, 0, cx);
     view.update(cx, |view, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.add_files(&[file.clone()], cx));
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.add_files(std::slice::from_ref(&file), cx)
+        });
     });
     tick(cx);
     assert!(cx.debug_bounds("pending-attachment-tray").is_some());
