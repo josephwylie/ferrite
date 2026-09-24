@@ -26,6 +26,7 @@ pub(super) struct Loader {
 pub(super) struct Pending {
     serial: u64,
     events: Vec<ActivityEvent>,
+    timings: HashMap<String, Duration>,
     bytes: usize,
 }
 
@@ -50,7 +51,7 @@ impl Loader {
 }
 
 impl Thread {
-    pub(super) fn buffer_history(&mut self, event: &ActivityEvent) {
+    pub(super) fn buffer_history(&mut self, event: &ActivityEvent, duration: Option<Duration>) {
         let view = self.activity.view();
         for (key, pending) in &mut self.history {
             let target = view.canonical_subject(&Subject::Subagent(key.clone()));
@@ -72,6 +73,18 @@ impl Thread {
                 _ => false,
             };
             if belongs {
+                if let (
+                    Some(duration),
+                    ActivityEvent::Content {
+                        event: crate::activity::ExecutionEvent::ToolCompleted { id, .. },
+                        ..
+                    },
+                ) = (duration, event)
+                {
+                    // This map is bounded by the buffered events. Keep the
+                    // measurement after Activity releases an evicted clock.
+                    pending.timings.insert(id.clone(), duration);
+                }
                 // Includes tool JSON and text; this bounds the wait buffer, not
                 // the provider's already-bounded incoming channel.
                 pending.bytes = pending.bytes.saturating_add(format!("{event:?}").len());
@@ -152,6 +165,7 @@ impl Cockpit {
             Pending {
                 serial,
                 events: Vec::new(),
+                timings: HashMap::new(),
                 bytes: 0,
             },
         );
@@ -226,6 +240,17 @@ impl Cockpit {
                 state.activity.apply(ActivityInput::Retain(subject.clone())),
                 true,
             );
+            if !pending.timings.is_empty() {
+                // Restore the live tail's clocks first so a duration in the
+                // older disk prefix cannot replace the newer completion.
+                changed.absorb(
+                    state.activity.apply(ActivityInput::RestoreTimings {
+                        subject: subject.clone(),
+                        timings: pending.timings,
+                    }),
+                    true,
+                );
+            }
             match completed.inputs {
                 Ok(inputs) => {
                     for input in inputs {

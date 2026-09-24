@@ -2380,16 +2380,16 @@ impl Cockpit {
                         if !matches!(accepted, ActivityEvent::Status { .. })
                             || !applied.blocks.is_empty()
                         {
-                            thread.buffer_history(accepted);
+                            thread.buffer_history(accepted, applied.completed_tool_duration);
                         }
                         let event = SessionEvent::Activity(accepted.clone());
-                        let duration = settled_duration(thread, &event);
+                        let duration = applied.completed_tool_duration;
                         if let Err(error) = thread.writer.record_event(&event, duration) {
                             thread.report_store_error(error);
                         }
                     }
                 } else {
-                    let duration = settled_duration(thread, &event);
+                    let duration = applied.completed_tool_duration;
                     if let Err(error) = thread.writer.record_event(&event, duration) {
                         thread.report_store_error(error);
                     }
@@ -2408,7 +2408,7 @@ impl Cockpit {
                             completed_at: completed_at.clone(),
                         };
                         if matches!(&subject, Subject::Subagent(_)) {
-                            thread.buffer_history(&observation);
+                            thread.buffer_history(&observation, None);
                         }
                         let observed = match subject {
                             Subject::Main => thread.activity.apply(ActivityInput::Main {
@@ -4074,9 +4074,6 @@ fn branch_name(thread: ThreadId) -> String {
     format!("ferrite/thread-{thread}")
 }
 
-/// The clock reading this event settled, for the log to keep. Only a
-/// completed tool call has one, and only where the fold just stopped it —
-/// a call whose start this cockpit never saw stays clockless.
 fn event_changes_content(event: &SessionEvent) -> bool {
     use crate::activity::ExecutionEvent;
     match event {
@@ -4108,28 +4105,6 @@ fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
         crate::SessionControl::StopTask { .. } => crate::ControlKind::StopTask,
         crate::SessionControl::BackgroundTasks => crate::ControlKind::BackgroundTasks,
         crate::SessionControl::SetPermissionMode { .. } => crate::ControlKind::SetPermissionMode,
-    }
-}
-
-fn settled_duration(state: &Thread, event: &SessionEvent) -> Option<Duration> {
-    use crate::activity::ExecutionEvent;
-    let (subject, id) = match event {
-        SessionEvent::ToolCompleted { id, .. } => (Subject::Main, id),
-        SessionEvent::Activity(ActivityEvent::Content {
-            key,
-            event: ExecutionEvent::ToolCompleted { id, .. },
-            ..
-        }) => (Subject::Subagent(key.clone()), id),
-        SessionEvent::Activity(ActivityEvent::MainContent {
-            event: ExecutionEvent::ToolCompleted { id, .. },
-            ..
-        }) => (Subject::Main, id),
-        _ => return None,
-    };
-    let view = state.activity.view().subject(&subject)?;
-    match view.tool_timings().get(id) {
-        Some(ToolTiming::Done(total)) => Some(*total),
-        _ => None,
     }
 }
 
@@ -6233,6 +6208,104 @@ mod tests {
             observed,
             "ordinary disk reload must preserve the exact child completion observation"
         );
+    }
+
+    #[test]
+    fn child_tool_duration_survives_a_history_read_already_in_flight() {
+        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+        for native_duration in [None, Some(42)] {
+            let (mut cockpit, fake) = cockpit("tool-duration-history-race");
+            let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+            let key = AgentKey::new(Provider::Claude, "root", "child");
+            let subject = Subject::Subagent(key.clone());
+            let emit = |id: &str, event| {
+                fake.streams.borrow()[0]
+                    .send(SessionEvent::Activity(ActivityEvent::Content {
+                        key: key.clone(),
+                        id: Some(id.into()),
+                        event,
+                    }))
+                    .unwrap()
+            };
+            let completed = |duration_ms| ExecutionEvent::ToolCompleted {
+                id: "tool".into(),
+                output: String::new(),
+                is_error: false,
+                result: crate::ToolResult::Command {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                    duration_ms,
+                },
+            };
+            emit(
+                "start",
+                ExecutionEvent::ToolStarted {
+                    id: "tool".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({}),
+                },
+            );
+            if native_duration.is_some() {
+                // A newer native completion must also outrank a duration
+                // already present in the frozen disk prefix.
+                emit("old-completion", completed(Some(7)));
+            }
+            cockpit.pump();
+            cockpit
+                .threads
+                .get_mut(&thread)
+                .unwrap()
+                .activity
+                .apply(ActivityInput::Evict(subject.clone()));
+            let (loader, finish) = history::gated_loader();
+            cockpit.history_loader = Some(loader);
+            assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+            emit("completion", completed(native_duration));
+            cockpit.pump();
+            assert!(cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&subject)
+                .unwrap()
+                .timings()
+                .is_empty());
+            finish(&cockpit.store);
+            cockpit.pump();
+            let timing = |cockpit: &Cockpit| match cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&subject)
+                .unwrap()
+                .timings()
+                .get("tool")
+            {
+                Some(ToolTiming::Done(duration)) => *duration,
+                timing => {
+                    panic!("the completed duration must survive the history read: {timing:?}")
+                }
+            };
+            let observed = timing(&cockpit);
+            if let Some(ms) = native_duration {
+                assert_eq!(observed, Duration::from_millis(ms));
+            }
+            // Reload from disk without the live-tail buffer: both paths must
+            // agree, allowing the log's millisecond precision.
+            cockpit
+                .threads
+                .get_mut(&thread)
+                .unwrap()
+                .activity
+                .apply(ActivityInput::Evict(subject.clone()));
+            let (loader, finish) = history::gated_loader();
+            cockpit.history_loader = Some(loader);
+            assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+            finish(&cockpit.store);
+            cockpit.pump();
+            assert_eq!(timing(&cockpit).as_millis(), observed.as_millis());
+        }
     }
 
     #[test]
