@@ -1982,14 +1982,15 @@ pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 //
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
 //   a few pixels into place. A menu or a sheet that closes goes at once:
-//   dismissals are frequent, and the closed state says it all. A fold opens
-//   and closes at once; only its chevron turns. Nothing slides a container
-//   height, and a column never tweens its width (cmd-B is instant).
+//   dismissals are frequent, and the closed state says it all. A fold grows
+//   open under its header (`MOTION_COLLAPSE_MS`) and shuts at once; the
+//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
 //   changes, a Send becoming ready) and a press land on the same frame.
-//   Only turn-level rows enter (`MOTION_ROW_IN_MS` 180, opacity only). One
-//   breath, `MOTION_BREATH_MS` 2400, used only by unread. Nothing on a
+//   A transcript row appended live rises in (`MOTION_FADE_IN_MS` 500, 4px);
+//   first paint and scroll-back never animate. One breath,
+//   `MOTION_BREATH_MS` 2400, used only by unread. Nothing on a
 //   high-frequency interaction scales, slides or staggers.
 // - **Interruptible.** A state the operator can flip back (a hover, a
 //   chevron) retargets from where it is, never restarts.
@@ -2008,12 +2009,23 @@ pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 /// CSS `transition-colors`' default curve: every hover blend.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+/// CSS `ease-out`: the sidebar's width and the Parked fold.
+pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
 /// A contextual icon swap's curve (a spring with no bounce, approximated).
 pub const MOTION_EASE_ICON: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
-/// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves.
-/// Only turn-level transcript rows appended live wear it: a prompt, the first
-/// answer block of a turn, a Decision summary (rule 2.10.1).
+/// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
+/// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
+/// Zeron's `fade-in`: a transcript row appended live fades up over 500ms
+/// while rising `MOTION_FADE_IN_RISE` into place.
+pub const MOTION_FADE_IN_MS: u64 = 500;
+pub const MOTION_FADE_IN_RISE: f32 = 4.0;
+/// The sidebar's width between column and rail (cmd-B), and the Parked
+/// fold growing open under its header.
+pub const MOTION_RESIZE_MS: u64 = 200;
+pub const MOTION_COLLAPSE_MS: u64 = 180;
+/// Where the sidebar's content fades up from while its width moves.
+pub const MOTION_NAV_CONTENT_FROM: f32 = 0.35;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// `menu-in`: 140ms, settling 2px away from its opener (Zeron's 0.96 scale

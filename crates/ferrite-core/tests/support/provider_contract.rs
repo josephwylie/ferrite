@@ -26,6 +26,9 @@ impl Replay {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        // A folder left by an earlier run whose process id this one reuses
+        // would make the create fail: start from nothing.
+        let _ = fs::remove_dir_all(&directory);
         fs::create_dir(&directory).unwrap();
         let mut all = if provider == "claude" {
             vec![

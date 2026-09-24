@@ -17,9 +17,12 @@
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]); the fold itself opens at once |
+//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse ⇄ rail (cmd-B): an interruptible [`Tween`] on the column's width, the content fading up from `MOTION_NAV_CONTENT_FROM` |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
+//! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
 //! | icon swap | [`ICON_SWAP`] 300ms | the Composer's send ⇄ stop: both glyphs stay mounted and cross-fade, opacity with `svg` scale 0.25 → 1 |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a turn-level transcript row appended at the tail while the operator watches ([`row_in_at`]): a prompt, a turn's first answer block, a Decision summary. Tool rows, output and later paragraphs are printed, never staged |
+//! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
 //! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
@@ -153,6 +156,7 @@ impl CubicBezier {
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
+pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
 pub const EASE_ICON: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_ICON);
 
 // ---------------------------------------------------------------------------
@@ -204,6 +208,9 @@ impl MotionSpec {
 }
 
 pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
+pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
+pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE_OUT);
+pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
@@ -349,10 +356,14 @@ where
     })
 }
 
-/// `row-in` at progress `t`: opacity only, nothing moves, for a caller that
-/// drives `t` itself (a live-appended turn-level transcript row).
-pub fn row_in_at<E: Styled>(element: E, t: f32) -> E {
-    element.opacity(t)
+/// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
+/// for a caller that drives `t` itself (a live-appended transcript row).
+/// The rise is a relative inset, so the rows around it never move.
+pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
+    element
+        .opacity(t)
+        .relative()
+        .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +415,15 @@ impl Tween {
         lerp(self.from, self.to, self.spec.progress_at(elapsed))
     }
 
+    /// Eased progress 0..1 along the tween; 1 once finished or reduced.
+    pub fn progress(&self, now: Instant, reduced: bool) -> f32 {
+        if !self.running(now, reduced) {
+            return 1.0;
+        }
+        self.spec
+            .progress_at(now.saturating_duration_since(self.started))
+    }
+
     /// Mid-flight: the owner must ask for another frame.
     pub fn running(&self, now: Instant, reduced: bool) -> bool {
         !reduced
@@ -437,6 +457,19 @@ pub fn settle(
     window: &mut Window,
     cx: &mut App,
 ) -> f32 {
+    settle_with(id, target, spec, false, window, cx)
+}
+
+/// `settle`, where `reveal_only` snaps any move toward 0 (a fold that
+/// closes goes at once) and eases only the opening.
+fn settle_with(
+    id: impl Into<ElementId>,
+    target: f32,
+    spec: MotionSpec,
+    reveal_only: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
     let now = cx.background_executor().now();
     let reduced = reduced_motion(cx);
     let (value, running) = window.with_global_id(id.into(), |id, window| {
@@ -446,14 +479,10 @@ pub fn settle(
                 tween: None,
             });
             if state.target != target {
-                state.tween = Some(Tween::retarget(
-                    state.tween,
-                    state.target,
-                    target,
-                    spec,
-                    now,
-                    reduced,
-                ));
+                let snap = reveal_only && target < state.target;
+                state.tween = (!snap).then(|| {
+                    Tween::retarget(state.tween, state.target, target, spec, now, reduced)
+                });
                 state.target = target;
             }
             let value = state
@@ -475,7 +504,16 @@ pub struct Settled<F> {
     id: ElementId,
     target: f32,
     spec: MotionSpec,
+    reveal_only: bool,
     build: F,
+}
+
+impl<F> Settled<F> {
+    /// Only the opening eases; a close lands at once.
+    pub fn reveal_only(mut self) -> Self {
+        self.reveal_only = true;
+        self
+    }
 }
 
 /// Ease `build`'s element between two states (`on` is the target).
@@ -488,6 +526,7 @@ where
         id: id.into(),
         target: if on { 1.0 } else { 0.0 },
         spec,
+        reveal_only: false,
         build,
     }
 }
@@ -498,7 +537,14 @@ where
     E: IntoElement,
 {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let value = settle(self.id, self.target, self.spec, window, cx);
+        let value = settle_with(
+            self.id,
+            self.target,
+            self.spec,
+            self.reveal_only,
+            window,
+            cx,
+        );
         (self.build)(value)
     }
 }
@@ -949,6 +995,12 @@ mod tests {
     fn the_catalog_keeps_zerons_numbers() {
         assert_eq!(ROW_IN.duration_ms, 180);
         assert_eq!(ROW_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
+        assert_eq!(FADE_IN.duration_ms, 500);
+        assert_eq!(FADE_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
+        assert_eq!(theme::MOTION_FADE_IN_RISE, 4.0);
+        assert_eq!(RESIZE.duration_ms, 200);
+        assert_eq!(RESIZE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
+        assert_eq!(COLLAPSE.duration_ms, 180);
         assert_eq!(FADE_QUICK.duration_ms, 150);
         assert_eq!(MENU_IN.duration_ms, 140);
         assert_eq!(DIALOG_IN.duration_ms, 180);

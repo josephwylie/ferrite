@@ -303,6 +303,11 @@ pub struct CockpitView {
     nav_drag_live: std::cell::Cell<bool>,
     /// The order the nav last drew, held while the pointer is inside.
     nav_snapshot: std::cell::RefCell<Option<NavSnapshot>>,
+    /// The column's width on its way between its two (`motion::RESIZE`).
+    /// None on launch so a restored preference never performs entrance
+    /// choreography; once the operator acts, a flip mid-flight retargets
+    /// from the width on screen. `nav_collapsed` stays authoritative.
+    nav_tween: Option<crate::motion::Tween>,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
@@ -1219,6 +1224,7 @@ impl CockpitView {
             nav_hovered: false,
             nav_drag_live: std::cell::Cell::new(false),
             nav_snapshot: std::cell::RefCell::new(None),
+            nav_tween: None,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -5159,8 +5165,9 @@ impl CockpitView {
     /// is shown and never saved; otherwise it folds or opens the column.
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
         if !self.nav_collapsed && self.nav_auto_rail.get() {
+            let was = self.nav_railed();
             self.nav_forced_open = !self.nav_forced_open;
-            cx.notify();
+            self.tween_nav(was, cx);
             return;
         }
         self.set_nav_collapsed(!self.nav_collapsed, cx);
@@ -5170,18 +5177,45 @@ impl CockpitView {
     fn open_nav(&mut self, cx: &mut Context<Self>) {
         self.set_nav_collapsed(false, cx);
         if self.nav_railed() {
+            let was = self.nav_railed();
             self.nav_forced_open = true;
-            cx.notify();
+            self.tween_nav(was, cx);
         }
     }
 
-    /// cmd-B is instant (rule 2.10.2): the column lands at its new width on
-    /// the toggle frame, and nothing tweens.
+    /// cmd-B rides the column's width between column and rail over
+    /// `motion::RESIZE` (Zeron's sidebar), the content fading up.
     fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         if self.nav_collapsed == collapsed {
             return;
         }
+        let was = self.nav_railed();
         self.nav_collapsed = collapsed;
+        self.tween_nav(was, cx);
+    }
+
+    /// Ride the column's width from what was drawn to what is drawn now.
+    fn tween_nav(&mut self, was_railed: bool, cx: &mut Context<Self>) {
+        let railed = self.nav_railed();
+        if was_railed == railed {
+            cx.notify();
+            return;
+        }
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let (from, to) = if railed {
+            (nav::WIDTH, nav::RAIL_WIDTH)
+        } else {
+            (nav::RAIL_WIDTH, nav::WIDTH)
+        };
+        self.nav_tween = Some(crate::motion::Tween::retarget(
+            self.nav_tween,
+            from,
+            to,
+            crate::motion::RESIZE,
+            now,
+            reduced,
+        ));
         cx.notify();
     }
 
@@ -8296,9 +8330,14 @@ impl Render for CockpitView {
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
-        // hover blend mid-flight keeps frames coming; otherwise nothing is
-        // scheduled (the pulse clock drives loops).
-        if crate::motion::hover_fades_active() {
+        // hover blend or the nav's width mid-flight keeps frames coming;
+        // with neither, nothing is scheduled (the pulse clock drives loops).
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let nav_moving = self
+            .nav_tween
+            .is_some_and(|tween| tween.running(now, reduced));
+        if crate::motion::hover_fades_active() | nav_moving {
             window.request_animation_frame();
         }
         root
@@ -11474,8 +11513,23 @@ impl CockpitView {
                 )
                 .children(self.nav_parked(&state, cx))
         };
-        nav::shell(state.collapsed)
-            .child(content)
+        let shell = nav::shell(state.collapsed);
+        let Some(tween) = self.nav_tween else {
+            return shell.child(content).into_any_element();
+        };
+        // The column's width rides the tween (the render tail keeps frames
+        // coming while it moves); the content swapped at once, so it fades
+        // up rather than popping in at full ink.
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let fade = crate::motion::lerp(
+            crate::theme::MOTION_NAV_CONTENT_FROM,
+            1.0,
+            tween.progress(now, reduced),
+        );
+        shell
+            .w(px(tween.value(now, reduced)))
+            .child(content.opacity(fade))
             .into_any_element()
     }
 
@@ -11743,25 +11797,45 @@ impl CockpitView {
                     }),
                 );
         let section = nav::parked_section().child(header);
-        // The fold opens and shuts at once (rule 2.10.5): on the press frame
-        // the list is at its natural height, capped by the section's share
-        // of the column (`NAV_PARKED_MAX_SHARE`). Only the chevron turns.
+        // Unfolding grows the list open over `motion::COLLAPSE` from its
+        // header, and at rest it takes its natural, capped height; folding
+        // shut is instant. One element holds the fold either way, so it
+        // knows an unfold from a first paint.
         let compact = state.thread_list_order == ThreadListOrder::ByProject;
-        let fold = state.parked_open.then(|| {
+        let list = state.parked_open.then(|| {
             let mut list = nav::parked_list(&self.nav_parked_scroll);
             for row in &state.parked {
                 list = list.child(self.thread_element_with_style(row, None, compact, cx));
             }
-            div()
-                .relative()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .child(list)
-                .child(nav::parked_scrollbar(&self.nav_parked_scroll))
+            (list, nav::parked_scrollbar(&self.nav_parked_scroll))
         });
-        let section = section.children(fold);
+        // Every row is the one 28px line, flush with its neighbours.
+        let natural = state.parked.len() as f32
+            * (crate::theme::THREAD_ROW_H + crate::theme::MEMBER_GAP)
+            + crate::theme::MEMBER_GAP;
+        let fold = crate::motion::settled(
+            "nav-parked-fold",
+            state.parked_open,
+            crate::motion::COLLAPSE,
+            move |open| {
+                let Some((list, scrollbar)) = list else {
+                    return div();
+                };
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .when(open < 1.0, |fold| {
+                        fold.overflow_hidden().max_h(px(natural * open))
+                    })
+                    .child(list)
+                    .child(scrollbar)
+            },
+        )
+        .reveal_only();
+        let section = section.child(fold);
         Some(section.into_any_element())
     }
 

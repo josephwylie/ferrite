@@ -148,12 +148,10 @@ pub(crate) enum TranscriptEvent {
 pub(crate) struct TranscriptView {
     input: TranscriptInput,
     rows: TranscriptRows,
-    /// Turn-level rows appended at the tail while the operator watched, and
-    /// when: a new prompt, the first answer block of a turn and a Decision
-    /// summary fade in (`motion::ROW_IN`, opacity only). Every other row is
-    /// printed on the frame it arrives (rule 2.10.1); first paint, a history
+    /// Rows appended at the tail while the operator watched, and when: they
+    /// fade in rising into place (`motion::FADE_IN`). First paint, a history
     /// window growing at its head and a row scrolled back into view never
-    /// animate.
+    /// do.
     arrivals: HashMap<RowId, std::time::Instant>,
     scroll: TranscriptScroll,
     rich: TextCache,
@@ -171,32 +169,6 @@ pub(crate) struct TranscriptView {
 }
 
 impl EventEmitter<TranscriptEvent> for TranscriptView {}
-
-/// Whether the row at `index` is turn-level and enters on `ROW_IN` when it
-/// is appended live: a prompt, the first answer block of its turn, or a
-/// Decision summary (`asks …` / `… needs approval`). Everything else is
-/// printed (rule 2.10.1).
-fn enters(rows: &[std::rc::Rc<TranscriptRow>], index: usize) -> bool {
-    let row = &rows[index];
-    let body = row.blocks().first().map(|block| &block.body);
-    match (row.id(), body) {
-        (_, Some(Body::Prompt(_))) => true,
-        (RowId::Markdown(_), _) => !rows[..index]
-            .iter()
-            .rev()
-            .take_while(|earlier| {
-                !matches!(
-                    earlier.blocks().first().map(|block| &block.body),
-                    Some(Body::Prompt(_))
-                )
-            })
-            .any(|earlier| matches!(earlier.id(), RowId::Markdown(_))),
-        (_, Some(Body::Notice(text))) => {
-            text.starts_with("asks ") || text.contains(" needs approval")
-        }
-        _ => false,
-    }
-}
 
 impl TranscriptView {
     pub(crate) fn empty(
@@ -310,11 +282,10 @@ impl TranscriptView {
         }
     }
 
-    /// Stamp the turn-level rows that now follow what was the tail: appended
-    /// live. Tool rows, output and later paragraphs are printed, not staged.
+    /// Stamp the rows that now follow what was the tail: appended live.
     fn note_arrivals(&mut self, tail: Option<RowId>, cx: &App) {
         let now = cx.background_executor().now();
-        let spell = crate::motion::ROW_IN.duration();
+        let spell = crate::motion::FADE_IN.duration();
         self.arrivals
             .retain(|_, at| now.saturating_duration_since(*at) < spell);
         let Some(tail) = tail else {
@@ -324,10 +295,8 @@ impl TranscriptView {
         let Some(at) = rows.iter().rposition(|row| *row.id() == tail) else {
             return;
         };
-        for index in at + 1..rows.len() {
-            if enters(rows, index) {
-                self.arrivals.insert(rows[index].id().clone(), now);
-            }
+        for row in &rows[at + 1..] {
+            self.arrivals.insert(row.id().clone(), now);
         }
     }
 
@@ -346,8 +315,8 @@ impl TranscriptView {
             .background_executor()
             .now()
             .saturating_duration_since(*at);
-        (elapsed < crate::motion::ROW_IN.duration())
-            .then(|| crate::motion::ROW_IN.progress_at(elapsed))
+        (elapsed < crate::motion::FADE_IN.duration())
+            .then(|| crate::motion::FADE_IN.progress_at(elapsed))
     }
 
     #[cfg(test)]
@@ -874,12 +843,12 @@ impl Render for TranscriptView {
                 // flickers mid-scroll).
                 let gap = row.gap();
                 let wrapper = div().w_full().px(px(theme::PANE_PAD_X));
-                // A turn-level row appended live fades in where it lands:
-                // opacity only, so nothing above or below it moves.
+                // A row appended live rises into place; its gap does not
+                // move, so the rows above it hold still.
                 let wrapper = match arrival {
                     Some(t) => {
                         window.request_animation_frame();
-                        crate::motion::row_in_at(wrapper, t)
+                        crate::motion::fade_in_at(wrapper, t)
                     }
                     None => wrapper,
                 };

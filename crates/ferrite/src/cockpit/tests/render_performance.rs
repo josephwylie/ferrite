@@ -1218,17 +1218,15 @@ fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) 
     assert_eq!(display_frames(cx), 0, "and asked the display for nothing");
 }
 
-/// Print, don't perform (rule 2.10.1): a tool row appended while the
-/// operator watches lands on the frame it arrives, stamped for no entrance
-/// and asking the display for nothing; the turn's first answer block is
-/// turn-level and enters on `motion::ROW_IN` (180ms, opacity only), then
-/// asks for nothing; a later answer block in the same turn is printed.
+/// A row appended while the operator watches rises in over
+/// `motion::FADE_IN` and then asks for nothing.
 #[gpui::test]
-fn an_appended_tool_row_schedules_no_animation_frames(cx: &mut TestAppContext) {
+fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-arrival", 1);
     let thread = core.threads()[0];
     core.send(thread, "Inspect progress".into());
+    long_transcripts(&fake);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
@@ -1241,66 +1239,20 @@ fn an_appended_tool_row_schedules_no_animation_frames(cx: &mut TestAppContext) {
                 .map_or(0, |transcript| transcript.read(cx).arrivals())
         })
     };
-    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
-
-    send(SessionEvent::ToolStarted {
-        id: "arrival-run".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "cargo test"}),
-    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "arrival-run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "cargo test"}),
+        })
+        .unwrap();
     tick(cx);
-    assert_eq!(arrivals(cx), 0, "a tool row is printed, not staged");
-    // At most the list's one measurement pass for the new row; then no
-    // frame at all across what an entrance would have taken.
-    assert!(
-        display_frames(cx) <= 1,
-        "the list measures the new row once"
-    );
-    let quiet = |cx: &mut gpui::VisualTestContext| {
-        let mut frames = 0;
-        for _ in 0..(crate::theme::MOTION_ROW_IN_MS / 16 + 1) {
-            cx.executor().advance_clock(Duration::from_millis(16));
-            frames += display_frames(cx);
-        }
-        frames
-    };
-    assert_eq!(quiet(cx), 0, "and asks the display for nothing");
-
-    send(SessionEvent::TextDelta {
-        text: "First answer of the turn.".into(),
-    });
-    tick(cx);
-    assert_eq!(arrivals(cx), 1, "the turn's first answer block is stamped");
-    assert!(display_frames(cx) > 0, "and fades in");
-    cx.executor().advance_clock(Duration::from_millis(16));
-    assert!(
-        display_frames(cx) > 0,
-        "still fading 16ms in: the entrance, not a measurement pass"
-    );
+    assert_eq!(arrivals(cx), 1, "the appended row is stamped");
+    assert!(display_frames(cx) > 0, "and rises in");
     cx.executor()
-        .advance_clock(Duration::from_millis(crate::theme::MOTION_ROW_IN_MS));
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_FADE_IN_MS));
     settle(cx);
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
-
-    send(SessionEvent::ToolStarted {
-        id: "arrival-run-2".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "cargo check"}),
-    });
-    send(SessionEvent::TextDelta {
-        text: "\n\nA later answer block.".into(),
-    });
-    tick(cx);
-    assert_eq!(
-        arrivals(cx),
-        0,
-        "a later answer block in the same turn is printed"
-    );
-    assert!(
-        display_frames(cx) <= 1,
-        "the list measures the new rows once"
-    );
-    assert_eq!(quiet(cx), 0, "and nothing enters");
 }
 
 /// One clock, one breath (rule 2.10.8): N working Panes and N unread Panes
@@ -1377,27 +1329,42 @@ fn nav_column_width(cx: &mut gpui::VisualTestContext) -> f32 {
     )
 }
 
-/// cmd-B is instant (rule 2.10.2): the column lands at its new width on
-/// the toggle frame and schedules no frame after it, either way.
+/// cmd-b tweens the column's width over `motion::RESIZE` and asks for frames
+/// only while it moves; flipped back mid-flight it turns around from the
+/// width on screen instead of jumping to an end; settled, it asks for none.
 #[gpui::test]
-fn the_nav_collapse_lands_on_the_toggle_frame_and_schedules_nothing(cx: &mut TestAppContext) {
+fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (core, _fake) = cockpit("motion-nav", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
-    assert_eq!(nav_column_width(cx), nav::WIDTH, "first paint: the column");
+    assert_eq!(nav_column_width(cx), nav::WIDTH, "first paint: no tween");
 
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.run_until_parked();
-    assert_eq!(nav_column_width(cx), nav::RAIL_WIDTH, "the toggle frame");
-    assert_eq!(display_frames(cx), 0, "and nothing after it");
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "a moving column asks for frames");
+    let mid = nav_column_width(cx);
+    assert!(
+        mid < nav::WIDTH && mid > nav::RAIL_WIDTH,
+        "mid-flight at 100ms: {mid}"
+    );
 
     view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
     cx.run_until_parked();
-    assert_eq!(nav_column_width(cx), nav::WIDTH, "back on the toggle frame");
-    assert_eq!(display_frames(cx), 0, "and nothing after it");
+    let turned = nav_column_width(cx);
+    assert!(
+        (turned - mid).abs() < 1.0,
+        "the flip starts from the width on screen: {mid} -> {turned}"
+    );
+
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(nav_column_width(cx), nav::WIDTH, "settled on its target");
+    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
 }
 
 /// Reduced motion: the column lands at its new width at once.
