@@ -1479,9 +1479,22 @@ impl Store {
         }
         // Recover to the last complete record: a crash tears at most the
         // final line, so the first unreadable line is where the log ends.
-        let records = lines
-            .map_while(|body_line| serde_json::from_slice(body_line).ok())
-            .collect();
+        // The log is torn when that line is not the empty one after the
+        // final newline — which `writer` must know before appending. A last
+        // fragment that happens to parse is torn too: the next append would
+        // land on its line.
+        let mut torn = !bytes.ends_with(b"\n");
+        let mut records = Vec::new();
+        let mut lines = lines.peekable();
+        while let Some(body_line) = lines.next() {
+            match serde_json::from_slice(body_line) {
+                Ok(record) => records.push(record),
+                Err(_) => {
+                    torn |= lines.peek().is_some();
+                    break;
+                }
+            }
+        }
         Ok(ThreadSnapshot {
             id,
             provider: header.provider,
@@ -1493,6 +1506,7 @@ impl Store {
             title: header.title,
             effort: header.effort,
             records,
+            torn,
         })
     }
 
@@ -1664,13 +1678,20 @@ impl Store {
     /// first new record onto the fragment — one unreadable line where the
     /// loader stops, hiding every turn after the crash.
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
-        let snapshot = self.load(id)?;
-        let file =
-            if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&fs::read(self.log_path(id))?) {
-                self.rewrite(&snapshot)?
-            } else {
-                OpenOptions::new().append(true).open(self.log_path(id))?
-            };
+        self.writer_for(&self.load(id)?)
+    }
+
+    /// `writer`, from a snapshot `load` just returned: a revive has read
+    /// the log already, and reading and parsing it twice more held a launch
+    /// for a second across a few long Threads.
+    pub fn writer_for(&self, snapshot: &ThreadSnapshot) -> Result<ThreadWriter, LoadError> {
+        let file = if snapshot.schema < SCHEMA_VERSION || snapshot.torn {
+            self.rewrite(snapshot)?
+        } else {
+            OpenOptions::new()
+                .append(true)
+                .open(self.log_path(snapshot.id))?
+        };
         Ok(ThreadWriter {
             file,
             buffer: Vec::new(),
@@ -1793,6 +1814,9 @@ pub struct ThreadSnapshot {
     title: Option<String>,
     effort: Option<String>,
     records: Vec<Record>,
+    /// Whether the log on disk ends in a torn line: `writer` rewrites it
+    /// from `records` before anything is appended.
+    torn: bool,
 }
 
 /// The last provider switch a log records, and what the next prompt on
@@ -2247,23 +2271,6 @@ impl ThreadWriter {
         }
         Ok(())
     }
-}
-
-/// Whether a loaded log's bytes end in anything but whole, newline-terminated,
-/// readable records — the leavings of a crash, which an append must not build
-/// on. The header is not judged here: `load` already required it.
-fn has_torn_tail(bytes: &[u8]) -> bool {
-    if !bytes.ends_with(b"\n") {
-        // Even a fragment that happens to parse is dirty: the next append
-        // would land on its line.
-        return true;
-    }
-    let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
-    // First line is the header; last is the empty slice after the final
-    // newline. Everything between must be a whole record.
-    lines[1..lines.len() - 1]
-        .iter()
-        .any(|body_line| serde_json::from_slice::<Record>(body_line).is_err())
 }
 
 /// One record as one JSONL line.

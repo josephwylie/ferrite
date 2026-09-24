@@ -620,9 +620,17 @@ impl SubjectState {
 
     fn trim(&mut self, limits: ActivityLimits) -> bool {
         let max_records = limits.blocks_per_subject.saturating_mul(8).max(1);
+        if self.bytes <= limits.content_bytes_per_subject && self.records.len() <= max_records {
+            return false;
+        }
+        // Past a bound, trim to a quarter below it: every trim costs a whole
+        // rebuild of the transcript, and trimming only to the bound made a
+        // long Thread rebuild on nearly every event once it reached it —
+        // seconds of replay at launch, a stall per streamed token live.
+        let low_bytes = limits.content_bytes_per_subject - limits.content_bytes_per_subject / 4;
+        let low_records = (max_records - max_records / 4).max(1);
         let mut trimmed = false;
-        while self.records.len() > 1
-            && (self.bytes > limits.content_bytes_per_subject || self.records.len() > max_records)
+        while self.records.len() > 1 && (self.bytes > low_bytes || self.records.len() > low_records)
         {
             if let Some(old) = self.records.pop_front() {
                 self.bytes = self.bytes.saturating_sub(old.bytes);

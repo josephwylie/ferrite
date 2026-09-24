@@ -1536,7 +1536,7 @@ impl Cockpit {
                 additional_directories,
             })
             .map_err(LoadError::Io)?;
-        let writer = self.store.writer(thread)?;
+        let writer = self.store.writer_for(&snapshot)?;
 
         let resume = snapshot.resume_target().map(|target| target.to_string());
         let mut state = Thread::fresh(

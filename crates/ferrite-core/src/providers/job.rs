@@ -43,6 +43,8 @@ use windows_sys::Win32::System::JobObjects::{
 #[cfg(windows)]
 pub(crate) struct SessionJob {
     handle: HANDLE,
+    /// The pid `watchdog_pid` settled on, 0 while unsettled.
+    settled: std::sync::atomic::AtomicU32,
 }
 
 // SAFETY: a job handle is a kernel object handle with no thread affinity; the
@@ -66,7 +68,10 @@ impl SessionJob {
                 return Err(io::Error::last_os_error());
             }
             // From here Drop owns the handle, so an early return leaks nothing.
-            let job = Self { handle };
+            let job = Self {
+                handle,
+                settled: std::sync::atomic::AtomicU32::new(0),
+            };
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             if SetInformationJobObject(
@@ -107,10 +112,25 @@ impl SessionJob {
 
     /// The pid whoever watches memory should meter: the wrapper's own child
     /// inside the job when the wrapper is cmd.exe (a `.cmd` shim), otherwise
-    /// `wrapper` itself. Resolved fresh per call, never cached — a cached pid
-    /// outlives its process, and a reused pid would meter a stranger.
+    /// `wrapper` itself. Resolved from the process table until it settles on
+    /// the CLI, then kept only while the job still lists it: a job's members
+    /// are its live processes, so the kept pid can neither outlive its
+    /// process nor be a stranger wearing a reused one. The watchdog asks for
+    /// every Session on each sweep, from the UI thread, and a process-table
+    /// snapshot per ask held the window for hundreds of milliseconds.
     pub(crate) fn watchdog_pid(&self, wrapper: u32) -> u32 {
-        choose_watchdog_pid(wrapper, &self.members(), &process_table())
+        use std::sync::atomic::Ordering;
+        let members = self.members();
+        let settled = self.settled.load(Ordering::Relaxed);
+        if settled != 0 && members.contains(&settled) {
+            return settled;
+        }
+        let table = process_table();
+        let pid = choose_watchdog_pid(wrapper, &members, &table);
+        let keep = watchdog_pid_is_settled(wrapper, pid, &table);
+        self.settled
+            .store(if keep { pid } else { 0 }, Ordering::Relaxed);
+        pid
     }
 
     /// Pids currently in the job. Empty on any query failure — the chooser
@@ -212,10 +232,7 @@ fn process_table() -> Vec<ProcessRow> {
 /// one wrapper child that is never the CLI (the console host a windowless
 /// parent gets given).
 fn choose_watchdog_pid(wrapper: u32, members: &[u32], table: &[ProcessRow]) -> u32 {
-    let wrapper_is_shim = table
-        .iter()
-        .any(|row| row.pid == wrapper && row.image.eq_ignore_ascii_case("cmd.exe"));
-    if !wrapper_is_shim {
+    if !is_shim(wrapper, table) {
         return wrapper;
     }
     table
@@ -227,6 +244,19 @@ fn choose_watchdog_pid(wrapper: u32, members: &[u32], table: &[ProcessRow]) -> u
                 && !row.image.eq_ignore_ascii_case("conhost.exe")
         })
         .map_or(wrapper, |row| row.pid)
+}
+
+fn is_shim(wrapper: u32, table: &[ProcessRow]) -> bool {
+    table
+        .iter()
+        .any(|row| row.pid == wrapper && row.image.eq_ignore_ascii_case("cmd.exe"))
+}
+
+/// Whether `chosen` is the final answer for this Session: the CLI found
+/// beneath a shim, or a wrapper that is itself the CLI. A shim metered as
+/// itself is only waiting for its CLI to start and must be asked again.
+fn watchdog_pid_is_settled(wrapper: u32, chosen: u32, table: &[ProcessRow]) -> bool {
+    chosen != wrapper || !is_shim(wrapper, table)
 }
 
 #[cfg(test)]
@@ -291,6 +321,18 @@ mod tests {
     fn a_wrapper_with_no_cli_yet_is_metered_as_itself() {
         let table = [row(100, 1, "cmd.exe")];
         assert_eq!(choose_watchdog_pid(100, &[100], &table), 100);
+    }
+
+    /// The CLI beneath a shim, and a direct CLI, are final; a shim still
+    /// waiting for its CLI is asked again next sweep.
+    #[test]
+    fn only_a_found_cli_settles_the_metered_pid() {
+        let started = [row(100, 1, "cmd.exe"), row(200, 100, "node.exe")];
+        assert!(watchdog_pid_is_settled(100, 200, &started));
+        let direct = [row(100, 1, "claude.exe")];
+        assert!(watchdog_pid_is_settled(100, 100, &direct));
+        let waiting = [row(100, 1, "cmd.exe")];
+        assert!(!watchdog_pid_is_settled(100, 100, &waiting));
     }
 
     /// Image names come off a case-preserving filesystem; the comparison

@@ -81,6 +81,9 @@ pub struct ThreadFacts {
     /// Whether `subagents` is known: counted while open, or a parked log's
     /// replay has come back.
     subagents_known: bool,
+    /// An open Thread's checkout, not known yet: read off the UI thread
+    /// (`take_checkout_lookups`) unless `set_branches` answers first.
+    branch_wanted: Option<std::path::PathBuf>,
 }
 impl ThreadFacts {
     /// Whether `branch` is the Project's default, which the nav row and the
@@ -168,7 +171,8 @@ impl Facts {
     /// The pump streamed into a Thread: the wall card refolds — this is the
     /// seam that keeps L3 free of per-frame Block walks — and a turn that
     /// just ended may have moved the checkout, the other stated refresh
-    /// moment (#29), so the slow facts follow it.
+    /// moment (#29), so the slow facts follow it (the checkout itself on
+    /// the view's background refresh).
     pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let was_busy = self
             .threads
@@ -209,6 +213,7 @@ impl Facts {
                 .and_then(|status| status.branch.clone())
                 .map(SharedString::from);
             facts.status = status;
+            facts.branch_wanted = None;
         }
     }
 
@@ -307,8 +312,9 @@ impl Facts {
         }
     }
 
-    /// The checkout label and the Project — a `git` call and a peek —
-    /// nowhere near a frame.
+    /// The Project and its default branch — a peek, and `git` once per
+    /// Project — nowhere near a frame. The checkout label is asked for
+    /// here and read off the UI thread (`take_checkout_lookups`).
     fn refresh_slow(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let open = cockpit.thread(thread);
         let cwd = ferrite_core::workspace::effective_cwd(
@@ -316,10 +322,6 @@ impl Facts {
             open.and_then(|open| open.workspace()),
         )
         .map(std::path::Path::to_path_buf);
-        let branch = cwd
-            .as_deref()
-            .and_then(ferrite_core::workspace::checkout_branch)
-            .map(SharedString::from);
         let (project, project_label) = match cockpit.peek(thread) {
             Ok(meta) => (
                 meta.project_id,
@@ -332,8 +334,24 @@ impl Facts {
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
         facts.last_used = last_used;
-        facts.branch = branch;
         facts.default_branch = default_branch;
+        // The checkout is `git`'s to say, 50-400ms a call on Windows: asked
+        // here, on the UI thread, it held a launch for seconds (one call per
+        // open Pane) and every turn's end for a beat. A known checkout
+        // follows the view's periodic branch refresh instead. Unit tests
+        // read it inline: the late answer's redraw would blank the cached
+        // transcripts' test selectors (see `motion::live`).
+        #[cfg(not(test))]
+        {
+            facts.branch_wanted = if facts.branch.is_none() { cwd } else { None };
+        }
+        #[cfg(test)]
+        {
+            facts.branch = cwd
+                .as_deref()
+                .and_then(ferrite_core::workspace::checkout_branch)
+                .map(SharedString::from);
+        }
         facts.branch_asked = true;
         facts.project = project;
         facts.project_label = project_label;
@@ -357,6 +375,19 @@ impl Facts {
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
+    }
+
+    /// The open Threads' checkouts still unknown, for the caller to read
+    /// off the UI thread and hand back through `parked_looked_up`.
+    pub fn take_checkout_lookups(&mut self) -> ParkedLookups {
+        ParkedLookups {
+            branches: self
+                .threads
+                .iter_mut()
+                .filter_map(|(thread, facts)| Some((*thread, facts.branch_wanted.take()?)))
+                .collect(),
+            subagents: Vec::new(),
+        }
     }
 
     /// The name alone — after a first prompt or a rename, the one fact
@@ -544,7 +575,9 @@ fn at_word_boundary(title: &str) -> String {
     }
 }
 
-/// The parked-row reads too slow for the UI thread (`Facts::parked_changed`).
+/// The reads too slow for the UI thread: a parked row's
+/// (`Facts::parked_changed`), and an open Thread's checkout
+/// (`Facts::take_checkout_lookups`).
 #[derive(Default)]
 pub struct ParkedLookups {
     /// Parked Threads whose checkout branch only `git` can say.

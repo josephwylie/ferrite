@@ -1324,6 +1324,12 @@ impl CockpitView {
         if lookups.is_empty() {
             return;
         }
+        self.look_up(lookups, cx);
+    }
+
+    /// Run `git` and whole-log reads on the background executor; the facts
+    /// fill in, and the window redraws, when they answer.
+    fn look_up(&mut self, lookups: crate::facts::ParkedLookups, cx: &mut Context<Self>) {
         let logs = self.cockpit.log_reader();
         cx.spawn(async move |this, cx| {
             let answers = cx
@@ -1684,6 +1690,10 @@ impl CockpitView {
             // A Main just finished making a worktree: ask git now, not in
             // up to two seconds, so the header follows without a pause.
             self.refresh_branches(cx);
+        }
+        let checkouts = self.facts.take_checkout_lookups();
+        if !checkouts.is_empty() {
+            self.look_up(checkouts, cx);
         }
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that

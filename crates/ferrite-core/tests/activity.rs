@@ -496,6 +496,47 @@ fn oversized_render_content_is_bounded_and_marks_partial_coverage() {
     );
 }
 
+/// Trimming a subject past its bound rebuilds its whole transcript. A long
+/// Thread must pay that once per stretch of new content, not once per event:
+/// trimmed only to the bound, every replayed record past it rebuilt.
+#[test]
+fn a_subject_past_its_bound_does_not_rebuild_on_every_event() {
+    let mut activity = Activity::new(ActivityLimits {
+        content_bytes_per_subject: 4096,
+        ..ActivityLimits::default()
+    });
+    let appends = 400;
+    let mut rebuilds = 0;
+    for n in 0..appends {
+        let update = activity.apply(ActivityInput::Replay(Input::Prompt(format!(
+            "{n:04} {}",
+            "x".repeat(95)
+        ))));
+        // A rebuild evicts every block it replaces; an ordinary append none.
+        rebuilds += update
+            .blocks
+            .iter()
+            .filter(|(subject, blocks)| *subject == Subject::Main && blocks.evicted.len() > 1)
+            .count();
+    }
+    assert!(
+        rebuilds <= appends / 8,
+        "{rebuilds} rebuilds for {appends} appends"
+    );
+    let main = activity.view().subject(&Subject::Main).unwrap();
+    let retained: usize = main
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Prompt(line) => Some(line.len()),
+            _ => None,
+        })
+        .sum();
+    assert!(retained <= 4096, "{retained} bytes retained");
+    assert!(retained > 0, "the newest content is kept");
+}
+
 #[test]
 fn highlights_are_scoped_even_when_children_reuse_block_ids() {
     let mut activity = connected();
