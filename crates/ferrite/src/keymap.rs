@@ -205,6 +205,12 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // The titlebar's New Group: the focused solo Thread plus a new one,
         // beside cmd-n's plain new Thread.
         (with_primary("g"), "cockpit::NewGroup", None),
+        // The transcript's reading size, the browser's zoom keys: `=` (and
+        // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
+        (with_primary("="), "cockpit::TextLarger", None),
+        (with_primary("+"), "cockpit::TextLarger", None),
+        (with_primary("-"), "cockpit::TextSmaller", None),
+        (with_primary("0"), "cockpit::TextReset", None),
         // Tab accepts a highlighted command first, then keeps #29's draft-band
         // walk or L1 tool disclosure walk. Shift-Tab is the reverse Thread walk.
         ("tab".into(), "cockpit::BandCycle", Some("Ferrite")),
@@ -295,6 +301,9 @@ mod tests {
             ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
             ("cockpit::NewGroup", "g"),
+            ("cockpit::TextLarger", "="),
+            ("cockpit::TextSmaller", "-"),
+            ("cockpit::TextReset", "0"),
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),
             ("ferrite::Quit", "q"),

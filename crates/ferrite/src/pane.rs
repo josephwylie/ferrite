@@ -3668,10 +3668,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // keeps them — the draft is untouched — and says them in words after
     // its `❯` (`flat_facts`); focus brings them back as they were.
     let flat = (!live).then(|| flat_facts(files, queued.len())).flatten();
-    let (attachments, queued) = if live {
-        (attachments, queued)
+    let (attachments, queued, changed_files) = if live {
+        (attachments, queued, changed_files)
     } else {
-        (None, Vec::new())
+        (None, Vec::new(), None)
     };
     let (pad_t, pad_b) = if grid {
         (theme::COMPOSER_GRID_PAD_Y, theme::COMPOSER_GRID_PAD_Y)
@@ -5067,15 +5067,19 @@ pub fn context_usage(
             .items_center()
             .gap(px(theme::SPACE_1))
             .children(context_fraction.map(|fraction| percent_value("context", fraction)))
+            // One chevron that turns a quarter as the legend opens, over
+            // `motion::CHEVRON` — the disclosures' turn.
             .when(expandable, |reading| {
-                reading.child(icon(
-                    if expanded {
-                        icons::CHEVRON_DOWN
-                    } else {
-                        icons::CHEVRON_RIGHT
+                reading.child(crate::motion::settled(
+                    "context-legend-turn",
+                    expanded,
+                    crate::motion::CHEVRON,
+                    |turn| {
+                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON_SM, TEXT_MUTED)
+                            .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                                std::f32::consts::FRAC_PI_2 * turn,
+                            )))
                     },
-                    theme::ICON_CHEVRON_SM,
-                    TEXT_MUTED,
                 ))
             })
             .into_any_element(),
@@ -5189,7 +5193,14 @@ pub fn context_usage(
                 },
             ));
         }
-        context = context.child(rows);
+        // The legend's rows fade in as it opens (`ROW_IN`, opacity only);
+        // closing is instant, like every exit.
+        context = context.child(crate::motion::fade_in(
+            "context-legend-in",
+            rows,
+            crate::motion::ROW_IN,
+            1.0,
+        ));
     }
     let mut card = div()
         .id("context-usage-body")

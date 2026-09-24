@@ -2023,6 +2023,9 @@ pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
 /// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
 pub const MOTION_DIALOG_IN_MS: u64 = 180;
 pub const MOTION_DIALOG_RISE: f32 = 2.0;
+/// How far a board slot opening beside its owner (the reader) settles in
+/// from the owner's side.
+pub const MOTION_SLOT_SHIFT: f32 = 6.0;
 /// A disclosure chevron turning: 150ms.
 pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.

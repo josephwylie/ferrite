@@ -303,6 +303,37 @@ where
     })
 }
 
+/// `slot-in` for a board slot that opens beside its owner (the reader
+/// beside its Pane): no surface of its own to lift, so no shadow — it fades
+/// up from `MOTION_MENU_FROM_OPACITY` while settling `MOTION_SLOT_SHIFT`
+/// in from the owner's side, over `DIALOG_IN`.
+pub fn slot_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+        el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .left(px(-theme::MOTION_SLOT_SHIFT * (1.0 - t)))
+    })
+}
+
+/// `fade-in` over `spec`: opacity 0 → `to`, nothing moves — a mark or a
+/// chip arriving in a line that is already drawn.
+pub fn fade_in<E>(
+    id: impl Into<ElementId>,
+    element: E,
+    spec: MotionSpec,
+    to: f32,
+) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, spec.animation(), move |el, t| {
+        el.opacity(lerp(0.0, to, t))
+    })
+}
+
 /// A sheet's veil darkening in over `FADE_QUICK`: only its ground fades, so
 /// the sheet on it keeps its own entrance.
 pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>

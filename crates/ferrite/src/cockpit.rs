@@ -190,6 +190,9 @@ actions!(
         NewThread,
         NewWorktreeThread,
         NewGroup,
+        TextLarger,
+        TextSmaller,
+        TextReset,
         BandCycle,
         ToolCyclePrevious,
         ToggleTool,
@@ -646,10 +649,17 @@ impl Render for PaneGhost {
             .border_1()
             .border_color(rgb(theme::FOCUS_RING))
             .bg(rgb(theme::PANE))
-            .opacity(theme::DRAG_GHOST_OPACITY)
             .shadow(crate::components::float_shadow())
             .child(head)
             .child(body);
+        // Lifted off the board, the miniature fades up to its see-through
+        // ink rather than popping in under the pointer.
+        let card = crate::motion::fade_in(
+            "pane-ghost-in",
+            card,
+            crate::motion::FADE_QUICK,
+            theme::DRAG_GHOST_OPACITY,
+        );
         div()
             .pl(shift(self.grab.x))
             .pt(shift(self.grab.y))
@@ -7645,6 +7655,27 @@ impl CockpitView {
         self.open_draft_in_current_view(DraftTarget::Main, cx);
     }
 
+    /// cmd-= / cmd-- step the transcript's reading size (Standard,
+    /// Comfortable, Large) and cmd-0 returns it to Standard: the same
+    /// saved setting Settings › Behaviour › Reading shows. `delta` 0 resets.
+    fn step_text_size(&mut self, delta: i32, cx: &mut Context<Self>) {
+        use ferrite_core::settings::SoloReadingSize::{Comfortable, Large, Standard};
+        let steps = [Standard, Comfortable, Large];
+        let at = steps
+            .iter()
+            .position(|size| *size == self.prefs.settings.solo_reading_size)
+            .unwrap_or(0) as i32;
+        let next = if delta == 0 {
+            Standard
+        } else {
+            steps[(at + delta).clamp(0, steps.len() as i32 - 1) as usize]
+        };
+        if next != self.prefs.settings.solo_reading_size {
+            self.change_settings(|settings| settings.solo_reading_size = next, cx);
+            cx.notify();
+        }
+    }
+
     /// cmd-g: the titlebar's New Group — a draft that founds a Group with
     /// the focused Thread on its first send. Only a Thread in no Group can
     /// found one, so elsewhere the key does nothing, as the button is not
@@ -8671,6 +8702,9 @@ impl CockpitView {
             .on_action(cx.listener(Self::new_thread))
             .on_action(cx.listener(Self::new_worktree_thread))
             .on_action(cx.listener(Self::new_group))
+            .on_action(cx.listener(|view, _: &TextLarger, _, cx| view.step_text_size(1, cx)))
+            .on_action(cx.listener(|view, _: &TextSmaller, _, cx| view.step_text_size(-1, cx)))
+            .on_action(cx.listener(|view, _: &TextReset, _, cx| view.step_text_size(0, cx)))
             .on_action(cx.listener(Self::band_cycle))
             .on_action(cx.listener(Self::tool_cycle_previous))
             .on_action(cx.listener(Self::toggle_tool_action))
@@ -9367,6 +9401,14 @@ impl CockpitView {
             reader: true,
             size: self.slot_size(leaf),
         };
+        // The reader settles in from its Pane's side each time a document
+        // opens in it (keyed by the document, so a new one replays).
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            document.path.hash(&mut hash);
+            hash.finish()
+        };
         let body = crate::rich::document_body(document, pane.document_rich.clone());
         let reader = pane
             .preview
@@ -9380,6 +9422,10 @@ impl CockpitView {
                     }
                 }),
             );
+        let reader = div().size_full().flex().child(crate::motion::slot_in(
+            SharedString::from(format!("reader-in-{}-{key}", leaf.get())),
+            reader.flex_1(),
+        ));
         Some(self.slot_drop_target(reader, leaf, cx))
     }
 
@@ -11234,7 +11280,12 @@ impl CockpitView {
             // unread ink, never the attention ochre.
             Badge::Ready(tooltip) => button
                 .tooltip(tooltip)
-                .child(icon(UPDATE, ICON_BUTTON_GLYPH, ACCENT))
+                .child(crate::motion::fade_in(
+                    "cli-update-ready-in",
+                    icon(UPDATE, ICON_BUTTON_GLYPH, ACCENT),
+                    crate::motion::FADE_QUICK,
+                    1.0,
+                ))
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     for provider in view.cli_updates.ready() {
@@ -21400,6 +21451,46 @@ mod tests {
     /// cmd-, opens the Settings panel and escape closes it; a chip press
     /// writes the setting and saves it to disk at once, and the Session
     /// defaults the spawner reads follow.
+    /// cmd-= / cmd-- step the transcript's reading size one step at a
+    /// time, stopping at either end, cmd-0 returns it to Standard, and every
+    /// step is saved like a Settings change.
+    #[gpui::test]
+    fn cmd_plus_and_minus_step_the_reading_size_and_save_it(cx: &mut TestAppContext) {
+        use ferrite_core::settings::{Settings, SoloReadingSize};
+        let (core, _fake) = cockpit("text-size-keys", 1);
+        bind_production_keys(cx);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| CockpitView::new(core, cx));
+            gpui::component::Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CockpitView>().unwrap()
+        });
+        tick(cx);
+        let size = |cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let saved = Settings::load(&view.prefs.dir).solo_reading_size;
+                assert_eq!(
+                    saved, view.prefs.settings.solo_reading_size,
+                    "saved at once"
+                );
+                saved
+            })
+        };
+        for (keys, expected) in [
+            ("cmd-=", SoloReadingSize::Comfortable),
+            ("cmd-=", SoloReadingSize::Large),
+            ("cmd-=", SoloReadingSize::Large),
+            ("cmd--", SoloReadingSize::Comfortable),
+            ("cmd-0", SoloReadingSize::Standard),
+            ("cmd--", SoloReadingSize::Standard),
+        ] {
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+            assert_eq!(size(cx), expected, "after {keys}");
+        }
+    }
+
     #[gpui::test]
     fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("settings-panel", 1);
