@@ -5618,7 +5618,7 @@ pub(crate) fn render_block(
     _provider: Option<Provider>,
     preview: &crate::attachment_preview::Preview,
     prompt_actions: Option<AnyElement>,
-    reading: ferrite_core::settings::SoloReadingSize,
+    reading: ferrite_core::settings::ReadingSize,
 ) -> AnyElement {
     let row = div().w_full().min_w_0().flex_shrink_0();
     // Prose rows read at the answer's size; tool rows and the stamp do not

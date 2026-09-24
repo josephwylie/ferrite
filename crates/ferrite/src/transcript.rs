@@ -99,7 +99,7 @@ pub(crate) struct TranscriptInput {
     pub signal_status: Option<Status>,
     pub timings: HashMap<String, ToolTiming>,
     pub focused: bool,
-    pub reading_size: ferrite_core::settings::SoloReadingSize,
+    pub reading_size: ferrite_core::settings::ReadingSize,
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub preview: Preview,
     pub expanded: HashSet<DisclosureId>,
@@ -125,7 +125,7 @@ impl TranscriptInput {
         bool,
         gpui::base::TextSelectionScopeId,
         Option<Status>,
-        ferrite_core::settings::SoloReadingSize,
+        ferrite_core::settings::ReadingSize,
     ) {
         (
             self.display_revision,
@@ -333,7 +333,7 @@ impl TranscriptView {
         disclosure_revision: u64,
         focused: bool,
         signal_status: Option<Status>,
-        reading_size: ferrite_core::settings::SoloReadingSize,
+        reading_size: ferrite_core::settings::ReadingSize,
     ) -> bool {
         self.input.namespace == namespace
             && self.input.content_revision == content_revision

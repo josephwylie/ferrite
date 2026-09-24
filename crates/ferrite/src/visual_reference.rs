@@ -14,7 +14,7 @@ use ferrite_core::{
     groups::{GroupChange, GroupId},
     layout::{Axis, Node, Tree},
     providers::Session,
-    settings::SoloReadingSize,
+    settings::ReadingSize,
     store::{Provider, Store},
     workspace::WorkspaceChoice,
     Decision, DecisionAnswer, DecisionKind, Hunk, QueueEvent, QueuedPrompt, SessionCommand,
@@ -609,9 +609,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // ---- WP-B scene arms (append above the end line)
         "prose" => (prose(), none),
         // The reading sizes: the same scenes read at Comfortable and Large.
-        "prose-comfortable" => (prose(), reading(SoloReadingSize::Comfortable)),
-        "prose-large" => (prose(), reading(SoloReadingSize::Large)),
-        "formatting-large" => (legacy("formatting").0, reading(SoloReadingSize::Large)),
+        "prose-comfortable" => (prose(), reading(ReadingSize::nearest(16))),
+        "prose-large" => (prose(), reading(ReadingSize::nearest(18))),
+        "formatting-large" => (legacy("formatting").0, reading(ReadingSize::nearest(18))),
         // (end WP-B)
 
         // ---- WP-C scene arms (append above the end line)
@@ -1625,9 +1625,9 @@ fn notifications() -> (Scene, Setup) {
 // ---- WP-B scene builders (append above the end line)
 
 /// A setup that reads the Solo Pane at `size`.
-fn reading(size: SoloReadingSize) -> Setup {
+fn reading(size: ReadingSize) -> Setup {
     Box::new(move |view, _, cx| {
-        view.prefs.settings.solo_reading_size = size;
+        view.prefs.settings.reading_size = size;
         cx.notify();
     })
 }

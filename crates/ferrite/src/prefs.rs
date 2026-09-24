@@ -19,7 +19,7 @@ use gpui::{div, px, rgb, rgba, AnyElement, App, Div, Entity, SharedString, Windo
 use gpui::component::button::Button;
 use gpui::component::input::{Input, InputState};
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui::component::{Selectable, Sizable};
+use gpui::component::{Disableable, Selectable, Sizable};
 use gpui_base::{Switch, SwitchThumb, SwitchTrack};
 
 use crate::pointer::Pointer;
@@ -934,6 +934,51 @@ pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: 
         .border_1()
         .border_color(rgba(edge))
         .child(components::form_label(label, ink))
+}
+
+/// A size stepper: `−`, the current value in tabular figures, `+`, on the
+/// segmented control's `RAISED_2` well. An end with nowhere to go is
+/// disabled. The keys that do the same ride the hint.
+pub fn stepper(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    value: SharedString,
+    can_down: bool,
+    can_up: bool,
+    step: impl Fn(i32, &mut App) + 'static,
+) -> Row {
+    let step = Rc::new(step);
+    Row::new(title, detail, vec![value.clone()], move |_, cx| {
+        let button = |at: usize, label: &'static str, delta: i32, live: bool| {
+            let step = step.clone();
+            chip((id, at), label.into(), false, cx)
+                .disabled(!live)
+                .when(!live, |button| button.cursor_default().opacity(0.4))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    step(delta, cx);
+                })
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(FORM_CHOICE_PAD))
+            .p(px(FORM_CHOICE_PAD))
+            .rounded(px(R_CONTROL))
+            .bg(rgb(RAISED_2))
+            .child(button(0, "\u{2212}", -1, can_down))
+            .child(components::tabular(
+                div()
+                    .debug_selector(move || format!("{id}-value"))
+                    .min_w(px(SETTINGS_STEPPER_VALUE_W))
+                    .flex()
+                    .justify_center()
+                    .child(components::form_label(value.clone(), TEXT)),
+            ))
+            .child(button(1, "+", 1, can_up))
+            .into_any_element()
+    })
 }
 
 /// A read-only fact (About): its key at the left, its value at the right

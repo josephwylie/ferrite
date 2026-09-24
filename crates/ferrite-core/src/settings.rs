@@ -58,8 +58,10 @@ pub struct Settings {
     /// Whether Ferrite predicts a follow-up prompt in the empty Composer.
     /// Default: true.
     pub placeholder_suggestions: bool,
-    /// Answer reading size in Solo and fullscreen. Group panes stay compact.
-    pub solo_reading_size: SoloReadingSize,
+    /// The transcript's text size, in every Pane: the answer prose in px,
+    /// one of `ReadingSize::STEPS`; every other transcript measure scales
+    /// from it. Default: 14.
+    pub reading_size: ReadingSize,
     /// Whether a newer provider CLI is installed without asking, once no
     /// Session of that provider is running — new models arrive only
     /// through a newer CLI. Off, Ferrite still offers each update.
@@ -67,14 +69,49 @@ pub struct Settings {
     pub auto_update_clis: bool,
 }
 
-/// The operator's reading preference, independent of provider and Thread.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SoloReadingSize {
-    #[default]
-    Standard,
-    Comfortable,
-    Large,
+/// The transcript's text size in px, independent of provider and Thread:
+/// a browser-style zoom over `STEPS`, 14 the standard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ReadingSize(u8);
+
+impl ReadingSize {
+    /// The sizes cmd-= and cmd-- step through: one pixel at a time where a
+    /// pixel is a visible step, two above 16.
+    pub const STEPS: [u8; 9] = [12, 13, 14, 15, 16, 18, 20, 22, 24];
+    pub const STANDARD: ReadingSize = ReadingSize(14);
+    pub const SMALLEST: ReadingSize = ReadingSize(Self::STEPS[0]);
+    pub const LARGEST: ReadingSize = ReadingSize(Self::STEPS[Self::STEPS.len() - 1]);
+
+    /// The step nearest `px` (a hand-edited file may say anything).
+    pub fn nearest(px: u8) -> ReadingSize {
+        let step = Self::STEPS
+            .iter()
+            .copied()
+            .min_by_key(|step| (i16::from(*step) - i16::from(px)).abs())
+            .unwrap_or(14);
+        ReadingSize(step)
+    }
+
+    pub fn px(self) -> u8 {
+        self.0
+    }
+
+    /// `delta` steps larger (positive) or smaller, stopping at either end.
+    pub fn step(self, delta: i32) -> ReadingSize {
+        let at = Self::STEPS
+            .iter()
+            .position(|step| *step == self.0)
+            .unwrap_or(2) as i32;
+        let to = (at + delta).clamp(0, Self::STEPS.len() as i32 - 1) as usize;
+        ReadingSize(Self::STEPS[to])
+    }
+}
+
+impl Default for ReadingSize {
+    fn default() -> Self {
+        Self::STANDARD
+    }
 }
 
 /// The two useful readings of the Thread list: one activity stream, or
@@ -103,7 +140,7 @@ impl Default for Settings {
             confirm_delete: true,
             auto_title: true,
             placeholder_suggestions: true,
-            solo_reading_size: SoloReadingSize::Standard,
+            reading_size: ReadingSize::STANDARD,
             auto_update_clis: true,
         }
     }
@@ -121,7 +158,24 @@ impl Settings {
     /// damaged file around long enough to be looked at or repaired by hand.
     pub fn load(dir: &Path) -> Settings {
         match fs::read(dir.join(Self::FILE)) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Ok(bytes) => {
+                let mut settings: Settings = serde_json::from_slice(&bytes).unwrap_or_default();
+                settings.reading_size = ReadingSize::nearest(settings.reading_size.px());
+                // A file from before the zoom names one of three sizes; it
+                // keeps reading at the size it chose.
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    if value.get("reading_size").is_none() {
+                        if let Some(old) = value.get("solo_reading_size").and_then(|v| v.as_str()) {
+                            settings.reading_size = match old {
+                                "comfortable" => ReadingSize(16),
+                                "large" => ReadingSize(18),
+                                _ => ReadingSize::STANDARD,
+                            };
+                        }
+                    }
+                }
+                settings
+            }
             Err(_) => Settings::default(),
         }
     }
@@ -204,7 +258,7 @@ mod tests {
             confirm_delete: false,
             auto_title: false,
             placeholder_suggestions: false,
-            solo_reading_size: SoloReadingSize::Large,
+            reading_size: ReadingSize(18),
             auto_update_clis: false,
         }
     }
@@ -252,7 +306,35 @@ mod tests {
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);
-        assert_eq!(settings.solo_reading_size, SoloReadingSize::Standard);
+        assert_eq!(settings.reading_size, ReadingSize::STANDARD);
+    }
+
+    /// The zoom steps one size at a time and stops at either end; a file
+    /// saying a size between steps reads as the nearest.
+    #[test]
+    fn the_reading_size_steps_and_stops_at_its_ends() {
+        let standard = ReadingSize::STANDARD;
+        assert_eq!(standard.step(1).px(), 15);
+        assert_eq!(standard.step(-1).px(), 13);
+        assert_eq!(standard.step(3).px(), 18);
+        assert_eq!(ReadingSize::LARGEST.step(1), ReadingSize::LARGEST);
+        assert_eq!(ReadingSize::SMALLEST.step(-1), ReadingSize::SMALLEST);
+        assert_eq!(ReadingSize::nearest(17).px(), 16);
+        assert_eq!(ReadingSize::nearest(99), ReadingSize::LARGEST);
+    }
+
+    /// A settings file from before the zoom keeps its chosen size.
+    #[test]
+    fn an_old_reading_size_carries_over() {
+        for (old, px) in [("standard", 14), ("comfortable", 16), ("large", 18)] {
+            let dir = scratch(&format!("legacy-reading-{old}"));
+            fs::write(
+                dir.join(Settings::FILE),
+                format!("{{\"solo_reading_size\": \"{old}\"}}"),
+            )
+            .unwrap();
+            assert_eq!(Settings::load(&dir).reading_size.px(), px, "{old}");
+        }
     }
 
     /// A corrupt file loads as the defaults and stays exactly as it was:

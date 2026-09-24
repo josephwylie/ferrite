@@ -794,11 +794,11 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     );
 }
 
-/// Reading preference changes layout, not the native source/selection identity.
-/// Group rendering always keeps its compact type, including after fullscreen.
+/// Reading preference changes layout, not the native source/selection identity,
+/// and it is one size for every transcript: Solo, a Group, fullscreen.
 #[gpui::test]
-fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppContext) {
-    use ferrite_core::settings::SoloReadingSize;
+fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppContext) {
+    use ferrite_core::settings::ReadingSize;
     let (mut core, fake) = cockpit("solo-reading-size", 2);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -824,7 +824,7 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
         )
     });
     view.update(cx, |view, cx| {
-        view.prefs.settings.solo_reading_size = SoloReadingSize::Large;
+        view.prefs.settings.reading_size = ReadingSize::nearest(18);
         cx.notify();
     });
     tick(cx);
@@ -842,7 +842,8 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(14.)));
+        // One size for every transcript: a Group reads at it too.
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)

@@ -689,14 +689,9 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
     style
 }
 
-/// The reading size whose answer size is `base` (Standard for anything
-/// else, as a Group always is).
-fn reading_size_at(base: f32) -> ferrite_core::settings::SoloReadingSize {
-    use ferrite_core::settings::SoloReadingSize;
-    [SoloReadingSize::Comfortable, SoloReadingSize::Large]
-        .into_iter()
-        .find(|size| theme::answer_text_size(*size) == base)
-        .unwrap_or(SoloReadingSize::Standard)
+/// The reading size whose answer size is `base`.
+fn reading_size_at(base: f32) -> ferrite_core::settings::ReadingSize {
+    ferrite_core::settings::ReadingSize::nearest(base.round() as u8)
 }
 
 /// A heading's size at prose size `base`: the type table's ratio, rounded
@@ -2474,17 +2469,14 @@ mod style_tests {
 
     #[test]
     fn inline_code_is_a_neutral_body_ink_chip_at_body_weight() {
-        use ferrite_core::settings::SoloReadingSize;
+        use ferrite_core::settings::ReadingSize;
         assert_eq!(theme::INLINE_CODE_INK, theme::TEXT);
-        assert_eq!(
-            theme::inline_code_size(SoloReadingSize::Standard),
-            theme::FS_UI
-        );
+        assert_eq!(theme::inline_code_size(ReadingSize::STANDARD), theme::FS_UI);
         // The chip centres in the prose line box at every reading size.
         for (size, chip, inset) in [
-            (SoloReadingSize::Standard, 18., 2.),
-            (SoloReadingSize::Comfortable, 20., 2.),
-            (SoloReadingSize::Large, 22., 3.),
+            (ReadingSize::STANDARD, 18., 2.),
+            (ReadingSize::nearest(16), 20., 2.),
+            (ReadingSize::nearest(18), 22., 3.),
         ] {
             assert_eq!(theme::inline_code_chip_h(size), chip);
             assert_eq!(theme::inline_code_inset_y(size), inset);

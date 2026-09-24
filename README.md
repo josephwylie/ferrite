@@ -89,8 +89,8 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
 - `cmd-]` / `cmd-[` — next / previous Pane
 - `cmd-d` — jump to the next Decision
 - `cmd-f` — make the focused Pane fullscreen (and back)
-- `cmd-=` / `cmd--` — bigger or smaller transcript text on a Pane shown alone;
-  `cmd-0` — back to the standard size
+- `cmd-=` / `cmd--` — bigger or smaller transcript text, 12–24px, in every Pane;
+  `cmd-0` — back to 14px
 - `cmd-b` — hide the sidebar
 - `cmd-i` — the bell: everything that finished while you were looking elsewhere
 - `cmd-w` — park a Thread; `cmd-o` — bring back the last one you parked

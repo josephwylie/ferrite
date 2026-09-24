@@ -1368,13 +1368,8 @@ impl CockpitView {
         let transcript = subject_view.transcript();
         let revision = subject_view.presentation_revision();
         let status = subagents::transcript_status(subject_view.status(), subject_view.fresh());
-        let reading_size = if self.cockpit.roster().view() == View::Solo
-            || self.cockpit.roster().fullscreen().is_some()
-        {
-            self.prefs.settings.solo_reading_size
-        } else {
-            ferrite_core::settings::SoloReadingSize::Standard
-        };
+        // One reading size for every transcript, on every board.
+        let reading_size = self.prefs.settings.reading_size;
         let entity = self.panes[index]
             .ensure_transcript(cx)
             .expect("thread Pane has a transcript entity");
@@ -3717,31 +3712,20 @@ impl CockpitView {
                 self.setting_change(cx, |s, v| s.nav_collapsed = v),
             ),
         ];
-        let reading = vec![prefs::choices(
-            "settings-solo-answer-size",
-            "Solo answer size",
-            "Answer text in solo and fullscreen, not in groups",
-            [
-                (
-                    "Standard",
-                    ferrite_core::settings::SoloReadingSize::Standard,
-                ),
-                (
-                    "Comfortable",
-                    ferrite_core::settings::SoloReadingSize::Comfortable,
-                ),
-                ("Large", ferrite_core::settings::SoloReadingSize::Large),
-            ]
-            .into_iter()
-            .map(|(label, size)| {
-                (
-                    SharedString::from(label),
-                    settings.solo_reading_size == size,
-                    size,
-                )
-            })
-            .collect(),
-            self.setting_change(cx, |settings, size| settings.solo_reading_size = size),
+        let size = settings.reading_size;
+        let reading = vec![prefs::stepper(
+            "settings-text-size",
+            "Text size",
+            "Transcript text in every Pane, from 12 to 24px",
+            format!("{}px", size.px()).into(),
+            size > ferrite_core::settings::ReadingSize::SMALLEST,
+            size < ferrite_core::settings::ReadingSize::LARGEST,
+            {
+                let view = cx.entity().downgrade();
+                move |delta, cx| {
+                    let _ = view.update(cx, |view, cx| view.step_text_size(delta, cx));
+                }
+            },
         )];
         let (claude, codex) = self
             .cli_versions
@@ -7699,23 +7683,20 @@ impl CockpitView {
         self.open_draft_in_current_view(DraftTarget::Main, cx);
     }
 
-    /// cmd-= / cmd-- step the transcript's reading size (Standard,
-    /// Comfortable, Large) and cmd-0 returns it to Standard: the same
-    /// saved setting Settings › Behaviour › Reading shows. `delta` 0 resets.
+    /// cmd-= / cmd-- step every transcript's text size through
+    /// `ReadingSize::STEPS` (12–24px), stopping at either end, and cmd-0
+    /// returns it to 14: the same saved setting as Settings › Behaviour ›
+    /// Text size. `delta` 0 resets.
     fn step_text_size(&mut self, delta: i32, cx: &mut Context<Self>) {
-        use ferrite_core::settings::SoloReadingSize::{Comfortable, Large, Standard};
-        let steps = [Standard, Comfortable, Large];
-        let at = steps
-            .iter()
-            .position(|size| *size == self.prefs.settings.solo_reading_size)
-            .unwrap_or(0) as i32;
+        use ferrite_core::settings::ReadingSize;
+        let now = self.prefs.settings.reading_size;
         let next = if delta == 0 {
-            Standard
+            ReadingSize::STANDARD
         } else {
-            steps[(at + delta).clamp(0, steps.len() as i32 - 1) as usize]
+            now.step(delta)
         };
-        if next != self.prefs.settings.solo_reading_size {
-            self.change_settings(|settings| settings.solo_reading_size = next, cx);
+        if next != now {
+            self.change_settings(|settings| settings.reading_size = next, cx);
             cx.notify();
         }
     }
@@ -16968,7 +16949,7 @@ mod tests {
     /// weight and ink, never by being smaller than the answer under it.
     #[gpui::test]
     fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestAppContext) {
-        use ferrite_core::settings::SoloReadingSize;
+        use ferrite_core::settings::ReadingSize;
         let (mut core, fake) = cockpit("echo-reading-size", 1);
         let thread = core.threads()[0];
         core.send(thread, "Check the build".into());
@@ -16983,12 +16964,12 @@ mod tests {
         // Each step changes the size, so the transcript re-renders (a cached
         // view registers no debug bounds).
         for size in [
-            SoloReadingSize::Large,
-            SoloReadingSize::Comfortable,
-            SoloReadingSize::Standard,
+            ReadingSize::nearest(18),
+            ReadingSize::nearest(16),
+            ReadingSize::STANDARD,
         ] {
             view.update(cx, |view, cx| {
-                view.prefs.settings.solo_reading_size = size;
+                view.prefs.settings.reading_size = size;
                 cx.notify();
             });
             tick(cx);
@@ -21589,12 +21570,12 @@ mod tests {
     /// cmd-, opens the Settings panel and escape closes it; a chip press
     /// writes the setting and saves it to disk at once, and the Session
     /// defaults the spawner reads follow.
-    /// cmd-= / cmd-- step the transcript's reading size one step at a
-    /// time, stopping at either end, cmd-0 returns it to Standard, and every
-    /// step is saved like a Settings change.
+    /// cmd-= / cmd-- step the transcript's text size one step at a time,
+    /// stopping at either end, cmd-0 returns it to 14, and every step is
+    /// saved like a Settings change.
     #[gpui::test]
     fn cmd_plus_and_minus_step_the_reading_size_and_save_it(cx: &mut TestAppContext) {
-        use ferrite_core::settings::{Settings, SoloReadingSize};
+        use ferrite_core::settings::{ReadingSize, Settings};
         let (core, _fake) = cockpit("text-size-keys", 1);
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
@@ -21607,22 +21588,22 @@ mod tests {
         tick(cx);
         let size = |cx: &mut gpui::VisualTestContext| {
             view.read_with(cx, |view, _| {
-                let saved = Settings::load(&view.prefs.dir).solo_reading_size;
-                assert_eq!(
-                    saved, view.prefs.settings.solo_reading_size,
-                    "saved at once"
-                );
+                let saved = Settings::load(&view.prefs.dir).reading_size;
+                assert_eq!(saved, view.prefs.settings.reading_size, "saved at once");
                 saved
             })
         };
         for (keys, expected) in [
-            ("cmd-=", SoloReadingSize::Comfortable),
-            ("cmd-=", SoloReadingSize::Large),
-            ("cmd-=", SoloReadingSize::Large),
-            ("cmd--", SoloReadingSize::Comfortable),
-            ("cmd-0", SoloReadingSize::Standard),
-            ("cmd--", SoloReadingSize::Standard),
-        ] {
+            ("cmd-=", 15),
+            ("cmd-=", 16),
+            ("cmd-=", 18),
+            ("cmd-0", 14),
+            ("cmd--", 13),
+            ("cmd--", 12),
+            ("cmd--", 12),
+        ]
+        .map(|(keys, px)| (keys, ReadingSize::nearest(px)))
+        {
             cx.simulate_keystrokes(keys);
             cx.run_until_parked();
             assert_eq!(size(cx), expected, "after {keys}");
@@ -21727,26 +21708,25 @@ mod tests {
             .debug_bounds("settings-search")
             .expect("the search field tops the sidebar");
         cx.simulate_click(search.center(), gpui::Modifiers::none());
-        cx.simulate_input("Solo answer size");
+        cx.simulate_input("Text size");
         tick(cx);
-        // Three sizes are a chooser (more than two options), not a tray:
-        // the second row is Comfortable.
-        let sizes = cx
-            .debug_bounds("settings-solo-answer-size")
-            .expect("the size chooser")
-            .center();
-        cx.simulate_click(sizes, gpui::Modifiers::none());
-        cx.run_until_parked();
-        cx.simulate_keystrokes("down down enter");
-        cx.run_until_parked();
+        // The stepper's `+` twice: 14 → 15 → 16.
+        for _ in 0..2 {
+            let larger = cx
+                .debug_bounds("settings-text-size-1")
+                .expect("the size stepper's +")
+                .center();
+            cx.simulate_click(larger, gpui::Modifiers::none());
+            cx.run_until_parked();
+        }
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.prefs.settings.solo_reading_size,
-                ferrite_core::settings::SoloReadingSize::Comfortable
+                view.prefs.settings.reading_size,
+                ferrite_core::settings::ReadingSize::nearest(16)
             );
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).solo_reading_size,
-                ferrite_core::settings::SoloReadingSize::Comfortable
+                ferrite_core::settings::Settings::load(&view.prefs.dir).reading_size,
+                ferrite_core::settings::ReadingSize::nearest(16)
             );
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());

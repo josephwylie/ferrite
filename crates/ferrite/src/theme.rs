@@ -438,24 +438,28 @@ pub const W_BODY: FontWeight = FontWeight::NORMAL;
 pub const W_LABEL: FontWeight = FontWeight::MEDIUM;
 pub const W_STRONG: FontWeight = FontWeight::SEMIBOLD;
 
-/// Solo's optional reading scale affects prose, not execution or chrome. It
-/// applies only in Solo and fullscreen; a Group is always Standard.
-pub fn answer_text_size(size: ferrite_core::settings::SoloReadingSize) -> f32 {
-    use ferrite_core::settings::SoloReadingSize;
-    match size {
-        SoloReadingSize::Standard => FS_PROSE,
-        SoloReadingSize::Comfortable => 16.,
-        SoloReadingSize::Large => 18.,
-    }
+/// The transcript's reading size (cmd-= / cmd-- / cmd-0, every Pane)
+/// scales prose, not execution or chrome: the answer size is the setting's
+/// own px.
+pub fn answer_text_size(size: ferrite_core::settings::ReadingSize) -> f32 {
+    f32::from(size.px())
 }
 
-/// The pixel line height paired with each reading size: 14/22, 16/24, 18/28.
-pub fn answer_line_height(size: ferrite_core::settings::SoloReadingSize) -> f32 {
-    use ferrite_core::settings::SoloReadingSize;
-    match size {
-        SoloReadingSize::Standard => LH_PROSE,
-        SoloReadingSize::Comfortable => 24.,
-        SoloReadingSize::Large => 28.,
+/// The pixel line height paired with each reading size, about 1.55× and
+/// whole: 12/19 · 13/20 · 14/22 · 15/23 · 16/24 · 18/28 · 20/31 · 22/34 ·
+/// 24/37.
+pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
+    match size.px() {
+        12 => 19.,
+        13 => 20.,
+        14 => LH_PROSE,
+        15 => 23.,
+        16 => 24.,
+        18 => 28.,
+        20 => 31.,
+        22 => 34.,
+        24 => 37.,
+        px => (f32::from(px) * 1.55).round(),
     }
 }
 
@@ -1117,43 +1121,33 @@ pub const INLINE_CODE_WASH: u32 = 0xffffff0f;
 /// out; its height is `inline_code_chip_h`, centred in the prose line box.
 pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
 
-/// Inline code's size at each reading size: the UI size at Standard
-/// (`FS_UI`, so a code cell is `CODE_CELL`), 14 and 16 above it. Tables set
-/// their cells at the same size.
-pub fn inline_code_size(size: ferrite_core::settings::SoloReadingSize) -> f32 {
-    use ferrite_core::settings::SoloReadingSize;
-    match size {
-        SoloReadingSize::Standard => FS_UI,
-        SoloReadingSize::Comfortable => 14.,
-        SoloReadingSize::Large => 16.,
+/// Inline code's size at each reading size: the UI size at 14 (`FS_UI`, so
+/// a code cell is `CODE_CELL`), 1.5 under the prose up to 15 and 2 under it
+/// above. Tables set their cells at the same size.
+pub fn inline_code_size(size: ferrite_core::settings::ReadingSize) -> f32 {
+    let px = f32::from(size.px());
+    if px <= 15. {
+        px - (FS_PROSE - FS_UI)
+    } else {
+        px - 2.
     }
 }
 
-/// The inline-code chip's height at each reading size: 18 · 20 · 22.
-pub fn inline_code_chip_h(size: ferrite_core::settings::SoloReadingSize) -> f32 {
-    use ferrite_core::settings::SoloReadingSize;
-    match size {
-        SoloReadingSize::Standard => 18.,
-        SoloReadingSize::Comfortable => 20.,
-        SoloReadingSize::Large => 22.,
-    }
+/// The inline-code chip's height: 4px over the prose size (18 at 14).
+pub fn inline_code_chip_h(size: ferrite_core::settings::ReadingSize) -> f32 {
+    f32::from(size.px()) + 4.
 }
 
 /// How far the chip stays inside the prose line box, top and bottom:
-/// `(answer_line_height − inline_code_chip_h) / 2` = 2 · 2 · 3.
-pub fn inline_code_inset_y(size: ferrite_core::settings::SoloReadingSize) -> f32 {
+/// `(answer_line_height − inline_code_chip_h) / 2`.
+pub fn inline_code_inset_y(size: ferrite_core::settings::ReadingSize) -> f32 {
     (answer_line_height(size) - inline_code_chip_h(size)) / 2.
 }
 
-/// A table row's line box at each reading size: `LH_UI` 20 · 22 · 24, so a
-/// Standard row is 4 + 20 + 4 = 28, the list pitch.
-pub fn table_line_height(size: ferrite_core::settings::SoloReadingSize) -> f32 {
-    use ferrite_core::settings::SoloReadingSize;
-    match size {
-        SoloReadingSize::Standard => LH_UI,
-        SoloReadingSize::Comfortable => 22.,
-        SoloReadingSize::Large => 24.,
-    }
+/// A table row's line box: 6px over the prose size, so at 14 it is `LH_UI`
+/// 20 and a row is 4 + 20 + 4 = 28, the list pitch.
+pub fn table_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
+    f32::from(size.px()) + 6.
 }
 
 /// 570px — the prose measure (~88 characters of Geist at 14px): the most a
@@ -1714,6 +1708,8 @@ pub const SETTINGS_LABEL_GAP: f32 = SPACE_2;
 pub const SETTINGS_TITLE_GAP: f32 = SPACE_4;
 /// Every control in a row: the chrome control height.
 pub const SETTINGS_CONTROL_H: f32 = CONTROL_H;
+/// The text-size stepper's value slot: `24px` never moves the `+`.
+pub const SETTINGS_STEPPER_VALUE_W: f32 = 44.0;
 /// A menu button's widest value before it truncates (a model's name).
 pub const SETTINGS_MENU_MAX_W: f32 = 220.0;
 /// An About key's column, so every value starts on one edge.
@@ -2306,7 +2302,7 @@ mod tests {
 
     #[test]
     fn every_type_role_has_a_whole_pixel_line_box() {
-        use ferrite_core::settings::SoloReadingSize;
+        use ferrite_core::settings::ReadingSize;
         for (size, line) in [
             (FS_PROSE, LH_PROSE),
             (FS_PROSE_SM, LH_PROSE_SM),
@@ -2317,16 +2313,12 @@ mod tests {
             assert_eq!(line, line.round());
             assert!(line >= size * 1.25, "{size}px on a {line}px line box");
         }
-        for reading in [
-            SoloReadingSize::Standard,
-            SoloReadingSize::Comfortable,
-            SoloReadingSize::Large,
-        ] {
+        for reading in ReadingSize::STEPS.map(ReadingSize::nearest) {
             let (size, line) = (answer_text_size(reading), answer_line_height(reading));
             assert_eq!(line, line.round());
             assert!(line >= size * 1.5, "{reading:?}: {size}/{line}");
         }
-        assert_eq!(answer_text_size(SoloReadingSize::Standard), FS_PROSE);
+        assert_eq!(answer_text_size(ReadingSize::STANDARD), FS_PROSE);
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
         assert!(near(FS_PROSE * heading_scale(1), 18.0));
         assert!(near(FS_PROSE * heading_scale(2), 16.0));

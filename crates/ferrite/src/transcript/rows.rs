@@ -625,14 +625,14 @@ mod tests {
         use crate::theme::{
             answer_text_size, reading_step, GAP_BLOCK, GAP_ROW, GAP_TURN, PROSE_GAP,
         };
-        use ferrite_core::settings::SoloReadingSize;
+        use ferrite_core::settings::ReadingSize;
         use RowKind::*;
         let prose = Answer { commentary: false };
         let mut previous = None;
         for (size, turn, block) in [
-            (SoloReadingSize::Standard, 32., 12.),
-            (SoloReadingSize::Comfortable, 37., 14.),
-            (SoloReadingSize::Large, 41., 15.),
+            (ReadingSize::STANDARD, 32., 12.),
+            (ReadingSize::nearest(16), 37., 14.),
+            (ReadingSize::nearest(18), 41., 15.),
         ] {
             let reading = answer_text_size(size);
             assert_eq!(gap_before(Some(prose), Prompt, reading), turn, "{size:?}");
@@ -661,7 +661,8 @@ mod tests {
         prompt(&mut transcript, "again");
         let mut rows = TranscriptRows::new(transcript.blocks(), None, READING);
         let first = rows.get(0).unwrap().clone();
-        let large = crate::theme::answer_text_size(ferrite_core::settings::SoloReadingSize::Large);
+        let large =
+            crate::theme::answer_text_size(ferrite_core::settings::ReadingSize::nearest(18));
         let delta = rows.reconcile(transcript.blocks(), None, large);
         assert!(delta.splices.is_empty());
         assert_eq!(delta.remeasure, vec![1, 2]);
