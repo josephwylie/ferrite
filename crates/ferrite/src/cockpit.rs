@@ -9143,7 +9143,7 @@ impl CockpitView {
         let background = (level != Level::Wall)
             .then(|| self.background_chips(index, cx))
             .flatten();
-        let changed_files = l1.then(|| self.changed_file_links(index)).flatten();
+        let changed_files = l1.then(|| self.changed_file_links(index, cx)).flatten();
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
         let joins = pane.is_main()
@@ -9383,9 +9383,13 @@ impl CockpitView {
         Some(self.slot_drop_target(reader, leaf, cx))
     }
 
-    fn changed_file_links(&self, index: usize) -> Option<AnyElement> {
-        use gpui::component::{Icon, IconName};
-
+    /// The Composer's changed-files shelf: the `FILE` mark and a quiet
+    /// `files changed`, then one chip per file on the pending-file chip
+    /// recipe (`FILL`, `R_CHIP`, `CHIP_H`, mono `FS_SM` `TEXT_2`, cut at
+    /// `ATTACH_CHIP_MAX_W`) with its `+N −N`. A click opens the file in the
+    /// reader beside the Pane.
+    fn changed_file_links(&self, index: usize, cx: &gpui::App) -> Option<AnyElement> {
+        use crate::theme::*;
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
         let changed_files = self.facts.get(thread)?.changed_files.clone();
@@ -9400,7 +9404,7 @@ impl CockpitView {
             .flex_1()
             .min_w_0()
             .items_center()
-            .gap(px(4.))
+            .gap(px(SPACE_1))
             .overflow_x_scroll();
         for (file_index, file) in changed_files.into_iter().enumerate() {
             let raw = std::path::PathBuf::from(&file.path);
@@ -9419,35 +9423,44 @@ impl CockpitView {
             let host = preview.clone();
             links = links.child(
                 div()
+                    .id(("thread-document-tip", file_index))
                     .debug_selector(move || format!("thread-document-{file_index}"))
+                    .tooltip(crate::menu::tooltip(format!("Open {}", path.display())))
                     .child(
-                        crate::components::button(("thread-document", file_index))
-                            .max_w(px(240.))
-                            .h(px(crate::theme::COMPOSER_ROW_H))
-                            .px(px(6.))
-                            .bg(rgb(crate::theme::PANE))
-                            .rounded(px(crate::theme::R_CHIP))
-                            .tooltip(format!("Open {}", path.display()))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .min_w_0()
-                                    .text_size(px(crate::theme::FS_SM))
-                                    .text_color(rgb(crate::theme::TEXT))
-                                    .child(div().min_w_0().truncate().child(title))
-                                    .child(pane::diff_stat(file.added, file.removed)),
-                            )
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                host.open_document(
-                                    path_for_open.clone(),
-                                    title_for_open.clone(),
-                                    window,
-                                    cx,
-                                );
-                            }),
+                        crate::components::faded_button(
+                            ("thread-document", file_index),
+                            rgb(FILL).into(),
+                            rgb(FILL_HOVER).into(),
+                            rgb(PRESSED).into(),
+                            rgb(TEXT_2).into(),
+                            cx,
+                        )
+                        .max_w(px(ATTACH_CHIP_MAX_W))
+                        .h(px(ATTACH_CHIP_H))
+                        .px(px(CHIP_PAD_X))
+                        .rounded(px(R_CHIP))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(SPACE_1_5))
+                                .min_w_0()
+                                .font_family(FONT_CODE)
+                                .text_size(px(FS_SM))
+                                .line_height(px(LH_META))
+                                .text_color(rgb(TEXT_2))
+                                .child(div().min_w_0().truncate().child(title))
+                                .child(pane::diff_stat(file.added, file.removed)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            host.open_document(
+                                path_for_open.clone(),
+                                title_for_open.clone(),
+                                window,
+                                cx,
+                            );
+                        }),
                     ),
             );
         }
@@ -9458,20 +9471,13 @@ impl CockpitView {
                 .items_center()
                 .flex_shrink_0()
                 .min_w_0()
-                .h(px(crate::theme::COMPOSER_ROW_H))
-                .gap(px(6.))
+                .h(px(COMPOSER_ROW_H))
+                .gap(px(SPACE_2))
+                .child(crate::icons::icon(crate::icons::FILE, ROW_ICON, TEXT_MUTED))
                 .child(
-                    Icon::new(IconName::FileText)
-                        .size(px(crate::theme::ROW_ICON))
-                        .text_color(rgb(crate::theme::TEXT_2)),
-                )
-                .child(
-                    div()
+                    crate::components::text_meta()
                         .flex_shrink_0()
-                        .font_family(crate::theme::FONT_UI)
-                        .text_size(px(crate::theme::FS_SM))
-                        .text_color(rgb(crate::theme::TEXT_2))
-                        .child("Files changed"),
+                        .child("files changed"),
                 )
                 .child(links)
                 .into_any_element(),
