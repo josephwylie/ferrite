@@ -1,26 +1,24 @@
-//! Longbridge Settings layout with Ferrite controls and theme tokens.
-//! Values and persistence remain owned by the cockpit.
+//! Ferrite's sheets, and the Settings sheet built on them. Values and
+//! persistence remain owned by the cockpit (`CockpitView::change_settings`);
+//! this module only lays settings out, searches them and draws their
+//! controls. The Settings sheet's rules live in `theme.rs` (`Settings
+//! sheet`).
 //!
-//! **The sheet recipe** (Settings, the Project editor, the image preview):
-//! a `VEIL` over the Cockpit; the sheet `RAISED` with a `HAIRLINE_STRONG`
-//! edge, `R_PANE` and the float shadow; a `MODAL_HEAD_H` head (the one
-//! `W_LABEL` title and the one close control, `×` with the tooltip `Close
-//! esc`) over a hairline; a scrolling body; a footer pinned under a
-//! hairline. Those two rules are the sheet's structure (they mark where the
-//! body scrolls); nothing inside the body draws one — pages, groups and
-//! rows are set apart by space alone (`SPACE_6` between settings). Every
-//! setting is one row: its label (UI `FS_UI` `TEXT`) over its description
-//! (prose `FS_PROSE_SM` `TEXT_MUTED`) at the left, at most
-//! `FORM_TEXT_FRACTION` wide, and its control right-aligned. Controls are
-//! `FORM_CONTROL_H` on `RAISED_2`, one step up from the sheet; a choice
-//! shows its selection as a neutral `FILL` chip, never in the accent.
+//! **The sheet recipe** (the Project editor, the image preview): a `VEIL`
+//! over the Cockpit; the sheet `RAISED` with a `HAIRLINE_STRONG` edge,
+//! `R_PANE` and the float shadow; a `MODAL_HEAD_H` head (the one `W_LABEL`
+//! title and the one close control, `×` with the tooltip `Close esc`) over
+//! a hairline; a scrolling body; a footer pinned under a hairline. Those
+//! two rules mark where the body scrolls. Settings is the recipe's quieter
+//! variant: a `PANE` sheet whose head needs no rule, because its cards are
+//! what is raised.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, Div, SharedString};
+use gpui::{div, px, rgb, rgba, AnyElement, App, Div, Entity, SharedString, Window};
 
 use gpui::component::button::Button;
+use gpui::component::input::{Input, InputState};
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui::component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
 use gpui::component::{Selectable, Sizable};
 use gpui_base::{Switch, SwitchThumb, SwitchTrack};
 
@@ -30,11 +28,6 @@ use std::rc::Rc;
 use crate::components::{self, MenuItem};
 use crate::icons::{self, icon};
 use crate::theme::*;
-
-/// The card's width; tall enough sections scroll inside it.
-pub const WIDTH: f32 = 820.0;
-pub const HEIGHT: f32 = 680.0;
-const SIDEBAR_WIDTH: f32 = 172.0;
 
 // ------------------------------------------------------------ the sheet
 
@@ -74,10 +67,28 @@ fn sheet_frame(width: f32) -> Div {
         .shadow(components::float_shadow())
 }
 
+/// The Settings sheet: `sheet` on `PANE`, one step under its `RAISED`
+/// cards, at `SETTINGS_W` × `SETTINGS_H` (capped to the window).
+pub fn settings_sheet() -> Div {
+    sheet(SETTINGS_W, SETTINGS_H).bg(rgb(PANE))
+}
+
 /// A sheet's head: its title (the sheet's one `W_LABEL` line), then the
 /// close button, over a hairline. The close button's tooltip names `esc`;
 /// no keycap repeats it.
 pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
+    head_row(title, close)
+        .border_b_1()
+        .border_color(rgba(HAIRLINE))
+}
+
+/// `sheet_head` without its rule: the Settings head, set apart from the
+/// sidebar and the page by space alone.
+pub fn settings_head(close: impl IntoElement) -> Div {
+    head_row("Settings", close)
+}
+
+fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -86,8 +97,6 @@ pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Di
         .h(px(MODAL_HEAD_H))
         .pl(px(MODAL_PAD))
         .pr(px(SPACE_2))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
         .child(
             div()
                 .min_w_0()
@@ -139,146 +148,535 @@ pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
         .child(right)
 }
 
-/// A form row's label block: the label in UI `FS_UI` `TEXT`, and its
-/// description under it in prose at `FS_PROSE_SM` (prose is never smaller).
-/// A description that opens with a key table's chord (`cmd-B toggles it
-/// any time`) draws the chord as keys (`⌘B`, `components::key_combo`):
-/// neither face has the command glyph.
-pub fn form_text(title: impl Into<SharedString>, detail: Option<SharedString>) -> Div {
+// ------------------------------------------------------------ Settings
+
+/// The Settings pages, in sidebar order. `About` is pinned to the
+/// sidebar's foot, apart from the settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PageKey {
+    #[default]
+    NewThreads,
+    Permissions,
+    Behaviour,
+    About,
+}
+
+impl PageKey {
+    pub const ALL: [PageKey; 4] = [
+        PageKey::NewThreads,
+        PageKey::Permissions,
+        PageKey::Behaviour,
+        PageKey::About,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            PageKey::NewThreads => "New threads",
+            PageKey::Permissions => "Permissions",
+            PageKey::Behaviour => "Behaviour",
+            PageKey::About => "About",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            PageKey::NewThreads => icons::NEW_THREAD,
+            PageKey::Permissions => icons::SHIELD,
+            PageKey::Behaviour => icons::SLIDERS,
+            PageKey::About => icons::INFO,
+        }
+    }
+
+    /// The sidebar row's selector, `settings-page-<slug>`.
+    pub fn selector(self) -> &'static str {
+        match self {
+            PageKey::NewThreads => "settings-page-new-threads",
+            PageKey::Permissions => "settings-page-permissions",
+            PageKey::Behaviour => "settings-page-behaviour",
+            PageKey::About => "settings-page-about",
+        }
+    }
+
+    /// The page `delta` rows away in sidebar order, held at either end.
+    pub fn step(self, delta: isize) -> PageKey {
+        let at = PageKey::ALL
+            .iter()
+            .position(|page| *page == self)
+            .unwrap_or(0) as isize;
+        let to = (at + delta).clamp(0, PageKey::ALL.len() as isize - 1);
+        PageKey::ALL[to as usize]
+    }
+}
+
+type Control = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
+/// One setting: its label, an optional one-line hint, the words search
+/// also finds it by (every option label), and its control.
+#[derive(Clone)]
+pub struct Row {
+    title: SharedString,
+    hint: SharedString,
+    words: Vec<SharedString>,
+    control: Control,
+    /// A fact's value gives way (wraps) rather than hold its width.
+    fact: bool,
+}
+
+impl Row {
+    fn new(
+        title: impl Into<SharedString>,
+        hint: impl Into<SharedString>,
+        words: Vec<SharedString>,
+        control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            hint: hint.into(),
+            words,
+            control: Rc::new(control),
+            fact: false,
+        }
+    }
+
+    fn fact(mut self) -> Self {
+        self.fact = true;
+        self
+    }
+
+    /// Case-insensitive substring on the label, the hint, the option
+    /// labels, and the group and page it sits in (`claude` finds every
+    /// Claude row).
+    fn matches(&self, query: &str, page: &str, group: Option<&str>) -> bool {
+        let query = query.to_lowercase();
+        [self.title.as_ref(), self.hint.as_ref(), page]
+            .into_iter()
+            .chain(group)
+            .chain(self.words.iter().map(|word| word.as_ref()))
+            .any(|text| text.to_lowercase().contains(&query))
+    }
+}
+
+/// A card of rows under a quiet label; a provider group's label leads
+/// with its logomark in brand colour.
+#[derive(Clone)]
+pub struct Group {
+    title: Option<&'static str>,
+    mark: Option<(&'static str, u32)>,
+    rows: Vec<Row>,
+}
+
+impl Group {
+    pub fn new(title: Option<&'static str>) -> Self {
+        Self {
+            title,
+            mark: None,
+            rows: Vec::new(),
+        }
+    }
+
+    pub fn mark(mut self, path: &'static str, ink: u32) -> Self {
+        self.mark = Some((path, ink));
+        self
+    }
+
+    pub fn rows(mut self, rows: impl IntoIterator<Item = Row>) -> Self {
+        self.rows.extend(rows);
+        self
+    }
+}
+
+pub struct Page {
+    key: PageKey,
+    groups: Vec<Group>,
+}
+
+pub fn page(key: PageKey, groups: Vec<Group>) -> Page {
+    Page { key, groups }
+}
+
+/// What the content column shows: the selected page, or, while the search
+/// holds a query, every matching row of every page, each card labelled
+/// `Page · Group`.
+struct Shown {
+    title: SharedString,
+    groups: Vec<(Option<SharedString>, Group)>,
+    /// The pages with a match (all of them without a query).
+    hit: Vec<PageKey>,
+}
+
+fn shown(pages: &[Page], selected: PageKey, query: &str) -> Shown {
+    if query.is_empty() {
+        let page = pages.iter().find(|page| page.key == selected);
+        return Shown {
+            title: selected.title().into(),
+            groups: page
+                .map(|page| {
+                    page.groups
+                        .iter()
+                        .map(|group| (group.title.map(SharedString::from), group.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            hit: PageKey::ALL.to_vec(),
+        };
+    }
+    let mut groups = Vec::new();
+    let mut hit = Vec::new();
+    for page in pages {
+        for group in &page.groups {
+            let rows: Vec<Row> = group
+                .rows
+                .iter()
+                .filter(|row| row.matches(query, page.key.title(), group.title))
+                .cloned()
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            if !hit.contains(&page.key) {
+                hit.push(page.key);
+            }
+            let label = match group.title {
+                Some(title) => format!("{} · {title}", page.key.title()),
+                None => page.key.title().to_string(),
+            };
+            groups.push((
+                Some(label.into()),
+                Group {
+                    rows,
+                    ..group.clone()
+                },
+            ));
+        }
+    }
+    Shown {
+        title: "Search results".into(),
+        groups,
+        hit,
+    }
+}
+
+/// The Settings body under its head: the sidebar (search, pages, `About`
+/// at the foot) and the selected page, or the search's results.
+pub fn body(
+    pages: Vec<Page>,
+    selected: PageKey,
+    search: &Entity<InputState>,
+    select: impl Fn(PageKey, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let query = search.read(cx).value().trim().to_string();
+    let shown = shown(&pages, selected, &query);
+    let searching = !query.is_empty();
+    let select = Rc::new(select);
+    let nav_row = |key: PageKey, cx: &App| {
+        let select = select.clone();
+        nav_row(
+            key,
+            !searching && key == selected,
+            shown.hit.contains(&key),
+            cx,
+        )
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            select(key, window, cx);
+        })
+    };
+    let sidebar = div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .w(px(SETTINGS_SIDEBAR_W))
+        .min_h_0()
+        .pl(px(MODAL_PAD - SPACE_1))
+        .pr(px(SPACE_2))
+        .pb(px(MODAL_PAD - SPACE_1))
+        .child(
+            div()
+                .px(px(SPACE_1))
+                .child(search_field(search, window, cx)),
+        )
+        .child(
+            div().flex().flex_col().pt(px(SPACE_3)).children(
+                [
+                    PageKey::NewThreads,
+                    PageKey::Permissions,
+                    PageKey::Behaviour,
+                ]
+                .map(|key| nav_row(key, cx)),
+            ),
+        )
+        .child(div().flex_1())
+        .child(nav_row(PageKey::About, cx));
+
+    let content = div()
+        .id("settings-content")
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .overflow_y_scroll()
+        .pl(px(SPACE_4))
+        .pr(px(SPACE_6))
+        .pb(px(SPACE_6))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .h(px(SETTINGS_NAV_ROW_H))
+                .pl(px(SETTINGS_ROW_PAD_X))
+                .text_size(px(FS_PROSE))
+                .line_height(px(LH_PROSE))
+                .font_weight(W_LABEL)
+                .text_color(rgb(TEXT_STRONG))
+                .child(shown.title.clone()),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .pt(px(SETTINGS_TITLE_GAP))
+                .gap(px(SETTINGS_GROUP_GAP))
+                .when(searching && shown.groups.is_empty(), |list| {
+                    list.child(
+                        components::text_ui()
+                            .pl(px(SETTINGS_ROW_PAD_X))
+                            .text_color(rgb(TEXT_MUTED))
+                            .child("No matching settings"),
+                    )
+                })
+                .children(
+                    shown
+                        .groups
+                        .iter()
+                        .map(|(label, group)| group_card(label.clone(), group, window, cx)),
+                ),
+        );
+
+    div()
+        .flex()
+        .flex_1()
+        .min_h_0()
+        .child(sidebar)
+        .child(content)
+}
+
+/// The search field atop the sidebar: a row's height, `RAISED` with a
+/// `HAIRLINE` edge (a field one step up off the sheet), the magnifier in
+/// `TEXT_MUTED`, and the focus outline while it holds the caret.
+fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
+    let focused = gpui::Focusable::focus_handle(search.read(cx), cx).is_focused(window);
+    components::focused(
+        div()
+            .debug_selector(|| "settings-search".into())
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1_5))
+            .h(px(SETTINGS_NAV_ROW_H))
+            .pl(px(SPACE_2))
+            .pr(px(SPACE_1))
+            .rounded(px(R_CONTROL))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgba(HAIRLINE))
+            .child(icon(icons::SEARCH, SETTINGS_SEARCH_ICON, TEXT_MUTED).flex_shrink_0())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(search).appearance(false).small().cleanable(true)),
+            ),
+        focused,
+    )
+}
+
+/// A sidebar row: the page's mark and label at the one list pitch. The
+/// selected row is `FILL` with `TEXT_STRONG`; the rest hover to `HOVER`.
+/// While a search runs, a page with no match reads `TEXT_MUTED`.
+fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
+    let (rest, hover) = if selected {
+        (FILL, FILL_HOVER)
+    } else {
+        (TRANSPARENT, HOVER)
+    };
+    let rest = if selected {
+        rgb(rest).into()
+    } else {
+        rgba(rest).into()
+    };
+    let (ink, mark) = match (selected, hit) {
+        (true, _) => (TEXT_STRONG, TEXT),
+        (false, true) => (TEXT_2, TEXT_MUTED),
+        (false, false) => (TEXT_MUTED, TEXT_MUTED),
+    };
+    components::faded_button(
+        key.selector(),
+        rest,
+        rgb(hover).into(),
+        rgb(PRESSED).into(),
+        rgb(ink).into(),
+        cx,
+    )
+    .selected(selected)
+    .debug_selector(move || key.selector().into())
+    .accessibility_label(key.title())
+    .w_full()
+    .h(px(SETTINGS_NAV_ROW_H))
+    .px(px(SPACE_2))
+    .child(
+        div()
+            .flex()
+            .flex_1()
+            .items_center()
+            .gap(px(SETTINGS_NAV_ICON_GAP))
+            .child(icon(key.icon(), SETTINGS_NAV_ICON, mark))
+            .child(components::form_label(key.title(), ink)),
+    )
+}
+
+/// A group: its label (and a provider's mark) above one card of rows split
+/// by hairlines.
+fn group_card(
+    label: Option<SharedString>,
+    group: &Group,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let rows: Vec<AnyElement> = group
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(at, row)| {
+            setting_row(row, window, cx)
+                .when(at > 0, |row| row.border_t_1().border_color(rgba(HAIRLINE)))
+                .into_any_element()
+        })
+        .collect();
     div()
         .flex()
         .flex_col()
-        .gap(px(SPACE_0_5))
-        .min_w_0()
-        .child(components::text_ui().child(title.into()))
-        .children(detail.map(|detail| {
-            let prose = div()
-                .font_family(FONT_UI)
-                .text_size(px(FS_PROSE_SM))
-                .line_height(px(LH_PROSE_SM))
-                .text_color(rgb(TEXT_MUTED));
-            match detail.split_once(' ') {
-                Some((chord, rest)) if chord.starts_with("cmd-") => prose
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_1))
-                    .child(components::key_combo(chord, TEXT_MUTED))
-                    .child(SharedString::from(rest.to_string())),
-                _ => prose.child(detail),
-            }
+        .gap(px(SETTINGS_LABEL_GAP))
+        .children(label.map(|label| {
+            components::text_meta()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_1_5))
+                .pl(px(SETTINGS_ROW_PAD_X))
+                .font_weight(W_LABEL)
+                .children(
+                    group
+                        .mark
+                        .map(|(path, ink)| icon(path, MENU_SECTION_ICON, ink)),
+                )
+                .child(section_words(&label))
         }))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .bg(rgb(RAISED))
+                .rounded(px(R_BLOCK))
+                .border_1()
+                .border_color(rgba(HAIRLINE))
+                .children(rows),
+        )
 }
 
-/// One form row, the same for every control (a switch, a choice, a
-/// chooser): its label block at the left, at most `FORM_TEXT_FRACTION` of
-/// the row, and the control right-aligned beside it, never shrinking.
-fn form_row(title: &'static str, detail: SharedString, control: impl IntoElement) -> Div {
-    let text = form_text(title, (!detail.is_empty()).then_some(detail));
+/// `Page · Group`, the `·` in structure ink.
+fn section_words(label: &str) -> Div {
+    let mut line = div().flex().items_center().gap(px(SPACE_1));
+    for (at, part) in label.split(" · ").enumerate() {
+        if at > 0 {
+            line = line.child(div().text_color(rgb(TEXT_FAINT)).child("·"));
+        }
+        line = line.child(SharedString::from(part.to_string()));
+    }
+    line
+}
+
+/// One setting row: label over hint at the left, the control right and
+/// centred; 36px, or 44px with a hint.
+fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
+    let hinted = !row.hint.is_empty();
     div()
         .flex()
         .items_center()
         .justify_between()
         .gap(px(SPACE_4))
-        // The group's title is `W_LABEL`; a row never inherits it.
-        .font_weight(W_BODY)
-        .py(px(SETTINGS_ROW_PAD_Y))
-        .child(text.flex_1().max_w(gpui::relative(FORM_TEXT_FRACTION)))
-        .child(div().flex().flex_shrink_0().justify_end().child(control))
+        .min_h(px(if hinted {
+            SETTINGS_ROW_HINT_H
+        } else {
+            SETTINGS_ROW_H
+        }))
+        .px(px(SETTINGS_ROW_PAD_X))
+        .py(px(SPACE_1))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .map(|text| {
+                    if row.fact {
+                        text.flex_shrink_0().w(px(SETTINGS_FACT_KEY_W))
+                    } else {
+                        text.flex_1()
+                    }
+                })
+                .child(components::text_ui().truncate().child(row.title.clone()))
+                .when(hinted, |text| text.child(hint(row.hint.clone()))),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .map(|control| {
+                    if row.fact {
+                        control.flex_1().min_w_0()
+                    } else {
+                        control.flex_shrink_0()
+                    }
+                })
+                .child((row.control)(window, cx)),
+        )
 }
 
-/// A form row as a Settings item. Ferrite sets all of its type; the kit
-/// only lays items out and searches them, so the title, the description and
-/// every option label ride as keywords.
-fn form_item(
-    title: &'static str,
-    detail: SharedString,
-    keywords: Vec<SharedString>,
-    control: impl Fn(&mut gpui::Window, &mut App) -> gpui::AnyElement + 'static,
-) -> SettingItem {
-    let words: Vec<SharedString> = [SharedString::from(title), detail.clone()]
-        .into_iter()
-        .chain(keywords)
-        .collect();
-    SettingItem::render(move |_, window, cx| form_row(title, detail.clone(), control(window, cx)))
-        .keywords(words)
-}
-
-// ------------------------------------------------------------ Settings
-
-/// Categories are native Settings pages, so navigation changes pages without
-/// relying on estimated positions in a virtualized list. Search spans them all.
-pub fn body(pages: Vec<SettingPage>) -> Div {
-    // The sidebar paints its own background, so it must own this corner too:
-    // GPUI's overflow mask alone does not clip descendants to rounded corners.
-    let sidebar = gpui::StyleRefinement::default()
-        .bg(rgb(RAISED))
-        .border_r_1()
-        .border_color(rgba(HAIRLINE))
-        .rounded_bl(px(R_PANE - 1.));
-    let settings = Settings::new("ferrite-settings")
-        .small()
-        .sidebar_width(px(SIDEBAR_WIDTH))
-        .sidebar_size_range(px(160.)..px(216.))
-        .sidebar_style(&sidebar);
-    let settings = pages
-        .into_iter()
-        .fold(settings, |settings, page| settings.page(page));
-    div().flex_1().min_h_0().child(settings)
-}
-
-/// A page, its header in the UI voice. No rule under it: the header sits a
-/// group's gap above the first group, on the rows' leading edge.
-pub fn page(title: &'static str, groups: Vec<SettingGroup>) -> SettingPage {
-    let header = gpui::StyleRefinement::default()
-        .px(px(MODAL_PAD))
-        .py(px(SPACE_3))
-        .border_b_0()
-        .text_size(px(FS_UI))
-        .text_color(rgb(TEXT_STRONG));
-    SettingPage::new(title)
-        .resettable(false)
-        .header_style(&header)
-        .groups(groups)
-}
-
-/// A group of items. Its title is a section header: UI `FS_SM` `W_LABEL`
-/// in the kit's muted ink (`TEXT_MUTED`), sentence case (the items set
-/// their own type and weight), sitting closer to its rows than they sit to
-/// each other. The group adds the inset that puts its rows on the page
-/// header's edge (`SETTINGS_GROUP_INSET_X`).
-pub fn group(title: Option<&'static str>) -> SettingGroup {
-    let group = SettingGroup::new()
-        .px(px(SETTINGS_GROUP_INSET_X))
-        .gap(px(SETTINGS_TITLE_GAP))
-        .font_family(FONT_UI)
-        .font_weight(W_LABEL)
-        .text_size(px(FS_SM));
-    match title {
-        Some(title) => group.title(title),
-        None => group,
+/// A row's hint: `FS_SM` `TEXT_MUTED`, one line. One that opens with a key
+/// table's chord (`cmd-B toggles it any time`) draws the chord as keys
+/// (`⌘B`, `components::key_combo`): neither face has the command glyph.
+fn hint(detail: SharedString) -> Div {
+    let line = components::text_meta().min_w_0().truncate();
+    match detail.split_once(' ') {
+        Some((chord, rest)) if chord.starts_with("cmd-") => line
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1))
+            .child(components::key_combo(chord, TEXT_MUTED))
+            .child(SharedString::from(rest.to_string())),
+        _ => line.child(detail),
     }
 }
 
+/// Two options are a segmented tray; more are a menu button (`chooser`).
 pub fn choices<T: Clone + 'static>(
     id: &'static str,
     title: &'static str,
     detail: impl Into<SharedString>,
     options: Vec<(SharedString, bool, T)>,
     change: impl Fn(T, &mut App) + 'static,
-) -> SettingItem {
+) -> Row {
     // Long ladders are values to choose, not a second row of navigation.
-    // The same selector as models keeps effort and permissions compact even
-    // when the Settings sidebar leaves a narrow content column.
     if options.len() > 2 {
         return chooser(id, title, detail, options, change);
     }
     let change = Rc::new(change);
     let keywords: Vec<_> = options.iter().map(|(label, _, _)| label.clone()).collect();
-    form_item(title, detail.into(), keywords, move |_, cx| {
-        let tray = div()
+    Row::new(title, detail, keywords, move |_, cx| {
+        div()
             .flex()
-            .flex_wrap()
-            .max_w(gpui::relative(1.))
             .gap(px(FORM_CHOICE_PAD))
             .p(px(FORM_CHOICE_PAD))
             .rounded(px(R_CONTROL))
@@ -295,22 +693,22 @@ pub fn choices<T: Clone + 'static>(
                             change(value.clone(), cx);
                         })
                     }),
-            );
-        div().flex().child(tray).into_any_element()
+            )
+            .into_any_element()
     })
 }
 
-/// A longer option list exposes its current value first; the menu retains
-/// every available value, and Settings search also indexes the hidden labels.
-/// The menu's rows are the one menu row, the standing value checked in the
-/// accent.
+/// A choice from a list: a compact menu button showing the current value
+/// and a chevron, as wide as its value (at most `SETTINGS_MENU_MAX_W`).
+/// The menu keeps every value, the standing one checked; search also
+/// indexes the hidden labels.
 pub fn chooser<T: Clone + 'static>(
     id: &'static str,
     title: &'static str,
     detail: impl Into<SharedString>,
     options: Vec<(SharedString, bool, T)>,
     change: impl Fn(T, &mut App) + 'static,
-) -> SettingItem {
+) -> Row {
     let change = Rc::new(change);
     let keywords: Vec<_> = options.iter().map(|(label, _, _)| label.clone()).collect();
     let selected = options
@@ -318,11 +716,11 @@ pub fn chooser<T: Clone + 'static>(
         .find(|(_, selected, _)| *selected)
         .map(|(label, _, _)| label.clone())
         .unwrap_or_else(|| "Choose an option".into());
-    form_item(title, detail.into(), keywords, move |_, cx| {
+    Row::new(title, detail, keywords, move |_, cx| {
         let options = options.clone();
         let change = change.clone();
-        // A field on the raised sheet: `RAISED_2`, lifting to `FILL` under
-        // the pointer over the one blend.
+        // A control on the raised card: `RAISED_2`, lifting to `FILL`
+        // under the pointer over the one blend.
         components::faded_button(
             id,
             rgb(RAISED_2).into(),
@@ -334,17 +732,25 @@ pub fn chooser<T: Clone + 'static>(
         .tab_stop(true)
         .debug_selector(move || id.into())
         .accessibility_label(format!("{title}: {selected}"))
-        .h(px(FORM_CONTROL_H))
-        .w(px(FORM_FIELD_W))
-        .px(px(FORM_FIELD_PAD_X))
-        .dropdown_caret(true)
+        .h(px(SETTINGS_CONTROL_H))
+        .max_w(px(SETTINGS_MENU_MAX_W))
+        .pl(px(FORM_FIELD_PAD_X))
+        .pr(px(SPACE_2))
         .child(
             div()
+                .flex()
+                .items_center()
                 .min_w_0()
-                .truncate()
-                .child(components::form_label(selected.clone(), TEXT_STRONG)),
+                .gap(px(SPACE_1_5))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(components::form_label(selected.clone(), TEXT)),
+                )
+                .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_MUTED).flex_shrink_0()),
         )
-        .dropdown_menu(move |menu, _, _| {
+        .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
             options.iter().fold(
                 menu.min_w(px(CHOICE_MENU_MIN_W))
                     .max_w(px(CHOICE_MENU_MAX_W))
@@ -400,18 +806,19 @@ pub fn model_options(
     options
 }
 
-/// A switch beside its label. Custom rather than the kit's (whose tokens do
-/// not reach it): the track `ACCENT_STRONG` when on and `RAISED_2` when off,
-/// so both read on the raised sheet; the thumb `TEXT_STRONG`, sprung.
+/// An on/off setting: a switch. Custom rather than the kit's (whose tokens
+/// do not reach it): the track `ACCENT_STRONG` when on and `FILL_HOVER`
+/// when off, so both read on the raised card; the thumb `TEXT_STRONG`,
+/// sprung.
 pub fn toggle(
     id: &'static str,
     title: &'static str,
     detail: impl Into<SharedString>,
     checked: bool,
     change: impl Fn(bool, &mut App) + 'static,
-) -> SettingItem {
+) -> Row {
     let change = Rc::new(change);
-    form_item(title, detail.into(), Vec::new(), move |window, cx| {
+    Row::new(title, detail, Vec::new(), move |window, cx| {
         let change = change.clone();
         // The thumb moves over 150ms on the standard curve when the pointer
         // flipped it, and lands at once on a keyboard toggle (no spring).
@@ -495,75 +902,127 @@ fn pointer_pressed(id: &'static str, now: std::time::Instant) -> bool {
     })
 }
 
-/// The switch track: steel when on, one step above the sheet when off.
+/// The switch track: steel when on, two steps above the card when off.
 fn switch_track(checked: bool) -> u32 {
     if checked {
         ACCENT_STRONG
     } else {
-        RAISED_2
+        FILL_HOVER
     }
 }
 
 /// One option of a segmented choice, inside the tray. Its 1px edge is always
 /// in layout, so selection never moves a neighbour: selected is a neutral
 /// `FILL` chip with a `HAIRLINE_STRONG` edge and `TEXT_STRONG`, the rest
-/// `TEXT_2` on the tray. `R_CHIP` is the tray's `R_CONTROL` less its
-/// `FORM_CHOICE_PAD`: concentric.
+/// `TEXT_2` on the tray, lifting to `FILL` under the pointer. `R_CHIP` is
+/// the tray's `R_CONTROL` less its `FORM_CHOICE_PAD`: concentric.
 pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (ink, ground, edge) = components::choice_inks(selected);
-    // A selected chip carries its FILL and steps up to FILL_HOVER under the
-    // pointer; the rest take the sheet's raised hover. Both blend.
-    let button = match ground {
-        Some(ground) => {
-            let hover = rgb(FILL_HOVER).into();
-            components::faded_button(id, rgb(ground).into(), hover, hover, rgb(ink).into(), cx)
-                .tab_stop(true)
-        }
-        None => components::form_button(id, cx),
+    let hover = rgb(if selected { FILL_HOVER } else { FILL }).into();
+    let rest = match ground {
+        Some(ground) => rgb(ground).into(),
+        None => rgba(TRANSPARENT).into(),
     };
-    button
+    components::faded_button(id, rest, hover, rgb(FILL_HOVER).into(), rgb(ink).into(), cx)
+        .tab_stop(true)
         .selected(selected)
         .toggled(selected)
         .debug_selector(move || format!("{}-{}", id.0, id.1))
-        .h(px(FORM_CONTROL_H - 2. * (FORM_CHOICE_PAD + 1.)))
-        .px(px(FORM_CHIP_PAD_X))
+        .h(px(SETTINGS_CONTROL_H - 2. * FORM_CHOICE_PAD))
+        .px(px(FORM_CHIP_PAD_X + SPACE_0_5))
         .rounded(px(R_CHIP))
         .border_1()
         .border_color(rgba(edge))
         .child(components::form_label(label, ink))
 }
 
-/// A read-only fact: its key in a muted column, its value machine text —
-/// Geist Mono `FS_UI` `TEXT_2` at `W_BODY` — wrapping anywhere, so a full
-/// path stays readable. Searchable by both.
-pub fn fact(title: &'static str, value: SharedString) -> SettingItem {
-    let words = [SharedString::from(title), value.clone()];
-    SettingItem::render(move |_, _, _| {
-        div()
-            .flex()
-            .items_start()
-            .gap(px(SPACE_3))
-            .font_weight(W_BODY)
-            .child(
-                components::text_ui()
-                    .flex_shrink_0()
-                    .w(px(FACT_KEY_W))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(title),
-            )
-            .child(
-                components::text_ui()
-                    .id(title)
-                    .debug_selector(move || format!("settings-fact-{title}"))
-                    .flex_1()
-                    .min_w_0()
-                    .font_family(FONT_CODE)
-                    .font_weight(W_BODY)
-                    .text_color(rgb(TEXT_2))
-                    .child(value.clone()),
-            )
+/// A read-only fact (About): its key at the left, its value at the right
+/// in Geist Mono `TEXT_2` (versions are machine text), wrapping anywhere
+/// rather than cut. Searchable by both.
+pub fn fact(title: &'static str, value: SharedString) -> Row {
+    let words = vec![value.clone()];
+    Row::new(title, "", words, move |_, _| {
+        fact_value(title, value.clone()).into_any_element()
     })
-    .keywords(words)
+    .fact()
+}
+
+/// A path fact: shown from `~` when it lies under the home directory, and
+/// copied whole on a click. The copy mark sits after it in structure ink,
+/// brightening under the pointer, and turns to a check once `copied`.
+pub fn path_fact(
+    title: &'static str,
+    path: String,
+    copied: bool,
+    on_copy: impl Fn(&mut App) + 'static,
+) -> Row {
+    let shown: SharedString = home_relative(&path, std::env::var("HOME").ok().as_deref()).into();
+    let words = vec![shown.clone(), path.clone().into()];
+    let on_copy = Rc::new(on_copy);
+    Row::new(title, "", words, move |_, _| {
+        let path = path.clone();
+        let on_copy = on_copy.clone();
+        let id = gpui::ElementId::from(SharedString::from(format!("settings-copy-{title}")));
+        let key = crate::pointer::hover_key(&id);
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .min_w_0()
+            .gap(px(SPACE_1_5))
+            .px(px(SPACE_1_5))
+            .mr(px(-SPACE_1_5))
+            .rounded(px(R_CONTROL))
+            .group(COPY_GROUP)
+            .hover_raised(key)
+            .tooltip(crate::menu::tooltip(if copied {
+                "Copied"
+            } else {
+                "Copy path"
+            }))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()));
+                on_copy(cx);
+            })
+            .child(fact_value(title, shown.clone()))
+            .child(
+                icon(
+                    if copied { icons::CHECK } else { icons::COPY },
+                    ICON_CHEVRON,
+                    if copied { TEXT_MUTED } else { TEXT_FAINT },
+                )
+                .flex_shrink_0()
+                .group_hover(COPY_GROUP, |style| style.text_color(rgb(TEXT_MUTED))),
+            )
+            .into_any_element()
+    })
+    .fact()
+}
+
+/// A path fact's hover reaches its copy mark through this group.
+const COPY_GROUP: &str = "settings-copy";
+
+fn fact_value(title: &'static str, value: SharedString) -> Div {
+    components::text_ui()
+        .debug_selector(move || format!("settings-fact-{title}"))
+        .min_w_0()
+        .text_right()
+        .font_family(FONT_CODE)
+        .font_weight(W_BODY)
+        .text_color(rgb(TEXT_2))
+        .child(value)
+}
+
+/// `path` from `~` when it lies under `home`.
+fn home_relative(path: &str, home: Option<&str>) -> String {
+    match home.filter(|home| home.len() > 1) {
+        Some(home) => match path.strip_prefix(home.trim_end_matches('/')) {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_string(),
+        },
+        None => path.to_string(),
+    }
 }
 
 /// The nav chrome's gear: the door to this panel. Ground and glyph blend
@@ -628,7 +1087,7 @@ mod tests {
 
     #[test]
     fn the_sheet_is_raised_edged_and_rounded_over_the_veil() {
-        let mut drawn = sheet(WIDTH, HEIGHT);
+        let mut drawn = sheet(SETTINGS_W, SETTINGS_H);
         let style = drawn.style();
         assert_eq!(style.background, Some(rgb(RAISED).into()));
         assert_eq!(style.border_color, Some(rgba(HAIRLINE_STRONG).into()));
@@ -641,11 +1100,130 @@ mod tests {
         assert_eq!(veil().style().background, Some(rgba(VEIL).into()));
     }
 
+    /// Settings is the recipe's quieter variant: a `PANE` sheet under its
+    /// `RAISED` cards, with the recipe's edge, radius and shadow.
+    #[test]
+    fn the_settings_sheet_sits_one_step_under_its_cards() {
+        let mut drawn = settings_sheet();
+        let style = drawn.style();
+        assert_eq!(style.background, Some(rgb(PANE).into()));
+        assert_eq!(style.border_color, Some(rgba(HAIRLINE_STRONG).into()));
+        assert_eq!(style.box_shadow, Some(components::float_shadow()));
+        assert_eq!(style.corner_radii.top_left, Some(px(R_PANE).into()));
+        const _: () = assert!(PANE < RAISED, "the cards are raised off the sheet");
+        assert_eq!(
+            head_row("Settings", div()).style().border_widths.bottom,
+            None,
+            "the Settings head has no rule"
+        );
+        assert_eq!(
+            sheet_head("Project", div()).style().border_widths.bottom,
+            Some(px(1.).into()),
+            "the scrolling sheets keep theirs"
+        );
+    }
+
+    #[test]
+    fn rows_keep_the_one_list_pitch_and_the_sheet_fits_its_pages() {
+        assert_eq!(SETTINGS_NAV_ROW_H, NAV_ROW_H);
+        assert_eq!(SETTINGS_ROW_H, 36.0);
+        assert_eq!(SETTINGS_ROW_HINT_H, 44.0);
+        // Checked at compile time: the rhythm and the size can never drift.
+        const _: () = assert!(SETTINGS_GROUP_GAP >= 2.0 * SETTINGS_LABEL_GAP);
+        const _: () = assert!(SETTINGS_CONTROL_H <= SETTINGS_ROW_H - 2.0 * SPACE_1);
+        const _: () = assert!(SWITCH_H + 2.0 * SPACE_1 <= SETTINGS_ROW_H);
+        const _: () = assert!(
+            SETTINGS_W <= 800.0 && SETTINGS_H <= 600.0,
+            "sized to content"
+        );
+    }
+
+    #[test]
+    fn pages_step_in_sidebar_order_and_hold_at_the_ends() {
+        assert_eq!(PageKey::NewThreads.step(1), PageKey::Permissions);
+        assert_eq!(PageKey::Behaviour.step(1), PageKey::About);
+        assert_eq!(PageKey::About.step(1), PageKey::About);
+        assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
+        assert_eq!(PageKey::About.step(-3), PageKey::NewThreads);
+        assert_eq!(PageKey::default(), PageKey::NewThreads);
+    }
+
+    /// Search spans every page: a row matches on its label, its hint, an
+    /// option label, or the group and page it sits in; each result card is
+    /// labelled `Page · Group`, and only pages with a hit stay lit.
+    #[test]
+    fn search_filters_every_page_and_labels_each_result() {
+        let row = |title: &'static str, hint: &'static str, words: &[&'static str]| {
+            Row::new(
+                title,
+                hint,
+                words.iter().map(|word| SharedString::from(*word)).collect(),
+                |_, _| div().into_any_element(),
+            )
+        };
+        let pages = vec![
+            page(
+                PageKey::NewThreads,
+                vec![
+                    Group::new(None).rows([row("Provider", "What a new thread starts on", &[])]),
+                    Group::new(Some("Codex")).rows([row("Model", "", &["GPT Future Model"])]),
+                ],
+            ),
+            page(
+                PageKey::Behaviour,
+                vec![Group::new(Some("Reading")).rows([row("Solo answer size", "", &[])])],
+            ),
+        ];
+        let at_rest = shown(&pages, PageKey::Behaviour, "");
+        assert_eq!(at_rest.title.as_ref(), "Behaviour");
+        assert_eq!(at_rest.groups.len(), 1);
+        assert_eq!(at_rest.hit, PageKey::ALL.to_vec());
+
+        let found = shown(&pages, PageKey::Behaviour, "future model");
+        assert_eq!(found.hit, vec![PageKey::NewThreads]);
+        assert_eq!(found.groups.len(), 1);
+        assert_eq!(
+            found.groups[0].0.as_deref(),
+            Some("New threads · Codex"),
+            "a result names its page and group"
+        );
+        let by_hint = shown(&pages, PageKey::NewThreads, "STARTS ON");
+        assert_eq!(by_hint.groups[0].0.as_deref(), Some("New threads"));
+        let by_group = shown(&pages, PageKey::NewThreads, "codex");
+        assert_eq!(by_group.groups.len(), 1);
+        assert_eq!(by_group.groups[0].1.rows.len(), 1);
+        assert!(shown(&pages, PageKey::NewThreads, "nothing like it")
+            .groups
+            .is_empty());
+    }
+
+    #[test]
+    fn a_path_under_home_reads_from_tilde() {
+        let home = Some("/Users/op");
+        assert_eq!(
+            home_relative("/Users/op/Library/ferrite/threads", home),
+            "~/Library/ferrite/threads"
+        );
+        assert_eq!(home_relative("/Users/op", home), "~");
+        assert_eq!(
+            home_relative("/Users/operator/x", home),
+            "/Users/operator/x"
+        );
+        assert_eq!(home_relative("/tmp/x", home), "/tmp/x");
+        assert_eq!(home_relative("/tmp/x", None), "/tmp/x");
+        assert_eq!(home_relative("/x", Some("/")), "/x");
+    }
+
     #[test]
     fn the_switch_is_steel_when_on_and_reads_on_the_sheet_when_off() {
         assert_eq!(switch_track(true), ACCENT_STRONG);
-        assert_eq!(switch_track(false), RAISED_2);
-        assert_ne!(switch_track(false), RAISED, "off must not vanish");
+        assert_eq!(switch_track(false), FILL_HOVER);
+        assert_ne!(
+            switch_track(false),
+            RAISED,
+            "off must not vanish on the card"
+        );
+        assert_ne!(switch_track(false), RAISED_2, "nor on a hovered row");
     }
 
     #[gpui::test]

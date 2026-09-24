@@ -90,6 +90,11 @@ icons![
 
     // ---- WP-E icons (append names above the end line)
     "command",
+    "search",
+    "new-thread",
+    "shield",
+    "sliders",
+    "info",
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
@@ -186,6 +191,14 @@ pub const CONTROL: &str = "icons/control.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
+/// The Settings sheet's line family (`prefs.rs`): the search field's
+/// magnifier, and one mark per sidebar page — a new thread, permissions,
+/// behaviour, about.
+pub const SEARCH: &str = "icons/search.svg";
+pub const NEW_THREAD: &str = "icons/new-thread.svg";
+pub const SHIELD: &str = "icons/shield.svg";
+pub const SLIDERS: &str = "icons/sliders.svg";
+pub const INFO: &str = "icons/info.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
@@ -409,6 +422,11 @@ mod tests {
             REASONING,
             OPTION,
             CONTROL,
+            SEARCH,
+            NEW_THREAD,
+            SHIELD,
+            SLIDERS,
+            INFO,
         ] {
             let bytes = Assets
                 .load(key)
@@ -420,9 +438,9 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            35,
-            "the prototype and app controls, including close, the four Windows caption glyphs \
-             and the option and control key glyphs"
+            40,
+            "the prototype and app controls, including close, the four Windows caption glyphs, \
+             the option and control key glyphs and the Settings sheet's five marks"
         );
     }
 
@@ -447,6 +465,11 @@ mod tests {
             COPY,
             RESEND,
             ARROW_UP,
+            SEARCH,
+            NEW_THREAD,
+            SHIELD,
+            SLIDERS,
+            INFO,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();

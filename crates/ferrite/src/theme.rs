@@ -535,10 +535,10 @@ pub const SPACE_8: f32 = 32.0;
 // | floating surface `R_BLOCK` 8  | `FLOAT_PAD` 4    | menu row `R_MENU_ROW` 4  |
 // | checks card `R_BLOCK` 8       | `FLOAT_PAD` 4    | run row `R_CHIP` 4       |
 // | segmented tray `R_CONTROL` 6  | `FORM_CHOICE_PAD` 2 | choice chip `R_CHIP` 4 |
-// | sheet `R_PANE` 10             | flush            | sidebar corner `R_PANE − 1` |
 //
 // Where the inset is at least the outer radius (a field 16px inside a
-// sheet, a chip in a card's row, a keycap in a Decision option) the inner
+// sheet, a control in a setting card's row, a chip in a card's row, a
+// keycap in a Decision option) the inner
 // corner no longer shares the outer arc, and the inner surface takes its
 // own role radius. The one exception is the kit's popup menu (the choice
 // menus, the Settings chooser): it rounds its surface and its rows alike
@@ -1549,9 +1549,6 @@ pub const ATTACH_THUMB: f32 = 12.0;
 /// Form fields and segmented choices share a 32px row. Compact pane and
 /// navigation controls keep their own smaller chrome metrics.
 pub const FORM_CONTROL_H: f32 = 32.0;
-/// A chooser's width at the right of its setting row: wide enough for a
-/// model's name, narrow enough to leave the label block its measure.
-pub const FORM_FIELD_W: f32 = 224.0;
 /// Inset around the chips of a segmented choice control, and the gap
 /// between them: 2px, so the chips nest concentrically (`R_CHIP` inside the
 /// tray's `R_CONTROL`) and the tray reads as one control.
@@ -1559,13 +1556,10 @@ pub const FORM_CHOICE_PAD: f32 = SPACE_0_5;
 /// A choice chip's and a chooser's inline padding inside the 32px row.
 pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
 pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
-/// A setting row's label block takes at most this share of the row, so a
-/// long description wraps before it crowds the control.
-pub const FORM_TEXT_FRACTION: f32 = 0.6;
-/// The Settings switch: a 28×16 pill (2px inset), a 12px thumb travelling
-/// the pill's inner width.
-pub const SWITCH_W: f32 = 28.0;
-pub const SWITCH_H: f32 = 16.0;
+/// The Settings switch: a 32×18 pill (2px inset), a 14px thumb travelling
+/// the pill's inner width — a macOS-sized switch in a 36px setting row.
+pub const SWITCH_W: f32 = 32.0;
+pub const SWITCH_H: f32 = 18.0;
 pub const SWITCH_INSET: f32 = SPACE_0_5;
 pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
 pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
@@ -1605,26 +1599,10 @@ pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + COMPOSER_META_GAP
     + COMPOSER_META_H
     + SPACE_2;
-/// A fact row's key column (About): room for its longest key (`Settings
-/// file`, `Claude CLI`) so every value starts on one edge.
-pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.
 pub const MODAL_HEAD_H: f32 = 48.0;
 pub const MODAL_PAD: f32 = 16.0;
 pub const MODAL_GAP: f32 = 12.0;
-/// The kit lays a Settings page out in rems, and its rem is the theme's
-/// font size (`FS_UI`), so the page list's own inset is 12.5px while the
-/// page header keeps `MODAL_PAD`. Each group adds the difference, so labels,
-/// descriptions, controls and the header share one leading edge.
-pub const SETTINGS_GROUP_INSET_X: f32 = MODAL_PAD - FS_UI;
-/// Between a Settings group's title and its first row: closer than the
-/// rows are to each other (the kit's 1rem), so a title belongs to what it
-/// heads, and groups stand 2rem apart.
-pub const SETTINGS_TITLE_GAP: f32 = SPACE_1_5;
-/// Settings stand `SPACE_6` apart with no rule between them: the kit sets
-/// its rows `SPACE_4` apart, and each row pads the difference, half above
-/// and half below.
-pub const SETTINGS_ROW_PAD_Y: f32 = (SPACE_6 - SPACE_4) / 2.0;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
@@ -1636,6 +1614,83 @@ pub const CHOICE_MENU_MAX_W: f32 = 320.0;
 /// About 48 characters — how much of a long directory a menu row keeps,
 /// cut at its head behind `…/` (the tail names the place).
 pub const MENU_PATH_TAIL: usize = 48;
+// ---------------------------------------------------------- Settings sheet
+//
+// **The Settings sheet** (`prefs.rs`) is Ferrite's own, in the manner of
+// macOS System Settings, Zed and Linear, sized to its content
+// (`SETTINGS_W` × `SETTINGS_H`, capped to `MODAL_VIEWPORT_FRACTION` of the
+// window). The sheet itself is `PANE`, one step under the cards it holds,
+// with the sheet recipe's strong edge, `R_PANE` and float shadow over the
+// veil. Its head is the title and the one close control, set apart by
+// space alone: no rule.
+//
+// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search field on top, then one
+//   plain row per page — a 16px line mark, then the label — at the one
+//   list pitch (`SETTINGS_NAV_ROW_H` = `NAV_ROW_H`, 28). No chevrons: a
+//   row is a place, not a disclosure. The selected row is a `FILL` ground
+//   with `TEXT_STRONG`; the rest `TEXT_2` with their marks in `TEXT_MUTED`,
+//   hovering to `HOVER`. `About` is pinned to the sidebar's foot, apart
+//   from the settings. ↑/↓ step pages while the sheet holds focus.
+// - **Content:** the page title (`FS_PROSE` `W_LABEL` `TEXT_STRONG`), then
+//   groups `SETTINGS_GROUP_GAP` apart. A group is a quiet sentence-case
+//   section label (`FS_SM` `W_LABEL` `TEXT_MUTED`, on the rows' text edge,
+//   a provider group led by its logomark in brand colour) above one card:
+//   `RAISED`, `R_BLOCK`, a `HAIRLINE` edge. Rows inside the card sit flush,
+//   split by `HAIRLINE`s, so the gap between groups is far more than twice
+//   the gap between rows.
+// - **Row:** the label (`FS_UI` `TEXT`) over an optional one-line hint
+//   (`FS_SM` `TEXT_MUTED`, under 60 characters, saying what the setting
+//   does) at the left; the control right-aligned and vertically centred.
+//   `SETTINGS_ROW_H` (36) without a hint, `SETTINGS_ROW_HINT_H` (44) with.
+// - **Controls** are `SETTINGS_CONTROL_H` (28) and hug their content: a
+//   switch for on/off; a menu button (the value, then a chevron, on
+//   `RAISED_2`, never a full-width field, at most `SETTINGS_MENU_MAX_W`)
+//   for a choice from a list; a segmented tray for two options. Each has
+//   the one hover blend, an instant press and the focus outline. Inside a
+//   card the inset exceeds every control's radius, so each keeps its own
+//   role radius (`R_CONTROL`, and `R_CHIP` for a tray's chips, concentric
+//   with the tray).
+// - **About** is one card of facts: the key at the left, the value at the
+//   right in Geist Mono `TEXT_2` (versions and paths are machine text).
+//   A path copies on click; its row shows the copy mark on hover and a
+//   check once copied.
+// - **Search** filters every page at once: matching rows keep their cards,
+//   each labelled `Page · Group`; pages with no match fade to
+//   `TEXT_MUTED` in the sidebar, and choosing a page clears the search.
+
+/// The sheet: wide enough for a sidebar and a 500px card column, tall
+/// enough for the longest page (Behaviour: a card of one row and a card
+/// of four) without a scroll, and no taller. Search results may scroll.
+pub const SETTINGS_W: f32 = 760.0;
+pub const SETTINGS_H: f32 = 448.0;
+/// The sidebar column, the search field included.
+pub const SETTINGS_SIDEBAR_W: f32 = 196.0;
+/// A sidebar row and the search field: the one list pitch.
+pub const SETTINGS_NAV_ROW_H: f32 = NAV_ROW_H;
+/// The search field's magnifier: a step under a row's mark, as the
+/// field's placeholder is a step under a label.
+pub const SETTINGS_SEARCH_ICON: f32 = 14.0;
+/// A sidebar row's mark and the gap to its label.
+pub const SETTINGS_NAV_ICON: f32 = ICON_BUTTON_GLYPH;
+pub const SETTINGS_NAV_ICON_GAP: f32 = SPACE_2;
+/// A setting row: one `LH_UI` line in 8px of air each side, or the line
+/// and its `LH_META` hint in 4px.
+pub const SETTINGS_ROW_H: f32 = LH_UI + 2.0 * SPACE_2;
+pub const SETTINGS_ROW_HINT_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1;
+/// A row's inline padding inside its card; group labels sit on the same
+/// edge.
+pub const SETTINGS_ROW_PAD_X: f32 = SPACE_3;
+/// Between groups, and between a group's label and its card.
+pub const SETTINGS_GROUP_GAP: f32 = SPACE_6;
+pub const SETTINGS_LABEL_GAP: f32 = SPACE_2;
+/// Between the page title and its first group.
+pub const SETTINGS_TITLE_GAP: f32 = SPACE_4;
+/// Every control in a row: the chrome control height.
+pub const SETTINGS_CONTROL_H: f32 = CONTROL_H;
+/// A menu button's widest value before it truncates (a model's name).
+pub const SETTINGS_MENU_MAX_W: f32 = 220.0;
+/// An About key's column, so every value starts on one edge.
+pub const SETTINGS_FACT_KEY_W: f32 = 104.0;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents

@@ -322,6 +322,10 @@ const STATES: &[(&str, &[&str])] = &[
     // ---- WP-E states (append above the end line)
     ("projectcreator", &["app"]),
     ("toasts", &["app"]),
+    ("settings-permissions", &["app"]),
+    ("settings-behaviour", &["app"]),
+    ("settings-about", &["app"]),
+    ("settings-search", &["app"]),
     // (end WP-E)
 
     // ---- WP-F states (append above the end line)
@@ -543,12 +547,33 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        "settings" => {
+        "settings" | "settings-permissions" | "settings-behaviour" | "settings-about" => {
             let scene = conversation(label);
-            let setup: Setup = Box::new(|view, _, cx| {
+            let page = match state {
+                "settings-permissions" => crate::prefs::PageKey::Permissions,
+                "settings-behaviour" => crate::prefs::PageKey::Behaviour,
+                "settings-about" => crate::prefs::PageKey::About,
+                _ => crate::prefs::PageKey::NewThreads,
+            };
+            let setup: Setup = Box::new(move |view, _, cx| {
                 // Seeded, so opening never probes the operator's CLIs.
                 view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
                 view.toggle_settings(cx);
+                view.settings_page = page;
+            });
+            (scene, setup)
+        }
+        "settings-search" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, window, cx| {
+                view.cli_versions = Some(("2.3.1 (Claude Code)".into(), "codex-cli 0.61.0".into()));
+                view.toggle_settings(cx);
+                let search = cx.new(|cx| {
+                    gpui::component::input::InputState::new(window, cx)
+                        .placeholder("Search")
+                        .default_value("codex")
+                });
+                view.settings_search = Some(search);
             });
             (scene, setup)
         }

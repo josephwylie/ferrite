@@ -159,8 +159,8 @@ use gpui::component::Disableable;
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Div, Entity, FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    Context, Div, Entity, FocusHandle, Focusable, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -400,6 +400,15 @@ pub struct CockpitView {
     prefs: Preferences,
     /// The Settings panel is up.
     settings_open: bool,
+    /// The Settings page the sidebar has selected; each opening starts on
+    /// the first.
+    settings_page: prefs::PageKey,
+    /// The Settings search field, made with the sheet (it needs a window)
+    /// and dropped with it, so each opening starts with an empty query.
+    settings_search: Option<Entity<gpui::component::input::InputState>>,
+    /// The About path copied last, shown with a check until the sheet
+    /// closes.
+    settings_copied: Option<&'static str>,
     /// The Project card: creating a Project, or editing the one the nav
     /// filter names. `None` is closed.
     project_editor: Option<ProjectEditor>,
@@ -993,6 +1002,9 @@ impl CockpitView {
             file_drop_over: None,
             prefs,
             settings_open: false,
+            settings_page: prefs::PageKey::default(),
+            settings_search: None,
+            settings_copied: None,
             project_editor: None,
             project_editor_focus: cx.focus_handle(),
             settings_focus: cx.focus_handle(),
@@ -2841,6 +2853,9 @@ impl CockpitView {
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
         if self.settings_open {
+            self.settings_page = prefs::PageKey::default();
+            self.settings_search = None;
+            self.settings_copied = None;
             self.project_editor = None;
             self.popover = None;
             self.context_menu = None;
@@ -2907,11 +2922,23 @@ impl CockpitView {
         }
     }
 
-    /// Searchable toolkit Settings, drawn above the cockpit's overlays.
-    fn settings_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The searchable Settings sheet, drawn above the cockpit's overlays.
+    fn settings_element(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if !self.settings_open {
             return None;
         }
+        let search = self
+            .settings_search
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    gpui::component::input::InputState::new(window, cx).placeholder("Search")
+                })
+            })
+            .clone();
         let settings = &self.prefs.settings;
         let defaults = vec![prefs::choices(
             "settings-provider",
@@ -2931,7 +2958,7 @@ impl CockpitView {
                 settings.default_provider = provider
             }),
         )];
-        let mut new_thread_groups = vec![prefs::group(None).items(defaults)];
+        let mut new_thread_groups = vec![prefs::Group::new(None).rows(defaults)];
         for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
             let model = prefs::chooser(
@@ -2988,8 +3015,7 @@ impl CockpitView {
                     settings.set_effort_for(provider, value)
                 }),
             );
-            new_thread_groups
-                .push(prefs::group(Some(provider_title(provider))).items([model, effort]));
+            new_thread_groups.push(provider_group(provider).rows([model, effort]));
         }
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -3053,21 +3079,39 @@ impl CockpitView {
             ),
         ];
         let behaviour = vec![
-            prefs::toggle("settings-auto-title", "Name threads automatically",
-                "Use the first prompt, then a short title from the thread's provider. Renaming a thread keeps your title",
-                settings.auto_title, self.setting_change(cx, |s, v| s.auto_title = v)),
-            prefs::toggle("settings-placeholder-suggestions", "Suggest follow-up prompts",
-                "Predict a possible next prompt in the empty composer. Tab accepts it without sending",
-                settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
-            prefs::toggle("settings-confirm-delete", "Confirm before deleting a thread", "Ask before removing a thread and its transcript",
-                settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
-            prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "cmd-B toggles it any time",
-                settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
+            prefs::toggle(
+                "settings-auto-title",
+                "Name threads automatically",
+                "Titled from the first prompt until you rename it",
+                settings.auto_title,
+                self.setting_change(cx, |s, v| s.auto_title = v),
+            ),
+            prefs::toggle(
+                "settings-placeholder-suggestions",
+                "Suggest follow-up prompts",
+                "A likely next prompt in an empty composer · tab takes it",
+                settings.placeholder_suggestions,
+                self.setting_change(cx, |s, v| s.placeholder_suggestions = v),
+            ),
+            prefs::toggle(
+                "settings-confirm-delete",
+                "Confirm before deleting a thread",
+                "Ask before removing a thread and its transcript",
+                settings.confirm_delete,
+                self.setting_change(cx, |s, v| s.confirm_delete = v),
+            ),
+            prefs::toggle(
+                "settings-nav-collapsed",
+                "Start with the sidebar collapsed",
+                "cmd-B toggles it any time",
+                settings.nav_collapsed,
+                self.setting_change(cx, |s, v| s.nav_collapsed = v),
+            ),
         ];
         let reading = vec![prefs::choices(
             "settings-solo-answer-size",
             "Solo answer size",
-            "Answer text in solo and fullscreen. Group panes keep their compact size",
+            "Answer text in solo and fullscreen, not in groups",
             [
                 (
                     "Standard",
@@ -3094,47 +3138,76 @@ impl CockpitView {
             .cli_versions
             .clone()
             .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
-        let mut about = vec![prefs::fact(
-            "Version",
-            version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV).into(),
-        )];
-        about.extend([
+        let copied = self.settings_copied;
+        let copy = |key: &'static str, cx: &Context<Self>| {
+            let view = cx.entity().downgrade();
+            move |cx: &mut gpui::App| {
+                let _ = view.update(cx, |view, cx| {
+                    view.settings_copied = Some(key);
+                    cx.notify();
+                });
+            }
+        };
+        let about = vec![
+            prefs::fact(
+                "Version",
+                version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV).into(),
+            ),
             prefs::fact("Claude CLI", claude),
             prefs::fact("Codex CLI", codex),
-            prefs::fact(
+            prefs::path_fact(
                 "Threads",
-                self.prefs.dir.join("threads").display().to_string().into(),
+                self.prefs.dir.join("threads").display().to_string(),
+                copied == Some("Threads"),
+                copy("Threads", cx),
             ),
-            prefs::fact(
+            prefs::path_fact(
                 "Settings file",
                 self.prefs
                     .dir
                     .join(ferrite_core::settings::Settings::FILE)
                     .display()
-                    .to_string()
-                    .into(),
+                    .to_string(),
+                copied == Some("Settings file"),
+                copy("Settings file", cx),
             ),
-        ]);
+        ];
         let pages = vec![
-            prefs::page("New threads", new_thread_groups),
+            prefs::page(prefs::PageKey::NewThreads, new_thread_groups),
             prefs::page(
-                "Permissions",
+                prefs::PageKey::Permissions,
                 vec![
-                    prefs::group(Some(provider_title(Provider::Claude))).items(claude_permissions),
-                    prefs::group(Some(provider_title(Provider::Codex))).items(codex_permissions),
+                    provider_group(Provider::Claude).rows(claude_permissions),
+                    provider_group(Provider::Codex).rows(codex_permissions),
                 ],
             ),
             prefs::page(
-                "Behaviour",
+                prefs::PageKey::Behaviour,
                 vec![
-                    prefs::group(Some("Reading")).items(reading),
-                    prefs::group(Some("Threads and navigation")).items(behaviour),
+                    prefs::Group::new(Some("Reading")).rows(reading),
+                    prefs::Group::new(Some("Threads and navigation")).rows(behaviour),
                 ],
             ),
-            prefs::page("About", vec![prefs::group(None).items(about)]),
+            prefs::page(
+                prefs::PageKey::About,
+                vec![prefs::Group::new(None).rows(about)],
+            ),
         ];
 
-        let card = prefs::sheet(prefs::WIDTH, prefs::HEIGHT)
+        let select = {
+            let view = cx.entity().downgrade();
+            let search = search.clone();
+            move |page: prefs::PageKey, window: &mut Window, cx: &mut gpui::App| {
+                // Choosing a page ends a search: the page shows whole.
+                search.update(cx, |search, cx| search.set_value("", window, cx));
+                let _ = view.update(cx, |view, cx| {
+                    view.settings_page = page;
+                    cx.notify();
+                });
+            }
+        };
+        let body = prefs::body(pages, self.settings_page, &search, select, window, cx);
+        let card = prefs::settings_sheet()
             .id("settings-card")
             .debug_selector(|| "settings-card".into())
             .track_focus(&self.settings_focus)
@@ -3142,8 +3215,22 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(prefs::sheet_head(
-                "Settings",
+            // ↑/↓ step the sidebar's pages while the sheet itself holds
+            // focus (a field or a control keeps its own arrows).
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                let delta = match event.keystroke.key.as_str() {
+                    "up" => -1,
+                    "down" => 1,
+                    _ => return,
+                };
+                if event.keystroke.modifiers.modified() || !view.settings_focus.is_focused(window) {
+                    return;
+                }
+                cx.stop_propagation();
+                view.settings_page = view.settings_page.step(delta);
+                cx.notify();
+            }))
+            .child(prefs::settings_head(
                 prefs::sheet_close("settings-close", "Close settings", cx).on_click(cx.listener(
                     |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -3152,7 +3239,7 @@ impl CockpitView {
                     },
                 )),
             ))
-            .child(prefs::body(pages));
+            .child(body);
         Some(
             deferred(crate::motion::veil_in(
                 "settings-veil",
@@ -7422,6 +7509,16 @@ fn provider_title(provider: Provider) -> &'static str {
     }
 }
 
+/// A Settings group for one Provider: its name, led by its logomark in
+/// brand colour.
+fn provider_group(provider: Provider) -> prefs::Group {
+    let (mark, ink) = match provider {
+        Provider::Claude => (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE),
+        Provider::Codex => (crate::icons::CODEX, crate::theme::PROVIDER_CODEX),
+    };
+    prefs::Group::new(Some(provider_title(provider))).mark(mark, ink)
+}
+
 /// An effort level as a person says it: `xhigh` is "Extra high", the
 /// rest capitalized.
 fn effort_title(effort: &str) -> String {
@@ -8182,7 +8279,7 @@ impl CockpitView {
             .children(self.context_usage_element(window, cx))
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
-            .children(self.settings_element(cx))
+            .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
@@ -19563,11 +19660,10 @@ mod tests {
             cx.notify();
         });
         tick(cx);
-        let card = cx.debug_bounds("settings-card").unwrap();
-        cx.simulate_click(
-            card.origin + gpui::point(px(80.), px(66.)),
-            gpui::Modifiers::none(),
-        );
+        let search = cx
+            .debug_bounds("settings-search")
+            .expect("the search field tops the sidebar");
+        cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_input("Future Model");
         tick(cx);
         let choice = cx
@@ -20064,6 +20160,68 @@ mod tests {
         });
     }
 
+    /// With the sheet itself focused, as it opens, ↓ and ↑ step the
+    /// sidebar's pages and hold at the ends; a path in About copies whole
+    /// on a click and shows its check until the sheet closes; reopening
+    /// starts on the first page again.
+    #[gpui::test]
+    fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("settings-keys", 1);
+        bind_production_keys(cx);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| CockpitView::new(core, cx));
+            gpui::component::Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CockpitView>().unwrap()
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-,");
+        cx.run_until_parked();
+        let page =
+            |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.settings_page);
+        assert_eq!(page(cx), prefs::PageKey::NewThreads);
+        cx.simulate_keystrokes("down");
+        tick(cx);
+        assert_eq!(page(cx), prefs::PageKey::Permissions);
+        assert!(cx.debug_bounds("settings-codex-sandbox").is_some());
+        assert!(cx.debug_bounds("settings-provider-0").is_none());
+        cx.simulate_keystrokes("down down down");
+        tick(cx);
+        assert_eq!(page(cx), prefs::PageKey::About, "held at the foot");
+        cx.simulate_keystrokes("up");
+        tick(cx);
+        assert_eq!(page(cx), prefs::PageKey::Behaviour);
+        cx.simulate_keystrokes("down");
+        tick(cx);
+
+        let threads = cx
+            .debug_bounds("settings-fact-Threads")
+            .expect("About lists the threads directory")
+            .center();
+        cx.simulate_click(threads, gpui::Modifiers::none());
+        tick(cx);
+        let dir = view.read_with(cx, |view, _| {
+            assert_eq!(view.settings_copied, Some("Threads"));
+            view.prefs.dir.join("threads").display().to_string()
+        });
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(dir),
+            "the whole path, never the ~ form"
+        );
+        assert!(view.read_with(cx, |view, _| view.settings_open));
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-,");
+        cx.run_until_parked();
+        assert_eq!(page(cx), prefs::PageKey::NewThreads);
+        view.read_with(cx, |view, _| assert_eq!(view.settings_copied, None));
+    }
+
     /// cmd-, opens the Settings panel and escape closes it; a chip press
     /// writes the setting and saves it to disk at once, and the Session
     /// defaults the spawner reads follow.
@@ -20086,11 +20244,10 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.settings_open, "cmd-, opens the panel")
         });
-        let card = cx.debug_bounds("settings-card").unwrap();
-        cx.simulate_click(
-            card.origin + gpui::point(px(80.), px(66.)),
-            gpui::Modifiers::none(),
-        );
+        let search = cx
+            .debug_bounds("settings-search")
+            .expect("the search field tops the sidebar");
+        cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_input("Suggest follow-up prompts");
         tick(cx);
         assert!(
@@ -20098,16 +20255,33 @@ mod tests {
                 .is_some(),
             "Behaviour exposes the follow-up suggestion toggle"
         );
+        assert!(
+            cx.debug_bounds("settings-provider-0").is_none()
+                && cx.debug_bounds("settings-confirm-delete").is_none(),
+            "search filters out every row that does not match"
+        );
         cx.simulate_keystrokes(if cfg!(target_os = "macos") {
             "cmd-a backspace"
         } else {
             "ctrl-a backspace"
         });
         tick(cx);
-        cx.simulate_click(
-            card.origin + gpui::point(px(60.), px(180.)),
-            gpui::Modifiers::none(),
+        assert!(
+            cx.debug_bounds("settings-provider-0").is_some(),
+            "an empty search shows the selected page whole"
         );
+        let card = cx.debug_bounds("settings-card").unwrap();
+        let behaviour = cx.debug_bounds("settings-page-behaviour").unwrap();
+        let about_row = cx
+            .debug_bounds("settings-page-about")
+            .expect("About is a sidebar row");
+        assert!(
+            about_row.top() > behaviour.bottom() + px(crate::theme::SETTINGS_NAV_ROW_H),
+            "About is pinned to the sidebar's foot, apart from the settings"
+        );
+        assert!(about_row.bottom() <= card.bottom());
+        assert_eq!(behaviour.size.height, px(crate::theme::SETTINGS_NAV_ROW_H));
+        cx.simulate_click(about_row.center(), gpui::Modifiers::none());
         tick(cx);
         let about = cx
             .debug_bounds("settings-fact-Settings file")
@@ -20130,12 +20304,8 @@ mod tests {
             about.bottom() <= card.bottom(),
             "About must scroll into the panel"
         );
-        cx.simulate_click(
-            // The first page's row, below the search header (both scale with
-            // the kit's font size, `theme::FS_UI`).
-            card.origin + gpui::point(px(60.), px(106.)),
-            gpui::Modifiers::none(),
-        );
+        let first = cx.debug_bounds("settings-page-new-threads").unwrap();
+        cx.simulate_click(first.center(), gpui::Modifiers::none());
         tick(cx);
         let codex = cx.debug_bounds("settings-provider-1").unwrap().center();
         cx.simulate_click(codex, gpui::Modifiers::none());
@@ -20149,11 +20319,10 @@ mod tests {
             );
         });
         // Click the native search field in the Settings sidebar.
-        let card = cx.debug_bounds("settings-card").unwrap();
-        cx.simulate_click(
-            card.origin + gpui::point(px(80.), px(66.)),
-            gpui::Modifiers::none(),
-        );
+        let search = cx
+            .debug_bounds("settings-search")
+            .expect("the search field tops the sidebar");
+        cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_input("Solo answer size");
         tick(cx);
         // Three sizes are a chooser (more than two options), not a tray:
@@ -20176,10 +20345,7 @@ mod tests {
                 ferrite_core::settings::SoloReadingSize::Comfortable
             );
         });
-        cx.simulate_click(
-            card.origin + gpui::point(px(80.), px(66.)),
-            gpui::Modifiers::none(),
-        );
+        cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes(if cfg!(target_os = "macos") {
             "cmd-a backspace"
         } else {
@@ -20194,10 +20360,7 @@ mod tests {
             assert!(!view.prefs.settings.confirm_delete);
             assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).confirm_delete);
         });
-        cx.simulate_click(
-            card.origin + gpui::point(px(80.), px(66.)),
-            gpui::Modifiers::none(),
-        );
+        cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
