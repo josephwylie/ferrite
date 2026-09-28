@@ -852,9 +852,17 @@ impl Render for TranscriptView {
                     }
                     None => wrapper,
                 };
+                let inset = if matches!(
+                    row.blocks().first().map(|block| &block.body),
+                    Some(Body::Prompt(_))
+                ) {
+                    theme::BOX_INSET_X - theme::PROMPT_PAD_X - theme::PROMPT_EDGE_W
+                } else {
+                    theme::BOX_INSET_X
+                };
                 wrapper
                     .child(components::reading_column(
-                        div().px(px(theme::BOX_INSET_X)).pt(px(gap)).child(element),
+                        div().px(px(inset)).pt(px(gap)).child(element),
                     ))
                     .into_any_element()
             },

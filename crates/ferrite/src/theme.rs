@@ -990,11 +990,11 @@ pub fn init_components(cx: &mut gpui::App) {
 //   measured per frame.
 // - **The prompt anchors its turn.** The operator's line is the turn's
 //   heading: the answer's size (`answer_text_size`/`answer_line_height`,
-//   14/22 at Standard) at `W_LABEL` in `TEXT_STRONG` under the accent `❯`,
-//   with no band, pill or hover ground, over answers at the same size,
-//   regular, in `TEXT`. An answer's own H1/H2 may be larger: they head sections of
-//   one answer, while the prompt heads the turn by place — the turn step
-//   above it, the accent in the gutter — not by size. Structural rows (tool
+//   14/22 at Standard) at `W_LABEL` in `TEXT_STRONG` under the accent `❯`.
+//   A neutral raised panel separates the operator's words from agent prose
+//   while its inset preserves the shared gutter and C1 text edge. An answer's
+//   own H1/H2 may be larger: they head sections of one answer, while the
+//   prompt heads the turn by place and surface. Structural rows (tool
 //   calls, summaries) are `FS_UI`/`LH_UI`; the stamp and the trail are
 //   `FS_SM`/`LH_META`, their changing digits tabular.
 
@@ -1015,6 +1015,14 @@ pub const GAP_BLOCK: f32 = SPACE_3;
 /// 4px — the row step: rows of one run of work, and a row hung on an elbow
 /// under the row it answers.
 pub const GAP_ROW: f32 = SPACE_1;
+
+/// The sent prompt's neutral panel, one step above the Pane without a state
+/// tint. Its edge and inset make the speaker boundary legible in a dense feed.
+pub const PROMPT_GROUND: u32 = RAISED_2;
+pub const PROMPT_EDGE: u32 = HAIRLINE;
+pub const PROMPT_EDGE_W: f32 = 1.0;
+pub const PROMPT_PAD_X: f32 = SPACE_2;
+pub const PROMPT_PAD_Y: f32 = SPACE_2;
 
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the

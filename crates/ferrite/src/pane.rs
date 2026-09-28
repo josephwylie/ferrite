@@ -5701,9 +5701,9 @@ pub(crate) fn render_block(
         theme::answer_line_height(reading),
     );
     match &block.body {
-        // No band and no hover ground: the accent `❯`, the label weight and
-        // the strongest ink carry the prompt. Its actions show under the
-        // pointer, their box always reserved.
+        // A neutral panel separates the operator's words from the agent's
+        // prose. The outer inset compensates for this padding and edge, so
+        // the prompt mark and text keep their shared transcript axes.
         Body::Prompt(line) => {
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let blank = text.is_empty();
@@ -5716,6 +5716,13 @@ pub(crate) fn render_block(
                 .items_start()
                 .min_w_0()
                 .flex_shrink_0()
+                .w_full()
+                .bg(rgb(theme::PROMPT_GROUND))
+                .border_1()
+                .border_color(rgba(theme::PROMPT_EDGE))
+                .rounded(px(theme::R_BLOCK))
+                .px(px(theme::PROMPT_PAD_X))
+                .py(px(theme::PROMPT_PAD_Y))
                 .hover_text()
                 .on_hover(crate::motion::hover_listener(prompt_hover_key(block.id)))
                 // The operator's own words head the turn: the answer's size
