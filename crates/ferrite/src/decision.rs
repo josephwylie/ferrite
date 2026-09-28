@@ -372,7 +372,7 @@ pub fn well(prompt: bool, child: impl IntoElement) -> Div {
         .px(px(theme::DECISION_WELL_PAD_X))
         .py(px(theme::DECISION_WELL_PAD_Y))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
+        .text_size(px(theme::FS_CODE))
         .line_height(px(theme::LH_CODE))
         .text_color(rgb(theme::TEXT_STRONG))
         .when(prompt, |well| {

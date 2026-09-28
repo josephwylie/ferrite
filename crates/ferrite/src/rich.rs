@@ -603,7 +603,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 .rounded(px(theme::R_BLOCK))
                 .font_family(theme::FONT_CODE)
                 .font_weight(theme::W_BODY)
-                .text_size(px(theme::FS_UI))
+                .text_size(px(theme::FS_CODE))
                 .line_height(px(theme::LH_CODE))
                 .text_color(rgb(theme::SYN_PLAIN)),
         )
@@ -636,7 +636,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gpui::StyleRefinement::default()
                 .border_r_0()
                 .py(px(theme::TABLE_CELL_PAD_Y))
-                .text_size(px(theme::inline_code_size(reading)))
+                .text_size(px(theme::table_text_size(reading)))
                 .line_height(px(theme::table_line_height(reading))),
         ))
         .with_table_head(
@@ -695,8 +695,8 @@ fn reading_size_at(base: f32) -> ferrite_core::settings::ReadingSize {
 }
 
 /// A heading's size at prose size `base`: the type table's ratio, rounded
-/// to a whole pixel (18 · 16 · 14 at Standard, 21 · 18 · 16 at Comfortable,
-/// 23 · 21 · 18 at Large), so no heading lands on a half pixel.
+/// to a whole pixel (20 · 16 · 14 at Standard, 23 · 18 · 16 at Comfortable,
+/// 26 · 21 · 18 at Large), so no heading lands on a half pixel.
 fn heading_size(level: u8, base: f32) -> f32 {
     (base * theme::heading_scale(level)).round()
 }
@@ -1769,7 +1769,7 @@ mod file_link_tests {
                 .text_system()
                 .shape_line(
                     "transcript.rs".into(),
-                    px(theme::FS_UI),
+                    px(theme::FS_CODE),
                     &[face.to_run("transcript.rs".len())],
                     None,
                 )
@@ -2413,11 +2413,11 @@ mod style_tests {
 
     #[test]
     fn headings_follow_the_type_table_at_every_reading_size() {
-        for (base, h1_line) in [(14., 28.), (18., 36.)] {
+        for (base, h1_line) in [(14., 31.), (18., 41.)] {
             let style = style_at(px(theme::FS_UI), px(base));
             assert_eq!(
                 style.heading_font_size(1),
-                Some(px((base * 18. / 14.).round()))
+                Some(px((base * 20. / 14.).round()))
             );
             assert_eq!(style.heading_font_size(3), Some(px(base)));
             let h1 = style.heading(1);
@@ -2431,11 +2431,11 @@ mod style_tests {
             assert_eq!(h4.text.font_style, None, "headings are never italic");
         }
         // Every heading is a whole pixel at every reading size, on the type
-        // table: 18 · 16 · 14, 21 · 18 · 16, 23 · 21 · 18.
+        // table: 20 · 16 · 14, 23 · 18 · 16, 26 · 21 · 18.
         for (base, sizes) in [
-            (14., [18., 16., 14.]),
-            (16., [21., 18., 16.]),
-            (18., [23., 21., 18.]),
+            (14., [20., 16., 14.]),
+            (16., [23., 18., 16.]),
+            (18., [26., 21., 18.]),
         ] {
             let style = style_at(px(theme::FS_UI), px(base));
             for level in 1..=6 {
@@ -2475,7 +2475,10 @@ mod style_tests {
         use ferrite_core::settings::ReadingSize;
         assert_eq!(theme::INLINE_CODE_INK, 0xe0b49a);
         assert_ne!(theme::INLINE_CODE_INK, theme::ATTENTION);
-        assert_eq!(theme::inline_code_size(ReadingSize::STANDARD), theme::FS_UI);
+        assert_eq!(
+            theme::inline_code_size(ReadingSize::STANDARD),
+            theme::FS_CODE
+        );
         // The chip centres in the prose line box at every reading size.
         for (size, chip, inset) in [
             (ReadingSize::STANDARD, 18., 2.),

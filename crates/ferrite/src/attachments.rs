@@ -409,7 +409,7 @@ pub fn inline_file(
         .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
         .not_italic()
-        .text_size(px(theme::FS_UI))
+        .text_size(px(theme::FS_CODE))
         .line_height(px(theme::LH_UI))
         .when(image, |chip| {
             chip.child(
@@ -479,7 +479,7 @@ pub fn inline_file(
 }
 
 /// An inline file chip's width: its padding, an image's thumbnail and gap,
-/// and the name and `:line` each shaped whole in the code face at `FS_UI`,
+/// and the name and `:line` each shaped whole in the code face at `FS_CODE`,
 /// rounded up to whole pixels with 1px to spare, so a name that fits is
 /// never ellipsized. Clamped to `INLINE_FILE_MIN_W`…`INLINE_FILE_MAX_W`.
 pub(crate) fn inline_file_width(
@@ -501,7 +501,7 @@ pub(crate) fn inline_file_width(
             .text_system()
             .shape_line(
                 gpui::SharedString::from(text.to_owned()),
-                px(theme::FS_UI),
+                px(theme::FS_CODE),
                 &[face.to_run(text.len())],
                 None,
             )

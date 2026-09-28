@@ -1899,7 +1899,7 @@ impl CockpitView {
                                     .px(px(0.))
                                     .py(px(0.))
                                     .font_family(theme::FONT_CODE)
-                                    .text_size(px(theme::FS_UI))
+                                    .text_size(px(theme::FS_CODE))
                                     .text_color(rgb(theme::TEXT)),
                                 ),
                         ),

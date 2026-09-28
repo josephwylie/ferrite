@@ -370,25 +370,33 @@ pub const SHADOW_NEAR_BLUR: f32 = 1.5;
 
 // ------------------------------------------------------------------- type
 //
-// **The type scale.** Four sizes, each one role, each paired with one pixel
-// line height (rule 7). Render sites name a role, never a number:
+// **The type scale.** Five sizes, each one role, each paired with one pixel
+// line height (rule 7), every one a whole pixel so glyphs land on the same
+// raster at every display scale. Render sites name a role, never a number:
 //
 // | role          | size | line | face          | used for                              |
 // |---------------|------|------|---------------|---------------------------------------|
 // | `FS_PROSE`    | 14   | 22   | UI            | agent prose, the Decision question    |
-// | `FS_UI`       | 12.5 | 20   | UI or code    | every chrome line: rows, titles,      |
+// | `FS_UI`       | 13   | 20   | UI            | every chrome line: rows, titles,      |
 // |               |      |      |               | labels, values, buttons, menu rows    |
-// | `FS_PROSE_SM` | 12.5 | 18   | UI            | a description that wraps (Settings,   |
+// | `FS_CODE`     | 12   | 18   | code          | code blocks, tool calls and output,   |
+// |               |      | (20) |               | the Composer (on `LH_UI` in a row)    |
+// | `FS_PROSE_SM` | 13   | 19   | UI            | a description that wraps (Settings,   |
 // |               |      |      |               | sheets, option descriptions)          |
-// | `FS_SM`       | 11.5 | 16   | UI or code    | metadata: details, hints, section     |
+// | `FS_SM`       | 11   | 16   | UI or code    | metadata: details, hints, section     |
 // |               |      |      |               | titles, keycaps, chips, ages, counts, |
 // |               |      |      |               | badges, tooltips                      |
 //
-// Headings step up from the prose size (`heading_scale`: 18 · 16 · 14) and
+// Code sits a pixel under the UI size because Geist Mono sets optically
+// larger than Geist: at 12 a tool call reads at the weight of the row
+// beside it. A mono run inside a UI line (a key, a scope, a fact value)
+// keeps its line's size.
+//
+// Headings step up from the prose size (`heading_scale`: 20 · 16 · 14) and
 // only inside the transcript. No surface outside it — menus, popovers,
 // sheets, cards, notifications, toasts, tooltips, the titlebar, empty
 // states — uses any size but `FS_UI` and `FS_SM`, plus `FS_PROSE_SM` for a
-// sheet's wrapping descriptions. A surface's hierarchy comes from ink and
+// sheet's wrapping descriptions and `FS_CODE` for a block of code. A surface's hierarchy comes from ink and
 // weight: its one title `W_LABEL`, section titles `FS_SM` `W_LABEL`
 // `TEXT_MUTED`, rows `FS_UI` `W_BODY`, details `FS_SM` `W_BODY`.
 //
@@ -406,24 +414,26 @@ pub const SHADOW_NEAR_BLUR: f32 = 1.5;
 /// 14px — agent prose (Geist), the size an operator reads at length; also the
 /// Decision question and option descriptions. Paired with `LH_PROSE`.
 pub const FS_PROSE: f32 = 14.0;
-/// 12.5px — the UI size: every chrome line (menu rows, nav and Pane titles,
-/// Settings labels, buttons) in Geist, and code in Geist Mono (prompts, tool
-/// output, the Composer). Paired with `LH_UI` (single-line rows) or
-/// `LH_CODE` (multi-line mono blocks).
-pub const FS_UI: f32 = 12.5;
-/// 12.5px — secondary prose (Geist): option labels and descriptions, notes,
+/// 13px — the UI size: every chrome line (menu rows, nav and Pane titles,
+/// Settings labels, buttons) in Geist. Paired with `LH_UI`.
+pub const FS_UI: f32 = 13.0;
+/// 12px — code in Geist Mono: fenced blocks, tool calls and their output,
+/// the Composer, inline code at Standard. Paired with `LH_CODE` (multi-line
+/// mono blocks) or `LH_UI` (a mono line in a row).
+pub const FS_CODE: f32 = 12.0;
+/// 13px — secondary prose (Geist): option labels and descriptions, notes,
 /// a Settings row's description. Prose is never smaller. Paired with
 /// `LH_PROSE_SM`.
-pub const FS_PROSE_SM: f32 = 12.5;
-/// 11.5px — metadata: checkout lines, durations, hints, keycaps, chips,
+pub const FS_PROSE_SM: f32 = 13.0;
+/// 11px — metadata: checkout lines, durations, hints, keycaps, chips,
 /// timestamps, section titles, badges, tooltips. The floor: nothing is
 /// smaller. Paired with `LH_META`.
-pub const FS_SM: f32 = 11.5;
+pub const FS_SM: f32 = 11.0;
 
 /// 22px — prose.
 pub const LH_PROSE: f32 = 22.0;
-/// 18px — secondary prose.
-pub const LH_PROSE_SM: f32 = 18.0;
+/// 19px — secondary prose.
+pub const LH_PROSE_SM: f32 = 19.0;
 /// 20px — single-line UI and mono rows.
 pub const LH_UI: f32 = 20.0;
 /// 18px — multi-line mono blocks: code, diffs, tool output.
@@ -463,12 +473,12 @@ pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
     }
 }
 
-/// Headings are ratios of the answer size: H1 18/14, H2 16/14, H3–H6 1.0
+/// Headings are ratios of the answer size: H1 20/14, H2 16/14, H3–H6 1.0
 /// (set apart by weight and ink, not by a half pixel). At Standard that is
-/// 18 · 16 · 14.
+/// 20 · 16 · 14.
 pub fn heading_scale(level: u8) -> f32 {
     match level {
-        1 => 18. / 14.,
+        1 => 20. / 14.,
         2 => 16. / 14.,
         _ => 1.,
     }
@@ -484,8 +494,8 @@ pub fn prose_line_height(size: f32) -> f32 {
 /// up to a whole pixel. UI text is proportional: nothing lays it out on a
 /// cell.
 pub const CODE_ADVANCE: f32 = 0.6;
-/// 7.5px — one code column at `FS_UI`.
-pub const CODE_CELL: f32 = FS_UI * CODE_ADVANCE;
+/// 7.2px — one code column at `FS_CODE`.
+pub const CODE_CELL: f32 = FS_CODE * CODE_ADVANCE;
 /// 0.5em — a floor under Geist's average advance in UI copy. Only an
 /// estimate from below may be laid out against proportional text (a title's
 /// floor), so a short label is never padded past itself.
@@ -693,7 +703,7 @@ pub const R_MENU_ROW: f32 = R_CHIP;
 /// so it hugs the rows it heads.
 pub const MENU_SECTION_H: f32 = 24.0;
 /// 10px — a section title's mark: the `FS_SM` cap band (`KEY_GLYPH`), so a
-/// provider mark beside an 11.5px title is no heavier than its letters.
+/// provider mark beside an 11px title is no heavier than its letters.
 pub const MENU_SECTION_ICON: f32 = KEY_GLYPH;
 /// 8px — what splits one group of rows from the next inside any floating
 /// surface (context-menu groups, a section after rows, a key-hint footer, a
@@ -1130,16 +1140,10 @@ pub const INLINE_CODE_WASH: u32 = 0xffffff0f;
 /// out; its height is `inline_code_chip_h`, centred in the prose line box.
 pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
 
-/// Inline code's size at each reading size: the UI size at 14 (`FS_UI`, so
-/// a code cell is `CODE_CELL`), 1.5 under the prose up to 15 and 2 under it
-/// above. Tables set their cells at the same size.
+/// Inline code's size at each reading size: 2 under the prose, so the
+/// code size at 14 (`FS_CODE`, a code cell is `CODE_CELL`).
 pub fn inline_code_size(size: ferrite_core::settings::ReadingSize) -> f32 {
-    let px = f32::from(size.px());
-    if px <= 15. {
-        px - (FS_PROSE - FS_UI)
-    } else {
-        px - 2.
-    }
+    f32::from(size.px()) - (FS_PROSE - FS_CODE)
 }
 
 /// The inline-code chip's height: 4px over the prose size (18 at 14).
@@ -1151,6 +1155,11 @@ pub fn inline_code_chip_h(size: ferrite_core::settings::ReadingSize) -> f32 {
 /// `(answer_line_height − inline_code_chip_h) / 2`.
 pub fn inline_code_inset_y(size: ferrite_core::settings::ReadingSize) -> f32 {
     (answer_line_height(size) - inline_code_chip_h(size)) / 2.
+}
+
+/// A table cell's size: 1 under the prose, so the UI size at 14 (`FS_UI`).
+pub fn table_text_size(size: ferrite_core::settings::ReadingSize) -> f32 {
+    f32::from(size.px()) - (FS_PROSE - FS_UI)
 }
 
 /// A table row's line box: 6px over the prose size, so at 14 it is `LH_UI`
@@ -2334,11 +2343,11 @@ mod tests {
         }
         assert_eq!(answer_text_size(ReadingSize::STANDARD), FS_PROSE);
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        assert!(near(FS_PROSE * heading_scale(1), 18.0));
+        assert!(near(FS_PROSE * heading_scale(1), 20.0));
         assert!(near(FS_PROSE * heading_scale(2), 16.0));
         assert!(near(FS_PROSE * heading_scale(3), FS_PROSE));
         assert_eq!(prose_line_height(FS_PROSE), LH_PROSE);
-        assert!(near(CODE_CELL, 7.5));
+        assert!(near(CODE_CELL, 7.2));
     }
 
     #[gpui::test]

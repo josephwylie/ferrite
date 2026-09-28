@@ -2477,7 +2477,7 @@ fn l2_tail_rows(transcript: &Transcript, namespace: &str, docked: bool) -> Vec<T
                         .flex_1()
                         .min_w_0()
                         .font_family(theme::FONT_CODE)
-                        .text_size(px(theme::FS_UI))
+                        .text_size(px(theme::FS_CODE))
                         .line_height(px(theme::LH_UI))
                         .text_color(rgb(TEXT_MUTED))
                         .child(SharedString::from(text)),
@@ -2504,7 +2504,7 @@ fn l2_tail_rows(transcript: &Transcript, namespace: &str, docked: bool) -> Vec<T
                             .flex_1()
                             .min_w_0()
                             .font_family(theme::FONT_CODE)
-                            .text_size(px(theme::FS_UI))
+                            .text_size(px(theme::FS_CODE))
                             .line_height(px(theme::LH_UI))
                             .font_weight(theme::W_BODY)
                             .text_color(rgb(TEXT_MUTED))
@@ -2611,7 +2611,7 @@ fn l2_tail_rows(transcript: &Transcript, namespace: &str, docked: bool) -> Vec<T
 }
 
 /// An L2 tail's prose (and heading) text at C1: Geist `FS_PROSE_SM` on an
-/// `LH_PROSE_SM` line in `TEXT_2` — prose never under 12.5 — a heading in
+/// `LH_PROSE_SM` line in `TEXT_2` — prose never under 13 — a heading in
 /// `TEXT_STRONG` at the label weight, never above it.
 fn tail_prose(text: String, heading: bool) -> Div {
     div()
@@ -3762,6 +3762,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                                     div()
                                         .flex_shrink_0()
                                         .font_family(theme::FONT_CODE)
+                                        .text_size(px(theme::FS_CODE))
                                         .debug_selector(move || {
                                             format!("queue-row-{namespace}-{index}")
                                         })
@@ -3790,6 +3791,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .min_w_0()
         // The input is a terminal line: the code face, placeholder too.
         .font_family(theme::FONT_CODE)
+        .text_size(px(theme::FS_CODE))
         .font_weight(theme::W_BODY)
         .line_height(px(theme::COMPOSER_ROW_H))
         .text_color(rgb(TEXT))
@@ -5945,7 +5947,7 @@ pub(crate) fn render_block(
                     .flex_col()
                     .overflow_hidden()
                     .font_family(theme::FONT_CODE)
-                    .text_size(px(theme::FS_UI))
+                    .text_size(px(theme::FS_CODE))
                     .line_height(px(theme::LH_CODE))
                     .text_color(rgb(TEXT_2))
                     .children(code_lines(
@@ -6244,7 +6246,7 @@ fn failure_line(
                         .flex_1()
                         .min_w_0()
                         .font_family(theme::FONT_CODE)
-                        .text_size(px(theme::FS_UI))
+                        .text_size(px(theme::FS_CODE))
                         .line_height(px(theme::LH_UI))
                         .child(selection.line(block, excerpt, Vec::new())),
                 )
@@ -6297,6 +6299,7 @@ fn render_tool(
         .min_w_0()
         .truncate()
         .font_family(theme::FONT_CODE)
+        .text_size(px(theme::FS_CODE))
         .font_weight(theme::W_BODY)
         .child(selection.line(block, text::tool_label(tool), call_highlights(tool)));
     let mut trail = components::tabular(
@@ -6566,6 +6569,7 @@ where
                             .min_w_0()
                             .truncate()
                             .font_family(theme::FONT_CODE)
+                            .text_size(px(theme::FS_CODE))
                             .font_weight(theme::W_BODY)
                             .child(StyledText::new(label).with_highlights(vec![(
                                 0..name,
@@ -6663,7 +6667,7 @@ pub(crate) fn output_block(
             .pl(px(theme::GUTTER_W + theme::ELBOW_INDENT))
     }
     .font_family(theme::FONT_CODE)
-    .text_size(px(theme::FS_UI))
+    .text_size(px(theme::FS_CODE))
     .line_height(px(theme::LH_CODE))
     .text_color(rgb(ink))
     .when(command, |rows| {
@@ -6976,7 +6980,7 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
         .overflow_hidden()
         .bg(rgb(RAISED))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
+        .text_size(px(theme::FS_CODE))
         // A whole-pixel line box: a fractional one rounds each row's origin
         // and height independently, and the added/removed washes can leave a
         // 1px unpainted seam between them.
@@ -8818,7 +8822,7 @@ mod tests {
     }
 
     /// The L2 tail's prose is set at the small prose size — never under
-    /// 12.5 — and a heading never above the label weight.
+    /// 13 — and a heading never above the label weight.
     #[test]
     fn the_l2_tail_sets_prose_at_the_small_prose_size() {
         let mut prose = tail_prose("Fixed it.".into(), false);
@@ -8830,7 +8834,7 @@ mod tests {
             prose.style().text.line_height,
             Some(px(theme::LH_PROSE_SM).into())
         );
-        assert!(theme::FS_PROSE_SM >= 12.5);
+        assert!(theme::FS_PROSE_SM >= 13.);
         let mut heading = tail_prose("Result".into(), true);
         assert_eq!(heading.style().text.font_weight, Some(theme::W_LABEL));
     }

@@ -861,6 +861,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                         .w(px(width))
                         .flex_shrink_0()
                         .font_family(theme::FONT_CODE)
+                        .text_size(px(theme::FS_CODE))
                 })
                 .child(gpui::StyledText::new(label).with_highlights(highlights)),
         )
