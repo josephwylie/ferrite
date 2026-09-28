@@ -5,7 +5,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod attachment_preview;
 mod attachments;
-mod background_chips;
 mod cli_updates;
 mod cockpit;
 mod components;

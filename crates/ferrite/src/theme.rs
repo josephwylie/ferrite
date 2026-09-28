@@ -1556,11 +1556,8 @@ pub const CTX_CYCLE: [u32; 4] = [0xa79fc4, 0xc39cab, 0x8fb2b8, 0xb5b48e];
 /// 768px — the image preview sheet's widest reading; it otherwise takes
 /// 90% × 85% of its Pane.
 pub const PREVIEW_MAX_W: f32 = 768.0;
-/// Background task chips on the shelf above the Composer: `FILL` (not
-/// `HOVER`, which vanishes on `RAISED`), `R_CHIP`, `CHIP_H`, mono `FS_SM`
-/// `TEXT_2`, the shared pulsing `RUNNING` dot, labels cut at 240px, and a
-/// quiet `×` stop control (`BG_CHIP_STOP` square, glyph `TEXT_MUTED`).
-pub const BG_CHIP_MAX_W: f32 = 240.0;
+/// A shelf chip's quiet `×` remove control: a `BG_CHIP_STOP` square, its
+/// glyph `TEXT_MUTED`.
 pub const BG_CHIP_STOP: f32 = 16.0;
 pub const BG_CHIP_STOP_GLYPH: f32 = 10.0;
 /// A pending file on the shelf: a `CHIP_H` chip with a fixed 12px slot for
@@ -2548,7 +2545,6 @@ mod tests {
             ("project_editor.rs", include_str!("project_editor.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
             ("attachments.rs", include_str!("attachments.rs")),
-            ("background_chips.rs", include_str!("background_chips.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
             ("decision.rs", include_str!("decision.rs")),
             (

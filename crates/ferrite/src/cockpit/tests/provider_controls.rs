@@ -149,17 +149,10 @@ fn contract_permission_and_mcp_auth_controls_are_native(cx: &mut TestAppContext)
     let controls = cx.debug_bounds("session-controls-1").unwrap();
     cx.simulate_click(controls.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let mode = cx
-        .debug_bounds("permission-mode-0")
-        .expect("provider-supplied permission mode exposed");
-    cx.simulate_click(mode.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    assert!(fake
-        .controls
-        .borrow()
-        .contains(&ferrite_core::SessionControl::SetPermissionMode {
-            mode: "native-mode".into()
-        }));
+    assert!(
+        cx.debug_bounds("permission-mode-0").is_none(),
+        "the mode is its own picker's, not the session card's"
+    );
     let login = cx
         .debug_bounds("mcp-login-0")
         .expect("native sign-in action");
@@ -290,6 +283,16 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     fake.streams.borrow()[0]
         .send(SessionEvent::PermissionMode {
+            mode: "default".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        debug_bounds(cx, format!("mode-picker-{}", thread.get())).is_some(),
+        "the picker is the Pane's one way to the mode, so it rides the default too"
+    );
+    fake.streams.borrow()[0]
+        .send(SessionEvent::PermissionMode {
             mode: "native-mode".into(),
         })
         .unwrap();
@@ -329,17 +332,17 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
+fn background_tasks_are_a_word_on_the_working_line_opening_the_session_card(
+    cx: &mut TestAppContext,
+) {
     use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
-    let (core, fake) = cockpit("native-background-chips", 1);
+    let (core, fake) = cockpit("native-background-tasks", 1);
+    bind_production_keys(cx);
     let thread = core.threads()[0];
     *fake.native_controls.borrow_mut() = true;
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(800.)));
-    assert!(
-        cx.debug_bounds("background-chips").is_none(),
-        "nothing running, no shelf"
-    );
+    let button = format!("background-tasks-{}", thread.get());
     let task = |id: &str, label: &str, status| BackgroundTask {
         id: id.into(),
         label: label.into(),
@@ -350,44 +353,36 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         event: ProgressEvent::BackgroundSnapshot { tasks },
     };
     fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "working".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
         .send(snapshot(vec![
             task("task:1", "cargo test --workspace", TaskStatus::Working),
-            task("task:2", "already finished", TaskStatus::Completed),
+            task("task:2", "cargo clippy", TaskStatus::Working),
+            task("task:3", "already finished", TaskStatus::Completed),
         ]))
         .unwrap();
     tick(cx);
-    let shelf = cx
-        .debug_bounds("background-chips")
-        .expect("a running task docks a chip above the prompt");
-    let chip = cx.debug_bounds("background-chip-0").unwrap();
     assert!(
-        cx.debug_bounds("background-chip-1").is_none(),
-        "finished tasks leave the shelf"
+        cx.debug_bounds("background-chips").is_none(),
+        "no shelf of task chips above the Composer"
     );
-    let editor = cx
-        .debug_bounds("focused-prompt-editor")
-        .or_else(|| cx.debug_bounds("prompt-editor"))
-        .unwrap();
+    let word =
+        debug_bounds(cx, button.clone()).expect("running tasks are a word on the working line");
+    let caption = cx.debug_bounds("progress-reasoning").unwrap();
     assert!(
-        shelf.bottom() <= editor.top(),
-        "the shelf stays above the editable prompt"
+        word.left() >= caption.right() && (word.center().y - caption.center().y).abs() <= px(2.),
+        "the word closes the working line: {word:?} after {caption:?}"
     );
+    cx.simulate_click(word.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
     assert!(
-        chip.center().x > editor.center().x,
-        "chips hang at the right edge of the prompt box, not the left"
+        cx.debug_bounds("session-controls-card").is_some(),
+        "the word opens the session card, where the tasks are listed"
     );
-    // Send closes the prompt row on the right, beside the editor.
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
-    );
-    assert!(
-        (shelf.right() - send.right()).abs() <= px(2.),
-        "the shelf's right edge is the prompt box's right edge: shelf {:?} vs send {:?}",
-        shelf.right(),
-        send.right()
-    );
-    let stop = cx.debug_bounds("background-chip-stop-0").unwrap();
+    let stop = cx.debug_bounds("background-stop-0").unwrap();
     cx.simulate_click(stop.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(fake
@@ -396,26 +391,9 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         .contains(&ferrite_core::SessionControl::StopTask {
             id: "task:1".into()
         }));
-    assert!(
-        fake.sent.borrow().is_empty(),
-        "a chip's × is a control, never a prompt"
-    );
-    // A Session that cannot stop tasks still shows what runs — read-only.
-    *fake.native_controls.borrow_mut() = false;
-    fake.streams.borrow()[0]
-        .send(snapshot(vec![task(
-            "task:1",
-            "cargo test --workspace",
-            TaskStatus::Working,
-        )]))
-        .unwrap();
-    tick(cx);
-    assert!(cx.debug_bounds("background-chip-0").is_some());
-    assert!(
-        cx.debug_bounds("background-chip-stop-0").is_none(),
-        "no stop control where the Session offers none"
-    );
-    // The last task finishing takes the shelf with it.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("session-controls-card").is_none());
     fake.streams.borrow()[0]
         .send(snapshot(vec![task(
             "task:1",
@@ -425,7 +403,8 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     assert!(
-        cx.debug_bounds("background-chips").is_none(),
-        "the shelf leaves with the last running task"
+        debug_bounds(cx, button.clone()).is_none(),
+        "the word leaves with the last running task"
     );
+    assert!(fake.sent.borrow().is_empty());
 }

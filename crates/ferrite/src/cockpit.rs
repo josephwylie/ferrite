@@ -9216,16 +9216,13 @@ impl CockpitView {
                 })
             });
         let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
-        let background = (level != Level::Wall)
-            .then(|| self.background_chips(index, cx))
+        let background = l1
+            .then(|| self.background_tasks_button(index, cx))
             .flatten();
         let changed_files = l1.then(|| self.changed_files_chip(index, cx)).flatten();
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
-        let joins = pane.is_main()
-            && attachments.is_none()
-            && background.is_none()
-            && (!self.grid_board() || focused);
+        let joins = pane.is_main() && attachments.is_none() && (!self.grid_board() || focused);
         let activity_decisions = (level != Level::Wall)
             .then(|| self.activity_decisions(index, joins, window, cx))
             .flatten();
@@ -10078,9 +10075,9 @@ impl CockpitView {
         {
             return None;
         }
-        // Hidden at the default: the mode stays reachable in the session
-        // controls card (`•••`) and Settings.
-        let label = pane::permission_mode_label(mode, &modes)?;
+        // The picker is the Pane's one way to the mode, so it stays at the
+        // default too, named `default`.
+        let label = pane::permission_mode_label(mode, &modes).unwrap_or_else(|| "default".into());
         let choices = modes
             .iter()
             .map(|choice| crate::components::Choice {
@@ -10141,84 +10138,107 @@ impl CockpitView {
         )
     }
 
-    /// The Pane's background shelf: the Session's running background tasks
-    /// as chips at the Composer's right edge, each `×` wired to `StopTask`
-    /// where the Session can stop one. Main only — a Subagent Subject's
-    /// Composer is Main's, but a shelf there would claim the tasks were the
-    /// Subagent's own. None while nothing runs, so the shelf leaves with
-    /// the last task.
-    fn background_chips(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        if !pane.is_main() {
-            return None;
-        }
-        let thread = pane.thread()?;
+    /// `2 tasks`: the Session's running background tasks as one word at the
+    /// end of the working line, opening the session controls card where
+    /// they are listed (and stopped). Main only — a Subagent Subject's
+    /// working line is its own, and the tasks are Main's. None while
+    /// nothing runs, or where the Pane has no session controls to open.
+    fn background_tasks_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
         let generation = open.generation();
-        let chips = crate::background_chips::BackgroundChips::new(
-            SharedString::from(format!("background-chips-{}", thread.get())),
-            open.transcript().progress().background().iter().cloned(),
-        );
-        if chips.is_empty() {
+        let count = open
+            .transcript()
+            .progress()
+            .background()
+            .iter()
+            .filter(|task| task.status == ferrite_core::progress::TaskStatus::Working)
+            .count();
+        if count == 0 || !self.has_session_controls(index) {
             return None;
         }
-        if !open.supports_control(ferrite_core::ControlKind::StopTask) {
-            return Some(chips.into_any_element());
-        }
-        let view = cx.entity().downgrade();
+        let was_open = self.session_controls_open(thread, generation);
         Some(
-            chips
-                .on_stop(move |id, _, cx| {
-                    let id = id.to_string();
-                    let _ = view.update(cx, |view, cx| {
-                        // Only a task this very Session still reports as
-                        // working: a chip clicked as its snapshot changes
-                        // must not stop whatever took its place.
-                        let running =
-                            view.cockpit.thread(thread).is_some_and(|open| {
-                                open.generation() == generation
-                                    && open.transcript().progress().background().iter().any(
-                                        |task| {
-                                            task.id == id
-                                                && task.status
-                                                    == ferrite_core::progress::TaskStatus::Working
-                                        },
-                                    )
-                            });
-                        if running {
-                            view.run_session_control(
-                                thread,
-                                generation,
-                                ferrite_core::SessionControl::StopTask { id },
-                            );
-                        }
-                        cx.notify();
-                    });
-                })
-                .into_any_element(),
+            pane::composer_control(
+                SharedString::from(format!("background-tasks-{}", thread.get())),
+                cx,
+            )
+            .debug_selector(move || format!("background-tasks-{}", thread.get()))
+            .tip("Background tasks")
+            .child(pane::tasks_chip(count))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_session_controls(index, thread, generation, was_open, cx);
+            }))
+            .into_any_element(),
         )
+    }
+
+    /// The Pane offers the session controls chip: Main, on a Session that
+    /// can do something from the card.
+    fn has_session_controls(&self, index: usize) -> bool {
+        let pane = &self.panes[index];
+        pane.is_main()
+            && pane
+                .thread()
+                .and_then(|thread| self.cockpit.thread(thread))
+                .is_some_and(|open| {
+                    [
+                        ferrite_core::ControlKind::RefreshMcp,
+                        ferrite_core::ControlKind::ReconnectMcp,
+                        ferrite_core::ControlKind::StopTask,
+                        ferrite_core::ControlKind::BackgroundTasks,
+                    ]
+                    .into_iter()
+                    .any(|kind| open.supports_control(kind))
+                })
+    }
+
+    /// The session controls card is open on this very Session.
+    fn session_controls_open(&self, thread: ThreadId, generation: u64) -> bool {
+        self.session_controls
+            .is_some_and(|(shown, shown_generation)| {
+                shown == thread && shown_generation == generation
+            })
+    }
+
+    /// Open the session controls card on `thread`, or close it where it
+    /// `was_open` — refreshing the MCP servers as it opens. `was_open` is
+    /// read when the trigger is drawn: the card's own mouse-down-out has
+    /// already closed it by the time the click lands.
+    fn toggle_session_controls(
+        &mut self,
+        index: usize,
+        thread: ThreadId,
+        generation: u64,
+        was_open: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_pane(index);
+        if !was_open
+            && self.cockpit.thread(thread).is_some_and(|open| {
+                open.generation() == generation
+                    && open.supports_control(ferrite_core::ControlKind::RefreshMcp)
+            })
+        {
+            self.run_session_control(thread, generation, ferrite_core::SessionControl::RefreshMcp);
+        }
+        self.popover = None;
+        self.context_menu = None;
+        self.context_usage = None;
+        self.context_checks = None;
+        self.changed_files_card = None;
+        self.session_controls = (!was_open).then_some((thread, generation));
+        cx.notify();
     }
 
     fn session_controls_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let open = self.cockpit.thread(thread)?;
-        let generation = open.generation();
-        let capable = [
-            ferrite_core::ControlKind::RefreshMcp,
-            ferrite_core::ControlKind::ReconnectMcp,
-            ferrite_core::ControlKind::StopTask,
-            ferrite_core::ControlKind::BackgroundTasks,
-        ]
-        .into_iter()
-        .any(|kind| open.supports_control(kind));
-        if !capable || !self.panes[index].is_main() {
+        let generation = self.cockpit.thread(thread)?.generation();
+        if !self.has_session_controls(index) {
             return None;
         }
-        let was_open = self
-            .session_controls
-            .is_some_and(|(shown, shown_generation)| {
-                shown == thread && shown_generation == generation
-            });
+        let was_open = self.session_controls_open(thread, generation);
         Some(
             pane::composer_control(
                 SharedString::from(format!("session-controls-{}", thread.get())),
@@ -10229,26 +10249,7 @@ impl CockpitView {
             .child(pane::session_chip())
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                view.focus_pane(index);
-                if !was_open
-                    && view.cockpit.thread(thread).is_some_and(|open| {
-                        open.generation() == generation
-                            && open.supports_control(ferrite_core::ControlKind::RefreshMcp)
-                    })
-                {
-                    view.run_session_control(
-                        thread,
-                        generation,
-                        ferrite_core::SessionControl::RefreshMcp,
-                    );
-                }
-                view.popover = None;
-                view.context_menu = None;
-                view.context_usage = None;
-                view.context_checks = None;
-                view.changed_files_card = None;
-                view.session_controls = (!was_open).then_some((thread, generation));
-                cx.notify();
+                view.toggle_session_controls(index, thread, generation, was_open, cx);
             }))
             // The card hangs off the chip's bounds, so a key opens it where
             // a click does.
@@ -10356,77 +10357,15 @@ impl CockpitView {
         if let Some((_, _, error)) = error {
             card = card.child(pane::card_error(error.clone()).id("session-control-error"));
         }
-        let modes = open.permission_modes();
-        let modes_empty = modes.is_empty();
-        if !modes_empty {
-            card = card.child(head("Mode", errored));
-        }
-        let current = open.permission_mode().map(str::to_owned);
-        for (index, mode) in modes.into_iter().enumerate() {
-            let checked = current.as_deref() == Some(mode.value.as_str());
-            let value = mode.value;
-            card = card.child(
-                crate::components::button(SharedString::from(format!("permission-mode-{index}")))
-                    .debug_selector(move || format!("permission-mode-{index}"))
-                    .tab_stop(true)
-                    .w_full()
-                    .h(px(crate::theme::MENU_ROW_H))
-                    .px(px(crate::theme::MENU_ROW_PAD_X))
-                    .rounded(px(crate::theme::R_MENU_ROW))
-                    .accessibility_label(mode.label.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .w_full()
-                            .items_center()
-                            .gap(px(crate::theme::SPACE_2))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    // The shared button is kit-xsmall; a menu
-                                    // row reads at the UI size like every menu.
-                                    .text_size(px(crate::theme::FS_UI))
-                                    .line_height(px(crate::theme::LH_UI))
-                                    .text_color(rgb(if checked {
-                                        crate::theme::TEXT_STRONG
-                                    } else {
-                                        crate::theme::TEXT
-                                    }))
-                                    .child(mode.label),
-                            )
-                            .children(checked.then(|| {
-                                crate::icons::icon(
-                                    crate::icons::CHECK,
-                                    crate::theme::ICON_CHEVRON,
-                                    crate::theme::ACCENT,
-                                )
-                            })),
-                    )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_session_control(
-                            thread,
-                            generation,
-                            ferrite_core::SessionControl::SetPermissionMode {
-                                mode: value.clone(),
-                            },
-                        );
-                        cx.notify();
-                    })),
-            );
-        }
         // With no servers the note alone says so; a `MCP servers` head over
         // `No MCP servers reported` would say it twice.
         if transcript.mcp_servers().is_empty() {
             card = card.child(
                 crate::components::menu_note("No MCP servers reported")
-                    .when(errored || !modes_empty, |note| {
-                        note.mt(px(crate::theme::MENU_GROUP_GAP))
-                    }),
+                    .when(errored, |note| note.mt(px(crate::theme::MENU_GROUP_GAP))),
             );
         } else {
-            card = card.child(head("MCP servers", errored || !modes_empty));
+            card = card.child(head("MCP servers", errored));
         }
         for (index, server) in transcript.mcp_servers().iter().enumerate() {
             let name = server.name.clone();

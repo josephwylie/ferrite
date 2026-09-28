@@ -685,10 +685,9 @@ pub struct PaneWiring {
     pub attachments: Option<AnyElement>,
     /// Pointer equivalents of the owning Composer's send and interrupt keys.
     pub composer_actions: Option<AnyElement>,
-    /// The Session's running background tasks as chips at the Composer's
-    /// right edge, each wired to its stop control — the other half of the
-    /// shelf the attachment island sits on. None while nothing runs in the
-    /// background, for a Subagent Subject, and at the wall.
+    /// `2 tasks` at the end of the working line: the Session's running
+    /// background tasks, opening the session controls card that lists
+    /// them. L1 Main only; None while nothing runs in the background.
     pub background: Option<AnyElement>,
     /// The retained transcript reports whether its received-reasoning row is
     /// mounted; this keeps the pinned live progress caption singular.
@@ -1229,6 +1228,7 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
             cx.focused,
             cx.received_reasoning_visible,
             cx.reduce_motion,
+            cx.background.take(),
         )
     } else if cx.starting {
         // A Session starting or being replaced, with nothing streaming yet:
@@ -1331,7 +1331,6 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 files: cx.composer_files,
                 attachments: cx.attachments.take(),
                 actions: cx.composer_actions.take(),
-                background: cx.background.take(),
                 changed_files: cx.changed_files.take(),
                 menu: cx.menu.take(),
                 mode: cx.permission_mode.as_deref(),
@@ -1373,7 +1372,6 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     files: cx.composer_files,
                     attachments: cx.attachments.take(),
                     actions: cx.composer_actions.take(),
-                    background: cx.background.take(),
                     changed_files: None,
                     menu: None,
                     // On a board a non-default mode is the head slot's word;
@@ -1677,7 +1675,6 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             files: composer_files,
             attachments,
             actions: composer_actions,
-            background: None,
             changed_files: None,
             menu,
             mode: None,
@@ -2259,6 +2256,7 @@ fn l2_cell(
                     focused,
                     false,
                     reduce_motion,
+                    None,
                 )),
         );
     }
@@ -3436,13 +3434,15 @@ fn working_mark(reduce_motion: bool) -> AnyElement {
 /// `· esc to interrupt`, dropped whole where the row cannot hold it. The
 /// caption is what truncates; the facts keep their room. L2 (`compact`)
 /// draws the same row without the token count. Command details stay in the
-/// tool rows.
+/// tool rows. `tasks` — L1's `2 tasks`, the Session's background work —
+/// closes the caption's piece, after the facts.
 fn working_line(
     transcript: &Transcript,
     compact: bool,
     focused: bool,
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
+    tasks: Option<AnyElement>,
 ) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
@@ -3497,6 +3497,9 @@ fn working_line(
                         .text_color(rgb(TEXT_MUTED))
                         .child(SharedString::from(format!("({})", facts.join(" \u{b7} ")))),
                 ))
+            })
+            .when_some(tasks, |main, tasks| {
+                main.child(div().flex_shrink_0().pl(px(theme::WORD_GAP)).child(tasks))
             });
         row = row
             .debug_selector(move || selector.clone())
@@ -3579,9 +3582,6 @@ struct ComposerStack<'a> {
     files: usize,
     attachments: Option<AnyElement>,
     actions: Option<AnyElement>,
-    /// Running background tasks as chips, hung at the right edge of the
-    /// same shelf the pending files sit on.
-    background: Option<AnyElement>,
     /// A compact shelf of files touched by this Thread. It belongs inside
     /// the Composer but above the prompt, separated from typed text.
     changed_files: Option<AnyElement>,
@@ -3626,8 +3626,7 @@ struct ComposerStack<'a> {
 /// - the hint row: setup or mode and the key hints at left, usage, session
 ///   controls and the model pair at right (Send/Stop at L2).
 ///
-/// The shelf — pending files at left, background tasks at right — floats
-/// above the block, its right edge on the Send column. The Pane lays the
+/// The shelf of pending files floats above the block. The Pane lays the
 /// stack out `flex_shrink_0` below the body, so the transcript gives way.
 /// The Decision card is **not** here: it is a sibling of the body. While a
 /// Decision pends the block carries the `Decision` key context, so y/n/a
@@ -3643,7 +3642,6 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         files,
         attachments,
         actions,
-        background,
         changed_files,
         menu,
         mode,
@@ -3913,17 +3911,20 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // Pane whose Session has announced one other than the default — a
     // pending Decision too: the mode is what the answer will run under. A
     // closed Session has no mode to be in (its word is None). L2 draws it
-    // plain (no menu).
-    if let Some(mode) = mode.filter(|_| !grid) {
+    // plain (no menu). The picker, where wired, rides at the default too:
+    // it is the Pane's one way to change the mode.
+    let mode_control = match (mode_picker, mode) {
+        (Some(picker), _) => Some(picker),
+        (None, Some(mode)) => Some(mode_chip(mode, false).into_any_element()),
+        (None, None) => None,
+    };
+    if let Some(control) = mode_control.filter(|_| !grid) {
         let key = view.thread().map_or(0, ThreadId::get);
         meta = meta.child(
             div()
                 .debug_selector(move || format!("composer-mode-{key}"))
                 .flex_shrink_0()
-                .child(match mode_picker {
-                    Some(picker) => picker,
-                    None => mode_chip(mode, false).into_any_element(),
-                }),
+                .child(control),
         );
     }
     meta = meta.child(div().flex_1());
@@ -3954,11 +3955,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .flex()
         .flex_col()
         .min_w_0()
-        .when(attachments.is_some() || background.is_some(), |stack| {
-            // The shelf floats `SHELF_GAP` clear of the block: pending
-            // files from its outer left edge, the background chips at right
-            // on the Send column. The chips give way first — they cut
-            // their labels, the files do not.
+        .when_some(attachments, |stack, attachments| {
+            // The shelf floats `SHELF_GAP` clear of the block, pending
+            // files from its outer left edge.
             stack.child(
                 div()
                     .debug_selector(|| "composer-shelf".into())
@@ -3969,12 +3968,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     .pl(px(0.))
                     .pr(px(theme::COMPOSER_CONTROL_INSET))
                     .pb(px(theme::SHELF_GAP))
-                    .when_some(attachments, |shelf, attachments| {
-                        shelf.child(div().flex_1().min_w_0().child(attachments))
-                    })
-                    .when_some(background, |shelf, chips| {
-                        shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
-                    }),
+                    .child(div().flex_1().min_w_0().child(attachments)),
             )
         })
         .child(block)
@@ -4105,6 +4099,16 @@ pub fn files_chip(count: usize) -> Div {
     let word = if count == 1 { "file" } else { "files" };
     control_chip(TEXT_MUTED)
         .debug_selector(move || format!("changed-files-{count}"))
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
+        .child(components::tabular(div().child(format!("{count} {word}"))))
+}
+
+/// `2 tasks`: the Session's running background tasks, the working line's
+/// last word, on the `3 files` recipe.
+pub fn tasks_chip(count: usize) -> Div {
+    let word = if count == 1 { "task" } else { "tasks" };
+    control_chip(TEXT_MUTED)
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .child(components::tabular(div().child(format!("{count} {word}"))))
@@ -7335,7 +7339,7 @@ mod tests {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .w_full()
-                .child(working_line(&self.0, false, false, false, false))
+                .child(working_line(&self.0, false, false, false, false, None))
         }
     }
 
