@@ -1031,11 +1031,10 @@ pub fn render_pane(
                 .and_then(|mode| permission_mode_label(mode, &thread.permission_modes()))
         }),
     });
-    // Solo (fullscreen included) has no head at any tier: the titlebar
-    // carries the Thread (C2). A Group's head is the Pane's drag handle
-    // whenever the cockpit wires one.
+    // Every Thread keeps its head, including Solo and fullscreen. On a
+    // board the cockpit also wires it as the Pane's drag handle.
     let head = |title: Option<AnyElement>, slot: Option<HeadSlot>| {
-        show_focus.then(|| {
+        Some({
             let head = group_head(GroupHead {
                 key,
                 name: view.name.clone(),
@@ -1145,10 +1144,8 @@ pub fn render_pane(
         )));
     }
 
-    // Solo (fullscreen included) has no head: the titlebar carries the
-    // Thread (C2), and the body starts at the card edge. A Group's L1 Pane
-    // wears the one head. Subagent tabs keep a strip of their own either
-    // way.
+    // The head stays above the body in Solo and Group. Subagent tabs keep
+    // their own strip beneath it when present.
     let mut pane = shell.children(head(title, slot));
     if let Some(agents) = agents {
         pane = pane.child(tab_strip(key, agents, l1_tasks(&mut cx), head_column));
@@ -1178,8 +1175,7 @@ pub fn render_pane(
                     .min_h_0()
                     .min_w_0()
                     // Nothing paints under the head: the body clips at its
-                    // own top edge — the card edge in Solo, the head rule on
-                    // a board.
+                    // own top edge under the head rule.
                     .overflow_hidden()
                     .when(child_request, |body| body.key_context("Decision"))
                     .child(
@@ -2036,8 +2032,7 @@ pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState 
     }
 }
 
-/// A Thread's face away from its Pane — the Solo titlebar, which carries
-/// the Thread the headless Solo Pane does not (C2): its status dot and its
+/// A Thread's face away from its Pane — the Solo titlebar: its status dot and its
 /// state word, read exactly as the Pane reads them.
 pub(crate) fn thread_face(
     open: ThreadView<'_>,
@@ -2871,8 +2866,7 @@ pub(crate) fn is_default_branch(name: &str) -> bool {
     matches!(name, "main" | "master")
 }
 
-/// The subagent tabs' own strip, under the head (or at the card's top edge
-/// in Solo, which has no head): one `PANE_HEAD_H` row closed by the head's
+/// The subagent tabs' own strip, under the head: one `PANE_HEAD_H` row closed by the head's
 /// rule, the tabs taking the width and the plan's meter at the right. It
 /// exists only while tabs do.
 fn tab_strip(key: u64, agents: AnyElement, tasks: Option<AnyElement>, column: bool) -> Div {

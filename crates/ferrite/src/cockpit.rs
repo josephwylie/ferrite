@@ -8962,7 +8962,7 @@ impl CockpitView {
                     chord,
                 );
                 // The Thread the board shows alone — Solo, or fullscreen —
-                // rides the titlebar: its Pane has no head (C2).
+                // also rides the titlebar for context above the Pane.
                 let alone = fullscreen.or_else(|| {
                     let visible = self.visible_indices();
                     (visible.len() == 1).then(|| visible[0])
@@ -14327,6 +14327,26 @@ mod tests {
         view.read_with(cx, |view, _| assert!(view.context_checks.is_some()));
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_checks.is_none()));
+    }
+
+    #[gpui::test]
+    fn a_solo_thread_keeps_its_pane_header(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("solo-pane-header", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+        view.update(cx, |view, cx| {
+            view.facts
+                .set_branches(vec![(thread, Some(branch_status_with_checks()))]);
+            cx.notify();
+        });
+        tick(cx);
+
+        assert_eq!(thread.get(), 1);
+        assert!(cx.debug_bounds("pane-head-1").is_some());
+        assert!(cx.debug_bounds("pane-head-title-1").is_some());
+        assert!(cx.debug_bounds("pane-head-branch-1").is_some());
+        assert!(cx.debug_bounds("head-slot-1").is_some());
     }
 
     #[gpui::test]
