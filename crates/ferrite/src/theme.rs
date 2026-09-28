@@ -23,13 +23,13 @@
 //!    a provider's logomark wears its own colour (`PROVIDER_*`) wherever it
 //!    appears — nav rows, the model chip, picker rows — and nothing else.
 //!    **Hues can be counted:** at rest the only non-grey pixels are status
-//!    dots, provider marks, links and a failed word; any other hue means
-//!    something needs you. **Colour sits on the word**, not the row, ground
-//!    or ring: a state shows once per surface (one alpha edge, one dot, or
-//!    one word or lead phrase), and no state tints a ground (the ochre
-//!    wash is retired; rich text never uses `ACCENT_WASH`; inline code is
-//!    `INLINE_CODE_INK` = `TEXT`; a waiting Pane's edge is
-//!    `ATTENTION_EDGE` at alpha).
+//!    dots, provider marks, links, inline code and a failed word; any other
+//!    hue means something needs you. **Colour sits on the word**, not the
+//!    row, ground or ring: a state shows once per surface (one alpha edge,
+//!    one dot, or one word or lead phrase), and no state tints a ground (the
+//!    ochre wash is retired; rich text never uses `ACCENT_WASH`; inline code
+//!    is `INLINE_CODE_INK`, a peach that no state uses; a waiting Pane's edge
+//!    is `ATTENTION_EDGE` at alpha).
 //! 3. **Opaque faces, alpha edges.** Planes and hover/fill faces are opaque
 //!    `rgb()` values (a hover must never be tinted by what lies under it, see
 //!    `pointer.rs`). Hairlines, washes, rings over content and veils are alpha
@@ -1106,8 +1106,8 @@ pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
 /// `PROSE_HANG`, with markers `TEXT_MUTED` right-aligned in it. Code is a
 /// `RAISED` block whose language and `Copy` are a hover overlay, never a
 /// header row; **inline code is mono `FS_UI` on a neutral `INLINE_CODE_WASH`
-/// chip**, in `TEXT` at weight 400 whatever it sits in; links are `ACCENT`
-/// over an `ACCENT_EDGE` underline.
+/// chip**, in peach `INLINE_CODE_INK` at weight 400 whatever it sits in;
+/// links are `ACCENT` over an `ACCENT_EDGE` underline.
 ///
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
@@ -1118,10 +1118,11 @@ pub const PROSE_GAP: f32 = SPACE_3;
 pub const HEADING_SPACE_ABOVE: f32 = SPACE_2;
 /// 8px — below a heading, in place of `PROSE_GAP`.
 pub const HEADING_SPACE_BELOW: f32 = SPACE_2;
-/// Inline code's ink on its chip: body ink, never brighter than the prose
-/// around it (the Markdown path paints the chip; the plain-text fallback
-/// carries the ink alone).
-pub const INLINE_CODE_INK: u32 = TEXT;
+/// `#e0b49a` — inline code's ink on its chip: a muted peach, so a literal
+/// stands apart from the grey prose around it without borrowing the
+/// accent or `ATTENTION`'s ochre (8.4:1 on the chip; the Markdown path
+/// paints the chip, the plain-text fallback carries the ink alone).
+pub const INLINE_CODE_INK: u32 = 0xe0b49a;
 /// `#ffffff0f` (6%) — inline code's chip: a neutral ground that shows the
 /// copy boundary (`None`, `nav.rs`) without tinting the line.
 pub const INLINE_CODE_WASH: u32 = 0xffffff0f;

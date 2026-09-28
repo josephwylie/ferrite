@@ -2404,7 +2404,10 @@ mod style_tests {
             .expect("inline code sits on a chip");
         assert_eq!(wash.color, rgba(theme::INLINE_CODE_WASH).into());
         assert_eq!(wash.radius, px(theme::R_CHIP));
-        assert_eq!(style.inline_code().color, Some(solid(theme::TEXT)));
+        assert_eq!(
+            style.inline_code().color,
+            Some(solid(theme::INLINE_CODE_INK))
+        );
         assert_eq!(style.code_background(), solid(theme::RAISED));
     }
 
@@ -2468,9 +2471,10 @@ mod style_tests {
     }
 
     #[test]
-    fn inline_code_is_a_neutral_body_ink_chip_at_body_weight() {
+    fn inline_code_is_a_peach_ink_chip_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
-        assert_eq!(theme::INLINE_CODE_INK, theme::TEXT);
+        assert_eq!(theme::INLINE_CODE_INK, 0xe0b49a);
+        assert_ne!(theme::INLINE_CODE_INK, theme::ATTENTION);
         assert_eq!(theme::inline_code_size(ReadingSize::STANDARD), theme::FS_UI);
         // The chip centres in the prose line box at every reading size.
         for (size, chip, inset) in [
