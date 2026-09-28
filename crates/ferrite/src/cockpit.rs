@@ -3402,10 +3402,8 @@ impl CockpitView {
         }
     }
 
-    /// Install `provider`'s newest CLI now. Once it lands, the model menus
-    /// are asked again and every open Thread of that provider restarts on
-    /// its own conversation — at once when idle, otherwise when its turn
-    /// ends — so nothing keeps running the old release.
+    /// Install `provider`'s newest CLI now. Once it lands, ask for the model
+    /// menus again. Existing Sessions continue until they end naturally.
     fn update_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
         let Some(upgrade) = self.cli_updates.begin_update(provider) else {
             return;
@@ -3417,19 +3415,20 @@ impl CockpitView {
                 .spawn(async move { ferrite_core::providers::update::run(provider, &upgrade) })
                 .await;
             this.update(cx, |view, cx| {
-                if result.is_ok() {
-                    // Open Threads restart on the new CLI as each goes
-                    // idle, and the pickers ask for its menu now.
-                    view.cockpit.restart_sessions(provider);
-                    view.cockpit.rediscover_models();
-                }
-                view.cli_updates.updated(provider, result);
+                view.finish_cli_update(provider, result);
                 view.probe_cli_versions(cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn finish_cli_update(&mut self, provider: Provider, result: Result<String, String>) {
+        if result.is_ok() {
+            self.cockpit.rediscover_models();
+        }
+        self.cli_updates.updated(provider, result);
     }
 
     /// The updater's toasts. Like the bell's, they wait for render, the
@@ -3454,7 +3453,7 @@ impl CockpitView {
                 }
                 Toast::Updated { provider, version } => Notification::new()
                     .title(format!("{} updated to {version}", name(provider)))
-                    .message("Open Threads restart on it as each finishes its turn.")
+                    .message("Existing Sessions keep running; new Sessions use this version.")
                     .with_type(NotificationType::Success)
                     .autohide(true),
                 Toast::Failed { provider, detail } => Notification::new()
@@ -12596,6 +12595,32 @@ mod tests {
                 .unwrap();
         }
         (cockpit, fake)
+    }
+
+    #[gpui::test]
+    fn a_cli_update_leaves_an_idle_thread_and_its_last_used_log_alone(cx: &mut TestAppContext) {
+        let dir = scratch("cli-update-idle-thread");
+        let fake = Fake::default();
+        let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+        let thread = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+        let log = dir.join(thread.to_string()).join("log.jsonl");
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let before = std::fs::read(&log).unwrap();
+        assert_eq!(fake.spawned.borrow().len(), 1);
+
+        view.update(cx, |view, _| {
+            view.finish_cli_update(Provider::Claude, Ok("2.1.270".into()));
+            view.cockpit.pump();
+        });
+
+        assert_eq!(fake.spawned.borrow().len(), 1, "the Session stays live");
+        assert_eq!(
+            std::fs::read(&log).unwrap(),
+            before,
+            "last used is unchanged"
+        );
     }
 
     /// Tab on an empty Composer showing a prediction puts it in the line —

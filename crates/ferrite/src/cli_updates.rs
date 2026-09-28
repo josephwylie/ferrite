@@ -290,7 +290,7 @@ pub fn describe(
         }
         State::Updating { latest } => (format!("Installing {latest}…"), None),
         State::Updated { version } => (
-            format!("Updated to {version}. Open Threads restart on it as each finishes its turn"),
+            format!("Updated to {version}. Existing Sessions keep running; new Sessions use this version"),
             None,
         ),
         State::Failed { detail } => (format!("The update failed: {detail}"), None),
