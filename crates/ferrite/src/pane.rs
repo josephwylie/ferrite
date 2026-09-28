@@ -625,6 +625,8 @@ pub struct PaneFacts<'a> {
     /// only when the binding follows the agent (`workspace::follow`), and
     /// nothing here may look like a way to move it.
     pub branch: Option<SharedString>,
+    /// Each checkout when a Project spans several directories.
+    pub project_branches: Vec<(SharedString, SharedString)>,
     /// What the header's second line says about that checkout (#29): its
     /// drift from the upstream, its dirt, and its PR and CI when `gh` can
     /// answer. Cached on the same cadence as `branch`; `None` draws the
@@ -714,6 +716,9 @@ pub struct PaneWiring {
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
     pub title: Option<AnyElement>,
+    /// Solo's plan and checks controls now live with the Thread.
+    pub head_tasks: Option<AnyElement>,
+    pub head_ci: Option<AnyElement>,
     pub agents: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
     /// A question too big for this Pane's body: it answers in fullscreen
@@ -918,6 +923,7 @@ pub fn render_pane(
     let PaneFacts {
         thread,
         branch,
+        project_branches,
         checkout,
         composer_empty,
         composer_files,
@@ -950,6 +956,8 @@ pub fn render_pane(
         mode_picker,
         decide,
         title,
+        head_tasks,
+        head_ci,
         agents,
         activity_decisions,
         expand_question,
@@ -1048,7 +1056,10 @@ pub fn render_pane(
                 reduce_motion,
                 title,
                 branch: head_branch(checkout, branch.as_ref(), workspace),
+                project_branches: project_branches.clone(),
                 provider: provider_mark,
+                tasks: head_tasks,
+                ci: head_ci,
                 slot_detail: match slot {
                     Some(HeadSlot::Working(_)) => Some(wall.working.clone()),
                     Some(HeadSlot::Failed) => Some(wall.context.clone()),
@@ -1281,7 +1292,7 @@ fn l1_tasks(cx: &mut PaneCtx) -> Option<AnyElement> {
 }
 
 /// The plan's meter (`tasks_strip`) for a Thread working to one: beside the
-/// subagent tabs, and in the Solo titlebar.
+/// subagent tabs and the Solo Pane head.
 pub(crate) fn tasks_meter(thread: ThreadId, transcript: &Transcript) -> Option<AnyElement> {
     let todos = transcript.todos()?;
     Some(
@@ -1602,16 +1613,13 @@ pub struct DraftState<'a> {
     pub show_focus: bool,
 }
 
-/// What a draft is called until its first send names the Thread — in the
-/// titlebar (Solo) and in its Group head.
+/// What a draft is called until its first send names the Thread.
 pub const DRAFT_TITLE: &str = "New thread";
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
-/// the pre-prompt band. In Solo it has no head — the titlebar reads
-/// `ferrite / New thread` and holds the discard ×. On a board it wears the
-/// Group head (the glyph column reserved, no dot: nothing runs yet) with the
-/// × in its slot, then the grid's one Composer line; below L1 the body is
-/// the head and that line alone.
+/// the pre-prompt band. Its head reserves the glyph column with no dot and
+/// holds the discard × in its slot. Below L1 the body is the head and one
+/// Composer line.
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         attachments,
@@ -1642,22 +1650,23 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         SharedString::from(format!("draft-edge-{key}")),
     );
     let mut shell = record_card(pane_shell(hover.ink(edge)), view);
-    if show_focus {
-        shell = shell.child(group_head(GroupHead {
-            key,
-            name: view.name.clone(),
-            dot: None,
-            unread: false,
-            reduce_motion,
-            title: None,
-            branch: None,
-            provider: None,
-            slot: None,
-            slot_detail: None,
-            action: Some(discard),
-            expand_question: false,
-        }));
-    }
+    shell = shell.child(group_head(GroupHead {
+        key,
+        name: view.name.clone(),
+        dot: None,
+        unread: false,
+        reduce_motion,
+        title: None,
+        branch: None,
+        project_branches: Vec::new(),
+        provider: None,
+        tasks: None,
+        ci: None,
+        slot: None,
+        slot_detail: None,
+        action: Some(discard),
+        expand_question: false,
+    }));
     let composer = composer_region(
         view,
         None,
@@ -1707,8 +1716,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 }
 
 /// A Draft is disposable state, so its Pane advertises the same close action
-/// as cmd-w: an `ICON_BUTTON` × in `TEXT_MUTED` — the Group head's slot on a
-/// board, the titlebar's trailing slot in Solo. Its tooltip names the key
+/// as cmd-w: an `ICON_BUTTON` × in `TEXT_MUTED` in the Pane head's slot.
+/// Its tooltip names the key
 /// only where one is bound. Live Threads deliberately keep keyboard and
 /// context-menu closure instead of adding this control to every Pane.
 pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
@@ -2022,7 +2031,7 @@ fn state_word(
 /// word beside it so the two can never disagree. A turn that ended in an
 /// error reads `failed`, so its dot is `BLOCKED` like a closed Session's;
 /// a `failing` word is always a `BLOCKED` dot. Every surface that draws a
-/// Thread's dot — the nav, the rail, the Group head, the titlebar — reads
+/// Thread's dot — the nav, the rail, the Pane head — reads
 /// it through here.
 pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState {
     match word {
@@ -2032,8 +2041,8 @@ pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState 
     }
 }
 
-/// A Thread's face away from its Pane — the Solo titlebar: its status dot and its
-/// state word, read exactly as the Pane reads them.
+/// A Thread's face in navigation: its status dot and state word, read
+/// exactly as the Pane reads them.
 pub(crate) fn thread_face(
     open: ThreadView<'_>,
     card: Option<&WallCard>,
@@ -2680,7 +2689,10 @@ pub(crate) struct GroupHead {
     /// name.
     pub title: Option<AnyElement>,
     pub branch: Option<SharedString>,
+    pub project_branches: Vec<(SharedString, SharedString)>,
     pub provider: Option<Provider>,
+    pub tasks: Option<AnyElement>,
+    pub ci: Option<AnyElement>,
     pub slot: Option<HeadSlot>,
     /// What the slot's word stands for, one hover away: a working cell's
     /// caption, a failed one's reason.
@@ -2701,12 +2713,16 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         reduce_motion,
         title,
         branch,
+        project_branches,
         provider,
+        tasks,
+        ci,
         slot,
         slot_detail,
         action,
         expand_question,
     } = head;
+    let branch = branch.filter(|_| project_branches.is_empty());
     let floor = title_floor(&name);
     let mark = match dot {
         Some(dot) if unread && dot.shape == crate::cockpit::DotShape::Solid => {
@@ -2785,7 +2801,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                             None => div().min_w_0().truncate().child(name).into_any_element(),
                         }),
                 )
-                .children(branch.map(|branch| {
+                .children((!project_branches.is_empty() || branch.is_some()).then(|| {
                     div()
                         .debug_selector(move || format!("pane-head-branch-{key}"))
                         .flex()
@@ -2799,7 +2815,17 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                         .line_height(px(theme::LH_META))
                         .text_color(rgb(TEXT_MUTED))
                         .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
-                        .child(div().min_w_0().truncate().child(branch))
+                        .children(project_branches.into_iter().enumerate().map(
+                            |(index, (directory, branch))| {
+                                div()
+                                    .debug_selector(move || format!("project-branch-{index}"))
+                                    .flex()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(format!("{directory}:{branch}"))
+                            },
+                        ))
+                        .children(branch.map(|branch| div().min_w_0().truncate().child(branch)))
                 }))
                 .children(provider.map(|provider| {
                     let (glyph, ink) = match provider {
@@ -2813,6 +2839,8 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                         .child(icon(glyph, theme::PROVIDER_MARK_SM, ink))
                 })),
         )
+        .children(tasks)
+        .children(ci)
         .children(slot)
         .children(action)
 }
@@ -2820,7 +2848,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
 /// `needs you` as a door: a press runs the ⌘D jump (`NextDecision`) from
 /// wherever the keyboard is — the press does not land on a Pane first — and
 /// the tooltip names that key: `Next needs you ⌘D`. The Group head's
-/// slot and the Solo titlebar share it.
+/// slot and the window titlebar's global waiting count share it.
 pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div) -> AnyElement {
     let door = div()
         .id(gpui::ElementId::Name(id))

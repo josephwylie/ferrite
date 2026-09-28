@@ -2,11 +2,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Solo has no head (C2): the titlebar carries the Thread on one line — the
-/// checkout, the tasks meter and the PR/CI chip ride it left to right, inside
-/// the band, and nothing spills past the window.
+/// Solo keeps its Thread details in the Pane head, below the window titlebar.
 #[gpui::test]
-fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
+fn the_solo_thread_details_ride_the_pane_header(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -32,19 +30,17 @@ fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
-    let band = cx
-        .debug_bounds("titlebar-thread")
-        .expect("the titlebar Thread");
-    assert!(band.bottom() <= px(crate::theme::WIN_CHROME_H));
-    let branch = cx.debug_bounds("project-branch-0").expect("the checkout");
+    assert!(cx.debug_bounds("titlebar-thread").is_none());
+    let band = cx.debug_bounds("pane-head-1").expect("the Pane head");
+    assert!(band.top() >= px(crate::theme::WIN_CHROME_H));
+    let branch = cx.debug_bounds("pane-head-branch-1").expect("the checkout");
     let meter = cx.debug_bounds("tasks-meter-1").expect("the tasks meter");
     let ci = cx.debug_bounds("ci-mark-1").expect("the PR/CI chip");
     let window = cx.update(|window, _| window.viewport_size().width);
     for (name, part) in [("checkout", branch), ("meter", meter), ("ci", ci)] {
         assert!(
-            part.top() >= px(0.) && part.bottom() <= px(crate::theme::WIN_CHROME_H),
-            "the {name} rides the titlebar row: {part:?} / {band:?}"
+            part.top() >= band.top() && part.bottom() <= band.bottom(),
+            "the {name} rides the Pane head: {part:?} / {band:?}"
         );
         assert!(
             part.right() <= window,
@@ -818,12 +814,10 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
     });
 }
 
-/// Fix 3: the Solo titlebar says `needs you` once. The Thread's own state
-/// word (`needs you · question`, the ⌘D door) stands, and the band's
-/// `· N need you` count does not repeat it; on a board, where no Thread
-/// rides the band, the count is still there.
+/// Solo keeps the waiting Thread's status in its Pane and the global count
+/// in the window titlebar.
 #[gpui::test]
-fn the_solo_titlebar_says_needs_you_once(cx: &mut TestAppContext) {
+fn the_solo_pane_and_titlebar_show_their_waiting_state(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("needs-you-once", 1);
     bind_production_keys(cx);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -831,12 +825,12 @@ fn the_solo_titlebar_says_needs_you_once(cx: &mut TestAppContext) {
     fake.streams.borrow()[0].send(question("once")).unwrap();
     tick(cx);
     assert!(
-        cx.debug_bounds("titlebar-needs-you").is_some(),
-        "the Thread's state word says needs you"
+        cx.debug_bounds("head-slot-1").is_some(),
+        "the Pane's state word says needs you"
     );
     assert!(
-        cx.debug_bounds("titlebar-need-you").is_none(),
-        "and the count does not say it again"
+        cx.debug_bounds("titlebar-need-you").is_some(),
+        "the titlebar keeps the global waiting count"
     );
 }
 

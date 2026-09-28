@@ -121,7 +121,7 @@ impl ThreadStatus {
 }
 
 /// **The one status truth.** The nav row, the Pane head, the L2 cell, the
-/// wall cell (and, later, the rail and the titlebar) all read a Thread's
+/// wall cell (and, later, the rail) all read a Thread's
 /// face from here, so no two surfaces can disagree about a Thread.
 ///
 /// Unread is its own axis, never a state: a quiet Thread that finished
@@ -2260,77 +2260,6 @@ impl CockpitView {
     /// `index` is kept so call sites read as the Pane they ask about.
     fn level_of(&self, _index: usize, window: &Window) -> Level {
         self.board_level(window)
-    }
-
-    /// The titlebar's Thread for the Pane the board shows alone (C2): its
-    /// dot, title, branch, PR/CI and state word — or, for a draft, `New
-    /// thread` with its discard × in the titlebar's trailing slot.
-    fn titlebar_crumb(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> (Option<crate::titlebar::ThreadCrumb>, Option<AnyElement>) {
-        let pane = &self.panes[index];
-        let reduce_motion = cx.reduce_motion();
-        let Some(thread) = pane.thread() else {
-            let discard = pane
-                .identity
-                .draft()
-                .map(|draft| self.draft_discard(draft, cx));
-            return (
-                Some(crate::titlebar::ThreadCrumb {
-                    dot: None,
-                    unread: false,
-                    reduce_motion,
-                    title: pane.name.clone(),
-                    branches: Vec::new(),
-                    tasks: None,
-                    ci: None,
-                    state: None,
-                }),
-                discard,
-            );
-        };
-        let facts = self.facts.get(thread);
-        let unread = index != self.focused() && self.cockpit.notifications().attention(thread);
-        let (dot, state) = match self.cockpit.thread(thread) {
-            Some(open) => {
-                let (dot, state) = pane::thread_face(open, facts.map(|facts| &facts.wall), unread);
-                (Some(dot), state)
-            }
-            None => (
-                Some(thread_status(pane::WallState::Parked, false)),
-                Some(pane::HeadSlot::Parked),
-            ),
-        };
-        let branches = match facts {
-            Some(facts) if facts.project_branches.len() > 1 => facts
-                .project_branches
-                .iter()
-                .map(|(directory, branch)| (Some(directory.clone()), branch.clone()))
-                .collect(),
-            Some(facts) => facts
-                .off_default_branch()
-                .map(|branch| vec![(None, branch)])
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
-        (
-            Some(crate::titlebar::ThreadCrumb {
-                dot,
-                unread,
-                reduce_motion,
-                title: pane.name.clone(),
-                branches,
-                tasks: self
-                    .cockpit
-                    .thread(thread)
-                    .and_then(|open| pane::tasks_meter(thread, open.transcript())),
-                ci: self.ci_mark(index, cx),
-                state,
-            }),
-            None,
-        )
     }
 
     /// More than one Pane is on the board and none fills it: every Composer
@@ -8961,29 +8890,17 @@ impl CockpitView {
                     add_tooltip,
                     chord,
                 );
-                // The Thread the board shows alone — Solo, or fullscreen —
-                // also rides the titlebar for context above the Pane.
-                let alone = fullscreen.or_else(|| {
-                    let visible = self.visible_indices();
-                    (visible.len() == 1).then(|| visible[0])
-                });
-                let (thread, trailing) = match alone {
-                    Some(index) => self.titlebar_crumb(index, cx),
-                    None => (None, None),
-                };
                 root.child(crate::titlebar::strip(
                     self.nav_width(),
                     crate::titlebar::Title {
                         project: project_title,
                         group: group_title.clone(),
-                        thread,
                     },
                     crate::titlebar::Board {
                         count: group_title.is_some().then(|| self.visible_indices().len()),
                         fullscreen: fullscreen.is_some(),
                         need_you: self.cockpit.needs_you().len(),
                     },
-                    trailing,
                     add_thread,
                     !self.overlay_open(),
                     self.maximized,
@@ -9175,6 +9092,10 @@ impl CockpitView {
             thread: open,
             // The cached checkout label (#29) — display-only.
             branch: cached.and_then(|facts| facts.branch.clone()),
+            project_branches: cached
+                .filter(|facts| facts.project_branches.len() > 1)
+                .map(|facts| facts.project_branches.clone())
+                .unwrap_or_default(),
             checkout: cached.and_then(|facts| facts.status.as_ref()),
             composer_empty: pane.composer.read(cx).is_empty(),
             composer_files: pane.composer.read(cx).file_count(),
@@ -9254,6 +9175,12 @@ impl CockpitView {
             // grouped Pane, a double-click renames it — an L2 cell with no
             // handle could not be rearranged at all.
             title: Some(self.activity_title(index, cx)),
+            head_tasks: (!self.grid_board())
+                .then(|| open.and_then(|open| pane::tasks_meter(thread, open.transcript())))
+                .flatten(),
+            head_ci: (!self.grid_board())
+                .then(|| self.ci_mark(index, cx))
+                .flatten(),
             agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
             activity_decisions,
             expand_question,
