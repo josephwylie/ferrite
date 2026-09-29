@@ -569,6 +569,18 @@ pub fn icon_button(
     tooltip: &'static str,
     cx: &App,
 ) -> Button {
+    lit_icon_button(id, glyph, tooltip, false, cx)
+}
+
+/// `icon_button` whose glyph rests at `TEXT` rather than `TEXT_MUTED` while
+/// `lit` — a control whose state must read even with nothing under the pointer.
+pub fn lit_icon_button(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    tooltip: &'static str,
+    lit: bool,
+    cx: &App,
+) -> Button {
     faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
@@ -582,7 +594,11 @@ pub fn icon_button(
     .tip(tooltip)
     .accessibility_label(tooltip)
     .child(
-        icons::icon(glyph, theme::ICON_BUTTON_GLYPH, theme::TEXT_MUTED)
+        icons::icon(
+            glyph,
+            theme::ICON_BUTTON_GLYPH,
+            if lit { theme::TEXT } else { theme::TEXT_MUTED },
+        )
             .group_hover(ICON_BUTTON_GROUP, |style| {
                 style.text_color(rgb(theme::TEXT))
             }),

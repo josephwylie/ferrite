@@ -11451,6 +11451,7 @@ impl CockpitView {
             nav::order_button(
                 state.thread_list_order == ThreadListOrder::ByProject,
                 state.order_open,
+                cx,
             )
             .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();

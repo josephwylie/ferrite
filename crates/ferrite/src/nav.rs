@@ -86,7 +86,6 @@ const TRUNCATE_SLOP: f32 = SPACE_1;
 const COLLAPSE_GROUP: &str = "nav-collapse";
 const RAIL_FILTER_GROUP: &str = "nav-rail-filter";
 const FILTER_GROUP: &str = "nav-filter";
-const ORDER_GROUP: &str = "nav-order";
 const PROJECT_SECTION_GROUP: &str = "nav-project-section";
 const PROJECT_ADD_GROUP: &str = "nav-project-add";
 const PARKED_GROUP: &str = "nav-parked";
@@ -537,24 +536,17 @@ pub fn rail_add_thread_button(cx: &App) -> Button {
 
 /// Easy-access ordering control beside New Thread. Its selected state is
 /// visible even while the menu is closed.
-pub fn order_button(active: bool, open: bool) -> Button {
-    components::button("thread-list-order")
-        .tab_stop(true)
-        .debug_selector(|| "thread-list-order".into())
-        .group(ORDER_GROUP)
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .when(open, |button| button.bg(rgb(FILL)))
-        .tooltip("Thread order")
-        .child(
-            icon(
-                icons::SORT,
-                ICON_BUTTON_GLYPH,
-                if active || open { TEXT } else { TEXT_MUTED },
-            )
-            .group_hover(ORDER_GROUP, |style| style.text_color(rgb(TEXT))),
-        )
+pub fn order_button(active: bool, open: bool, cx: &App) -> Button {
+    components::lit_icon_button(
+        "thread-list-order",
+        icons::SORT,
+        "Thread order",
+        active || open,
+        cx,
+    )
+    .tab_stop(true)
+    .debug_selector(|| "thread-list-order".into())
+    .when(open, |button| button.bg(rgb(FILL)))
 }
 
 /// The order menu: a floating surface anchored under its button at the
@@ -1890,15 +1882,18 @@ mod tests {
         assert_eq!(cursor(group_row(&group())), Some(CursorStyle::OpenHand));
     }
 
-    #[test]
-    fn the_order_button_is_clear_at_rest_and_filled_while_open() {
-        let background = |mut button: Button| button.style().background.clone();
-        assert_eq!(background(order_button(false, false)), None);
-        assert_eq!(background(order_button(true, false)), None);
-        assert_eq!(
-            background(order_button(false, true)),
-            Some(rgb(FILL).into())
-        );
+    #[gpui::test]
+    fn the_order_button_is_clear_at_rest_and_filled_while_open(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init_components(cx);
+            let background = |mut button: Button| button.style().background.clone();
+            assert_eq!(background(order_button(false, false, cx)), None);
+            assert_eq!(background(order_button(true, false, cx)), None);
+            assert_eq!(
+                background(order_button(false, true, cx)),
+                Some(rgb(FILL).into())
+            );
+        });
     }
 
     /// A row whose Project or checkout has not resolved keeps its full
