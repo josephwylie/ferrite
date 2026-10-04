@@ -39,8 +39,8 @@ pub fn veil() -> Div {
 }
 
 /// A modal sheet, `width` × `height` at most `MODAL_VIEWPORT_FRACTION` of
-/// the window: `RAISED`, the strong hairline edge, `R_PANE`, the float
-/// shadow, UI type. Its definite height is what lets the body scroll.
+/// the window: `RAISED`, the strong hairline edge, `R_PANE`, the sheet
+/// elevation, UI type. Its definite height is what lets the body scroll.
 pub fn sheet(width: f32, height: f32) -> Div {
     sheet_frame(width)
         .h(px(height))
@@ -64,7 +64,7 @@ fn sheet_frame(width: f32) -> Div {
         .bg(rgb(RAISED))
         .border_1()
         .border_color(rgba(HAIRLINE_STRONG))
-        .shadow(components::float_shadow())
+        .shadow(components::elevation(components::Elevation::Sheet))
 }
 
 /// The Settings sheet: `sheet` on `PANE`, one step under its `RAISED`
@@ -481,6 +481,7 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
             .pr(px(SPACE_1))
             .rounded(px(R_CONTROL))
             .bg(rgb(RAISED))
+            .shadow(components::well_shade())
             .border_1()
             .border_color(rgba(HAIRLINE))
             .child(icon(icons::SEARCH, SETTINGS_SEARCH_ICON, TEXT_MUTED).flex_shrink_0())
@@ -522,6 +523,11 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
         cx,
     )
     .selected(selected)
+    // The carried row is lit like the nav's (rule 4); its face is a kit
+    // button's, so light only.
+    .when(selected, |row| {
+        row.shadow(components::elevation(components::Elevation::Control))
+    })
     .debug_selector(move || key.selector().into())
     .accessibility_label(key.title())
     .w_full()
@@ -579,6 +585,7 @@ fn group_card(
                 .flex()
                 .flex_col()
                 .bg(rgb(RAISED))
+                .shadow(components::elevation(components::Elevation::Raised))
                 .rounded(px(R_BLOCK))
                 .border_1()
                 .border_color(rgba(HAIRLINE))
@@ -681,6 +688,7 @@ pub fn choices<T: Clone + 'static>(
             .p(px(FORM_CHOICE_PAD))
             .rounded(px(R_CONTROL))
             .bg(rgb(RAISED_2))
+            .shadow(components::well_shade())
             .children(
                 options
                     .iter()
@@ -730,6 +738,7 @@ pub fn chooser<T: Clone + 'static>(
             cx,
         )
         .tab_stop(true)
+        .shadow(components::elevation(components::Elevation::Control))
         .debug_selector(move || id.into())
         .accessibility_label(format!("{title}: {selected}"))
         .h(px(SETTINGS_CONTROL_H))
@@ -865,12 +874,16 @@ pub fn toggle(
                             .border(px(SWITCH_INSET))
                             .border_color(rgba(TRANSPARENT))
                             .bg(rgb(switch_track(checked)))
+                            .shadow(components::well_shade())
                             .child(
                                 SwitchThumb::new(checked)
                                     .rounded_full()
                                     .size(px(SWITCH_THUMB))
                                     .left(thumb_x)
-                                    .bg(rgb(TEXT_STRONG)),
+                                    .bg(rgb(TEXT_STRONG))
+                                    // The thumb is opaque: it rests on
+                                    // its track and casts a contact line.
+                                    .shadow(components::contact_line()),
                             ),
                     ),
             )
@@ -933,6 +946,10 @@ pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: 
         .rounded(px(R_CHIP))
         .border_1()
         .border_color(rgba(edge))
+        // The chosen chip stands proud of its tray (rule 4).
+        .when(selected, |chip| {
+            chip.shadow(components::elevation(components::Elevation::Control))
+        })
         .child(components::form_label(label, ink))
 }
 
@@ -967,6 +984,7 @@ pub fn stepper(
             .p(px(FORM_CHOICE_PAD))
             .rounded(px(R_CONTROL))
             .bg(rgb(RAISED_2))
+            .shadow(components::well_shade())
             .child(button(0, "\u{2212}", -1, can_down))
             .child(components::tabular(
                 div()
@@ -1170,7 +1188,10 @@ mod tests {
         let style = drawn.style();
         assert_eq!(style.background, Some(rgb(RAISED).into()));
         assert_eq!(style.border_color, Some(rgba(HAIRLINE_STRONG).into()));
-        assert_eq!(style.box_shadow, Some(components::float_shadow()));
+        assert_eq!(
+            style.box_shadow,
+            Some(components::elevation(components::Elevation::Sheet))
+        );
         assert_eq!(
             style.corner_radii.top_left,
             Some(px(R_PANE).into()),
@@ -1187,7 +1208,10 @@ mod tests {
         let style = drawn.style();
         assert_eq!(style.background, Some(rgb(PANE).into()));
         assert_eq!(style.border_color, Some(rgba(HAIRLINE_STRONG).into()));
-        assert_eq!(style.box_shadow, Some(components::float_shadow()));
+        assert_eq!(
+            style.box_shadow,
+            Some(components::elevation(components::Elevation::Sheet))
+        );
         assert_eq!(style.corner_radii.top_left, Some(px(R_PANE).into()));
         const _: () = assert!(PANE < RAISED, "the cards are raised off the sheet");
         assert_eq!(

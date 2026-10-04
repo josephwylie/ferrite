@@ -1720,7 +1720,13 @@ fn row_frame(id: (&'static str, usize), height: f32, selected: bool) -> Stateful
     // sweeps these rows constantly, so a snap would flicker the column.
     let key = SharedString::from(format!("{}-{}", id.0, id.1));
     let frame = if selected {
-        frame.hover_carried(key).press_row()
+        // The tree's one fill is a face on the field: lit (rule 4).
+        frame
+            .shadow(crate::components::elevation(
+                crate::components::Elevation::Control,
+            ))
+            .hover_carried(key)
+            .press_row()
     } else {
         frame.hover_row(key).press_row()
     };

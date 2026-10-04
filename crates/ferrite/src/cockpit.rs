@@ -656,7 +656,9 @@ impl Render for PaneGhost {
             .border_1()
             .border_color(rgb(theme::FOCUS_RING))
             .bg(rgb(theme::PANE))
-            .shadow(crate::components::float_shadow())
+            .shadow(crate::components::elevation(
+                crate::components::Elevation::Float,
+            ))
             .child(head)
             .child(body);
         // Lifted off the board, the miniature fades up to its see-through
@@ -3089,6 +3091,7 @@ impl CockpitView {
                                 .bg(rgb(crate::theme::RAISED))
                                 .border_1()
                                 .border_color(rgba(crate::theme::HAIRLINE_STRONG))
+                                .shadow(crate::components::float_shadow())
                                 .font_family(crate::theme::FONT_UI)
                                 .text_size(px(crate::theme::FS_SM))
                                 .line_height(px(crate::theme::LH_META))
@@ -4520,6 +4523,12 @@ impl CockpitView {
                 .size(px(crate::theme::SEND_BUTTON))
                 .p_0()
                 .rounded(px(crate::theme::COMPOSER_CHIP_R))
+                // A live control's face is lit (rule 4); idle lies flat.
+                .when(live, |button| {
+                    button.shadow(crate::components::elevation(
+                        crate::components::Elevation::Control,
+                    ))
+                })
                 .disabled(!live)
                 .accessibility_label(spoken)
                 .when(face.blends, |button| {
@@ -9266,7 +9275,8 @@ impl CockpitView {
     /// modifiers (`⌘N`, `⌘⇧N`, `⌘O`). No button — the nav's `+` is the
     /// pointer's way in. The keys stand in one column and their verbs in
     /// another, so every verb starts on the same edge however long its keys;
-    /// the mark sits on the keycap column 16px above them (rule 2.11.4).
+    /// the mark, embossed on the field, is centred 24px above them
+    /// (rule 2.11.4).
     fn empty_board(&self) -> Div {
         use crate::theme::*;
         let hints = [
@@ -9300,14 +9310,10 @@ impl CockpitView {
                 div()
                     .flex()
                     .flex_col()
-                    .items_start()
+                    .items_center()
                     .gap(px(EMPTY_BOARD_MARK_GAP))
                     .child(div().debug_selector(|| "empty-board-mark".into()).child(
-                        crate::icons::icon(
-                            crate::icons::FERRITE_MONO,
-                            EMPTY_BOARD_MARK,
-                            TEXT_FAINT,
-                        ),
+                        crate::components::embossed_mark(EMPTY_BOARD_MARK, EMBOSS_ON_GROUND),
                     ))
                     .child(
                         div()
@@ -11490,6 +11496,17 @@ impl CockpitView {
                         .flex_1()
                         .min_h_0()
                         .child(self.nav_tree(&state, cx))
+                        // Rows meet the head and the Parked fold in a fade,
+                        // each no deeper than the tree's own inset there, so
+                        // a tree at rest is untouched.
+                        .child(
+                            crate::components::scroll_fade(crate::theme::NAV, true)
+                                .h(px(crate::theme::NAV_TREE_PAD)),
+                        )
+                        .child(
+                            crate::components::scroll_fade(crate::theme::NAV, false)
+                                .h(px(crate::theme::NAV_TREE_PAD_B)),
+                        )
                         .child(nav::scrollbar(&self.nav_scroll)),
                 )
                 .children(self.nav_parked(&state, cx))

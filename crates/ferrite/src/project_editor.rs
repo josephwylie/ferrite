@@ -87,6 +87,9 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
                 .flex_shrink_0()
                 .px(px(FORM_FIELD_PAD_X))
                 .rounded(px(R_CONTROL))
+                // A field is a well: shaded at its lip, the focus ring
+                // replacing the shade while it holds the caret.
+                .shadow(components::well_shade())
                 .map(|field| components::focused(field, focused))
                 .when(focused, |field| {
                     field.debug_selector(|| "project-name-focused".into())

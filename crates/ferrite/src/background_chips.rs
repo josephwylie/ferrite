@@ -104,6 +104,9 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
         .px(px(theme::CHIP_PAD_X))
         .rounded(px(theme::R_CHIP))
         .bg(rgb(theme::FILL))
+        .shadow(crate::components::elevation(
+            crate::components::Elevation::Control,
+        ))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))

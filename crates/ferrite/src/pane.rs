@@ -997,7 +997,7 @@ pub fn render_pane(
         SharedString::from(format!("pane-edge-{key}")),
     );
     let shell = record_card(
-        pane_shell(hover.ink(edge)).map(|shell| match edge {
+        pane_shell(hover.ink(edge), framed).map(|shell| match edge {
             PaneEdge::Focused => shell.debug_selector(move || format!("pane-focus-edge-{key}")),
             PaneEdge::Attention => shell.debug_selector(move || format!("pane-waiting-edge-{key}")),
             PaneEdge::AnswerTarget => {
@@ -1187,6 +1187,9 @@ pub fn render_pane(
                         retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
                     )
                     .children(question_measurement)
+                    // Rows meet the body's fixed edges in a fade, not a cut.
+                    .child(components::scroll_fade(PANE, true))
+                    .child(components::scroll_fade(PANE, false))
                     .when_some(docked_requests, |body, requests| {
                         body.child(deferred(requests_overlay(requests)))
                     }),
@@ -1253,6 +1256,8 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
                     .px(px(theme::PANE_PAD_X))
                     .pb(px(theme::GAP_ROW))
                     .bg(rgb(PANE))
+                    // The rows above dissolve into the line's band.
+                    .child(components::fade_band(PANE, false).top(px(-theme::SCROLL_FADE_H)))
                     .child(components::reading_column(
                         div().px(px(theme::BOX_INSET_X)).child(line),
                     )),
@@ -1414,7 +1419,15 @@ fn record_card(shell: Div, view: &PaneView) -> Div {
     })
 }
 
-fn pane_shell(edge: gpui::Hsla) -> Div {
+/// Lit from above (rule 4): a Pane rests on the field, and the board's
+/// focused Pane is lifted off it, so the keyboard's place reads as height
+/// as well as the ring's ink.
+fn pane_shell(edge: gpui::Hsla, lifted: bool) -> Div {
+    let rung = if lifted {
+        components::Elevation::Lifted
+    } else {
+        components::Elevation::Pane
+    };
     div()
         .relative()
         .flex()
@@ -1423,6 +1436,7 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
         .min_h_0()
         .min_w_0()
         .bg(rgb(PANE))
+        .shadow(components::elevation(rung))
         .border_1()
         .border_color(edge)
         .rounded(px(theme::R_PANE))
@@ -1647,7 +1661,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         show_focus,
         SharedString::from(format!("draft-edge-{key}")),
     );
-    let mut shell = record_card(pane_shell(hover.ink(edge)), view);
+    let mut shell = record_card(pane_shell(hover.ink(edge), framed), view);
     if show_focus {
         shell = shell.child(group_head(GroupHead {
             key,
@@ -1695,18 +1709,41 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             joined: false,
         },
     );
+    // The body says nothing — the Composer's placeholder says what to do,
+    // once (rule 2.11.4) — but it is not a void. A lone draft at L1 is a
+    // launch: the mark, embossed, over the Composer, the pair centred in
+    // the Pane, where the eye already is. The first send makes it a
+    // Thread, whose Composer sits at the foot. On a board the line keeps
+    // the grid's foot, and the mark centres in the body above it.
+    let launch = !show_focus && level == Level::Transcript;
+    let mark = (level == Level::Transcript)
+        .then(|| components::embossed_mark(theme::DRAFT_MARK, theme::EMBOSS_ON_PANE));
+    let body = div()
+        .debug_selector(|| "draft-empty".into())
+        .flex_1()
+        .min_h_0()
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .items_center()
+        .map(|body| {
+            if launch {
+                body.justify_end().pb(px(theme::DRAFT_MARK_GAP))
+            } else {
+                body.justify_center()
+            }
+        })
+        .children(mark);
     pane_frame(
         shell
-            // The body is empty space: the Composer's placeholder says what
-            // to do, once (rule 2.11.4).
-            .child(
-                div()
-                    .debug_selector(|| "draft-empty".into())
-                    .flex_1()
-                    .min_h_0(),
-            )
+            .child(body)
             .children(drop_target.then(crate::prompt_drop::sheet))
-            .when(level != Level::Wall, |pane| pane.child(composer)),
+            .when(level != Level::Wall, |pane| pane.child(composer))
+            // The launch's lower half: a touch taller than the upper, so
+            // the pair sits just above the Pane's middle.
+            .when(launch, |pane| {
+                pane.child(div().flex_1().min_h_0().pb(px(theme::DRAFT_LAUNCH_LIFT)))
+            }),
         framed,
         false,
         hover,
@@ -2715,6 +2752,15 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         expand_question,
     } = head;
     let floor = title_floor(&name);
+    // The provider mark never yields (it goes whole, like the nav's), and
+    // an emptied branch keeps its margin: both count in the cluster's
+    // floor, so a narrow head clips neither into a sliver.
+    let held = provider.map_or(0., |_| theme::HEAD_GAP + theme::PROVIDER_MARK_SM)
+        + if branch.is_some() {
+            theme::HEAD_GAP
+        } else {
+            0.
+        };
     let mark = match dot {
         Some(dot) if unread && dot.shape == crate::cockpit::DotShape::Solid => {
             components::breathing_dot(dot.ink, reduce_motion)
@@ -2766,7 +2812,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
             div()
                 .flex()
                 .flex_1()
-                .min_w(px(theme::GUTTER_W + floor))
+                .min_w(px(theme::GUTTER_W + floor + held))
                 .overflow_hidden()
                 .items_center()
                 .child(components::gutter(
@@ -3681,7 +3727,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     let block = if live && joined {
         // The block's own top edge is the seam under the Decision: it stays
         // in layout, so a Decision arriving never moves the line.
-        composer_box(composer_edge(drop_target)).rounded_t(px(0.))
+        composer_box(composer_edge(drop_target))
+            .rounded_t(px(0.))
+            // The seam under the Decision is not a top edge: the joined
+            // block's light is the Decision's own, so the seam casts only.
+            .shadow(
+                components::elevation(components::Elevation::Raised)
+                    .into_iter()
+                    .filter(|layer| !layer.inset)
+                    .collect(),
+            )
     } else if live {
         composer_box(composer_edge(drop_target))
     } else {
@@ -4020,10 +4075,12 @@ fn composer_edge(drop_target: bool) -> u32 {
 }
 
 /// The Composer's box: the raised block with its always-in-layout edge,
-/// cornered `COMPOSER_R` — concentric with the pill controls it holds
+/// resting on the Pane (`Elevation::Raised`), cornered `COMPOSER_R` — concentric with the pill controls it holds
 /// (§ theme "Concentric radii"). The Subagent footer draws the same box.
 pub fn composer_box(edge: u32) -> Div {
-    components::raised_edged(edge).rounded(px(theme::COMPOSER_R))
+    components::raised_edged(edge)
+        .rounded(px(theme::COMPOSER_R))
+        .shadow(components::elevation(components::Elevation::Raised))
 }
 
 /// A Composer control on the hint row (§ theme "Composer controls"): the

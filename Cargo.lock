@@ -1792,6 +1792,7 @@ dependencies = [
  "gpui-base",
  "gpui-kit",
  "gpui-pre-platform",
+ "gpui-pre-reqwest-client",
  "percent-encoding",
  "serde_json",
  "url",

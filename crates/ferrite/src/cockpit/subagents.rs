@@ -345,6 +345,10 @@ fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) ->
             // by a box laid exactly over it.
             tab.relative()
                 .hover_carried(key.clone())
+                // The pill is a face on the strip: lit (rule 4).
+                .shadow(crate::components::elevation(
+                    crate::components::Elevation::Control,
+                ))
                 .text_color(rgb(theme::TEXT_STRONG))
                 .child(
                     div()

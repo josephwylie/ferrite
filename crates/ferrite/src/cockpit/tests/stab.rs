@@ -815,9 +815,9 @@ fn the_image_preview_dims_the_whole_window(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(image.parent().unwrap());
 }
 
-/// A draft's body is empty space, and neither it nor an empty Thread
-/// centres a second copy of the guidance: the Composer's placeholder says
-/// how to start, once (rule 2.11.4).
+/// A draft's body holds only the embossed mark, and neither it nor an
+/// empty Thread centres a second copy of the guidance: the Composer's
+/// placeholder says how to start, once (rule 2.11.4).
 #[gpui::test]
 fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("draft-empty", 1);

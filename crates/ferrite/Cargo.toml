@@ -24,6 +24,9 @@ serde_json = { workspace = true }
 gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
 url = "2"
 percent-encoding = "2"
+# GPUI's default HTTP client refuses every request, so Markdown images with
+# http(s) URLs never load. GPUI Kit already builds this client; Ferrite wires it.
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.3" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

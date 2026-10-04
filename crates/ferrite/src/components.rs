@@ -151,6 +151,10 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
     )
     .tab_stop(true)
     .text_color(rgb(primary_ink(disabled)))
+    // An enabled primary is a control's face, lit; disabled lies flat.
+    .when(!disabled, |button| {
+        button.shadow(elevation(Elevation::Control))
+    })
     .focus_visible(|style| focus_outline(style, theme::TEXT_STRONG))
     .disabled(disabled)
     .when(disabled, |button| button.cursor_default())
@@ -221,8 +225,9 @@ pub fn tabular<E: Styled>(mut element: E) -> E {
 
 // ------------------------------------------------- planes and elevation
 
-/// An in-flow raised block (Composer, code, cards): `RAISED`, `R_BLOCK`, no
-/// edge and no shadow.
+/// An in-flow raised block (code, cards): `RAISED`, `R_BLOCK`, no edge and
+/// no shadow — content, not an object. An object that rests on the Pane
+/// (the Composer, a Decision block) adds `Elevation::Raised`.
 pub fn raised() -> Div {
     div().bg(rgb(theme::RAISED)).rounded(px(theme::R_BLOCK))
 }
@@ -231,6 +236,175 @@ pub fn raised() -> Div {
 /// recolours the edge and never shifts what is inside.
 pub fn raised_edged(edge: u32) -> Div {
     raised().border_1().border_color(rgba(edge))
+}
+
+/// A rung of the elevation ladder (rule 4, the table beside `LIGHT_LOW`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elevation {
+    /// A Pane on the field.
+    Pane,
+    /// The focused Pane of a board, lifted off the field.
+    Lifted,
+    /// An object resting on a plane: the Composer, a Decision block, a
+    /// Settings card.
+    Raised,
+    /// A control's face: an armed control, a chip on its tray. Lit only.
+    Control,
+    /// Menus, popovers, tooltips, a dragged ghost. (Toasts wear the
+    /// kit's own lift.)
+    Float,
+    /// A modal sheet over the veil.
+    Sheet,
+}
+
+fn layer(color: u32, y: f32, blur: f32, spread: f32) -> BoxShadow {
+    BoxShadow {
+        inset: false,
+        color: rgba(color).into(),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+    }
+}
+
+/// The 1px top light: an inset line along the top edge that follows the
+/// corner arcs (gpui paints it over the ground and under the edge, so over
+/// a hairline it reads as the edge catching light).
+fn top_light(color: u32) -> BoxShadow {
+    BoxShadow {
+        inset: true,
+        ..layer(color, 1., 0., 0.)
+    }
+}
+
+fn contact() -> BoxShadow {
+    layer(
+        theme::SHADOW_CONTACT,
+        theme::SHADOW_CONTACT_Y,
+        theme::SHADOW_CONTACT_BLUR,
+        0.,
+    )
+}
+
+/// A rung's light and shadow, cast layers far to near, the top light last.
+pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
+    use theme::*;
+    match rung {
+        Elevation::Pane => vec![
+            layer(
+                SHADOW_PANE,
+                SHADOW_PANE_Y,
+                SHADOW_PANE_BLUR,
+                SHADOW_PANE_SPREAD,
+            ),
+            contact(),
+            top_light(LIGHT_LOW),
+        ],
+        Elevation::Lifted => vec![
+            layer(
+                SHADOW_LIFTED,
+                SHADOW_LIFTED_Y,
+                SHADOW_LIFTED_BLUR,
+                SHADOW_LIFTED_SPREAD,
+            ),
+            contact(),
+            top_light(LIGHT_LOW),
+        ],
+        Elevation::Raised => vec![
+            layer(
+                SHADOW_RAISED,
+                SHADOW_RAISED_Y,
+                SHADOW_RAISED_BLUR,
+                SHADOW_RAISED_SPREAD,
+            ),
+            contact(),
+            top_light(LIGHT_LOW),
+        ],
+        // A face catches the light but casts nothing: kit buttons rest
+        // translucent, and gpui paints a drop shadow under the whole box,
+        // so a cast layer would darken the face it sits beneath.
+        Elevation::Control => vec![top_light(LIGHT_HIGH)],
+        Elevation::Float => vec![
+            layer(SHADOW_FAR, SHADOW_FAR_Y, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD),
+            layer(
+                SHADOW_NEAR,
+                SHADOW_NEAR_Y,
+                SHADOW_NEAR_BLUR,
+                SHADOW_NEAR_SPREAD,
+            ),
+            contact(),
+            top_light(LIGHT_HIGH),
+        ],
+        Elevation::Sheet => vec![
+            layer(
+                SHADOW_SHEET,
+                SHADOW_SHEET_Y,
+                SHADOW_SHEET_BLUR,
+                SHADOW_SHEET_SPREAD,
+            ),
+            layer(
+                SHADOW_NEAR,
+                SHADOW_NEAR_Y,
+                SHADOW_NEAR_BLUR,
+                SHADOW_NEAR_SPREAD,
+            ),
+            contact(),
+            top_light(LIGHT_HIGH),
+        ],
+    }
+}
+
+/// The contact line alone: a small opaque knob (a switch's thumb) resting
+/// on its track.
+pub fn contact_line() -> Vec<BoxShadow> {
+    vec![contact()]
+}
+
+/// A keycap's light: the control rung's top light over a dark foot, so the
+/// key reads as a physical cap. It casts nothing: a key sits in its row.
+pub fn key_light() -> Vec<BoxShadow> {
+    vec![
+        top_light(theme::LIGHT_HIGH),
+        BoxShadow {
+            inset: true,
+            ..layer(theme::KEY_FOOT, -1., 0., 0.)
+        },
+    ]
+}
+
+/// A well's shade: what is recessed (a segmented tray, a switch track, a
+/// field) catches the light from above as a soft dark lip on its top edge.
+pub fn well_shade() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        inset: true,
+        ..layer(theme::WELL_SHADE, 1., 1., 0.)
+    }]
+}
+
+/// A scroll fade: `SCROLL_FADE_H` of `ground` from clear to solid toward a
+/// fixed edge (`top` or bottom), laid absolutely over the edge of a scrolled
+/// body. It has no hitbox, so the pointer reaches the rows beneath it.
+pub fn scroll_fade(ground: u32, top: bool) -> Div {
+    let fade = fade_band(ground, top);
+    if top {
+        fade.top_0()
+    } else {
+        fade.bottom_0()
+    }
+}
+
+/// A scroll fade not yet placed: solid toward its edge (`top` or bottom).
+pub fn fade_band(ground: u32, top: bool) -> Div {
+    let solid = gpui::linear_color_stop(rgb(ground), 1.);
+    let clear = gpui::linear_color_stop(rgba(ground << 8), 0.);
+    // gpui's angle is the direction the gradient runs: 0 toward the top.
+    let angle = if top { 0. } else { 180. };
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(theme::SCROLL_FADE_H))
+        .bg(gpui::linear_gradient(angle, clear, solid))
 }
 
 /// `float_shadow` with its ink scaled by `k` (0..1): a floating surface's
@@ -245,25 +419,9 @@ pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
         .collect()
 }
 
-/// The only shadow in the app, for floating surfaces: a far soft layer and a
-/// near contact layer.
+/// Every floating surface's light and shadow: `Elevation::Float`.
 pub fn float_shadow() -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            inset: false,
-            color: rgba(theme::SHADOW_FAR).into(),
-            offset: point(px(0.), px(theme::SHADOW_FAR_Y)),
-            blur_radius: px(theme::SHADOW_FAR_BLUR),
-            spread_radius: px(theme::SHADOW_FAR_SPREAD),
-        },
-        BoxShadow {
-            inset: false,
-            color: rgba(theme::SHADOW_NEAR).into(),
-            offset: point(px(0.), px(theme::SHADOW_NEAR_Y)),
-            blur_radius: px(theme::SHADOW_NEAR_BLUR),
-            spread_radius: px(0.),
-        },
-    ]
+    elevation(Elevation::Float)
 }
 
 /// A floating surface (menu, popover, card): `MENU` ground, a
@@ -358,8 +516,31 @@ impl RenderOnce for BreathingDot {
     }
 }
 
-/// The one keycap: `KBD_H`, at least square, `RAISED_2`, mono `FS_SM`
-/// `TEXT_2`, centred.
+/// Ferrite's mark struck into a surface: its `body` ink a little over the
+/// ground, lit along its upper edges (`EMBOSS_LIGHT`, 1px up) and shaded
+/// along its lower ones (`EMBOSS_SHADE`, 1px down), the one light from
+/// above (rule 4). A watermark, never a control: it takes no pointer.
+pub fn embossed_mark(size: f32, body: u32) -> Div {
+    let layer = |dy: f32, ink: gpui::Hsla| {
+        gpui::svg()
+            .path(icons::FERRITE_MONO)
+            .absolute()
+            .left_0()
+            .top(px(dy))
+            .size(px(size))
+            .text_color(ink)
+    };
+    div()
+        .relative()
+        .flex_shrink_0()
+        .size(px(size))
+        .child(layer(1., rgba(theme::EMBOSS_SHADE).into()))
+        .child(layer(-1., rgba(theme::EMBOSS_LIGHT).into()))
+        .child(layer(0., rgb(body).into()))
+}
+
+/// The one keycap: `KBD_H`, at least square, `RAISED_2` under the key
+/// light, mono `FS_SM` `TEXT_2`, centred.
 pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
 }
@@ -381,6 +562,7 @@ fn kbd_face() -> Div {
         .px(px(theme::KBD_PAD_X))
         .rounded(px(theme::R_CHIP))
         .bg(rgb(theme::RAISED_2))
+        .shadow(key_light())
         .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
@@ -1348,18 +1530,45 @@ mod tests {
     }
 
     #[test]
-    fn the_float_shadow_is_the_far_then_the_near_layer() {
+    fn the_float_shadow_is_far_near_contact_then_the_top_light() {
         let layers = float_shadow();
-        assert_eq!(layers.len(), 2);
+        assert_eq!(layers.len(), 4);
         assert_eq!(layers[0].color, rgba(theme::SHADOW_FAR).into());
         assert_eq!(layers[0].offset.y, px(theme::SHADOW_FAR_Y));
         assert_eq!(layers[0].blur_radius, px(theme::SHADOW_FAR_BLUR));
         assert_eq!(layers[0].spread_radius, px(theme::SHADOW_FAR_SPREAD));
         assert_eq!(layers[1].color, rgba(theme::SHADOW_NEAR).into());
-        assert!(layers.iter().all(|layer| !layer.inset));
-        // gpui blurs are σ, half the CSS value: a CSS 24px haze is σ 12.
-        assert_eq!(layers[0].blur_radius, px(12.));
-        assert_eq!(layers[1].blur_radius, px(1.5));
+        assert_eq!(layers[2].color, rgba(theme::SHADOW_CONTACT).into());
+        assert!(layers[..3].iter().all(|layer| !layer.inset));
+        let light = &layers[3];
+        assert!(light.inset);
+        assert_eq!(light.color, rgba(theme::LIGHT_HIGH).into());
+        assert_eq!((light.offset.y, light.blur_radius), (px(1.), px(0.)));
+    }
+
+    /// Every rung casts downward and never haloes: each cast layer is
+    /// offset down, and any blur wider than its offset is pulled under the
+    /// surface by a negative spread. Height orders the far layers.
+    #[test]
+    fn every_rung_is_lit_from_above_and_casts_down() {
+        use Elevation::*;
+        let rungs = [Pane, Lifted, Raised, Control, Float, Sheet];
+        for rung in rungs {
+            let layers = elevation(rung);
+            let light = layers.last().unwrap();
+            assert!(light.inset && light.offset.y == px(1.), "{rung:?} lit");
+            for cast in layers.iter().filter(|layer| !layer.inset) {
+                assert!(cast.offset.y > px(0.), "{rung:?} casts down");
+                if cast.blur_radius > cast.offset.y {
+                    assert!(cast.spread_radius < px(0.), "{rung:?} haloes");
+                }
+            }
+        }
+        let far = |rung| elevation(rung)[0].offset.y;
+        assert!(far(Pane) < far(Lifted));
+        assert!(far(Lifted) < far(Float));
+        assert!(far(Float) < far(Sheet));
+        assert!(key_light().iter().all(|layer| layer.inset));
     }
 
     #[test]

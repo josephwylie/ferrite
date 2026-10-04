@@ -411,6 +411,14 @@ fn badge(unread: usize, tone: BadgeTone) -> Div {
             .px(px(SPACE_1))
             .rounded_full()
             .bg(rgb(ground))
+            // The knockout: the nav's ground cut around the pill.
+            .shadow(vec![gpui::BoxShadow {
+                inset: false,
+                color: rgb(NAV).into(),
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(BADGE_KNOCKOUT),
+            }])
             .font_family(FONT_UI)
             .text_size(px(FS_SM))
             .line_height(px(BADGE_H))

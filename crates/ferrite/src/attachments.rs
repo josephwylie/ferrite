@@ -147,6 +147,10 @@ fn pending_chips(attachments: Attachments) -> gpui::AnyElement {
             .pl(gpui::px(theme::SPACE_0_5))
             .pr(gpui::px(theme::SPACE_0_5))
             .rounded(gpui::px(theme::R_CHIP))
+            // A file on the shelf is an object about to be sent: lit.
+            .shadow(crate::components::elevation(
+                crate::components::Elevation::Control,
+            ))
             .hover_carried(format!("attachment-{index}-{}", open.display()))
             .text_size(gpui::px(theme::FS_SM))
             .line_height(gpui::px(theme::LH_META))

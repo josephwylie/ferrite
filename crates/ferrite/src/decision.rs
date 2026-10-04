@@ -164,7 +164,8 @@ pub fn split_recommended(label: &str) -> (&str, bool) {
 
 // ------------------------------------------------------------------ frame
 
-/// The block: `RAISED`, one 1px `COMPOSER_EDGE`, `R_BLOCK`, capped at the
+/// The block: `RAISED`, resting on the Pane (`Elevation::Raised`), one 1px
+/// `COMPOSER_EDGE`, `R_BLOCK`, capped at the
 /// reading column. Ochre is only on `◆` and the kind word — no wash, no
 /// state edge. `joined` merges it into the live Composer below it: square
 /// bottom corners and no bottom edge — the Composer's own top edge is the
@@ -190,6 +191,7 @@ pub fn card(
         .min_h_0()
         .cursor_default()
         .bg(rgb(theme::RAISED))
+        .shadow(components::elevation(components::Elevation::Raised))
         .border_color(rgba(theme::COMPOSER_EDGE));
     let block = if joined {
         block

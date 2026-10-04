@@ -286,6 +286,9 @@ impl Preview {
                 .border_1()
                 .border_color(rgba(theme::HAIRLINE))
                 .bg(rgb(theme::PANE))
+                .shadow(crate::components::elevation(
+                    crate::components::Elevation::Pane,
+                ))
                 .font_family(theme::FONT_UI)
                 .child(head(head_band))
                 .child(document_content),
@@ -375,7 +378,7 @@ impl RenderOnce for PreviewLayer {
             f32::from(bounds.size.height),
         );
         // The sheet recipe (`prefs::sheet`): `RAISED`, the strong hairline,
-        // `R_PANE`, the float shadow; the 48px head with its title and the
+        // `R_PANE`, the sheet elevation; the 48px head with its title and the
         // one close control over a hairline; then the image itself on the
         // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
         // sheet is darker than the sheet.

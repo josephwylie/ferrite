@@ -44,8 +44,18 @@
 //!    half blends over 150ms (`pointer.rs`); the cursor's `FILL` and a press
 //!    land at once. The Stop control's ground is never `TEXT_STRONG`
 //!    (`SEND_STOP_GROUND`): only an armed Send is bright. Floating surfaces are
-//!    `RAISED` + a `HAIRLINE_STRONG` edge + `R_BLOCK` + a float shadow; in-flow
-//!    blocks and planes cast no shadow; a modal adds `VEIL`.
+//!    `RAISED` + a `HAIRLINE_STRONG` edge + `R_BLOCK` + the float elevation;
+//!    a modal adds `VEIL`.
+//!    **Light from above.** Value alone cannot hold the ladder apart on a
+//!    near-black ground, so every object above the ground is lit: a 1px top
+//!    light (an inset white line on its top edge that follows the corner
+//!    arcs) and a cast shadow below it (offset down and soft, never a halo),
+//!    both growing with height (`components::elevation`): a Pane sits on the
+//!    field, the focused Pane of a board is lifted off it, the Composer and
+//!    a Decision block rest on the Pane, a control's face (a keycap, an armed
+//!    control, a selected chip) catches more light, floats hang above it all
+//!    and a modal sheet highest. Content is not an object: code, diffs,
+//!    tables, washes and rows stay flat.
 //! 5. **An ink ladder with floors**, brightest first: `TEXT_STRONG` (titles,
 //!    prompts, headings), `TEXT` (agent prose, the brightest body copy),
 //!    `TEXT_2` (secondary copy), `TEXT_MUTED` (metadata; the floor for readable
@@ -110,9 +120,10 @@ use gpui::FontWeight;
 
 // ---------------------------------------------------------------- planes
 
-/// `#0d0e11` — the window's own ground: the nav, the Cockpit field, the
-/// gutters between Panes. The darkest plane.
-pub const GROUND: u32 = 0x0d0e11;
+/// `#0b0c0f` — the window's own ground: the nav, the Cockpit field, the
+/// gutters between Panes. The darkest plane, a step further under the Panes
+/// than their own value step so the field reads as the floor they rest on.
+pub const GROUND: u32 = 0x0b0c0f;
 /// `#131518` — a Pane's plane, one step above the ground, so a Pane reads as
 /// a sheet laid on the field without needing a heavy edge.
 pub const PANE: u32 = 0x131518;
@@ -122,9 +133,11 @@ pub const NAV: u32 = GROUND;
 /// `#1a1d21` — raised in-flow blocks: the Composer, code blocks, cards, and
 /// every floating surface's ground.
 pub const RAISED: u32 = 0x1a1d21;
-/// The floating menu ground. Same value as `RAISED`, its own name so a retune
-/// can split them without a rename.
-pub const MENU: u32 = RAISED;
+/// `#1c1f24` — the floating ground: menus, popovers, tooltips. Half a step
+/// over `RAISED`, since a float hangs above every in-flow block (a menu
+/// over the Composer must not read as part of it); its rows' hover is still
+/// `HOVER_RAISED`, a step above.
+pub const MENU: u32 = 0x1c1f24;
 /// `#1d2024` — a row's or control's hover face on `GROUND` or `PANE` only.
 /// On `RAISED` the hover face is `HOVER_RAISED`.
 pub const HOVER: u32 = 0x1d2024;
@@ -351,22 +364,76 @@ pub const LINK_INK: u32 = ACCENT;
 /// The wash over the slot a dragged Pane would take.
 pub const DROP_WASH: u32 = ACCENT_WASH;
 
-// ---------------------------------------------------------------- shadows
+// ------------------------------------------------------ light and shadow
+//
+// **The elevation ladder** (rule 4, `components::elevation`). Each rung is
+// a top light and a cast shadow; blurs are gpui's gaussian σ, half a CSS
+// blur, and every cast layer is offset down with a negative spread past its
+// contact line, so it lies *under* the surface rather than haloing it.
+//
+// | rung      | used by                               | top light     | cast                         |
+// |-----------|---------------------------------------|---------------|------------------------------|
+// | `Pane`    | a Pane on the field                   | `LIGHT_LOW`   | contact + a short ambient    |
+// | `Lifted`  | the focused Pane of a board           | `LIGHT_LOW`   | contact + a deeper ambient   |
+// | `Raised`  | the Composer, a Decision block, cards | `LIGHT_LOW`   | contact + a short ambient    |
+// | `Control` | an armed control, a chip on its tray  | `LIGHT_HIGH`  | none: a face casts nothing   |
+// | `Float`   | menus, popovers, tooltips, a ghost    | `LIGHT_HIGH`  | contact + near + far         |
+// | `Sheet`   | a modal sheet over the veil           | `LIGHT_HIGH`  | contact + near + a deep far  |
 
-/// The float shadow (`components::float_shadow`), two layers under every
-/// floating surface. Blurs are gpui's gaussian σ, half a CSS blur: the far
-/// layer is CSS `0 8px 24px -4px` at 55%, its −4 spread keeping it *under*
-/// the surface rather than a halo around it; the near layer is a CSS
-/// `0 1px 3px` contact line at 40%. On the near-black ground the hairline
-/// edge carries the elevation and the shadow only lifts the surface off
-/// the Panes.
-pub const SHADOW_FAR: u32 = 0x0000008c;
-pub const SHADOW_FAR_Y: f32 = 8.0;
-pub const SHADOW_FAR_BLUR: f32 = 12.0;
-pub const SHADOW_FAR_SPREAD: f32 = -4.0;
+/// `#ffffff0d` (5%) — the top light of a plane resting on another: a Pane on
+/// the field, the Composer on its Pane. Over a hairline edge it reads as the
+/// edge catching light, not a second rule.
+pub const LIGHT_LOW: u32 = 0xffffff0d;
+/// `#ffffff14` (8%) — the top light of what stands proud: a control's face,
+/// a float, a sheet.
+pub const LIGHT_HIGH: u32 = 0xffffff14;
+/// `#00000033` (20%) — the keycap's foot: an inset line along its bottom
+/// edge, so a key reads as pressed into the light, not printed on.
+pub const KEY_FOOT: u32 = 0x00000033;
+/// `#00000052` (32%) — a well's lip: an inset shade along the top edge of
+/// anything recessed (a segmented tray, a switch track, a field), the same
+/// light from above falling into it.
+pub const WELL_SHADE: u32 = 0x00000052;
+/// 16px — a scroll fade: where a scrolled list meets a fixed edge (the
+/// Pane's top, the working line, the Composer), its content dissolves into
+/// the ground over this run instead of being cut.
+pub const SCROLL_FADE_H: f32 = SPACE_4;
+/// The contact line every rung shares: CSS `0 1px 2px` at 50%, the dark
+/// seam where a surface meets what it rests on.
+pub const SHADOW_CONTACT: u32 = 0x00000080;
+pub const SHADOW_CONTACT_Y: f32 = 1.0;
+pub const SHADOW_CONTACT_BLUR: f32 = 1.0;
+/// An object resting on a Pane (the Composer, a Decision block, a card):
+/// CSS `0 6px 16px -4px` at 45%, so it stands over what scrolls beneath it.
+pub const SHADOW_RAISED: u32 = 0x00000073;
+pub const SHADOW_RAISED_Y: f32 = 6.0;
+pub const SHADOW_RAISED_BLUR: f32 = 8.0;
+pub const SHADOW_RAISED_SPREAD: f32 = -4.0;
+/// A Pane's ambient: CSS `0 4px 12px -2px` at 35%.
+pub const SHADOW_PANE: u32 = 0x00000059;
+pub const SHADOW_PANE_Y: f32 = 4.0;
+pub const SHADOW_PANE_BLUR: f32 = 6.0;
+pub const SHADOW_PANE_SPREAD: f32 = -2.0;
+/// The focused Pane of a board, lifted: CSS `0 10px 28px -6px` at 60%.
+pub const SHADOW_LIFTED: u32 = 0x00000099;
+pub const SHADOW_LIFTED_Y: f32 = 10.0;
+pub const SHADOW_LIFTED_BLUR: f32 = 14.0;
+pub const SHADOW_LIFTED_SPREAD: f32 = -6.0;
+/// The near layer of a float: CSS `0 4px 8px -2px` at 40%.
 pub const SHADOW_NEAR: u32 = 0x00000066;
-pub const SHADOW_NEAR_Y: f32 = 1.0;
-pub const SHADOW_NEAR_BLUR: f32 = 1.5;
+pub const SHADOW_NEAR_Y: f32 = 4.0;
+pub const SHADOW_NEAR_BLUR: f32 = 4.0;
+pub const SHADOW_NEAR_SPREAD: f32 = -2.0;
+/// The far layer of a float: CSS `0 16px 40px -8px` at 60%.
+pub const SHADOW_FAR: u32 = 0x00000099;
+pub const SHADOW_FAR_Y: f32 = 16.0;
+pub const SHADOW_FAR_BLUR: f32 = 20.0;
+pub const SHADOW_FAR_SPREAD: f32 = -8.0;
+/// The far layer of a sheet: CSS `0 28px 72px -12px` at 75%.
+pub const SHADOW_SHEET: u32 = 0x000000bf;
+pub const SHADOW_SHEET_Y: f32 = 28.0;
+pub const SHADOW_SHEET_BLUR: f32 = 36.0;
+pub const SHADOW_SHEET_SPREAD: f32 = -12.0;
 
 // ------------------------------------------------------------------- type
 //
@@ -1360,12 +1427,30 @@ pub const DRAG_GHOST_OPACITY: f32 = 0.86;
 /// The empty board's hints: lines 8px apart, the keys in one column 8px
 /// from their verbs' shared edge.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
-/// 24px — the empty board's Ferrite mark (`ferrite-mono` in `TEXT_FAINT`,
-/// rule 2.11.4), left-aligned on the keycap column, `EMPTY_BOARD_MARK_GAP`
-/// (16px) above the hints. It replaces the line of words: the board says
-/// how to start, once.
-pub const EMPTY_BOARD_MARK: f32 = 24.0;
-pub const EMPTY_BOARD_MARK_GAP: f32 = SPACE_4;
+/// 44px — the empty board's Ferrite mark, embossed on the field
+/// (`components::embossed_mark`, rule 2.11.4) and centred
+/// `EMPTY_BOARD_MARK_GAP` (24px) over the hints. It replaces the line of
+/// words: the board says how to start, once.
+pub const EMPTY_BOARD_MARK: f32 = 44.0;
+pub const EMPTY_BOARD_MARK_GAP: f32 = SPACE_6;
+/// An embossed mark's body on the field: two steps over `GROUND`, so the
+/// mark reads as struck into the surface by its light and shadow edges,
+/// not drawn on it in ink.
+pub const EMBOSS_ON_GROUND: u32 = 0x1d2024;
+/// The same on a Pane's ground (an empty draft's body).
+pub const EMBOSS_ON_PANE: u32 = 0x23262b;
+/// The emboss's lit upper edge and its shadowed lower edge.
+pub const EMBOSS_LIGHT: u32 = 0xffffff17;
+pub const EMBOSS_SHADE: u32 = 0x000000b3;
+/// 44px — an empty draft's mark, embossed over its Composer (Solo) or at
+/// its body's centre (a board): the Pane is ready, and the Composer's
+/// placeholder still says what to do, once.
+pub const DRAFT_MARK: f32 = 44.0;
+/// 24px — from a launching draft's mark down to its Composer.
+pub const DRAFT_MARK_GAP: f32 = SPACE_6;
+/// 64px — how far a launching draft's pair sits above the Pane's middle:
+/// the optical centre is above the measured one.
+pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 // (end WP-C) — append above this line only
 
 // ======================================== WP-D · composer, pickers, usage, draft
@@ -1607,6 +1692,10 @@ pub const NOTICE_AGE_W: f32 = 30.0;
 /// right of its centre, so the glyph stays readable beside it.
 pub const BADGE_H: f32 = LH_META;
 pub const BADGE_LEFT: f32 = ICON_BUTTON / 2.0 + SPACE_0_5;
+/// 2px — the badge's knockout: a ring of the nav's ground cut around the
+/// pill, so the bell's stroke stops short of the count instead of running
+/// under it.
+pub const BADGE_KNOCKOUT: f32 = SPACE_0_5;
 /// With the nav collapsed, toasts stack BottomRight this far up: the
 /// board's padding, the Pane's edge, a one-line Composer and its inset,
 /// then 8px of air, so the stack clears the Composer.

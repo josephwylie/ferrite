@@ -50,6 +50,17 @@ use session::{ProcessRss, SessionDefaults};
 
 actions!(ferrite, [Quit]);
 
+/// Transcript Markdown can show remote images (`![alt](https://…)`); GPUI
+/// loads them through the application's HTTP client, whose default refuses
+/// every request.
+fn http_client() -> std::sync::Arc<dyn gpui::http_client::HttpClient> {
+    let agent = concat!("Ferrite/", env!("CARGO_PKG_VERSION"));
+    std::sync::Arc::new(
+        reqwest_client::ReqwestClient::user_agent(agent)
+            .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
+    )
+}
+
 /// GPUI defaults to hiding the OS pointer whenever a key is typed. In a
 /// dense cockpit that reads as a flash whenever the pointer is resting over
 /// the Composer, so Ferrite keeps pointer visibility under the operator's
@@ -149,6 +160,7 @@ fn main() {
     // and `svg()` finds neither afterwards.
     kit::application()
         .with_assets(icons::Assets)
+        .with_http_client(http_client())
         .run(move |cx: &mut App| {
             keep_mouse_cursor_visible(cx);
             theme::init_components(cx);
