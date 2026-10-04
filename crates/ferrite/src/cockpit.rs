@@ -777,15 +777,13 @@ enum MenuVerb {
     Rename,
     Focus,
     Fullscreen,
-    Close,
     /// Unfold or fold the Parked section.
     ToggleParked,
     /// Delete every Thread the Parked section lists — exactly those rows,
     /// so what the menu erases is what the operator can see.
     DeleteAllParked,
-    /// Drop the Session of a Thread that is open but not on screen (Solo
-    /// view shows one Pane; the rest still run). `Close` is the on-screen
-    /// Pane's own door, with its Group semantics.
+    /// Park the Thread in one act, on screen or not: a Group member leaves
+    /// its Group and parks (`Cockpit::park_thread`), the same as cmd-w.
     Park,
     /// The transcript menu's own verbs: what is highlighted, or all of it.
     CopySelection,
@@ -2595,11 +2593,7 @@ impl CockpitView {
                 if live {
                     rows.push(Some((
                         menu::Item::new("Park thread").shortcut(if shown { "cmd-W" } else { "" }),
-                        if shown && !grouped {
-                            MenuVerb::Close
-                        } else {
-                            MenuVerb::Park
-                        },
+                        MenuVerb::Park,
                     )));
                 }
                 if grouped {
@@ -2639,13 +2633,14 @@ impl CockpitView {
                 )));
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
                 rows.push(None);
+                // cmd-w parks in one act, Group member or not
+                // (`Cockpit::park_thread`); leaving without parking is its
+                // own row.
                 rows.push(Some((
-                    menu::Item::new(if grouped { "Close pane" } else { "Park thread" })
-                        .shortcut("cmd-W"),
-                    MenuVerb::Close,
+                    menu::Item::new("Park thread").shortcut("cmd-W"),
+                    MenuVerb::Park,
                 )));
                 if grouped {
-                    rows.push(Some((menu::Item::new("Park thread"), MenuVerb::Park)));
                     rows.push(Some((menu::Item::new("Leave group"), MenuVerb::LeaveGroup)));
                 }
             }
@@ -2805,21 +2800,12 @@ impl CockpitView {
                 self.focus_thread(thread, cx);
                 self.cockpit.toggle_fullscreen();
             }
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Close) => {
-                self.close_pane(PaneIdentity::Thread(thread), cx);
-            }
+            // One act: a Group member leaves its Group and parks
+            // (`Cockpit::park_thread`), straight into the parked rows.
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Park) => {
-                if let Err(e) = self.cockpit.park(thread) {
-                    self.group_error = Some(format!("park refused: {e}").into());
-                }
-                if self
-                    .popover
-                    .as_ref()
-                    .is_some_and(|open| open.pane == PaneIdentity::Thread(thread))
-                {
-                    self.popover = None;
-                }
-                self.sync_panes(cx);
+                self.close_pane(PaneIdentity::Thread(thread), cx);
+                // A Thread parked from the nav may have had no Pane in
+                // this view, so the grid did not change: refresh the rows.
                 self.parked_changed(cx);
             }
             (MenuTarget::Pane(_), MenuVerb::CopySelection) => {
@@ -7770,9 +7756,10 @@ impl CockpitView {
         self.close_pane(identity, cx);
     }
 
-    /// Close one Pane through the core act, its refusal landing where every
-    /// other Group error does — and a park that would not flush is logged,
-    /// the Pane gone either way.
+    /// Close one Pane through the core act (a Thread always parks, leaving
+    /// its Group first), its refusal landing where every other Group error
+    /// does — and a park that would not flush is logged, the Pane gone
+    /// either way.
     fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
         // Whether this close is a Group change at all: a Thread leaving
         // the Group on screen, unless a pair defers the leave onto a
@@ -13062,7 +13049,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn group_scope_is_one_view_and_cmd_w_makes_the_focused_thread_live_and_solo(
+    fn group_scope_is_one_view_and_cmd_w_parks_the_focused_member_in_one_press(
         cx: &mut TestAppContext,
     ) {
         let (mut core, _fake) = cockpit("group-scope-close", 2);
@@ -13085,9 +13072,11 @@ mod tests {
         });
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.threads().len(), 2, "leaving never parks");
+            assert_eq!(view.cockpit.threads().len(), 1, "one press parks it");
+            assert!(view.cockpit.parked().unwrap().contains(&threads[0]));
             assert!(view.cockpit.groups().of(threads[0]).is_none());
             assert_eq!(view.visible_indices().len(), 1);
+            assert_eq!(view.cockpit.roster().focused_thread(), Some(threads[1]));
         });
     }
     #[gpui::test]
@@ -23022,18 +23011,22 @@ mod tests {
             assert_eq!(view.cockpit.roster().view(), View::Group(group));
         });
 
+        // cmd-w parks a member in one press: out of the Group, into the
+        // parked rows, no loose open Thread left to park again.
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.roster().view(), View::Group(group));
             assert_eq!(view.visible_indices().len(), 3);
-            assert_eq!(view.cockpit.threads().len(), 4, "leaving never parks");
+            assert_eq!(view.cockpit.threads().len(), 3, "one press parks");
+            assert_eq!(view.cockpit.parked().unwrap().len(), 1);
         });
         cx.simulate_keystrokes("cmd-w cmd-w");
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert!(view.cockpit.groups().get(group).is_none());
             assert_eq!(view.visible_indices().len(), 1);
-            assert_eq!(view.cockpit.threads().len(), 4);
+            assert_eq!(view.cockpit.threads().len(), 1, "only the survivor runs");
+            assert_eq!(view.cockpit.parked().unwrap().len(), 3);
         });
     }
 

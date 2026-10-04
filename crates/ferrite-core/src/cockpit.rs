@@ -3705,10 +3705,30 @@ impl Cockpit {
     pub fn close(&mut self, identity: PaneIdentity) -> Result<(), CloseError> {
         match identity {
             PaneIdentity::Draft(draft) => self.discard_draft(draft).map_err(CloseError::Group),
-            PaneIdentity::Thread(thread) => self.close_thread(thread),
+            PaneIdentity::Thread(thread) => self.park_thread(thread),
         }
     }
 
+    /// Park a Thread in one act, wherever it sits — cmd-w and every "Park
+    /// thread". A Group member leaves its Group first (onto the ordinal
+    /// survivor when its Group is on screen, deferred onto a pending draft
+    /// in a pair), then parks: it lands in the parked rows at once, never
+    /// as a loose open Thread that needs a second park.
+    pub fn park_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
+        if let Some(group) = self.groups.of(thread).map(|group| group.id) {
+            if self.roster.view() == View::Group(group) {
+                self.close_thread(thread)?;
+            } else {
+                self.apply_group(GroupChange::Leave { thread })
+                    .map_err(CloseError::Group)?;
+            }
+        }
+        self.park_noted(thread)
+    }
+
+    /// Close a Thread's Pane in the view it is in: in a Group that is a
+    /// leave (the drag-out door, which follows the Thread to Solo), in Solo
+    /// a park. cmd-w goes through `park_thread`, which always parks.
     fn close_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
         if let View::Group(group) = self.roster.view() {
             let members = self
@@ -3740,10 +3760,14 @@ impl Cockpit {
             }
             return Ok(());
         }
-        // Solo: park. Parked even on a flush error — the Session is gone
-        // either way, so cmd-o should still bring this Thread back first —
-        // and the clamped survivor takes focus and, while fullscreen, the
-        // screen (#20).
+        self.park_noted(thread)
+    }
+
+    /// Solo's park. Parked even on a flush error — the Session is gone
+    /// either way, so cmd-o should still bring this Thread back first —
+    /// and the clamped survivor takes focus and, while fullscreen, the
+    /// screen (#20).
+    fn park_noted(&mut self, thread: ThreadId) -> Result<(), CloseError> {
         let re_aim = self.roster.fullscreen() == Some(PaneIdentity::Thread(thread));
         let parked = self.park(thread);
         self.roster.note_parked(thread);
@@ -8431,7 +8455,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_in_solo_parks_and_closing_in_a_group_leaves_onto_the_ordinal_survivor() {
+    fn closing_parks_in_one_act_and_a_group_member_leaves_onto_the_ordinal_survivor() {
         let (mut cockpit, _) = cockpit("roster-close");
         let threads = opened(&mut cockpit, 3);
         let group = pair(&mut cockpit, threads[0], threads[1]);
@@ -8443,31 +8467,25 @@ mod tests {
             })
             .unwrap();
         cockpit.enter_group(group).unwrap();
-        assert_eq!(
-            crate::layout::grid_shape(
-                cockpit.visible().len(),
-                crate::layout::Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: 1134.0,
-                    h: 838.0
-                }
-            )
-            .0,
-            2
-        );
         cockpit.focus(PaneIdentity::Thread(threads[1]));
 
+        // cmd-w on a member: out of the Group and parked, in one press.
         cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
-        assert_eq!(cockpit.threads().len(), 3, "leaving never parks");
+        assert!(
+            cockpit.parked().unwrap().contains(&threads[1]),
+            "one park parks a Group member"
+        );
+        assert!(cockpit.groups().of(threads[1]).is_none(), "and it left");
+        assert_eq!(cockpit.threads().len(), 2);
         assert_eq!(cockpit.roster().view(), View::Group(group));
         assert_eq!(
             cockpit.roster().focused_thread(),
             Some(threads[2]),
-            "the Thread that took the closed one's ordinal"
+            "the Thread that took the parked one's ordinal"
         );
 
         cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
+        assert!(cockpit.parked().unwrap().contains(&threads[2]));
         assert_eq!(
             cockpit.roster().view(),
             View::Solo,
@@ -8485,8 +8503,34 @@ mod tests {
             cockpit.parked().unwrap().contains(&threads[0]),
             "a Solo close parks"
         );
-        assert_eq!(cockpit.roster().park_order(), [threads[0]]);
-        assert_eq!(cockpit.roster().panes().len(), 2);
+        assert_eq!(
+            cockpit.roster().park_order(),
+            [threads[1], threads[2], threads[0]]
+        );
+        assert!(cockpit.roster().panes().is_empty());
+    }
+
+    #[test]
+    fn parking_a_member_whose_group_is_not_on_screen_leaves_and_parks() {
+        let (mut cockpit, _) = cockpit("roster-park-offscreen");
+        let threads = opened(&mut cockpit, 3);
+        let group = pair(&mut cockpit, threads[0], threads[1]);
+        cockpit
+            .apply_group(GroupChange::Join {
+                thread: threads[2],
+                group,
+                index: None,
+            })
+            .unwrap();
+        assert_eq!(cockpit.roster().view(), View::Solo);
+
+        cockpit.park_thread(threads[1]).unwrap();
+        assert!(cockpit.parked().unwrap().contains(&threads[1]));
+        assert_eq!(
+            cockpit.groups().get(group).unwrap().members,
+            [threads[0], threads[2]]
+        );
+        assert_eq!(cockpit.roster().park_order(), [threads[1]]);
     }
 
     #[test]
@@ -8594,8 +8638,12 @@ mod tests {
         let (mut cockpit, _) = cockpit("roster-enter");
         let threads = opened(&mut cockpit, 3);
         let group = pair(&mut cockpit, threads[1], threads[2]);
-        cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
+        // A member parked without leaving: cmd-w would take it out of the
+        // Group, so this is the raw park a relaunch leaves behind.
+        cockpit.park(threads[2]).unwrap();
+        cockpit.roster.note_parked(threads[2]);
         assert!(cockpit.parked().unwrap().contains(&threads[2]));
+        assert_eq!(cockpit.groups().of(threads[2]).map(|g| g.id), Some(group));
         cockpit.focus(PaneIdentity::Thread(threads[1]));
 
         cockpit.enter_group(group).unwrap();
