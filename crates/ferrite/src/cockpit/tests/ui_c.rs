@@ -295,21 +295,26 @@ fn a_dragged_tree_survives_a_resize_and_draws_one_level(cx: &mut TestAppContext)
     );
 }
 
-/// Stepping focus across a 3×3 board moves nothing: every cell's body keeps
-/// its bounds (the grid Composer is one fixed line, focused or not), and
-/// only the focused cell's line is live — one caret on the board.
+/// Stepping focus across a 3×3 board (FL-11): an unfocused Pane is flush —
+/// its body runs down to its band, which ends 7px over the Pane's foot —
+/// and only the focused Pane carries the status line, so its body alone is
+/// shorter, by exactly the status line and its gap. No body's top ever
+/// moves, and only the focused cell's line is live: one caret on the board.
 #[gpui::test]
 fn stepping_focus_across_nine_cells_moves_no_body(cx: &mut TestAppContext) {
     let (view, _fake, cx, _group) = board("board-cmd-bracket", 9, cx);
+    // Cells large enough to read at L1 (R12: at least 300 × 360).
+    cx.simulate_resize(gpui::size(px(2000.), px(1300.)));
+    tick(cx);
     let keys: Vec<(u64, SharedString)> = view.read_with(cx, |view, _| {
         view.panes
             .iter()
             .map(|pane| (pane.thread().unwrap().get(), pane.text_namespace()))
             .collect()
     });
-    let bodies = |cx: &mut gpui::VisualTestContext| -> Vec<gpui::Bounds<gpui::Pixels>> {
+    let bodies = |cx: &mut gpui::VisualTestContext| -> Vec<(u64, gpui::Bounds<gpui::Pixels>)> {
         keys.iter()
-            .map(|(key, _)| bounds(cx, format!("pane-body-{key}")))
+            .map(|(key, _)| (*key, bounds(cx, format!("pane-body-{key}"))))
             .collect()
     };
     let live = |cx: &mut gpui::VisualTestContext| -> usize {
@@ -319,13 +324,38 @@ fn stepping_focus_across_nine_cells_moves_no_body(cx: &mut TestAppContext) {
             })
             .count()
     };
-    let before = bodies(cx);
-    assert_eq!(live(cx), 1, "one live line on the board");
+    let status = px(crate::theme::COMPOSER_STATUS_GAP + crate::theme::COMPOSER_STATUS_H);
+    let tops: Vec<gpui::Pixels> = bodies(cx).iter().map(|(_, body)| body.top()).collect();
     for _ in 0..9 {
+        let focused = view.read_with(cx, |view, _| view.focused_thread().unwrap().get());
+        let now = bodies(cx);
+        assert_eq!(
+            now.iter().map(|(_, body)| body.top()).collect::<Vec<_>>(),
+            tops,
+            "focus moved a body's top"
+        );
+        let rest: Vec<gpui::Pixels> = now
+            .iter()
+            .filter(|(key, _)| *key != focused)
+            .map(|(_, body)| body.size.height)
+            .collect();
+        let flush = rest[0];
+        assert!(
+            rest.iter().all(|height| (*height - flush).abs() <= px(1.)),
+            "every unfocused body runs to its band: {rest:?}"
+        );
+        let mine = now
+            .iter()
+            .find(|(key, _)| *key == focused)
+            .map(|(_, body)| body.size.height)
+            .unwrap();
+        assert!(
+            ((flush - mine) - status).abs() <= px(1.),
+            "only the focused body is shorter, by the status line: {mine:?} vs {flush:?}"
+        );
+        assert_eq!(live(cx), 1, "exactly one caret-bearing line");
         cx.simulate_keystrokes("cmd-]");
         tick(cx);
-        assert_eq!(bodies(cx), before, "focus moved a body");
-        assert_eq!(live(cx), 1, "exactly one caret-bearing line");
     }
 }
 

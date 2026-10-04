@@ -8,6 +8,9 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 [features]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 visual-reference = ["gpui/test-support", "dep:gpui-reference-platform"]
+# The opaque greys on macOS too (`theme::GLASS`): what the headless parity
+# captures render, since a capture cannot show the desktop blur.
+opaque = []
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }

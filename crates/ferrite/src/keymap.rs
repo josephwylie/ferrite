@@ -24,6 +24,11 @@ pub const PLATFORM: Platform = Platform::Mac;
 #[cfg(not(target_os = "macos"))]
 pub const PLATFORM: Platform = Platform::Windows;
 
+/// The key context of a keystroke no text field takes: the cockpit's own
+/// root holds the keyboard (the transcript, the board, a wall), and neither
+/// a Composer nor a kit input is on the focus path.
+pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
+
 /// Every key the cockpit binds: (keystroke, action name, key context).
 /// Action names are the registered `namespace::Action` strings, so the
 /// table stays buildable without touching gpui.
@@ -79,6 +84,21 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             with_edge("backspace"),
             "composer::DeleteToStart",
             Some("Composer"),
+        ),
+        // ⌘⌫ on an empty line parks the Thread (the palette's `park
+        // thread`): bound after DeleteToStart, so the empty line's own
+        // context wins the same-depth tie and a line with text still
+        // deletes to its start. With no text field holding the keyboard
+        // (the transcript, the board) it parks too.
+        (
+            with_primary("backspace"),
+            "cockpit::CloseThread",
+            Some("ComposerEmpty"),
+        ),
+        (
+            with_primary("backspace"),
+            "cockpit::CloseThread",
+            Some(NO_TEXT_FIELD),
         ),
         (
             with_edge("delete"),
@@ -179,8 +199,8 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("]"), "cockpit::NextPane", None),
         (with_primary("["), "cockpit::PreviousPane", None),
         (with_primary("d"), "cockpit::NextDecision", None),
-        // The rail's ordinals: ⌘1…⌘9 land on its first nine Threads (those
-        // that need you first, then the tree's order).
+        // The board's ordinals: ⌘1…⌘9 focus the shown board's Panes in head
+        // order (Solo: ⌘1 is the Solo Pane).
         (with_primary("1"), "cockpit::FocusThread1", None),
         (with_primary("2"), "cockpit::FocusThread2", None),
         (with_primary("3"), "cockpit::FocusThread3", None),
@@ -208,9 +228,16 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
-        // The titlebar's New Group: the focused solo Thread plus a new one,
-        // beside cmd-n's plain new Thread.
-        (with_primary("g"), "cockpit::NewGroup", None),
+        // ⌘G opens a Group: the palette scoped to Groups. New Group (the
+        // focused solo Thread plus a new one) moves to ⌘⇧G.
+        (with_primary("g"), "palette::OpenGroups", None),
+        (with_primary("shift-g"), "cockpit::NewGroup", None),
+        // ⌘K: the command palette — every Thread, then every command.
+        (with_primary("k"), "palette::Toggle", None),
+        // The palette's two keyed commands: the parked Threads, and the
+        // focused Thread's diff against main in a reader beside it.
+        (with_primary("shift-p"), "palette::ShowParked", None),
+        (with_primary("shift-d"), "palette::CompareWithMain", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -218,13 +245,21 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("-"), "cockpit::TextSmaller", None),
         (with_primary("0"), "cockpit::TextReset", None),
         // Tab accepts a highlighted command first, then keeps #29's draft-band
-        // walk or L1 tool disclosure walk. Shift-Tab is the reverse Thread walk.
+        // walk or L1 tool disclosure walk. Shift-Tab cycles the permission
+        // mode (the status line's `⇧⇥ mode`); inside a tool disclosure walk
+        // it stays the walk's reverse step.
         ("tab".into(), "cockpit::BandCycle", Some("Ferrite")),
+        ("shift-tab".into(), "status::CycleMode", Some("Ferrite")),
         (
             "shift-tab".into(),
             "cockpit::ToolCyclePrevious",
-            Some("Ferrite"),
+            Some("ToolDisclosure"),
         ),
+        // `?`: the shortcuts sheet, read from this table. Only on an empty
+        // Composer line or with no text field holding the keyboard; a `?`
+        // typed into text is just a character.
+        ("?".into(), "shortcuts::Toggle", Some("ComposerEmpty")),
+        ("?".into(), "shortcuts::Toggle", Some(NO_TEXT_FIELD)),
         // Close parks the Thread; it is still there, and reopening revives it.
         (with_primary("w"), "cockpit::CloseThread", None),
         // And back again: the most recently parked Thread, revived.
@@ -249,6 +284,74 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // row — where history recall keeps its single-line meaning.
         ("up".into(), "composer::Up", Some("Composer")),
         ("down".into(), "composer::Down", Some("Composer")),
+        // A Decision row under an empty line: ↑↓ walk its options, ⏎ picks
+        // the selected one, esc denies, tab amends (a note sent with the
+        // answer). Bound after the history and row walks and after the bare
+        // enter and escape rows, so the empty line's own context wins the
+        // same-depth tie; with text on the line every key edits it.
+        (
+            "up".into(),
+            "decision::SelectPrevious",
+            Some("Decision > ComposerEmpty"),
+        ),
+        (
+            "down".into(),
+            "decision::SelectNext",
+            Some("Decision > ComposerEmpty"),
+        ),
+        (
+            "enter".into(),
+            "decision::Confirm",
+            Some("Decision > ComposerEmpty"),
+        ),
+        (
+            "escape".into(),
+            "decision::Dismiss",
+            Some("Decision > ComposerEmpty"),
+        ),
+        (
+            "tab".into(),
+            "decision::Amend",
+            Some("Decision > ComposerEmpty"),
+        ),
+        // The empty board's key list (`new thread ⌘N`, …): ↑↓ walk it, ⏎
+        // runs the selected row.
+        ("up".into(), "empty_board::Previous", Some("EmptyBoard")),
+        ("down".into(), "empty_board::Next", Some("EmptyBoard")),
+        ("enter".into(), "empty_board::Run", Some("EmptyBoard")),
+        // The floats' own keys, each in its float's context and bound after
+        // the bare rows they shadow: the palette (↑↓ select, ⏎ open, ⇥
+        // preview in a pane, esc), the notifications list (↑↓ select, ⏎
+        // open, ⌫ dismiss, esc) and the shortcuts sheet (↑↓ scroll, esc).
+        ("up".into(), "palette::SelectPrevious", Some("Palette")),
+        ("down".into(), "palette::SelectNext", Some("Palette")),
+        ("enter".into(), "palette::Confirm", Some("Palette")),
+        ("tab".into(), "palette::Preview", Some("Palette")),
+        ("escape".into(), "palette::Dismiss", Some("Palette")),
+        (
+            "up".into(),
+            "notifications::SelectPrevious",
+            Some("Notifications"),
+        ),
+        (
+            "down".into(),
+            "notifications::SelectNext",
+            Some("Notifications"),
+        ),
+        ("enter".into(), "notifications::Open", Some("Notifications")),
+        (
+            "backspace".into(),
+            "notifications::Dismiss",
+            Some("Notifications"),
+        ),
+        (
+            "escape".into(),
+            "notifications::Close",
+            Some("Notifications"),
+        ),
+        ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
+        ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
+        ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie
@@ -306,11 +409,17 @@ mod tests {
             ("cockpit::ToggleNav", "b"),
             ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
-            ("cockpit::NewGroup", "g"),
+            // ⌘G opens a Group; New Group moves to ⌘⇧G.
+            ("palette::OpenGroups", "g"),
+            ("cockpit::NewGroup", "shift-g"),
+            ("palette::Toggle", "k"),
+            ("palette::ShowParked", "shift-p"),
+            ("palette::CompareWithMain", "shift-d"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),
             ("cockpit::CloseThread", "w"),
+            ("cockpit::CloseThread", "backspace"),
             ("cockpit::ReopenThread", "o"),
             ("ferrite::Quit", "q"),
         ];
@@ -367,19 +476,172 @@ mod tests {
     }
 
     /// Tab stays the draft band's chip walk and doubles as the forward L1
-    /// disclosure walk; Shift-Tab is its reverse on Thread Panes.
+    /// disclosure walk; Shift-Tab cycles the permission mode, and stays the
+    /// disclosure walk's reverse step only inside that walk.
     #[test]
-    fn tab_cycles_the_band_on_both_platforms() {
+    fn tab_cycles_the_band_and_shift_tab_cycles_the_mode() {
         for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
             assert!(
-                bindings(platform).contains(&("tab".into(), "cockpit::BandCycle", Some("Ferrite"))),
+                table.contains(&("tab".into(), "cockpit::BandCycle", Some("Ferrite"))),
                 "{platform:?} is missing tab for cockpit::BandCycle"
             );
-            assert!(bindings(platform).contains(&(
+            assert!(table.contains(&("shift-tab".into(), "status::CycleMode", Some("Ferrite"))));
+            assert!(table.contains(&(
                 "shift-tab".into(),
                 "cockpit::ToolCyclePrevious",
-                Some("Ferrite")
+                Some("ToolDisclosure")
             )));
+            assert!(
+                !table.contains(&(
+                    "shift-tab".into(),
+                    "cockpit::ToolCyclePrevious",
+                    Some("Ferrite")
+                )),
+                "the mode owns shift-tab outside a disclosure walk"
+            );
+        }
+    }
+
+    /// The position of the first row binding `key` to `action`.
+    fn at(
+        table: &[(String, &'static str, Option<&'static str>)],
+        key: &str,
+        action: &str,
+    ) -> usize {
+        table
+            .iter()
+            .position(|(keys, bound, _)| keys == key && *bound == action)
+            .unwrap_or_else(|| panic!("{key} → {action} is not in the table"))
+    }
+
+    /// A Decision row's keys live under an empty Composer line only, and
+    /// sit after every bare and Composer row they shadow, so gpui's
+    /// same-depth tie-break hands them the key: ↑↓ past history and the row
+    /// walk, ⏎ past Submit, esc past Interrupt. The ComposerMenu rows stay
+    /// later still. The number keys answer by number in the Decision
+    /// context and on the wall.
+    #[test]
+    fn decision_keys_win_on_an_empty_line_and_numbers_pick() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (key, action) in [
+                ("up", "decision::SelectPrevious"),
+                ("down", "decision::SelectNext"),
+                ("enter", "decision::Confirm"),
+                ("escape", "decision::Dismiss"),
+                ("tab", "decision::Amend"),
+            ] {
+                assert!(
+                    table.contains(&(key.into(), action, Some("Decision > ComposerEmpty"))),
+                    "{platform:?} is missing {key} for {action}"
+                );
+            }
+            assert!(
+                at(&table, "up", "cockpit::HistoryOlder")
+                    < at(&table, "up", "decision::SelectPrevious")
+            );
+            assert!(
+                at(&table, "up", "composer::Up") < at(&table, "up", "decision::SelectPrevious")
+            );
+            assert!(
+                at(&table, "down", "composer::Down") < at(&table, "down", "decision::SelectNext")
+            );
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "decision::Confirm")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "decision::Dismiss")
+            );
+            assert!(
+                at(&table, "up", "decision::SelectPrevious")
+                    < at(&table, "up", "cockpit::MenuPrevious")
+            );
+            for (key, action) in [
+                ("1", "cockpit::PickOption1"),
+                ("2", "cockpit::PickOption2"),
+                ("3", "cockpit::PickOption3"),
+            ] {
+                assert!(table.contains(&(key.into(), action, Some("Decision"))));
+                assert!(table.contains(&(key.into(), action, Some("Wall"))));
+            }
+            for (key, action) in [
+                ("y", "cockpit::Allow"),
+                ("n", "cockpit::Deny"),
+                ("a", "cockpit::Always"),
+            ] {
+                assert!(table.contains(&(key.into(), action, Some("Decision"))));
+                assert!(table.contains(&(key.into(), action, Some("Wall"))));
+            }
+        }
+    }
+
+    /// Every float's keys sit in its own context and after the bare rows
+    /// they shadow; `?` opens the shortcuts sheet only where no text is
+    /// being typed; ⌘⌫ parks from an empty line or with no text field.
+    #[test]
+    fn the_floats_and_the_empty_board_have_their_keys() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (key, action, context) in [
+                ("up", "palette::SelectPrevious", "Palette"),
+                ("down", "palette::SelectNext", "Palette"),
+                ("enter", "palette::Confirm", "Palette"),
+                ("tab", "palette::Preview", "Palette"),
+                ("escape", "palette::Dismiss", "Palette"),
+                ("up", "notifications::SelectPrevious", "Notifications"),
+                ("down", "notifications::SelectNext", "Notifications"),
+                ("enter", "notifications::Open", "Notifications"),
+                ("backspace", "notifications::Dismiss", "Notifications"),
+                ("escape", "notifications::Close", "Notifications"),
+                ("up", "shortcuts::ScrollUp", "Shortcuts"),
+                ("down", "shortcuts::ScrollDown", "Shortcuts"),
+                ("escape", "shortcuts::Dismiss", "Shortcuts"),
+                ("up", "empty_board::Previous", "EmptyBoard"),
+                ("down", "empty_board::Next", "EmptyBoard"),
+                ("enter", "empty_board::Run", "EmptyBoard"),
+                ("?", "shortcuts::Toggle", "ComposerEmpty"),
+                ("?", "shortcuts::Toggle", NO_TEXT_FIELD),
+            ] {
+                assert!(
+                    table.contains(&(key.into(), action, Some(context))),
+                    "{platform:?} is missing {key} for {action} in {context}"
+                );
+            }
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "palette::Confirm")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "palette::Dismiss")
+            );
+            assert!(
+                at(&table, "backspace", "composer::Backspace")
+                    < at(&table, "backspace", "notifications::Dismiss")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "shortcuts::Dismiss")
+            );
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "empty_board::Run")
+            );
+            let park = match platform {
+                Platform::Mac => "cmd-backspace",
+                Platform::Windows => "ctrl-backspace",
+            };
+            assert!(table.contains(&(park.into(), "cockpit::CloseThread", Some("ComposerEmpty"))));
+            assert!(table.contains(&(park.into(), "cockpit::CloseThread", Some(NO_TEXT_FIELD))));
+            let delete = match platform {
+                Platform::Mac => "cmd-backspace",
+                Platform::Windows => "ctrl-shift-backspace",
+            };
+            assert!(
+                at(&table, delete, "composer::DeleteToStart")
+                    < at(&table, park, "cockpit::CloseThread"),
+                "an empty line's park beats the delete; text still deletes"
+            );
         }
     }
 

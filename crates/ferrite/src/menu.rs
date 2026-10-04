@@ -4,12 +4,14 @@
 //! decides the rows and runs the verbs.
 //!
 //! Every menu, picker, popover and card draws in this one grammar: the
-//! float (`float`: `paint::FLOAT`, a 1px `paint::LINE2` edge, square, the
-//! float shadow, no inset), a head row (`head`), section rows (`section`),
-//! rows on the 20px grid with a 2-cell gutter that holds the accent `❯` on
-//! the cursor row (`row`, `item_row`), and a footer of key hints under a
-//! rule (`footer`). A short ladder's chosen step is an inverse token
-//! (`token`).
+//! float (`float`: `FLOAT_GROUND`, a 1px `FLOAT_EDGE`, square, the float
+//! shadow, no inset), a head row (`head`), section rows (`section`), rows
+//! on the 20px grid with a 2-cell gutter that holds the accent `❯` on the
+//! cursor row (`row`, `item_row`), and a footer of key hints under a
+//! `FLOAT_RULE` (`footer`), every word of it `TEXT_MUTED`. A short ladder's
+//! chosen step is an inverse token (`token`). Floats are opaque (theme
+//! WP-E, FL-15), so their rows wear the float inks (`FLOAT_SEL` on the
+//! cursor row, `FLOAT_HOVER` under the pointer) and never a glass overlay.
 //!
 //! A destructive verb never runs on one press: its row arms on the first
 //! (the selection ground, the label `BLOCKED` and `· press again` after it)
@@ -113,9 +115,8 @@ pub fn gutter(cursor: bool) -> Div {
 const ARMED_SEAM: &str = " \u{b7} ";
 const ARMED_ASK: &str = "press again";
 
-/// A row's inks: its label, and the ground (`paint::SELECTION` on the
-/// cursor and an armed row). Its description and key are always
-/// `TEXT_MUTED`.
+/// A row's inks: its label, and the ground (`FLOAT_SEL` on the cursor and
+/// an armed row). Its description and key are always `TEXT_MUTED`.
 fn label_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
     if item.disabled {
         TEXT_MUTED
@@ -172,9 +173,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         .h(px(FLOAT_ROW_H))
         .px(px(FLOAT_PAD_X))
         .whitespace_nowrap()
-        .when(armed || (cursor && !item.disabled), |row| {
-            row.bg(paint::SELECTION)
-        })
+        .when(armed || (cursor && !item.disabled), |row| row.bg(FLOAT_SEL))
         .text_color(rgb(ink))
         .child(gutter(cursor && !item.disabled && !armed))
         .when_some(item.leading, |row, (path, mark)| {
@@ -234,9 +233,10 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         })
 }
 
-/// A row with its pointer role: `paint::HOVER` under the pointer and the
-/// press face, or the carried face on the cursor row; an armed or disabled
-/// row takes none. Callers add selectors and handlers only.
+/// A row with its pointer role: `FLOAT_HOVER` under the pointer and the
+/// press face; the cursor row keeps `FLOAT_SEL` under the pointer (hover
+/// never moves the `❯` or lightens its bar); an armed or disabled row takes
+/// none. Callers add selectors and handlers only.
 pub fn item_row(id: impl Into<ElementId>, item: &Item, cursor: bool, armed: bool) -> Stateful<Div> {
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
@@ -244,9 +244,9 @@ pub fn item_row(id: impl Into<ElementId>, item: &Item, cursor: bool, armed: bool
     if item.disabled || armed {
         row
     } else if cursor {
-        row.hover_carried(key).press_raised()
+        row.float_cursor().press_float()
     } else {
-        row.hover_raised(key).press_raised()
+        row.hover_float(key).press_float()
     }
 }
 
@@ -265,8 +265,8 @@ pub fn note(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// A float's footer: a `paint::LINE` rule, then one row of key hints —
-/// `↑↓ select · ↵ pick · esc` — in `TEXT_MUTED`, the `·` in `TEXT_FAINT`.
+/// A float's footer: a `FLOAT_RULE` rule, then one row of key hints —
+/// `↑↓ select · ⏎ open · esc` — all `TEXT_MUTED`, its `·` too (FL-14).
 pub fn footer(hints: &[(&str, &str)]) -> Div {
     let text = hints
         .iter()
@@ -282,14 +282,13 @@ pub fn footer(hints: &[(&str, &str)]) -> Div {
     footer_line(text)
 }
 
-/// A footer row of already-joined words (`·` seams turn faint).
+/// A footer row of already-joined words, all `TEXT_MUTED`.
 pub fn footer_line(text: impl Into<SharedString>) -> Div {
     let text: SharedString = text.into();
-    let seams = seam_highlights(&text);
-    footer_shell().child(gpui::StyledText::new(text).with_highlights(seams))
+    footer_shell().child(text)
 }
 
-/// The footer's row with nothing in it yet: the `paint::LINE` rule, half a
+/// The footer's row with nothing in it yet: the `FLOAT_RULE` rule, half a
 /// row above it, one row of `TEXT_MUTED`. For a footer whose keys must be
 /// drawn (`⌘`, `components::key_combo`).
 pub fn footer_shell() -> Div {
@@ -301,30 +300,15 @@ pub fn footer_shell() -> Div {
         .mt(px(FLOAT_SECTION_GAP))
         .px(px(FLOAT_PAD_X))
         .border_t_1()
-        .border_color(paint::LINE)
+        .border_color(FLOAT_RULE)
         .whitespace_nowrap()
         .overflow_hidden()
         .text_color(rgb(TEXT_MUTED))
 }
 
-/// Every `·` in `text` in structure ink.
-pub fn seam_highlights(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
-    text.match_indices('\u{b7}')
-        .map(|(at, seam)| {
-            (
-                at..at + seam.len(),
-                HighlightStyle {
-                    color: Some(rgb(TEXT_FAINT).into()),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect()
-}
-
 /// One step of a short ladder (an effort level, a two-way setting): the
 /// chosen one inverse — `ACCENT_STRONG` with `ON_ACCENT` at `W_STRONG` — the
-/// rest `TEXT_MUTED`, `paint::HOVER` under the pointer.
+/// rest `TEXT_MUTED`, `FLOAT_HOVER` under the pointer.
 pub fn token(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -350,8 +334,8 @@ pub fn token(
         token
             .text_color(rgb(TEXT_MUTED))
             .cursor_pointer()
-            .hover_raised(key)
-            .press_raised()
+            .hover_float(key)
+            .press_float()
     }
 }
 
@@ -484,7 +468,7 @@ pub struct Ladder {
 
 /// A picker in the float grammar (the prototype's `#picker`): a head
 /// (`model  /model`), the choices as rows — sections led by a provider's
-/// mark, the cursor's `❯` on its `paint::SELECTION` bar, a green `✓` on the
+/// mark, the cursor's `❯` on its `FLOAT_SEL` bar, a green `✓` on the
 /// standing choice — an optional ladder row, and a footer of the keys that
 /// act. The kit `Popover` hangs it off its trigger; the menu owns its
 /// keyboard (↑/↓ the cursor, ←/→ the ladder, ↵ picks, esc closes) in the
@@ -503,10 +487,14 @@ pub struct ChoiceMenu {
     pub return_focus: gpui::FocusHandle,
     pub on_open: OpenChanged,
     pub on_pick: Picked,
-    /// Where the menu may rest: its foot `FLOAT_OFFSET` above the
+    /// Where the menu may rest: its foot `MODEL_PICKER_GAP` above the
     /// Composer's band, its right edge inside the Pane's. `None` hangs it off
     /// the trigger alone.
     pub place: Option<components::FloatPlace>,
+    /// How far left of its trigger the menu's left edge stands: the model
+    /// picker's `MODEL_PICKER_NUDGE`, so its section logo sits left of the
+    /// status logo; 0 lines the menu up with its trigger.
+    pub lead: f32,
     /// The head row: the picker's name and the command that opens it.
     pub head: Option<(SharedString, SharedString)>,
     pub ladder: Option<Ladder>,
@@ -515,6 +503,28 @@ pub struct ChoiceMenu {
     /// A fixed width (the model picker's 66 cells); else it hugs its rows
     /// between `CHOICE_MENU_MIN_W` and `SLASH_MENU_W`.
     pub width: Option<f32>,
+}
+
+/// A picker's trigger that never wears the selected face while its menu is
+/// open (FL-13): the status segment stays a quiet segment under its float,
+/// no raised box.
+#[derive(IntoElement)]
+struct QuietTrigger(gpui::component::button::Button);
+
+impl gpui::component::Selectable for QuietTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+}
+
+impl RenderOnce for QuietTrigger {
+    fn render(self, _: &mut gpui::Window, _: &mut gpui::App) -> impl IntoElement {
+        self.0
+    }
 }
 
 #[derive(Default)]
@@ -562,6 +572,7 @@ struct ChoiceContent {
     on_open: OpenChanged,
     return_focus: gpui::FocusHandle,
     place: Option<components::FloatPlace>,
+    lead: f32,
     state: gpui::Entity<ChoiceState>,
     focus: gpui::FocusHandle,
 }
@@ -680,24 +691,12 @@ impl ChoiceContent {
             if let (true, Some((path, ink))) = (marked, choice.icon) {
                 item = item.leading(path, ink);
             }
+            // The pointer paints its own row (`FLOAT_HOVER`) and leaves the
+            // cursor where the arrows put it: only ↑↓ move the `❯`.
             let pick = self.clone();
-            let hover = self.clone();
             rows = rows.child(
                 item_row(("choice-row", index), &item, cursor == Some(index), false)
                     .debug_selector(move || format!("choice-row-{index}"))
-                    .on_mouse_move(move |_, window, cx| {
-                        if !hover.choices.get(index).is_some_and(live) {
-                            return;
-                        }
-                        let moved = hover.state.update(cx, |state, _| {
-                            let moved = state.cursor != Some(index);
-                            state.cursor = Some(index);
-                            moved
-                        });
-                        if moved {
-                            window.refresh();
-                        }
-                    })
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         pick.pick(index, window, cx);
@@ -715,7 +714,7 @@ impl ChoiceContent {
                 .pt(px(FLOAT_SECTION_GAP))
                 .px(px(FLOAT_PAD_X))
                 .border_t_1()
-                .border_color(paint::LINE)
+                .border_color(FLOAT_RULE)
                 .whitespace_nowrap()
                 .child(
                     div()
@@ -745,13 +744,17 @@ impl ChoiceContent {
             if let Some(place) = menu.place {
                 // Inside the surface's 1px edge: add it back.
                 let bounds = bounds.dilate(px(1.));
+                let lead = menu.lead;
                 let moved = menu.state.update(cx, |state, _| {
                     // Undo the offsets in force to find where the kit laid
-                    // it, then solve from there.
+                    // it, then solve from there: the foot
+                    // `MODEL_PICKER_GAP` over the band, the left edge
+                    // `lead` left of the trigger, the right edge inside
+                    // the Pane.
                     let natural_bottom = f32::from(bounds.bottom()) + state.lift;
                     let natural_right = f32::from(bounds.right()) + state.shift;
-                    let lift = natural_bottom - (place.floor - FLOAT_OFFSET);
-                    let shift = (natural_right - place.limit_right).max(0.);
+                    let lift = natural_bottom - (place.floor - MODEL_PICKER_GAP);
+                    let shift = (natural_right - place.limit_right).max(0.).max(lead);
                     let moved = (lift - state.lift).abs() > 0.5
                         || (shift - state.shift).abs() > 0.5
                         || !state.placed;
@@ -848,7 +851,7 @@ impl RenderOnce for ChoiceMenu {
             .appearance(false)
             .overlay_closable(false)
             .anchor(self.anchor)
-            .trigger(self.trigger)
+            .trigger(QuietTrigger(self.trigger))
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx));
         if self.place.is_some() {
@@ -870,6 +873,7 @@ impl RenderOnce for ChoiceMenu {
                 on_open: self.on_open,
                 return_focus: self.return_focus,
                 place: self.place,
+                lead: self.lead,
                 state,
                 focus: focus.clone(),
             });
@@ -928,6 +932,26 @@ mod tests {
         assert_eq!(drawn.style().mouse_cursor, None);
     }
 
+    /// FL-14: a footer's words and seams are all `TEXT_MUTED` (no faint
+    /// `·`), under the float's own rule.
+    #[test]
+    fn a_footer_is_one_muted_line_under_the_float_rule() {
+        let mut drawn = footer(&[
+            ("\u{2191}\u{2193}", "model"),
+            ("\u{23ce}", "apply"),
+            ("esc", ""),
+        ]);
+        assert_eq!(drawn.style().text.color, Some(rgb(TEXT_MUTED).into()));
+        assert_eq!(drawn.style().border_color, Some(FLOAT_RULE.into()));
+        // The cursor row keeps its bar under the pointer; another row only
+        // takes the float's hover ink.
+        let cursor = Item::new("Opus 5.5 (1M)");
+        let mut drawn = item_row("c", &cursor, true, false);
+        assert_eq!(drawn.style().background, Some(FLOAT_SEL.into()));
+        let mut rest = item_row("r", &cursor, false, false);
+        assert_eq!(rest.style().background, None);
+    }
+
     #[test]
     fn the_floating_shell_masks_the_cursor_beneath_it() {
         let mut drawn = shell();
@@ -965,10 +989,7 @@ mod tests {
     fn an_armed_destructive_row_holds_the_fill_and_colours_its_word() {
         let delete = Item::new("Delete thread").destructive();
         let mut drawn = row(2, &delete, true);
-        assert_eq!(
-            drawn.style().background,
-            Some(crate::theme::paint::SELECTION.into())
-        );
+        assert_eq!(drawn.style().background, Some(FLOAT_SEL.into()));
         let mut calm = row(2, &delete, false);
         assert_eq!(calm.style().background, None);
         assert_eq!(

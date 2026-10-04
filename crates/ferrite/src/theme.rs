@@ -159,8 +159,10 @@ use gpui::FontWeight;
 // --------------------------------------------------------------- platform
 
 /// Glass on the frame (rule 4): macOS opens the window blurred and paints
-/// translucent fills; every other platform paints the opaque greys.
-pub const GLASS: bool = cfg!(target_os = "macos");
+/// translucent fills; every other platform paints the opaque greys. The
+/// `opaque` Cargo feature forces the opaque greys on macOS too (the
+/// headless parity captures, which cannot show the desktop blur).
+pub const GLASS: bool = cfg!(target_os = "macos") && !cfg!(feature = "opaque");
 
 /// An opaque `0xRRGGBB` as a `0xRRGGBBAA` paint.
 pub const fn solid(rgb: u32) -> u32 {
@@ -392,8 +394,8 @@ pub const ACCENT_STRONG: u32 = ACCENT;
 /// A primary button under the pointer and held down.
 pub const PRIMARY_HOVER: u32 = 0xa5c1f3;
 pub const PRIMARY_ACTIVE: u32 = 0x7fa3e3;
-/// `#111214` — ink on an accent fill.
-pub const ON_ACCENT: u32 = 0x111214;
+/// `#0b0d12` — ink on an accent fill (the prototype's inverse token).
+pub const ON_ACCENT: u32 = 0x0b0d12;
 /// **The** keyboard-focus ink: the focused Pane's border, the kit's `ring`,
 /// every focus outline. The accent itself.
 pub const FOCUS_RING: u32 = ACCENT;
@@ -764,8 +766,8 @@ pub const GRID_PAD: f32 = 10.0;
 /// corner sits directly beneath the caption buttons, and their hover face
 /// — edge-to-edge by design — reads as lying over the Pane.
 pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
-/// A toast's width: the nav column less 8px each side.
-pub const TOAST_W: f32 = NAV_WIDTH - 2.0 * SPACE_2;
+/// A toast's width: 52 cells (the prototype's `.toast`).
+pub const TOAST_W: f32 = 52.0 * CH;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
 /// one toast (`max_items`), so this is only ever the kit's own spacing.
 pub const TOAST_GAP: f32 = SPACE_3;
@@ -817,8 +819,9 @@ pub const ICON_CHEVRON: f32 = 12.0;
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
-/// 10px — the drawn `⌘` in a key combination (`components::key_combo`).
-pub const KEY_GLYPH: f32 = 10.0;
+/// 7.5px — the drawn `⌘` in a key combination (`components::key_combo`):
+/// the fallback face's glyph at the grid size, 15 × 14 device pixels.
+pub const KEY_GLYPH: f32 = 7.5;
 /// A keycap: 18px high (it fits inside a 20px row), 5px inline padding.
 pub const KBD_H: f32 = 18.0;
 pub const KBD_PAD_X: f32 = 5.0;
@@ -1652,25 +1655,35 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 ///   `TEXT_STRONG` on `COMPOSER_SELECTION`. Queued prompts (dim `❯` lines)
 ///   stand inside the band above the line.
 /// - **The caret is a block** one cell wide and one row high in `CARET`. In
-///   the Composer that holds the keyboard it blinks softly
-///   (`MOTION_CARET_BLINK_MS`, `components::caret_blink`) and the character
-///   under it takes `ON_ACCENT`; everywhere else it is a still, hollow 1px
-///   box in `CARET_HOLLOW`. Typing restarts the blink solid.
-/// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`,
-///   its pieces joined by a `TEXT_FAINT` `·` and dropping out whole from the
-///   right where the band is narrow: `Steer this thread · / for commands ·
-///   drop or paste images`; while a turn runs `queue a follow-up · ⏎ sends
-///   when the turn ends`; under a Decision `answer above, or steer`.
-/// - **The status line** sits under the band (`COMPOSER_STATUS_GAP` above,
-///   `COMPOSER_STATUS_PAD_B` below), drawn in the focused Pane only (Solo
-///   always; an unfocused board cell holds its room empty, so stepping
-///   focus moves no body):
-///   `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's logomark and
-///   `opus 5.5 (1M)` · `medium` · `ctx`, an 8-cell meter and `32%` ·
-///   `1 file +9 −4`; at its right the verb hint (`⏎ send`, `esc interrupt`).
-///   Every segment is a quiet control (`COMPOSER_SEG_PAD_X` padding,
-///   `paint::HOVER` under the pointer, no chevron) that opens what it always
-///   opened; segments are split by a `TEXT_FAINT` `·`.
+///   Solo and in the focused board Pane it is always the block, blinking
+///   softly (`MOTION_CARET_BLINK_MS`, `components::caret_blink`) whoever
+///   holds the keyboard — the transcript, an open float, an inactive
+///   window — and the character under it takes `ON_ACCENT`; an unfocused
+///   board Pane draws a still, hollow 1px box in `CARET_HOLLOW`. Typing
+///   restarts the blink solid.
+/// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`
+///   throughout (its `·` too), its pieces dropping out whole from the right
+///   where the band is narrow: Solo `Steer this thread · / for commands ·
+///   drop or paste images`; the focused Pane while a turn runs `queue a
+///   follow-up · ⏎ sends when the turn ends`; a Pane a Decision waits in
+///   `answer above, or steer`; any other unfocused Pane nothing.
+/// - **The working line** (`pane::working_line`, the spinner, the caption
+///   and its facts) is the Composer's first row while a turn runs,
+///   `COMPOSER_WORKING_GAP` above the band's rule.
+/// - **The band** stands between two `COMPOSER_RULE` rules (transparent on
+///   the grey and glass themes, the prototype's `--rule`).
+/// - **The status line** sits under the lower rule (`COMPOSER_STATUS_GAP`
+///   above, `COMPOSER_STATUS_PAD_B` below), in Solo and the focused board
+///   Pane only. An unfocused board Pane is flush: its band, the rule and
+///   `COMPOSER_STATUS_PAD_B` to the Pane's foot.
+///   Solo: `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's
+///   logomark and `opus 5.5 (1M) · medium` (one control: the model and its
+///   effort, a `TEXT_MUTED` `·` between) · `ctx`, an 8-cell meter and
+///   `32%` · `1 file +9 −4`; at its right `⇧⇥ mode · ? shortcuts`. The
+///   focused board Pane: the mode, the model and `ctx` only, nothing at the
+///   right. Every segment is a quiet control (`COMPOSER_SEG_PAD_X` padding,
+///   `paint::HOVER` under the pointer, no chevron) that opens what it
+///   always opened; segments are split by a `TEXT_FAINT` `·`.
 ///
 /// Any pad or line change here must update `pane::composer_fixed_height` in
 /// the same commit.
@@ -1691,7 +1704,7 @@ pub const COMPOSER_SEG_PAD_X: f32 = CH;
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
 pub const COMPOSER_INSET_B: f32 = SPACE_2;
 pub const COMPOSER_CHIP_R: f32 = R_CHIP;
-/// One band row: what an unfocused board cell's Composer measures, and the
+/// One band row: what an unfocused board cell's band measures, and the
 /// Subagent footer's row.
 pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H;
 /// The ctx meter: eight cells by 4px on a `paint::LINE2` track, filled
@@ -1701,9 +1714,20 @@ pub const CTX_METER_W: f32 = 8.0 * CH;
 pub const CTX_METER_H: f32 = 4.0;
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
-/// The mode marker before the mode word (`⏵⏵ accept edits`): a glyph box,
-/// drawn (Geist Mono lacks `⏵` and `⏸`).
-pub const MODE_MARK: f32 = GLYPH_BOX;
+/// The mode marker before the mode word (`⏵⏵ accept edits`), drawn (Geist
+/// Mono lacks `⏵` and `⏸`) as the fallback face sets it: each `⏵` a
+/// 6.9px advance with a 5 × 5.5px triangle, centred on the row so it rides
+/// the x-height, then one space before the word — which starts 21.6px
+/// after the marker (`⏵⏵`), 14.7px after a lone `⏵` or `⏸`.
+pub const MODE_MARK_W: f32 = 13.8;
+pub const MODE_MARK_ONE_W: f32 = 6.9;
+pub const MODE_MARK_H: f32 = 5.5;
+/// The Composer's band sits between two 1px rules (the prototype's
+/// `.comp .rule`, transparent on these themes): the room is real, the ink
+/// is none.
+pub const COMPOSER_RULE: f32 = 1.0;
+/// Under the working line, above the band's upper rule.
+pub const COMPOSER_WORKING_GAP: f32 = 6.0;
 /// The provider's logomark in a status segment or a picker section.
 pub const STATUS_LOGO: f32 = 11.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
@@ -1773,6 +1797,11 @@ pub const BG_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_CHIP_H: f32 = ROW;
 pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;
+/// The model picker (the prototype's `#picker`) hangs off the model
+/// segment: its left edge 8px left of the segment's (so its section logo
+/// sits 8px left of the status logo), its foot 5px over the input band.
+pub const MODEL_PICKER_NUDGE: f32 = 8.0;
+pub const MODEL_PICKER_GAP: f32 = 5.0;
 // (end WP-D) — append above this line only
 
 // ======================================== WP-E · menus, popovers, sheets, notifications
@@ -1797,9 +1826,8 @@ pub const ATTACH_THUMB: f32 = 12.0;
 ///   `TEXT_MUTED` hard right; a `RUNNING` `✓` on the standing choice. The
 ///   cursor row is `paint::SELECTION`, a row under the pointer
 ///   `paint::HOVER`.
-/// - **A footer** (`menu::footer`): a `paint::LINE` rule, then one row of key
-///   hints in `TEXT_MUTED` split by a `TEXT_FAINT` `·`: `↑↓ select · ⏎ pick ·
-///   esc`.
+/// - **A footer** (`menu::footer`): a `FLOAT_RULE` rule, then one row of
+///   key hints, all `TEXT_MUTED` (its `·` too): `↑↓ select · ⏎ open · esc`.
 /// - **An inverse token** (`menu::token`): the chosen one of a short ladder
 ///   (an effort, a two-way setting) on `ACCENT_STRONG` in `ON_ACCENT` at
 ///   `W_STRONG`; the rest `TEXT_MUTED`, `paint::HOVER` under the pointer.
@@ -1829,8 +1857,10 @@ pub const TOOLTIP_PAD_Y: f32 = 0.0;
 pub const TOOLTIP_MAX_W: f32 = 40.0 * CH;
 /// The notifications list (the prototype's `#notes`): 76 cells; a row is
 /// one line in four columns — the mark (2 cells), the state word (10), the
-/// title and its detail, the age (5, right).
+/// title and its detail, the age (5, right). It hangs from the bell, its
+/// left on the bell's, `NOTICE_PANEL_GAP` under it.
 pub const NOTICE_PANEL_W: f32 = 76.0 * CH;
+pub const NOTICE_PANEL_GAP: f32 = 4.0;
 pub const NOTICE_MARK_W: f32 = 2.0 * CH;
 pub const NOTICE_STATE_W: f32 = 10.0 * CH;
 pub const NOTICE_AGE_W: f32 = 5.0 * CH;
@@ -1839,9 +1869,8 @@ pub const NOTICE_AGE_W: f32 = 5.0 * CH;
 /// waits (`ATTENTION`, `BLOCKED`, else `TEXT_STRONG`).
 pub const BADGE_FS: f32 = 10.0;
 pub const BADGE_LH: f32 = 12.0;
-/// With the nav collapsed, toasts stack BottomRight this far up: the
-/// board's padding, the Pane's edge, the band and the status line, then
-/// half a row of air, so the stack clears the Composer.
+/// The kit's own toast stack (unused by the bell, kept for the kit's
+/// margins in `init_components`): this far up from the window's foot.
 pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + 1.0
     + 2.0 * COMPOSER_PAD_Y
@@ -1850,6 +1879,90 @@ pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + COMPOSER_STATUS_H
     + COMPOSER_STATUS_PAD_B
     + HALF_ROW;
+/// **A toast** (the prototype's `.toast`): a float `TOAST_W` wide, its
+/// right edge `TOAST_RIGHT` in from the window's, its foot `TOAST_BOTTOM`
+/// over the bottom bar. One row of head (`◆ needs you · <title>`, `⌘D`), one
+/// body line, then the quick answers: `TOAST_BUTTON_H` boxes a cell apart,
+/// `TOAST_QUICK_GAP` under the body and over the float's edge.
+pub const TOAST_RIGHT: f32 = 2.0 * CH;
+pub const TOAST_BOTTOM: f32 = ROW + 16.0;
+pub const TOAST_BUTTON_H: f32 = ROW + 2.0;
+pub const TOAST_QUICK_GAP: f32 = HALF_ROW;
+/// **The palette** (the prototype's `#palette`, ⌘K): 84 cells wide, centred
+/// on the board, its head `PALETTE_TOP` under the board's top, over the
+/// veil (`VEIL`, the board only). The input row is a row and 12px, under a
+/// `FLOAT_RULE`; a Thread's context stands `PALETTE_CONTEXT_GAP` after its
+/// name; the list scrolls past `PALETTE_MAX_H`. The shortcuts sheet takes
+/// the same geometry and veil.
+pub const PALETTE_W: f32 = 84.0 * CH;
+pub const PALETTE_TOP: f32 = 56.0;
+pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
+pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
+pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
+/// The drawn `⌘` in a key combination (`KEY_GLYPH` wide): 7px high (15 ×
+/// 14 device px), lifted `KEY_GLYPH_LIFT` off the line's centre onto the
+/// cap height, `KEY_GLYPH_GAP` before the next letter.
+pub const KEY_GLYPH_H: f32 = 7.0;
+pub const KEY_GLYPH_LIFT: f32 = 1.0;
+pub const KEY_GLYPH_GAP: f32 = 1.5;
+/// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
+/// float stays opaque.** The prototype frosts its floats (`.glass .float`:
+/// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
+/// so a float could only frost what is behind it as a window of its own
+/// (`WindowKind::PopUp`, `WindowBackgroundAppearance::Blurred`). That
+/// window cannot be the prototype's float, for three reasons, each in the
+/// gpui-pre-macos 0.3.3 source:
+///
+/// 1. **It is always a titled window.** `MacWindow::open` builds the style
+///    mask as `NSTitledWindowMask | NSFullSizeContentViewWindowMask` when no
+///    titlebar is asked for (`src/window.rs:918-937`), and PopUp only adds
+///    `NSWindowStyleMaskNonactivatingPanel` (`src/window.rs:946`). AppKit
+///    gives a titled window rounded corners and its own window shadow, and
+///    `WindowOptions` offers no borderless mask, corner radius or shadow
+///    switch (`gpui-pre-0.3.3/src/platform.rs:1948-2017`; its
+///    `window_decorations` is X11/Wayland only, `:2008-2010`). A float is
+///    square (rule 2) and casts the one `0 6px 14px rgba(0,0,0,.5)` shadow;
+///    drawn inside the window instead, that shadow's margin would be
+///    frosted with the rest of the rect, since the blur view fills the
+///    whole content view (`set_background_appearance`,
+///    `src/window.rs:1659-1692`).
+/// 2. **It takes the keyboard when clicked.** Both window classes answer
+///    `canBecomeKeyWindow` with YES (`build_window_class`,
+///    `src/window.rs:376`, used for the panel class at `:134`); the
+///    non-activating mask keeps the app from activating, not the panel from
+///    becoming key. A palette or picker clicked with the pointer would pull
+///    the keyboard out of the main window, whose key table (the Composer,
+///    the Decision keys, the palette's own) is the only one the floats run
+///    on.
+/// 3. **No anchored native popup exists.** `MacPlatform::open_window`
+///    rejects `WindowKind::AnchoredPopup` with `PopupNotSupportedError`
+///    (`src/platform.rs:657-661`), so a PopUp is placed by hand in screen
+///    space and follows no move, resize, Space or fullscreen change of its
+///    owner.
+///
+/// The verdict: floats render in-window and opaque (`float::hang`), on the
+/// opaque float inks below (`FLOAT_GROUND`, `FLOAT_EDGE`, `FLOAT_RULE`,
+/// `FLOAT_SEL`, `FLOAT_HOVER` = `#2a2a2c`, `#3c3c3f`, `#2f2f31`, `#343437`,
+/// `#2c2c2e`), never a glass overlay over an opaque ground, and
+/// `FLOAT_GLASS` stays opaque. Flip `FLOAT_FROSTED` when a gpui release
+/// lifts the three blocks; the inks then follow the glass values.
+pub const FLOAT_FROSTED: bool = false;
+const fn float_ink(glass: u32, opaque: u32) -> Paint {
+    if FLOAT_FROSTED {
+        Paint::pick(glass, solid(opaque))
+    } else {
+        Paint(solid(opaque))
+    }
+}
+/// A float's ground, edge, inner rule (under a head, over a footer), the
+/// cursor row and a row under the pointer (FL-14).
+pub const FLOAT_GROUND: Paint = float_ink(FLOAT_GLASS, FLOAT);
+pub const FLOAT_EDGE: Paint = float_ink(LINE2_GLASS, LINE2);
+pub const FLOAT_RULE: Paint = float_ink(LINE_GLASS, LINE);
+pub const FLOAT_SEL: Paint = float_ink(SELECTION_GLASS, SELECTION);
+pub const FLOAT_HOVER: Paint = float_ink(HOVER_GLASS, HOVER);
+/// A quick answer under the pointer on a float (a toast's buttons).
+pub const FLOAT_BAND2: Paint = float_ink(BAND2_GLASS, BAND2);
 /// A sheet (Settings, the Project editor, the image preview) is a float at
 /// sheet size: its head two rows (the title and the one close control over
 /// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.

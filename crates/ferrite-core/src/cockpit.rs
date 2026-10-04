@@ -3155,6 +3155,18 @@ impl Cockpit {
         self.notifications.clear();
     }
 
+    /// The bell's `mark all read`: every Notice and live request read,
+    /// none removed (`Notifications::mark_all_read`).
+    pub fn mark_notices_read(&mut self) {
+        self.notifications.mark_all_read();
+    }
+
+    /// Fixtures only (the parity scenes): date a Thread's notification
+    /// records (`Notifications::fixture_backdate`).
+    pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
+        self.notifications.fixture_backdate(thread, at);
+    }
+
     fn acknowledge_focus(&mut self) {
         if let Some(thread) = self.roster.focused_thread() {
             let subject = self

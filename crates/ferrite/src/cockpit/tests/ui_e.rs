@@ -2,55 +2,64 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// The one toast (C8, only ever shown with the nav on the rail) stands
-/// BottomRight above the Composer, one at a time, whichever way the nav is
-/// folded: there is no bottom-left card any more.
+/// FL-18: a request from a Thread off the focused Pane toasts with the nav
+/// open, as one float 52 cells wide, its right edge two cells in from the
+/// window's, its foot 36px over the bottom bar.
 #[gpui::test]
-fn the_toast_stands_bottom_right_above_the_composer(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("toast-side", 1);
+fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("toast-side", 2);
+    let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let side = |cx: &mut gpui::VisualTestContext| {
-        cx.update(|_, cx| {
-            let toasts = &gpui::component::Theme::global(cx).notification;
-            (
-                toasts.placement,
-                toasts.margins.bottom,
-                toasts.width,
-                toasts.max_items,
-            )
-        })
-    };
-    let expected = (
-        gpui::Anchor::BottomRight,
-        px(crate::theme::TOAST_ABOVE_COMPOSER),
-        px(crate::theme::NAV_WIDTH - 2. * crate::theme::SPACE_2),
-        1,
-    );
-    assert_eq!(side(cx), expected);
-    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    let off_focus = view.read_with(cx, |view, _| {
+        threads
+            .iter()
+            .copied()
+            .find(|thread| Some(*thread) != view.focused_thread())
+            .unwrap()
+    });
+    let stream = threads
+        .iter()
+        .position(|thread| *thread == off_focus)
+        .unwrap();
+    fake.streams.borrow()[stream]
+        .send(super::decision("toast-side"))
+        .unwrap();
     tick(cx);
-    assert_eq!(side(cx), expected);
-    let (_, bottom, _, _) = side(cx);
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let window_h = cx.update(|window, _| window.viewport_size().height);
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.bell.toasts().len(),
+            1,
+            "the nav is open, and it toasts"
+        );
+    });
+    let selector: &'static str = format!("toast-{}", off_focus.get()).leak();
+    let toast = cx.debug_bounds(selector).expect("the toast is up");
+    let window = cx.update(|window, _| window.viewport_size());
     assert!(
-        window_h - bottom <= editor.origin.y,
-        "the toast's foot clears the Composer's line"
+        (toast.size.width - px(crate::theme::TOAST_W)).abs() <= px(1.),
+        "52 cells: {toast:?}"
     );
-    view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
-    tick(cx);
-    assert_eq!(side(cx), expected);
+    assert!(
+        (toast.right() - (window.width - px(crate::theme::TOAST_RIGHT))).abs() <= px(1.),
+        "two cells in from the window's edge: {toast:?}"
+    );
+    assert!(
+        (toast.bottom()
+            - (window.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM)))
+        .abs()
+            <= px(1.),
+        "36px over the bottom bar: {toast:?}"
+    );
 }
 
-/// At the app size with the nav on the rail, an off-board Thread's finish
-/// stands as one toast, BottomRight above the Composer: it never covers a
-/// Pane's head or the focused Composer, and it goes once its Thread lands
-/// on the board.
+/// A finished turn keeps its toast rule: with the nav folded, an off-board
+/// Thread's finish toasts (only `⏎ open`), clear of every Pane head, and it
+/// goes once its Thread lands on the board.
 #[gpui::test]
-fn the_rails_one_toast_clears_every_pane_head_and_the_composer(cx: &mut TestAppContext) {
-    use gpui::component::WindowExt as _;
+fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestAppContext) {
     // A board of two, and a third Thread off it.
     let (mut core, fake) = cockpit("toast-geometry", 3);
     let threads = core.threads();
@@ -74,30 +83,16 @@ fn the_rails_one_toast_clears_every_pane_head_and_the_composer(cx: &mut TestAppC
         })
         .unwrap();
     tick(cx);
-    std::thread::sleep(Duration::from_millis(600));
-    for _ in 0..8 {
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
-    }
-    cx.update(|window, cx| {
-        assert_eq!(
-            window.notifications(cx).len(),
-            1,
-            "one toast, off the board"
-        )
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.bell.toasts().len(), 1, "one toast, off the board")
     });
     let selector: &'static str = format!("toast-{}", threads[2].get()).leak();
     let toast = cx.debug_bounds(selector).expect("the toast is up");
-    let window = cx.update(|window, _| window.viewport_size());
-    assert!(
-        toast.right() <= window.width - px(crate::theme::GRID_PAD),
-        "BottomRight, inside the board's padding: {toast:?}"
-    );
-    assert!(
-        toast.bottom() <= window.height - px(crate::theme::TOAST_ABOVE_COMPOSER),
-        "above the Composer: {toast:?}"
-    );
+    let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
+    assert!(cx.debug_bounds(open).is_some(), "a finish offers `⏎ open`");
+    let allow: &'static str = format!("toast-allow-{}", threads[2].get()).leak();
+    assert!(cx.debug_bounds(allow).is_none(), "and no answers");
     for thread in &threads[..2] {
         let head: &'static str = format!("pane-head-{}", thread.get()).leak();
         let head = cx.debug_bounds(head).expect("the board shows a Pane head");
@@ -106,21 +101,15 @@ fn the_rails_one_toast_clears_every_pane_head_and_the_composer(cx: &mut TestAppC
             "a toast would cover the Pane head at {head:?}"
         );
     }
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    assert!(
-        toast.bottom() <= editor.origin.y,
-        "a toast would cover the Composer"
-    );
 
     // The Thread lands on the board: its toast goes.
     view.update(cx, |view, cx| view.land_on_thread(threads[2], cx));
     tick(cx);
-    cx.executor().advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
-    cx.update(|window, cx| {
+    view.read_with(cx, |view, _| {
         assert!(
-            window.notifications(cx).is_empty(),
+            view.bell.toasts().is_empty(),
             "a Thread on the board has no toast"
         )
     });
+    assert!(cx.debug_bounds(selector).is_none());
 }

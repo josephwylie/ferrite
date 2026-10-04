@@ -382,6 +382,43 @@ impl Notifications {
         }
     }
 
+    /// The bell's `mark all read`: every Notice and every live request is
+    /// read. Nothing is removed — the rows stay, their titles drop from
+    /// unread to plain, and the badge clears.
+    pub fn mark_all_read(&mut self) {
+        for notice in self.notices.iter_mut() {
+            notice.read = true;
+        }
+        for notice in self.decisions.values_mut() {
+            notice.read = true;
+        }
+    }
+
+    /// The bell's badge: live requests nobody has read or dismissed yet.
+    /// A finished turn, failed or not, never counts — only what waits on
+    /// the operator.
+    pub fn unread_requests(&self) -> usize {
+        self.decisions
+            .values()
+            .filter(|notice| !notice.read && !notice.dismissed)
+            .count()
+    }
+
+    /// Fixtures only (the parity scenes): date every record about `thread`
+    /// at `at`, so a scene's ages read as the prototype's (`2m`, `9m`).
+    pub fn fixture_backdate(&mut self, thread: ThreadId, at: SystemTime) {
+        for notice in self.notices.iter_mut() {
+            if notice.thread == thread {
+                notice.at = at;
+            }
+        }
+        for notice in self.decisions.values_mut() {
+            if notice.id.thread == thread {
+                notice.at = at;
+            }
+        }
+    }
+
     /// Every live Decision attention record, ordered by its stable key.
     pub fn decisions(&self) -> impl Iterator<Item = &DecisionNotice> {
         self.decisions.values().filter(|notice| !notice.dismissed)
@@ -803,6 +840,80 @@ mod tests {
         let applied = b.activity.apply(ActivityInput::Disconnect);
         assert_eq!(b.frame(applied), None);
         assert_eq!(b.wait(Duration::from_secs(60)), None, "the Session is gone");
+    }
+
+    /// A live request's record, as `observe_decisions` makes one.
+    fn request(b: &mut Bench, thread: u64, serial: u64) -> DecisionNoticeId {
+        let id = DecisionNoticeId {
+            thread: ThreadId::new(thread),
+            handle: DecisionHandle {
+                generation: 7,
+                serial,
+                request_id: format!("r{serial}"),
+            },
+        };
+        b.notifications.decisions.insert(
+            id.clone(),
+            DecisionNotice {
+                id: id.clone(),
+                subject: Some(Subject::Main),
+                kind: RequestKind::Permission,
+                read: false,
+                at: SystemTime::now(),
+                seq: serial,
+                dismissed: false,
+            },
+        );
+        id
+    }
+
+    /// The badge counts unread, undismissed live requests only; `mark all
+    /// read` reads everything and removes nothing.
+    #[test]
+    fn the_badge_counts_waiting_requests_and_mark_all_read_keeps_every_row() {
+        let mut b = Bench::new(DEFAULT_GRACE);
+        for _ in 0..3 {
+            b.prompt();
+            b.turn_ended(done()).unwrap();
+        }
+        let first = request(&mut b, 2, 1);
+        let _second = request(&mut b, 3, 2);
+        let dismissed = request(&mut b, 4, 3);
+        assert!(b.notifications.dismiss_decision(&dismissed));
+        assert_eq!(
+            b.notifications.unread_requests(),
+            2,
+            "2 waiting; 3 unread completions never count"
+        );
+        assert_eq!(b.notifications.unread(), 5);
+        assert_eq!(
+            b.notifications.open_decision(&first),
+            Some(ThreadId::new(2))
+        );
+        assert_eq!(b.notifications.unread_requests(), 1);
+
+        b.notifications.mark_all_read();
+        assert_eq!(b.notifications.unread_requests(), 0);
+        assert_eq!(b.notifications.unread(), 0);
+        assert_eq!(b.notifications.notices().count(), 3, "nothing is removed");
+        assert!(b.notifications.notices().all(|notice| notice.read));
+        assert_eq!(b.notifications.decisions().count(), 2);
+        assert!(b.notifications.decisions().all(|notice| notice.read));
+    }
+
+    /// A fixture can date a Thread's records for its scene.
+    #[test]
+    fn a_fixture_backdates_one_threads_records() {
+        let mut b = Bench::new(DEFAULT_GRACE);
+        b.prompt();
+        b.turn_ended(done()).unwrap();
+        let waiting = request(&mut b, 1, 9);
+        let other = request(&mut b, 5, 10);
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        b.notifications.fixture_backdate(ThreadId::new(1), then);
+        assert!(b.notifications.notices().all(|notice| notice.at == then));
+        assert_eq!(b.notifications.decision(&waiting).unwrap().at, then);
+        assert_ne!(b.notifications.decision(&other).unwrap().at, then);
     }
 
     #[test]

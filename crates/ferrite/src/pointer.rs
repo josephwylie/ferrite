@@ -18,7 +18,7 @@
 //! Thread when the id alone repeats). The role owns the element's ground:
 //! the caller sets none after it. A press (`press_*`, gpui's `.active()`)
 //! lands at once over the blend, and a keyboard-armed row (the menu cursor,
-//! a selected option) takes its `FILL` on the same frame — only the pointer
+//! a selected option) takes its `SELECTION` on the same frame — only the pointer
 //! half of its ladder blends. Kit buttons take the same blend through
 //! `components::faded_button`, whose variant (`button_variant`) holds hover
 //! equal to rest so the kit's own hover never snaps over it.
@@ -27,15 +27,19 @@
 //! hover `paint::HOVER`; the cursor or a selected row `paint::SELECTION`;
 //! that row under the pointer `paint::SELECTION_HOVER`; press
 //! `paint::PRESS`. On glass (macOS) every face is a white overlay, so it
-//! reads on chrome, the plane, a band or a float alike; elsewhere each is
-//! its opaque grey.
+//! reads on chrome, the plane or a band alike; elsewhere each is its opaque
+//! grey. A float is opaque until it can frost (theme WP-E, FL-15), so its
+//! rows wear the float's own inks (`hover_float`, `float_cursor`,
+//! `press_float`: `FLOAT_HOVER`, `FLOAT_SEL`), never a glass overlay over
+//! an opaque ground; its cursor row keeps `FLOAT_SEL` under the pointer,
+//! so the row the arrows hold and the row the pointer is on read apart.
 
 use gpui::component::button::ButtonCustomVariant;
 use gpui::prelude::*;
 use gpui::{rgba, App, Hsla, SharedString, StyleRefinement};
 
 use crate::motion;
-use crate::theme::{paint, HAIRLINE_STRONG, TRANSPARENT};
+use crate::theme::{paint, FLOAT_BAND2, FLOAT_HOVER, FLOAT_SEL, TRANSPARENT};
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
 /// and interactive can say what role it plays. `key` names the element's
@@ -89,8 +93,37 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
         element
     }
 
+    /// A row on a float (a menu, a picker, the palette, the notifications
+    /// list): nothing at rest, the float's own hover ink (`FLOAT_HOVER`)
+    /// under the pointer, pointer cursor.
+    fn hover_float(self, key: impl Into<SharedString>) -> Self {
+        blended(
+            self.cursor_pointer(),
+            key.into(),
+            rgba(TRANSPARENT).into(),
+            float_face(),
+        )
+    }
+
+    /// A quick answer on a float (a toast's `1 allow`): nothing at rest, the
+    /// float's band (`FLOAT_BAND2`) under the pointer.
+    fn hover_quick(self, key: impl Into<SharedString>) -> Self {
+        blended(
+            self.cursor_pointer(),
+            key.into(),
+            rgba(TRANSPARENT).into(),
+            FLOAT_BAND2.into(),
+        )
+    }
+
+    /// A float's cursor row (the arrows' `❯`): `FLOAT_SEL`, held under the
+    /// pointer — hover never moves or lightens the row the keys act on.
+    fn float_cursor(self) -> Self {
+        self.cursor_pointer().bg(FLOAT_SEL)
+    }
+
     /// A surface whose resting edge is the hairline (a Pane): under the
-    /// pointer the edge steps up to `HAIRLINE_STRONG`, saying a click lands
+    /// pointer the edge steps up to `paint::LINE2`, saying a click lands
     /// here. No cursor change — the surface is a focus target, not a
     /// button. Apply it only while the edge is the resting hairline: the
     /// hover refinement would otherwise replace a state colour.
@@ -150,6 +183,11 @@ pub trait PointerPressed: Pointer + StatefulInteractiveElement {
     fn press_raised(self) -> Self {
         self.active(raised_press)
     }
+
+    /// A pressed row on a float: the float's selection ink.
+    fn press_float(self) -> Self {
+        self.active(float_press)
+    }
 }
 
 impl<E: Pointer + StatefulInteractiveElement> PointerPressed for E {}
@@ -191,9 +229,13 @@ fn carried_face() -> Hsla {
     paint::SELECTION_HOVER.into()
 }
 
+fn float_face() -> Hsla {
+    FLOAT_HOVER.into()
+}
+
 #[allow(dead_code)]
 fn edge_lift(surface: StyleRefinement) -> StyleRefinement {
-    surface.border_color(rgba(HAIRLINE_STRONG))
+    surface.border_color(paint::LINE2)
 }
 
 fn row_press(row: StyleRefinement) -> StyleRefinement {
@@ -206,6 +248,10 @@ fn control_press(control: StyleRefinement) -> StyleRefinement {
 
 fn raised_press(control: StyleRefinement) -> StyleRefinement {
     control.bg(paint::PRESS)
+}
+
+fn float_press(row: StyleRefinement) -> StyleRefinement {
+    row.bg(FLOAT_SEL)
 }
 
 #[cfg(test)]
@@ -240,6 +286,22 @@ mod tests {
         // washing over it: SELECTION -> SELECTION_HOVER.
         assert_eq!(carried_face(), Hsla::from(paint::SELECTION_HOVER));
 
+        // A float's rows wear the float's own inks (FL-14): its hover, and
+        // a cursor row that holds its selection under the pointer.
+        assert_eq!(float_face(), Hsla::from(FLOAT_HOVER));
+        assert_eq!(
+            background(&float_press(StyleRefinement::default())),
+            Some(&Fill::from(FLOAT_SEL))
+        );
+        let mut cursor = div().id("float-cursor").float_cursor();
+        assert_eq!(background(cursor.style()), Some(&Fill::from(FLOAT_SEL)));
+        let mut float_row = div().id("float-row").hover_float("pointer-test-float");
+        assert_eq!(background(float_row.style()), None);
+        assert_eq!(
+            float_row.style().mouse_cursor,
+            Some(CursorStyle::PointingHand)
+        );
+
         for element in [
             div().id("row").hover_row("pointer-test-row"),
             div().id("control").hover_control("pointer-test-control"),
@@ -255,7 +317,7 @@ mod tests {
         }
 
         // At rest a row paints nothing of its own, and the carried role
-        // paints its FILL at once: arming a row is a keyboard change.
+        // paints its SELECTION at once: arming a row is a keyboard change.
         let mut row = div().id("rest").hover_row("pointer-test-rest");
         assert_eq!(background(row.style()), None);
         let mut carried = div().id("armed").hover_carried("pointer-test-armed");
@@ -275,7 +337,7 @@ mod tests {
     #[test]
     fn the_edge_role_lifts_the_border_and_keeps_the_cursor() {
         let edge = edge_lift(StyleRefinement::default());
-        assert_eq!(edge.border_color, Some(rgba(HAIRLINE_STRONG).into()));
+        assert_eq!(edge.border_color, Some(paint::LINE2.into()));
         assert_eq!(background(&edge), None);
         let mut surface = div().hover_edge();
         assert_eq!(surface.style().mouse_cursor, None);
