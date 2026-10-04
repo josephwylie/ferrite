@@ -123,16 +123,11 @@ fn reconnect_never_displays_previous_sessions_live_mcp_status() {
 #[test]
 fn adapters_supply_permission_choices_for_the_shared_ui() {
     for (provider, expected) in [
+        // Bypass only for a Session launched in it: the CLI refuses to
+        // switch into it otherwise.
         (
             "claude",
-            vec![
-                "default",
-                "acceptEdits",
-                "plan",
-                "dontAsk",
-                "bypassPermissions",
-                "auto",
-            ],
+            vec!["default", "acceptEdits", "plan", "dontAsk", "auto"],
         ),
         ("codex", vec!["untrusted", "on-request", "never"]),
     ] {

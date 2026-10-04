@@ -414,7 +414,7 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
     cx: &mut TestAppContext,
 ) {
     let (core, fake) = cockpit("render-viewport-budget", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     reasoning_rows(&fake, 0, 30);
     tick(cx);
@@ -498,7 +498,7 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
 fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("virtual-logical-selection", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     let rows = short_reasoning_rows(&fake, 0, 160);
     tick(cx);
@@ -595,7 +595,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
 fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("selection-resize-reflow", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
 
@@ -679,7 +679,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
 ) {
     let (core, fake) = cockpit("selection-snapshot-replacement", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     let rows = short_reasoning_rows(&fake, 0, 160);
     tick(cx);
@@ -882,7 +882,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     let thread = core.threads()[0];
     core.send(thread, "prior prompt".into());
     bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     let stream = fake.streams.borrow();
     stream[0]

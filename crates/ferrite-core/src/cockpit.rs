@@ -1110,7 +1110,8 @@ impl Cockpit {
         let state = self.threads.get_mut(&id).expect("pending Thread exists");
         if let Some(binding) = &state.workspace {
             state.apply(Input::Notice(format!(
-                "opened in {}",
+                "{}{}",
+                crate::transcript::OPENED_IN,
                 binding.cwd().display()
             )));
         }

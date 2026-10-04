@@ -2545,6 +2545,15 @@ impl Window {
         count
     }
 
+    /// The bounds the last drawn frame recorded for an element's
+    /// `debug_selector`: what a headless driver points the mouse at.
+    /// [`crate::VisualTestContext::debug_bounds`] for a window that is not
+    /// a test context's.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_bounds(&self, selector: &str) -> Option<Bounds<Pixels>> {
+        self.rendered_frame.debug_bounds.get(selector).copied()
+    }
+
     /// Spawn the future returned by the given closure on the application thread pool.
     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
     /// use within your future.

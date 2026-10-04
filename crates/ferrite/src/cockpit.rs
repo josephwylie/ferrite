@@ -1155,6 +1155,15 @@ impl CockpitView {
         Self::new_with_provider(cockpit, Provider::Claude, cx)
     }
 
+    /// The test view with the model's thinking shown (the palette's `show
+    /// thinking`): what the reasoning rows' own tests draw.
+    #[cfg(test)]
+    pub fn new_thinking(cockpit: Cockpit, cx: &mut Context<Self>) -> Self {
+        let mut prefs = Preferences::ephemeral();
+        prefs.settings.show_thinking = true;
+        Self::new_with_settings(cockpit, Provider::Claude, prefs, cx)
+    }
+
     #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     pub fn new_with_provider(
         cockpit: Cockpit,
@@ -1458,6 +1467,7 @@ impl CockpitView {
             pending_call: pending_call.clone(),
             workspace: workspace.clone(),
             solo,
+            thinking: self.prefs.settings.show_thinking,
         };
         let entity = self.panes[index]
             .ensure_transcript(cx)
@@ -1499,6 +1509,7 @@ impl CockpitView {
             pending_call,
             workspace,
             solo,
+            thinking: self.prefs.settings.show_thinking,
             settled_at: transcript.settled_at().clone(),
             #[cfg(test)]
             disclosure_bounds: pane.tool_bounds_sink(),
@@ -10012,13 +10023,14 @@ impl CockpitView {
         // each adapter fills: Claude's `claude -p`, Codex's `codex exec` —
         // the same copy of the CLI the Session runs.
         let program = ferrite_core::providers::discover::program(provider);
-        let form = ferrite_core::titler::form(
+        let form = ferrite_core::titler::form_for(
             provider,
             &program,
             &ferrite_core::titler::TitleRequest {
                 prompt,
                 reply: None,
             },
+            &self.cockpit.model_catalog(provider),
         );
         let rx = ferrite_core::titler::spawn(form);
         cx.spawn(async move |this, cx| {
@@ -11695,7 +11707,13 @@ impl CockpitView {
                 if notice.kind == ferrite_core::notifications::RequestKind::Question {
                     return Detail::Words(decision.description.clone().into());
                 }
-                let tool: SharedString = decision.tool_name.clone().into();
+                // The tool and its command as the Decision's own head and
+                // well say them: Codex's `commandExecution` is `Bash`, its
+                // login-shell wrapper taken off (`Bash wants to run cargo
+                // test`, never `commandExecution wants to run /bin/zsh`).
+                let tool: SharedString = crate::decision::tool_word(&decision.tool_name)
+                    .to_string()
+                    .into();
                 if let Some(command) = decision
                     .input
                     .get("command")
@@ -11703,16 +11721,53 @@ impl CockpitView {
                 {
                     return Detail::Run {
                         tool,
-                        command: command_head(command).into(),
+                        command: command_head(&crate::decision::unwrap_shell(command)).into(),
                     };
                 }
+                // Codex's patch request names no file; its gated call does.
+                let gated_path =
+                    || {
+                        let open = self.cockpit.thread(thread)?;
+                        open.transcript().blocks().iter().rev().find_map(|block| {
+                            match &block.body {
+                                ferrite_core::transcript::Body::Tool(call)
+                                    if !decision.tool_use_id.is_empty()
+                                        && crate::transcript::gated(
+                                            &call.call,
+                                            &decision.tool_use_id,
+                                        ) =>
+                                {
+                                    call.diffs
+                                        .first()
+                                        .map(|diff| diff.path.clone())
+                                        .or_else(|| {
+                                            (!call.summary.is_empty()).then(|| call.summary.clone())
+                                        })
+                                }
+                                _ => None,
+                            }
+                        })
+                    };
                 let path = ["file_path", "path", "notebook_path", "url"]
                     .iter()
                     .find_map(|key| decision.input.get(*key).and_then(serde_json::Value::as_str))
                     .map(str::to_string)
+                    .or_else(gated_path)
                     .unwrap_or_else(|| decision.description.clone());
+                // Inside the Thread's checkout the path reads relative.
+                let path = self
+                    .cockpit
+                    .thread(thread)
+                    .and_then(|open| open.workspace())
+                    .and_then(|binding| {
+                        std::path::Path::new(&path)
+                            .strip_prefix(binding.cwd())
+                            .ok()
+                            .map(|rest| rest.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or(path);
                 Detail::Touch {
-                    verb: tool_verb(&decision.tool_name),
+                    verb: tool_verb(&tool),
                     tool,
                     path: path.into(),
                 }
@@ -16954,7 +17009,7 @@ mod tests {
     #[gpui::test]
     fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("reasoning-details", 1);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
         hold_nav_open(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let body = "The provider supplied these additional details.";
@@ -17029,7 +17084,7 @@ mod tests {
     #[gpui::test]
     fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("transcript-wrap", 1);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(1000.)));
         let text = "Inspecting the provider transcript and preserving all the details. ".repeat(8);
         fake.streams.borrow()[0]
@@ -17691,7 +17746,7 @@ mod tests {
         let (mut core, fake) = cockpit("native-progress", 1);
         let thread = core.threads()[0];
         core.send(thread, "Inspect progress".into());
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         for index in 0..70 {
             fake.streams.borrow()[0]

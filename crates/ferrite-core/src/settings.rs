@@ -68,6 +68,11 @@ pub struct Settings {
     /// through a newer CLI. Off, Ferrite still offers each update.
     /// Default: true.
     pub auto_update_clis: bool,
+    /// Whether a transcript shows the model's thinking (Claude's thinking,
+    /// Codex's reasoning summaries) as `∴` rows between the calls. The
+    /// approved transcript has none, so they are kept off it and shown from
+    /// the ⌘K palette's `show thinking`. Default: false.
+    pub show_thinking: bool,
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -149,6 +154,7 @@ impl Default for Settings {
             placeholder_suggestions: true,
             reading_size: ReadingSize::STANDARD,
             auto_update_clis: true,
+            show_thinking: false,
         }
     }
 }
@@ -270,6 +276,7 @@ mod tests {
             placeholder_suggestions: false,
             reading_size: ReadingSize(18),
             auto_update_clis: false,
+            show_thinking: true,
         }
     }
 

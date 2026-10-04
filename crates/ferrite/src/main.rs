@@ -122,6 +122,17 @@ fn main() {
         );
         return;
     }
+    // The same capture over the real provider CLIs, on a throwaway repo
+    // and store (`visual_reference::live`).
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--live-reference") {
+        cockpit::visual_reference::live_capture(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = shell::adopt_login_environment();

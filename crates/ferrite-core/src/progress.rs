@@ -27,6 +27,17 @@ impl Phase {
     }
 }
 
+/// The waits a provider reports while a Decision stands (Codex's
+/// `waitingOnApproval`, `waitingOnUserInput`): the Decision row is their
+/// whole account, so they leave no notice in the transcript.
+pub const APPROVAL_NEEDED: &str = "Approval needed";
+pub const ANSWER_NEEDED: &str = "Answer needed";
+
+/// Whether a wait is one of a standing Decision's (`APPROVAL_NEEDED`).
+pub fn decision_wait(phase: Phase, detail: &str) -> bool {
+    phase == Phase::Waiting && (detail == APPROVAL_NEEDED || detail == ANSWER_NEEDED)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepStatus {
     Pending,
@@ -268,6 +279,14 @@ impl Progress {
     pub fn summary(&mut self, text: &str) {
         self.summary = headline(text);
     }
+
+    /// Raw thinking (Claude's) as the live status: only a heading it bolds
+    /// (`**Planning the fix**`, as Codex's summaries do). Its first sentence
+    /// is the model talking to itself, not a status, so without a heading
+    /// the line keeps the turn's verb (`Reticulating…`).
+    pub fn thinking(&mut self, text: &str) {
+        self.summary = bold_heading(text).unwrap_or_default();
+    }
     pub fn caption(&self) -> Option<String> {
         let phase = self.phase?;
         if matches!(phase, Phase::Retrying | Phase::Compacting | Phase::Waiting) {
@@ -487,12 +506,8 @@ pub fn one_line(text: &str, max: usize) -> String {
 /// Only a provider-authored first paragraph/heading is used. No summarizer.
 pub fn headline(text: &str) -> String {
     // Codex's CLI uses the first complete bold heading as its live status.
-    if let Some((_, rest)) = text.split_once("**") {
-        if let Some((heading, _)) = rest.split_once("**") {
-            if !heading.trim().is_empty() {
-                return one_line(heading, 160);
-            }
-        }
+    if let Some(heading) = bold_heading(text) {
+        return heading;
     }
     let text = text.trim_start().trim_start_matches('#').trim_start();
     let line = text
@@ -500,6 +515,13 @@ pub fn headline(text: &str) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("");
     one_line(line.trim_matches(|c| matches!(c, '*' | '_' | '`')), 160)
+}
+
+/// The first complete bold heading in `text` (`**Instrumenting**`).
+fn bold_heading(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once("**")?;
+    let (heading, _) = rest.split_once("**")?;
+    (!heading.trim().is_empty()).then(|| one_line(heading, 160))
 }
 
 fn strip_ansi(text: &str) -> String {

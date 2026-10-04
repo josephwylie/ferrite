@@ -174,11 +174,22 @@ pub struct ToolBlock {
     pub progress: Option<TestProgress>,
 }
 
-/// A running test suite's count, folded from its streamed output.
+/// A running test suite's count, folded from its streamed output. `total`
+/// is 0 while the runner's announcement is unknown: Codex's stream drops a
+/// command's first moments (0.160 sends no delta for what printed before
+/// its first poll), so a fast `cargo test` can stream its result lines
+/// without the `running 342 tests` that counted them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TestProgress {
     pub done: u32,
     pub total: u32,
+}
+
+impl TestProgress {
+    /// Whether the runner said how many tests it holds.
+    pub fn known(&self) -> bool {
+        self.total > 0
+    }
 }
 
 impl ToolBlock {
@@ -323,6 +334,123 @@ pub struct Diff {
     pub hunks: Vec<Hunk>,
     pub added: usize,
     pub removed: usize,
+}
+
+/// The change an edit approval asks to make, drawn as the diff it would
+/// leave (Claude's `Edit`, `MultiEdit` and `Write` carry the text itself,
+/// before the call runs; its row's `structuredPatch` comes only after).
+/// Each replacement is one hunk: its old text against its new, line by
+/// line, placed where the old text stands in the file today. `path` reads
+/// relative to `workspace` when it is inside it. `None` for any other tool,
+/// or an input that names no change.
+pub fn proposed_diff(
+    tool_name: &str,
+    input: &serde_json::Value,
+    workspace: Option<&std::path::Path>,
+) -> Option<Diff> {
+    let path = input.get("file_path").and_then(serde_json::Value::as_str)?;
+    let text = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let full = match workspace {
+        Some(root) if !std::path::Path::new(path).is_absolute() => root.join(path),
+        _ => std::path::PathBuf::from(path),
+    };
+    let current = std::fs::read_to_string(&full).ok();
+    let replacements: Vec<(String, String)> = match tool_name {
+        "Edit" => vec![(text(input, "old_string")?, text(input, "new_string")?)],
+        "MultiEdit" => input
+            .get("edits")?
+            .as_array()?
+            .iter()
+            .filter_map(|edit| Some((text(edit, "old_string")?, text(edit, "new_string")?)))
+            .collect(),
+        "Write" => vec![(current.clone().unwrap_or_default(), text(input, "content")?)],
+        _ => return None,
+    };
+    if replacements.is_empty() {
+        return None;
+    }
+    let hunks = replacements
+        .iter()
+        .map(|(old, new)| {
+            // Where the old text starts in the file, counted in lines.
+            let start = current
+                .as_deref()
+                .filter(|_| !old.is_empty())
+                .and_then(|file| file.find(old.as_str()))
+                .and_then(|at| {
+                    current
+                        .as_deref()
+                        .map(|file| file[..at].matches('\n').count())
+                })
+                .map_or(1, |before| before as u32 + 1);
+            let lines = line_diff(old, new);
+            let count =
+                |mark: char| lines.iter().filter(|line| !line.starts_with(mark)).count() as u32;
+            Hunk {
+                old_start: start,
+                old_lines: count('+'),
+                new_start: start,
+                new_lines: count('-'),
+                section: hunk_section(&lines),
+                lines,
+            }
+        })
+        .collect();
+    let shown = workspace
+        .and_then(|root| full.strip_prefix(root).ok())
+        .map(|inside| inside.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_owned());
+    Some(Diff::new(shown, hunks))
+}
+
+/// `old` against `new`, line by line, each line marked as a hunk's are
+/// (`' '` kept, `'-'` removed, `'+'` added): the longest common run kept,
+/// removals before the additions that replace them. Past a few hundred
+/// lines a side the whole of `old` is removed and `new` added.
+pub fn line_diff(old: &str, new: &str) -> Vec<String> {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let (n, m) = (a.len(), b.len());
+    if n.saturating_mul(m) > 250_000 {
+        return a
+            .iter()
+            .map(|line| format!("-{line}"))
+            .chain(b.iter().map(|line| format!("+{line}")))
+            .collect();
+    }
+    // `keep[i][j]`: the longest common run of `a[i..]` and `b[j..]`.
+    let width = m + 1;
+    let mut keep = vec![0u32; (n + 1) * width];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            keep[i * width + j] = if a[i] == b[j] {
+                keep[(i + 1) * width + j + 1] + 1
+            } else {
+                keep[(i + 1) * width + j].max(keep[i * width + j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut lines = Vec::with_capacity(n.max(m));
+    while i < n || j < m {
+        if i < n && j < m && a[i] == b[j] {
+            lines.push(format!(" {}", a[i]));
+            i += 1;
+            j += 1;
+        } else if i < n && (j == m || keep[(i + 1) * width + j] >= keep[i * width + j + 1]) {
+            lines.push(format!("-{}", a[i]));
+            i += 1;
+        } else {
+            lines.push(format!("+{}", b[j]));
+            j += 1;
+        }
+    }
+    lines
 }
 
 impl Diff {
@@ -703,12 +831,41 @@ impl TestCounter {
     }
 
     fn progress(&self) -> Option<TestProgress> {
-        (self.total > 0).then_some(TestProgress {
-            done: self.done.min(self.total),
-            total: self.total,
+        if self.total > 0 {
+            return Some(TestProgress {
+                done: self.done.min(self.total),
+                total: self.total,
+            });
+        }
+        // Results with no announcement: the count, against no total.
+        (self.done > 0).then_some(TestProgress {
+            done: self.done,
+            total: 0,
         })
     }
 }
+
+/// The record an answered request leaves (`allowed Bash`, `denied Edit`):
+/// history and search keep it; the transcript draws the call's own row
+/// instead.
+pub fn is_decision_record(text: &str) -> bool {
+    [ANSWER_ALLOWED, ANSWER_DENIED].iter().any(|verb| {
+        text.strip_prefix(verb)
+            .is_some_and(|rest| rest.starts_with(' '))
+    })
+}
+
+const ANSWER_ALLOWED: &str = "allowed";
+const ANSWER_DENIED: &str = "denied";
+
+/// The note a first send leaves of where the Thread works (`opened in
+/// ~/ferrite`): the banner heading the transcript says it, so no row does.
+pub fn is_opened_notice(text: &str) -> bool {
+    text.starts_with(OPENED_IN)
+}
+
+/// The words `is_opened_notice` reads, as the first send writes them.
+pub const OPENED_IN: &str = "opened in ";
 
 /// One cargo test result line (`test nav::rows ... ok`), as `(name,
 /// verdict)`: `ok`, `FAILED` or `ignored` (an `ignored, reason` counts as
@@ -1309,6 +1466,9 @@ impl Transcript {
                     } = event
                     {
                         let detail = crate::progress::one_line(&detail, 512);
+                        if crate::progress::decision_wait(phase, &detail) {
+                            return Update::default();
+                        }
                         let text = if detail.is_empty() {
                             phase.label().to_string()
                         } else {
@@ -1507,7 +1667,11 @@ impl Transcript {
             }
             Input::Answered { allowed, tool_name } => {
                 self.status = Status::Streaming;
-                let verb = if allowed { "allowed" } else { "denied" };
+                let verb = if allowed {
+                    ANSWER_ALLOWED
+                } else {
+                    ANSWER_DENIED
+                };
                 Update {
                     dirty: vec![self.push(Body::Meta(format!("{verb} {tool_name}")))],
                     ..Update::default()
@@ -1625,6 +1789,16 @@ impl Transcript {
                 }
                 self.status = Status::Streaming;
                 self.progress.phase(Phase::Working);
+                // Codex's patch item names its edit up front: its row (and
+                // an approval it waits on) shows the diff it would make.
+                let diffs = if name == "fileChange" {
+                    crate::providers::file_change_diffs(&input)
+                        .into_iter()
+                        .map(|(path, hunks)| Diff::new(path, hunks))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
                     summary: tool_summary(&name, &input),
@@ -1640,7 +1814,7 @@ impl Transcript {
                         .map(str::to_owned),
                     name,
                     state: ToolState::Running,
-                    diffs: Vec::new(),
+                    diffs,
                     structured_result: None,
                     result_line: None,
                     output: None,
@@ -1816,13 +1990,13 @@ impl Transcript {
         }) = self.blocks.last_mut().filter(|_| self.thinking_open)
         {
             thought.push_str(text);
-            self.progress.summary(thought);
+            self.progress.thinking(thought);
             let id = *id;
             self.open = None;
             self.source.clear();
             return id;
         }
-        self.progress.summary(text);
+        self.progress.thinking(text);
         let id = self.push(Body::Thinking(text.to_string()));
         self.thinking_open = true;
         id
@@ -2133,6 +2307,19 @@ fn tool_summary(name: &str, input: &serde_json::Value) -> String {
 }
 
 fn tool_subject(input: &serde_json::Value) -> String {
+    // A patch (Codex's `fileChange`) names its files in `changes`: the
+    // first, and how many more.
+    if let Some(changes) = input.get("changes").and_then(|v| v.as_array()) {
+        let paths: Vec<&str> = changes
+            .iter()
+            .filter_map(|change| change.get("path")?.as_str())
+            .collect();
+        match paths.as_slice() {
+            [] => {}
+            [one] => return (*one).to_string(),
+            [first, rest @ ..] => return format!("{first} +{}", rest.len()),
+        }
+    }
     for key in [
         "command",
         "file_path",
@@ -2361,6 +2548,56 @@ fn link_at(rest: &str) -> Option<(&str, usize)> {
 mod tests {
     use super::*;
     use crate::Decision;
+
+    /// Codex's patch item names its file and its edit before it runs (and
+    /// before an approval it waits on is answered): `Update(NOTES.md)` and
+    /// the diff, as 0.160 sends it.
+    #[test]
+    fn a_codex_patch_names_its_file_and_edit_as_it_starts() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "exec-1".into(),
+            name: "fileChange".into(),
+            input: serde_json::json!({
+                "type": "fileChange", "id": "exec-1", "status": "inProgress",
+                "changes": [{ "path": "/repo/NOTES.md", "kind": { "type": "add" }, "diff": "hello\n" }],
+            }),
+        }));
+        let Body::Tool(tool) = &transcript.blocks()[0].body else {
+            panic!("a tool row");
+        };
+        assert_eq!(tool.summary, "/repo/NOTES.md");
+        assert_eq!(tool.diffs.len(), 1);
+        assert_eq!((tool.diffs[0].added, tool.diffs[0].removed), (1, 0));
+    }
+
+    /// An edit approval reads as the diff it would leave, placed where its
+    /// old text stands in the file.
+    #[test]
+    fn an_edit_approval_reads_as_its_diff() {
+        assert_eq!(
+            line_diff("a\nb\nc", "a\nB\nc\nd"),
+            [" a", "-b", "+B", " c", "+d"]
+        );
+        let root = std::env::temp_dir().join(format!("ferrite-proposed-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/stats.rs"),
+            "one\ntwo\n    let mid = 1;\nfour\n",
+        )
+        .unwrap();
+        let input = serde_json::json!({
+            "file_path": root.join("src/stats.rs").display().to_string(),
+            "old_string": "    let mid = 1;",
+            "new_string": "    let len = 2;\n    let mid = len / 2;",
+        });
+        let diff = proposed_diff("Edit", &input, Some(&root)).unwrap();
+        assert_eq!(diff.path, "src/stats.rs");
+        assert_eq!((diff.added, diff.removed), (2, 1));
+        assert_eq!(diff.hunks[0].new_start, 3, "the old text stands on line 3");
+        assert!(proposed_diff("Bash", &input, Some(&root)).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// CT-10/11: every call is its own Block under its own name — adjacent
     /// calls are never folded into a summary — and the names read as Claude
@@ -2669,6 +2906,11 @@ mod tests {
         let mut go = TestCounter::default();
         go.push("=== RUN   TestA\n--- PASS: TestA (0.00s)\n=== RUN   TestB\n");
         assert_eq!(go.progress(), Some(TestProgress { done: 1, total: 2 }));
+        // Codex's stream lost the announcement: the count, total unknown.
+        let mut cut = TestCounter::default();
+        cut.push("test case_005 ... ok\ntest case_003 ... ok\n");
+        let cut = cut.progress().unwrap();
+        assert_eq!((cut.done, cut.known()), (2, false));
     }
 
     /// CT-31: what a Thread did to a file, for the hover card.

@@ -177,6 +177,11 @@ browser does, so the same CSS geometry lands on the same device pixels:
   fallback written `postscript:<name>` names one face exactly (the braille
   spinner's `AppleBraille-Outline6Dot`, whose family's faces share one
   weight).
+- **Debug bounds on a window** (`window.rs`, test support only).
+  `Window::debug_bounds` reads the last frame's `debug_selector` bounds,
+  which upstream exposes only through `VisualTestContext`: the live
+  reference capture drives a headless window that is no test context's and
+  clicks what it finds there.
 
 Cargo applies both through the root `[patch.crates-io]`. Remove a patch when
 an upstream release offers equivalent behaviour.

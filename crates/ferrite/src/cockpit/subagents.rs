@@ -1139,15 +1139,41 @@ impl CockpitView {
         if requests.is_empty() {
             return None;
         }
+        // The edit each approval asks for, where its gated call already
+        // names it (Codex's `fileChange` carries its patch on the item, not
+        // on the request).
+        let asked: Vec<(String, ferrite_core::transcript::Diff)> = requests
+            .iter()
+            .filter(|(request, _)| !request.decision.tool_use_id.is_empty())
+            .filter_map(|(request, _)| {
+                let id = &request.decision.tool_use_id;
+                let subject = request.subject.clone().unwrap_or(Subject::Main);
+                let view = activity.subject(&subject)?;
+                view.transcript()
+                    .blocks()
+                    .iter()
+                    .rev()
+                    .find_map(|block| match &block.body {
+                        ferrite_core::transcript::Body::Tool(tool)
+                            if crate::transcript::gated(&tool.call, id) =>
+                        {
+                            tool.diffs.first().map(|diff| (id.clone(), diff.clone()))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect();
         let (provider, context) = self.decision_context(thread);
         Some(Cards {
             owner: self.decisions.owner(),
+            asked,
             thread,
             provider,
             context,
             workspace: open
                 .workspace()
                 .map(|workspace| workspace.cwd().to_path_buf()),
+            reading: self.prefs.settings.reading_size,
             rich: pane.rich.clone(),
             forms: pane.request_forms.clone(),
             request_error: pane.request_error.clone(),
@@ -1496,11 +1522,15 @@ impl CockpitView {
 #[derive(Clone)]
 pub(super) struct Cards {
     pub(super) owner: gpui::WeakEntity<CockpitView>,
+    /// The diff each approval's gated call names, by the call's id.
+    pub(super) asked: Vec<(String, ferrite_core::transcript::Diff)>,
     pub(super) thread: ThreadId,
     pub(super) provider: Option<Provider>,
     /// The head's last detail: Codex's sandbox, Claude's permission mode.
     pub(super) context: Option<SharedString>,
     pub(super) workspace: Option<std::path::PathBuf>,
+    /// The transcript's reading size: an edit approval's diff is drawn at it.
+    pub(super) reading: ferrite_core::settings::ReadingSize,
     pub(super) rich: crate::rich::TextCache,
     pub(super) forms: RequestForms,
     pub(super) request_error: Option<(DecisionHandle, String)>,
@@ -1528,6 +1558,12 @@ impl Cards {
         self.thread.hash(&mut hasher);
         self.provider.map(decision::provider_word).hash(&mut hasher);
         self.context.as_deref().hash(&mut hasher);
+        self.reading.hash(&mut hasher);
+        for (id, diff) in &self.asked {
+            id.hash(&mut hasher);
+            diff.path.hash(&mut hasher);
+            (diff.added, diff.removed).hash(&mut hasher);
+        }
         self.request_error.hash(&mut hasher);
         let cursors = self.forms.1.borrow();
         let forms = self.forms.0.borrow();
@@ -1688,9 +1724,7 @@ impl Cards {
             let command = decision::shell_source(decision)
                 .map(std::borrow::Cow::into_owned)
                 .or_else(|| pane::approval_source(decision));
-            (!decision.description.is_empty()
-                && !decision::prose_repeats_command(&decision.description, command.as_deref()))
-            .then(|| SharedString::from(decision.description.clone()))
+            decision::prose_beyond_subject(decision, command.as_deref()).map(SharedString::from)
         };
         let serial = request.handle.serial;
         let title = title.map(|title| {
@@ -1726,7 +1760,19 @@ impl Cards {
                 .filter(|_| !self.short)
                 .map(|title| decision::section(title).into_any_element()),
         );
-        if let Some(input) = pane::approval_input(
+        let asked = self
+            .asked
+            .iter()
+            .find(|(id, _)| *id == request.decision.tool_use_id)
+            .map(|(_, diff)| diff);
+        if let Some(diff) = pane::approval_diff(
+            &request.decision,
+            asked,
+            self.workspace.as_deref(),
+            self.reading,
+        ) {
+            children.push(decision::section(diff).into_any_element());
+        } else if let Some(input) = pane::approval_input(
             &request.decision,
             &self.rich,
             format!(

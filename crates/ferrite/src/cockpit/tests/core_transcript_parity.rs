@@ -105,6 +105,33 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
     assert_eq!(elbow.hidden, 6);
 
     assert!(pane::test_elbow(&call("Bash", "ls", ToolState::Ok, "a")).is_none());
+
+    // A live `cargo test` of a crate with a unit binary and one suite: two
+    // `test result:` lines, the run's tally their sum.
+    let two_binaries = "running 2 tests\ntest parse::a ... ok\ntest parse::b ... ok\n\
+                        test result: ok. 2 passed; 0 failed; 0 ignored\n\
+                        running 342 tests\ntest case_1 ... ok\ntest case_2 ... ok\n\
+                        test median_even ... FAILED\n\
+                        test result: FAILED. 341 passed; 1 failed; 0 ignored";
+    let elbow = pane::test_elbow(&call(
+        "Bash",
+        "cargo test",
+        ToolState::Failed("Exit code 101".into()),
+        two_binaries,
+    ))
+    .expect("a test run");
+    assert_eq!(elbow.line(), "failed \u{b7} 343 passed; 1 failed");
+    // Piped (`| grep`, `| tail`) the command exits 0; its own report
+    // still fails it.
+    let piped = call(
+        "Bash",
+        "cargo test 2>&1 | tail -3",
+        ToolState::Ok,
+        "test median_even ... FAILED\n\ntest result: FAILED. 341 passed; 1 failed; 0 ignored",
+    );
+    let elbow = pane::test_elbow(&piped).expect("a test run");
+    assert_eq!(elbow.lead, crate::theme::words::FAILED);
+    assert_eq!(elbow.line(), "failed \u{b7} 341 passed; 1 failed");
 }
 
 /// A command's output folds whole behind its first line: `└ 7 issues · + 2

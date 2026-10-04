@@ -581,6 +581,43 @@ fn parse_codex(bytes: &[u8]) -> Result<ParsedSession, ImportError> {
                             }
                         })
                     }
+                    // 0.160 says the prompt and the replies as completed
+                    // items (`UserMessage`, `AgentMessage`) instead; a file
+                    // that says both says each once.
+                    Some("item_completed") => {
+                        let item = &payload["item"];
+                        let text = item["content"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|part| part["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        match item["type"].as_str() {
+                            Some("UserMessage") if !text.is_empty() => {
+                                let repeated = matches!(
+                                    entries.last(),
+                                    Some(Entry::Prompt(last)) if *last == text
+                                );
+                                if !repeated {
+                                    entries.push(Entry::Prompt(text));
+                                    turn_open = true;
+                                }
+                                None
+                            }
+                            Some("AgentMessage") if !text.is_empty() => {
+                                let repeated = entries.iter().rev().find_map(|entry| match entry {
+                                    Entry::Event(SessionEvent::TextDelta { text }) => Some(text),
+                                    _ => None,
+                                }) == Some(&text);
+                                if !repeated {
+                                    entries.push(Entry::Event(SessionEvent::ContentBoundary));
+                                }
+                                (!repeated).then_some(SessionEvent::TextDelta { text })
+                            }
+                            _ => None,
+                        }
+                    }
                     Some("token_count") => parse_token_count(payload),
                     Some("task_complete") => Some(SessionEvent::TurnEnded {
                         outcome: TurnOutcome::Completed,

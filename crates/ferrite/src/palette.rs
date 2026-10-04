@@ -128,6 +128,8 @@ pub(crate) enum Command {
     TextLarger,
     TextSmaller,
     TextReset,
+    ShowThinking,
+    HideThinking,
     Notifications,
     Shortcuts,
     NextRequest,

@@ -112,6 +112,8 @@ pub(crate) struct RowShape {
     pub banner_pad: f32,
     pub tail: Option<u64>,
     pub pending_call: Option<String>,
+    /// The model's thinking drawn as `∴` rows; off, it draws nothing.
+    pub thinking: bool,
     pub opened_diffs: HashSet<String>,
 }
 
@@ -366,6 +368,13 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
             let start = index;
             let mut source = String::new();
             while let Some(markdown) = blocks.get(index).and_then(|block| block.markdown.as_ref()) {
+                // A section still open when its item ended (its last, with
+                // no newline of its own) closes its paragraph before the next
+                // item's prose: two messages read `…hello.` and `The
+                // workspace…`, never `hello.The workspace`.
+                if !source.is_empty() && !source.ends_with('\n') {
+                    source.push_str("\n\n");
+                }
                 source.push_str(markdown);
                 index += 1;
             }
@@ -422,7 +431,12 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 }
                 rows.push(entry);
             }
-            Body::Thinking(text) if text.trim().is_empty() => {}
+            Body::Thinking(text) if text.trim().is_empty() || !shape.thinking => {}
+            // An answered request's record (`allowed Bash`): the call's own
+            // row is its account, as the approved transcript draws it.
+            Body::Meta(text) if ferrite_core::transcript::is_decision_record(text) => {}
+            // Where the Thread works: the banner says it.
+            Body::Notice(text) if ferrite_core::transcript::is_opened_notice(text) => {}
             _ => rows.push(row(
                 RowId::Block(block.id),
                 std::slice::from_ref(block),
@@ -503,7 +517,10 @@ mod tests {
     const READING: f32 = crate::theme::FS_PROSE;
 
     fn shape() -> RowShape {
-        RowShape::default()
+        RowShape {
+            thinking: true,
+            ..RowShape::default()
+        }
     }
 
     fn text(transcript: &mut Transcript, text: &str) {
@@ -554,6 +571,38 @@ mod tests {
         }));
     }
 
+    /// The model's thinking, an answered request's record and the
+    /// `opened in` note leave no row of their own unless thinking is shown.
+    #[test]
+    fn thinking_records_and_the_opened_note_draw_no_rows_by_default() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Notice(format!(
+            "{}/work/repo",
+            ferrite_core::transcript::OPENED_IN
+        )));
+        prompt(&mut transcript, "run it");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "The user wants the tests run.".into(),
+        }));
+        bash(&mut transcript, "b1");
+        transcript.apply(Input::Answered {
+            allowed: true,
+            tool_name: "Bash".into(),
+        });
+        let kinds = |shape: &RowShape| -> Vec<RowKind> {
+            TranscriptRows::new(transcript.blocks(), shape, READING)
+                .rows()
+                .iter()
+                .map(|row| row.kind())
+                .collect()
+        };
+        let hidden = kinds(&RowShape::default());
+        assert!(!hidden.contains(&RowKind::Reasoning), "{hidden:?}");
+        assert!(!hidden.contains(&RowKind::Notice), "{hidden:?}");
+        assert!(!hidden.contains(&RowKind::Meta), "{hidden:?}");
+        assert!(kinds(&shape()).contains(&RowKind::Reasoning));
+    }
+
     #[test]
     fn contiguous_markdown_blocks_share_one_native_answer_row() {
         let mut transcript = Transcript::default();
@@ -565,7 +614,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Markdown(_)));
         assert_eq!(rows.get(0).unwrap().blocks().len(), 2);
-        assert_eq!(rows.get(0).unwrap().source(), Some("firstsecond"));
+        // Each item's prose closes its paragraph: `first` and `second`
+        // read as two, never `firstsecond`.
+        assert_eq!(rows.get(0).unwrap().source(), Some("first\n\nsecond"));
     }
 
     #[test]

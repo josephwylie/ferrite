@@ -523,7 +523,7 @@ mod tests {
             "claude",
             "scope",
             vec![
-                json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Checking Main"}}}),
+                json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"**Checking Main**"}}}),
                 json!({"type":"stream_event","parent_tool_use_id":"child","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Child heading"}}}),
                 json!({"type":"result","parent_tool_use_id":"child","subtype":"success","is_error":false}),
             ],
@@ -533,6 +533,16 @@ mod tests {
             Some("Checking Main")
         );
         assert_eq!(claude.status(), ferrite_core::transcript::Status::Streaming);
+        // Thinking with no heading is the model talking to itself, not a
+        // status: the line keeps the turn's verb, as Claude Code's does.
+        let plain = fold(replay(
+            "claude",
+            "scope",
+            vec![
+                json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"The user wants me to run the tests."}}}),
+            ],
+        ));
+        assert_eq!(plain.progress().caption().as_deref(), Some("Working"));
     }
 
     #[test]

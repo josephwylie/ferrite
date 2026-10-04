@@ -56,7 +56,10 @@ fn native_accounting_details_keep_scope_and_all_counters() {
             .usage_details()
             .expect("shared accounting details");
         assert_eq!(details.scope, scope);
-        assert_eq!(details.input_tokens, 100);
+        // Codex's input counts its cached share; Claude's API reports the
+        // cache apart, and the shared counter is Codex's shape.
+        let input = if provider == "claude" { 120 } else { 100 };
+        assert_eq!(details.input_tokens, input);
         assert_eq!(details.cached_input_tokens, 20);
         assert_eq!(details.output_tokens, 30);
         if provider == "codex" {

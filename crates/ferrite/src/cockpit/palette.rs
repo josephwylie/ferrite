@@ -648,6 +648,23 @@ impl CockpitView {
             bound_chord("cockpit::TextReset"),
             Command::TextReset,
         );
+        // The model's thinking is off the approved transcript; these put
+        // its `∴` rows back, and take them away again.
+        let thinking = self.prefs.settings.show_thinking;
+        add(
+            !thinking,
+            "show thinking".into(),
+            "",
+            None,
+            Command::ShowThinking,
+        );
+        add(
+            thinking,
+            "hide thinking".into(),
+            "",
+            None,
+            Command::HideThinking,
+        );
         add(
             true,
             "notifications".into(),
@@ -794,6 +811,11 @@ impl CockpitView {
             Command::TextLarger => self.step_text_size(1, cx),
             Command::TextSmaller => self.step_text_size(-1, cx),
             Command::TextReset => self.step_text_size(0, cx),
+            Command::ShowThinking | Command::HideThinking => {
+                let show = command == Command::ShowThinking;
+                self.change_settings(|settings| settings.show_thinking = show, cx);
+                cx.notify();
+            }
             Command::Notifications => self.toggle_notifications(&ToggleNotifications, window, cx),
             Command::Shortcuts => self.toggle_shortcuts(window, cx),
             Command::NextRequest => self.next_decision(&NextDecision, window, cx),
@@ -944,6 +966,7 @@ impl CockpitView {
                 .permission_modes()
                 .into_iter()
                 .map(|choice| choice.value)
+                .filter(|mode| crate::status::cycles(mode))
                 .collect();
             let next = crate::status::next_mode(open.permission_mode(), &modes)?.to_string();
             Some((thread, open.generation(), next))

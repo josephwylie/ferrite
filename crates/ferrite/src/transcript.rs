@@ -4,6 +4,7 @@
 //! per-Subject row snapshot, native text, selection document and viewport.
 
 mod rows;
+pub(crate) use rows::gated;
 mod scroll;
 
 #[cfg(test)]
@@ -149,6 +150,35 @@ pub(crate) enum ScrollTarget {
     TurnBand { turn: usize, offset: f32 },
 }
 
+/// The paths a call names, read from the Thread's checkout: inside it,
+/// relative (`Read(src/stats.rs)`, `Update(src/stats.rs)`), as Claude Code
+/// prints them and the approved transcript reads — Claude reports every
+/// path absolute. A path outside the checkout stays whole.
+fn relative_paths(input: &mut TranscriptInput) {
+    let Some(root) = input.workspace.clone() else {
+        return;
+    };
+    let inside = |path: &str| -> Option<String> {
+        std::path::Path::new(path)
+            .strip_prefix(&root)
+            .ok()
+            .filter(|rest| !rest.as_os_str().is_empty())
+            .map(|rest| rest.to_string_lossy().into_owned())
+    };
+    for block in &mut input.blocks {
+        let Body::Tool(tool) = &mut block.body else {
+            continue;
+        };
+        // The diffs keep their whole paths: a hunk's section is read off
+        // the file on disk (`pane::file_section`).
+        if pane::argument_is_path(tool) {
+            if let Some(path) = inside(&tool.summary) {
+                tool.summary = path;
+            }
+        }
+    }
+}
+
 /// Owned input for one selected Subject. Cockpit clones only its retained L1
 /// render window when this revision changes; rendering never borrows core.
 pub(crate) struct TranscriptInput {
@@ -179,6 +209,9 @@ pub(crate) struct TranscriptInput {
     /// The Pane stands alone (Solo): the banner takes the body's top
     /// padding, which board Panes do not have.
     pub solo: bool,
+    /// Whether the model's thinking shows as `∴` rows (Settings'
+    /// `show_thinking`, the palette's `show thinking`).
+    pub thinking: bool,
     /// When each edit settled, seen live: the hover card's age.
     pub settled_at: BTreeMap<String, SystemTime>,
     #[cfg(test)]
@@ -200,6 +233,7 @@ pub(crate) struct TranscriptKey {
     pub pending_call: Option<String>,
     pub workspace: Option<PathBuf>,
     pub solo: bool,
+    pub thinking: bool,
 }
 
 impl TranscriptInput {
@@ -216,6 +250,7 @@ impl TranscriptInput {
             pending_call: self.pending_call.clone(),
             workspace: self.workspace.clone(),
             solo: self.solo,
+            thinking: self.thinking,
         }
     }
 
@@ -226,6 +261,7 @@ impl TranscriptInput {
             banner_pad: if self.solo { theme::BANNER_PAD_T } else { 0. },
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
+            thinking: self.thinking,
             opened_diffs: self
                 .expanded
                 .iter()
@@ -350,6 +386,7 @@ impl TranscriptView {
                 pending_call: None,
                 workspace: None,
                 solo: false,
+                thinking: false,
                 settled_at: BTreeMap::new(),
                 #[cfg(test)]
                 disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
@@ -361,11 +398,12 @@ impl TranscriptView {
     }
 
     pub(crate) fn new(
-        input: TranscriptInput,
+        mut input: TranscriptInput,
         rich: TextCache,
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
     ) -> Self {
+        relative_paths(&mut input);
         let rows = TranscriptRows::new(
             &input.blocks,
             &input.shape(),
@@ -443,10 +481,11 @@ impl TranscriptView {
     /// redraws compare that key without cloning rows or notifying this entity.
     pub(crate) fn sync(
         &mut self,
-        input: TranscriptInput,
+        mut input: TranscriptInput,
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
     ) {
+        relative_paths(&mut input);
         let before = self.input.key();
         let after = input.key();
         let namespace_changed = before.namespace != after.namespace;
@@ -690,6 +729,14 @@ impl TranscriptView {
                     _ => None,
                 })
         })
+    }
+
+    /// The scope this transcript's path targets register under (what
+    /// `file_links::laid_out` finds them by): a headless driver points the
+    /// mouse at one.
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn namespace(&self) -> SharedString {
+        self.input.namespace.clone()
     }
 
     /// Open the hover card on the first target naming `path` (a scene's

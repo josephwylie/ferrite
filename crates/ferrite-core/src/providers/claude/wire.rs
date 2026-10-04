@@ -509,7 +509,9 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
                     .and_then(|context| context.get("total_tokens"))
                     .and_then(Value::as_u64)
                     .unwrap_or(input + cached + created + output),
-                input_tokens: input,
+                // Every token the model read (`claude_input`), as Codex
+                // counts it: the cached reads are a share of it.
+                input_tokens: input + cached + created,
                 cached_input_tokens: cached,
                 output_tokens: output,
                 reasoning_output_tokens: 0,
@@ -535,7 +537,7 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
                     + count(last, "cache_creation_input_tokens")
                     + count(last, "output_tokens")
             });
-            let input = count(usage, "input_tokens");
+            let input = claude_input(usage);
             let cached = count(usage, "cache_read_input_tokens");
             let active_model = value
                 .get("model")
@@ -571,6 +573,22 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     }
 }
 
+/// The input a Claude usage block reports, whole: the API's `input_tokens`
+/// are only what missed the prompt cache, so the cache's reads and writes
+/// join them. The shared counters are Codex's shape — cached input is a
+/// share of the input, never beside it — so a turn's `↑ 3.2k` reads the
+/// same on both providers.
+fn claude_input(usage: &Value) -> u64 {
+    [
+        "input_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ]
+    .iter()
+    .map(|key| usage.get(*key).and_then(Value::as_u64).unwrap_or(0))
+    .sum()
+}
+
 pub(super) fn parse_usage_details_value(value: &Value) -> Option<SessionEvent> {
     let usage = match value.get("type")?.as_str()? {
         "assistant" => value["message"].get("usage")?,
@@ -588,7 +606,7 @@ pub(super) fn parse_usage_details_value(value: &Value) -> Option<SessionEvent> {
             } else {
                 UsageScope::Turn
             },
-            input_tokens: count("input_tokens"),
+            input_tokens: claude_input(usage),
             cached_input_tokens: count("cache_read_input_tokens"),
             output_tokens: count("output_tokens"),
             reasoning_output_tokens: usage["output_tokens_details"]

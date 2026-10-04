@@ -902,7 +902,9 @@ fn wall_lines(
                     wraps: true,
                 });
             }
-            Body::Notice(text) if decision.is_none() => {
+            Body::Notice(text)
+                if decision.is_none() && !ferrite_core::transcript::is_opened_notice(text) =>
+            {
                 let text = first_line(notice_text(text.trim(), false));
                 if !text.is_empty() {
                     lines.push(WallLine::line(format!("{DIAMOND_GLYPH} {text}")));
@@ -962,11 +964,13 @@ fn wall_call_line(tool: &ToolBlock, timings: Option<&HashMap<String, ToolTiming>
 /// its own line, and nothing else hangs.
 fn wall_result_line(tool: &ToolBlock) -> Option<String> {
     match &tool.state {
-        ToolState::Running => tool
-            .progress
-            .as_ref()
-            .filter(|progress| progress.total > 0)
-            .map(|progress| format!("{}/{} tests", progress.done, progress.total)),
+        ToolState::Running => tool.progress.as_ref().map(|progress| {
+            if progress.known() {
+                format!("{}/{} tests", progress.done, progress.total)
+            } else {
+                format!("{} tests", progress.done)
+            }
+        }),
         ToolState::Failed(message) => {
             if is_test_run(tool) {
                 if let Some(summary) = test_summary(tool) {
@@ -4283,6 +4287,61 @@ pub(crate) fn approval_source(decision: &Decision) -> Option<String> {
         })
 }
 
+/// An edit approval's change as the diff it would leave (`proposed_diff`):
+/// unified, under the head, in the rows' own red and green — the edit the
+/// operator is asked about rather than its JSON. `None` for anything that
+/// is not an edit with its text.
+pub(crate) fn approval_diff(
+    decision: &Decision,
+    asked: Option<&Diff>,
+    workspace: Option<&std::path::Path>,
+    reading: ferrite_core::settings::ReadingSize,
+) -> Option<AnyElement> {
+    if let Some(diff) = asked {
+        return Some(
+            div()
+                .debug_selector(|| "approval-diff".into())
+                .w_full()
+                .min_w_0()
+                .flex_shrink_0()
+                .child(render_diff(None, diff, Grid::of(reading), false, true))
+                .into_any_element(),
+        );
+    }
+    thread_local! {
+        /// Each asked edit's diff, read off the file once: the card draws
+        /// every frame while it stands.
+        static PROPOSED: std::cell::RefCell<HashMap<String, Option<ferrite_core::transcript::Diff>>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    let key = format!("{}\u{1f}{}", decision.id, decision.tool_use_id);
+    let diff = PROPOSED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() > 32 {
+            cache.clear();
+        }
+        cache
+            .entry(key)
+            .or_insert_with(|| {
+                ferrite_core::transcript::proposed_diff(
+                    &decision.tool_name,
+                    &decision.input,
+                    workspace,
+                )
+            })
+            .clone()
+    })?;
+    Some(
+        div()
+            .debug_selector(|| "approval-diff".into())
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .child(render_diff(None, &diff, Grid::of(reading), false, true))
+            .into_any_element(),
+    )
+}
+
 /// Whether an approval's well holds a shell command, which reads after a
 /// `$ ` prompt: Claude's `Bash` and Codex's `commandExecution` alike.
 pub(crate) fn shell_command(decision: &Decision) -> bool {
@@ -5286,7 +5345,6 @@ impl Grid {
     pub(crate) fn mark(self) -> f32 {
         theme::tx_mark(self.size)
     }
-
 
     /// Half a line, whole pixels.
     pub(crate) fn half(self) -> f32 {
@@ -6499,7 +6557,7 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
     if !is_test_run(tool) {
         return None;
     }
-    let failed = match &tool.state {
+    let exited = match &tool.state {
         ToolState::Ok => false,
         ToolState::Failed(_) => true,
         _ => return None,
@@ -6523,10 +6581,11 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
                 .map(|(name, verdict)| (at, name, verdict))
         })
         .collect();
-    let result = lines
+    let results: Vec<&str> = lines
         .iter()
         .copied()
-        .rfind(|line| line.trim_start().starts_with("test result:"));
+        .filter(|line| line.trim_start().starts_with("test result:"))
+        .collect();
     let counted = |verdict: &str| tests.iter().filter(|(_, _, v)| *v == verdict).count();
     let summary_of = |line: &str| -> Option<(usize, usize)> {
         let passed = passed_count(line)?;
@@ -6536,9 +6595,50 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
             .unwrap_or(0);
         Some((passed, failed))
     };
+    // cargo prints one `test result:` per test binary (the crate's, each
+    // integration suite's, the doc tests'): the run's tally is their sum —
+    // unless the last one already accounts for every test the run announced
+    // (`running 359 tests`, a workspace tally closing the output).
+    let ignored_of = |line: &str| -> usize {
+        line.split(';')
+            .find_map(|part| part.trim().strip_suffix(" ignored")?.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    let announced: usize = lines
+        .iter()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("running ")?
+                .strip_suffix(" tests")
+                .or_else(|| line.trim().strip_prefix("running ")?.strip_suffix(" test"))?
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .sum();
+    let last = results
+        .last()
+        .and_then(|line| summary_of(line).map(|counts| (counts, ignored_of(line))));
+    let totals = match last {
+        Some(((passed, failed), ignored))
+            if announced > 0 && passed + failed + ignored == announced =>
+        {
+            Some((passed, failed))
+        }
+        _ => results
+            .iter()
+            .filter_map(|line| summary_of(line))
+            .reduce(|(p, f), (passed, failed)| (p + passed, f + failed)),
+    };
+    // A run is failed by its own report too: piped into `tail` or `grep`
+    // the command exits 0 while its suite failed.
+    let failed = exited
+        || results
+            .iter()
+            .any(|line| line.trim_start().starts_with("test result: FAILED"))
+        || tests.iter().any(|(_, _, verdict)| *verdict == "FAILED");
     if !failed {
-        let passed = result
-            .and_then(summary_of)
+        let passed = totals
             .map(|(passed, _)| passed)
             .or_else(|| (!tests.is_empty()).then(|| counted("ok")))
             .or_else(|| tool.result_line.as_deref().and_then(passed_count));
@@ -6557,6 +6657,10 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
         && fails
             .iter()
             .all(|(at, _, _)| tests.iter().take(3).any(|(first, _, _)| first == at));
+    // The early form heads with the run's first line (`running 38 tests`);
+    // output a pipe cut to its test lines has no such line, and reads its
+    // tally instead.
+    let early = early && tests.first().is_some_and(|(at, _, _)| *at > 0);
     if early {
         let first = lines.first().map(|line| line.trim()).unwrap_or("");
         let preview: Vec<String> = tests
@@ -6572,9 +6676,7 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
             preview,
         });
     }
-    let (passed, failed_count) = result
-        .and_then(summary_of)
-        .unwrap_or_else(|| (counted("ok"), fails.len()));
+    let (passed, failed_count) = totals.unwrap_or_else(|| (counted("ok"), fails.len()));
     let preview: Vec<String> = fails
         .iter()
         .take(3)
@@ -6583,7 +6685,7 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
             line.strip_prefix("test ").unwrap_or(line).to_string()
         })
         .collect();
-    let shown = preview.len() + usize::from(result.is_some());
+    let shown = preview.len() + usize::from(!results.is_empty());
     Some(TestElbow {
         lead: theme::words::FAILED,
         rest: format!("{passed} passed; {failed_count} failed"),
@@ -6733,6 +6835,26 @@ fn fold_open(
 /// A running test's elbow (CT-25): `└ running 357 tests`, its bar, and
 /// `212/357` in tabular `TEXT_MUTED`.
 fn running_tests(call: &str, progress: ferrite_core::transcript::TestProgress, grid: Grid) -> Div {
+    // The runner's total unheard (`TestProgress::known`): the count alone,
+    // where `212/357` would stand, and no bar to fill against nothing.
+    if !progress.known() {
+        return elbow_line(grid, TEXT_MUTED)
+            .debug_selector(|| "tool-test-progress".into())
+            .items_center()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .child("running tests"),
+            )
+            .child(components::tabular(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .ml(px(grid.cell()))
+                    .child(SharedString::from(progress.done.to_string())),
+            ));
+    }
     let total = progress.total.max(1);
     let fraction = (progress.done as f32 / total as f32).clamp(0., 1.);
     elbow_line(grid, TEXT_MUTED)
@@ -6917,7 +7039,15 @@ pub(crate) fn render_tool(
         );
         trailing = true;
     }
-    let (ink, shape) = tool_dot_ink(&tool.state);
+    let (ink, shape) = match tool_dot_ink(&tool.state) {
+        // Its own report failed it, whatever the pipe exited with.
+        (TEXT_MUTED, shape)
+            if test_elbow(tool).is_some_and(|elbow| elbow.lead == theme::words::FAILED) =>
+        {
+            (BLOCKED, shape)
+        }
+        ink => ink,
+    };
     let row_selector = format!("tool-row-{}", tool.call);
     let mut line =
         grid_row(glyph_gutter(grid, shape.glyph(), ink).debug_selector(|| "tool-dot".into()))
@@ -7002,10 +7132,17 @@ pub(crate) fn render_tool(
                 let detail = tool
                     .result_line
                     .clone()
-                    .or_else(|| failed_excerpt(tool).map(str::to_owned));
+                    .or_else(|| failed_excerpt(tool).map(str::to_owned))
+                    .filter(|detail| !detail.trim().is_empty());
+                // Nothing said: the word alone, no separator left hanging.
+                let head = if detail.is_some() {
+                    failed_head()
+                } else {
+                    theme::words::FAILED.to_string()
+                };
                 card = card.child(failure_line(
                     block,
-                    failed_head(),
+                    head,
                     theme::words::FAILED.len(),
                     BLOCKED,
                     detail,
@@ -7043,6 +7180,28 @@ pub(crate) fn render_tool(
         ToolState::Ok => {
             if let Some(elbow) = test_elbow(tool) {
                 card = card.child(test_elbow_row(block, &elbow, selection, grid));
+                // A suite that failed behind a pipe (`| tail`) exited 0: its
+                // failures hang under it as a failed call's would.
+                if elbow.lead == theme::words::FAILED {
+                    if !elbow.preview.is_empty() {
+                        card = card.child(output_lines_run(
+                            block,
+                            elbow.preview.join("\n"),
+                            selection,
+                            grid,
+                        ));
+                    }
+                    card = card.children(rest_fold(
+                        block,
+                        tool,
+                        &elbow,
+                        expanded,
+                        &fold_id,
+                        toggle.clone(),
+                        selection,
+                        grid,
+                    ));
+                }
             } else if let Some((first, rest)) = command_fold(tool) {
                 // `└ 7 issues · + 7 lines`: the whole output folds behind its
                 // elbow; open, the rest hangs under it.
@@ -8128,8 +8287,13 @@ fn render_diff(
         } = side.kind.paint();
         let (highlights, words) = diff_highlights(side, language);
         let runs = highlights.iter().map(|(range, _)| range.clone()).collect();
-        let cut = CellCut::new(side.body.clone(), words, rgb(code_color).into(), grid.cell())
-            .runs(runs);
+        let cut = CellCut::new(
+            side.body.clone(),
+            words,
+            rgb(code_color).into(),
+            grid.cell(),
+        )
+        .runs(runs);
         let code = match selection {
             Some((selection, block)) if selectable => selection
                 .line(block, side.body.clone(), highlights)
@@ -9019,6 +9183,7 @@ mod tests {
                 pending_call: None,
                 workspace: None,
                 solo: false,
+                thinking: true,
                 settled_at: Default::default(),
                 #[cfg(test)]
                 disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
@@ -9058,6 +9223,7 @@ mod tests {
                     pending_call: None,
                     workspace: None,
                     solo: false,
+                    thinking: true,
                     settled_at: Default::default(),
                     #[cfg(test)]
                     disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),

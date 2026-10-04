@@ -11,8 +11,21 @@ use std::borrow::Cow;
 /// The command a `sh`/`bash`/`zsh`/`fish`/`dash` `-c`/`-lc` wrapper runs, or
 /// `raw` itself when it is not one. A single-quoted body is taken verbatim;
 /// a double-quoted one has its backslash escapes (`\"`, `\\`, `\$`, `` \` ``)
-/// undone.
+/// undone. A wrapper inside a wrapper comes off too: 0.160 escalates
+/// `/bin/zsh -lc "/bin/zsh -lc 'printf …'"`.
 pub fn unwrap_shell(raw: &str) -> Cow<'_, str> {
+    let mut command = unwrap_once(raw);
+    for _ in 0..3 {
+        let inner = match unwrap_once(&command) {
+            Cow::Borrowed(inner) if inner.len() == command.len() => break,
+            inner => inner.into_owned(),
+        };
+        command = Cow::Owned(inner);
+    }
+    command
+}
+
+fn unwrap_once(raw: &str) -> Cow<'_, str> {
     let trimmed = raw.trim();
     for flag in [" -lc ", " -c "] {
         let Some(at) = trimmed.find(flag) else {
@@ -63,6 +76,14 @@ pub fn unwrap_shell(raw: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrapper_inside_a_wrapper_comes_off_too() {
+        assert_eq!(
+            unwrap_shell("/bin/zsh -lc \"/bin/zsh -lc 'printf \\\"hello\\\\n\\\" > NOTES.md'\""),
+            "printf \"hello\\n\" > NOTES.md"
+        );
+    }
 
     #[test]
     fn login_shell_wrappers_unwrap_to_the_command() {

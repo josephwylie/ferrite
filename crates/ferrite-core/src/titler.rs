@@ -96,6 +96,27 @@ pub fn form(provider: Provider, program: &str, req: &TitleRequest) -> TitleForm 
     }
 }
 
+/// [`form`] on the model the provider offers today: Codex's small model
+/// is named by its catalog (`model/list`), and a ChatGPT account refuses a
+/// retired one outright (`gpt-5.4-mini`, 0.160), so the catalog's fast tier
+/// stands in when the built-in name is not on it.
+pub fn form_for(
+    provider: Provider,
+    program: &str,
+    req: &TitleRequest,
+    catalog: &[crate::ModelInfo],
+) -> TitleForm {
+    let mut form = form(provider, program, req);
+    if provider == Provider::Codex {
+        if let Some(model) = codex::cheap_model(catalog) {
+            if let Some(at) = form.args.iter().position(|arg| arg == "--model") {
+                form.args[at + 1] = model;
+            }
+        }
+    }
+    form
+}
+
 /// Ask for a title on a background thread. The receiver yields exactly one
 /// value: Some(title), or None when the CLI is missing, exits non-zero,
 /// prints nothing usable, or outlives `TIMEOUT` (it is killed). The
@@ -206,6 +227,45 @@ mod tests {
         }
         assert!(form.args.last().unwrap().starts_with("Write a title"));
         assert!(form.args.last().unwrap().contains("Ship it"));
+    }
+
+    /// A catalog without the built-in small model titles on its fast tier;
+    /// one that lists it (or says nothing) keeps it.
+    #[test]
+    fn codex_titles_on_the_catalogs_fast_tier_when_its_small_model_is_gone() {
+        let model = |value: &str, detail: &str| crate::ModelInfo {
+            value: value.into(),
+            display: value.into(),
+            detail: detail.into(),
+            resolved: None,
+            efforts: vec!["low".into()],
+            default_effort: None,
+        };
+        let today = [
+            model(
+                "gpt-6-astra",
+                "Frontier intelligence for the most demanding work.",
+            ),
+            model("gpt-6-luna", "Fast and affordable model for easier tasks."),
+        ];
+        let at = |form: &TitleForm| {
+            let at = form.args.iter().position(|arg| arg == "--model").unwrap();
+            form.args[at + 1].clone()
+        };
+        let request = req("Ship it", None);
+        assert_eq!(
+            at(&form_for(Provider::Codex, "codex", &request, &today)),
+            "gpt-6-luna"
+        );
+        assert_eq!(
+            at(&form_for(Provider::Codex, "codex", &request, &[])),
+            codex::MODEL
+        );
+        let listed = [model(codex::MODEL, "Small and fast.")];
+        assert_eq!(
+            at(&form_for(Provider::Codex, "codex", &request, &listed)),
+            codex::MODEL
+        );
     }
 
     #[test]

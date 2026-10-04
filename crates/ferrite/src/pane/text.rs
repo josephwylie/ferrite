@@ -19,11 +19,13 @@ pub(super) fn tool_label(tool: &ToolBlock) -> String {
 /// original command stays in the ToolBlock and becomes selectable in the
 /// disclosed details.
 fn tool_summary_line(tool: &ToolBlock) -> std::borrow::Cow<'_, str> {
-    let summary = tool.title.as_deref().unwrap_or(&tool.summary);
-    let summary = if ferrite_core::docview::is_command_run(&tool.name) {
-        ferrite_core::providers::shell::unwrap_shell(summary)
+    // A command reads as the command (`Bash(cargo test)`), as Claude Code
+    // prints it, whatever purpose the model wrote beside it (Claude's Bash
+    // `description`: "Run cargo test to identify failing tests").
+    let summary = if ferrite_core::docview::is_command_run(&tool.name) && !tool.summary.is_empty() {
+        ferrite_core::providers::shell::unwrap_shell(&tool.summary)
     } else {
-        std::borrow::Cow::Borrowed(summary)
+        std::borrow::Cow::Borrowed(tool.title.as_deref().unwrap_or(&tool.summary))
     };
     if summary.contains(['\n', '\r']) {
         let first = summary

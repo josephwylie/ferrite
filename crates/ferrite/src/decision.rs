@@ -226,7 +226,20 @@ pub fn hint_text<S: AsRef<str>>(parts: &[S]) -> String {
 /// A login-shell wrapper taken off (`/bin/zsh -lc "…"`, `bash -c '…'`), so
 /// a Codex command reads as the operator would type it. Anything that is
 /// not exactly one quoted argument to a known shell comes back unchanged.
+/// A wrapper inside a wrapper comes off too: 0.160 asks to escalate
+/// `/bin/zsh -lc "/bin/zsh -lc 'printf …'"`.
 pub fn unwrap_shell(raw: &str) -> Cow<'_, str> {
+    let mut command = unwrap_shell_once(raw);
+    for _ in 0..3 {
+        match unwrap_shell_once(&command) {
+            Cow::Owned(inner) => command = Cow::Owned(inner),
+            Cow::Borrowed(_) => break,
+        }
+    }
+    command
+}
+
+fn unwrap_shell_once(raw: &str) -> Cow<'_, str> {
     let line = raw.trim();
     for flag in [" -lc ", " -c "] {
         let Some(at) = line.find(flag) else {
@@ -336,6 +349,37 @@ pub fn prose_repeats_command(description: &str, command: Option<&str>) -> bool {
         || command.trim() == unwrapped
         || first.contains(description)
         || first.contains(unwrapped)
+}
+
+/// What an approval's prose says beyond its head and its well — or `None`
+/// when that is nothing. Claude composes the prose from the request's
+/// parts (`cargo test · Bash · This command requires approval`,
+/// `src/stats.rs · Edit`): a part that names the tool, repeats the command
+/// or the edited path, or only says approval is required goes; a real
+/// reason (a blocked path, the provider's own why) stays.
+pub fn prose_beyond_subject(decision: &Decision, command: Option<&str>) -> Option<String> {
+    let description = decision.description.trim();
+    if description.is_empty() || prose_repeats_command(description, command) {
+        return None;
+    }
+    let tool = decision.tool_name.to_lowercase();
+    let word = tool_word(&decision.tool_name).to_lowercase();
+    let path = edit_path(decision);
+    let said = |part: &str| -> bool {
+        let lower = part.to_lowercase();
+        lower == tool
+            || lower == word
+            || prose_repeats_command(part, command)
+            || path.is_some_and(|path| path == part || path.ends_with(&format!("/{part}")))
+            || lower.ends_with("requires approval")
+            || lower.ends_with("needs approval")
+    };
+    let rest: Vec<&str> = description
+        .split(" \u{b7} ")
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && !said(part))
+        .collect();
+    (!rest.is_empty()).then(|| rest.join(" \u{b7} "))
 }
 
 // ------------------------------------------------------------ the patterns
@@ -455,14 +499,35 @@ pub fn standing_pattern(value: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// Whether a provider's standing answer ends with this Thread's Session —
+/// what option 2's `for this thread` promises. Codex's execpolicy and
+/// network amendments are written to the operator's own rules
+/// (`~/.codex/rules/default.rules`, seen live on 0.160) and Claude's
+/// `localSettings`/`projectSettings`/`userSettings` rules to settings
+/// files: they outlive the Thread, so option 2 keeps a Ferrite thread rule
+/// instead. A session grant (`acceptForSession`, Claude's `session`
+/// destination) and an answer that names no scope qualify.
+fn thread_scoped(value: &serde_json::Value) -> bool {
+    if value.get("acceptWithExecpolicyAmendment").is_some()
+        || value.get("applyNetworkPolicyAmendment").is_some()
+    {
+        return false;
+    }
+    match value.get("destination").and_then(serde_json::Value::as_str) {
+        Some(destination) => destination == "session",
+        None => true,
+    }
+}
+
 /// The provider's standing answer option 2 adopts — a rule-shaped one
-/// before a session grant — and its pattern when it has one.
+/// before a session grant — and its pattern when it has one. Only an
+/// answer scoped to this Thread (`thread_scoped`).
 pub fn standing_choice(decision: &Decision) -> Option<(usize, Option<String>)> {
     let standing: Vec<usize> = decision
         .suggestions
         .iter()
         .enumerate()
-        .filter(|(_, choice)| choice.standing)
+        .filter(|(_, choice)| choice.standing && thread_scoped(&choice.value))
         .map(|(at, _)| at)
         .collect();
     standing
@@ -1257,7 +1322,8 @@ mod tests {
         );
     }
 
-    /// Option 2 names the provider's standing rule when it offered one.
+    /// Option 2 names the provider's standing rule when it offered one
+    /// that ends with the Thread, else Ferrite's own.
     #[test]
     fn option_two_names_the_standing_rule_before_its_own() {
         let mut claude = bash("gh issue close 212");
@@ -1289,12 +1355,28 @@ mod tests {
                 ),
             ],
         );
-        // The rule-shaped standing answer wins over the session grant.
+        // An amendment Codex writes to the operator's own rules outlives the
+        // Thread: the session grant is what `for this thread` adopts.
+        assert_eq!(standing_choice(&codex), Some((0, None)));
+        codex.suggestions.remove(0);
         assert_eq!(
             standing_choice(&codex),
-            Some((1, Some("cargo test *".into())))
+            None,
+            "an amendment alone leaves option 2 to a Ferrite thread rule"
         );
-        codex.suggestions.remove(1);
+        // Claude's rule for local settings outlives the Thread too; its
+        // session-scoped twin is adopted.
+        assert_eq!(standing_choice(&claude), None);
+        claude.suggestions[0].value["destination"] = "session".into();
+        assert_eq!(
+            standing_choice(&claude),
+            Some((0, Some("gh issue *".into())))
+        );
+        codex.suggestions = vec![choice(
+            "Allow for this session",
+            serde_json::json!("acceptForSession"),
+            true,
+        )];
         assert_eq!(standing_choice(&codex), Some((0, None)));
         // A session grant has no rule: Ferrite's own pattern names it.
         assert_eq!(option_two_pattern(&codex, None), "cargo test *");

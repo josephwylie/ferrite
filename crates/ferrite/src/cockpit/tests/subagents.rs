@@ -775,7 +775,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     cx: &mut TestAppContext,
 ) {
     let (core, fake) = cockpit("subagents-native-progress", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     child(&fake, "Atlas", AgentStatus::Working);
     emit(

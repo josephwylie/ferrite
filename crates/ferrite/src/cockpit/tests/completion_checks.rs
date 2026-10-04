@@ -512,7 +512,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
 #[gpui::test]
 fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("reasoning-once", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
     let text = "Checking the supplied spacing and tool results";
     let historical_count = |cx: &gpui::VisualTestContext, source: &str| {

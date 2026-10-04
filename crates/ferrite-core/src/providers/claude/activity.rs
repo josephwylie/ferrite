@@ -50,6 +50,10 @@ pub(super) struct Decoder {
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
     excluded_tasks: HashSet<String>,
+    /// Shell tasks serving a foreground Bash call: the call's own row shows
+    /// it running (`shell_output` streams its output there), so it is no
+    /// background task. A task the CLI backgrounds later leaves the set.
+    foreground_shells: HashSet<String>,
     main_stream_message: Option<String>,
     main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
     main_stream_order: VecDeque<(String, u64)>,
@@ -351,6 +355,9 @@ impl Decoder {
     /// Extra SDK observations share the execution path and attribution used
     /// for tools. Completed message snapshots are already decoded by message().
     fn progress(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if self.foreground_shell(value) {
+            return;
+        }
         let extras: Vec<_> = wire::parse_events_value(value)
             .into_iter()
             .filter(|event| {
@@ -383,6 +390,48 @@ impl Decoder {
                     }
                 }
             }
+        }
+    }
+
+    /// Whether `value` is a task event of a foreground Bash call's shell
+    /// (`task_type` `local_bash`, not backgrounded), which no background
+    /// chip shows: the call's row is already running.
+    fn foreground_shell(&mut self, value: &Value) -> bool {
+        if value["type"] != "system" {
+            return false;
+        }
+        let Some(task) = value["task_id"].as_str() else {
+            return false;
+        };
+        let backgrounded = |value: &Value| {
+            value["is_backgrounded"] == true
+                || value["patch"]["is_backgrounded"] == true
+                || value["patch"]["isBackgrounded"] == true
+        };
+        match value["subtype"].as_str() {
+            Some("task_started") => {
+                let foreground = value["task_type"] == "local_bash"
+                    && !backgrounded(value)
+                    && value["tool_use_id"].is_string();
+                if foreground {
+                    self.foreground_shells.insert(task.to_owned());
+                }
+                foreground
+            }
+            Some("task_progress" | "task_notification" | "task_updated")
+                if self.foreground_shells.contains(task) =>
+            {
+                if backgrounded(value) {
+                    // Sent to the background mid-run: from now on it is one.
+                    self.foreground_shells.remove(task);
+                    return false;
+                }
+                if value["subtype"] == "task_notification" {
+                    self.foreground_shells.remove(task);
+                }
+                true
+            }
+            _ => false,
         }
     }
 

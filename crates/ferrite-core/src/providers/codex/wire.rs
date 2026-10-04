@@ -322,10 +322,13 @@ pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
             Some("active") => {
                 let flags = params["status"]["activeFlags"].as_array();
                 if flags.is_some_and(|flags| flags.iter().any(|v| v == "waitingOnApproval")) {
-                    Some(phase(Phase::Waiting, "Approval needed".into()))
+                    Some(phase(
+                        Phase::Waiting,
+                        crate::progress::APPROVAL_NEEDED.into(),
+                    ))
                 } else if flags.is_some_and(|flags| flags.iter().any(|v| v == "waitingOnUserInput"))
                 {
-                    Some(phase(Phase::Waiting, "Answer needed".into()))
+                    Some(phase(Phase::Waiting, crate::progress::ANSWER_NEEDED.into()))
                 } else {
                     None
                 }
@@ -436,6 +439,13 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             })
             .unwrap_or_default(),
     };
+    // A refused call ran nothing; its row says what happened to it (`└
+    // failed · declined`), never the patch it carried or a bare `failed ·`.
+    let output = if item["status"] == "declined" {
+        "declined".to_string()
+    } else {
+        output
+    };
     let result = if kind == "commandExecution" {
         // Codex supplies one combined stream, so preserve it as the
         // primary output instead of pretending it supplied stderr.
@@ -501,6 +511,22 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
 
 /// Decode Codex's per-file unified diff without assigning a tool identity or
 /// inferring files absent from the native `changes` list.
+/// A `fileChange` item's `changes` as the diffs they make, path by path —
+/// what the item says before it runs (and before its approval is
+/// answered), so its row and its Decision can draw the edit asked for.
+pub(crate) fn file_change_diffs(item: &Value) -> Vec<(String, Vec<Hunk>)> {
+    item.get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|change| {
+            let path = change.get("path")?.as_str()?.to_string();
+            let hunks = parse_file_change(change);
+            (!hunks.is_empty()).then_some((path, hunks))
+        })
+        .collect()
+}
+
 fn parse_file_change(change: &Value) -> Vec<Hunk> {
     let diff = change
         .get("diff")
@@ -624,9 +650,20 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
     };
     DecisionPolicy {
         allow: choices.iter().any(|choice| choice == "accept"),
-        deny: choices.iter().any(|choice| choice == "decline"),
+        deny: refusable(choices),
         ..DecisionPolicy::default()
     }
+}
+
+/// Whether an approval may be declined — the model told no and the turn
+/// going on. 0.160 lists only `cancel` (which ends the turn) beside the
+/// allows, yet answers `decline` as the protocol's own refusal: the item
+/// settles `declined` and the model carries on. Any refusal offered means
+/// `decline` is too.
+pub(super) fn refusable(choices: &[Value]) -> bool {
+    choices
+        .iter()
+        .any(|choice| choice == "decline" || choice == "cancel")
 }
 
 fn codex_choice(value: &Value) -> Option<DecisionChoice> {
@@ -1553,14 +1590,15 @@ mod tests {
     }
 
     /// Denial is not failure: the declined command completes as an error and
-    /// the turn runs to a normal end with the model talking about it.
+    /// the turn runs to a normal end with the model talking about it. Its
+    /// output says what happened to it (`declined`).
     #[test]
     fn a_declined_tool_fails_without_failing_the_turn() {
         let events = events_of("approval-deny");
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                SessionEvent::ToolCompleted { is_error: true, output, .. } if output.is_empty()
+                SessionEvent::ToolCompleted { is_error: true, output, .. } if output == "declined"
             )),
             "no declined tool result: {events:?}"
         );

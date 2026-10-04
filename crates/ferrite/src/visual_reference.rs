@@ -14,6 +14,10 @@
 #[path = "cockpit/visual_reference/parity_scenes.rs"]
 mod parity_scenes;
 
+#[path = "cockpit/visual_reference/live.rs"]
+mod live;
+pub(crate) use live::capture as live_capture;
+
 use super::{CockpitView, DraftTarget, MenuTarget};
 use crate::nav::NavFold;
 use crate::palette::PaletteScope;

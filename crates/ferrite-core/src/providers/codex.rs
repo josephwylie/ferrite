@@ -21,6 +21,7 @@ mod questions;
 mod queue;
 mod requests;
 pub(super) mod wire;
+pub(crate) use wire::file_change_diffs;
 
 use crate::spawn::NoConsoleWindow;
 use std::collections::HashMap;
@@ -1375,6 +1376,21 @@ pub mod title {
     /// positional argument.
     pub fn fill(program: &str, prompt: &str) -> TitleForm {
         fill_with_model(program, prompt, MODEL)
+    }
+
+    /// The small model to ask instead of [`MODEL`] when the provider's own
+    /// catalog no longer lists it: the first model the catalog calls fast
+    /// (`GPT-6 Luna — Fast and affordable model for easier tasks.`).
+    /// `None` keeps [`MODEL`]: it is listed, or the catalog names no fast
+    /// tier (an empty catalog says nothing either way).
+    pub fn cheap_model(catalog: &[crate::ModelInfo]) -> Option<String> {
+        if catalog.is_empty() || catalog.iter().any(|model| model.value == MODEL) {
+            return None;
+        }
+        catalog
+            .iter()
+            .find(|model| model.detail.to_lowercase().contains("fast"))
+            .map(|model| model.value.clone())
     }
 
     pub(super) fn fill_with_model(program: &str, prompt: &str, model: &'static str) -> TitleForm {

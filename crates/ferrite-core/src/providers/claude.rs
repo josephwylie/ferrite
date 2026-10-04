@@ -11,6 +11,7 @@ pub(super) mod discovery;
 mod file_search;
 mod menu;
 mod queue;
+mod shell_output;
 mod suggestions;
 pub(super) mod wire;
 
@@ -382,6 +383,11 @@ impl ClaudeSession {
     }
 
     pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        // The CLI enters bypass only when it was launched in it (2.1.289
+        // refuses `set_permission_mode` to it otherwise: "Cannot set
+        // permission mode to bypassPermissions…"), so a Session that began
+        // elsewhere never offers it — ⇧⇥ would step onto a refusal.
+        let bypass = self.capabilities.permission_mode == "bypassPermissions";
         [
             ("default", "Default"),
             ("acceptEdits", "Accept edits"),
@@ -391,6 +397,7 @@ impl ClaudeSession {
             ("auto", "Auto"),
         ]
         .into_iter()
+        .filter(|(value, _)| bypass || *value != "bypassPermissions")
         .map(|(value, label)| PermissionModeChoice {
             value: value.into(),
             label: label.into(),
@@ -680,6 +687,7 @@ fn read_stdout(
         let mut line = Vec::new();
         let mut handshake = Some(handshake);
         let mut menu = menu::McpMenu::default();
+        let mut shells = shell_output::ShellOutputs::default();
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -691,6 +699,7 @@ fn read_stdout(
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                shells.observe(&value, &sender);
                 if lock(&file_search).observe(&value) {
                     continue;
                 }
@@ -846,6 +855,7 @@ fn read_stdout(
                 }
             }
         }
+        shells.stop_all();
         lock(&file_search).disconnect();
         lock(&control_replies).clear();
         let _ = sender.send(closed_event(&child, &stderr_tail));

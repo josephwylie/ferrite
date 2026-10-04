@@ -876,3 +876,64 @@ fn session_file_discovery_walks_both_roots_newest_first_and_capped() {
     let missing = session_roots(&base.join("nowhere"));
     assert!(candidates(&missing, 8).is_empty());
 }
+
+/// 0.160 writes a turn's prompt and replies as completed items
+/// (`event_msg` `item_completed`: `UserMessage`, `AgentMessage`) where
+/// earlier releases wrote `user_message` and `agent_message`. Line shapes
+/// are a live 0.160 rollout's, cut down and redacted.
+#[test]
+fn a_codex_0_160_rollout_imports_its_prompts_and_replies() {
+    let store = scratch("codex-0-160");
+    let lines = [
+        r#"{"timestamp":"2026-10-04T19:10:53.154Z","type":"session_meta","payload":{"id":"01a10853-829f-7640-8121-542eafc4914d","cwd":"/private/tmp/repo","cli_version":"0.160.0"}}"#,
+        r#"{"timestamp":"2026-10-04T19:10:53.200Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/private/tmp/repo","model":"gpt-6-luna"}}"#,
+        r#"{"timestamp":"2026-10-04T19:10:53.300Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"#,
+        r#"{"timestamp":"2026-10-04T19:10:55.400Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10853","turn_id":"t1","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"Create a file NOTES.md containing one line: hello.","text_elements":[]}]}}}"#,
+        r#"{"timestamp":"2026-10-04T19:10:57.300Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10853","turn_id":"t1","item":{"type":"AgentMessage","id":"m1","content":[{"type":"Text","text":"I'll create NOTES.md."}],"phase":"commentary"}}}"#,
+        r#"{"timestamp":"2026-10-04T19:11:00.700Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10853","turn_id":"t1","item":{"type":"AgentMessage","id":"m2","content":[{"type":"Text","text":"The write request was rejected."}],"phase":"final_answer"}}}"#,
+        r#"{"timestamp":"2026-10-04T19:11:00.800Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1"}}"#,
+    ];
+    let dir = std::env::temp_dir().join(format!("ferrite-import-codex160-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rollout-0.160.jsonl");
+    fs::write(&path, lines.join("\n")).unwrap();
+
+    let thread = import(&store, &path).unwrap();
+    let inputs = store.load(thread).unwrap().inputs();
+    let ends = inputs
+        .iter()
+        .filter(|input| matches!(input, Input::Event(SessionEvent::TurnEnded { .. })))
+        .count();
+    let mut transcript = Transcript::default();
+    for input in inputs {
+        transcript.apply(input);
+    }
+    let text: Vec<String> = transcript
+        .blocks()
+        .iter()
+        .map(|block| match &block.body {
+            ferrite_core::transcript::Body::Prompt(text) => text.clone(),
+            ferrite_core::transcript::Body::Paragraph { spans } => {
+                spans.iter().map(|span| span.text.as_str()).collect()
+            }
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(ends, 1, "{text:?}");
+    assert!(
+        text.iter()
+            .any(|line| line == "Create a file NOTES.md containing one line: hello."),
+        "{text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains("I'll create NOTES.md.")),
+        "{text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains("The write request was rejected.")),
+        "{text:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
