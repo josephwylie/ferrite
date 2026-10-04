@@ -120,7 +120,6 @@ icons![
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
-    "arrow-up-down",
     "disclosure-right",
     "disclosure-down",
     // (end WP-G)
@@ -151,11 +150,15 @@ pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
 const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
 const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
-/// `+` — add a Project.
+/// `+` — add a Project. (The nav no longer draws it: a new Thread in a
+/// Project is a palette command.)
+#[allow(dead_code)]
 pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
-/// Four Panes held together as one durable Group.
+/// Four Panes held together as one durable Group. (The nav no longer marks
+/// membership after a title: a Thread is listed under its Groups.)
+#[allow(dead_code)]
 pub const GROUP: &str = "icons/group.svg";
 /// A parent Agent branching to two children. (The nav no longer draws it:
 /// a row's subagents are its tooltip.)
@@ -185,8 +188,10 @@ pub const PROMPT: &str = "icons/prompt.svg";
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- foundation: spinner frames (theme rule 8)
-/// The braille spinner's ten frames in order, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (dots 1–6 of
-/// a 2×3 cell, centred in a 12-unit box): `components::braille_spinner`
+/// The braille spinner's ten frames in order, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`: every frame
+/// draws the whole 2×3 cell, its raised dots filled and the rest as thin
+/// rings (as the prototype's braille face draws them), the cell's centre
+/// ~1px above the line's in a 12-unit box: `components::braille_spinner`
 /// draws them at `MOTION_BRAILLE_FRAME_MS`.
 #[allow(dead_code)]
 pub const BRAILLE_FRAMES: [&str; 10] = [
@@ -288,13 +293,11 @@ pub const DIAMOND: &str = "icons/diamond.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
-/// Lucide's `arrow-up-down`: the order the Thread list is shown in.
-pub const SORT: &str = "icons/arrow-up-down.svg";
 /// `▸` and `▾`, drawn (Geist Mono has neither small triangle): the nav's
-/// disclosure marks — a Group's and a Project heading's `▾`, the Parked
-/// fold's `▸` (turned a quarter when open). Fill marks in a 12-unit box;
-/// `▾` is `▸` turned a quarter about the box's centre, so a turning `▸`
-/// lands exactly on it.
+/// disclosure marks — open and folded Projects and Groups, and the Parked
+/// fold's `▸` (turned a quarter when open). Fill marks in a 12-unit box
+/// centred on their character cell, each fitted to the prototype's glyph at
+/// 2× (about 4.9 × 4.95 px, a hair below the line's centre).
 pub const DISCLOSURE_RIGHT: &str = "icons/disclosure-right.svg";
 pub const DISCLOSURE_DOWN: &str = "icons/disclosure-down.svg";
 // (end WP-G)
@@ -496,7 +499,6 @@ mod tests {
             FERRITE_UPPER,
             FERRITE_LOWER,
             GEAR,
-            SORT,
             GROUP,
             SUBAGENTS,
             WINDOW_MINIMIZE,
@@ -536,7 +538,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            58,
+            57,
             "the prototype and app controls, including close, the four Windows caption glyphs, \
              the option and control key glyphs, the image mark, the three mode markers, the \
              failed cross, the CLI update mark, the sixteen spinner frames (ten braille, six \
@@ -548,8 +550,18 @@ mod tests {
     /// root, or resvg renders them as filled blobs; the logomarks must not.
     #[test]
     fn line_icons_bake_the_stroke_class_and_logomarks_do_not() {
+        // The sidebar toggle is the prototype's own drawing: a 20-unit box
+        // stroked 1.6, at the titlebar doors' 15px.
+        let sidebar = Assets.load(SIDEBAR).unwrap().unwrap();
+        let sidebar = std::str::from_utf8(&sidebar).unwrap();
+        assert!(sidebar.contains(r#"fill="none""#));
+        assert!(sidebar.contains(r#"stroke="currentColor""#));
+        assert!(sidebar.contains(r#"viewBox="0 0 20 20""#));
+        assert!(sidebar.contains(r#"stroke-width="1.6""#));
+        assert!(sidebar.contains(r#"<rect x="2.5" y="3" width="15" height="14" rx="2.5"/>"#));
+        assert!(sidebar.contains(r#"<path d="M7.5 3v14"/>"#));
+
         for key in [
-            SIDEBAR,
             BELL,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
@@ -559,7 +571,6 @@ mod tests {
             PENCIL,
             CHECK,
             GEAR,
-            SORT,
             GROUP,
             SUBAGENTS,
             COPY,

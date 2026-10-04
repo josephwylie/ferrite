@@ -1,4 +1,13 @@
 //! Durable, ordered Thread groups spanning Projects.
+//!
+//! **Membership is non-exclusive.** A Thread has at most one *home* Group —
+//! the one `Create` and `Join` put it in, taking it out of the home it had
+//! — and may also be a *guest* of any number of others (`Include`, which
+//! takes it out of nothing): "Everything" holds the members of "Perf sweep"
+//! without taking them from it. A guest is a full member everywhere a
+//! Group is read (its Panes, its layout, its count); the difference is only
+//! where the Thread lives when no Group claims it as home — the navigation
+//! lists it under its Project. `Leave` takes a Thread out of every Group.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -33,7 +42,12 @@ impl GroupId {
 pub struct Group {
     pub id: GroupId,
     pub title: String,
+    /// Every member, home and guest alike, in the Group's own order.
     pub members: Vec<ThreadId>,
+    /// The members that are only guests here (`GroupChange::Include`):
+    /// their home, if they have one, is another Group. Always a subset of
+    /// `members`.
+    pub guests: BTreeSet<ThreadId>,
     /// The members' Pane arrangement, once one has been stored; `None` (as
     /// older files load) means the even grid. Always names exactly the
     /// members — see `Groups::layout` for the fitted view.
@@ -41,6 +55,11 @@ pub struct Group {
 }
 
 impl Group {
+    /// Whether `thread` lives here: a member that is not only a guest.
+    pub fn is_home_of(&self, thread: ThreadId) -> bool {
+        self.members.contains(&thread) && !self.guests.contains(&thread)
+    }
+
     pub fn display_title(&self) -> String {
         if self.title.trim().is_empty() {
             format!("group-{:02}", self.id.0)
@@ -68,6 +87,14 @@ pub enum GroupChange {
         second: ThreadId,
     },
     Join {
+        thread: ThreadId,
+        group: GroupId,
+        index: Option<usize>,
+    },
+    /// Add `thread` to `group` as a guest: it stays wherever else it is
+    /// (`Join` without the detach). A Thread the Group already holds stays
+    /// where it is.
+    Include {
         thread: ThreadId,
         group: GroupId,
         index: Option<usize>,
@@ -242,6 +269,8 @@ struct PersistedGroup {
     id: GroupId,
     title: String,
     members: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    guests: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<Tree>,
 }
@@ -276,7 +305,9 @@ impl Groups {
         }
         let store = Store::open(dir)?;
         let known: BTreeSet<ThreadId> = store.thread_ids()?.into_iter().collect();
-        let mut claimed = BTreeSet::new();
+        // A Thread has one home: a later Group claiming it as home keeps it
+        // as a guest instead.
+        let mut homed = BTreeSet::new();
         let mut healed = false;
         let mut groups = Vec::new();
         for stored in persisted
@@ -285,6 +316,7 @@ impl Groups {
             .flat_map(|value| &value.groups)
         {
             let before = stored.members.len();
+            let mut seen = BTreeSet::new();
             let members: Vec<_> = stored
                 .members
                 .iter()
@@ -301,13 +333,22 @@ impl Groups {
                 })
                 .collect::<io::Result<Vec<_>>>()?
                 .into_iter()
-                .filter(|thread| claimed.insert(*thread))
+                .filter(|thread| seen.insert(*thread))
                 .collect();
             healed |= members.len() != before;
             if members.len() < 2 {
                 healed = true;
                 continue;
             }
+            let stored_guests: BTreeSet<ThreadId> =
+                stored.guests.iter().copied().map(ThreadId::new).collect();
+            let mut guests = BTreeSet::new();
+            for thread in &members {
+                if stored_guests.contains(thread) || !homed.insert(*thread) {
+                    guests.insert(*thread);
+                }
+            }
+            healed |= guests != stored_guests;
             let layout = stored
                 .layout
                 .clone()
@@ -317,6 +358,7 @@ impl Groups {
                 id: stored.id,
                 title: stored.title.clone(),
                 members,
+                guests,
                 layout,
             });
         }
@@ -340,10 +382,26 @@ impl Groups {
         self.groups.iter().find(|group| group.id == id)
     }
 
+    /// The first Group, in the durable order (creation order unless the
+    /// operator moved one), that holds `thread`, home or guest. Board code
+    /// that knows which Group is on screen asks that Group instead.
     pub fn of(&self, thread: ThreadId) -> Option<&Group> {
         self.groups
             .iter()
             .find(|group| group.members.contains(&thread))
+    }
+
+    /// Every Group that holds `thread`, home or guest, in the durable order.
+    pub fn all_of(&self, thread: ThreadId) -> impl Iterator<Item = &Group> {
+        self.groups
+            .iter()
+            .filter(move |group| group.members.contains(&thread))
+    }
+
+    /// The Group `thread` lives in — the one `Create` or `Join` put it in —
+    /// if any. A Thread that is only ever a guest has none.
+    pub fn home(&self, thread: ThreadId) -> Option<&Group> {
+        self.groups.iter().find(|group| group.is_home_of(thread))
     }
 
     /// The Group's Pane arrangement in `bounds`, fit to its current
@@ -458,7 +516,7 @@ impl Groups {
                 self.require_thread_project(*first)?;
                 self.require_thread_project(*second)?;
             }
-            GroupChange::Join { thread, .. } => {
+            GroupChange::Join { thread, .. } | GroupChange::Include { thread, .. } => {
                 self.require_thread_project(*thread)?;
             }
             _ => {}
@@ -479,14 +537,15 @@ impl Groups {
                 if first == second {
                     return Err(ApplyError::SameThread);
                 }
-                let mut dissolved = self.detach(first).into_iter().collect::<Vec<_>>();
-                dissolved.extend(self.detach(second));
+                let mut dissolved = self.detach_home(first).into_iter().collect::<Vec<_>>();
+                dissolved.extend(self.detach_home(second));
                 let id = GroupId(self.next_id);
                 self.next_id += 1;
                 self.groups.push(Group {
                     id,
                     title: String::new(),
                     members: vec![first, second],
+                    guests: BTreeSet::new(),
                     // No stored tree: the default grid is drawn until the
                     // operator drags a seam, swaps or splits.
                     layout: None,
@@ -501,13 +560,24 @@ impl Groups {
                 group,
                 index,
             } => {
-                self.get(group).ok_or(ApplyError::MissingGroup)?;
-                let dissolved = self.detach(thread).into_iter().collect();
+                let at_home = self
+                    .get(group)
+                    .ok_or(ApplyError::MissingGroup)?
+                    .is_home_of(thread);
+                // Joining the Group it already lives in moves nothing out.
+                let dissolved = if at_home {
+                    Vec::new()
+                } else {
+                    self.detach_home(thread).into_iter().collect()
+                };
                 let target = self
                     .groups
                     .iter_mut()
                     .find(|item| item.id == group)
                     .ok_or(ApplyError::MissingGroup)?;
+                // A guest here comes home here, at the place asked for.
+                target.guests.remove(&thread);
+                target.members.retain(|member| *member != thread);
                 let at = index
                     .unwrap_or(target.members.len())
                     .min(target.members.len());
@@ -518,9 +588,32 @@ impl Groups {
                     dissolved,
                 })
             }
+            GroupChange::Include {
+                thread,
+                group,
+                index,
+            } => {
+                let target = self
+                    .groups
+                    .iter_mut()
+                    .find(|item| item.id == group)
+                    .ok_or(ApplyError::MissingGroup)?;
+                if !target.members.contains(&thread) {
+                    let at = index
+                        .unwrap_or(target.members.len())
+                        .min(target.members.len());
+                    target.members.insert(at, thread);
+                    target.guests.insert(thread);
+                    target.reconcile_layout();
+                }
+                Ok(Applied {
+                    group: Some(group),
+                    dissolved: Vec::new(),
+                })
+            }
             GroupChange::Leave { thread } => Ok(Applied {
                 group: None,
-                dissolved: self.detach(thread).into_iter().collect(),
+                dissolved: self.detach_all(thread),
             }),
             GroupChange::ReorderMember {
                 group,
@@ -574,22 +667,42 @@ impl Groups {
         }
     }
 
-    fn detach(&mut self, thread: ThreadId) -> Option<Dissolved> {
+    /// Take `thread` out of its home Group, if it has one — its guest seats
+    /// stay: the move `Create` and `Join` make. A Group left with fewer
+    /// than two members dissolves onto the one left.
+    fn detach_home(&mut self, thread: ThreadId) -> Option<Dissolved> {
         let index = self
             .groups
             .iter()
-            .position(|group| group.members.contains(&thread))?;
-        self.groups[index]
-            .members
-            .retain(|member| *member != thread);
-        if self.groups[index].members.len() < 2 {
+            .position(|group| group.is_home_of(thread))?;
+        self.remove_member(index, thread)
+    }
+
+    /// Take `thread` out of every Group that holds it: `Leave`.
+    fn detach_all(&mut self, thread: ThreadId) -> Vec<Dissolved> {
+        let mut dissolved = Vec::new();
+        while let Some(index) = self
+            .groups
+            .iter()
+            .position(|group| group.members.contains(&thread))
+        {
+            dissolved.extend(self.remove_member(index, thread));
+        }
+        dissolved
+    }
+
+    fn remove_member(&mut self, index: usize, thread: ThreadId) -> Option<Dissolved> {
+        let group = &mut self.groups[index];
+        group.members.retain(|member| *member != thread);
+        group.guests.remove(&thread);
+        if group.members.len() < 2 {
             let group = self.groups.remove(index);
             Some(Dissolved {
                 group: group.id,
                 survivor: group.members[0],
             })
         } else {
-            self.groups[index].reconcile_layout();
+            group.reconcile_layout();
             None
         }
     }
@@ -631,6 +744,7 @@ impl Groups {
                     id: group.id,
                     title: group.title.clone(),
                     members: group.members.iter().map(|thread| thread.get()).collect(),
+                    guests: group.guests.iter().map(|thread| thread.get()).collect(),
                     layout: group.layout.clone(),
                 })
                 .collect(),
@@ -920,6 +1034,158 @@ mod tests {
         assert_eq!(
             groups.iter().next().unwrap().members,
             [threads[2], threads[3], threads[0]]
+        );
+    }
+
+    /// R1: Groups are non-exclusive. "Everything" includes "Perf sweep"'s
+    /// members without taking them out of it: each is listed by both, its
+    /// first Group (creation order) is Perf sweep, which stays its home,
+    /// and the guest seats survive a reload. Including a member twice
+    /// changes nothing.
+    #[test]
+    fn include_adds_a_guest_without_detaching_it() {
+        let dir = scratch("include-guest");
+        let (threads, _writers) = stored_threads(&dir, 4);
+        let mut groups = Groups::load(&dir).unwrap();
+        let perf = groups
+            .apply(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let everything = groups
+            .apply(GroupChange::Create {
+                first: threads[2],
+                second: threads[3],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        for (index, thread) in [threads[0], threads[1]].into_iter().enumerate() {
+            let applied = groups
+                .apply(GroupChange::Include {
+                    thread,
+                    group: everything,
+                    index: Some(index),
+                })
+                .unwrap();
+            assert!(applied.dissolved.is_empty(), "nothing is taken anywhere");
+        }
+        assert_eq!(groups.get(perf).unwrap().members, [threads[0], threads[1]]);
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[1], threads[2], threads[3]],
+            "the guests sit where they were asked to"
+        );
+        let all: Vec<GroupId> = groups.all_of(threads[0]).map(|group| group.id).collect();
+        assert_eq!(all, [perf, everything], "listed by both");
+        assert_eq!(groups.of(threads[0]).map(|group| group.id), Some(perf));
+        assert_eq!(groups.home(threads[0]).map(|group| group.id), Some(perf));
+        assert_eq!(groups.home(threads[2]).map(|group| group.id), Some(everything));
+        assert!(!groups.get(everything).unwrap().is_home_of(threads[0]));
+
+        groups
+            .apply(GroupChange::Include {
+                thread: threads[0],
+                group: everything,
+                index: Some(3),
+            })
+            .unwrap();
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[1], threads[2], threads[3]],
+            "a second include is a no-op"
+        );
+
+        let reloaded = Groups::load(&dir).unwrap();
+        assert_eq!(
+            reloaded.get(everything).unwrap().guests,
+            [threads[0], threads[1]].into_iter().collect::<BTreeSet<_>>(),
+            "the guest seats persist"
+        );
+        assert_eq!(reloaded.home(threads[1]).map(|group| group.id), Some(perf));
+    }
+
+    /// Join and Create still move a Thread's home — and only its home: the
+    /// guest seats stay. Leave takes it out of every Group, dissolving any
+    /// left with one member.
+    #[test]
+    fn join_moves_the_home_and_leave_takes_a_thread_out_of_every_group() {
+        let dir = scratch("include-join-leave");
+        let (threads, _writers) = stored_threads(&dir, 5);
+        let mut groups = Groups::load(&dir).unwrap();
+        let perf = groups
+            .apply(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let everything = groups
+            .apply(GroupChange::Create {
+                first: threads[2],
+                second: threads[3],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        groups
+            .apply(GroupChange::Include {
+                thread: threads[0],
+                group: everything,
+                index: None,
+            })
+            .unwrap();
+        groups
+            .apply(GroupChange::Join {
+                thread: threads[4],
+                group: perf,
+                index: None,
+            })
+            .unwrap();
+
+        // Joining Everything brings Thread 0 home there and out of Perf.
+        let applied = groups
+            .apply(GroupChange::Join {
+                thread: threads[0],
+                group: everything,
+                index: Some(0),
+            })
+            .unwrap();
+        assert!(applied.dissolved.is_empty());
+        assert_eq!(groups.get(perf).unwrap().members, [threads[1], threads[4]]);
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[2], threads[3]]
+        );
+        assert!(groups.get(everything).unwrap().is_home_of(threads[0]));
+
+        // Thread 1 is Perf's and a guest of Everything; leaving takes it
+        // out of both, and Perf, down to one member, dissolves.
+        groups
+            .apply(GroupChange::Include {
+                thread: threads[1],
+                group: everything,
+                index: None,
+            })
+            .unwrap();
+        let applied = groups
+            .apply(GroupChange::Leave { thread: threads[1] })
+            .unwrap();
+        assert_eq!(
+            applied.dissolved,
+            vec![Dissolved {
+                group: perf,
+                survivor: threads[4],
+            }]
+        );
+        assert!(groups.all_of(threads[1]).next().is_none());
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[2], threads[3]]
         );
     }
 

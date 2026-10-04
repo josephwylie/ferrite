@@ -28,51 +28,39 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
 
-/// Where a nav row sits in the default order. `Ongoing` carries no clock:
-/// every Thread that is currently working ranks identically, so the stable
-/// sort behind it preserves their gathered order instead of re-racing them
-/// on each activity update. Quiet rows fall back to newest-used-first.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum NavRank {
-    Ongoing,
-    Quiet(std::cmp::Reverse<std::time::SystemTime>),
-}
-
-/// One item of the nav's drawn order, by identity: what the snapshot that
-/// holds the order still under the pointer remembers.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum NavKey {
-    Group(GroupId),
-    Thread(ThreadId),
-}
-
-/// The order the nav last drew (C8, "never re-sort under the pointer"):
-/// while the pointer is inside the column or a drag is live, the tree keeps
-/// this order. It re-ranks on pointer-leave, a focus change, or a Thread
-/// (or Group) arriving or leaving — any of which changes `focused` or the
-/// key sets, so the snapshot no longer applies.
+/// The loose rows the nav last drew, in order (C8, "never re-sort under
+/// the pointer"): under `sort: recent`, while the pointer is inside the
+/// column or a drag is live, the tree keeps this order. It re-ranks on
+/// pointer-leave, a focus change, or a Thread arriving or leaving — any of
+/// which changes `focused` or the row set, so the snapshot no longer
+/// applies. Creation order never moves a row, so it has nothing to hold.
 struct NavSnapshot {
-    order: Vec<NavKey>,
     rows: Vec<ThreadId>,
     focused: Option<ThreadId>,
 }
 
-/// Reorder `items` by where their keys sat in `snapshot`, when the snapshot
-/// holds exactly the same keys; `false` (and `items` untouched) otherwise.
-fn hold_order<T>(items: &mut [T], key: impl Fn(&T) -> NavKey, snapshot: &[NavKey]) -> bool {
-    if items.len() != snapshot.len() {
+/// Reorder `rows` by where they sat in `snapshot`, when the snapshot holds
+/// exactly the same Threads; `false` (and `rows` untouched) otherwise.
+fn hold_order(rows: &mut [ThreadId], snapshot: &[ThreadId]) -> bool {
+    if rows.len() != snapshot.len() {
         return false;
     }
-    let position = |item: &T| snapshot.iter().position(|held| *held == key(item));
-    if items.iter().any(|item| position(item).is_none()) {
+    let position = |thread: &ThreadId| snapshot.iter().position(|held| held == thread);
+    if rows.iter().any(|thread| position(thread).is_none()) {
         return false;
     }
-    items.sort_by_key(|item| position(item));
+    rows.sort_by_key(|thread| position(thread));
     true
 }
 
-/// The action ⌘`ordinal` is bound to: the `ordinal`th Thread of the ⌘ order
-/// (`NavState::rail_rows`), named in that row's tooltip.
+/// A fold the nav's triangles hold (N-4): a Project section shut to its
+/// heading, a Group shut to its row, the Parked section shut to its header.
+/// In memory only; a re-render or a view switch keeps it.
+pub(crate) use crate::nav::NavFold;
+
+/// The action ⌘`ordinal` is bound to: the `ordinal`th Pane of the board on
+/// screen, in head order (R5). The tests check every digit is bound.
+#[cfg(test)]
 pub(crate) fn focus_rail_action(ordinal: usize) -> Option<&'static str> {
     [
         "cockpit::FocusThread1",
@@ -87,13 +75,6 @@ pub(crate) fn focus_rail_action(ordinal: usize) -> Option<&'static str> {
     ]
     .get(ordinal.checked_sub(1)?)
     .copied()
-}
-
-/// Is this row mid-flight? Working and Failing are both live inference —
-/// the states whose recency churns. Attention and Blocked wait on a human,
-/// so they age like any other quiet row.
-fn ongoing(status: nav::RowStatus) -> bool {
-    matches!(status, nav::RowStatus::Working | nav::RowStatus::Failing)
 }
 
 /// A status dot's shape: filled for a live Thread, hollow for a parked one.
@@ -312,19 +293,25 @@ pub struct CockpitView {
     /// choreography; once the operator acts, a flip mid-flight retargets
     /// from the width on screen. `nav_collapsed` stays authoritative.
     nav_tween: Option<crate::motion::Tween>,
+    /// The column's content opacity on its way between 1 and 0
+    /// (`nav::CONTENT_FADE`, 150ms CSS ease), on its own clock apart from the
+    /// width's ride. None on launch, like `nav_tween`.
+    nav_fade: Option<crate::motion::Tween>,
+    /// The titlebar cell's ground on its way between the chrome (0) and the
+    /// plane (1) (`nav::BAND_FADE`, 200ms CSS ease). None on launch.
+    nav_band: Option<crate::motion::Tween>,
+    /// What the nav's triangles hold folded (N-4): Projects and Groups. The
+    /// Parked section's fold is `nav_parked_open`. In memory only.
+    nav_folds: std::collections::HashSet<NavFold>,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
     facts: Facts,
-    /// The one Project filter navigation has (#29). `None` is
-    /// `All Projects`. It filters the **navigation only** — which Panes the
-    /// Cockpit flies is never touched by it.
+    /// The one Project filter navigation has (#29), chosen from the ⌘K
+    /// palette. `None` is every Project. It narrows the **navigation only**
+    /// to that Project's section — which Panes the Cockpit flies is never
+    /// touched by it.
     nav_filter: Option<ProjectId>,
-    /// Whether the filter's menu is down. Any press the menu did not
-    /// swallow closes it, like every other popover here.
-    nav_filter_open: bool,
-    /// The easy-access Thread ordering popover in the main nav head.
-    nav_order_open: bool,
     /// The nav tree's scroll, shared with the hand-drawn scrollbar beside
     /// it — gpui 0.2.2 paints none of its own.
     nav_scroll: ScrollHandle,
@@ -856,41 +843,26 @@ struct ContextMenu {
 }
 
 /// What rides the pointer while a nav row is dragged: that row itself, as
-/// the tree drew it — the Thread row of whichever list order is showing,
-/// or the Group's header.
+/// the tree drew it — a Thread's row, or the Group's header.
 #[derive(Clone)]
 enum NavChip {
-    Thread {
-        row: nav::ThreadRow,
-        /// The by-Project list's compact row, not the grouped tree's.
-        compact: bool,
-        grouped: bool,
-    },
+    Thread(nav::ThreadRow),
     Group(nav::GroupBlock),
 }
 
 impl NavChip {
     fn element(&self) -> Div {
         nav::drag_row(match self {
-            NavChip::Thread {
-                row,
-                compact: true,
-                grouped,
-            } => nav::project_thread_row_with_title(
+            NavChip::Thread(row) => nav::thread_row_with_title(
                 row,
                 row.name.clone(),
                 nav::RowPlace::Root,
-                *grouped,
+                None,
                 false,
             ),
-            NavChip::Thread { row, .. } => nav::project_thread_row_with_title(
-                row,
-                row.name.clone(),
-                nav::RowPlace::Root,
-                false,
-                false,
-            ),
-            NavChip::Group(group) => nav::group_row_with_title(group, group.title.clone()),
+            NavChip::Group(group) => {
+                nav::group_row_with_title(group, group.title.clone(), nav::group_fold(group))
+            }
         })
     }
 }
@@ -1251,8 +1223,7 @@ impl CockpitView {
             selection: TranscriptText::default(),
             native_copy: None,
             nav_filter: None,
-            nav_filter_open: false,
-            nav_order_open: false,
+            nav_folds: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
             nav_parked_open: false,
             nav_parked_eased: false,
@@ -1286,6 +1257,8 @@ impl CockpitView {
             nav_drag_live: std::cell::Cell::new(false),
             nav_snapshot: std::cell::RefCell::new(None),
             nav_tween: None,
+            nav_fade: None,
+            nav_band: None,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -1992,16 +1965,14 @@ impl CockpitView {
         Cell::new(rect.w.max(0.0), rect.h.max(0.0))
     }
 
-    /// Whether something floats over the cockpit: a menu, a popover, the
-    /// filter list or the Settings panel. The titlebar's drag region reads
-    /// it — a region that lies under an open overlay would answer Windows'
-    /// hit test as the window frame, and the row under the pointer would
-    /// never see the press (`titlebar.rs`).
+    /// Whether something floats over the cockpit: a menu, a popover or the
+    /// Settings panel. The titlebar's drag region reads it — a region that
+    /// lies under an open overlay would answer Windows' hit test as the
+    /// window frame, and the row under the pointer would never see the
+    /// press (`titlebar.rs`).
     fn overlay_open(&self) -> bool {
         self.settings_open
             || self.project_editor.is_some()
-            || self.nav_filter_open
-            || self.nav_order_open
             || self.popover.is_some()
             || self.context_checks.is_some()
             || self.changed_files_card.is_some()
@@ -2555,13 +2526,12 @@ impl CockpitView {
     }
 
     /// Summon the context menu for `target` at the pointer. Whatever else
-    /// was up (a popover, the filter, a rename) closes: one floating thing
-    /// at a time.
+    /// was up (a popover, a card, a rename) closes: one floating thing at a
+    /// time.
     fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.popover = None;
         self.context_checks = None;
         self.changed_files_card = None;
-        self.nav_filter_open = false;
         if self.rename.is_some() {
             self.finish_rename(false, cx);
         }
@@ -2735,6 +2705,23 @@ impl CockpitView {
             .collect()
     }
 
+    /// The Threads some Group claims as home (`Groups::home`), as the nav
+    /// sees it: an open Thread that is only ever a Group's guest is still a
+    /// loose row under its Project (R1). A member whose leave waits on a
+    /// pending draft has already left.
+    fn homed_threads(&self) -> std::collections::HashSet<ThreadId> {
+        self.cockpit
+            .groups()
+            .iter()
+            .flat_map(|group| {
+                let pending_leave = self.cockpit.roster().pending_leave(group.id);
+                group.members.iter().copied().filter(move |thread| {
+                    Some(*thread) != pending_leave && group.is_home_of(*thread)
+                })
+            })
+            .collect()
+    }
+
     /// Whether any Thread, open or parked, records this Project.
     fn project_in_use(&self, project: ProjectId) -> bool {
         self.cockpit
@@ -2849,8 +2836,9 @@ impl CockpitView {
             }
             (MenuTarget::Group(group), MenuVerb::EnterGroup) => self.enter_group(group, cx),
             (MenuTarget::Parked, MenuVerb::ToggleParked) => {
-                self.nav_parked_open = !self.nav_parked_open;
-                self.nav_parked_eased = false;
+                // A menu toggle lands at once (`set_nav_fold`).
+                let folded = self.nav_parked_open;
+                self.set_nav_fold(NavFold::Parked, folded, cx);
             }
             (MenuTarget::Parked, MenuVerb::DeleteAllParked) => {
                 self.delete_parked_threads(cx);
@@ -3273,13 +3261,21 @@ impl CockpitView {
             }
             _ => None,
         };
+        // Groups are non-exclusive (R1): the board's Group is the one being
+        // viewed; Solo's is the shown Thread's home.
         let group_of =
-            |view: &Self, thread: ThreadId| view.cockpit.groups().of(thread).map(|group| group.id);
+            |view: &Self, thread: ThreadId| view.cockpit.groups().home(thread).map(|group| group.id);
+        let holds = |view: &Self, group: GroupId, thread: ThreadId| {
+            view.cockpit
+                .groups()
+                .get(group)
+                .is_some_and(|group| group.members.contains(&thread))
+        };
         let group = match view {
             View::Group(group) => Some(group),
             View::Solo => shown.and_then(|shown| group_of(self, shown)),
         };
-        if group.is_none_or(|group| group_of(self, thread) != Some(group)) {
+        if group.is_none_or(|group| !holds(self, group, thread)) {
             let joined = match (group, shown) {
                 (Some(group), _) => self
                     .cockpit
@@ -3375,7 +3371,6 @@ impl CockpitView {
             self.project_editor = None;
             self.popover = None;
             self.context_menu = None;
-            self.nav_filter_open = false;
             if self.cli_versions.is_none() {
                 self.probe_cli_versions(cx);
             }
@@ -3919,7 +3914,8 @@ impl CockpitView {
     }
 
     /// Open the card on an existing Project, seeded with its name.
-    fn open_project_editor(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+    #[allow(dead_code)] // the ⌘K palette's "edit project" (the nav's pencil is gone)
+    pub(crate) fn open_project_editor(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         let Some(title) = self
             .cockpit
             .registry()
@@ -3962,7 +3958,6 @@ impl CockpitView {
     fn show_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
         self.project_editor = Some(editor);
         self.settings_open = false;
-        self.nav_filter_open = false;
         self.popover = None;
         self.context_menu = None;
         self.bell.open = false;
@@ -5139,17 +5134,16 @@ impl CockpitView {
         self.tween_nav(was, cx);
     }
 
-    /// Ride the column's width from what was drawn to what is drawn now.
+    /// Ride the column's width from what was drawn to what is drawn now —
+    /// and, each on its own clock, its content's opacity (1 → 0 folding,
+    /// 0 → 1 opening, `nav::CONTENT_FADE`) and the titlebar cell's ground
+    /// (chrome → plane, `nav::BAND_FADE`). A flip mid-flight turns every
+    /// one around from where it is on screen.
     fn tween_nav(&mut self, was_railed: bool, cx: &mut Context<Self>) {
         let railed = self.nav_railed();
         if was_railed == railed {
             cx.notify();
             return;
-        }
-        // The head's menus fold with the column: nothing would draw them.
-        if railed {
-            self.nav_filter_open = false;
-            self.nav_order_open = false;
         }
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
@@ -5163,6 +5157,25 @@ impl CockpitView {
             from,
             to,
             crate::motion::RESIZE,
+            now,
+            reduced,
+        ));
+        // Opacity of the content; the band runs the other way (0 chrome, 1
+        // plane).
+        let (from, to) = if railed { (1.0, 0.0) } else { (0.0, 1.0) };
+        self.nav_fade = Some(crate::motion::Tween::retarget(
+            self.nav_fade,
+            from,
+            to,
+            nav::CONTENT_FADE,
+            now,
+            reduced,
+        ));
+        self.nav_band = Some(crate::motion::Tween::retarget(
+            self.nav_band,
+            1.0 - from,
+            1.0 - to,
+            nav::BAND_FADE,
             now,
             reduced,
         ));
@@ -6262,9 +6275,11 @@ impl CockpitView {
     /// Point navigation at a Project — or back at all of them — and bring
     /// any standing draft with it. The Composer's chip names the Project a
     /// send will run in, and it must not sit there disagreeing with the
-    /// Project the operator just chose in the nav. A draft already
-    /// bootstrapping is on its way out and is left alone.
-    fn choose_nav_filter(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
+    /// Project the operator just chose (the ⌘K palette's filter command,
+    /// or a Project just created). Filtered, the tree is that Project's
+    /// section. A draft already bootstrapping is on its way out and is left
+    /// alone.
+    pub(crate) fn choose_nav_filter(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
         self.nav_filter = project;
         if let Some(project) = project {
             let standing = self.panes.iter().position(|pane| {
@@ -6282,11 +6297,63 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A new Thread in a named Project: the Project heading's `+` in the
-    /// by-Project view, where the heading is the whole statement of intent.
-    /// It is a loose draft like every pointer-made one, and it moves the
-    /// fallback Project, so the draft after it starts here too.
-    fn open_draft_in_project(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+    /// How the nav orders the rows inside each Project (N-3): creation
+    /// order, or `sort: recent` (last used first) — the ⌘K palette's sort
+    /// command. Saved with the settings.
+    #[allow(dead_code)] // the ⌘K palette's sort command
+    pub(crate) fn set_thread_order(&mut self, order: ThreadListOrder, cx: &mut Context<Self>) {
+        if self.prefs.settings.thread_list_order == order {
+            return;
+        }
+        // A fresh order is drawn at once, never held from the old one.
+        self.nav_snapshot.borrow_mut().take();
+        self.change_settings(|settings| settings.thread_list_order = order, cx);
+    }
+
+    /// Fold or unfold what one of the nav's triangles holds (N-4) — a
+    /// Project section, a Group, the Parked section — at once, as a
+    /// keyboard or menu toggle lands. In memory only: the fold survives
+    /// re-renders and view switches, and opening a folded Group leaves it
+    /// folded.
+    pub(crate) fn set_nav_fold(&mut self, fold: NavFold, folded: bool, cx: &mut Context<Self>) {
+        match fold {
+            NavFold::Parked => {
+                self.nav_parked_open = !folded;
+                self.nav_parked_eased = false;
+            }
+            fold if folded => {
+                self.nav_folds.insert(fold);
+            }
+            fold => {
+                self.nav_folds.remove(&fold);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Show the parked Threads (N-18): the nav unfolds if it is folded away,
+    /// the Parked section opens, and the tree scrolls it into view — the
+    /// ⌘K palette's "show parked" command.
+    #[allow(dead_code)] // the ⌘K palette's "show parked" command
+    pub(crate) fn show_parked(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.nav_railed() {
+            self.toggle_nav_now(cx);
+        }
+        self.nav_parked_open = true;
+        self.nav_parked_eased = false;
+        // The section is pinned at the column's foot, under the scrolling
+        // tree, so it is always in view; its own list starts at its first
+        // row.
+        self.nav_parked_scroll
+            .set_offset(gpui::point(px(0.), px(0.)));
+        cx.notify();
+    }
+
+    /// A new Thread in a named Project — the ⌘K palette's "new thread in
+    /// <project>". It is a loose draft like every pointer-made one, and it
+    /// moves the fallback Project, so the draft after it starts here too.
+    #[allow(dead_code)] // the ⌘K palette's "new thread in <project>"
+    pub(crate) fn open_draft_in_project(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         self.launch_project = Some(project);
         let provider = self.default_choice();
         self.open_draft_with_choice(
@@ -7208,181 +7275,180 @@ impl CockpitView {
     /// The nav's per-frame state, from caches and O(1) reads only. Nothing
     /// here touches the store, and nothing here is a Pane decision: the
     /// Project filter narrows this list and nothing else.
+    ///
+    /// The tree (N-2) is one section per Project, in creation order: its
+    /// loose rows — open Threads no Group claims as home — then its Groups,
+    /// each under the Project of its first member; then `Other`, for
+    /// Threads whose Project cannot be read. A Project with nothing to show
+    /// draws no heading, and a Thread a second Group includes is listed
+    /// under that Group too (R1). Rows keep creation order (N-3) — a Thread
+    /// starting or finishing work never moves — unless `sort: recent` asks
+    /// for last use within each Project. Filtered to a Project, the tree is
+    /// that Project's section, holding every Group with a member there.
+    ///
+    /// The one selection (N-5) is the row of what the board shows: the
+    /// Group being viewed (its view or its wall), or the Solo Thread.
     fn nav_state(&self) -> nav::NavState {
-        let mut label = SharedString::from("All projects");
-        let mut options = vec![nav::FilterOption {
-            project: None,
-            label: SharedString::from("All projects"),
-            selected: self.nav_filter.is_none(),
-        }];
-        for project in self.cockpit.registry().projects() {
-            let selected = self.nav_filter == Some(project.id);
-            if selected {
-                label = SharedString::from(project.title.clone());
-            }
-            options.push(nav::FilterOption {
-                project: Some(project.id),
-                label: SharedString::from(project.title.clone()),
-                selected,
-            });
-        }
-        let filter = nav::FilterState {
-            label,
-            open: self.nav_filter_open,
-            options,
+        let roster = self.cockpit.roster();
+        let view = roster.view();
+        let solo = match view {
+            View::Solo => roster.focused_thread(),
+            View::Group(_) => None,
+        };
+        let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
+        let row = |thread: ThreadId| nav::ThreadRow {
+            selected: solo == Some(thread),
+            ..self.thread_row(thread)
         };
 
-        // Drafts are not rows: nothing runs, nothing parks, nothing to aim
-        // the nav at (#29) — the grid is where a draft lives.
-        let groups: Vec<nav::GroupBlock> = self
-            .cockpit
-            .groups()
-            .iter()
-            .filter_map(|group| {
-                // A member whose leave is parked on a pending draft has
-                // already left as far as the operator is concerned, here
-                // exactly as in `visible_indices`.
-                let pending_leave = self.cockpit.roster().pending_leave(group.id);
-                let members: Vec<nav::ThreadRow> = group
-                    .members
-                    .iter()
-                    .filter(|thread| Some(**thread) != pending_leave)
-                    .filter(|thread| self.admitted(**thread))
-                    .map(|thread| self.thread_row(*thread))
-                    .collect();
-                // A Group is shown when any member survives the filter, and
-                // then only its surviving members are drawn.
-                if members.is_empty() {
-                    return None;
-                }
-                let projects: std::collections::HashSet<_> = group
-                    .members
-                    .iter()
-                    .filter(|thread| Some(**thread) != pending_leave)
-                    .filter_map(|thread| self.facts.get(*thread).and_then(|facts| facts.project))
-                    .collect();
-                let project_summary = match projects.len() {
-                    0 => None,
-                    1 => members.iter().find_map(|row| row.project.clone()),
-                    count => Some(format!("{count} projects").into()),
-                };
-                Some(nav::GroupBlock {
-                    id: group.id,
-                    title: group.display_title().into(),
-                    // Summarize the whole Group even when the filter hides
-                    // some member rows; opening it still shows every Pane.
-                    projects: project_summary,
-                    members,
-                })
-            })
-            .collect();
-
-        // ...and so it lands in the solos below, which is where a Thread on
-        // its way out of a Group belongs.
-        let grouped = self.grouped_threads();
-        // The open solos, in pane order. A parked solo is not in the tree:
-        // it waits in the Parked section at the foot of the column, in the
-        // park order, so a fresh park lands at the bottom of that list.
-        let mut solos: Vec<nav::ThreadRow> = self
+        // The loose rows: open Threads with no home Group, in creation
+        // order. Drafts are not rows (#29) — the grid is where a draft
+        // lives — and a parked loose Thread waits in the Parked section.
+        let homed = self.homed_threads();
+        let mut loose: Vec<ThreadId> = self
             .panes
             .iter()
             .filter_map(PaneView::thread)
-            .filter(|thread| !grouped.contains(thread) && self.admitted(*thread))
-            .map(|thread| self.thread_row(thread))
+            .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
             .collect();
-        solos.dedup_by_key(|row| row.thread);
-        let parked: Vec<nav::ThreadRow> = self
-            .parked_threads()
-            .into_iter()
-            .map(|thread| self.thread_row(thread))
-            .collect();
-
-        // The nav's default order (#21): most recently used first, across
-        // open and parked alike, and across Groups and solo Threads alike —
-        // one list, not a Groups shelf above a Threads shelf. A Group is as
-        // recent as its most recently used member; its own members keep the
-        // operator's order, because that order *is* the Group.
-        //
-        // `sort_by_key` is stable, so items sharing a rank keep the order
-        // they were gathered in: Groups in the roster's order, Threads in
-        // pane-then-park order.
-        //
-        // Ongoing Threads sit above the rest and share *one* rank, so their
-        // recency — which ticks with every streamed token — never reorders
-        // them against each other. A row the operator is watching work must
-        // hold still; only leaving the ongoing tier moves it.
-        let mut order: Vec<(NavRank, nav::NavItem)> = groups
-            .iter()
-            .enumerate()
-            .map(|(index, block)| {
-                let rank = if block.members.iter().any(|row| ongoing(row.status)) {
-                    NavRank::Ongoing
-                } else {
-                    let recency = block
-                        .members
-                        .iter()
-                        .map(|row| self.last_used(row.thread))
-                        .max()
-                        .unwrap_or(std::time::UNIX_EPOCH);
-                    NavRank::Quiet(std::cmp::Reverse(recency))
-                };
-                (rank, nav::NavItem::Group(index))
-            })
-            .chain(
-                solos
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| (self.nav_rank(row), nav::NavItem::Solo(index))),
-            )
-            .collect();
-        order.sort_by_key(|(rank, _)| *rank);
-        let mut order: Vec<nav::NavItem> = order.into_iter().map(|(_, item)| item).collect();
-
-        // Project sections are a second projection of the same rows, not a
-        // second source of truth. Rows remain newest-first inside each
-        // section; sections follow the registry's alphabetic project list,
-        // with unreadable legacy bindings gathered honestly under Other.
-        let mut rows: Vec<nav::ThreadRow> = groups
-            .iter()
-            .flat_map(|group| group.members.iter().cloned())
-            .chain(solos.iter().cloned())
-            .collect();
-        rows.sort_by_key(|row| self.nav_rank(row));
-        rows.dedup_by_key(|row| row.thread);
-
+        loose.sort();
+        loose.dedup();
+        if self.prefs.settings.thread_list_order == ThreadListOrder::Recent {
+            // Stable: Threads used at the same moment keep creation order.
+            loose.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread)));
+        }
         // Never re-sort under the pointer (C8): while the pointer is inside
-        // the column or a drag is live, the tree keeps the order it last
-        // drew, as long as the same items are there and focus has not
-        // moved. Anything else re-ranks, and the fresh order is remembered.
-        let order_key = |item: &nav::NavItem| match item {
-            nav::NavItem::Group(index) => NavKey::Group(groups[*index].id),
-            nav::NavItem::Solo(index) => NavKey::Thread(solos[*index].thread),
-        };
-        let row_key = |row: &nav::ThreadRow| NavKey::Thread(row.thread);
-        let focused = self.cockpit.roster().focused_thread();
+        // the column or a drag is live, the rows keep the order they were
+        // last drawn in, as long as the same Threads are there and focus
+        // has not moved. Anything else re-ranks, and is remembered.
+        let focused = roster.focused_thread();
         let frozen = self.nav_hovered || self.nav_drag_live.get();
         let mut snapshot = self.nav_snapshot.borrow_mut();
         let held = frozen
             && snapshot.as_ref().is_some_and(|held| {
-                let rows_held: Vec<NavKey> =
-                    held.rows.iter().copied().map(NavKey::Thread).collect();
-                held.focused == focused
-                    && hold_order(&mut order.clone(), order_key, &held.order)
-                    && hold_order(&mut rows.clone(), row_key, &rows_held)
+                held.focused == focused && hold_order(&mut loose.clone(), &held.rows)
             });
-        if held {
-            let held = snapshot.as_ref().expect("checked");
-            let rows_held: Vec<NavKey> = held.rows.iter().copied().map(NavKey::Thread).collect();
-            hold_order(&mut order, order_key, &held.order);
-            hold_order(&mut rows, row_key, &rows_held);
-        } else {
-            *snapshot = Some(NavSnapshot {
-                order: order.iter().map(order_key).collect(),
-                rows: rows.iter().map(|row| row.thread).collect(),
-                focused,
-            });
+        match snapshot.as_ref() {
+            Some(held_rows) if held => {
+                hold_order(&mut loose, &held_rows.rows);
+            }
+            _ => {
+                *snapshot = Some(NavSnapshot {
+                    rows: loose.clone(),
+                    focused,
+                });
+            }
         }
         drop(snapshot);
+
+        // The Groups, in the durable order (creation order unless the
+        // operator moved one), each under the Project of its first member —
+        // or, filtered, under the filter's Project when any member is
+        // there, drawing only those members. A member whose leave is parked
+        // on a pending draft has already left, as in `visible_indices`.
+        let placed: Vec<(Option<ProjectId>, nav::GroupBlock)> = self
+            .cockpit
+            .groups()
+            .iter()
+            .filter_map(|group| {
+                let leaving = roster.pending_leave(group.id);
+                let members: Vec<ThreadId> = group
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|thread| Some(*thread) != leaving)
+                    .collect();
+                let shown: Vec<nav::ThreadRow> = members
+                    .iter()
+                    .copied()
+                    .filter(|thread| self.admitted(*thread))
+                    .map(row)
+                    .collect();
+                if shown.is_empty() {
+                    return None;
+                }
+                let project = match self.nav_filter {
+                    Some(filter) => Some(filter),
+                    None => members.first().and_then(|first| project_of(*first)),
+                };
+                Some((
+                    project,
+                    nav::GroupBlock {
+                        id: group.id,
+                        title: group.display_title().into(),
+                        members: shown,
+                        folded: self.nav_folds.contains(&NavFold::Group(group.id)),
+                        selected: view == View::Group(group.id),
+                    },
+                ))
+            })
+            .collect();
+
+        // The sections: every Project something is drawn under, in creation
+        // order (ids are handed out in registration order), `Other` last.
+        let mut keys: Vec<Option<ProjectId>> = loose
+            .iter()
+            .map(|thread| project_of(*thread))
+            .chain(placed.iter().map(|(project, _)| *project))
+            .collect();
+        keys.sort_by_key(|key| (key.is_none(), *key));
+        keys.dedup();
+        let mut solos: Vec<nav::ThreadRow> = Vec::new();
+        let mut groups: Vec<nav::GroupBlock> = Vec::new();
+        let mut sections: Vec<nav::ProjectSection> = Vec::new();
+        for key in keys {
+            let mut section_solos = Vec::new();
+            for thread in loose.iter().filter(|thread| project_of(**thread) == key) {
+                section_solos.push(solos.len());
+                solos.push(row(*thread));
+            }
+            let mut section_groups = Vec::new();
+            for (_, block) in placed.iter().filter(|(project, _)| *project == key) {
+                section_groups.push(groups.len());
+                groups.push(block.clone());
+            }
+            let label = key
+                .and_then(|project| self.cockpit.registry().project(project))
+                .map(|project| SharedString::from(project.title.clone()))
+                .or_else(|| {
+                    key.and_then(|_| {
+                        section_solos
+                            .iter()
+                            .map(|index| &solos[*index])
+                            .chain(
+                                section_groups
+                                    .iter()
+                                    .flat_map(|index| groups[*index].members.iter()),
+                            )
+                            .find_map(|row| row.project.clone())
+                    })
+                })
+                .unwrap_or_else(|| SharedString::from("Other"));
+            // A heading names its branch; `Other` names no Project, so no
+            // branch either.
+            let branch = key.and_then(|_| {
+                let rows: Vec<ThreadId> = section_solos
+                    .iter()
+                    .map(|index| solos[*index].thread)
+                    .chain(
+                        section_groups
+                            .iter()
+                            .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
+                    )
+                    .collect();
+                self.section_branch(&rows)
+            });
+            sections.push(nav::ProjectSection {
+                project: key,
+                label,
+                branch,
+                folded: key.is_some_and(|project| {
+                    self.nav_folds.contains(&NavFold::Project(project))
+                }),
+                solos: section_solos,
+                groups: section_groups,
+            });
+        }
 
         // The Needs-you strip: every waiting Thread in the answer order,
         // whatever the filter admits — it is the queue ⌘D walks.
@@ -7395,54 +7461,16 @@ impl CockpitView {
                 kind: self.request_word(thread),
             })
             .collect();
+        let parked = self.parked_threads().into_iter().map(row).collect();
 
-        let mut project_sections: Vec<nav::ProjectSection> = Vec::new();
-        for row in rows {
-            let project = self.facts.get(row.thread).and_then(|facts| facts.project);
-            let label = project
-                .and_then(|_| row.project.clone())
-                .unwrap_or_else(|| SharedString::from("Other"));
-            if let Some(section) = project_sections
-                .iter_mut()
-                .find(|section| section.project == project)
-            {
-                section.rows.push(row);
-            } else {
-                project_sections.push(nav::ProjectSection {
-                    project,
-                    label,
-                    branch: None,
-                    rows: vec![row],
-                });
-            }
-        }
-        project_sections.sort_by(|left, right| {
-            (left.project.is_none(), left.label.to_lowercase())
-                .cmp(&(right.project.is_none(), right.label.to_lowercase()))
-        });
-        // A heading names its branch; `Other` names no Project, so no
-        // branch either.
-        for section in &mut project_sections {
-            if section.project.is_some() {
-                section.branch = self.section_branch(&section.rows);
-            }
-        }
-
-        let mut state = nav::NavState {
-            filter,
+        nav::NavState {
+            needs_you,
+            sections,
             groups,
             solos,
             parked,
             parked_open: self.nav_parked_open,
-            order,
-            project_sections,
-            thread_list_order: self.prefs.settings.thread_list_order,
-            order_open: self.nav_order_open,
-            collapsed: self.nav_railed(),
-            needs_you,
-        };
-        state.number_rows();
-        state
+        }
     }
 
     /// What a waiting Thread waits for, in the lexicon: `question` or
@@ -7470,8 +7498,8 @@ impl CockpitView {
     }
 
     /// One Thread's nav row, entirely from caches: the name core has (there
-    /// is no display name), the cached Project and checkout, and the
-    /// provider — live for an open Thread, the parked cache otherwise.
+    /// is no display name), its state, the cached Project, and its word.
+    /// Not selected: `nav_state` decides what carries the selection.
     fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
         let facts = self.facts.get(thread);
         let open = self.cockpit.thread(thread);
@@ -7513,23 +7541,14 @@ impl CockpitView {
             status,
             unread,
             project: facts.and_then(|facts| facts.project_label.clone()),
-            branch: facts.and_then(|facts| facts.off_default_branch()),
-            provider: self
-                .cockpit
-                .thread(thread)
-                .map(|open| open.provider())
-                .or_else(|| facts.and_then(|facts| facts.provider)),
-            current: self.cockpit.roster().focused_thread() == Some(thread),
+            selected: false,
             tail: nav::NavTail::of(slot.as_ref(), age),
-            subagents: facts.map_or(0, |facts| facts.subagents),
-            // Numbered once the whole state is drawn up (`number_rows`).
-            ordinal: None,
         }
     }
 
     /// The branch a Project heading names: the checkout every one of its
     /// rows is on, else the Project's default branch. Cache reads only.
-    fn section_branch(&self, rows: &[nav::ThreadRow]) -> Option<SharedString> {
+    fn section_branch(&self, rows: &[ThreadId]) -> Option<SharedString> {
         let checkout = |thread: ThreadId| {
             self.facts.get(thread).and_then(|facts| {
                 facts
@@ -7540,24 +7559,39 @@ impl CockpitView {
                     .or_else(|| facts.branch.clone())
             })
         };
-        let mut branches = rows.iter().map(|row| checkout(row.thread));
+        let mut branches = rows.iter().map(|thread| checkout(*thread));
         if let Some(Some(first)) = branches.next() {
             if branches.all(|branch| branch.as_ref() == Some(&first)) {
                 return Some(first);
             }
         }
-        rows.iter().find_map(|row| {
+        rows.iter().find_map(|thread| {
             self.facts
-                .get(row.thread)
+                .get(*thread)
                 .and_then(|facts| facts.default_branch.clone())
         })
     }
 
-    /// Land on a Thread from the nav's other doors — a Needs-you row, a
-    /// rail ordinal: its Group's view if it has one, its Pane if open,
-    /// else revived — exactly as a press on its own row does.
+    /// Land on a Thread from the nav's other doors — a Needs-you row: the
+    /// Group on screen when it holds the Thread, else its home Group's
+    /// view, else its Pane if open, else revived — exactly as a press on
+    /// its own row does.
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Some(group) = self.cockpit.groups().of(thread).map(|group| group.id) {
+        let target: Option<GroupId> = {
+            let groups = self.cockpit.groups();
+            let viewed = match self.cockpit.roster().view() {
+                View::Group(group)
+                    if groups
+                        .get(group)
+                        .is_some_and(|group| group.members.contains(&thread)) =>
+                {
+                    Some(group)
+                }
+                _ => None,
+            };
+            viewed.or_else(|| groups.home(thread).map(|group| group.id))
+        };
+        if let Some(group) = target {
             self.enter_group(group, cx);
             self.focus_thread(thread, cx);
         } else if self.pane_for(thread).is_some() {
@@ -7567,40 +7601,21 @@ impl CockpitView {
         }
     }
 
-    /// ⌘1…⌘9: the `ordinal`th Thread of the ⌘ order (`NavState::rail_rows`).
+    /// ⌘1…⌘9 (R5): the `ordinal`th Pane of the board on screen, in head
+    /// order. Nothing past the last Pane.
     fn focus_rail(&mut self, ordinal: usize, cx: &mut Context<Self>) {
-        let state = self.nav_state();
-        let parked: &[nav::ThreadRow] = if state.parked_open && state.collapsed {
-            &state.parked
-        } else {
-            &[]
-        };
-        let thread = state
-            .rail_rows()
-            .into_iter()
-            .chain(parked)
-            .nth(ordinal.saturating_sub(1))
-            .map(|row| row.thread);
-        if let Some(thread) = thread {
-            self.land_on_thread(thread, cx);
+        let index = ordinal
+            .checked_sub(1)
+            .and_then(|at| self.visible_indices().get(at).copied());
+        if let Some(index) = index {
+            self.focus_pane(index);
+            cx.notify();
         }
     }
 
-    /// When a Thread was last used, for the nav's default order. A Thread
-    /// whose log cannot be stat'd sorts to the bottom rather than to the
-    /// top: an unknown time is not a recent one.
-    /// A row's place in the nav's default order: ongoing first, then the
-    /// rest newest-first. Every ongoing row shares [`NavRank::Ongoing`], so
-    /// a stable sort leaves them in the order they were gathered rather
-    /// than shuffling them each time one of them speaks.
-    fn nav_rank(&self, row: &nav::ThreadRow) -> NavRank {
-        if ongoing(row.status) {
-            NavRank::Ongoing
-        } else {
-            NavRank::Quiet(std::cmp::Reverse(self.last_used(row.thread)))
-        }
-    }
-
+    /// When a Thread was last used, for `sort: recent`. A Thread whose log
+    /// cannot be stat'd sorts to the bottom rather than to the top: an
+    /// unknown time is not a recent one.
     fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
         self.facts
             .last_used(thread)
@@ -8797,14 +8812,6 @@ impl CockpitView {
                         }
                         dismissed = true;
                     }
-                    if view.nav_filter_open {
-                        view.nav_filter_open = false;
-                        dismissed = true;
-                    }
-                    if view.nav_order_open {
-                        view.nav_order_open = false;
-                        dismissed = true;
-                    }
                     if view.context_menu.take().is_some() {
                         dismissed = true;
                     }
@@ -8846,15 +8853,8 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    // The nav and its one seam column (`nav::seam`).
                     .child(self.nav(cx))
-                    .child(
-                        div()
-                            .debug_selector(|| "chrome-seam".into())
-                            .flex_shrink_0()
-                            .h_full()
-                            .w(px(crate::theme::CHROME_SEAM_W))
-                            .bg(crate::theme::paint::CHROME_SEAM),
-                    )
                     .child(grid),
             )
             .child(self.bottom_bar(cx))
@@ -11594,8 +11594,6 @@ impl CockpitView {
         if self.bell.open {
             self.popover = None;
             self.context_menu = None;
-            self.nav_filter_open = false;
-            self.nav_order_open = false;
         }
         cx.notify();
     }
@@ -11839,27 +11837,37 @@ impl CockpitView {
         )
     }
 
-    /// The nav column: the Project filter, the Needs-you strip, the tree and
-    /// the Parked fold on the chrome, under the titlebar cell
+    /// The nav column and its one seam (`nav::seam`): the Needs-you strip,
+    /// the tree and the Parked fold on the chrome, under the titlebar cell
     /// (`nav_chrome`). cmd-B rides its width to nothing over
     /// `motion::RESIZE` (the render tail keeps frames coming while it
-    /// moves), the content fading out as it folds and up as it opens; at
-    /// rest folded, the column draws nothing inside.
+    /// moves) while its content fades on its own clock (N-15): 1 → 0 over
+    /// 150ms folding, 0 → 1 opening. At rest folded, the column draws
+    /// nothing and the seam beside it is the plane.
     fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
         let moving = self.nav_tween.filter(|tween| tween.running(now, reduced));
-        let shell = nav::shell(collapsed).when_some(moving, |shell, tween| {
-            shell.w(px(tween.value(now, reduced)))
-        });
+        let width = moving.map_or(
+            if collapsed {
+                nav::FOLDED_WIDTH
+            } else {
+                nav::WIDTH
+            },
+            |tween| tween.value(now, reduced),
+        );
+        let frame = div().flex().flex_row().flex_shrink_0().h_full();
+        let shell = nav::shell(width);
         // Folded at rest, the column holds nothing to draw up.
         if collapsed && moving.is_none() {
-            return shell.into_any_element();
+            return frame
+                .child(shell)
+                .child(nav::seam(true))
+                .into_any_element();
         }
         let state = self.nav_state();
         let content = nav::content()
-            .child(self.nav_head(&state, cx))
             .children(self.needs_you_strip(&state, cx))
             .child(
                 div()
@@ -11872,29 +11880,48 @@ impl CockpitView {
                     .child(nav::scrollbar(&self.nav_scroll)),
             )
             .children(self.nav_parked(&state, cx));
-        let fade = match moving {
-            None => 1.0,
-            Some(tween) if collapsed => 1.0 - tween.progress(now, reduced),
-            Some(tween) => crate::motion::lerp(
-                crate::theme::MOTION_NAV_CONTENT_FROM,
-                1.0,
-                tween.progress(now, reduced),
-            ),
-        };
-        shell
-            .child(content.opacity(fade))
-            .child(nav::seam())
+        frame
+            .child(
+                shell
+                    .child(nav::body())
+                    .child(content.opacity(self.nav_content_opacity(now, reduced))),
+            )
+            .child(nav::seam(collapsed))
             .into_any_element()
+    }
+
+    /// The nav content's opacity this frame (N-15): wherever its own fade
+    /// has it while the column rides — a fade that has finished holds its
+    /// end — and fully shown at rest.
+    fn nav_content_opacity(&self, now: std::time::Instant, reduced: bool) -> f32 {
+        match (self.nav_tween, self.nav_fade) {
+            (Some(ride), Some(fade)) if ride.running(now, reduced) => fade.value(now, reduced),
+            _ => 1.0,
+        }
+    }
+
+    /// How far the titlebar cell's ground is from the chrome (0) to the
+    /// plane (1) this frame (N-16): its own cross-fade while the column
+    /// rides, else where the column rests.
+    fn nav_band_t(&self, now: std::time::Instant, reduced: bool) -> f32 {
+        match (self.nav_tween, self.nav_band) {
+            (Some(ride), Some(band)) if ride.running(now, reduced) => band.value(now, reduced),
+            _ if self.nav_railed() => 1.0,
+            _ => 0.0,
+        }
     }
 
     /// The titlebar cell over the column (`nav::chrome_band`), laid over
     /// everything under it at the window's top-left: the traffic lights'
     /// reserve, a stretch (where the app draws its own titlebar, a drag
-    /// region), then a waiting CLI update, the sidebar toggle, the bell and
-    /// the gear — the prototype's titlebar. It rides with the column
-    /// (`nav_chrome_width`), so folded it keeps every door.
+    /// region), then a waiting CLI update, the sidebar toggle and the bell
+    /// (and the gear where Settings has no other door) — the prototype's
+    /// titlebar. It rides with the column (`nav_chrome_width`) and
+    /// cross-fades from the chrome to the plane as one colour, so folded it
+    /// keeps every door on the reading plane.
     fn nav_chrome(&self, cx: &mut Context<Self>) -> AnyElement {
-        let column = self.nav_column_now(cx);
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
         let gear = prefs::gear(
             prefs::gear_button(cx).on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -11913,28 +11940,32 @@ impl CockpitView {
         } else {
             div().flex_1()
         };
-        nav::chrome_band(self.nav_chrome_width(cx), column)
-            .child(stretch)
-            .children(self.update_element(cx))
-            .child(nav::collapse_button().on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.toggle_nav_now(cx);
-                }),
-            ))
-            .child(self.bell_element(cx))
-            // Settings keeps its gear only where it has no other visible
-            // door: macOS lists it in the app menu (and ⌘,), so there the
-            // cell carries none, folded or not (theme WP-C, the prototype).
-            .children((!cfg!(target_os = "macos")).then_some(gear))
-            .into_any_element()
+        nav::chrome_band(
+            self.nav_chrome_width(cx),
+            nav::band_ground(self.nav_band_t(now, reduced)),
+            self.nav_railed(),
+        )
+        .child(stretch)
+        .children(self.update_element(cx))
+        .child(nav::collapse_button().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_nav_now(cx);
+            }),
+        ))
+        .child(self.bell_element(cx))
+        // Settings keeps its gear only where it has no other visible
+        // door: macOS lists it in the app menu (and ⌘,), so there the
+        // cell carries none, folded or not (theme WP-C, the prototype).
+        .children((!cfg!(target_os = "macos")).then_some(gear))
+        .into_any_element()
     }
 
-    /// The Needs-you strip under the head (C8), or nothing while no Thread
-    /// waits: `Needs you N ⌘D`, then one reference row per waiting Thread
-    /// in the answer order. A row's press lands on its Thread like its own
-    /// row's; its own row stays where it is in the tree.
+    /// The Needs-you strip at the top of the column (C8), or nothing while
+    /// no Thread waits: `needs you N ⌘D`, then one reference row per
+    /// waiting Thread in the answer order. A row's press lands on its
+    /// Thread like its own row's; its own row stays where it is in the tree.
     fn needs_you_strip(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Option<Div> {
         if state.needs_you.is_empty() {
             return None;
@@ -11952,122 +11983,10 @@ impl CockpitView {
         Some(strip)
     }
 
-    /// The 42px head: the one Project dropdown, and its menu when it is
-    /// down. The menu is `deferred` — it is absolutely positioned inside
-    /// the head, and the scrolling tree is a later sibling that would
-    /// otherwise paint straight over it.
-    fn nav_head(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
-        let head = nav::nav_head().child(nav::filter_trigger(&state.filter).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.nav_filter_open = !view.nav_filter_open;
-                view.nav_order_open = false;
-                cx.notify();
-            }),
-        ));
-        // The pencil belongs to the chosen Project, so it sits directly
-        // against the dropdown that names it — not out among the actions,
-        // and not inside the menu, which is shut for most of the Project's
-        // life. `All Projects` is a filter state, not a Project, and has
-        // nothing to edit.
-        let head = match self.nav_filter {
-            Some(project) => head.child(nav::project_edit_button(cx).on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_project_editor(project, cx);
-                },
-            ))),
-            None => head,
-        };
-        let head = head.child(
-            nav::order_button(
-                state.thread_list_order == ThreadListOrder::ByProject,
-                state.order_open,
-                cx,
-            )
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.nav_filter_open = false;
-                view.nav_order_open = !view.nav_order_open;
-                cx.notify();
-            })),
-        );
-        let head = head.child(nav::add_thread_button(cx).on_click(cx.listener(
-            |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_draft(DraftTarget::Main, cx);
-            },
-        )));
-        if state.order_open {
-            let mut menu = nav::order_menu();
-            for (index, (label, value)) in [
-                ("Recent activity", ThreadListOrder::Recent),
-                ("Project", ThreadListOrder::ByProject),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                menu = menu.child(
-                    nav::order_option(index, label, state.thread_list_order == value).on_click(
-                        cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.nav_order_open = false;
-                            view.change_settings(|settings| settings.thread_list_order = value, cx);
-                        }),
-                    ),
-                );
-            }
-            return head.child(deferred(crate::motion::menu_in_at(
-                "nav-order-menu-in",
-                menu,
-                crate::motion::Opens::Down,
-                crate::theme::MENU_TOP,
-            )));
-        }
-        if !state.filter.open {
-            return head;
-        }
-        let mut menu = nav::filter_menu();
-        for (index, option) in state.filter.options.iter().enumerate() {
-            let project = option.project;
-            let row = nav::filter_option(index, option).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    // The filter narrows navigation and nothing else: no
-                    // Pane opens, closes or moves because of it. What it
-                    // does carry is a standing draft's Project.
-                    view.choose_nav_filter(project, cx);
-                    view.nav_filter_open = false;
-                }),
-            );
-            menu = menu.child(row);
-        }
-        let count = state.filter.options.len();
-        menu = menu.child(crate::components::menu_separator());
-        menu = menu.child(nav::filter_action(count, "Add project…").on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.nav_filter_open = false;
-                view.open_project_creator(cx);
-                cx.notify();
-            }),
-        ));
-        head.child(deferred(crate::motion::menu_in_at(
-            "nav-filter-menu-in",
-            menu,
-            crate::motion::Opens::Down,
-            crate::theme::MENU_TOP,
-        )))
-    }
-
-    /// The scrolling tree: Groups with their members and solo Threads in
-    /// one order, most recently used first. The 16px band above a Group
-    /// block is also its `GroupGap` drop zone, so reordering costs no
-    /// layout of its own, and every run of solo rows is a `LooseZone` — a
-    /// place to drop a row to get it out of its Group.
+    /// The scrolling tree: one section per Project (`nav_state`), each its
+    /// heading, its loose rows — a `LooseZone`, a place to drop a row to get
+    /// it out of its Group — and its Groups, then the ground, which is a
+    /// `LooseZone` too.
     fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
         // Every drag started from this frame started from this View.
         let origin = self.cockpit.roster().view();
@@ -12075,105 +11994,88 @@ impl CockpitView {
         if let Some(error) = &self.group_error {
             tree = tree.child(nav::notice(error.clone()));
         }
-        // An empty tree names the Project the filter chose; `All projects`
-        // is a filter state, not a Project, and is not named.
-        let filtered = self.nav_filter.map(|_| state.filter.label.as_ref());
-        if state.thread_list_order == ThreadListOrder::ByProject {
-            for (index, section) in state.project_sections.iter().enumerate() {
-                let heading = nav::project_section(
-                    index,
-                    section.label.clone(),
-                    section.branch.clone(),
-                    index == 0,
-                );
-                // `Other` gathers Threads whose Project cannot be read, so
-                // it names none to start a Thread in and gets no `+`.
-                let heading = match section.project {
-                    Some(project) => {
-                        heading.child(nav::project_add_button(index, &section.label, cx).on_click(
-                            cx.listener(move |view, _: &ClickEvent, _, cx| {
-                                cx.stop_propagation();
-                                view.open_draft_in_project(project, cx);
-                            }),
-                        ))
-                    }
-                    None => heading,
-                };
-                tree = tree.child(heading);
-                for row in &section.rows {
-                    tree = tree.child(self.project_thread_element(row, cx));
-                }
-            }
-            if state.project_sections.is_empty() {
-                tree = tree.child(nav::empty_filter(filtered, !state.parked.is_empty()));
-            }
-            return tree;
-        }
-        // Solo rows the order puts next to each other are drawn as one run,
-        // so the 2px between siblings stays a container's gap rather than a
-        // margin on every row.
         let mut zones = 0usize;
-        let mut run: Vec<AnyElement> = Vec::new();
-        let mut after_group = false;
-        for (position, item) in state.order.iter().enumerate() {
-            match item {
-                nav::NavItem::Solo(index) => {
-                    run.push(self.thread_element(&state.solos[*index], None, cx));
+        for (index, section) in state.sections.iter().enumerate() {
+            let mut block = nav::section(index == 0).child(self.project_heading(index, section, cx));
+            if !section.folded {
+                if !section.solos.is_empty() {
+                    let rows = section
+                        .solos
+                        .iter()
+                        .map(|row| {
+                            self.thread_element(&state.solos[*row], None, nav::RowPlace::Root, cx)
+                        })
+                        .collect();
+                    block = block.child(self.loose_run(zones, rows, cx));
+                    zones += 1;
                 }
-                nav::NavItem::Group(index) => {
-                    if !run.is_empty() {
-                        tree = tree.child(self.loose_run(
-                            zones,
-                            std::mem::take(&mut run),
-                            after_group,
-                            cx,
-                        ));
-                        zones += 1;
-                        after_group = false;
-                    }
-                    tree = tree.child(self.group_element(
-                        state,
-                        *index,
-                        position == 0,
-                        after_group,
-                        origin,
-                        cx,
-                    ));
-                    after_group = true;
+                for group in &section.groups {
+                    block = block.child(self.group_element(&state.groups[*group], origin, cx));
                 }
             }
+            tree = tree.child(block);
         }
-        if !run.is_empty() {
-            tree = tree.child(self.loose_run(zones, run, after_group, cx));
-            zones += 1;
-            after_group = false;
-        }
-        // An empty tree says so just under the head, before the ground.
-        if state.order.is_empty() {
-            tree = tree.child(nav::empty_filter(filtered, !state.parked.is_empty()));
+        // An empty tree says so just under the strip, before the ground. It
+        // names the Project the filter chose.
+        if state.sections.is_empty() {
+            let filtered = self
+                .nav_filter
+                .and_then(|project| self.cockpit.registry().project(project))
+                .map(|project| project.title.clone());
+            tree = tree.child(nav::empty_filter(
+                filtered.as_deref(),
+                !state.parked.is_empty(),
+            ));
         }
         // The ground under the last row is a drop target too — with every
         // Thread in a Group it is the only place left to drop one to get it
         // out — and it takes the tree's slack, so that ground is never dead.
-        let ground = nav::loose_ground(zones)
-            .when(after_group, |ground| ground.mt(px(crate::theme::SOLOS_TOP)));
-        tree = tree.child(
-            drop_feedback(ground, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
-                cx.listener(|view, drag: &NavDrag, _, cx| {
-                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
-                }),
-            ),
+        tree.child(
+            drop_feedback(
+                nav::loose_ground(zones),
+                self.cockpit.groups().clone(),
+                DropTarget::LooseZone,
+            )
+            .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
+                view.apply_drop(*drag, DropTarget::LooseZone, cx)
+            })),
+        )
+    }
+
+    /// A Project heading (N-12): a plain row whose press folds or unfolds
+    /// the section (N-4). `Other` names no Project and does not fold.
+    fn project_heading(
+        &self,
+        index: usize,
+        section: &nav::ProjectSection,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let heading = nav::project_section(
+            index,
+            section.label.clone(),
+            section.branch.clone(),
+            section.folded,
         );
-        tree
+        let Some(project) = section.project else {
+            return heading.into_any_element();
+        };
+        let folded = section.folded;
+        heading
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    view.set_nav_fold(NavFold::Project(project), !folded, cx);
+                }),
+            )
+            .into_any_element()
     }
 
     /// The Parked section under the tree, or nothing when nothing is
     /// parked — an empty fold would be a heading for a list that does not
     /// exist. The header's press toggles the fold; its right press opens
-    /// the section's menu. Unfolded, the rows are the tree's own row
-    /// shape in the current order's voice, with every verb a tree row has:
-    /// a press revives, a drag regroups, a right press opens the row's
-    /// menu.
+    /// the section's menu. Unfolded, the rows are the tree's own row shape,
+    /// with every verb a tree row has: a press revives, a drag regroups, a
+    /// right press opens the row's menu.
     fn nav_parked(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Option<AnyElement> {
         if state.parked.is_empty() {
             return None;
@@ -12200,24 +12102,15 @@ impl CockpitView {
         // header, and at rest it takes its natural, capped height; folding
         // shut is instant. One element holds the fold either way, so it
         // knows an unfold from a first paint.
-        let compact = state.thread_list_order == ThreadListOrder::ByProject;
         let list = state.parked_open.then(|| {
             let mut list = nav::parked_list(&self.nav_parked_scroll);
             for row in &state.parked {
-                list = list.child(self.thread_element_with_style(
-                    row,
-                    None,
-                    compact,
-                    nav::RowPlace::Root,
-                    cx,
-                ));
+                list = list.child(self.thread_element(row, None, nav::RowPlace::Root, cx));
             }
             (list, nav::parked_scrollbar(&self.nav_parked_scroll))
         });
         // Every row is the one 20px line, flush with its neighbours.
-        let natural = state.parked.len() as f32
-            * (crate::theme::NAV_LINE + crate::theme::MEMBER_GAP)
-            + crate::theme::MEMBER_GAP;
+        let natural = state.parked.len() as f32 * crate::theme::NAV_LINE;
         let fold = crate::motion::settled(
             "nav-parked-fold",
             state.parked_open,
@@ -12244,63 +12137,59 @@ impl CockpitView {
         Some(section.into_any_element())
     }
 
-    /// One run of solo rows, which is also a `LooseZone`. `after_group` is
-    /// what separates it from the Group above it; a run that opens the tree
-    /// starts at the tree's own padding.
-    fn loose_run(
-        &self,
-        zone: usize,
-        rows: Vec<AnyElement>,
-        after_group: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let run =
-            nav::solos(zone, rows).when(after_group, |run| run.mt(px(crate::theme::SOLOS_TOP)));
-        drop_feedback(run, self.cockpit.groups().clone(), DropTarget::LooseZone)
-            .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
-                view.apply_drop(*drag, DropTarget::LooseZone, cx)
-            }))
-            .into_any_element()
+    /// One section's run of loose rows, which is also a `LooseZone`.
+    fn loose_run(&self, zone: usize, rows: Vec<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
+        drop_feedback(
+            nav::solos(zone, rows),
+            self.cockpit.groups().clone(),
+            DropTarget::LooseZone,
+        )
+        .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
+            view.apply_drop(*drag, DropTarget::LooseZone, cx)
+        }))
+        .into_any_element()
     }
 
-    /// One Group block: the 16px band above it when another Group precedes
-    /// it — the "insert between these two" drop target — then the header,
-    /// which is the drag handle, the rename target and the way in, then the
-    /// member rows.
+    /// One Group block: the header — the drag handle, the rename target and
+    /// the way in, its triangle the fold (N-4) — then, unfolded, the member
+    /// rows; and over the header's top edge the "insert before this Group"
+    /// drop band, laid last so it is the topmost target there.
     fn group_element(
         &self,
-        state: &nav::NavState,
-        index: usize,
-        first_in_tree: bool,
-        after_group: bool,
+        group: &nav::GroupBlock,
         origin: View,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let group = &state.groups[index];
         let id = group.id;
-        let full_index = self
+        let Some(full_index) = self
             .cockpit
             .groups()
             .iter()
             .position(|group| group.id == id)
-            .expect("navigation only shows existing Groups");
+        else {
+            return div().into_any_element();
+        };
         let gap = DropTarget::GroupGap(full_index);
+        let folded = group.folded;
+        // The triangle folds and stops there: the rest of the row opens the
+        // Group, and opening a folded Group leaves it folded.
+        let fold = nav::group_fold(group).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                view.set_nav_fold(NavFold::Group(id), !folded, cx);
+            }),
+        );
         let head = nav::group_row_with_title(
             group,
             self.editable_group_title(id, group.title.clone(), cx),
+            fold,
         );
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
-        let mut block = nav::group_block()
+        let mut block = nav::group_block(id)
             .when(lifted, |block| {
                 block.opacity(crate::theme::DRAG_SOURCE_OPACITY)
-            })
-            // A Group separates itself from whatever is above it: nothing
-            // when it opens the tree, the 16px band from another Group —
-            // prepended below, because that band is a drop target and not a
-            // margin — and the same 16px from a run of rows.
-            .when(!first_in_tree && !after_group, |block| {
-                block.mt(px(crate::theme::SOLOS_TOP))
             })
             .child(
                 drop_feedback(
@@ -12333,21 +12222,7 @@ impl CockpitView {
                     }),
                 ),
             );
-        // The first block in the tree has no band above it to drop into, so
-        // "insert above this Group" rides its header instead.
-        if first_in_tree {
-            block = block.child(
-                drop_feedback(
-                    nav::group_gap_lead(index),
-                    self.cockpit.groups().clone(),
-                    gap,
-                )
-                .on_drop(
-                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
-                ),
-            );
-        }
-        if !group.members.is_empty() {
+        if !folded && !group.members.is_empty() {
             // Each member hangs on its tree glyph: `├ `, and `└ ` closing
             // the Group.
             let count = group.members.len();
@@ -12356,10 +12231,9 @@ impl CockpitView {
                 .iter()
                 .enumerate()
                 .map(|(position, row)| {
-                    self.thread_element_with_style(
+                    self.thread_element(
                         row,
                         Some(id),
-                        false,
                         nav::RowPlace::Member {
                             last: position + 1 == count,
                         },
@@ -12378,9 +12252,7 @@ impl CockpitView {
                         .cockpit
                         .groups()
                         .get(id)
-                        .expect("Group exists")
-                        .members
-                        .len(),
+                        .map_or(0, |group| group.members.len()),
                 };
                 members = members.child(
                     drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
@@ -12391,48 +12263,24 @@ impl CockpitView {
             }
             block = block.child(members);
         }
-        if !after_group {
-            return block.into_any_element();
-        }
-        // Two Groups in a row: the band between them, a hit band over this
-        // one's top edge, laid after it so it is the topmost target there.
         block
             .child(
-                drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap).on_drop(
-                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
-                ),
+                drop_feedback(nav::group_gap(full_index), self.cockpit.groups().clone(), gap)
+                    .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                        view.apply_drop(*drag, gap, cx)
+                    })),
             )
             .into_any_element()
     }
 
     /// One Thread row, with the whole drag/drop and click wiring a row has
-    /// had since #21 — retargeted from the old running/parked pair onto the
-    /// one row shape. A row whose Pane is open focuses it; a parked one
-    /// revives, into the Group it was drawn under.
+    /// had since #21. A press on a member row opens its Group (`group`, the
+    /// Group it is drawn under) on that Thread; a loose row whose Pane is
+    /// open focuses it; a parked one revives.
     fn thread_element(
         &self,
         row: &nav::ThreadRow,
         group: Option<GroupId>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        self.thread_element_with_style(row, group, false, nav::RowPlace::Root, cx)
-    }
-
-    fn project_thread_element(&self, row: &nav::ThreadRow, cx: &mut Context<Self>) -> AnyElement {
-        let group = self
-            .cockpit
-            .groups()
-            .iter()
-            .find(|group| group.members.contains(&row.thread))
-            .map(|group| group.id);
-        self.thread_element_with_style(row, group, true, nav::RowPlace::Root, cx)
-    }
-
-    fn thread_element_with_style(
-        &self,
-        row: &nav::ThreadRow,
-        group: Option<GroupId>,
-        compact: bool,
         place: nav::RowPlace,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -12451,25 +12299,14 @@ impl CockpitView {
             index,
         };
         let title = self.editable_thread_title(thread, row.name.clone(), cx);
-        // One row builder; Project order adds the membership glyph.
         let editing = matches!(
             &self.rename,
             Some((RenameTarget::Thread(editing), _)) if *editing == thread
         );
-        let head = nav::project_thread_row_with_title(
-            row,
-            title,
-            place,
-            compact && group.is_some(),
-            editing,
-        );
+        let head = nav::thread_row_with_title(row, title, place, group, editing);
         let face = self.thread_ghost(thread);
         let nav_edge = self.nav_width();
-        let chip = NavChip::Thread {
-            row: row.clone(),
-            compact,
-            grouped: group.is_some(),
-        };
+        let chip = NavChip::Thread(row.clone());
         let lifted = matches!(
             self.nav_dragging,
             Some(Drag::Thread { thread: dragged, .. }) if dragged == thread
@@ -12705,6 +12542,7 @@ mod tests {
     mod core_transcript_parity;
     mod decisions_parity;
     mod layout_polish;
+    mod nav_parity;
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;
@@ -13441,23 +13279,16 @@ mod tests {
             assert_eq!(view.cockpit.project_id(joined), Some(second_project));
             view.enter_group(group, cx);
             let nav = view.nav_state();
-            assert_eq!(
-                nav.groups[0]
-                    .projects
-                    .as_ref()
-                    .map(|label| label.to_string()),
-                Some("2 projects".to_string())
-            );
             assert_eq!(nav.groups[0].members.len(), 3);
-            assert_eq!(nav.project_sections.len(), 2);
             assert_eq!(
-                nav.project_sections
+                nav.sections
                     .iter()
-                    .map(|section| section.rows.len())
-                    .sum::<usize>(),
-                3,
-                "grouping by Project keeps every Thread, including a cross-Project Group"
+                    .map(|section| section.project)
+                    .collect::<Vec<_>>(),
+                [Some(first_project)],
+                "a cross-Project Group sits under the Project of its first member"
             );
+            assert_eq!(nav.sections[0].groups, [0]);
             view.nav_filter = Some(second_project);
             let nav = view.nav_state();
             assert_eq!(
@@ -13469,11 +13300,12 @@ mod tests {
                 [joined]
             );
             assert_eq!(
-                nav.groups[0]
-                    .projects
-                    .as_ref()
-                    .map(|label| label.to_string()),
-                Some("2 projects".to_string())
+                nav.sections
+                    .iter()
+                    .map(|section| section.project)
+                    .collect::<Vec<_>>(),
+                [Some(second_project)],
+                "filtered, the tree is that Project's section, with every Group a member of it is in"
             );
             assert_eq!(
                 view.visible_indices().len(),
@@ -13653,31 +13485,6 @@ mod tests {
                 "Renamed"
             );
         });
-    }
-
-    /// The pencil edits the Project the dropdown names, so it sits against
-    /// that dropdown — left of the head's actions, not stranded past them.
-    #[gpui::test]
-    fn the_project_pencil_sits_right_of_the_dropdown(cx: &mut TestAppContext) {
-        let (mut core, _) = cockpit("project-pencil-place", 1);
-        let project = core.register_project(&here()).unwrap();
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.choose_nav_filter(Some(project), cx));
-        tick(cx);
-
-        let trigger = cx
-            .debug_bounds("nav-filter")
-            .expect("the Project dropdown is up");
-        let pencil = cx
-            .debug_bounds("project-edit")
-            .expect("a named Project offers its editor");
-        let order = cx
-            .debug_bounds("thread-list-order")
-            .expect("the order control is up");
-        let add = cx.debug_bounds("add-thread").expect("New thread is up");
-        assert!(trigger.right() <= pencil.origin.x, "{trigger:?} {pencil:?}");
-        assert!(pencil.right() <= order.origin.x, "{pencil:?} {order:?}");
-        assert!(order.right() <= add.origin.x, "{order:?} {add:?}");
     }
 
     /// The card is a card, not a title bar: whatever the head says, the
@@ -13901,12 +13708,12 @@ mod tests {
         });
     }
 
-    /// C8: the tree never re-sorts under the pointer. While the pointer is
-    /// inside the nav, a Thread starting work (which ranks it first) leaves
-    /// the order as drawn; once the pointer leaves, the order updates.
+    /// N-3: rows follow creation order, independent of activity. A Thread
+    /// moving from quiet to working and on to done keeps its row index —
+    /// with the pointer nowhere near the column, so nothing is merely held.
     #[gpui::test]
-    fn the_nav_order_holds_still_under_the_pointer(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("nav-hold-order", 3);
+    fn a_thread_keeps_its_row_through_working_and_done(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("nav-stable-order", 3);
         let threads = core.threads();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
@@ -13920,10 +13727,13 @@ mod tests {
             })
         };
         let before = order(&view, cx);
+        let mut created = threads.clone();
+        created.sort();
+        assert_eq!(before, created, "creation order");
         let last = *before.last().unwrap();
         let stream = threads.iter().position(|thread| *thread == last).unwrap();
+        assert!(!view.read_with(cx, |view, _| view.nav_hovered));
 
-        view.update(cx, |view, _| view.nav_hovered = true);
         fake.streams.borrow()[stream]
             .send(SessionEvent::TextDelta {
                 text: "thinking".into(),
@@ -13933,14 +13743,69 @@ mod tests {
         assert_eq!(
             view.read_with(cx, |view, _| view.thread_row(last).status),
             nav::RowStatus::Working,
-            "the premise: the bottom row started work, which ranks it first"
+            "the premise: the bottom row started work"
         );
-        assert_eq!(order(&view, cx), before, "nothing moves under the pointer");
+        assert_eq!(order(&view, cx), before, "working moves no row");
 
-        view.update(cx, |view, _| view.nav_hovered = false);
-        let after = order(&view, cx);
-        assert_eq!(after[0], last, "leaving re-ranks: the working row leads");
-        assert_eq!(after.len(), before.len());
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert_ne!(
+            view.read_with(cx, |view, _| view.thread_row(last).status),
+            nav::RowStatus::Working,
+            "the premise: the turn is over"
+        );
+        assert_eq!(order(&view, cx), before, "nor does finishing");
+    }
+
+    /// C8 under `sort: recent`: the tree never re-sorts under the pointer.
+    /// While the pointer is inside the nav the rows hold the order they
+    /// were drawn in; leaving re-ranks them.
+    #[gpui::test]
+    fn sort_recent_holds_still_under_the_pointer(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("nav-hold-order", 3);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        view.update(cx, |view, cx| {
+            view.set_thread_order(ThreadListOrder::Recent, cx);
+            assert_eq!(
+                view.prefs.settings.thread_list_order,
+                ThreadListOrder::Recent
+            );
+            let drawn: Vec<ThreadId> = view
+                .nav_state()
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect();
+            let held = vec![drawn[2], drawn[0], drawn[1]];
+            // The pointer is inside, and the last drawn order differs from
+            // what recency would say: it is kept.
+            view.nav_hovered = true;
+            *view.nav_snapshot.borrow_mut() = Some(NavSnapshot {
+                rows: held.clone(),
+                focused: view.cockpit.roster().focused_thread(),
+            });
+            let order: Vec<ThreadId> = view
+                .nav_state()
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect();
+            assert_eq!(order, held, "nothing moves under the pointer");
+            view.nav_hovered = false;
+            let order: Vec<ThreadId> = view
+                .nav_state()
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect();
+            assert_eq!(order, drawn, "leaving re-ranks");
+        });
     }
 
     /// Rule 2.7.7: a window too narrow for the column beside a board folds
@@ -14006,41 +13871,53 @@ mod tests {
         );
     }
 
-    /// ⌘1…⌘9 land on the rail's items in its order: Threads that need you
-    /// first, then the tree's.
+    /// R5: ⌘1…⌘9 focus the shown board's Panes in head order — a waiting
+    /// Thread pins nothing — and a digit past the last Pane does nothing.
     #[gpui::test]
-    fn command_digits_land_on_the_rails_items(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("rail-digits", 3);
-        let threads = core.threads();
+    fn command_digits_focus_the_boards_panes_in_head_order(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("rail-digits", 3);
+        let group = group_all(&mut core);
+        core.enter_group(group).unwrap();
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         fake.streams.borrow()[1].send(decision("perm_2")).unwrap();
         tick(cx);
-        let rail: Vec<ThreadId> = view.read_with(cx, |view, _| {
-            view.nav_state()
-                .rail_rows()
-                .iter()
-                .map(|row| row.thread)
+        let heads: Vec<ThreadId> = view.read_with(cx, |view, _| {
+            view.visible_indices()
+                .into_iter()
+                .filter_map(|index| view.panes[index].thread())
                 .collect()
         });
-        assert_eq!(rail[0], threads[1], "the waiting Thread pins first");
-        cx.simulate_keystrokes("cmd-1");
-        tick(cx);
-        assert_eq!(
-            view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
-            Some(rail[0])
-        );
+        assert_eq!(heads.len(), 3);
         cx.simulate_keystrokes("cmd-3");
         tick(cx);
         assert_eq!(
             view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
-            Some(rail[2])
+            Some(heads[2])
+        );
+        cx.simulate_keystrokes("cmd-1");
+        tick(cx);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+            Some(heads[0]),
+            "the first head, not the Thread that waits"
+        );
+        cx.simulate_keystrokes("cmd-9");
+        tick(cx);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+            Some(heads[0]),
+            "nothing past the last Pane"
         );
     }
 
+    /// The one row grammar under a Project heading (N-2): the title then
+    /// the word on one line, and none of the marks the redesign dropped —
+    /// no subagent count, no provider logo, no Project filter, order door,
+    /// new-thread door or pencil above the tree (N-1).
     #[gpui::test]
-    fn thread_order_is_changed_from_the_main_nav_menu(cx: &mut TestAppContext) {
+    fn a_project_section_draws_one_row_grammar_and_no_filter_row(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("nav-thread-order", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -14055,56 +13932,58 @@ mod tests {
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         assert_eq!(
-            view.read_with(cx, |view, _| view.thread_row(thread).subagents),
-            1
+            view.read_with(cx, |view, _| view
+                .facts
+                .get(thread)
+                .map_or(0, |facts| facts.subagents)),
+            1,
+            "the premise: the Thread runs a subagent"
         );
-
-        let button = cx
-            .debug_bounds("thread-list-order")
-            .expect("the ordering control is in the main Thread list");
-        cx.simulate_click(button.center(), gpui::Modifiers::none());
-        cx.run_until_parked();
-        let grouped = cx
-            .debug_bounds("thread-list-order-option-1")
-            .expect("the grouped option is available from the control");
-        cx.simulate_click(grouped.center(), gpui::Modifiers::none());
-        cx.run_until_parked();
 
         let age_id: &'static str = format!("nav-since-{}", thread.get()).leak();
         let age = cx
             .debug_bounds(age_id)
-            .expect("grouped Project rows retain the Thread's word");
+            .expect("the row keeps the Thread's word");
         let title_id: &'static str = format!("nav-title-{}", thread.get()).leak();
-        let title = cx
-            .debug_bounds(title_id)
-            .expect("grouped Project rows keep the one row grammar");
+        let title = cx.debug_bounds(title_id).expect("the one row grammar");
         assert!(title.right() <= age.origin.x + px(0.5));
-        // The subagents and the provider are the row's tooltip now, not
-        // marks on the line.
-        assert!(cx
-            .debug_bounds(format!("nav-subagents-{}", thread.get()).leak())
-            .is_none());
-        assert!(cx
-            .debug_bounds(format!("nav-mark-{}", thread.get()).leak())
-            .is_none());
-        assert!(
-            cx.debug_bounds("nav-project-section-0").is_some(),
-            "the Project heading"
-        );
-
+        for gone in [
+            format!("nav-subagents-{}", thread.get()),
+            format!("nav-mark-{}", thread.get()),
+            format!("nav-group-membership-{}", thread.get()),
+            "nav-filter".to_string(),
+            "thread-list-order".to_string(),
+            "add-thread".to_string(),
+            "project-edit".to_string(),
+            "nav-project-add-0".to_string(),
+        ] {
+            assert!(
+                cx.debug_bounds(gone.clone().leak()).is_none(),
+                "{gone} is gone from the nav"
+            );
+        }
+        let heading = cx
+            .debug_bounds("nav-project-section-0")
+            .expect("the Project heading");
+        let row = cx
+            .debug_bounds(format!("nav-thread-{}", thread.get()).leak())
+            .unwrap();
+        assert!(heading.bottom() <= row.origin.y, "the row hangs under it");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.prefs.settings.thread_list_order,
-                ThreadListOrder::ByProject
+                ThreadListOrder::Created,
+                "creation order by default"
             );
-            assert!(!view.nav_order_open, "choosing an order closes its menu");
-            assert_eq!(view.nav_state().project_sections.len(), 1);
+            assert_eq!(view.nav_state().sections.len(), 1);
         });
     }
 
+    /// A member row opens its whole Group on that Thread, its parked
+    /// members revived.
     #[gpui::test]
-    fn project_order_group_member_opens_the_whole_group(cx: &mut TestAppContext) {
-        let (mut core, _) = cockpit("project-order-group-open", 2);
+    fn a_member_row_opens_the_whole_group(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("member-row-group-open", 2);
         let threads = core.threads();
         let group = core
             .apply_group(GroupChange::Create {
@@ -14116,23 +13995,12 @@ mod tests {
             .unwrap();
         core.park(threads[0]).unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| {
-            view.change_settings(
-                |settings| settings.thread_list_order = ThreadListOrder::ByProject,
-                cx,
-            );
-        });
         tick(cx);
 
         let target: &'static str = format!("nav-thread-{}", threads[1].get()).leak();
         let row = cx
             .debug_bounds(target)
-            .expect("the grouped Thread appears in the Project section");
-        let membership: &'static str = format!("nav-group-membership-{}", threads[1].get()).leak();
-        assert!(
-            cx.debug_bounds(membership).is_some(),
-            "Project order marks Threads that retain Group membership"
-        );
+            .expect("the member hangs under its Group");
         cx.simulate_click(row.center(), gpui::Modifiers::none());
         cx.run_until_parked();
 
@@ -14148,11 +14016,11 @@ mod tests {
         });
     }
 
-    /// The `+` on a Project heading is that Project's door to a new
-    /// Thread: one draft, bound to the Project the heading names, whatever
-    /// the nav filter or the focused Pane happen to say.
+    /// A new Thread in a named Project (the palette's command; the heading
+    /// has no `+` now): one draft, bound to that Project whatever the nav
+    /// filter or the focused Pane happen to say.
     #[gpui::test]
-    fn project_heading_plus_opens_a_draft_in_that_project(cx: &mut TestAppContext) {
+    fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("project-heading-plus", 1);
         let elsewhere = core
             .register_project(&std::env::temp_dir().canonicalize().unwrap())
@@ -14161,28 +14029,19 @@ mod tests {
         assert_ne!(heading, elsewhere);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
-            view.change_settings(
-                |settings| settings.thread_list_order = ThreadListOrder::ByProject,
-                cx,
-            );
             // The fallback names the *other* Project, so a draft that
-            // ignored the heading would be caught.
+            // ignored the request would be caught.
             view.launch_project = Some(elsewhere);
+            view.open_draft_in_project(heading, cx);
         });
         tick(cx);
-
-        let plus = cx
-            .debug_bounds("nav-project-add-0")
-            .expect("every named Project heading offers a new Thread");
-        cx.simulate_click(plus.center(), gpui::Modifiers::none());
-        cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
             let draft = view
                 .panes
                 .iter()
                 .find_map(|pane| pane.draft())
-                .expect("the press opened a draft");
+                .expect("the command opened a draft");
             assert_eq!(draft.binding.project(), heading);
             assert_eq!(
                 view.launch_project,
@@ -14192,57 +14051,37 @@ mod tests {
         });
     }
 
-    /// The tree draws one list, not a Groups shelf above a Threads shelf:
-    /// Groups and solo Threads sort together by when they were last used,
-    /// a Group counting as its most recently used member. Threads created
-    /// back to back can share a timestamp, so the assertion is the rule
-    /// itself — the order never climbs — plus every item drawn exactly once.
+    /// N-2: one section per Project — its loose rows first, then its
+    /// Groups — every Thread drawn exactly once, and nothing in creation
+    /// order moves because a Group was made.
     #[gpui::test]
-    fn groups_and_solo_threads_share_one_recency_order(cx: &mut TestAppContext) {
+    fn a_project_lists_its_loose_rows_then_its_groups(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("nav-interleave", 4);
-        let ids = core.threads();
-        core.apply_group(GroupChange::Create {
-            first: ids[0],
-            second: ids[1],
-        })
-        .unwrap();
+        let mut ids = core.threads();
+        ids.sort();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: ids[0],
+                second: ids[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
         view.read_with(cx, |view, _| {
             let state = view.nav_state();
-            assert_eq!(state.groups.len(), 1);
-            assert_eq!(state.solos.len(), 2);
+            assert_eq!(state.sections.len(), 1, "one Project");
+            let section = &state.sections[0];
+            assert_eq!(section.solos.len(), 2);
+            assert_eq!(section.groups.len(), 1);
+            assert_eq!(state.groups[section.groups[0]].id, group);
+            let rows: Vec<ThreadId> = state.ordered_rows().iter().map(|row| row.thread).collect();
             assert_eq!(
-                state.order.len(),
-                3,
-                "one entry per Group and per solo Thread, and no other"
-            );
-            let recency = |item: &nav::NavItem| match item {
-                nav::NavItem::Group(index) => state.groups[*index]
-                    .members
-                    .iter()
-                    .map(|row| view.last_used(row.thread))
-                    .max()
-                    .unwrap(),
-                nav::NavItem::Solo(index) => view.last_used(state.solos[*index].thread),
-            };
-            let times: Vec<_> = state.order.iter().map(recency).collect();
-            assert!(
-                times.windows(2).all(|pair| pair[0] >= pair[1]),
-                "most recently used first, whichever kind of item it is"
-            );
-            let mut seen: Vec<nav::NavItem> = state.order.clone();
-            seen.sort_by_key(|item| match item {
-                nav::NavItem::Group(index) => (0, *index),
-                nav::NavItem::Solo(index) => (1, *index),
-            });
-            seen.dedup();
-            assert_eq!(seen.len(), 3, "nothing is drawn twice and nothing is lost");
-            assert_eq!(
-                view.nav_state().ordered_rows().len(),
-                4,
-                "every Thread has a row, member or solo"
+                rows,
+                vec![ids[2], ids[3], ids[0], ids[1]],
+                "the loose rows, then the Group's members, each in creation order"
             );
         });
     }
@@ -18356,39 +18195,6 @@ mod tests {
         });
     }
 
-    /// The nav exposes the same draft-opening path as cmd-t/cmd-n for
-    /// operators who discover actions with the pointer.
-    #[gpui::test]
-    fn add_thread_button_opens_a_loose_draft_even_from_a_group(cx: &mut TestAppContext) {
-        let (mut core, _fake) = cockpit("add-thread-button", 2);
-        let threads = core.threads();
-        let group = core
-            .apply_group(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.enter_group(group, cx));
-        tick(cx);
-
-        let button = cx.debug_bounds("add-thread").expect("button is visible");
-        cx.simulate_click(button.center(), gpui::Modifiers::none());
-        cx.run_until_parked();
-
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
-            assert_eq!(view.visible_indices().len(), 1);
-            assert_eq!(view.cockpit.groups().get(group).unwrap().members, threads);
-            assert!(matches!(
-                view.panes.last().map(|pane| pane.identity),
-                Some(PaneIdentity::Draft(_))
-            ));
-        });
-    }
-
     /// #20: cmd-f gives the focused Pane the whole cockpit at L1, and cmd-f
     /// again restores the grid. The proof of L1 is the keyboard: only a
     /// Transcript-level Pane renders a Composer, so typing landing there is
@@ -18853,11 +18659,9 @@ mod tests {
         });
     }
 
-    /// #21 AC1, amended: the tree lists every **open** Thread — most
-    /// recently used first, each row naming its Project and its provider.
-    /// A parked solo is not a tree row any more: it waits in the Parked
-    /// section at the foot of the column, folded shut, its provider still
-    /// peeked off the log rather than loaded.
+    /// #21 AC1, amended: the tree lists every **open** Thread — in creation
+    /// order (N-3). A parked solo is not a tree row any more: it waits in
+    /// the Parked section at the foot of the column, folded shut.
     #[gpui::test]
     fn the_nav_lists_open_threads_in_the_tree_and_parked_ones_below(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-order", 3);
@@ -18889,10 +18693,10 @@ mod tests {
                 .copied()
                 .filter(|thread| *thread != parked_thread)
                 .collect();
-            // The nav's default order, and the only one it has: last used
-            // first, over the Threads that are open.
-            expected.sort_by_key(|thread| std::cmp::Reverse(view.last_used(*thread)));
-            assert_eq!(rows, expected, "most recently used first");
+            // The nav's default order: creation order, over the Threads
+            // that are open.
+            expected.sort();
+            assert_eq!(rows, expected, "creation order");
             assert!(
                 !rows.contains(&parked_thread),
                 "a parked Thread is not a tree row"
@@ -18918,11 +18722,6 @@ mod tests {
                     .all(|row| matches!(row.tail, nav::NavTail::Age(_))),
                 "every quiet row's tail is how long since it was used"
             );
-            assert_eq!(
-                ordered[0].provider,
-                Some(Provider::Claude),
-                "the provider is the logomark's own value, never a `cl` tag"
-            );
             let parked: Vec<ThreadId> = state.parked.iter().map(|row| row.thread).collect();
             assert_eq!(
                 parked,
@@ -18931,11 +18730,6 @@ mod tests {
             );
             assert!(!state.parked_open, "folded shut until the operator asks");
             assert_eq!(state.parked[0].status, nav::RowStatus::Parked);
-            assert_eq!(
-                state.parked[0].provider,
-                Some(Provider::Claude),
-                "a parked row still names its provider — peeked, not loaded"
-            );
             assert!(matches!(state.parked[0].tail, nav::NavTail::Age(_)));
         });
     }
@@ -19207,8 +19001,8 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
-        // Which row is which is the nav's order to decide (last used
-        // first), so the test asks it rather than assuming the grid's.
+        // Which row is which is the nav's order to decide, so the test asks
+        // it rather than assuming the grid's.
         let row_of = |view: &CockpitView, pane: usize| {
             let thread = view.panes[pane].thread().unwrap();
             view.nav_state()
@@ -19217,18 +19011,12 @@ mod tests {
                 .position(|row| row.thread == thread)
                 .expect("every open Thread has a row")
         };
-        // Row `n`: the window band, the column's half row, the head and the
-        // half row under it, n lines of `NAV_LINE` each with the gap
-        // between siblings, then halfway down its own line. No strip, no
-        // section header.
+        // Row `n`: the window band, the column's half row, the Project's
+        // heading line, n lines of `NAV_LINE` flush, then halfway down its
+        // own line. No strip, no filter row.
         let row_y = |n: usize| {
             use crate::theme::*;
-            px(WIN_CHROME_H
-                + NAV_PAD_Y
-                + NAV_HEAD_H
-                + NAV_SECTION_GAP
-                + n as f32 * (NAV_LINE + MEMBER_GAP)
-                + NAV_LINE / 2.)
+            px(WIN_CHROME_H + NAV_PAD_Y + NAV_LINE + n as f32 * NAV_LINE + NAV_LINE / 2.)
         };
         let (second, first) = view.read_with(cx, |view, _| (row_of(view, 1), row_of(view, 0)));
         cx.simulate_click(
@@ -19341,7 +19129,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             let state = view.nav_state();
-            assert!(state.collapsed);
+            assert!(view.nav_railed());
             assert_eq!(describe_nav(&state), before);
         });
     }
@@ -19352,7 +19140,7 @@ mod tests {
         state
             .ordered_rows()
             .into_iter()
-            .map(|row| format!("{}|{:?}|{:?}", row.name, row.project, row.provider))
+            .map(|row| format!("{}|{:?}", row.name, row.project))
             .collect()
     }
 

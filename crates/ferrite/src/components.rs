@@ -329,19 +329,28 @@ pub fn reading_column(child: impl IntoElement) -> Div {
 
 // ------------------------------------------------------------------ marks
 
-/// A status dot, `STATUS_DOT` across. Chain `.size(..)` for another size.
+/// A status dot: the `●` glyph's own box at the grid size (`STATUS_DOT`,
+/// 7.5px), its centre `STATUS_DOT_LIFT` above the centre of the line it is
+/// laid in — where Geist Mono's `●` sits — as a relative inset, so the line
+/// never moves. Its left edge is wherever the caller starts its cell. Chain
+/// `.size(..)` for another size.
 pub fn status_dot(ink: u32) -> Div {
     div()
         .flex_shrink_0()
+        .relative()
+        .top(px(-theme::STATUS_DOT_LIFT))
         .size(px(theme::STATUS_DOT))
         .rounded_full()
         .bg(rgb(ink))
 }
 
-/// A hollow status dot (parked): the ring without the fill.
+/// A hollow status dot (parked, the prototype's `○`): the ring without the
+/// fill, the dot's diameter and lift.
 pub fn status_ring(ink: u32) -> Div {
     div()
         .flex_shrink_0()
+        .relative()
+        .top(px(-theme::STATUS_DOT_LIFT))
         .size(px(theme::STATUS_DOT))
         .rounded_full()
         .border_1()
@@ -762,6 +771,7 @@ fn key_word(key: &str) -> String {
 /// An icon-only control: `ICON_BUTTON` square, the glyph at
 /// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, brightening to `TEXT` over
 /// `paint::HOVER` under the pointer, a tooltip naming what it does.
+#[allow(dead_code)] // the nav's new-thread door, its last caller, is gone
 pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: &'static str,
@@ -1152,6 +1162,7 @@ pub fn on_bounds<E: ParentElement>(
 /// The one separator inside a floating surface: `MENU_GROUP_GAP` of space.
 /// Grouping is space, not a line; the surface's own hairline edge is the
 /// only rule a menu draws.
+#[allow(dead_code)] // the nav's filter menu, its last caller, is gone
 pub fn menu_separator() -> Div {
     div().flex_shrink_0().h(px(theme::MENU_GROUP_GAP))
 }
@@ -1607,6 +1618,12 @@ mod tests {
     fn marks_and_keycaps_hold_their_boxes() {
         let mut dot = status_dot(theme::RUNNING);
         assert_eq!(dot.style().size.width, Some(px(theme::STATUS_DOT).into()));
+        assert_eq!(theme::STATUS_DOT, 7.5, "the ● glyph's size at the grid size");
+        assert_eq!(
+            dot.style().inset.top,
+            Some(px(-theme::STATUS_DOT_LIFT).into()),
+            "the dot's centre sits 1px above the line's, as the glyph's does"
+        );
         assert_eq!(
             dot.style().background,
             Some(Fill::from(rgb(theme::RUNNING)))

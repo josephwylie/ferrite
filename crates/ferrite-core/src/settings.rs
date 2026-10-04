@@ -47,8 +47,8 @@ pub struct Settings {
     pub codex_sandbox: Option<String>,
     /// Whether the navigation rail is collapsed. Default: false.
     pub nav_collapsed: bool,
-    /// How the main navigation orders Threads. This is changed from the
-    /// navigation itself, where its effect is immediately visible.
+    /// How the navigation orders the rows inside each Project: creation
+    /// order, or most recently used first. Changed from the ⌘K palette.
     pub thread_list_order: ThreadListOrder,
     /// Whether deleting a Thread asks first. Default: true.
     pub confirm_delete: bool,
@@ -115,14 +115,20 @@ impl Default for ReadingSize {
     }
 }
 
-/// The two useful readings of the Thread list: one activity stream, or
-/// separate Project sections whose rows remain newest-first.
+/// How the navigation orders the rows inside each Project section. The
+/// sections themselves are always the Projects in creation order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThreadListOrder {
+    /// Creation order: a row never moves because its Thread worked. The
+    /// two retired readings (one activity stream, Project sections) load
+    /// as this, the order that replaced them.
     #[default]
+    #[serde(alias = "recent", alias = "by-project")]
+    Created,
+    /// Most recently used first (the palette's `sort: recent`).
+    #[serde(rename = "last-used")]
     Recent,
-    ByProject,
 }
 
 impl Default for Settings {
@@ -137,7 +143,7 @@ impl Default for Settings {
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
             nav_collapsed: false,
-            thread_list_order: ThreadListOrder::Recent,
+            thread_list_order: ThreadListOrder::Created,
             confirm_delete: true,
             auto_title: true,
             placeholder_suggestions: true,
@@ -258,7 +264,7 @@ mod tests {
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
-            thread_list_order: ThreadListOrder::ByProject,
+            thread_list_order: ThreadListOrder::Recent,
             confirm_delete: false,
             auto_title: false,
             placeholder_suggestions: false,
@@ -284,6 +290,28 @@ mod tests {
         assert!(!dir.join("settings.json.tmp").exists());
     }
 
+    /// The retired orders (one activity stream, Project sections) load as
+    /// creation order, which replaced both; `sort: recent` round-trips.
+    #[test]
+    fn retired_thread_orders_load_as_creation_order() {
+        for (stored, order) in [
+            ("\"recent\"", ThreadListOrder::Created),
+            ("\"by-project\"", ThreadListOrder::Created),
+            ("\"created\"", ThreadListOrder::Created),
+            ("\"last-used\"", ThreadListOrder::Recent),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<ThreadListOrder>(stored).unwrap(),
+                order,
+                "{stored}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&ThreadListOrder::Recent).unwrap(),
+            "\"last-used\""
+        );
+    }
+
     #[test]
     fn a_missing_file_or_directory_is_the_defaults() {
         let dir = scratch("missing");
@@ -306,7 +334,7 @@ mod tests {
         assert_eq!(settings.codex_approval_policy, "on-request");
         assert_eq!(settings.codex_sandbox, None);
         assert!(!settings.nav_collapsed);
-        assert_eq!(settings.thread_list_order, ThreadListOrder::Recent);
+        assert_eq!(settings.thread_list_order, ThreadListOrder::Created);
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);

@@ -199,10 +199,21 @@ fn a_folded_nav_keeps_its_doors_in_the_titlebar_cell(cx: &mut TestAppContext) {
         toggle.right() <= bell.left() + px(0.5),
         "toggle, bell: {toggle:?} {bell:?}"
     );
+    // The toggle is a 28×24 door centred in the band.
+    assert_eq!(toggle.size.width, px(crate::theme::ICON_BUTTON));
+    assert_eq!(toggle.size.height, px(crate::theme::ICON_BUTTON_H));
+    assert!(
+        (toggle.center().y - px(crate::theme::WIN_CHROME_H / 2.)).abs() < px(0.5),
+        "{toggle:?}"
+    );
     let mut doors = vec![toggle, bell];
     if cfg!(target_os = "macos") {
         assert!(cx.debug_bounds("settings-gear").is_none());
         assert!(bell.right() <= cell.right());
+        // The prototype's collapsed 20ch cell: the toggle at 92.2–120.2,
+        // the bell from 120.2, 1ch clear of the cell's edge.
+        assert!((toggle.left() - px(92.2)).abs() < px(0.5), "{toggle:?}");
+        assert!((bell.left() - px(120.2)).abs() < px(0.5), "{bell:?}");
     } else {
         let settings = cx.debug_bounds("settings-gear").unwrap();
         assert!(

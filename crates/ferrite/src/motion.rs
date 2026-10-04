@@ -17,7 +17,7 @@
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing, the content fading out, and up from `MOTION_NAV_CONTENT_FROM` on opening |
+//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms, and the titlebar cell over it cross-fades over 200ms (the nav's `MOTION_NAV_*` tokens) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
@@ -281,6 +281,7 @@ where
 
 /// `menu-in` for a floating surface placed absolutely at `top`: the same
 /// entrance, the shift riding its own inset.
+#[allow(dead_code)] // the nav's filter and order menus, its last callers, are gone
 pub fn menu_in_at<E>(
     id: impl Into<ElementId>,
     element: E,
@@ -672,20 +673,23 @@ struct FadeEntry {
     target: f32,
     started: Instant,
     seen: u64,
+    /// The blend's timing: `HOVER_FADE`, unless the surface names its own
+    /// ([`hover_listener_with`]).
+    spec: MotionSpec,
 }
 
 impl FadeEntry {
     fn value(&self, now: Instant) -> f32 {
         let elapsed = now.saturating_duration_since(self.started);
-        if elapsed >= HOVER_FADE.duration() {
+        if elapsed >= self.spec.duration() {
             return self.target;
         }
-        lerp(self.origin, self.target, HOVER_FADE.progress_at(elapsed))
+        lerp(self.origin, self.target, self.spec.progress_at(elapsed))
     }
 
     fn settled(&self, now: Instant) -> bool {
         self.origin == self.target
-            || now.saturating_duration_since(self.started) >= HOVER_FADE.duration()
+            || now.saturating_duration_since(self.started) >= self.spec.duration()
     }
 }
 
@@ -697,28 +701,50 @@ pub struct HoverFades {
 }
 
 impl HoverFades {
-    /// The pointer entered (`hovered`) or left the element behind `key`.
-    /// Reduced motion snaps to the endpoint.
+    /// `set_with` on the one 150ms blend.
+    #[cfg(test)]
     pub fn set_at(&mut self, key: &SharedString, hovered: bool, reduced: bool, now: Instant) {
+        self.set_with(key, hovered, reduced, now, HOVER_FADE);
+    }
+
+    /// The pointer entered (`hovered`) or left the element behind `key`,
+    /// blending on `spec` (`HOVER_FADE`, or a surface's own timing).
+    /// Reduced motion snaps to the endpoint.
+    pub fn set_with(
+        &mut self,
+        key: &SharedString,
+        hovered: bool,
+        reduced: bool,
+        now: Instant,
+        spec: MotionSpec,
+    ) {
         let target = if hovered { 1.0 } else { 0.0 };
         let Some(current) = self.entries.get(key).map(|entry| entry.value(now)) else {
             if hovered {
                 let origin = if reduced { target } else { 0.0 };
-                self.insert(key, origin, target, now);
+                self.insert(key, origin, target, now, spec);
             }
             // A leave for a key never entered: nothing to fade.
             return;
         };
         let origin = if reduced { target } else { current };
-        self.insert(key, origin, target, now);
+        self.insert(key, origin, target, now, spec);
     }
 
-    fn insert(&mut self, key: &SharedString, origin: f32, target: f32, now: Instant) {
+    fn insert(
+        &mut self,
+        key: &SharedString,
+        origin: f32,
+        target: f32,
+        now: Instant,
+        spec: MotionSpec,
+    ) {
         let entry = FadeEntry {
             origin,
             target,
             started: now,
             seen: self.frame,
+            spec,
         };
         self.entries.insert(key.clone(), entry);
     }
@@ -777,10 +803,23 @@ pub fn hover_t(key: &str) -> f32 {
 /// An `on_hover` listener driving the blend for `key`: pair it with a
 /// [`hover_blend`] read of the same key on the same element.
 pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    hover_listener_with(key, HOVER_FADE)
+}
+
+/// [`hover_listener`] on a surface's own timing: the nav's 80ms row wash,
+/// its titlebar doors' 100ms (the prototype's own transitions).
+pub fn hover_listener_with(
+    key: SharedString,
+    spec: MotionSpec,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
         let now = cx.background_executor().now();
-        HOVER_FADES.with(|fades| fades.borrow_mut().set_at(&key, *hovered, reduced, now));
+        HOVER_FADES.with(|fades| {
+            fades
+                .borrow_mut()
+                .set_with(&key, *hovered, reduced, now, spec)
+        });
         // Dispatch runs outside any view's draw, so `request_animation_frame`
         // cannot name a view here: refresh (what a gpui `.hover()` style does
         // on the same event), and the root's tail keeps frames coming.
