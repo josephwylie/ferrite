@@ -287,16 +287,17 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
             cx.debug_bounds("question-island").is_none(),
             "L2 must not paint an unusable compressed form"
         );
-        // The fixed head's slot says what the cell needs and jumps to it;
-        // the expand key opens the full form.
+        // The Pane's foot says what the cell needs and jumps to it (the
+        // head carries no word, theme rule 7); the expand key opens the
+        // full form.
         let slot = cx
-            .debug_bounds("head-slot-1")
-            .expect("a compact Question names itself in the head's slot");
+            .debug_bounds("pane-question-1")
+            .expect("a compact Question names itself at the Pane's foot");
         assert!(slot.left() >= px(pane.x) && slot.right() <= px(pane.x + pane.w));
         assert!(
-            slot.top() >= px(pane.y)
-                && slot.bottom() <= px(pane.y + crate::theme::PANE_HEAD_H + 1.),
-            "the slot remains in the fixed head even with an eight-line draft: {slot:?} / {pane:?}"
+            slot.top() >= px(pane.y + crate::theme::PANE_HEAD_H)
+                && slot.bottom() <= px(pane.y + pane.h),
+            "the door stays inside the cell even with an eight-line draft: {slot:?} / {pane:?}"
         );
         assert_eq!(composer_text(&view, cx), draft);
         if iteration != 1 {

@@ -360,6 +360,12 @@ pub fn duration_label(elapsed: std::time::Duration) -> String {
     }
 }
 
+/// The local wall clock as a turn's end stamps it (`7:41 pm`): the window's
+/// bottom bar reads it.
+pub fn clock_label() -> String {
+    chrono::Local::now().format("%-I:%M %P").to_string()
+}
+
 /// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
 /// never runs ahead of the clock — `0s` … `59s`, then `1m04s`. A frozen
 /// fact keeps its tenths (`duration_label`).

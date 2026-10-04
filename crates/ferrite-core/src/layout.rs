@@ -711,8 +711,9 @@ impl Node {
     }
 }
 
-/// The gap between two Panes on the board, both axes (px).
-pub const GRID_GAP: f32 = 8.0;
+/// The gap between two Panes on the board, both axes (px): the 1px seam
+/// the terminal-native board draws between flush Panes.
+pub const GRID_GAP: f32 = 1.0;
 
 /// The cell aspect (w / h) the default grid prefers once every candidate
 /// draws at the same `Level`: a little wider than tall, like a terminal.

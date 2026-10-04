@@ -422,7 +422,10 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
         .unwrap();
     tick(cx);
     let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
-    assert!(debug_bounds(cx, format!("head-slot-{key}")).is_some());
+    // The head names the Thread and nothing else (theme rule 7): the
+    // approval reads at the Pane's foot, never as a head word.
+    assert!(debug_bounds(cx, format!("pane-head-{key}")).is_some());
+    assert!(debug_bounds(cx, format!("head-slot-{key}")).is_none());
     view.update(cx, |view, cx| {
         view.focus_pane(0);
         cx.notify();
