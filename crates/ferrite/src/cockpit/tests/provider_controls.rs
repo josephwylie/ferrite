@@ -85,15 +85,28 @@ fn contract_session_controls_use_shared_native_handles(cx: &mut TestAppContext) 
         })
         .unwrap();
     tick(cx);
-    let controls = cx
-        .debug_bounds("session-controls-1")
-        .expect("capable Sessions expose a shared controls menu");
-    cx.simulate_click(controls.center(), gpui::Modifiers::none());
+    // The session controls are the palette's (FL-4): `refresh MCP` runs the
+    // native refresh, `background tasks` opens the card.
+    assert!(
+        cx.debug_bounds("session-controls-1").is_none(),
+        "the status line has no `•••`"
+    );
+    cx.simulate_keystrokes("cmd-k");
+    cx.run_until_parked();
+    cx.simulate_input("refresh");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(fake
         .controls
         .borrow()
         .contains(&ferrite_core::SessionControl::RefreshMcp));
+    cx.simulate_keystrokes("cmd-k");
+    cx.run_until_parked();
+    cx.simulate_input("background");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    tick(cx);
     let reconnect = cx.debug_bounds("mcp-reconnect-0").unwrap();
     cx.simulate_click(reconnect.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -146,9 +159,13 @@ fn contract_permission_and_mcp_auth_controls_are_native(cx: &mut TestAppContext)
         })
         .unwrap();
     tick(cx);
-    let controls = cx.debug_bounds("session-controls-1").unwrap();
-    cx.simulate_click(controls.center(), gpui::Modifiers::none());
+    // The card opens from the palette's `background tasks` (FL-4).
+    cx.simulate_keystrokes("cmd-k");
     cx.run_until_parked();
+    cx.simulate_input("background");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    tick(cx);
     let mode = cx
         .debug_bounds("permission-mode-0")
         .expect("provider-supplied permission mode exposed");

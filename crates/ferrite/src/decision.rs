@@ -22,6 +22,23 @@ use crate::theme;
 /// pointer or Tab.
 pub const DIGIT_KEYS: usize = 4;
 
+// Phase 0 (shared interface; the decisions package owns these): a Decision
+// row's keys under an empty Composer line, and the three approval answers.
+gpui::actions!(
+    decision,
+    [SelectNext, SelectPrevious, Confirm, Dismiss, Amend]
+);
+
+/// The three answers every approval offers (R9): allow once, allow the
+/// pattern for this Thread, or deny and steer.
+#[allow(dead_code)] // AllowForThread is the Decision row's to send
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApprovalChoice {
+    Allow,
+    AllowForThread,
+    DenyAndSteer,
+}
+
 /// What one approval row does when it is picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verb {

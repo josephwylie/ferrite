@@ -14,6 +14,7 @@ mod decision;
 mod demo;
 mod facts;
 mod file_links;
+mod float;
 mod fuzzy;
 mod icons;
 mod keymap;
@@ -22,6 +23,7 @@ mod menu;
 mod motion;
 mod nav;
 mod notifications;
+mod palette;
 mod pane;
 mod pointer;
 mod prefs;
@@ -32,6 +34,8 @@ mod scrollbar;
 mod select;
 mod session;
 mod shell;
+mod shortcuts;
+mod status;
 mod theme;
 mod titlebar;
 mod transcript;
@@ -468,10 +472,14 @@ fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Thread", NewThread),
                 MenuItem::action("New Thread in a Worktree", NewWorktreeThread),
-                MenuItem::action("New Group with New Thread", NewGroup),
+                // ⌘⇧G: the focused Thread and a new one, founding a Group.
+                MenuItem::action("New Group", NewGroup),
+                // ⌘G: the palette scoped to Groups.
+                MenuItem::action("Open Group\u{2026}", palette::OpenGroups),
                 MenuItem::separator(),
-                MenuItem::action("Close Pane", CloseThread),
+                MenuItem::action("Park Thread", CloseThread),
                 MenuItem::action("Reopen Parked Thread", ReopenThread),
+                MenuItem::action("Show Parked", palette::ShowParked),
             ],
         },
         Menu {
@@ -491,6 +499,9 @@ fn app_menus() -> Vec<Menu> {
             disabled: false,
             name: "View".into(),
             items: vec![
+                MenuItem::action("Commands\u{2026}", palette::Toggle),
+                MenuItem::action("Compare with Main", palette::CompareWithMain),
+                MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Notifications", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
@@ -498,6 +509,8 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Next Pane", NextPane),
                 MenuItem::action("Previous Pane", PreviousPane),
                 MenuItem::action("Next Decision", NextDecision),
+                MenuItem::separator(),
+                MenuItem::action("Keyboard Shortcuts", shortcuts::Toggle),
             ],
         },
         Menu {

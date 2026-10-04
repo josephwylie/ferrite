@@ -37,13 +37,13 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
     assert!(cx.debug_bounds("prompt-placeholder").is_none());
 }
 
-/// Terminal-native (WP-D): the verb hint rides the focused Pane's status
-/// line, so the pointer's send and stop act on that Pane only; an unfocused
+/// FL-10 / FL-11: no verb is drawn — ⏎ sends and esc interrupts, as in a
+/// terminal — and the keys act on the focused Pane only; an unfocused board
 /// cell draws no status line and keeps its draft. Focus never moves the
 /// editor's text origin.
 #[gpui::test]
-fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("composer-pointer-panes", 2);
+fn composer_keys_target_the_focused_pane_only(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("composer-keys-panes", 2);
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     bind_production_keys(cx);
@@ -66,15 +66,17 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         });
         cx.notify();
     });
-    cx.run_until_parked();
+    tick(cx);
     let origin = cx.debug_bounds("prompt-editor").unwrap().left();
     assert!(
         cx.debug_bounds(format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])).leak())
             .is_none(),
-        "an unfocused cell has no status line"
+        "no verb hint is drawn"
     );
-    view.update(cx, |view, cx| {
+    view.update_in(cx, |view, window, cx| {
         view.focus_pane(1);
+        let focus = view.panes[1].composer.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
         cx.notify();
     });
     tick(cx);
@@ -83,11 +85,7 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         origin,
         "gaining focus must keep the editor's text origin fixed"
     );
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])),
-    );
-    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(fake.sent.borrow().as_slice(), ["send from pane two"]);
     view.read_with(cx, |view, cx| {
@@ -95,62 +93,28 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
         assert!(view.panes[1].composer.read(cx).is_empty());
     });
-
-    let stop = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(threads[1])),
-    );
-    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused_thread(), Some(threads[1]));
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
     });
-
-    // At instrument size the Composer keeps its shape: the verb hint (Stop
-    // now, over an empty line while the turn runs) rides the status line
-    // under the input row.
-    cx.simulate_resize(gpui::size(px(860.), px(500.)));
-    tick(cx);
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let control = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(threads[1])),
-    );
-    assert!(editor.bottom() <= control.top());
 }
 
-/// While a turn runs the one control is Stop, whatever is in the line: the
-/// pointer can always interrupt. Enter still queues the line behind the
-/// turn, and the pointer Stop keeps both the line and the queue.
+/// While a turn runs, ⏎ queues the line behind it, and esc interrupts and
+/// keeps both the new line and the queue.
 #[gpui::test]
-fn composer_pointer_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("composer-pointer-queue", 1);
+fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("composer-escape-queue", 1);
     let thread = core.threads()[0];
     core.send(thread, "first".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
     tick(cx);
-    let send: &'static str =
-        Box::leak(format!("composer-send-{:?}", PaneIdentity::Thread(thread)).into_boxed_str());
-    let stop = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
-    );
     cx.simulate_input("follow up");
     cx.run_until_parked();
-    assert!(
-        cx.debug_bounds(send).is_none(),
-        "text in the line does not turn a running turn's Stop into Send"
-    );
-    let held = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
-    );
-    assert_eq!(held.center(), stop.center(), "in the same place");
-
     // Enter queues the line, as it always has.
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -163,26 +127,22 @@ fn composer_pointer_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppC
         assert!(view.panes[0].composer.read(cx).is_empty());
     });
 
-    // With a new line typed, the pointer Stop interrupts and keeps it.
+    // With a new line typed, esc interrupts and keeps it.
     cx.simulate_input("and then this");
     cx.run_until_parked();
-    let stop = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
-    );
-    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1);
     assert_eq!(
         fake.sent.borrow().as_slice(),
         ["first"],
-        "Stop sends nothing"
+        "esc sends nothing"
     );
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit.thread(thread).unwrap().queued_all(),
             ["follow up"],
-            "the pointer Stop preserves existing interrupt/queue semantics"
+            "the interrupt keeps the queue"
         );
         assert_eq!(
             view.panes[0].composer.read(cx).text(),
@@ -254,28 +214,6 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             menu.rows.iter().find(|row| row.active).unwrap().name,
             "High"
         );
-    });
-}
-
-#[gpui::test]
-fn composer_pointer_action_does_not_confirm_another_surface(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("composer-modal-guard", 2);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    view.update_in(cx, |view, window, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.set("must stay".into(), cx));
-        let identity = view.panes[0].identity;
-        view.settings_open = true;
-        view.composer_action(identity, false, window, cx);
-        assert!(view.settings_open);
-        view.settings_open = false;
-        // The Solo view shows only the focused Thread, so pane zero is hidden.
-        view.focus_pane(1);
-        view.composer_action(identity, false, window, cx);
-        assert_eq!(view.panes[0].composer.read(cx).text(), "must stay");
-        assert!(fake.sent.borrow().is_empty());
     });
 }
 
@@ -443,11 +381,8 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         tick(cx);
         let latest = bounds(cx, format!("queue-row-{namespace}-0"));
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-        // The turn runs, so the one control is Stop, text in the line or not.
-        let send = bounds(
-            cx,
-            format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
-        );
+        // The focused cell's status line stands under its band (FL-11).
+        let send = cx.debug_bounds("composer-meta").expect("the status line");
         assert!(
             queue.size.height
                 <= px(

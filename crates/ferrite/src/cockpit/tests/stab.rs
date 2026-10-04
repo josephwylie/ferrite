@@ -1309,10 +1309,10 @@ fn a_group_chevron_trails_its_summary_and_its_target_leads_in_the_gutter(cx: &mu
     assert_eq!(chevron.size.width, px(crate::theme::ICON_CHEVRON));
 }
 
-/// Terminal-native (WP-D): the Composer is one input row on its band — no
-/// box, no round send control — with the status line under it, whose right
-/// end carries the verb hint (`⏎ send` once the line can go, `esc
-/// interrupt` while the turn runs). Enter still sends and Esc interrupts.
+/// Terminal-native (WP-D, FL-10): the Composer is one input row on its band
+/// — no box, no send control, no verb hint — with the status line under the
+/// band's rule, whose right end carries `⇧⇥ mode · ? shortcuts` in Solo.
+/// Enter sends and Esc interrupts.
 #[gpui::test]
 fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
@@ -1323,40 +1323,39 @@ fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     tick(cx);
     let block = cx.debug_bounds("composer-block").unwrap();
     let meta = cx.debug_bounds("composer-meta").expect("the meta row");
-    let send: &'static str =
-        Box::leak(format!("composer-send-{:?}", PaneIdentity::Thread(thread)).into_boxed_str());
-    assert!(
-        cx.debug_bounds(send).is_none(),
-        "an empty line has nothing to send"
-    );
     assert_eq!(
         block.size.height,
         px(2. * crate::theme::COMPOSER_PAD_Y + crate::theme::COMPOSER_ROW_H),
         "one row on the band"
     );
-    assert!(
-        meta.top() >= block.bottom(),
-        "the meta row is under the band"
+    assert_eq!(
+        meta.top(),
+        block.bottom() + px(crate::theme::COMPOSER_RULE + crate::theme::COMPOSER_STATUS_GAP),
+        "band, rule, 2px, the status line"
     );
     assert!(
         cx.debug_bounds("prompt-placeholder").is_some(),
         "the resting line carries its one hint in the placeholder"
     );
+    let keys = cx
+        .debug_bounds("status-keys")
+        .expect("Solo's keys at the right");
+    assert!(
+        keys.top() >= meta.top() - px(0.5) && keys.right() <= block.right() + px(0.5),
+        "the keys ride the status line's right: {keys:?} / {meta:?}"
+    );
+    for verb in ["send", "stop"] {
+        let hint: &'static str = Box::leak(
+            format!("composer-{verb}-{:?}", PaneIdentity::Thread(thread)).into_boxed_str(),
+        );
+        assert!(cx.debug_bounds(hint).is_none(), "no `{verb}` hint is drawn");
+    }
 
     cx.simulate_input("go");
     tick(cx);
-    let control = cx.debug_bounds(send).expect("the send hint");
-    assert!(
-        control.top() >= meta.top() - px(0.5) && control.right() <= block.right() + px(0.5),
-        "the hint rides the status line's right: {control:?} / {meta:?}"
-    );
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(fake.sent.borrow().as_slice(), ["go"], "Enter sends");
-    let stop: &'static str =
-        Box::leak(format!("composer-stop-{:?}", PaneIdentity::Thread(thread)).into_boxed_str());
-    let stop = cx.debug_bounds(stop).expect("Stop while the turn runs");
-    assert!(stop.top() >= meta.top() - px(0.5), "in the same line");
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1, "Esc still interrupts");

@@ -9,7 +9,12 @@
 //! The caret is a terminal's block (theme WP-D): one cell wide, one row
 //! high, in the accent, blinking softly while this line holds the keyboard
 //! (the character under it turns `ON_ACCENT`), a still hollow box when it
-//! does not.
+//! does not. A line the cockpit keeps lit (`set_caret_lit`: Solo's, and the
+//! focused board Pane's) draws its block whoever holds the keyboard.
+//!
+//! An empty prompt line adds `ComposerEmpty` to its key context: where the
+//! Decision keys, `?` and ⌘⌫'s park live (`keymap`). A one-line field
+//! (`Role::Field`) never does, and may name its float's own context.
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -93,6 +98,37 @@ pub(crate) fn caret_alpha(since: Duration) -> f32 {
 /// grows with its text, but the transcript above keeps most of the Pane.
 pub const MAX_ROWS: usize = 8;
 
+/// What a line is for. A Pane's prompt (`Prompt`, the default) adds
+/// `ComposerEmpty` to its key context while it holds nothing, so the keys
+/// an empty line answers (a Decision's ↑↓⏎, `?`, ⌘⌫) never fire under text.
+/// A one-line field inside a float or a sheet (`Field`) never does, and
+/// carries its float's own context (`Palette`) on the focused node, where
+/// its keys win their tie against the bare enter and escape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Role {
+    #[default]
+    Prompt,
+    Field(Option<&'static str>),
+}
+
+/// The focused node's key context for a line in this state.
+pub(crate) fn key_context(role: Role, empty: bool, history: bool, menu: bool) -> gpui::KeyContext {
+    let mut context = gpui::KeyContext::default();
+    context.add("Composer");
+    if history {
+        context.add("ComposerHistory");
+    }
+    if menu {
+        context.add("ComposerMenu");
+    }
+    match role {
+        Role::Prompt if empty => context.add("ComposerEmpty"),
+        Role::Field(Some(extra)) => context.add(extra),
+        Role::Prompt | Role::Field(None) => {}
+    }
+    context
+}
+
 /// The line moved — text or cursor. The cockpit listens to keep the `/` and
 /// `@` menus following what the operator is typing (#23).
 pub struct Edited;
@@ -141,6 +177,12 @@ pub struct Composer {
     /// Whether the line held the keyboard on the last drawn frame, so the
     /// frame that gains it restarts the blink.
     had_focus: bool,
+    /// The cockpit keeps this line's block lit whoever holds the keyboard
+    /// (Solo's line, the focused board Pane's): it blinks softly over the
+    /// transcript, an open float, an inactive window.
+    caret_lit: bool,
+    /// A Pane's prompt or a float's one-line field (`Role`).
+    role: Role,
     /// How the caret was last drawn, for the tests.
     #[cfg(test)]
     last_caret: Option<Caret>,
@@ -167,8 +209,27 @@ impl Composer {
             dragging: false,
             blink_from: None,
             had_focus: false,
+            caret_lit: false,
+            role: Role::Prompt,
             #[cfg(test)]
             last_caret: None,
+        }
+    }
+
+    /// What this line is for (`Role`): a Pane's prompt, or a field.
+    pub(crate) fn set_role(&mut self, role: Role, cx: &mut Context<Self>) {
+        if self.role != role {
+            self.role = role;
+            cx.notify();
+        }
+    }
+
+    /// Keep the block caret lit while another node holds the keyboard
+    /// (theme WP-D): Solo's line and the focused board Pane's.
+    pub fn set_caret_lit(&mut self, lit: bool, cx: &mut Context<Self>) {
+        if self.caret_lit != lit {
+            self.caret_lit = lit;
+            cx.notify();
         }
     }
 
@@ -764,12 +825,12 @@ impl Render for Composer {
             // (#26's text role, #27) — an arrow over the one line the
             // operator types into would say the opposite of the truth.
             .hover_text()
-            .key_context(match (self.history_available, self.menu_open) {
-                (true, true) => "Composer ComposerHistory ComposerMenu",
-                (true, false) => "Composer ComposerHistory",
-                (false, true) => "Composer ComposerMenu",
-                (false, false) => "Composer",
-            })
+            .key_context(key_context(
+                self.role,
+                self.is_empty(),
+                self.history_available,
+                self.menu_open,
+            ))
             .track_focus(&self.focus_handle(cx))
             .tab_stop(true)
             .on_action(cx.listener(Self::backspace))
@@ -1182,10 +1243,13 @@ impl Element for LineElement {
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
         let now = cx.background_executor().now();
-        let blink_from = self.composer.update(cx, |composer, _| {
+        let (blink_from, lit) = self.composer.update(cx, |composer, _| {
             composer.sync_focus(focused, now);
-            composer.blink_from
+            (composer.blink_from, composer.caret_lit)
         });
+        // A lit line (Solo's, the focused board Pane's) draws its block
+        // whoever holds the keyboard; only its typing needs the focus.
+        let focused = focused || lit;
         let selected = self.composer.read(cx).line.selection();
         // The soft blink rides the shared pulse clock (theme rule 8): leasing
         // it keeps the frames coming while this line holds the keyboard; the

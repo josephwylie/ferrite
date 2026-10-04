@@ -202,12 +202,12 @@ pub fn text_ui() -> Div {
 pub fn text_meta() -> Div {
     div()
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(theme::TEXT_MUTED))
 }
 
-/// A group's title inside a surface: UI `FS_SM` `W_LABEL` `TEXT_MUTED`,
+/// A group's title inside a surface: the grid's type, `W_LABEL` `TEXT_MUTED`,
 /// written as-is (terminal case, no rule), 8px above what it heads.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
     text_meta()
@@ -285,11 +285,11 @@ pub fn float_shadow() -> Vec<BoxShadow> {
     )]
 }
 
-/// A floating surface (menu, picker, palette, popover, card): the float
-/// ground (`paint::FLOAT`, near-opaque glass on macOS), a 1px `paint::LINE2`
-/// edge, square, the float shadow, `FLOAT_PAD` inside, the grid's type. It
-/// occludes what it covers and owns its cursor. The caller states its
-/// width and position.
+/// A floating surface (menu, picker, palette, popover, card, toast): the
+/// float's opaque ground (`FLOAT_GROUND`; floats cannot frost, theme WP-E
+/// FL-15), a 1px `FLOAT_EDGE`, square, the float shadow, `FLOAT_PAD`
+/// inside, the grid's type. It occludes what it covers and owns its cursor.
+/// The caller states its width and position.
 pub fn floating_surface() -> Div {
     text_ui()
         .cursor_default()
@@ -298,9 +298,9 @@ pub fn floating_surface() -> Div {
         .flex_col()
         .p(px(theme::FLOAT_PAD))
         .rounded(px(theme::R_BLOCK))
-        .bg(theme::paint::FLOAT)
+        .bg(theme::FLOAT_GROUND)
         .border_1()
-        .border_color(theme::paint::LINE2)
+        .border_color(theme::FLOAT_EDGE)
         .shadow(float_shadow())
 }
 
@@ -589,7 +589,7 @@ pub fn embossed_mark(size: f32, body: u32) -> Div {
 }
 
 /// The one keycap: `KBD_H`, at least square, flat and square on
-/// `paint::BAND2`, the grid's type in `TEXT_2`, centred.
+/// `paint::BAND2`, the grid's type in `TEXT`, centred.
 pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
 }
@@ -606,9 +606,9 @@ fn kbd_face() -> Div {
         .rounded(px(theme::R_CHIP))
         .bg(theme::paint::BAND2)
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(theme::TEXT_2))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(theme::TEXT))
 }
 
 /// A modifier's glyph as a key combination spells it: `cmd` ⌘, `shift` ⇧,
@@ -636,29 +636,81 @@ pub fn key_glyphs(keys: &str) -> String {
         .join(" ")
 }
 
+/// One stroke of a key table's spelling, split into its parts: the
+/// modifiers, then the key — `cmd-shift-P` → `cmd`, `shift`, `P`; `cmd--`
+/// → `cmd`, `-` (the minus key is itself a dash).
+pub fn chord_parts(stroke: &str) -> Vec<&str> {
+    let (modifiers, key) = match stroke.strip_suffix("--") {
+        Some(head) => (Some(head), "-"),
+        None if stroke == "-" => (None, "-"),
+        None => match stroke.rsplit_once('-') {
+            Some((head, key)) => (Some(head), key),
+            None => (None, stroke),
+        },
+    };
+    let mut parts: Vec<&str> = modifiers
+        .map(|head| head.split('-').filter(|part| !part.is_empty()).collect())
+        .unwrap_or_default();
+    parts.push(key);
+    parts
+}
+
 /// A key combination as it is drawn, from a key table's spelling, in the
-/// code face (keys are machine text, rule 6). Every modifier is a glyph in
-/// a `KEY_GLYPH` box: `⌘` (`command.svg`), `⌥` (`option.svg`) and `⌃`
-/// (`control.svg`) are in neither face, and `⇧` is Geist Mono's own
-/// (`CHROME_GLYPHS`); every other part stays its own word. Parts joined by
-/// `-` sit tight, as a menu shortcut or a tooltip reads (`cmd-F` → `⌘F`);
-/// parts joined by spaces keep one code space apart. The one place a
-/// modifier glyph is drawn.
+/// code face (keys are machine text, rule 6). `⌘` (`command.svg`, the
+/// fallback face's glyph), `⌥` (`option.svg`) and `⌃` (`control.svg`) are
+/// in neither face and are drawn: `⌘` at `KEY_GLYPH` (15 × 14 device px),
+/// riding the cap height, `KEY_GLYPH_GAP` before the next letter. `⇧` and
+/// every key word (`⌫` `⏎` `⇥`, a letter) are Geist Mono's own text. Parts
+/// joined by `-` sit tight, as a menu shortcut or a tooltip reads (`cmd-F`
+/// → `⌘F`); strokes joined by spaces keep one code space apart. The one
+/// place a modifier glyph is drawn.
 pub fn key_combo(keys: &str, ink: u32) -> Div {
     let spaced = keys.contains(' ');
     let gap = if spaced {
-        theme::FS_SM * theme::CODE_ADVANCE
+        theme::FS_UI * theme::CODE_ADVANCE
     } else {
         0.
     };
-    let glyph_box = || {
+    let glyph_box = |selector: &'static str| {
         div()
+            .debug_selector(move || selector.into())
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
             .w(px(theme::KEY_GLYPH))
+            .h(px(theme::KEY_GLYPH_H))
+            // Centred on the line, then lifted onto the cap height: the
+            // glyph's top a hair under the cap, its foot clear of the
+            // baseline, as the fallback face sets it.
+            .mb(px(theme::KEY_GLYPH_LIFT * 2.0))
+            .mr(px(theme::KEY_GLYPH_GAP))
     };
+    let strokes = keys.split(' ').map(|stroke| {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .children(chord_parts(stroke).into_iter().map(|part| {
+                let svg = match part {
+                    "cmd" => Some((icons::COMMAND, "command-key")),
+                    "alt" => Some((icons::OPTION, "option-key")),
+                    "ctrl" => Some((icons::CONTROL, "control-key")),
+                    _ => None,
+                };
+                match (svg, part) {
+                    (Some((path, selector)), _) => glyph_box(selector)
+                        .child(icons::icon(path, theme::KEY_GLYPH, ink).h(px(theme::KEY_GLYPH_H)))
+                        .into_any_element(),
+                    (None, "shift") => div()
+                        .debug_selector(|| "shift-key".into())
+                        .flex_shrink_0()
+                        .child("\u{21e7}")
+                        .into_any_element(),
+                    (None, key) => SharedString::from(key.to_string()).into_any_element(),
+                }
+            }))
+    });
     div()
         .flex()
         .flex_shrink_0()
@@ -666,25 +718,7 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
         .font_family(theme::FONT_CODE)
         .gap(px(gap))
         .text_color(rgb(ink))
-        .children(keys.split([' ', '-']).map(|part| {
-            let svg = match part {
-                "cmd" => Some((icons::COMMAND, "command-key")),
-                "alt" => Some((icons::OPTION, "option-key")),
-                "ctrl" => Some((icons::CONTROL, "control-key")),
-                _ => None,
-            };
-            match (svg, part) {
-                (Some((path, selector)), _) => glyph_box()
-                    .debug_selector(move || selector.into())
-                    .child(icons::icon(path, theme::KEY_GLYPH, ink))
-                    .into_any_element(),
-                (None, "shift") => glyph_box()
-                    .debug_selector(|| "shift-key".into())
-                    .child("\u{21e7}")
-                    .into_any_element(),
-                (None, key) => SharedString::from(key.to_string()).into_any_element(),
-            }
-        }))
+        .children(strokes)
 }
 
 /// The prompt mark `❯`, drawn (neither face has the glyph): `prompt.svg` in a
@@ -718,7 +752,7 @@ pub fn gutter(mark: impl IntoElement, first_line_h: f32) -> Div {
 }
 
 /// A floating surface's empty list: one line of guidance, centred, the
-/// title in `TEXT_2` and an optional hint in `TEXT_MUTED` beneath it. It is
+/// title in `TEXT` and an optional hint in `TEXT_MUTED` beneath it. It is
 /// never a Pane body: an empty Thread or draft shows nothing, and its
 /// Composer's placeholder says what to do (rule 2.11.4).
 pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -> Div {
@@ -729,32 +763,66 @@ pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -
         .justify_center()
         .gap(px(theme::SPACE_1))
         .size_full()
-        .child(text_ui().text_color(rgb(theme::TEXT_2)).child(title.into()))
+        .child(text_ui().text_color(rgb(theme::TEXT)).child(title.into()))
         .children(hint.map(|hint| text_meta().child(hint)))
 }
 
 // --------------------------------------------------------------- controls
 
 /// The chord an action is bound to with no key context, as a menu shortcut
-/// spells it (`cmd-D`, the last key upper-cased; `esc`, `↵`): `None` when
-/// nothing binds it, so a tooltip never names a key that would not act.
+/// spells it (`cmd-D`, the last key upper-cased; `esc`, `⏎`, `⌫`): `None`
+/// when nothing binds it, so a tooltip never names a key that would not
+/// act.
 pub fn bound_chord(action: &str) -> Option<String> {
+    bound_chord_in(action, None)
+}
+
+/// The chord an action is bound to in exactly `context` (`None`: no
+/// context), spelled as `bound_chord` spells it — for a key that only acts
+/// somewhere (⌘⌫ parks from an empty line: `ComposerEmpty`).
+pub fn bound_chord_in(action: &str, context: Option<&str>) -> Option<String> {
     let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
         .into_iter()
-        .find(|(_, bound, context)| *bound == action && context.is_none())?;
-    let mut parts: Vec<String> = keys.split('-').map(str::to_string).collect();
-    if let Some(key) = parts.last_mut() {
-        *key = key_word(key);
-    }
-    Some(parts.join("-"))
+        .find(|(_, bound, bound_context)| *bound == action && *bound_context == context)?;
+    Some(spell_chord(&keys))
+}
+
+/// A key table's spelling as a combination draws it: the modifiers stay
+/// words (`key_combo` draws them), the key becomes its keycap word
+/// (`key_word`): `cmd-backspace` → `cmd-⌫`, `shift-tab` → `shift-⇥`.
+pub fn spell_chord(keys: &str) -> String {
+    keys.split(' ')
+        .map(|stroke| {
+            let mut parts: Vec<String> = chord_parts(stroke)
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            if let Some(key) = parts.last_mut() {
+                *key = key_word(key);
+            }
+            parts.join("-")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A key table's key as a combination spells it: a letter upper-cased,
-/// `escape` as `esc` and `enter` as `↵`, the words a keycap prints.
-fn key_word(key: &str) -> String {
+/// `escape` as `esc`, `enter` `⏎`, `backspace` `⌫`, `tab` `⇥`, `shift`
+/// `⇧`, the minus key `−` and the arrows as arrows — the words a keycap
+/// prints.
+pub fn key_word(key: &str) -> String {
     match key {
         "escape" => "esc".into(),
-        "enter" => "\u{21b5}".into(),
+        "enter" => "\u{23ce}".into(),
+        "backspace" => "\u{232b}".into(),
+        "tab" => "\u{21e5}".into(),
+        "shift" => "\u{21e7}".into(),
+        "-" => "\u{2212}".into(),
+        "up" => "\u{2191}".into(),
+        "down" => "\u{2193}".into(),
+        "left" => "\u{2190}".into(),
+        "right" => "\u{2192}".into(),
+        "space" => "space".into(),
         key => key.to_uppercase(),
     }
 }
@@ -793,7 +861,7 @@ pub fn icon_button(
 /// button shares the name: `group_hover` resolves to the nearest one.
 const ICON_BUTTON_GROUP: &str = "icon-button";
 
-/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT_2`;
+/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT`;
 /// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
 /// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
@@ -802,7 +870,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT_2).into(),
+        rgb(theme::TEXT).into(),
         cx,
     )
     .h(px(theme::CONTROL_H))
@@ -810,7 +878,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
     .child(
         text_ui()
             .font_weight(theme::W_BODY)
-            .text_color(rgb(theme::TEXT_2))
+            .text_color(rgb(theme::TEXT))
             .child(label.into()),
     )
 }
@@ -850,15 +918,14 @@ const QUIET_BUTTON_GROUP: &str = "quiet-button";
 #[derive(Clone, Debug, Default)]
 pub struct MenuItem {
     pub label: SharedString,
-    /// Fuzzy-match runs in `label`, drawn in the accent (never a weight).
+    /// Fuzzy-match runs in `label`, drawn in the accent at `W_STRONG`.
     pub matched: Vec<Range<usize>>,
     /// An aligned name column's width, when the rows share one.
     pub label_w: Option<f32>,
     /// A 12px leading mark and its ink.
     pub leading: Option<(&'static str, u32)>,
-    /// A trailing detail: Ferrite's description of the row in Geist
-    /// `FS_UI` (`TEXT_MUTED`, `TEXT_2` on the cursor row), or — when `mono`
-    /// — machine text such as an `@` path, in Geist Mono `FS_SM`
+    /// A trailing detail: Ferrite's description of the row (`TEXT_MUTED` in
+    /// every state), or — when `mono` — machine text such as an `@` path,
     /// `TEXT_MUTED`, cut at its head so the useful tail survives.
     pub detail: Option<SharedString>,
     /// `detail` is machine text (rule 2.1.1): drawn in the code face.
@@ -945,7 +1012,7 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if armed {
         return RowInks {
             label: theme::BLOCKED,
-            detail: theme::TEXT_2,
+            detail: theme::TEXT_MUTED,
             shortcut: theme::TEXT_MUTED,
             ground: Some(theme::paint::SELECTION.rgba()),
         };
@@ -957,18 +1024,16 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     };
     RowInks {
         label,
-        detail: if cursor {
-            theme::TEXT_2
-        } else {
-            theme::TEXT_MUTED
-        },
+        detail: theme::TEXT_MUTED,
         shortcut: theme::TEXT_MUTED,
         ground: cursor.then_some(theme::paint::SELECTION.rgba()),
     }
 }
 
-/// Fuzzy-match runs as highlights: the accent colour, weight unchanged.
-/// A disabled row paints none.
+/// Fuzzy-match runs as highlights (the prototype's `.m`): the accent at
+/// `W_STRONG`, in every float that filters — the palette, the `/` and `@`
+/// menus. One face, so the heavier run never moves a column. A disabled
+/// row paints none.
 pub fn match_highlights(
     ranges: &[Range<usize>],
     disabled: bool,
@@ -983,6 +1048,7 @@ pub fn match_highlights(
                 range.clone(),
                 HighlightStyle {
                     color: Some(rgb(theme::ACCENT).into()),
+                    font_weight: Some(theme::W_STRONG),
                     ..Default::default()
                 },
             )
@@ -1051,7 +1117,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             let cell = div().flex_1().min_w_0().truncate();
             let cell = if item.mono {
                 cell.font_family(theme::FONT_CODE)
-                    .text_size(px(theme::FS_SM))
+                    .text_size(px(theme::FS_UI))
                     .text_color(rgb(theme::TEXT_MUTED))
                     .text_ellipsis_start()
             } else {
@@ -1066,7 +1132,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             row.child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(theme::FS_SM))
+                    .text_size(px(theme::FS_UI))
                     .text_color(rgb(inks.shortcut))
                     .child(key),
             )
@@ -1097,7 +1163,7 @@ pub fn menu_row(
     }
 }
 
-/// A menu section title: UI `FS_SM` `W_LABEL` `TEXT_MUTED`, an optional
+/// A menu section title: the grid's type, `W_LABEL` `TEXT_MUTED`, an optional
 /// leading mark and an optional note after it. Its mark and title share the
 /// rows' leading edge. A section that follows rows is set apart from them
 /// by `menu_separator` (space) or `.mt(MENU_GROUP_GAP)`, never a rule.
@@ -1121,7 +1187,7 @@ pub fn menu_section(
                 .flex()
                 .items_center()
                 .gap(px(theme::SPACE_2))
-                .h(px(theme::LH_META))
+                .h(px(theme::LH_UI))
                 .min_w_0()
                 .when_some(leading, |line, (path, ink)| {
                     line.child(icons::icon(path, theme::MENU_SECTION_ICON, ink))
@@ -1471,7 +1537,7 @@ fn cursor_steps(choices: &[Choice]) -> usize {
 /// A menu grammar row inside a kit `PopupMenuItem`: the kit item already
 /// insets its content by the row's own inline padding, so the row takes it
 /// back and spans the item edge to edge. The kit draws the hover and cursor
-/// face (`tokens.accent` = `FILL`) on the item itself.
+/// face (`tokens.accent` = `SELECTION`) on the item itself.
 pub fn kit_row(row: Div) -> Div {
     row.flex_1().mx(px(-theme::MENU_ROW_PAD_X)).py(px(0.))
 }
@@ -1552,8 +1618,10 @@ mod tests {
     fn a_floating_surface_wears_the_float_ground_the_strong_line_and_the_shadow() {
         let mut surface = floating_surface();
         let style = surface.style();
-        assert_eq!(style.background, Some(Fill::from(theme::paint::FLOAT)));
-        assert_eq!(style.border_color, Some(theme::paint::LINE2.into()));
+        assert_eq!(style.background, Some(Fill::from(theme::FLOAT_GROUND)));
+        assert_eq!(style.border_color, Some(theme::FLOAT_EDGE.into()));
+        // Opaque until floats can frost (FL-15): never a glass overlay.
+        assert!(theme::FLOAT_GROUND.is_opaque() && theme::FLOAT_SEL.is_opaque());
         assert_eq!(style.corner_radii.top_left, Some(px(0.).into()));
         assert_eq!(style.box_shadow, Some(float_shadow()));
         assert_eq!(style.text.font_family, Some(theme::FONT_UI.into()));
@@ -1572,8 +1640,8 @@ mod tests {
             (
                 text_meta(),
                 theme::FONT_UI,
-                theme::FS_SM,
-                theme::LH_META,
+                theme::FS_UI,
+                theme::LH_UI,
                 theme::TEXT_MUTED,
             ),
         ] {
@@ -1599,7 +1667,7 @@ mod tests {
         assert_eq!(plain.style().box_shadow, None);
         assert_eq!(primary_face(false), theme::ACCENT_STRONG);
         assert_eq!(primary_ink(false), theme::ON_ACCENT);
-        assert_eq!(primary_face(true), theme::FILL);
+        assert_eq!(primary_face(true), theme::SELECTION);
         assert_eq!(primary_ink(true), theme::TEXT_MUTED);
     }
 
@@ -1657,12 +1725,9 @@ mod tests {
         }
         assert_eq!(MenuItem::new("x").shortcut("").shortcut, None);
         assert!(match_highlights(std::slice::from_ref(&(0..2)), true).is_empty());
-        assert_eq!(
-            match_highlights(std::slice::from_ref(&(0..2)), false)[0]
-                .1
-                .font_weight,
-            None
-        );
+        let lit = match_highlights(std::slice::from_ref(&(0..2)), false);
+        assert_eq!(lit[0].1.font_weight, Some(theme::W_STRONG));
+        assert_eq!(lit[0].1.color, Some(rgb(theme::ACCENT).into()));
     }
 
     #[test]

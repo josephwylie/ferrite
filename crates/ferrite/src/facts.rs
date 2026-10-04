@@ -509,6 +509,18 @@ pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
     SharedString::from(text)
 }
 
+/// A notification's age (the notifications list's right column): the one
+/// unit `since_label` reads, with `now` for its first minute — a row
+/// there always says how old it is.
+pub fn age_label(at: SystemTime, now: SystemTime) -> SharedString {
+    let label = since_label(at, now);
+    if label.is_empty() {
+        SharedString::from("now")
+    } else {
+        label
+    }
+}
+
 /// A Thread with no title and no prompt yet.
 pub const NEW_THREAD: &str = "New thread";
 
@@ -672,6 +684,18 @@ mod tests {
             ferrite_core::workspace::checkout_branch(&checkout).map(SharedString::from),
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A notification's age says `now` in its first minute (a future
+    /// stamp too), and `since_label`'s one unit after.
+    #[test]
+    fn a_notifications_age_starts_at_now() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        assert_eq!(age_label(now - Duration::from_secs(5), now), "now");
+        assert_eq!(age_label(now + Duration::from_secs(5), now), "now");
+        assert_eq!(age_label(now - Duration::from_secs(120), now), "2m");
+        assert_eq!(age_label(now - Duration::from_secs(43 * 60), now), "43m");
+        assert_eq!(age_label(now - Duration::from_secs(2 * 3600), now), "2h");
     }
 
     /// A clock that moved backwards must not print a negative age.
