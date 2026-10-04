@@ -1479,38 +1479,50 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // Owner: WP-C (the pane shell, head, L2/wall cells, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
-// **The Pane frame.** A Pane is a `PANE` sheet with a 1px edge that is always
-// in layout, so a state change recolours it and nothing reflows. The edge
-// says one thing, by precedence (`pane::PaneEdge`): blocked `BLOCKED` >
-// a Decision `ATTENTION` > focused `FOCUS_RING` > at rest `HAIRLINE`. On a
-// board the resting hairline blends to `HAIRLINE_STRONG` under the pointer
-// over the one 150ms hover blend; in Solo the frame never reacts to hover.
-// Focus is drawn only while more than one Pane is on the board: a lone Pane
-// is plainly the one with the keyboard and rests on its hairline. A
-// *focused* alert Pane beside others also draws a `FOCUS_RING` ring inset
-// by 2px, so focus is never hidden by a state. There is no other ring:
-// unread breathes on the head dot (`ACCENT`, on the shared pulse clock at
-// `MOTION_BREATH_MS`, held still under reduced motion).
+// **The board is a terminal multiplexer's** (theme rules 2, 3, 7). The window
+// is three rows: the titlebar band (`WIN_CHROME_H`), the board beside the
+// sidebar, the bottom bar (`STATUS_BAR_H`). Panes sit flush, square and
+// flat on the reading plane (`paint::PLANE`), split by `BOARD_SEAM` 1px
+// `paint::LINE` seams; there is no gutter and no card. The sidebar column
+// is separated from the board by one `CHROME_SEAM_W` column
+// (`paint::CHROME_SEAM`). A seam is also the grab band that resizes its two
+// sides; under the pointer and while held its line takes the accent.
 //
-// **Solo has no head** (C2): the titlebar carries the Thread —
-// `project / ● title ⎇ branch · state` — and the body starts at the card
-// edge. A strip of `PANE_HEAD_H` appears only while subagent tabs exist.
+// **The Pane frame.** Every Pane keeps a 1px edge inside its own box that is
+// always in layout and only changes colour, so a state change reflows
+// nothing. By precedence (`pane::PaneEdge`): blocked `BLOCKED_EDGE` > a
+// Decision `ATTENTION_EDGE` (the one answer target full `ATTENTION`) >
+// focused `FOCUS_RING` > at rest `TRANSPARENT` — the seams separate Panes, an
+// edge only ever says something. Focus is drawn only while more than one
+// Pane is on the board; a focused alert Pane also draws the `FOCUS_RING`
+// inset 2px inside its state edge. Nothing breathes: an unread Thread's
+// title is `TEXT_STRONG`.
 //
-// **The Group head is one 32px line** (`PANE_HEAD_H`, rule 2.4.6) at every
-// tier — L1, L2 and the wall — closed by a permanent `HAIRLINE` rule the
-// body clips at: the status dot in the glyph box at `PANE_PAD_X` (every
-// board's dots on one vertical), the title at C1 (`W_LABEL` `TEXT_STRONG`,
-// flexing, never under `HEAD_TITLE_MIN_W`), the branch only when it is not
-// the default, the provider mark only when it differs from the board's
-// majority, then a fixed right slot with one lexicon word
-// (`pane::HeadSlot`): `needs you · approval` > `failing 2` > `working 12s`
-// > `done` > `ctx 84%` > a mode word. Nothing else rides the head.
+// **Solo has no head**: the titlebar carries the Thread (`ferrite / title ·
+// state · branch`) and the body starts at the plane's top edge.
+//
+// **The Group head is one row** (`PANE_HEAD_H`, a row and 4px) at every tier,
+// closed by a `paint::LINE` rule: the state dot in a 2-cell column
+// (`HEAD_DOT_W`; a working Thread's dot is the braille spinner), the title
+// at `W_LABEL` (`TEXT`, `TEXT_STRONG` when focused or unread), the provider
+// mark at the right. **No state word and no number rides a head** (rule 7):
+// state reads at the Pane's foot. The focused Pane's head lays the
+// `paint::HEAD` band. A draft carries its × at the right instead.
 //
 // **One Level per board** (rule 2.3.5): the default Group tree is the
 // aspect-aware grid (`layout::Tree::grid`), and every Pane on a board draws
-// at the smallest Level its cells allow, with `LEVEL_HYSTERESIS`. Below L1
-// the cells keep the L1 axes — marks at `PANE_PAD_X`, text at C1 — and a
-// title is always `TEXT_STRONG`: the slot's word is the only signal.
+// at the smallest Level its cells allow, with `LEVEL_HYSTERESIS`. At the
+// wall (L3) a tile is the head, its state word at the strong weight in its
+// colour, the last lines of its transcript dim and, while it waits, quick
+// answers boxed in `paint::LINE2`; no meter, no sparkline.
+//
+// **The window chrome.** The titlebar's right cell lies on the plane: the
+// location dim with the title the one strong word, and the trailing door
+// (`⌘T new thread`) dim at the right; no rule closes the band. The bottom
+// bar (`STATUS_BAR_H`) lies on the chrome under a `paint::LINE` rule: the
+// session in `ACCENT` at the strong weight, a tab per view (the current one
+// `TEXT_STRONG` on `paint::BAND2`), the provider usage and the clock. No
+// state counts in either.
 
 /// The Windows caption buttons (`titlebar.rs`), which exist only where the
 /// app draws its own titlebar. 46px is the width Windows gives each of its
@@ -1534,15 +1546,19 @@ pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
-/// The titlebar location's segments: 6px apart, one Geist baseline.
-pub const TITLE_GAP: f32 = SPACE_1_5;
+/// The titlebar location's segments: one cell apart, on the grid
+/// (`ferrite / title · state · branch`).
+pub const TITLE_GAP: f32 = CH;
+/// The titlebar's right cell (over the board) holds its words two cells in
+/// from either edge, the transcript's own gutter.
+pub const TITLE_PAD_X: f32 = 2.0 * CH;
 /// The Project's floor in a narrow titlebar: it truncates after the branch
 /// but keeps a few letters, so the `/` never stands alone.
 pub const TITLE_PROJECT_MIN_W: f32 = 48.0;
-/// The titlebar's labelled add control: words on the ground (no box), a
-/// 28px hit area with room for its label, the glyph 6px from it.
-pub const TITLE_ADD_PAD_X: f32 = SPACE_2;
-pub const TITLE_ADD_GAP: f32 = SPACE_1_5;
+/// The titlebar's trailing door (`⌘T new thread`): dim words on the plane,
+/// no box, a cell of padding each side and a cell between key and verb.
+pub const TITLE_ADD_PAD_X: f32 = CH;
+pub const TITLE_ADD_GAP: f32 = CH;
 /// The smallest window the chrome still lays out in: the nav plus one Pane
 /// at L2, the title, the add control and the Windows caption group.
 pub const WINDOW_MIN_W: f32 = 640.0;
@@ -1554,30 +1570,39 @@ pub const WINDOW_MIN_H: f32 = 420.0;
 /// from flickering the whole board between tiers.
 pub const LEVEL_HYSTERESIS: f32 = 24.0;
 
-/// 32px — the Group head (and the Solo tab strip): one `LH_UI` line with 6px
-/// of air, a 24px control (a draft's ×) fitting inside it.
-pub const PANE_HEAD_H: f32 = 32.0;
+/// 1px — the seam between two Panes on a board: a `paint::LINE` line and
+/// nothing else (no gutter), the tree's gap (`layout::Tree::rects`), the
+/// core's `GRID_GAP` so the default grid's equal cells stay equal.
+pub const BOARD_SEAM: f32 = GRID_GAP;
+/// 1px — the column between the sidebar and the board (`paint::CHROME_SEAM`).
+pub const CHROME_SEAM_W: f32 = 1.0;
+
+/// 24px — the Group head (and the subagent strip, a reader's head): one row
+/// and 4px, closed by a `paint::LINE` rule.
+pub const PANE_HEAD_H: f32 = ROW + SPACE_1;
+/// A head's inline inset: one cell.
+pub const HEAD_PAD_X: f32 = CH;
+/// The head's dot column: two cells, the dot (or the braille spinner)
+/// centred in a `GLYPH_BOX` at its left.
+pub const HEAD_DOT_W: f32 = 2.0 * CH;
 /// The floor a head title keeps however narrow the head (a shorter title
-/// keeps its whole text): the branch gives way first. There is no cap — a
-/// long title takes the width the head has.
+/// keeps its whole text). There is no cap — a long title takes the width
+/// the head has.
 pub const HEAD_TITLE_MIN_W: f32 = 96.0;
-/// Between the head's title, branch, provider mark and slot.
-pub const HEAD_GAP: f32 = SPACE_2;
+/// Between the head's title and its provider mark (or a draft's ×).
+pub const HEAD_GAP: f32 = CH;
 /// Between the tab strip's tabs and the plan's meter at its right.
 pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
-/// How much more the branch shrinks than the title when the head is
-/// narrow: the branch gives way first.
-pub const HEAD_CHECKOUT_SHRINK: f32 = 4.0;
-/// The tasks meter in the head: 6 × 3 segments, 1px radius, 2px apart (an
-/// 8px pitch). Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track.
+/// The tasks meter: 6 × 3 segments, 1px radius, 2px apart (an 8px pitch).
+/// Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track.
 pub const METER_SEG_W: f32 = 6.0;
 pub const METER_SEG_H: f32 = 3.0;
 pub const METER_SEG_GAP: f32 = SPACE_0_5;
-pub const METER_SEG_R: f32 = 1.0;
+pub const METER_SEG_R: f32 = 0.0;
 pub const METER_SEG_CAP: usize = 12;
 pub const METER_TRACK_W: f32 = 48.0;
 /// Between the meter and its `3/4` count.
-pub const METER_GAP: f32 = SPACE_1_5;
+pub const METER_GAP: f32 = CH;
 /// The checks card the head's PR/CI chip opens (#29): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
@@ -1595,48 +1620,56 @@ pub const CHECKS_ROW_H: f32 = MENU_ROW_H;
 /// heading itself is the menu section title (`MENU_SECTION_H`).
 pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
-/// The wall's signal line hangs 4px under the head rule, at the text
-/// column (C1); its rows sit 4px apart. The dot is the head's own.
-pub const WALL_ROW_GAP: f32 = SPACE_1;
+/// The wall tile's body (L3): half a row above and below, two cells in.
+pub const WALL_PAD_Y: f32 = HALF_ROW;
+pub const WALL_PAD_X: f32 = 2.0 * CH;
+/// How many of a tile's last transcript lines it shows, dim, under its
+/// state word.
+pub const WALL_LINES: usize = 3;
+/// A quick answer at the wall: words in a 1px `paint::LINE2` box, a cell of
+/// padding each side, a cell between boxes, half a row above the row.
+pub const QUICK_ANSWER_PAD_X: f32 = CH;
+pub const QUICK_ANSWER_GAP: f32 = CH;
 
-/// A seam between Panes: the grab band is transparent, and a 2px line
-/// inset 8px from each end (so it never touches a Pane corner) appears
-/// `TEXT_FAINT` under the pointer and `ACCENT` while held.
-pub const SEAM_LINE_W: f32 = 2.0;
-pub const SEAM_LINE_INSET: f32 = SPACE_2;
-/// A dragged Pane's drop wash: `DROP_WASH` ground, `ACCENT_EDGE` edge, the
-/// Pane's radius; its label is a raised mono tag, 8/4 padded.
-pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
-pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
+/// A dragged Pane's drop wash: `DROP_WASH` ground, `ACCENT_EDGE` edge,
+/// square; its label is a float tag one row high, a cell padded.
+pub const DROP_LABEL_PAD_X: f32 = CH;
+pub const DROP_LABEL_PAD_Y: f32 = 0.0;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
 pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
 /// The miniature that rides the pointer while a slot is dragged: see-through
 /// enough that the board under it still reads.
 pub const DRAG_GHOST_OPACITY: f32 = 0.86;
-/// The empty board's hints: lines 8px apart, the keys in one column 8px
-/// from their verbs' shared edge.
-pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
-/// 44px — the empty board's Ferrite mark, embossed on the field
-/// (`components::embossed_mark`, rule 2.11.4) and centred
-/// `EMPTY_BOARD_MARK_GAP` (24px) over the hints. It replaces the line of
-/// words: the board says how to start, once.
-pub const EMPTY_BOARD_MARK: f32 = 44.0;
-pub const EMPTY_BOARD_MARK_GAP: f32 = SPACE_6;
-/// An embossed mark's body on the field: two steps over `GROUND`, so the
-/// mark reads as struck into the surface by its light and shadow edges,
-/// not drawn on it in ink.
-pub const EMBOSS_ON_GROUND: u32 = 0x1d2024;
-/// The same on a Pane's ground (an empty draft's body).
-pub const EMBOSS_ON_PANE: u32 = 0x23262b;
-/// The emboss's lit upper edge and its shadowed lower edge (legacy: the
-/// foundation draws the mark flat, theme rule 2).
-#[allow(dead_code)]
-pub const EMBOSS_LIGHT: u32 = 0xffffff17;
-#[allow(dead_code)]
-pub const EMBOSS_SHADE: u32 = 0x000000b3;
-/// 44px — an empty draft's mark, embossed over its Composer (Solo) or at
-/// its body's centre (a board): the Pane is ready, and the Composer's
-/// placeholder still says what to do, once.
+
+/// The empty board, on the plane: two rows down and four cells in, a
+/// banner (the mark three rows tall, `EMPTY_BANNER_GAP` before its lines),
+/// then the commands and the recent Threads as rows on the grid.
+pub const EMPTY_PAD_Y: f32 = 2.0 * ROW;
+pub const EMPTY_PAD_X: f32 = 4.0 * CH;
+pub const EMPTY_BANNER_GAP: f32 = 3.0 * CH;
+pub const EMPTY_MARK_H: f32 = 3.0 * ROW;
+/// A command row: the `❯` column, the verb's 30 cells, the key's 10.
+pub const EMPTY_VERB_W: f32 = 30.0 * CH;
+pub const EMPTY_KEY_W: f32 = 10.0 * CH;
+/// A recent row: the dot's two cells, the title's 44, the project's 14,
+/// the age's 6.
+pub const EMPTY_RECENT_TITLE_W: f32 = 44.0 * CH;
+pub const EMPTY_RECENT_PROJECT_W: f32 = 14.0 * CH;
+pub const EMPTY_RECENT_AGE_W: f32 = 6.0 * CH;
+/// How many recent Threads the empty board lists.
+pub const EMPTY_RECENT_MAX: usize = 5;
+
+/// The bottom bar's segments (session, tabs, usage, clock): a cell of
+/// padding each side, the full bar's height.
+pub const BAR_SEG_PAD_X: f32 = CH;
+/// The provider mark before a usage segment.
+pub const BAR_MARK: f32 = 11.0;
+
+/// An empty draft's mark, flat, in a quiet ink a step over the plane.
+pub const EMBOSS_ON_PANE: u32 = LINE;
+/// 44px — an empty draft's mark over its Composer (Solo) or at its body's
+/// centre (a board): the Pane is ready, and the Composer's placeholder
+/// still says what to do, once.
 pub const DRAFT_MARK: f32 = 44.0;
 /// 24px — from a launching draft's mark down to its Composer.
 pub const DRAFT_MARK_GAP: f32 = SPACE_6;

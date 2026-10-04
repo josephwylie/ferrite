@@ -187,9 +187,15 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
+    // At rest the only key on screen is the titlebar's trailing door
+    // (`⌘T new thread`, the prototype's `⌘K commands` slot).
+    let door = cx
+        .debug_bounds("titlebar-add-thread")
+        .expect("the titlebar door");
+    let glyph = cx.debug_bounds("command-key").expect("the door's key");
     assert!(
-        cx.debug_bounds("command-key").is_none(),
-        "nothing shows keys"
+        door.contains(&glyph.center()),
+        "only the titlebar door shows keys: {glyph:?} / {door:?}"
     );
 
     view.update(cx, |view, cx| {
@@ -500,10 +506,9 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
     );
 }
 
-/// A Group head names the branch only when it is not the default: a Main
-/// checkout on `main` adds nothing, a feature branch is named. A pending
-/// question is the slot's word, and it never pushes the title under its
-/// floor.
+/// A Group head names the Thread and nothing else (theme WP-C, rule 7):
+/// no branch — default or not — and no state word, even while a question
+/// pends; the title keeps its floor beside the provider's mark.
 #[gpui::test]
 fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContext) {
     use ferrite_core::workspace::BranchStatus;
@@ -542,20 +547,26 @@ fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContex
     );
     branch("feat/board", cx);
     assert!(
-        cx.debug_bounds("pane-head-branch-1").is_some(),
-        "a feature branch is named"
+        cx.debug_bounds("pane-head-branch-1").is_none(),
+        "the head carries no branch: the titlebar and the sidebar do"
     );
     fake.streams.borrow()[0]
         .send(question("l2-head-question"))
         .unwrap();
     tick(cx);
-    let slot = cx.debug_bounds("head-slot-1").expect("the slot's word");
+    assert!(
+        cx.debug_bounds("head-slot-1").is_none(),
+        "no state word rides the head"
+    );
     let title = cx.debug_bounds("pane-head-title-1").unwrap();
+    let mark = cx
+        .debug_bounds("pane-head-provider-1")
+        .expect("the provider's mark");
     assert!(
         title.size.width >= px(crate::theme::HEAD_TITLE_MIN_W),
         "the title keeps its floor: {title:?}"
     );
-    assert!(title.right() <= slot.left(), "{title:?} / {slot:?}");
+    assert!(title.right() <= mark.left(), "{title:?} / {mark:?}");
 }
 
 /// An L2 tail's tool row reads as L1 spells it, `● Name(args)`, and a long
@@ -847,8 +858,8 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     );
 }
 
-/// On the empty board the titlebar has no location, and the `dev` tag
-/// takes the location's own inset rather than trailing an empty slot.
+/// On the empty board the titlebar has no location: it reads `Ferrite`
+/// at the right cell's inset (theme WP-C), and the `dev` tag follows it.
 #[gpui::test]
 fn the_empty_board_titlebar_keeps_the_dev_tag_on_the_inset(cx: &mut TestAppContext) {
     if !crate::titlebar::DEV {
@@ -862,12 +873,15 @@ fn the_empty_board_titlebar_keeps_the_dev_tag_on_the_inset(cx: &mut TestAppConte
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(cx.debug_bounds("empty-board").is_some());
-    let tag = cx.debug_bounds("titlebar-dev-badge").expect("the dev tag");
-    assert_eq!(
-        tag.left(),
-        px(crate::theme::NAV_WIDTH + crate::theme::GRID_PAD),
-        "{tag:?}"
+    let name = cx.debug_bounds("titlebar-ferrite").expect("the app's name");
+    let inset =
+        px(crate::theme::NAV_WIDTH + crate::theme::CHROME_SEAM_W + crate::theme::TITLE_PAD_X);
+    assert!(
+        (name.left() - inset).abs() <= px(0.5),
+        "{name:?} at {inset:?}"
     );
+    let tag = cx.debug_bounds("titlebar-dev-badge").expect("the dev tag");
+    assert!(tag.left() > name.right(), "{tag:?} after {name:?}");
 }
 
 /// The checks card grows to its own tally: the counts line is never cut
@@ -1457,10 +1471,11 @@ fn a_compact_placeholder_carries_no_hint(cx: &mut TestAppContext) {
     );
 }
 
-/// The Group head sits on the Pane's own axes at every width (rule 2.4.6):
-/// its dot in the glyph box at `PANE_PAD_X`, its title at C1 — 36px from
-/// the card's inner edge — so every head on a board shares one vertical of
-/// dots. Solo has no head at all: the titlebar carries the Thread.
+/// The Group head sits on the grid at every width (theme WP-C): its dot
+/// column a cell in from the Pane's inner edge (`HEAD_PAD_X`), two cells
+/// wide (`HEAD_DOT_W`), its title right after it — so every head on a
+/// board shares one vertical of dots. Solo has no head at all: the
+/// titlebar carries the Thread.
 #[gpui::test]
 fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("head-on-column", 2);
@@ -1487,17 +1502,15 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
                 .debug_bounds(Box::leak(format!("pane-head-dot-{key}").into_boxed_str()))
                 .unwrap();
             let inner = px(rect.x + 1.);
-            let c1 = inner + px(crate::theme::PANE_PAD_X + crate::theme::GUTTER_W);
+            let c1 = inner + px(crate::theme::HEAD_PAD_X + crate::theme::HEAD_DOT_W);
             assert!(
                 (title.left() - c1).abs() <= px(0.5),
-                "{width}: the title {title:?} starts at C1 {c1:?}"
+                "{width}: the title {title:?} starts after the dot column {c1:?}"
             );
-            let axis = inner
-                + px(crate::theme::PANE_PAD_X
-                    + (crate::theme::GLYPH_BOX - crate::theme::STATUS_DOT) / 2.);
+            let axis = inner + px(crate::theme::HEAD_PAD_X);
             assert!(
                 (dot.left() - axis).abs() <= px(0.5),
-                "{width}: the dot {dot:?} sits on the glyph axis {axis:?}"
+                "{width}: the dot column {dot:?} sits a cell in {axis:?}"
             );
             assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
         }
@@ -1549,8 +1562,8 @@ fn an_l2_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds(mode).is_none(), "no status line in a grid");
     assert!(
-        cx.debug_bounds(slot).is_some(),
-        "the head's slot speaks for the cell"
+        cx.debug_bounds(slot).is_none(),
+        "the head carries no word (theme rule 7)"
     );
 
     // At L1 the status line stays under a Decision (rule 2.6.6): the mode
