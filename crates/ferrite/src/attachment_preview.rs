@@ -7,6 +7,7 @@
 //! window like every modal's.
 
 use crate::components::Tip as _;
+use crate::pointer::Pointer as _;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -171,11 +172,6 @@ impl Preview {
         self.reader_focus.contains_focused(window, cx)
     }
 
-    /// The reader slot's focus handle, for the slot the cockpit draws.
-    pub fn reader_focus(&self) -> FocusHandle {
-        self.reader_focus.clone()
-    }
-
     pub fn open_document(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
         use gpui::component::{notification::Notification, WindowExt as _};
         if !self.open_text_document(path.clone(), title, window, cx) {
@@ -294,8 +290,7 @@ impl Preview {
                     .justify_center()
                     .w(px(ICON_BUTTON))
                     .h(px(PANE_HEAD_H))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(paint::HOVER))
+                    .hover_control("reader-close")
                     // A press here closes; it must not also pick the slot
                     // up as a drag.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())

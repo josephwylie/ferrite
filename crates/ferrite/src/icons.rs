@@ -57,6 +57,7 @@ icons![
     "claude",
     "ferrite-upper",
     "ferrite-lower",
+    "ferrite-steel",
     "plus",
     "gear",
     "group",
@@ -150,6 +151,10 @@ pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
 const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
 const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
+/// The mark whole, in its steel gradient, cropped to the shards (the
+/// prototype's banner `viewBox="280 30 700 1130"`): drawn as an image, so
+/// the gradient paints (an `svg()` element is a one-ink mask).
+pub const FERRITE_STEEL: &str = "icons/ferrite-steel.svg";
 /// `+` — add a Project. (The nav no longer draws it: a new Thread in a
 /// Project is a palette command.)
 #[allow(dead_code)]
@@ -178,6 +183,7 @@ pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 #[allow(dead_code)]
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
+#[cfg_attr(not(test), allow(dead_code))]
 pub const RESEND: &str = "icons/resend.svg";
 /// The prompt mark `❯`, drawn: Geist Mono has no U+276F, so the mark the
 /// transcript, the Composer, the nav cursor and every selection bar share
@@ -259,8 +265,6 @@ pub const REASONING: &str = "icons/reasoning.svg";
 /// Lucide bell, whose 24-box stroke read heavier than the gear beside it).
 #[allow(dead_code)]
 pub const BELL: &str = "icons/bell.svg";
-/// ■: the stop mark (the turn's interrupt).
-pub const STOP: &str = "icons/stop.svg";
 // (end WP-C)
 
 /// `⌘` (not in Geist Mono): the command key wherever a key combination is
@@ -304,8 +308,6 @@ pub const DIAMOND: &str = "icons/diamond.svg";
 pub const DISCLOSURE_RIGHT: &str = "icons/disclosure-right.svg";
 pub const DISCLOSURE_DOWN: &str = "icons/disclosure-down.svg";
 // (end WP-G)
-/// A newer provider CLI is ready to install.
-pub const UPDATE: &str = "icons/update.svg";
 
 pub struct Assets;
 
@@ -541,8 +543,8 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            57,
-            "the prototype and app controls, including close, the four Windows caption glyphs, \
+            58,
+            "the prototype and app controls, the steel banner mark, including close, the four Windows caption glyphs, \
              the option and control key glyphs, the image mark, the three mode markers, the \
              failed cross, the CLI update mark, the sixteen spinner frames (ten braille, six \
              working glyphs) and the nav's two disclosure triangles"
@@ -589,22 +591,37 @@ mod tests {
         assert!(sidebar.contains(r#"<rect x="2.5" y="3" width="15" height="14" rx="2.5"/>"#));
         assert!(sidebar.contains(r#"<path d="M7.5 3v14"/>"#));
 
+        // The bell is the prototype's own too: a 16-unit box stroked 1.4.
+        let bell = Assets.load(BELL).unwrap().unwrap();
+        let bell = std::str::from_utf8(&bell).unwrap();
+        assert!(bell.contains(r#"stroke-width="1.4""#));
+        assert!(bell.contains(r#"viewBox="0 0 16 16""#));
+        // The check is the picker's `✓` as the prototype's face draws it: a
+        // 12-unit box stroked 1.15.
+        let check = Assets.load(CHECK).unwrap().unwrap();
+        let check = std::str::from_utf8(&check).unwrap();
+        assert!(check.contains(r#"viewBox="0 0 12 12""#));
+        assert!(check.contains(r#"stroke-width="1.15""#));
+        // The failed cross is the prototype's `✗` glyph, drawn the same way:
+        // a 12-unit box stroked 1.2.
+        let cross = Assets.load(CROSS).unwrap().unwrap();
+        let cross = std::str::from_utf8(&cross).unwrap();
+        assert!(cross.contains(r#"viewBox="0 0 12 12""#));
+        assert!(cross.contains(r#"stroke-width="1.2""#));
+
         for key in [
-            BELL,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
             FOLDER,
             WARNING,
             PENCIL,
-            CHECK,
             GEAR,
             GROUP,
             SUBAGENTS,
             COPY,
             RESEND,
             IMAGE,
-            CROSS,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();

@@ -15,7 +15,8 @@
 mod parity_scenes;
 
 use super::{CockpitView, DraftTarget, MenuTarget};
-use crate::demo::parity::phase0::{NavFold, PaletteScope, Phase0Hooks as _};
+use crate::nav::NavFold;
+use crate::palette::PaletteScope;
 use ferrite_core::{
     activity::TranscriptCoverage,
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
@@ -203,7 +204,7 @@ impl Scene {
         std::fs::create_dir_all(&root).expect("create disposable reference root");
         let feeds = Feeds::default();
         let mut core = Cockpit::new(
-            Store::open(&root.join("store")).expect("open disposable store"),
+            Store::open(root.join("store")).expect("open disposable store"),
             Box::new(Fixture(feeds.clone())),
         );
         core.set_suggestions_enabled(false);

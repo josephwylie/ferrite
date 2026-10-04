@@ -44,16 +44,14 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
         .unwrap();
     drop(stream);
     tick(cx);
-    for disclosure in [pane::DisclosureId::Tool("sweep".into())] {
-        let control = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(disclosure.clone())
-                .unwrap()
-                .center()
-        });
-        cx.simulate_click(control, gpui::Modifiers::none());
-        tick(cx);
-    }
+    let control = view.read_with(cx, |view, _| {
+        view.panes[0]
+            .tool_bounds(pane::DisclosureId::Tool("sweep".into()))
+            .unwrap()
+            .center()
+    });
+    cx.simulate_click(control, gpui::Modifiers::none());
+    tick(cx);
 
     let from = caret(&view, cx, 0, 0);
     let mut to = caret(&view, cx, 2, "after".len() - 1);
@@ -64,10 +62,15 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
     cx.simulate_keystrokes("cmd-c");
     let copied = clipboard(cx).unwrap_or_default();
     assert!(copied.starts_with("before"), "{copied:?}");
-    assert!(
-        copied.contains(&output),
-        "the whole output copies: {copied:?}"
-    );
+    // The elbow's first line, then the open fold's lines: every output
+    // line copies, in order.
+    let mut at = 0;
+    for line in output.lines() {
+        let found = copied[at..]
+            .find(line)
+            .unwrap_or_else(|| panic!("{line} copies, in order: {copied:?}"));
+        at += found + line.len();
+    }
     assert!(copied.ends_with("after"), "{copied:?}");
     assert!(
         !copied.contains('$') && !copied.contains('⎿'),

@@ -17,12 +17,11 @@ use gpui::component::{FocusableExt, Sizable};
 use gpui::prelude::*;
 use gpui::{
     div, point, px, rgb, rgba, AnyElement, App, BoxShadow, Div, ElementId, FontFeatures,
-    HighlightStyle, Hsla, SharedString, Stateful, StyleRefinement, Window,
+    HighlightStyle, Hsla, SharedString, StyleRefinement, Window,
 };
 
 use crate::icons;
 use crate::motion;
-use crate::pointer::{Pointer, PointerPressed};
 use crate::theme;
 
 /// A compact, neutral button. Supply content with its own typography so
@@ -216,6 +215,24 @@ pub fn section_label(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
+/// Mono words in exactly their cells (`chars × CH` at the UI size). GPUI
+/// rounds a measured run's width up to the next whole pixel, so a row of
+/// separate runs drifts right by up to a pixel a run; boxed in its cells,
+/// each run stays on the grid the prototype's one browser line keeps.
+pub fn cells(text: impl Into<SharedString>) -> Div {
+    let text: SharedString = text.into();
+    div()
+        .flex_shrink_0()
+        .w(px(cells_width(&text)))
+        .whitespace_nowrap()
+        .child(text)
+}
+
+/// `text`'s width on the UI grid: one `CH` a character.
+pub fn cells_width(text: &str) -> f32 {
+    text.chars().count() as f32 * theme::CH
+}
+
 /// Tabular figures, so a ticking count or a column of numbers never shifts.
 pub fn tabular<E: Styled>(mut element: E) -> E {
     element.text_style().font_features =
@@ -230,8 +247,10 @@ pub fn tabular<E: Styled>(mut element: E) -> E {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Elevation {
     /// A Pane on the field: flat.
+    #[cfg_attr(not(test), allow(dead_code))]
     Pane,
     /// The focused Pane of a board: flat (its border says focus).
+    #[cfg_attr(not(test), allow(dead_code))]
     Lifted,
     /// A control's face: flat.
     Control,
@@ -599,10 +618,12 @@ pub fn embossed_mark(size: f32, body: u32) -> Div {
 
 /// The one keycap: `KBD_H`, at least square, flat and square on
 /// `paint::BAND2`, the grid's type in `TEXT`, centred.
+#[cfg(test)]
 pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
 }
 
+#[cfg(test)]
 fn kbd_face() -> Div {
     div()
         .flex()
@@ -760,21 +781,14 @@ pub fn prompt_mark(ink: u32) -> AnyElement {
 /// mark, not after its box. The empty board's banner and every transcript's
 /// banner draw it three rows tall.
 pub fn steel_mark(height: f32) -> Div {
-    // The shards span x 280..980 and y 30..1160 of the mark's 1254 box.
-    let size = height * 1254.0 / 1130.0;
+    // The shards span x 280..980 and y 30..1160 of the mark's 1254 box; the
+    // image is cropped to them and paints their steel gradient.
+    let width = height * 700.0 / 1130.0;
     div()
-        .relative()
         .flex_shrink_0()
-        .w(px(height * 700.0 / 1130.0))
+        .w(px(width))
         .h(px(height))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left(px(-size * 280.0 / 1254.0))
-                .top(px(-size * 30.0 / 1254.0))
-                .child(icons::ferrite_icon(size)),
-        )
+        .child(gpui::img(icons::FERRITE_STEEL).w(px(width)).h(px(height)))
 }
 
 /// A `GLYPH_BOX` square that centres its mark.
@@ -800,22 +814,6 @@ pub fn gutter(mark: impl IntoElement, first_line_h: f32) -> Div {
         .w(px(theme::GUTTER_W))
         .h(px(first_line_h))
         .child(glyph_box(mark))
-}
-
-/// A floating surface's empty list: one line of guidance, centred, the
-/// title in `TEXT` and an optional hint in `TEXT_MUTED` beneath it. It is
-/// never a Pane body: an empty Thread or draft shows nothing, and its
-/// Composer's placeholder says what to do (rule 2.11.4).
-pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(theme::SPACE_1))
-        .size_full()
-        .child(text_ui().text_color(rgb(theme::TEXT)).child(title.into()))
-        .children(hint.map(|hint| text_meta().child(hint)))
 }
 
 // --------------------------------------------------------------- controls
@@ -1197,12 +1195,14 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
 /// A menu row. The only place a menu row takes its pointer role: the raised
 /// hover and press faces, or the carried face on the cursor row; an armed or
 /// disabled row takes none. Callers add selectors and handlers only.
+#[cfg(test)]
 pub fn menu_row(
     id: impl Into<ElementId>,
     item: &MenuItem,
     cursor: bool,
     armed: bool,
-) -> Stateful<Div> {
+) -> gpui::Stateful<Div> {
+    use crate::pointer::{Pointer, PointerPressed};
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
     let row = menu_row_content(item, cursor, armed).id(id);
@@ -1728,7 +1728,11 @@ mod tests {
     fn marks_and_keycaps_hold_their_boxes() {
         let mut dot = status_dot(theme::RUNNING);
         assert_eq!(dot.style().size.width, Some(px(theme::STATUS_DOT).into()));
-        assert_eq!(theme::STATUS_DOT, 7.5, "the ● glyph's size at the grid size");
+        assert_eq!(
+            theme::STATUS_DOT,
+            7.5,
+            "the ● glyph's size at the grid size"
+        );
         assert_eq!(
             dot.style().inset.top,
             Some(px(-theme::STATUS_DOT_LIFT).into()),

@@ -351,11 +351,6 @@ impl Composer {
         self.line.text().is_empty() && self.files.is_empty()
     }
 
-    /// A pointer Send is available for actual input, including attached files.
-    pub fn can_submit(&self) -> bool {
-        !self.line.text().trim().is_empty() || !self.files.is_empty()
-    }
-
     pub fn prompt(&self) -> String {
         prompt_files::compose(self.line.text(), &self.files)
     }
@@ -1248,7 +1243,9 @@ impl Element for LineElement {
             (composer.blink_from, composer.caret_lit)
         });
         // A lit line (Solo's, the focused board Pane's) draws its block
-        // whoever holds the keyboard; only its typing needs the focus.
+        // whoever holds the keyboard — solid, still, until the keyboard is
+        // here; only the line holding it blinks (and leases the clock).
+        let holds = focused;
         let focused = focused || lit;
         let selected = self.composer.read(cx).line.selection();
         // The soft blink rides the shared pulse clock (theme rule 8): leasing
@@ -1256,7 +1253,7 @@ impl Element for LineElement {
         // phase is the line's own, from its last focus or edit. Still and
         // solid under reduced motion.
         let alpha = (focused && selected.is_empty()).then(|| {
-            if crate::motion::reduced_motion(cx) {
+            if crate::motion::reduced_motion(cx) || !holds {
                 return 1.0;
             }
             let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
@@ -1595,10 +1592,12 @@ mod tests {
         assert_eq!(at(turn * 4 / 10), 1.0);
         assert_eq!(at(turn * 7 / 10), crate::theme::CARET_BLINK_MIN);
         assert_eq!(at(turn), 1.0, "and round again");
-        assert!(
-            crate::theme::CARET_BLINK_MIN > 0.0,
-            "soft: it never vanishes"
-        );
+        const {
+            assert!(
+                crate::theme::CARET_BLINK_MIN > 0.0,
+                "soft: it never vanishes"
+            )
+        };
     }
 
     /// The selection wash is painted under the shaped line, so every covered

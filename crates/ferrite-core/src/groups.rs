@@ -1083,7 +1083,10 @@ mod tests {
         assert_eq!(all, [perf, everything], "listed by both");
         assert_eq!(groups.of(threads[0]).map(|group| group.id), Some(perf));
         assert_eq!(groups.home(threads[0]).map(|group| group.id), Some(perf));
-        assert_eq!(groups.home(threads[2]).map(|group| group.id), Some(everything));
+        assert_eq!(
+            groups.home(threads[2]).map(|group| group.id),
+            Some(everything)
+        );
         assert!(!groups.get(everything).unwrap().is_home_of(threads[0]));
 
         groups
@@ -1102,7 +1105,9 @@ mod tests {
         let reloaded = Groups::load(&dir).unwrap();
         assert_eq!(
             reloaded.get(everything).unwrap().guests,
-            [threads[0], threads[1]].into_iter().collect::<BTreeSet<_>>(),
+            [threads[0], threads[1]]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
             "the guest seats persist"
         );
         assert_eq!(reloaded.home(threads[1]).map(|group| group.id), Some(perf));

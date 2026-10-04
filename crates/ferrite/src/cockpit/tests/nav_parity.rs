@@ -107,7 +107,11 @@ fn a_guest_only_thread_is_still_a_loose_row(cx: &mut TestAppContext) {
         let loose: Vec<ThreadId> = state.ordered_solos().iter().map(|row| row.thread).collect();
         assert_eq!(loose, [threads[2], threads[3]], "the guests stay loose");
         assert_eq!(state.groups.len(), 1);
-        assert_eq!(state.groups[0].members.len(), 4, "Everything holds all four");
+        assert_eq!(
+            state.groups[0].members.len(),
+            4,
+            "Everything holds all four"
+        );
     });
 }
 
@@ -173,7 +177,10 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let row = |thread: ThreadId| -> &'static str { format!("nav-thread-{}", thread.get()).leak() };
-    assert!(cx.debug_bounds(row(threads[0])).is_some(), "open: members drawn");
+    assert!(
+        cx.debug_bounds(row(threads[0])).is_some(),
+        "open: members drawn"
+    );
     let before = view.read_with(cx, |view, _| view.cockpit.roster().view());
 
     let fold: &'static str = format!("nav-group-fold-{}", group.get()).leak();
@@ -198,7 +205,10 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, _| {
         let state = view.nav_state();
-        assert!(state.groups[0].folded, "opening a folded Group keeps it folded");
+        assert!(
+            state.groups[0].folded,
+            "opening a folded Group keeps it folded"
+        );
         assert!(state.groups[0].selected);
     });
     view.update(cx, |view, cx| view.focus_thread(threads[2], cx));
@@ -247,9 +257,15 @@ fn one_seam_column_sits_right_of_the_nav(cx: &mut TestAppContext) {
     tick(cx);
     let column = cx.debug_bounds("nav-column").expect("the column");
     let seam = cx.debug_bounds("nav-seam").expect("the seam");
-    assert!((seam.left() - column.right()).abs() < px(0.5), "{seam:?} {column:?}");
+    assert!(
+        (seam.left() - column.right()).abs() < px(0.5),
+        "{seam:?} {column:?}"
+    );
     assert_eq!(seam.size.width, px(crate::theme::CHROME_SEAM_W));
-    assert!(cx.debug_bounds("chrome-seam").is_none(), "one seam, not two");
+    assert!(
+        cx.debug_bounds("chrome-seam").is_none(),
+        "one seam, not two"
+    );
     view.read_with(cx, |view, _| {
         assert!(
             (view.board_left() - f32::from(seam.right())).abs() < 0.5,
@@ -260,7 +276,10 @@ fn one_seam_column_sits_right_of_the_nav(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     let seam = cx.debug_bounds("nav-seam").expect("the seam");
-    assert!(seam.left() < px(0.5), "folded, the seam is at x = 0: {seam:?}");
+    assert!(
+        seam.left() < px(0.5),
+        "folded, the seam is at x = 0: {seam:?}"
+    );
 }
 
 /// N-15 / N-16: folding fades the content 1 → 0 over 150ms (CSS `ease`)
@@ -302,7 +321,10 @@ fn the_content_fades_on_its_own_clock_while_the_width_rides(cx: &mut TestAppCont
     cx.executor().advance_clock(Duration::from_millis(100));
     let (fade, band, width) = sample(&view, cx);
     assert_eq!(fade, 0.0, "the content is gone at 150ms…");
-    assert!(width > nav::FOLDED_WIDTH, "…while the width still rides: {width}");
+    assert!(
+        width > nav::FOLDED_WIDTH,
+        "…while the width still rides: {width}"
+    );
     assert!(band < 1.0, "and the cell is still cross-fading: {band}");
 
     cx.executor().advance_clock(Duration::from_millis(100));

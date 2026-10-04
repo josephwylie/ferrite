@@ -206,8 +206,16 @@ fn collect_tool_text(
                     line(result.clone());
                 }
             }
-            if expanded && shows_input(tool) {
-                collect_output_text(block, "command", &tool.summary, selection);
+            if expanded {
+                if shows_input(tool) {
+                    collect_output_text(block, "command", &tool.summary, selection);
+                }
+                if let Some(output) = disclosed_output(tool) {
+                    collect_output_text(block, "result", &output.text, selection);
+                }
+                if let Some(output) = tool.structured_output() {
+                    collect_output_text(block, "details", &output.text, selection);
+                }
             }
         }
         ToolState::Unavailable => {}
@@ -286,7 +294,7 @@ fn collect_fold(block: BlockId, tool: &ToolBlock, rest: String, selection: &Text
 /// (`DiffRow::selectable`).
 fn collect_diff_text(block: BlockId, diff: &Diff, wide: bool, selection: &TextRuns) {
     let (cap, _) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
-    for row in diff_rows(diff, cap, wide) {
+    for row in preview_rows(diff, cap, wide) {
         for side in row.selectable() {
             let _ = selection.line(block, side.body.clone(), Vec::new());
         }

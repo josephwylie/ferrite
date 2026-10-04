@@ -32,6 +32,7 @@ use crate::{
     file_links::{PathTarget, TargetContext},
     hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
+    pointer::Pointer,
     rich::TextCache,
     select::{TextRuns, TranscriptText},
     theme,
@@ -93,10 +94,16 @@ impl AnswerMarks {
 /// A row another package appends after the transcript's last (the pending
 /// Decision, built by `CockpitView::decision_tail`): `key` names its content
 /// (a change re-renders it), `render` builds it.
+/// What builds a `TranscriptTail`'s row.
+pub(crate) type TailRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
+/// A pinned prompt band's place: its turn's row and its offset.
+type PinnedBand = Option<(usize, gpui::Pixels)>;
+
 #[derive(Clone)]
 pub(crate) struct TranscriptTail {
     pub key: u64,
-    pub render: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+    pub render: TailRender,
 }
 
 impl std::fmt::Debug for TranscriptTail {
@@ -133,11 +140,10 @@ pub(crate) struct BannerFacts {
 
 /// Where a scene (or a command) asks a transcript to scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
 pub(crate) enum ScrollTarget {
     /// The banner at the top.
     Top,
-    /// The live tail, following again.
-    Tail,
     /// `offset` pixels below the top of turn `turn`'s prompt band (0 is the
     /// first prompt in the window), its band pinned above.
     TurnBand { turn: usize, offset: f32 },
@@ -280,9 +286,9 @@ pub(crate) struct TranscriptView {
     /// turn's band pushes it up by what it overlaps.
     pinned_h: Rc<Cell<gpui::Pixels>>,
     /// The pinned band this frame drew, to notice a layout that moves it.
-    pinned_drawn: Rc<Cell<Option<(usize, gpui::Pixels)>>>,
+    pinned_drawn: Rc<Cell<PinnedBand>>,
     /// The position a re-render was last asked for.
-    pinned_asked: Rc<Cell<Option<Option<(usize, gpui::Pixels)>>>>,
+    pinned_asked: Rc<Cell<Option<PinnedBand>>>,
     /// Each row's laid-out height, as the list last measured it: the
     /// minimap places its ticks and its view band from these.
     heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
@@ -293,6 +299,23 @@ pub(crate) struct TranscriptView {
     hover_card: Option<Entity<HoverCard>>,
     /// A minimap jump easing in.
     glide: Option<Glide>,
+    /// Room past the last row so a band jump can put its band at the top
+    /// of a transcript shorter than that (a board Pane with its banner
+    /// scrolled away, R2): see `Runway`.
+    runway: Rc<Cell<Runway>>,
+}
+
+/// The scroll room a band jump adds under the last row: the jump's row and
+/// its offset into it (until the list has laid it out), the room, and how
+/// tall the rows from the jump's row down were when it was sized — rows
+/// arriving later use the room up, so the tail never floats above it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Runway {
+    /// The offset into `index`'s row, while the room is being sized.
+    jump: Option<f32>,
+    index: usize,
+    room: f32,
+    below: f32,
 }
 
 impl EventEmitter<TranscriptEvent> for TranscriptView {}
@@ -374,7 +397,9 @@ impl TranscriptView {
             rich,
             selection_source,
             transcript_focus: cx.focus_handle(),
-            controls_end: cx.focus_handle(),
+            // A tab stop, so the controls walk meets it at the end of the
+            // transcript instead of wrapping round the window.
+            controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
             second_tick: None,
             eased: None,
@@ -386,6 +411,7 @@ impl TranscriptView {
             targets,
             hover_card: None,
             glide: None,
+            runway: Rc::default(),
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -550,15 +576,17 @@ impl TranscriptView {
             if Some(&focus) == before.as_ref() || !self.transcript_focus.contains(&focus, window) {
                 return false;
             }
+            // The end sentinel: forward, the walk is past the last control;
+            // backward, it wrapped round from the first.
+            if focus == self.controls_end {
+                return false;
+            }
             if crate::rich::code_actions_focused(window) {
                 return true;
             }
         }
     }
 
-    pub(crate) fn tool_focus(&self) -> FocusHandle {
-        self.input.disclosure_focus.clone()
-    }
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
         if self.input.expanded.contains(&call.into()) {
             DisclosureState::Expanded
@@ -605,8 +633,10 @@ impl TranscriptView {
     pub(crate) fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
         self.glide = None;
         match target {
-            ScrollTarget::Top => self.scroll.scroll_to(0, px(0.)),
-            ScrollTarget::Tail => self.scroll.scroll_to_bottom(),
+            ScrollTarget::Top => {
+                self.runway.set(Runway::default());
+                self.scroll.scroll_to(0, px(0.))
+            }
             ScrollTarget::TurnBand { turn, offset } => {
                 let Some((index, row)) = self
                     .rows
@@ -618,7 +648,21 @@ impl TranscriptView {
                 else {
                     return;
                 };
-                self.scroll.scroll_to(index, px(row.gap() + offset));
+                let into = row.gap() + offset;
+                // A band brought to the very top gets the room to get
+                // there (the room is sized once the list has laid the rows
+                // out); any other offset is clamped at the end, as a
+                // browser clamps a scroll past it.
+                if offset == 0.0 {
+                    self.runway.set(Runway {
+                        jump: Some(into),
+                        index,
+                        ..self.runway.get()
+                    });
+                } else {
+                    self.runway.set(Runway::default());
+                }
+                self.scroll.scroll_to(index, px(into));
             }
         }
         cx.notify();
@@ -1227,24 +1271,11 @@ fn banner_lines(facts: &BannerFacts) -> [BannerLine; 3] {
 }
 
 /// The steel mark, `height` tall, cropped to its shards (the prototype's
-/// `viewBox="280 30 700 1130"`), so the banner's text starts its gap after
+/// `viewBox="280 30 700 1130"`), in its steel gradient
+/// (`components::steel_mark`), so the banner's text starts its gap after
 /// the mark rather than after its box.
 fn banner_mark(height: f32) -> gpui::Div {
-    // The shards span x 280..980 and y 30..1160 of the mark's 1254 box.
-    let size = height * 1254.0 / 1130.0;
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(height * 700.0 / 1130.0))
-        .h(px(height))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left(px(-size * 280.0 / 1254.0))
-                .top(px(-size * 30.0 / 1254.0))
-                .child(crate::icons::ferrite_icon(size)),
-        )
+    crate::components::steel_mark(height)
 }
 
 /// What prose path targets resolve against: the checkout, and every path
@@ -1475,37 +1506,41 @@ impl TranscriptView {
         let band_h = (view_h / total).clamp(0., 1.);
         let entity = cx.entity().downgrade();
         let tops = Rc::new(tops);
-        let ticks = rows.iter().enumerate().filter_map(|(index, row)| {
-            let mark = Mark::of(row)?;
-            let at = tops[index] / total;
-            let entity = entity.clone();
-            let goal = tops[index] + row.gap();
-            Some(
-                div()
-                    .id(SharedString::from(format!("minimap-tick-{index}")))
-                    .debug_selector(move || format!("minimap-tick-{mark:?}"))
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(gpui::relative(at))
-                    .h(px(theme::MINIMAP_TICK_H + 2. * theme::MINIMAP_TICK_INSET))
-                    .mt(px(-theme::MINIMAP_TICK_INSET))
-                    .flex()
-                    .items_center()
-                    .px(px(theme::MINIMAP_TICK_INSET))
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(theme::MINIMAP_TICK_H))
-                            .rounded(px(theme::MINIMAP_TICK_R))
-                            .bg(gpui::rgb(mark.ink())),
-                    )
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        cx.stop_propagation();
-                        let _ = entity.update(cx, |view, cx| view.glide_to(goal, cx));
-                    }),
-            )
-        });
+        let ticks: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let mark = Mark::of(row)?;
+                let at = tops[index] / total;
+                let entity = entity.clone();
+                let goal = tops[index] + row.gap();
+                Some(
+                    div()
+                        .id(SharedString::from(format!("minimap-tick-{index}")))
+                        .debug_selector(move || format!("minimap-tick-{mark:?}"))
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(gpui::relative(at))
+                        .h(px(theme::MINIMAP_TICK_H + 2. * theme::MINIMAP_TICK_INSET))
+                        .mt(px(-theme::MINIMAP_TICK_INSET))
+                        .flex()
+                        .items_center()
+                        .px(px(theme::MINIMAP_TICK_INSET))
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(theme::MINIMAP_TICK_H))
+                                .rounded(px(theme::MINIMAP_TICK_R))
+                                .bg(gpui::rgb(mark.ink())),
+                        )
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                            let _ = entity.update(cx, |view, cx| view.glide_to(goal, cx));
+                        }),
+                )
+            })
+            .collect();
         let rail = SharedString::from(format!("transcript-minimap-{}", self.input.namespace));
         let band_key = SharedString::from(format!("{rail}-band"));
         let band_t = crate::motion::hover_t(&band_key);
@@ -1675,8 +1710,8 @@ impl Render for TranscriptView {
             },
         )
         // The bottom padding is the list's own: it counts in the scroll
-        // extent and the tail follow.
-        .pb(px(theme::BODY_PAD_B))
+        // extent and the tail follow. A band jump's room rides it.
+        .pb(px(theme::BODY_PAD_B + self.runway.get().room))
         .size_full()
         .min_h_0();
         let scroll = self.scroll.clone();
@@ -1687,11 +1722,64 @@ impl Render for TranscriptView {
         let pinned_drawn = self.pinned_drawn.clone();
         let pinned_asked = self.pinned_asked.clone();
         let pinned_h = self.pinned_h.clone();
+        let runway = self.runway.clone();
         let line = grid.line;
         let half = grid.half();
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
+                // A band jump's room: enough under the last row for the
+                // band to reach the top, used up as rows arrive under it.
+                {
+                    let state = scroll.list_state();
+                    let mut now = runway.get();
+                    // The rows' height from `from` down, when the list laid
+                    // them all out (a row past the viewport means there is
+                    // height enough already).
+                    let below = |from: usize| -> Option<f32> {
+                        let mut total = 0.0;
+                        for index in from..gaps.len() {
+                            total += f32::from(state.bounds_for_item(index)?.size.height);
+                        }
+                        Some(total)
+                    };
+                    if let Some(into) = now.jump {
+                        let measured = below(now.index);
+                        let view_h = f32::from(state.viewport_bounds().size.height);
+                        let room = measured.map_or(0.0, |below| {
+                            (into + view_h - below - theme::BODY_PAD_B).max(0.0)
+                        });
+                        let settled = (room - now.room).abs() < 0.5;
+                        now = Runway {
+                            jump: (!settled).then_some(into),
+                            index: now.index,
+                            room,
+                            below: measured.unwrap_or(now.below),
+                        };
+                        runway.set(now);
+                        if !settled {
+                            state.scroll_to(gpui::ListOffset {
+                                item_ix: now.index,
+                                offset_in_item: px(into),
+                            });
+                            let weak = weak.clone();
+                            window.defer(cx, move |_, cx| {
+                                let _ = weak.update(cx, |_, cx| cx.notify());
+                            });
+                        }
+                    } else if now.room > 0.0 {
+                        match below(now.index) {
+                            Some(grown) if grown > now.below + 0.5 => {
+                                now.room = (now.room - (grown - now.below)).max(0.0);
+                                now.below = grown;
+                                runway.set(now);
+                            }
+                            Some(_) => {}
+                            // The rows under it outgrew the viewport.
+                            None => runway.set(Runway::default()),
+                        }
+                    }
+                }
                 // A pinned band hides the list's top down to its foot, and
                 // the row passing under the foot down to its next whole
                 // line.
@@ -1795,7 +1883,6 @@ impl Render for TranscriptView {
         }
         let card = self.hover_card(window, cx);
         div()
-            .group(pane::PANE_GROUP)
             .relative()
             .flex()
             .flex_col()

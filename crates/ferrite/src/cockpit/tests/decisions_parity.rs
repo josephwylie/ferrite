@@ -86,7 +86,13 @@ fn the_decision_row_reads_head_band_options_hint(cx: &mut TestAppContext) {
         near(head.size.height, line),
         "the head is one row: {head:?}"
     );
-    assert!(near(mark.left(), head.left()), "◆ at the gutter's origin");
+    assert!(
+        near(
+            mark.left() + px(crate::theme::DECISION_MARK_LEAD),
+            head.left()
+        ),
+        "◆ centred at the gutter's origin"
+    );
     assert!(near(mark.size.width, px(crate::theme::DECISION_MARK)));
     assert!(
         near(well.top() - head.bottom(), half),

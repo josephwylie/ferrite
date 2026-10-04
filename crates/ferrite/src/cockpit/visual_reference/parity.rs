@@ -11,12 +11,10 @@
 //!
 //! Where two prototype strings imply different clock times for one event,
 //! the transcript keeps the clock's time and the notice is restamped
-//! (`phase0::backdate`); each case says so where it happens.
+//! (`Cockpit::fixture_backdate_notices`); each case says so where it
+//! happens.
 
 #![cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-
-#[path = "phase0.rs"]
-pub(crate) mod phase0;
 
 use std::cell::RefCell;
 use std::io;
@@ -38,9 +36,29 @@ use ferrite_core::{
     TurnOutcome, UsageDetails, UsageScope,
 };
 
-use phase0::clock::Fixture;
-
 // ------------------------------------------------------------------ clock
+
+/// The process clock's fixture (`ferrite_core::clock::Fixture`), moved in
+/// the `SystemTime`s the world is scripted in.
+pub(crate) struct Fixture(ferrite_core::clock::Fixture);
+
+impl Fixture {
+    /// Freeze every visible time at `at` until dropped.
+    pub(crate) fn install(at: SystemTime) -> Self {
+        Fixture(ferrite_core::clock::Fixture::install(at.into()))
+    }
+
+    /// Move the clock to `at`.
+    pub(crate) fn set(&self, at: SystemTime) {
+        self.0.set(at.into());
+    }
+
+    /// Step the clock forward by `by`.
+    #[allow(dead_code)]
+    pub(crate) fn advance(&self, by: Duration) {
+        self.0.advance(by);
+    }
+}
 
 /// A wall-clock time of the capture's day, in seconds since local midnight:
 /// the world is scripted in the times the prototype prints.
@@ -278,7 +296,9 @@ pub(crate) struct World {
     pub held: Option<(mpsc::Sender<SessionEvent>, SessionEvent)>,
 }
 
-/// What one Thread does at one moment of the timeline.
+/// What one Thread does at one moment of the timeline. A fixture's script,
+/// built once per capture: an event's size is no concern here.
+#[allow(clippy::large_enum_variant)]
 enum Act {
     /// The operator sends a line.
     Prompt(String),
@@ -564,6 +584,10 @@ pub(crate) fn build(root: &Path, look: Look, clock: Clock) -> World {
     }
     clock.set(CAPTURE);
     core.pump();
+    // Fold regression's first turn failed its suite and went idle without a
+    // turn end of its own (no stamp in the prototype's Pane), then resumed;
+    // its finish is the list's `failed` row all the same (FL-16).
+    core.fixture_notice(cast.fold, TurnOutcome::Completed);
 
     // The Groups, in creation order: Perf sweep first, so a member's Group
     // is Perf sweep (R1); Everything holds it again by inclusion.
@@ -595,15 +619,23 @@ pub(crate) fn build(root: &Path, look: Look, clock: Clock) -> World {
         &[cast.theme, cast.fold],
         "Perf sweep",
     );
-    let everything = group(
-        &mut core,
-        cast.port,
-        cast.bump,
-        &[cast.docs, cast.flaky, cast.release],
-        "Everything",
-    );
-    for (index, thread) in cast.sweep().into_iter().enumerate() {
-        phase0::include(&mut core, thread, everything, Some(index));
+    // Everything is home only to the two ferrite Threads no other Group
+    // holds (Flaky provider test, Release notes); the sweep's members and
+    // zeron's three are its guests (R1, `GroupChange::Include`), so zeron's
+    // Threads stay loose rows under zeron and the Group sits under ferrite,
+    // the Project of its first member. Its order is the wall's.
+    let everything = group(&mut core, cast.flaky, cast.release, &[], "Everything");
+    let guests = cast
+        .sweep()
+        .into_iter()
+        .chain([cast.port, cast.bump, cast.docs]);
+    for (index, thread) in guests.enumerate() {
+        core.apply_group(GroupChange::Include {
+            thread,
+            group: everything,
+            index: Some(index),
+        })
+        .expect("Everything includes the sweep's and zeron's Threads");
     }
 
     // The notifications list holds exactly the prototype's rows: Theme
@@ -625,14 +657,14 @@ pub(crate) fn build(root: &Path, look: Look, clock: Clock) -> World {
     }
     // Theme retune's turn ended at 7:33 pm (its stamp), eight minutes
     // before capture; the list reads `12m`.
-    phase0::backdate(&mut core, cast.theme, clock.instant(CAPTURE - 12 * MINUTE));
+    core.fixture_backdate_notices(cast.theme, clock.instant(CAPTURE - 12 * MINUTE));
     // Fold regression's run failed after its 7:34 pm prompt; the list reads
     // `9m`, earlier than that prompt.
-    phase0::backdate(&mut core, cast.fold, clock.instant(CAPTURE - 9 * MINUTE));
+    core.fixture_backdate_notices(cast.fold, clock.instant(CAPTURE - 9 * MINUTE));
     // Flaky provider test asked after Close stale did (the nav's needs-you
     // strip lists Close stale first, in arrival order); the list ages it
     // `5m`, older than Close stale's `2m`.
-    phase0::backdate(&mut core, cast.flaky, clock.instant(CAPTURE - 5 * MINUTE));
+    core.fixture_backdate_notices(cast.flaky, clock.instant(CAPTURE - 5 * MINUTE));
 
     match look {
         Look::Solo => {
@@ -1459,7 +1491,7 @@ fn docs(s: &mut Script, cast: &Cast) {
     s.ev(
         start + 2,
         who,
-        text("Drafting the decision section from the spike notes"),
+        text("Drafting the decision section\nfrom the spike notes"),
     );
 }
 
@@ -1749,13 +1781,17 @@ fn nav_tests_failing() -> String {
     lines.join("\n")
 }
 
-/// Fold regression's workspace run: its summary first, the two failures it
-/// names, and forty-one folded lines (CT-14).
+/// Fold regression's workspace run, as cargo prints it: passing tests, the
+/// two failures past the first three test lines (so the elbow reads the
+/// tally and those two, CT-14), their details, and forty-one folded lines.
 fn fold_tests_failing() -> String {
     let mut lines = vec![
-        "357 passed; 2 failed".to_string(),
-        "fold::tail_follows_newest_line ... FAILED".to_string(),
-        "fold::collapse_keeps_anchor ... FAILED".to_string(),
+        "running 359 tests".to_string(),
+        "test fold::fold_opens_under_its_header ... ok".to_string(),
+        "test fold::fold_shuts_at_once ... ok".to_string(),
+        "test fold::keeps_the_reader_where_it_was ... ok".to_string(),
+        "test fold::tail_follows_newest_line ... FAILED".to_string(),
+        "test fold::collapse_keeps_anchor ... FAILED".to_string(),
         "failures:".to_string(),
     ];
     for test in ["tail_follows_newest_line", "collapse_keeps_anchor"] {
@@ -1927,6 +1963,7 @@ fn nav_edit_one() -> Hunk {
         old_lines: 7,
         new_start: 208,
         new_lines: 11,
+        section: Some("fn thread_row".into()),
         lines: [
             " fn thread_row(&self, t: &ThreadRow, cx: &App) -> Div {",
             "     let facts = self.facts.get(&t.id);",
@@ -1955,6 +1992,7 @@ fn nav_edit_two() -> Hunk {
         old_lines: 6,
         new_start: 211,
         new_lines: 7,
+        section: Some("fn thread_row".into()),
         lines: [
             "     let mut row = div().h(px(if live { theme::ROW_LIVE_H } else { theme::ROW_H }));",
             "     if live {",
@@ -2029,6 +2067,7 @@ fn canvas_hunks(before: &[String]) -> Vec<Hunk> {
         old_lines: 6,
         new_start: 88,
         new_lines: 9,
+        section: Some("impl Canvas".into()),
         lines: [
             " impl Canvas {",
             " fn paint(&mut self, cell: CellId, glyphs: &[Glyph]) -> Frame {",
@@ -2121,6 +2160,7 @@ fn replace(
         old_lines: (before_context + remove) as u32,
         new_start: (old_start as i64 + shift) as u32,
         new_lines: (before_context + add.len()) as u32,
+        section: None,
         lines,
     }
 }
@@ -2186,19 +2226,21 @@ fn theme_before() -> Vec<String> {
     lines
 }
 
-/// The retune, `+3 −3`: zero-context rows at 237, 240 and 246.
+/// The retune, `+3 −3`: zero-context rows at 237 and 240 as the prototype
+/// draws them, the second hunk's header counting the BLOCKED row at 246
+/// its lines leave out (the stat reads the header, `hunk_stat`).
 fn theme_hunks() -> Vec<Hunk> {
     [
-        (237, "RUNNING", "0x7fbf95", "0x93cf8c"),
-        (240, "ATTENTION", "0xcbb280", "0xe6c47c"),
-        (246, "BLOCKED", "0xd9776f", "0xef8a80"),
+        (237, 1, "RUNNING", "0x7fbf95", "0x93cf8c"),
+        (240, 2, "ATTENTION", "0xcbb280", "0xe6c47c"),
     ]
     .into_iter()
-    .map(|(line, name, old, new)| Hunk {
+    .map(|(line, counted, name, old, new)| Hunk {
         old_start: line,
-        old_lines: 1,
+        old_lines: counted,
         new_start: line,
-        new_lines: 1,
+        new_lines: counted,
+        section: None,
         lines: vec![
             format!("-pub const {name}: u32 = {old};"),
             format!("+pub const {name}: u32 = {new};"),
@@ -2220,6 +2262,7 @@ fn port_hunks() -> Vec<Hunk> {
                 old_lines: 4,
                 new_start: start + part * 9,
                 new_lines: 13,
+                section: None,
                 lines,
             }
         })
@@ -2315,9 +2358,10 @@ mod tests {
         assert_eq!((count(&hunks, '+'), count(&hunks, '-')), (31, 9));
         let theme = theme_before();
         assert_applies(&theme, &theme_hunks());
+        // Two drawn pairs; the second header counts the third (`+3 −3`).
         assert_eq!(
             (count(&theme_hunks(), '+'), count(&theme_hunks(), '-')),
-            (3, 3)
+            (2, 2)
         );
         assert_eq!(
             (count(&port_hunks(), '+'), count(&port_hunks(), '-')),

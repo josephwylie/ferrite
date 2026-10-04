@@ -1400,7 +1400,12 @@ mod tests {
             line
         );
         assert_eq!(
-            height(project_section(0, "ferrite".into(), Some("dev".into()), true)),
+            height(project_section(
+                0,
+                "ferrite".into(),
+                Some("dev".into()),
+                true
+            )),
             line
         );
     }
@@ -1664,7 +1669,11 @@ mod tests {
             assert!((NAV_CHROME_FOLDED_W - 156.0).abs() < 1e-3, "20ch");
             let doors = |cell: f32| {
                 let bell_right = cell - NAV_PAD_X;
-                (bell_right - 2.0 * ICON_BUTTON, bell_right - ICON_BUTTON, bell_right)
+                (
+                    bell_right - 2.0 * ICON_BUTTON,
+                    bell_right - ICON_BUTTON,
+                    bell_right,
+                )
             };
             let (toggle, bell, end) = doors(WIDTH);
             assert!((toggle - 217.0).abs() < 1e-3 && (bell - 245.0).abs() < 1e-3);

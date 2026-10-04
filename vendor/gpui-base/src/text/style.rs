@@ -44,6 +44,7 @@ pub struct TextViewStyle {
     link_underline_on_hover: bool,
     numeric_columns_right: bool,
     image: StyleRefinement,
+    table_fit: Option<Pixels>,
 }
 
 /// A fixed hang for list text: markers right-aligned in a box `width` wide,
@@ -114,6 +115,7 @@ impl PartialEq for TextViewStyle {
             && self.link_underline_on_hover == other.link_underline_on_hover
             && self.numeric_columns_right == other.numeric_columns_right
             && self.image == other.image
+            && self.table_fit == other.table_fit
     }
 }
 
@@ -176,6 +178,7 @@ impl TextViewStyle {
             link_underline_on_hover: false,
             numeric_columns_right: false,
             image: StyleRefinement::default(),
+            table_fit: None,
         }
     }
 
@@ -337,6 +340,21 @@ impl TextViewStyle {
     pub fn with_numeric_columns_right(mut self, right: bool) -> Self {
         self.numeric_columns_right = right;
         self
+    }
+
+    /// Sizes a table to its content, like CSS `width: auto` with
+    /// `border-collapse`: each column exactly its widest cell plus `pad` a
+    /// side (the first column's left pad dropped, so its text sits on the
+    /// table's edge), no column floor, no stretch to the frame, cells on one
+    /// line. `None` (the default) keeps upstream's frame-filling layout.
+    pub fn with_table_fit(mut self, pad: Option<Pixels>) -> Self {
+        self.table_fit = pad;
+        self
+    }
+
+    /// The content-sized table's cell padding, when on.
+    pub fn table_fit(&self) -> Option<Pixels> {
+        self.table_fit
     }
 
     /// Refines the frame a Markdown image is drawn in (its border, width,

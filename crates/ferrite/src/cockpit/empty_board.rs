@@ -58,6 +58,7 @@ impl CockpitView {
 
     /// Where Ferrite was launched: the empty board's path line. Defaults to
     /// the process's directory at startup.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub(crate) fn set_launch_dir(&mut self, dir: PathBuf) {
         self.launch_dir = Some(dir);
     }
@@ -132,7 +133,7 @@ impl CockpitView {
         };
         // `claude 2.1.289 · codex 0.160.0 · 3 projects · 9 open threads`:
         // one dim run of words, each logo half a cell before its name.
-        let seam = || div().flex_shrink_0().child("\u{b7}");
+        let seam = || crate::components::cells("\u{b7}").w(px(STATUS_SEAM_W));
         let mut facts = div()
             .debug_selector(|| "empty-board-facts".into())
             .flex()
@@ -153,14 +154,14 @@ impl CockpitView {
                         .items_center()
                         .gap(px(CH / 2.0))
                         .child(crate::icons::icon(glyph, BAR_MARK, ink))
-                        .child(SharedString::from(format!("{name} {version}"))),
+                        .child(crate::components::cells(format!("{name} {version}"))),
                 )
                 .child(seam());
         }
         facts = facts
-            .child(div().flex_shrink_0().child(plural(projects, "project")))
+            .child(crate::components::cells(plural(projects, "project")))
             .child(seam())
-            .child(div().flex_shrink_0().child(plural(open, "open thread")));
+            .child(crate::components::cells(plural(open, "open thread")));
         // The launch directory, `~`-abbreviated, as a path reads: cyan, its
         // underline under the pointer, a press opening it.
         let root = self
@@ -174,15 +175,16 @@ impl CockpitView {
             })
             .map(|root| {
                 let shown = SharedString::from(home_relative(&root));
+                // A path as every path reads (`file_links::path_text`): cyan,
+                // its underline under the pointer; a press opens it.
+                let target = crate::file_links::PathTarget::new(root.clone());
                 div()
                     .id("empty-board-path")
                     .debug_selector(|| "empty-board-path".into())
                     .flex_shrink_0()
-                    .truncate()
                     .cursor_pointer()
                     .text_color(rgb(PATH_INK))
-                    .hover(|style| style.underline().text_decoration_color(rgb(PATH_INK)))
-                    .child(shown)
+                    .child(crate::file_links::path_text(shown, target))
                     .on_click(move |_, window, cx| {
                         crate::file_links::FileLink {
                             path: root.clone(),
@@ -277,7 +279,7 @@ impl CockpitView {
                     })),
             );
         }
-        let now = std::time::SystemTime::now();
+        let now = ferrite_core::clock::system_time();
         // R13: the four Threads used last, open or parked.
         let mut recent: Vec<ThreadId> = self.cockpit.threads();
         for thread in self.parked_threads() {

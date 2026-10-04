@@ -3167,6 +3167,12 @@ impl Cockpit {
         self.notifications.fixture_backdate(thread, at);
     }
 
+    /// Fixtures only (the parity scenes): a Notice for `thread`, born now
+    /// (`Notifications::fixture_push`).
+    pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
+        self.notifications.fixture_push(thread, outcome);
+    }
+
     fn acknowledge_focus(&mut self) {
         if let Some(thread) = self.roster.focused_thread() {
             let subject = self
@@ -8186,7 +8192,7 @@ mod tests {
         assert!(
             blocks.iter().any(|b| matches!(
                 &b.body,
-                Body::Notice(line) if line.starts_with("continued on Codex · Default")
+                Body::Notice(line) if line.starts_with("continued on Codex · default")
             )),
             "the handover replays: {blocks:?}"
         );

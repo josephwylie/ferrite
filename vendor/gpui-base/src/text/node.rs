@@ -2168,6 +2168,108 @@ impl BlockNode {
     /// refinement keeps cell text on a single line, and the floors are raised
     /// to the full content widths so the single-line columns never shrink —
     /// the table scrolls as soon as the content is wider than the frame.
+    /// Ferrite: the content-sized table (`TextViewStyle::with_table_fit`).
+    fn render_fit_table(
+        table: &Table,
+        col_count: usize,
+        pad: Pixels,
+        node_cx: &NodeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let mut col_w = vec![0.0_f32; col_count];
+        for row in table.children.iter() {
+            for (ix, cell) in row.children.iter().enumerate() {
+                let Some(slot) = col_w.get_mut(ix) else {
+                    continue;
+                };
+                for line in cell.children.text().split('\n') {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let run = text_style.to_run(line.len());
+                    let width = window
+                        .text_system()
+                        .layout_line(line, font_size, &[run], None)
+                        .width;
+                    *slot = slot.max(f32::from(width));
+                }
+            }
+        }
+        let pad = f32::from(pad);
+        let widths: Vec<f32> = col_w
+            .iter()
+            .enumerate()
+            .map(|(ix, w)| w + if ix == 0 { pad } else { 2.0 * pad })
+            .collect();
+        let total: f32 = widths.iter().sum();
+        let style = &node_cx.style;
+        let mut rows = Vec::with_capacity(table.children.len());
+        for (row_ix, row) in table.children.iter().enumerate() {
+            let mut cells = Vec::with_capacity(row.children.len());
+            for (ix, cell) in row.children.iter().enumerate() {
+                let align = table.display_align(ix, style.numeric_columns_right());
+                cells.push(
+                    div()
+                        .id(("cell", ix))
+                        .flex_none()
+                        .w(px(widths.get(ix).copied().unwrap_or(0.)))
+                        .when(align == ColumnumnAlign::Center, |this| this.text_center())
+                        .when(align == ColumnumnAlign::Right, |this| this.text_right())
+                        .refine_style(&style.table_cell())
+                        .when(row_ix == 0, |this| this.refine_style(&style.table_head()))
+                        .when(ix == 0, |this| this.pl_0())
+                        .whitespace_nowrap()
+                        .child(cell.children.render(node_cx, window, cx)),
+                );
+            }
+            rows.push(
+                div()
+                    .id("row")
+                    .w(px(total))
+                    .border_b_1()
+                    .border_color(style.border())
+                    .flex()
+                    .flex_row()
+                    .when(row_ix == 0, |this| {
+                        this.text_color(style.foreground())
+                            .refine_style(&style.table_head())
+                    })
+                    .children(cells),
+            );
+        }
+        // As wide as its cells; a frame narrower than that scrolls it.
+        let scroll_key = match table.span {
+            Some(span) => SharedString::from(format!(
+                "{}-table-scroll-{}:{}",
+                window.current_view(),
+                span.start,
+                span.end
+            )),
+            None => SharedString::from(format!("{}-table-scroll", window.current_view())),
+        };
+        let scroll_handle = window
+            .use_keyed_state(scroll_key, cx, |_, _| ScrollHandle::default())
+            .read(cx)
+            .clone();
+        div()
+            .debug_selector(|| "markdown-table-fit".into())
+            .max_w(px(total))
+            .child(horizontal_scroll_area(
+                ("table-fit", table.span.map_or(0, |span| span.start)),
+                &scroll_handle,
+                &StyleRefinement::default().refine_style(style.table()),
+                div()
+                    .debug_selector(|| "markdown-table-track".into())
+                    .w(px(total))
+                    .children(rows),
+            ))
+            .into_any_element()
+    }
+
     fn render_scroll_table(
         table: &Table,
         col_count: usize,
@@ -2224,6 +2326,11 @@ impl BlockNode {
             }
         }
         let style = &node_cx.style;
+        // Ferrite: a content-sized table (`with_table_fit`) — exact columns,
+        // the first flush left, every row's rule (the last's too).
+        if let Some(pad) = style.table_fit() {
+            return Self::render_fit_table(table, col_count, pad, node_cx, window, cx);
+        }
         // Nowrap cells (via the `table_cell` refinement, which cascades to
         // the cell text) must never shrink below their single-line content,
         // so their floor is the content width itself.

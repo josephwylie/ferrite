@@ -277,6 +277,13 @@ impl Bell {
         &self.toasts
     }
 
+    /// Take every toast down, keeping what was presented as presented: a
+    /// scene's requests that stood before the window opened.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+    pub fn clear_toasts(&mut self) {
+        self.toasts.clear();
+    }
+
     /// Take one toast down (its button acted on it).
     pub fn drop_toast(&mut self, target: &RowTarget) {
         self.toasts.retain(|(standing, _)| standing != target);
@@ -440,6 +447,11 @@ fn mark_cell(state: State) -> Div {
         .w(px(NOTICE_MARK_W))
         .h(px(LH_UI));
     match mark(state) {
+        // The `◆` as the fallback face sets it: 8px wide, its ink starting
+        // where the cell's text would (the drawn shape is 60% of its box).
+        Mark::Drawn(path, ink) if path == icons::DIAMOND => {
+            cell.child(icons::icon(path, NOTICE_DIAMOND, ink).ml(px(-NOTICE_DIAMOND * 0.2 + 0.25)))
+        }
         Mark::Drawn(path, ink) => cell.child(icons::icon(path, GLYPH_BOX, ink)),
         Mark::Typed(glyph, ink) => cell.text_color(rgb(ink)).child(glyph),
     }
@@ -635,8 +647,8 @@ fn quick_button(
         .whitespace_nowrap()
         .hover_quick(blend)
         .press_float()
-        .child(div().text_color(rgb(TEXT_MUTED)).child(key))
-        .child(div().text_color(ink).child(word))
+        .child(components::cells(key).text_color(rgb(TEXT_MUTED)))
+        .child(components::cells(word).text_color(ink))
 }
 
 /// A toast (the prototype's `.toast`, FL-18), in the float grammar with no
@@ -733,12 +745,7 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
                         .min_w_0()
                         .items_center()
                         .child(mark_cell(row.state))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_color(rgb(word_ink(word)))
-                                .child(word),
-                        )
+                        .child(components::cells(word).text_color(rgb(word_ink(word))))
                         .child(
                             div()
                                 .min_w_0()
@@ -896,7 +903,7 @@ mod tests {
         );
         assert_eq!(mark(State::Done), Mark::Drawn(icons::CHECK, TEXT_MUTED));
         assert_eq!(BADGE_INK, ATTENTION);
-        assert!(ROW_TEXT_CELLS >= 40);
+        const { assert!(ROW_TEXT_CELLS >= 40) };
     }
 
     /// A Thread's completions fold into its newest; requests never fold;

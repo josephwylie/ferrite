@@ -90,6 +90,12 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
   `12%`, `1,204`, `3.2k`, `$12`) is drawn right-aligned
   (`Table::display_align`); the source and a copy keep the column's own
   alignment.
+- `with_table_fit(Option<Pixels>)`: a table sized to its content, as CSS
+  lays out `width: auto` with `border-collapse` — each column exactly its
+  widest cell plus the pad a side (the first column's left pad dropped), no
+  column floor, no stretch to the frame, cells on one line, and every row's
+  bottom rule including the last's (`TextNode::render_fit_table`). `None`
+  keeps upstream's frame-filling, scrollable layout.
 - `with_image(StyleRefinement)`: a block Markdown image is drawn in a frame
   refined by this style (its width, border, ground), the picture filling the
   frame's width at its own proportions. The default draws no frame, exactly as

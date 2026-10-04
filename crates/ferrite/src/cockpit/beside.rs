@@ -448,13 +448,14 @@ pub(crate) fn parse_git_diff(diff: &str) -> Vec<ferrite_core::FileEdit> {
                 continue;
             }
         }
-        if let Some((old_start, old_lines, new_start, new_lines)) = hunk_header(line) {
+        if let Some((old_start, old_lines, new_start, new_lines, section)) = hunk_header(line) {
             flush(&mut edits, &mut hunk);
             hunk = Some(ferrite_core::Hunk {
                 old_start,
                 old_lines,
                 new_start,
                 new_lines,
+                section,
                 lines: Vec::new(),
             });
             continue;
@@ -471,16 +472,21 @@ pub(crate) fn parse_git_diff(diff: &str) -> Vec<ferrite_core::FileEdit> {
 }
 
 /// `@@ -208,7 +208,11 @@ fn thread_row` → (208, 7, 208, 11).
-fn hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+/// A hunk header's ranges and the section git names after it
+/// (`@@ -88,6 +88,9 @@ fn draw`).
+fn hunk_header(line: &str) -> Option<(u32, u32, u32, u32, Option<String>)> {
     let (old, rest) = line.strip_prefix("@@ -")?.split_once(" +")?;
-    let (new, _) = rest.split_once(" @@")?;
+    let (new, section) = rest.split_once(" @@")?;
+    let section = Some(section.trim())
+        .filter(|section| !section.is_empty())
+        .map(str::to_string);
     let range = |range: &str| -> Option<(u32, u32)> {
         let (start, count) = range.split_once(',').unwrap_or((range, "1"));
         Some((start.parse().ok()?, count.parse().ok()?))
     };
     let (old_start, old_lines) = range(old)?;
     let (new_start, new_lines) = range(new)?;
-    Some((old_start, old_lines, new_start, new_lines))
+    Some((old_start, old_lines, new_start, new_lines, section))
 }
 
 #[cfg(test)]

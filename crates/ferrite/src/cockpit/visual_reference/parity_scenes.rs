@@ -16,10 +16,11 @@ use ferrite_core::ThreadId;
 use gpui::{Context, Window};
 
 use super::{CockpitView, Scene, Setup};
-use crate::demo::parity::phase0::{
-    clock::Fixture, disable_font_smoothing, NavFold, PaletteScope, Phase0Hooks as _, ScrollTarget,
-};
-use crate::demo::parity::{self, Cast, Clock, Look, World, CAPTURE};
+use crate::demo::parity::{self, Cast, Clock, Fixture, Look, World, CAPTURE};
+use crate::nav::NavFold;
+use crate::palette::PaletteScope;
+use crate::platform_text::disable_font_smoothing;
+use crate::transcript::ScrollTarget;
 
 /// One parity capture: the prototype view it reproduces, and the state
 /// name the capture is saved under (`parity-<view>-app.png`).
@@ -256,6 +257,10 @@ fn prepare(
     view.set_nav_fold(NavFold::Group(everything), true, cx);
     use gpui::component::WindowExt as _;
     window.clear_notifications(cx);
+    // The requests standing when the window opened were presented then:
+    // none of them toasts (the toast scene delivers its one request after).
+    view.present_notices(window, cx);
+    view.bell.clear_toasts();
     // The prototype's window has the keyboard: the focused Composer's caret
     // is the solid block, not the hollow one an inactive window draws.
     window.activate_window();
@@ -277,7 +282,7 @@ fn solo_scroll(view: &mut CockpitView, cast: &Cast, cx: &mut Context<CockpitView
     view.scroll_transcript(
         pane,
         ScrollTarget::TurnBand {
-            turn: 2,
+            turn: 1,
             offset: 180.0,
         },
         cx,
@@ -292,7 +297,7 @@ fn board_scroll(view: &mut CockpitView, cast: &Cast, cx: &mut Context<CockpitVie
         view.scroll_transcript(
             pane,
             ScrollTarget::TurnBand {
-                turn: 1,
+                turn: 0,
                 offset: 0.0,
             },
             cx,

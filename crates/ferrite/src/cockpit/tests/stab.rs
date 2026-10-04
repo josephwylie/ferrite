@@ -1392,7 +1392,7 @@ fn an_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
     );
 }
 
-/// The Solo status line is always present at one `LH_META` line, so the
+/// The Solo status line is always present at one `LH_UI` line, so the
 /// Composer's top never moves: not when a mode is announced, not under a
 /// Decision (rule 2.6.6).
 #[gpui::test]
@@ -1403,7 +1403,7 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
     tick(cx);
     let rest = cx.debug_bounds("composer-block").expect("the Composer");
     let line = cx.debug_bounds("composer-meta").expect("the status line");
-    assert_eq!(line.size.height, px(crate::theme::LH_META));
+    assert_eq!(line.size.height, px(crate::theme::LH_UI));
     fake.streams.borrow()[0]
         .send(SessionEvent::PermissionMode {
             mode: "acceptEdits".into(),

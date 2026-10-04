@@ -164,12 +164,12 @@ fn the_hover_card_hangs_under_its_path_and_flips_above_near_the_foot() {
     let anchor = Bounds::new(point(px(200.), px(300.)), size(px(120.), px(20.)));
     assert_eq!(
         crate::hover_card::hang_origin(anchor, card, viewport),
-        point(px(200.), px(326.))
+        point(px(200.), px(320. + crate::theme::HOVER_CARD_GAP))
     );
     let low = Bounds::new(point(px(200.), px(800.)), size(px(120.), px(20.)));
     assert_eq!(
         crate::hover_card::hang_origin(low, card, viewport).y,
-        px(800. - 6. - 166.)
+        px(800. - crate::theme::HOVER_CARD_GAP - 166.)
     );
     let right = Bounds::new(point(px(1400.), px(300.)), size(px(30.), px(20.)));
     assert_eq!(

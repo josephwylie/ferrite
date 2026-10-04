@@ -602,7 +602,10 @@ fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
     let island = cx.debug_bounds("question-island").expect("the Decision");
     let deny = cx.debug_bounds("decision-deny").expect("its deny row");
     assert!(
-        island.contains(&deny.origin) && island.contains(&deny.bottom_right()),
+        (deny.left() >= island.left()
+            && deny.top() >= island.top()
+            && deny.right() <= island.right()
+            && deny.bottom() <= island.bottom()),
         "{deny:?} inside {island:?}"
     );
     // Terminal-native: an option is one grid row.

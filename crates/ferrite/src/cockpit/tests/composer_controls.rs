@@ -344,9 +344,9 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             composer.set("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(), cx);
         });
     });
-    // 490 / 510 tall: the cells the old 42px band left at 500 / 520
-    // (`WIN_CHROME_H` is the 32px titlebar now).
-    for (width, height) in [(860., 490.), (1000., 510.)] {
+    // The smallest 2×2 boards whose cells still read as transcripts (R12:
+    // 300 wide, 360 tall); anything smaller is the wall, with no Composer.
+    for (width, height) in [(900., 790.), (1000., 800.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
         let queue = bounds(cx, format!("composer-queue-{namespace}"));
@@ -385,17 +385,12 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         let send = cx.debug_bounds("composer-meta").expect("the status line");
         assert!(
             queue.size.height
-                <= px(
-                    crate::theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * crate::theme::QUEUE_ROW_H
-                        + 1.
-                )
+                <= px(crate::theme::COMPOSER_QUEUE_ROWS as f32 * crate::theme::QUEUE_ROW_H + 1.)
         );
         assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
         assert!(queue.bottom() <= editor.top());
-        if width == 860. {
-            let progress = cx
-                .debug_bounds("progress-caption-Checking the remaining interactions")
-                .unwrap();
+        if width == 900. {
+            let progress = bounds(cx, format!("transcript-progress-{namespace}"));
             assert!(
                 progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_Y),
                 "the complete live status stays above the Composer rule: {progress:?} / {queue:?}"

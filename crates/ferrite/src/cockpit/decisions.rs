@@ -42,7 +42,6 @@ impl CockpitView {
     /// as one transcript row each. `key` changes whenever what they draw
     /// does — a request, its sending state, the cursor, a note, a pick, an
     /// error, the head's words.
-    #[allow(dead_code)] // Called by core-transcript's `sync_transcript`.
     pub(crate) fn decision_tail(
         &self,
         index: usize,

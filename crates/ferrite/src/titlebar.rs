@@ -321,11 +321,14 @@ fn title_region(title: &Title) -> Div {
         .line_height(px(LH_UI))
         .text_color(rgb(TEXT_MUTED))
         .children(words.into_iter().enumerate().map(|(at, (word, strong))| {
+            // Every word holds exactly its cells: measured runs round up
+            // a pixel each and would drift the row (`components::cells`).
             if strong {
                 div()
                     .id(("titlebar-title", at))
                     .debug_selector(|| "titlebar-title".into())
                     .min_w_0()
+                    .w(px(components::cells_width(&word) + 0.1))
                     .flex_shrink(1.)
                     .truncate()
                     .tooltip(crate::menu::tooltip(word.clone()))
@@ -335,11 +338,8 @@ fn title_region(title: &Title) -> Div {
                     .into_any_element()
             } else {
                 components::tabular(
-                    div()
-                        .debug_selector(move || format!("titlebar-word-{at}"))
-                        .flex_shrink_0(),
+                    components::cells(word).debug_selector(move || format!("titlebar-word-{at}")),
                 )
-                .child(word)
                 .into_any_element()
             }
         }))
@@ -379,7 +379,7 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedSt
                 .px(px(BAR_SEG_PAD_X))
                 .font_weight(W_STRONG)
                 .text_color(rgb(ACCENT))
-                .child("ferrite"),
+                .child(components::cells("ferrite")),
         )
         .children(tabs)
         .child(div().flex_1().min_w_0())
@@ -391,10 +391,11 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedSt
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .px(px(BAR_SEG_PAD_X))
+                    .pl(px(BAR_SEG_PAD_X))
+                    .pr(px(BAR_SEG_PAD_TAIL))
                     .text_color(rgb(TEXT)),
             )
-            .child(clock),
+            .child(components::cells(clock)),
         )
 }
 
@@ -431,7 +432,7 @@ pub fn bar_tab(
                 .when(!current, |label| {
                     label.group_hover(key, |style| style.text_color(rgb(TEXT)))
                 })
-                .child(SharedString::from(format!("{ordinal} {label}"))),
+                .child(components::cells(format!("{ordinal} {label}"))),
         )
 }
 
@@ -477,20 +478,15 @@ pub fn bar_usage(
             .flex_shrink_0()
             .items_center()
             .gap(px(BAR_SEG_PAD_X))
-            .px(px(BAR_SEG_PAD_X))
-            .hover(|style| style.bg(paint::HOVER))
+            .pl(px(BAR_SEG_PAD_X))
+            .pr(px(BAR_SEG_PAD_TAIL))
+            .hover_row(key.clone())
             .child(icon(glyph, BAR_MARK, ink))
-            .child(
-                components::tabular(
-                    div()
-                        .text_color(rgb(TEXT_MUTED))
-                        .group_hover(key, |style| style.text_color(rgb(TEXT))),
-                )
-                .child(SharedString::from(format!(
-                    "{window} {}%",
-                    (used * 100.).round() as u32
-                ))),
-            ),
+            .child(components::tabular(
+                components::cells(format!("{window} {}%", (used * 100.).round() as u32))
+                    .text_color(rgb(TEXT_MUTED))
+                    .group_hover(key, |style| style.text_color(rgb(TEXT))),
+            )),
     )
 }
 

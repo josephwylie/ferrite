@@ -133,7 +133,10 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         let other = bounds(cx, format!("request-other-{}-{serial}-0", thread.get()));
         let submit = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
         assert!(
-            island.contains(&submit.origin) && island.contains(&submit.bottom_right()),
+            (submit.left() >= island.left()
+                && submit.top() >= island.top()
+                && submit.right() <= island.right()
+                && submit.bottom() <= island.bottom()),
             "the answer button must move with the question bar: {submit:?} / {island:?}"
         );
         let gap = submit.top() - other.bottom();
@@ -143,54 +146,36 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         );
         if let Some((previous_width, previous_island)) = previous {
             let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;
-            assert!(
-                (island.bottom() - previous_island.bottom()).abs() <= px(1.),
-                "the question bar stays anchored above the composer"
-            );
+            // The question is the transcript's tail: wrapping makes it
+            // taller, unwrapping shorter.
             if width < previous_width {
-                assert!(island.top() < previous_island.top(),
-                    "wrapped questions must expand the bar upward: {island:?} / {previous_island:?}");
+                assert!(
+                    island.size.height > previous_island.size.height,
+                    "wrapped questions grow the row: {island:?} / {previous_island:?}"
+                );
             } else {
-                assert!(island.top() > previous_island.top(),
-                    "unwrapped questions must let the bar shrink back down: {island:?} / {previous_island:?}");
+                assert!(
+                    island.size.height < previous_island.size.height,
+                    "unwrapped questions shrink the row: {island:?} / {previous_island:?}"
+                );
             }
         }
         previous = Some((width, island));
     }
-    let before_island = cx.debug_bounds("question-island").unwrap();
-    let before_composer = cx.debug_bounds("focused-prompt-editor").unwrap();
+    // A Composer that grows keeps the draft; the question stays the
+    // transcript's tail (it is not docked to the Composer any more).
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set("draft  untouched\nsecond line\nthird line".into(), cx)
         })
     });
     tick(cx);
-    let grown_island = cx.debug_bounds("question-island").unwrap();
-    let grown_composer = cx.debug_bounds("focused-prompt-editor").unwrap();
-    assert!(grown_composer.size.height > before_composer.size.height);
-    assert!(
-        grown_island.bottom() < before_island.bottom(),
-        "the entire question bar moves up when the composer grows"
-    );
-    assert!(
-        (grown_island.bottom()
-            - before_island.bottom()
-            - (grown_composer.top() - before_composer.top()))
-        .abs()
-            <= px(1.),
-        "the question bar and composer must move together"
-    );
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set("draft  untouched".into(), cx)
         })
     });
     tick(cx);
-    assert_eq!(
-        cx.debug_bounds("question-island").unwrap(),
-        before_island,
-        "the bar returns when the composer shrinks"
-    );
     let first = cx.debug_bounds("question-choice-0-0").unwrap();
     let second = cx.debug_bounds("question-choice-0-1").unwrap();
     let island = cx.debug_bounds("question-island").unwrap();
@@ -292,10 +277,18 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         if cx.debug_bounds("tool-row-anchor-tool").is_some() {
             break;
         }
+
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: viewport.center(),
-            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(300.))),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(100.))),
             ..Default::default()
+        });
+        // The transcript is a cached view: paint it again so its rows'
+        // debug bounds are this frame's.
+        view.update(cx, |view, cx| {
+            if let Some(transcript) = view.panes[0].transcript() {
+                transcript.update(cx, |_, cx| cx.notify());
+            }
         });
         tick(cx);
     }
@@ -393,13 +386,23 @@ fn typed_and_pasted_question_marks_remain_literal_composer_text(cx: &mut TestApp
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    // On an empty line `?` is the shortcuts sheet's key (the status line's
+    // `? shortcuts`); after a word it is a question mark.
     cx.simulate_keystrokes("?");
-    assert_eq!(composer_text(&view, cx), "?");
+    assert_eq!(
+        composer_text(&view, cx),
+        "",
+        "an empty line's ? opens the sheet"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_input("why");
+    cx.simulate_keystrokes("?");
+    assert_eq!(composer_text(&view, cx), "why?");
     cx.update(|_, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string("?  literal\ttext\n  next".into()))
     });
     cx.simulate_keystrokes("cmd-v");
-    assert_eq!(composer_text(&view, cx), "??  literal\ttext\n  next");
+    assert_eq!(composer_text(&view, cx), "why??  literal\ttext\n  next");
     assert!(
         fake.sent.borrow().is_empty(),
         "pasting never submits the draft"
@@ -490,8 +493,8 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
+    // Open the fold: the elbow keeps the first line, the fold the rest.
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         cx.notify();
     });
@@ -499,9 +502,10 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
     cx.update(|_, cx| crate::rich::testing::select_all(cx));
     cx.simulate_keystrokes("cmd-c");
     let copied = clipboard(cx).unwrap();
+    // The fold holds the non-blank lines, as the elbow names them (CT-26).
     assert!(
-        copied.contains(source),
-        "literal output must survive copy without synthetic blank-line spaces: {copied:?}"
+        copied.contains("Bash(fixture)\n\nfirst\n\nlast"),
+        "the call, its elbow's line and the fold's copy as shown: {copied:?}"
     );
 }
 
@@ -702,7 +706,10 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         );
         for (label, button) in [("Allow", allow), ("Deny", deny)] {
             assert!(
-                island.contains(&button.origin) && island.contains(&button.bottom_right()),
+                (button.left() >= island.left()
+                    && button.top() >= island.top()
+                    && button.right() <= island.right()
+                    && button.bottom() <= island.bottom()),
                 "{label} must sit inside the island: button={button:?} island={island:?}"
             );
         }
@@ -732,19 +739,17 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         );
         if let Some((previous_width, previous_island)) = previous {
             let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;
-            assert!(
-                (island.bottom() - previous_island.bottom()).abs() <= px(1.),
-                "resizing keeps the bar's bottom edge anchored"
-            );
+            // The row is the transcript's tail: wrapping makes it taller,
+            // unwrapping shorter — it is not docked to the Composer.
             if width < previous_width {
                 assert!(
-                    island.top() < previous_island.top(),
-                    "wrapping expands the entire bar upward: {island:?} / {previous_island:?}"
+                    island.size.height > previous_island.size.height,
+                    "wrapping grows the row: {island:?} / {previous_island:?}"
                 );
             } else {
                 assert!(
-                    island.top() > previous_island.top(),
-                    "unwrapping lets the bar shrink down: {island:?} / {previous_island:?}"
+                    island.size.height < previous_island.size.height,
+                    "unwrapping shrinks the row: {island:?} / {previous_island:?}"
                 );
             }
         }

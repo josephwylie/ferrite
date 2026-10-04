@@ -26,9 +26,8 @@
 //!    with it. Vertical metrics are whole or half rows (`ROW`, `HALF_ROW`);
 //!    horizontal ones are cells (`CH`, the face's 0.6em advance). Hierarchy
 //!    comes from ink, weight, colour and the 2-cell glyph gutter, never from
-//!    size or face: a heading is the body size (`heading_scale` is 1), and
-//!    `FS_SM`, `FS_PROSE_SM`, `LH_META` survive only as legacy names for the
-//!    one size. Weights: 400 body; 500 a surface's one title, a tool's name,
+//!    size or face: a heading is the body size (`heading_scale` is 1).
+//!    Weights: 400 body; 500 a surface's one title, a tool's name,
 //!    a label; 600 the prompt `❯`, strong prose, headings, a Project heading.
 //!    700 is unused. Never reach a weight by family name.
 //! 2. **Square and flat inside.** Every in-app radius is 0 (the `R_*`
@@ -418,14 +417,11 @@ pub const RUNNING: u32 = GREEN;
 /// Yellow — a Decision: the dot, the `◆`, the kind word, the waiting Pane's
 /// border.
 pub const ATTENTION: u32 = YELLOW;
-/// A waiting Pane's border on a board: yellow at 35%, so the one
-/// answer-target cell at full `ATTENTION` stands out (the operator's Q6
-/// ruling; the prototype's lone waiting Pane is that target).
-pub const ATTENTION_EDGE: u32 = 0xe6c47c59;
+/// A waiting Pane's border on a board: yellow at 75% (the prototype's
+/// `.pane.attn::after`, `rgba(230,196,124,.75)`).
+pub const ATTENTION_EDGE: u32 = 0xe6c47cbf;
 /// Red — blocked or failed: the dot, the word `failed`, diff `−`.
 pub const BLOCKED: u32 = RED;
-/// A closed Pane's border on a board: red at 35%.
-pub const BLOCKED_EDGE: u32 = 0xef8a8059;
 /// Red as a one-line ground (a refused drop, a destructive control under
 /// the pointer); never a multi-line wash (`DIFF_REMOVED_WASH`).
 pub const BLOCKED_WASH: u32 = 0xef8a801f;
@@ -540,8 +536,8 @@ pub const SYN_NUMBER: u32 = ORANGE;
 pub const SYN_CONST: u32 = ORANGE;
 /// Comments are read, not decoration: `TEXT_MUTED`, set italic.
 pub const SYN_COMMENT: u32 = TEXT_MUTED;
-/// Punctuation.
-pub const SYN_PUNCT: u32 = TEXT_MUTED;
+/// Punctuation: the plain ink (the prototype leaves `::`, `(`, `;` unclassed).
+pub const SYN_PUNCT: u32 = TEXT;
 /// Everything the highlighter leaves unclassed.
 pub const SYN_PLAIN: u32 = TEXT;
 /// Inline `code` in prose: cyan ink, no chip.
@@ -819,11 +815,17 @@ pub const ICON_CHEVRON: f32 = 12.0;
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
-/// 7.5px — the drawn `⌘` in a key combination (`components::key_combo`):
-/// the fallback face's glyph at the grid size, 15 × 14 device pixels.
-pub const KEY_GLYPH: f32 = 7.5;
+/// 7px — the drawn `⌘` in a key combination (`components::key_combo`):
+/// the fallback face's glyph at the grid size, its ink 14 × 14 device
+/// pixels in the prototype's capture.
+pub const KEY_GLYPH: f32 = 7.0;
+/// The drawn `◆` of a request's row and toast (`icons::DIAMOND`, 60% of its
+/// box): a 13.3px box, so the diamond is the prototype glyph's 8px.
+pub const NOTICE_DIAMOND: f32 = 13.3;
 /// A keycap: 18px high (it fits inside a 20px row), 5px inline padding.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const KBD_H: f32 = 18.0;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const KBD_PAD_X: f32 = 5.0;
 /// A chip: 20px high (one row), 6px inline padding.
 pub const CHIP_H: f32 = 20.0;
@@ -859,9 +861,9 @@ pub const MENU_NAME_MAX_W: f32 = 220.0;
 /// The folder and branch marks on the Project and checkout lines (12px), and
 /// the 5px gap to their labels.
 pub const ROW_ICON: f32 = 12.0;
-pub const ROW_ICON_GAP: f32 = 5.0;
-/// 12px — the provider logomark in a picker row and the Composer's chip.
-pub const PROVIDER_MARK_SM: f32 = 12.0;
+/// 11px — the provider logomark in a Pane head, a picker row and the status
+/// line (the prototype's `svg.logo`).
+pub const PROVIDER_MARK_SM: f32 = 11.0;
 /// 20px — one queued prompt's row pitch in the Composer's queue viewport.
 pub const QUEUE_ROW_H: f32 = COMPOSER_ROW_H;
 
@@ -871,8 +873,6 @@ pub const QUEUE_ROW_H: f32 = COMPOSER_ROW_H;
 /// glyph's size at `FS_UI`, its centre `STATUS_DOT_LIFT` above the line's.
 pub const STATUS_DOT: f32 = 7.5;
 pub const STATUS_DOT_LIFT: f32 = 1.0;
-/// The dimmest a breath goes (legacy: no dot breathes now, rule 8).
-pub const PULSE_MIN: f32 = 0.15;
 /// The Ferrite progress mark follows the timing and geometry of the supplied
 /// animated logo. These are artwork tokens rather than general motion tokens:
 /// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
@@ -1068,35 +1068,6 @@ pub fn init_components(cx: &mut gpui::App) {
 
 // ======================================== end of the frozen shared head
 
-// ======================================== legacy aliases — remove after integration
-// The previous design's names, mapped onto the tokens above so every module
-// builds while the builders restyle their surfaces. New code names the
-// tokens above (`paint::*` for fills and lines); each alias says what
-// replaces it. Once no call site names one, delete it.
-
-pub use legacy::*;
-
-#[allow(dead_code)]
-mod legacy {
-    use super::*;
-
-    /// → `BAND` / `paint::BAND` (a band) or nothing (code blocks and cards
-    /// have no ground now).
-    pub const RAISED: u32 = BAND;
-    /// → `SELECTION` / `paint::SELECTION`.
-    pub const FILL: u32 = SELECTION;
-    /// → `paint::LINE2`.
-    pub const HAIRLINE_STRONG: u32 = paint::LINE2.0;
-    /// → `TEXT` or `TEXT_MUTED`: the ladder has four inks now. Held between
-    /// them so nothing collapses before its surface is restyled.
-    pub const TEXT_2: u32 = 0xb4b4b8;
-    /// → `FS_UI`: one size per surface.
-    pub const FS_SM: f32 = FS_UI;
-    /// → `LH_UI`.
-    pub const LH_META: f32 = LH_UI;
-}
-// (end legacy aliases)
-
 // ======================================== WP-A · transcript rows and grammar
 // Owner: WP-A (transcript.rs, pane/text.rs, the transcript rows in pane.rs, ferrite-core transcript strings.)
 // Edit values and append tokens only inside this section.
@@ -1165,14 +1136,6 @@ mod legacy {
 // - **No transcript row has a hover ground** but the keyboard's disclosure
 //   target (`paint::HOVER`).
 
-/// 12px — the block step: between the blocks of one turn (prompt → the
-/// agent's first row, prose ↔ tools, anything ↔ reasoning, notices, the
-/// turn's changes, the last block → its stamp).
-pub const GAP_BLOCK: f32 = SPACE_3;
-/// 4px — the row step: rows of one run of work, and a row hung on an elbow
-/// under the row it answers.
-pub const GAP_ROW: f32 = SPACE_1;
-
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
 /// Markdown gaps go through it; UI-row steps do not.
@@ -1181,20 +1144,14 @@ pub fn reading_step(step: f32, size: f32) -> f32 {
     (step * size / FS_PROSE).round()
 }
 
-/// 6px — a tool call's state dot, the size of every status dot.
-pub const TOOL_DOT: f32 = STATUS_DOT;
-/// The elbow `⎿`, painted in the 12px glyph box: its stem 3px in, so it
-/// stands under the stem of the call name's first letter, running from the
-/// top of the row box to the first line's centre, then 8px along it.
-pub const ELBOW_STEM_X: f32 = 3.0;
-pub const ELBOW_ARM: f32 = SPACE_2;
 /// A disclosed call echoes its input under `⎿` only when the call line could
 /// not show it whole: a command (always, exactly), a titled call, a
 /// multi-line input, or one longer than this many characters.
 pub const INPUT_ECHO_CHARS: usize = 48;
-/// A settled call shows its time only from one second up; anything quicker
-/// is noise on every row.
-pub const DURATION_MIN_MS: u128 = 1_000;
+/// A settled call shows its time only from two seconds up (the prototype's
+/// `Bash(…) 2s`, and no time on a one-second `Read`); anything quicker is
+/// noise on every row.
+pub const DURATION_MIN_MS: u128 = 2_000;
 /// Output up to `OUTPUT_INLINE_BYTES` draws inline under its elbow, where a
 /// copy sweep across the transcript reaches it; larger output scrolls in a
 /// bounded native viewport `OUTPUT_MAX_LINES` high, with `… +N lines` under
@@ -1236,6 +1193,17 @@ pub fn tx_gutter(size: f32) -> f32 {
 /// a glyph of the face, 12px at Standard — the Composer's `❯` (`GLYPH_BOX`).
 pub fn tx_mark(size: f32) -> f32 {
     (size * GLYPH_BOX / FS_PROSE).round()
+}
+
+/// The drawn star family (`✻` and the working spinner's frames): the
+/// prototype sets them as the face's glyphs, whose ink is about 7.5px at
+/// Standard — the drawn star's ink in a 10px box — centred on the gutter's
+/// first cell rather than hung from its left edge.
+pub const STAR_MARK: f32 = 10.0;
+
+/// The drawn star's box at reading size `size` (`STAR_MARK` at Standard).
+pub fn tx_star(size: f32) -> f32 {
+    (size * STAR_MARK / FS_PROSE).round()
 }
 
 /// Half a transcript line, whole pixels: the prompt band's padding above
@@ -1300,6 +1268,11 @@ pub const BANNER_PAD_T: f32 = LH_UI;
 /// The prompt band's send time: its own right-aligned column, this many
 /// cells of padding on its left (the prototype's `.when{padding-left:2ch}`).
 pub const PROMPT_TIME_PAD_CELLS: f32 = 2.0;
+/// What a prompt band's chip line adds below it: the prototype's chip is an
+/// `inline-flex` box seated on its icon's synthesized baseline, which lifts
+/// it above the line's strut and grows that line box by two pixels. The
+/// chips close the prompt, so the band takes the extra under its last line.
+pub const PROMPT_CHIP_LINE_EXTRA: f32 = 2.0;
 /// A running test's bar (the prototype's `.bar`): `TEST_BAR_CELLS` wide,
 /// `TEST_BAR_H` tall on a `paint::LINE2` track, `RUNNING` fill at sub-pixel
 /// precision easing over `TEST_BAR_EASE_MS`, a cell's margin each side,
@@ -1317,19 +1290,19 @@ pub const FOLD_EASE_MS: u64 = 220;
 /// edge; six numbered lines (`HOVER_CARD_LINES`), the number column
 /// `HOVER_CARD_NUMBER_CELLS` wide with `HOVER_CARD_NUMBER_PAD_CELLS` after.
 pub const HOVER_CARD_CELLS: f32 = 100.0;
-pub const HOVER_CARD_GAP: f32 = 6.0;
+/// (The prototype measures its 6px from the path's text box, which ends
+/// half a leading — 1.5px — above the row's foot; the card hangs from the
+/// row, so 4.5 here.)
+pub const HOVER_CARD_GAP: f32 = 4.5;
 pub const HOVER_CARD_EDGE: f32 = 16.0;
 pub const HOVER_CARD_LINES: u32 = 6;
 pub const HOVER_CARD_NUMBER_CELLS: f32 = 6.0;
 pub const HOVER_CARD_NUMBER_PAD_CELLS: f32 = 2.0;
-/// The working line's room below it, above the Composer's input band.
-pub const WORKING_LINE_GAP_B: f32 = SPACE_1_5;
 /// A path's hover underline (the prototype's `.path`): `PATH_UNDERLINE_W`
 /// thick, `PATH_UNDERLINE_OFFSET` below the baseline, in the path's own
 /// ink, fading in over `PATH_UNDERLINE_FADE_MS`; transparent at rest.
 pub const PATH_UNDERLINE_W: f32 = 1.0;
 pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
-pub const PATH_UNDERLINE_FADE_MS: u64 = 120;
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars
@@ -1386,12 +1359,6 @@ pub const CODE_ACTIONS_TOP: f32 = 0.0;
 pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-/// `copy` sits with its right edge this many cells in from the block's
-/// right edge (the prototype's `.code .copy{right:6ch}`), two cells left of
-/// the language tag, and fades in over `CODE_COPY_FADE_MS` under the
-/// pointer.
-pub const CODE_COPY_RIGHT_CELLS: f32 = 6.0;
-pub const CODE_COPY_FADE_MS: u64 = 120;
 /// The html preview dialog: the reading column's width, and a height cap
 /// before its body scrolls.
 pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
@@ -1623,6 +1590,11 @@ pub const EMPTY_RECENT_MAX: usize = 4;
 /// The bottom bar's segments (session, tabs, usage, clock): a cell of
 /// padding each side, the full bar's height.
 pub const BAR_SEG_PAD_X: f32 = CH;
+/// The trailing cell of a right-hand bottom-bar segment (usage, clock),
+/// authored at 7.5 for the reason `COMPOSER_SEG_PAD_TAIL` gives: with its
+/// leading cell snapped to 8 the pair keeps the prototype's two cells, so
+/// the segments packed against the right edge land where the browser's do.
+pub const BAR_SEG_PAD_TAIL: f32 = 7.5;
 /// The provider mark before a usage segment.
 pub const BAR_MARK: f32 = 11.0;
 
@@ -1699,6 +1671,14 @@ pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
 /// A status segment's inline padding: one cell each side, so the first
 /// segment's text (hung one cell out) starts on the `❯` column.
 pub const COMPOSER_SEG_PAD_X: f32 = CH;
+/// GPUI snaps every authored length to the device grid before layout (a
+/// 7.8px cell lays out at 8 on a 2× screen), so a row of padded segments
+/// drifts right half a pixel a segment where the prototype's browser keeps
+/// fractions. A segment's trailing pad and the seam after it are authored
+/// at 7.5 (`COMPOSER_SEG_PAD_TAIL`, `STATUS_SEAM_W`) so the snapped row
+/// lands where the browser's does.
+pub const COMPOSER_SEG_PAD_TAIL: f32 = 7.5;
+pub const STATUS_SEAM_W: f32 = 7.5;
 /// Legacy names other modules still read (the Subagent footer, the send
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
@@ -1717,9 +1697,11 @@ pub const CTX_METER_FULL: f32 = 0.85;
 /// The mode marker before the mode word (`⏵⏵ accept edits`), drawn (Geist
 /// Mono lacks `⏵` and `⏸`) as the fallback face sets it: each `⏵` a
 /// 6.9px advance with a 5 × 5.5px triangle, centred on the row so it rides
-/// the x-height, then one space before the word — which starts 21.6px
-/// after the marker (`⏵⏵`), 14.7px after a lone `⏵` or `⏸`.
+/// the x-height, then one space before the word. The pair advances
+/// `MODE_MARK_ADVANCE` (13px) in the line, so the word starts 21px after
+/// the marker as the prototype's capture sets it.
 pub const MODE_MARK_W: f32 = 13.8;
+pub const MODE_MARK_ADVANCE: f32 = 13.0;
 pub const MODE_MARK_ONE_W: f32 = 6.9;
 pub const MODE_MARK_H: f32 = 5.5;
 /// The Composer's band sits between two 1px rules (the prototype's
@@ -1899,12 +1881,13 @@ pub const PALETTE_TOP: f32 = 56.0;
 pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
 pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
 pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
-/// The drawn `⌘` in a key combination (`KEY_GLYPH` wide): 7px high (15 ×
+/// The drawn `⌘` in a key combination (`KEY_GLYPH` wide): 7px high (14 ×
 /// 14 device px), lifted `KEY_GLYPH_LIFT` off the line's centre onto the
-/// cap height, `KEY_GLYPH_GAP` before the next letter.
+/// cap height, `KEY_GLYPH_GAP` before the next letter — whose ink then
+/// starts a pixel after the glyph's, as the fallback face spaces them.
 pub const KEY_GLYPH_H: f32 = 7.0;
 pub const KEY_GLYPH_LIFT: f32 = 1.0;
-pub const KEY_GLYPH_GAP: f32 = 1.5;
+pub const KEY_GLYPH_GAP: f32 = 0.5;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
@@ -2051,9 +2034,12 @@ pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 /// overlay) it lies on the plane, `DECISION_PAD_Y` inside.
 pub const DECISION_PAD_Y: f32 = HALF_ROW;
 pub const DECISION_GAP: f32 = HALF_ROW;
-/// The head's drawn diamond: an 8px box, so the `◆` reads ~7px wide like
-/// the prototype's glyph, starting at the gutter's text origin.
-pub const DECISION_MARK: f32 = 8.0;
+/// The head's drawn diamond (`icons::DIAMOND`, its shape 60% of its box):
+/// a 12.5px box, so the `◆` reads 7.5px wide like the prototype's glyph,
+/// centred where an 8px box at the gutter's text origin centres it
+/// (`DECISION_MARK_LEAD` back from the origin).
+pub const DECISION_MARK: f32 = 12.5;
+pub const DECISION_MARK_LEAD: f32 = (DECISION_MARK - 8.0) / 2.0;
 /// Option rows sit flush, one `LH_UI` row each; a description adds a line
 /// under the label.
 pub const DECISION_ROW_GAP: f32 = 0.0;
@@ -2087,18 +2073,12 @@ pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// The primary's `↵`: `ON_ACCENT` at 70%, so the key reads under its label
 /// on the accent fill.
 pub const SEND_KEY_INK: u32 = 0x111214b3;
-/// An L2 quick-answer pair (`y allow`); pairs one cell apart.
-pub const DECISION_KEY_GAP: f32 = SPACE_1;
-pub const DECISION_KEYS_GAP: f32 = CH;
-/// The L2 Decision body: 6px between its lines, `GAP_BLOCK` above the
-/// Composer line.
-pub const DECISION_L2_GAP: f32 = SPACE_1_5;
 
 /// Subagent tabs (rule 2.2.4-5): their own `SUBJECT_STRIP_H` row at the
 /// Pane's top — under the Group head in a board cell — closed by a
 /// permanent `HAIRLINE` the body clips at. 20px tabs packed with no gap
 /// and centred in the row, 8px inline padding, no edge; the active tab a
-/// `FILL` pill in `TEXT_STRONG` (`FILL_HOVER` under the pointer), the
+/// `paint::SELECTION` pill in `TEXT_STRONG` (stepping up under the pointer), the
 /// others `TEXT_MUTED` blending to `TEXT` with no ground. Main's label sits
 /// on the text column. Labels truncate at 112px. A still `STATUS_DOT`
 /// leads a subagent's label 6px before it, in a slot every tab reserves —
@@ -2492,7 +2472,6 @@ mod tests {
             &[
                 ("TEXT_STRONG", TEXT_STRONG),
                 ("TEXT", TEXT),
-                ("TEXT_2", TEXT_2),
                 ("TEXT_MUTED", TEXT_MUTED),
             ],
             PLANES,
@@ -2599,11 +2578,10 @@ mod tests {
         );
     }
 
-    /// Rule 5: four inks, brightest first (`TEXT_2` is a legacy alias held
-    /// between `TEXT` and `TEXT_MUTED` so nothing collapses mid-restyle).
+    /// Rule 5: four inks, brightest first.
     #[test]
     fn the_ink_ladder_steps_down() {
-        let ladder = [TEXT_STRONG, TEXT, TEXT_2, TEXT_MUTED, TEXT_FAINT];
+        let ladder = [TEXT_STRONG, TEXT, TEXT_MUTED, TEXT_FAINT];
         for pair in ladder.windows(2) {
             assert!(luminance(pair[0]) > luminance(pair[1]), "{pair:06x?}");
         }
@@ -2642,8 +2620,6 @@ mod tests {
         for (_, face) in ladder {
             assert!(face <= 0xffffff, "{face:x} carries alpha");
         }
-        // The legacy names still in use land on the new ladder.
-        assert_eq!((FILL, RAISED), (SELECTION, BAND));
     }
 
     /// Rule 4: glass on macOS — the window paints nothing, chrome and the
@@ -2671,9 +2647,11 @@ mod tests {
             assert!(near(alpha(overlay), opacity), "{overlay:08x}");
         }
         // Glass overlays step up in the same order as the opaque ladder.
-        assert!(HEAD_GLASS & 0xff < HOVER_GLASS & 0xff);
-        assert!(HOVER_GLASS & 0xff < SELECTION_GLASS & 0xff);
-        assert!(SELECTION_GLASS & 0xff < SELECTION_HOVER_GLASS & 0xff);
+        const {
+            assert!(HEAD_GLASS & 0xff < HOVER_GLASS & 0xff);
+            assert!(HOVER_GLASS & 0xff < SELECTION_GLASS & 0xff);
+            assert!(SELECTION_GLASS & 0xff < SELECTION_HOVER_GLASS & 0xff);
+        }
         let paints = [
             (paint::PLANE, PLANE_GLASS, PLANE),
             (paint::CHROME, CHROME_GLASS, CHROME),
@@ -2724,8 +2702,6 @@ mod tests {
                 gpui::WindowBackgroundAppearance::Opaque
             );
         }
-        // The legacy line names follow the platform's lines.
-        assert_eq!(HAIRLINE_STRONG, paint::LINE2.0);
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
         let fill: gpui::Fill = paint::PLANE.into();
         assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::PLANE.0)));
@@ -2739,7 +2715,7 @@ mod tests {
         for radius in [R_PANE, R_BLOCK, R_CONTROL, R_CHIP, R_TIGHT, R_MENU_ROW] {
             assert_eq!(radius, 0.0);
         }
-        assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0);
+        const { assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0) };
     }
 
     /// Rule 1: one size per surface on a whole-pixel line, a 1.5× terminal
@@ -2753,8 +2729,6 @@ mod tests {
             assert_eq!(line, line.round());
             assert!(line >= size * 1.5, "{size}px on a {line}px line box");
         }
-        // The legacy roles are the one size now.
-        assert_eq!((FS_SM, LH_META), (FS_UI, LH_UI));
         for reading in ReadingSize::STEPS.map(ReadingSize::nearest) {
             let (size, line) = (answer_text_size(reading), answer_line_height(reading));
             assert_eq!(line, line.round());

@@ -50,8 +50,7 @@ pub fn parity_world() -> Cockpit {
         fixture: None,
     }
     .instant(parity::CAPTURE);
-    let fixture: &'static parity::phase0::clock::Fixture =
-        Box::leak(Box::new(parity::phase0::clock::Fixture::install(at)));
+    let fixture: &'static parity::Fixture = Box::leak(Box::new(parity::Fixture::install(at)));
     let world = parity::build(
         &root,
         parity::Look::Solo,

@@ -95,14 +95,25 @@ impl Instruments {
                 // worse than one flying none.
                 ToolState::Unavailable if is_test_run(tool) => instruments.tests = None,
                 state if is_test_run(tool) => {
-                    instruments.tests = Some(match state {
-                        ToolState::Failed(message) => Tests::Failed {
-                            count: test_count(message, &["failed", "failing"]),
-                        },
-                        _ => Tests::Passed {
-                            count: tool.result_line.as_deref().and_then(passed_count),
-                        },
-                    })
+                    instruments.tests =
+                        Some(match state {
+                            // The runner's own tally, wherever its output put
+                            // it (cargo: the closing `test result:` line).
+                            ToolState::Failed(message) => Tests::Failed {
+                                count: tool
+                                    .output
+                                    .as_ref()
+                                    .and_then(|output| {
+                                        output.text.lines().rev().find_map(|line| {
+                                            test_count(line, &["failed", "failing"])
+                                        })
+                                    })
+                                    .or_else(|| test_count(message, &["failed", "failing"])),
+                            },
+                            _ => Tests::Passed {
+                                count: tool.result_line.as_deref().and_then(passed_count),
+                            },
+                        })
                 }
                 _ => {}
             }

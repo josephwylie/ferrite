@@ -1058,7 +1058,7 @@ mod tests {
             assert_eq!(options.iter().filter(|(_, on, _)| *on).count(), 1);
             assert_eq!(options[0], ("CLI default".into(), true, None));
         }
-        let options = model_options(fallback(Provider::Claude), Some("claude-sonnet-5"));
+        let options = model_options(fallback(Provider::Claude), Some("claude-sonnet-5-5"));
         let selected: Vec<_> = options.iter().filter(|(_, on, _)| *on).collect();
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].2.as_deref(), Some("sonnet"));

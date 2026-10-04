@@ -820,7 +820,7 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
         format!("markdown-{}-", view.panes[index].text_namespace())
     });
     let (identity, selected) = cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(14.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(13.)));
         (
             crate::rich::testing::first_entity(&prefix, cx).unwrap(),
             crate::rich::testing::full_text(&prefix, cx).unwrap(),
@@ -1037,7 +1037,9 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             // The row owns no padding: the list's gap table spaces rows.
             text.top() - answer.top(),
             answer.bottom() - text.bottom(),
-            answer.right() - text.right(),
+            // The text runs one cell past the row: a trailing space hangs
+            // there (`rich::Markdown`).
+            answer.right() + px(theme::tx_cell(theme::FS_PROSE)) - text.right(),
             // The `●` hangs in the gutter at the row's left edge, on the
             // first prose line box.
             mark.left() - answer.left(),
@@ -1348,7 +1350,11 @@ fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestApp
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
-    assert_eq!(nav_column_width(cx), nav::WIDTH, "first paint: no tween");
+    // Layout snaps to whole pixels: 36 cells (280.8) lays out at 281.
+    assert!(
+        (nav_column_width(cx) - nav::WIDTH).abs() <= 0.5,
+        "first paint: no tween"
+    );
 
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.run_until_parked();
@@ -1371,7 +1377,10 @@ fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestApp
     cx.executor()
         .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
     display_frames(cx);
-    assert_eq!(nav_column_width(cx), nav::WIDTH, "settled on its target");
+    assert!(
+        (nav_column_width(cx) - nav::WIDTH).abs() <= 0.5,
+        "settled on its target"
+    );
     assert_eq!(display_frames(cx), 0, "and asks for nothing more");
 }
 
@@ -1387,7 +1396,7 @@ fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     settle(cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.run_until_parked();
-    assert_eq!(nav_column_width(cx), nav::FOLDED_WIDTH);
+    assert!((nav_column_width(cx) - nav::FOLDED_WIDTH).abs() <= 0.5);
     assert_eq!(display_frames(cx), 0);
 }
 

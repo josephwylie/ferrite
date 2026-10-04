@@ -231,6 +231,13 @@ impl Notifications {
         Some(self.push(thread, born?))
     }
 
+    /// Fixtures only (the parity scenes): a Notice for `thread`, born now —
+    /// the news of a turn a fixture's script cannot end without drawing its
+    /// turn stamp.
+    pub fn fixture_push(&mut self, thread: ThreadId, outcome: TurnOutcome) -> NoticeId {
+        self.push(thread, outcome)
+    }
+
     fn push(&mut self, thread: ThreadId, outcome: TurnOutcome) -> NoticeId {
         self.next += 1;
         let id = NoticeId(self.next);
@@ -238,7 +245,7 @@ impl Notifications {
             id,
             thread,
             outcome,
-            at: SystemTime::now(),
+            at: crate::clock::system_time(),
             read: false,
         });
         while self.notices.len() > CAPACITY {
@@ -278,7 +285,7 @@ impl Notifications {
                         RequestKind::Permission
                     },
                     read: false,
-                    at: SystemTime::now(),
+                    at: crate::clock::system_time(),
                     seq: {
                         self.raised += 1;
                         self.raised
@@ -859,7 +866,7 @@ mod tests {
                 subject: Some(Subject::Main),
                 kind: RequestKind::Permission,
                 read: false,
-                at: SystemTime::now(),
+                at: crate::clock::system_time(),
                 seq: serial,
                 dismissed: false,
             },

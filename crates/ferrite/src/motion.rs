@@ -420,15 +420,6 @@ impl Tween {
         lerp(self.from, self.to, self.spec.progress_at(elapsed))
     }
 
-    /// Eased progress 0..1 along the tween; 1 once finished or reduced.
-    pub fn progress(&self, now: Instant, reduced: bool) -> f32 {
-        if !self.running(now, reduced) {
-            return 1.0;
-        }
-        self.spec
-            .progress_at(now.saturating_duration_since(self.started))
-    }
-
     /// Mid-flight: the owner must ask for another frame.
     pub fn running(&self, now: Instant, reduced: bool) -> bool {
         !reduced

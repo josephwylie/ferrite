@@ -482,7 +482,7 @@ impl Tree {
         let at = line(own);
         let candidates: Vec<&Seam> = all
             .iter()
-            .filter(|found| found.axis == axis && (line(*found) - at).abs() <= 0.5)
+            .filter(|found| found.axis == axis && (line(found) - at).abs() <= 0.5)
             .collect();
         let mut group: Vec<&Seam> = vec![own];
         let mut grew = true;

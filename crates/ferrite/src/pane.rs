@@ -461,6 +461,7 @@ impl PaneView {
         self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
     }
 
+    #[cfg(test)]
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
         if self.disclosure.expanded.contains(&call.into()) {
             DisclosureState::Expanded
@@ -937,12 +938,7 @@ fn wall_lines(
 /// else a settled time from one second up. A running call has no trail:
 /// the state line's clock is ticking.
 fn wall_call_line(tool: &ToolBlock, timings: Option<&HashMap<String, ToolTiming>>) -> String {
-    let name = ferrite_core::transcript::display_tool_name(&tool.name);
-    let label = if tool.summary.is_empty() {
-        name.to_string()
-    } else {
-        format!("{name}({})", tool_summary_line(tool))
-    };
+    let label = text::tool_label(tool);
     let trail = match &tool.state {
         ToolState::Running => None,
         ToolState::Ok if !tool.diffs.is_empty() => {
@@ -953,7 +949,7 @@ fn wall_call_line(tool: &ToolBlock, timings: Option<&HashMap<String, ToolTiming>
         ToolState::Ok if is_test_run(tool) => Some("ok".to_string()),
         _ => match timings.and_then(|map| map.get(&tool.call)) {
             Some(ToolTiming::Done(total)) if total.as_millis() >= theme::DURATION_MIN_MS => {
-                Some(ferrite_core::progress::settled_duration_label(*total))
+                Some(ferrite_core::progress::live_seconds(*total))
             }
             _ => None,
         },
@@ -1482,8 +1478,8 @@ pub(crate) struct WorkingFacts {
 /// Composer region to draw as its top row: while the transcript streams,
 /// the line; while a Session starts with nothing streaming yet, its
 /// starting shape; otherwise nothing. Only the Pane holding the keyboard
-/// (`focused`) animates it and offers `esc to interrupt` — the key acts
-/// nowhere else.
+/// (`focused`) animates it; every line names `esc to interrupt`, as the
+/// prototype's do, though the key acts only where the keyboard is.
 pub(crate) fn working_line(
     view: &PaneView,
     transcript: &Transcript,
@@ -1508,13 +1504,20 @@ pub(crate) fn working_line(
     } else {
         return None;
     };
+    let namespace = view.text_namespace();
     Some(
         div()
-            .debug_selector(|| "transcript-progress".into())
+            .debug_selector(move || format!("transcript-progress-{namespace}"))
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .child(line)
+            .child(
+                div()
+                    .debug_selector(|| "transcript-progress".into())
+                    .w_full()
+                    .min_w_0()
+                    .child(line),
+            )
             .into_any_element(),
     )
 }
@@ -1596,7 +1599,27 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
 /// WP-D · the L1 Composer, or a Subagent's footer in its place.
 fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     if let Some(footer) = cx.child_footer.take() {
-        return Some(footer);
+        // A subagent's tab keeps the working line over its footer.
+        let working = cx
+            .transcript
+            .and_then(|transcript| working_line(cx.view, transcript, cx.focused));
+        return Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .min_w_0()
+                .when_some(working, |stack, line| {
+                    stack.child(
+                        div()
+                            .pl(px(theme::COMPOSER_PAD_L))
+                            .pr(px(theme::COMPOSER_PAD_R))
+                            .child(line),
+                    )
+                })
+                .child(footer)
+                .into_any_element(),
+        );
     }
     let transcript = cx.transcript?;
     // The working line (`working_line`), noted for this frame above.
@@ -2199,13 +2222,8 @@ pub(crate) fn quick_answer(
         .cursor_pointer()
         .whitespace_nowrap()
         .on_hover(crate::motion::hover_listener(hover))
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(format!("{key} "))),
-        )
-        .child(div().flex_shrink_0().text_color(word).child(label))
+        .child(components::cells(format!("{key} ")).text_color(rgb(TEXT_MUTED)))
+        .child(components::cells(label).text_color(word))
 }
 
 /// A cell's status dot, one recipe for the wall, the Pane head and the
@@ -2996,6 +3014,7 @@ fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -
 /// Public because every chip and row must spell a model exactly one way —
 /// one grooming, never two; the catalog's own display names win where a
 /// Session announced them (see `providers::models::label`).
+#[cfg(test)]
 pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
@@ -3026,7 +3045,7 @@ pub fn model_picker(
     };
     status_seg(TEXT_MUTED)
         .children(mark)
-        .child(div().flex_shrink_0().child(text))
+        .child(components::cells(text))
 }
 
 /// A model's name as the status line says it: lowercase outside any
@@ -3098,19 +3117,23 @@ pub fn rendered_disclosures(_view: &PaneView, blocks: &[Block], level: Level) ->
 /// (`live`), the still `✻` everywhere else and under reduced motion. Its
 /// selector says which.
 fn working_mark(ink: u32, live: bool) -> AnyElement {
+    // Centred on the gutter's first cell, as the prototype's glyph sits.
+    let lead = px((theme::CH - theme::STAR_MARK) / 2.0);
     if live {
         div()
             .debug_selector(|| "progress-mark-live".into())
-            .child(components::working_spinner(ink, theme::GLYPH_BOX))
+            .ml(lead)
+            .child(components::working_spinner(ink, theme::STAR_MARK))
             .into_any_element()
     } else {
         div()
             .debug_selector(|| "progress-mark-still".into())
+            .ml(lead)
             .flex()
             .items_center()
             .justify_center()
-            .size(px(theme::GLYPH_BOX))
-            .child(icon(icons::WORKED, theme::GLYPH_BOX, ink))
+            .size(px(theme::STAR_MARK))
+            .child(icon(icons::WORKED, theme::STAR_MARK, ink))
             .into_any_element()
     }
 }
@@ -3140,13 +3163,14 @@ fn working_row(
 /// grid, the star spinner in the gutter, the provider's live caption in its
 /// colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
-/// has something better to say (R16) — and then `(1m04s · ↓ 4.1k tokens ·
+/// has something better to say (R16) — and then `(1m04s · ↑ 4.1k tokens ·
 /// esc to interrupt)` in `TEXT_MUTED`. Only the
 /// focused Pane animates it: the spinner cycles and the caption's shimmer
 /// sweeps there; elsewhere the `✻` and the caption hold still. The seconds
 /// are whole (`progress::live_seconds`), tabular, so the text changes once a
-/// second. `esc to interrupt` rides only the Pane holding the keyboard (the
-/// key acts nowhere else). The caption is what truncates; the facts keep
+/// second. Every line names `esc to interrupt`, focused or not, as the
+/// prototype's do (the key acts only where the keyboard is). The caption is
+/// what truncates; the facts keep
 /// their room. L2 (`compact`) draws the same row without the token count.
 fn working_line_for(
     transcript: &Transcript,
@@ -3165,11 +3189,11 @@ fn working_line_for(
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
-        facts.push(format!("\u{2193} {} tokens", tokens_label(tokens)));
+        facts.push(format!("\u{2191} {} tokens", tokens_label(tokens)));
     }
-    if focused {
-        facts.push("esc to interrupt".into());
-    }
+    // Every working line names the key, as the prototype's do — focused
+    // or not (the key acts where the keyboard is).
+    facts.push("esc to interrupt".into());
     let progress = transcript.progress();
     let generic = Phase::Working.label();
     let caption = progress
@@ -3193,7 +3217,13 @@ fn working_line_for(
                     ),
                 )
             } else {
-                (format!("progress-caption-{caption}"), caption)
+                // R16: the caption always trails off (`Reticulating…`).
+                let words = if caption.ends_with('\u{2026}') {
+                    caption.clone()
+                } else {
+                    format!("{caption}\u{2026}")
+                };
+                (format!("progress-caption-{caption}"), words)
             }
         });
     let mut row = div()
@@ -3610,8 +3640,11 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .items_center()
             .h(px(theme::COMPOSER_STATUS_H))
             .mt(px(theme::COMPOSER_STATUS_GAP))
+            // The first segment hangs its padding out (the prototype's
+            // `.seg:first-child{margin-left:-1ch}`); the last keeps its own
+            // inside the Composer's three cells.
             .pl(px(theme::COMPOSER_PAD_L - theme::COMPOSER_SEG_PAD_X))
-            .pr(px(theme::COMPOSER_PAD_R - theme::COMPOSER_SEG_PAD_X))
+            .pr(px(theme::COMPOSER_PAD_R))
             .min_w_0()
             .overflow_hidden()
             .whitespace_nowrap()
@@ -3677,10 +3710,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
 
 /// The faint `·` between two status segments.
 pub(crate) fn status_seam() -> Div {
-    div()
-        .flex_shrink_0()
+    components::cells("\u{b7}")
+        .w(px(theme::STATUS_SEAM_W))
         .text_color(rgb(TEXT_FAINT))
-        .child("\u{b7}")
 }
 
 /// A status segment (the prototype's `.status .seg`): one row, a cell of
@@ -3695,7 +3727,8 @@ fn status_seg(ink: u32) -> Div {
         .items_center()
         .gap(px(theme::CH))
         .h(px(theme::COMPOSER_STATUS_H))
-        .px(px(theme::COMPOSER_SEG_PAD_X))
+        .pl(px(theme::COMPOSER_SEG_PAD_X))
+        .pr(px(theme::COMPOSER_SEG_PAD_TAIL))
         .whitespace_nowrap()
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
@@ -3710,18 +3743,32 @@ fn status_seg(ink: u32) -> Div {
 /// word, both in `MODE_INK`. Hidden at the default: the mode stays
 /// reachable through ⇧⇥ and the palette's `permission mode`.
 pub fn mode_chip(mode: &str, _menu: bool) -> Div {
-    let (mark, width) = match mode {
-        "accept edits" | "bypass permissions" | "auto" => (icons::MODE_ACCEPT, theme::MODE_MARK_W),
-        "plan" => (icons::MODE_PLAN, theme::MODE_MARK_ONE_W),
-        _ => (icons::MODE_ON, theme::MODE_MARK_ONE_W),
+    let (mark, width, advance) = match mode {
+        "accept edits" | "bypass permissions" | "auto" => (
+            icons::MODE_ACCEPT,
+            theme::MODE_MARK_W,
+            theme::MODE_MARK_ADVANCE,
+        ),
+        "plan" => (
+            icons::MODE_PLAN,
+            theme::MODE_MARK_ONE_W,
+            theme::MODE_MARK_ONE_W,
+        ),
+        _ => (
+            icons::MODE_ON,
+            theme::MODE_MARK_ONE_W,
+            theme::MODE_MARK_ONE_W,
+        ),
     };
     status_seg(theme::MODE_INK)
         .child(
-            icon(mark, width, theme::MODE_INK)
-                .w(px(width))
-                .h(px(theme::MODE_MARK_H)),
+            div().flex_shrink_0().w(px(advance)).child(
+                icon(mark, width, theme::MODE_INK)
+                    .w(px(width))
+                    .h(px(theme::MODE_MARK_H)),
+            ),
         )
-        .child(mode.to_owned())
+        .child(components::cells(mode.to_owned()))
 }
 
 /// The button a status segment rides in (model, effort, mode, files, the
@@ -3757,7 +3804,9 @@ pub fn files_chip(count: usize, added: usize, removed: usize) -> Div {
     let word = if count == 1 { "file" } else { "files" };
     status_seg(TEXT_MUTED)
         .debug_selector(move || format!("changed-files-{count}"))
-        .child(components::tabular(div().child(format!("{count} {word}"))))
+        .child(components::tabular(components::cells(format!(
+            "{count} {word}"
+        ))))
         .child(diff_stat(added, removed))
 }
 
@@ -3822,15 +3871,15 @@ pub fn shortcuts_hint(cycle: Option<String>, help: Option<String>) -> Div {
     if let Some(cycle) = cycle {
         seg = seg
             .child(components::key_combo(&cycle, TEXT_MUTED))
-            .child("\u{a0}mode");
+            .child(components::cells("\u{a0}mode"));
     }
     if let Some(help) = help {
         if led {
-            seg = seg.child("\u{a0}\u{b7}\u{a0}");
+            seg = seg.child(components::cells("\u{a0}\u{b7}\u{a0}"));
         }
         seg = seg
             .child(components::key_combo(&help, TEXT_MUTED))
-            .child("\u{a0}shortcuts");
+            .child(components::cells("\u{a0}shortcuts"));
     }
     seg
 }
@@ -3983,11 +4032,10 @@ fn ghost_row(ghost: Ghost, compact: bool) -> Div {
     // The placeholder is one muted run, its `·` too (the prototype's
     // `.ph-text`).
     let seam = || {
-        div()
-            .flex_shrink_0()
+        components::cells("\u{b7}")
             .px(px(theme::CH))
+            .w(px(3.0 * theme::CH))
             .text_color(rgb(TEXT_MUTED))
-            .child("\u{b7}")
     };
     let more: Vec<SharedString> = if compact && !ghost.verbatim {
         Vec::new()
@@ -4003,7 +4051,7 @@ fn ghost_row(ghost: Ghost, compact: bool) -> Div {
                 piece.debug_selector(|| "prompt-placeholder-hint".into())
             })
             .child(seam())
-            .child(piece)
+            .child(components::cells(piece))
     });
     let row = div()
         .debug_selector(|| "prompt-placeholder".into())
@@ -4028,11 +4076,14 @@ fn ghost_row(ghost: Ghost, compact: bool) -> Div {
             )
             .children(pieces);
     }
+    // A hair over its cells, so the shaped run never reads as cut.
+    let head_w = components::cells_width(&ghost.head) + 0.1;
     row.flex_wrap()
         .child(
             div()
                 .flex_shrink(1.)
                 .min_w_0()
+                .w(px(head_w))
                 .h(px(theme::COMPOSER_ROW_H))
                 .truncate()
                 .child(ghost.head),
@@ -4408,6 +4459,7 @@ pub(crate) fn diff_stat(added: usize, removed: usize) -> Div {
             .flex()
             .flex_shrink_0()
             .items_center()
+            .w(px(components::cells_width(&text)))
             .text_size(px(theme::FS_UI))
             .text_color(rgb(TEXT_MUTED))
             .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
@@ -4558,7 +4610,7 @@ pub fn context_usage(
     on_toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     let maximum = usage.context_window.filter(|limit| *limit > 0);
-    let now = SystemTime::now();
+    let now = ferrite_core::clock::system_time();
     // One 4px bar, full width: the same track and the same status ink as
     // the meter that opened the card, at a size a card can afford.
     let bar = |fraction: f32| {
@@ -5100,12 +5152,12 @@ pub fn usage_meter_body(
                     // and its share; an account window as plain words.
                     match token.strip_prefix("ctx ") {
                         Some(share) => reading
-                            .child("ctx")
+                            .child(components::cells("ctx"))
                             .child(ctx_meter(used))
-                            .child(SharedString::from(share.to_owned())),
+                            .child(components::cells(share.to_owned())),
                         None => reading
                             .text_color(rgb(readout_ink(used)))
-                            .child(SharedString::from(token)),
+                            .child(components::cells(token)),
                     }
                 })),
         )),
@@ -5266,6 +5318,11 @@ impl Grid {
     /// A drawn mark's box (`❯ ✻ ◆ ∴`).
     pub(crate) fn mark(self) -> f32 {
         theme::tx_mark(self.size)
+    }
+
+    /// A drawn star's box (`✻`), whole pixels.
+    pub(crate) fn star(self) -> f32 {
+        theme::tx_star(self.size)
     }
 
     /// Half a line, whole pixels.
@@ -5632,7 +5689,7 @@ pub(crate) enum PromptText {
 /// A prompt line as its band draws (and copies) it, and the files it
 /// carries.
 pub(crate) fn prompt_text(line: &str) -> (PromptText, Vec<std::path::PathBuf>) {
-    let (text, files) = ferrite_core::prompt_files::split(line.to_owned());
+    let (text, files) = ferrite_core::prompt_files::split(String::from(line));
     if files.is_empty() {
         return (PromptText::Literal(text), files);
     }
@@ -5691,6 +5748,13 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
 pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool) -> AnyElement {
     let grid = row_cx.grid();
     let (text, files) = prompt_text(line);
+    // The chips close the prompt; their line stands taller, as the
+    // prototype's inline chip makes it.
+    let chip_line = if files.is_empty() {
+        0.0
+    } else {
+        theme::PROMPT_CHIP_LINE_EXTRA
+    };
     // A prompt of attachments alone has no words to register or draw.
     let words = match text {
         PromptText::Literal(words) if words.is_empty() => None,
@@ -5747,7 +5811,8 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool
         .min_w_0()
         .flex_shrink_0()
         .bg(theme::paint::BAND)
-        .py(px(grid.half()))
+        .pt(px(grid.half()))
+        .pb(px(grid.half() + chip_line))
         .pl(px(theme::TX_PAD_L))
         .pr(px(theme::TX_PAD_R))
         .font_weight(theme::W_BODY)
@@ -5874,10 +5939,12 @@ pub(crate) fn prompt_chip(
             theme::GLYPH_BOX,
             theme::PATH_INK,
         ))
+        // The chip is sized in whole cells; the label never cuts (a
+        // measured run rounds up past its cells by a fraction of a pixel).
         .child(
             div()
-                .min_w_0()
-                .truncate()
+                .flex_shrink_0()
+                .whitespace_nowrap()
                 .child(SharedString::from(label.to_string())),
         )
         .on_click(move |_, window, cx| {
@@ -6082,49 +6149,6 @@ fn image_size(head: &[u8]) -> Option<(u32, u32)> {
 /// under the pointer anywhere on the row.
 pub(crate) const DISCLOSURE_ROW: &str = "disclosure-row";
 
-/// The `group` the transcript body names, so its minimap shows while the
-/// pointer is anywhere on the body.
-pub(crate) const PANE_GROUP: &str = "transcript-body";
-
-/// The `⎿` elbow, painted in a `GLYPH_BOX`-wide cell one `line_box` tall:
-/// its stem runs from the top of the row box to the first line's centre and
-/// turns along it. The L2 tail's elbow; the transcript types `└`
-/// (`elbow_line`).
-fn elbow(line_box: f32) -> Div {
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(theme::GLYPH_BOX))
-        .h(px(line_box))
-        .child(
-            div()
-                .absolute()
-                .left(px(theme::ELBOW_STEM_X))
-                .top_0()
-                .w(px(theme::ELBOW_ARM))
-                .h(px(line_box / 2.))
-                .border_l_1()
-                .border_b_1()
-                .border_color(rgb(TEXT_FAINT)),
-        )
-}
-
-/// An L2 tail row that hangs under the one above it: the elbow at C1, its
-/// text at C2. The caller adds the text as the next child.
-pub(crate) fn result_line(ink: u32) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .gap(px(theme::GUTTER_GAP))
-        .w_full()
-        .min_w_0()
-        .pl(px(theme::GUTTER_W))
-        .child(elbow(theme::LH_UI))
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(ink))
-}
-
 /// What a row of output omitted, under the output it belongs to.
 pub(crate) fn omitted_line(bytes: usize, grid: Grid) -> Div {
     after_elbow(grid)
@@ -6156,7 +6180,8 @@ fn turn_end(
             return components::tabular(
                 grid_row(mark_gutter(
                     grid,
-                    icon(icons::WORKED, grid.mark(), provider_ink(provider))
+                    icon(icons::WORKED, grid.star(), provider_ink(provider))
+                        .ml(px((grid.cell() - grid.star()) / 2.0))
                         .debug_selector(|| "turn-stamp-mark".into()),
                 ))
                 .debug_selector(|| "turn-stamp".into())
@@ -6523,8 +6548,7 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
     let result = lines
         .iter()
         .copied()
-        .filter(|line| line.trim_start().starts_with("test result:"))
-        .last();
+        .rfind(|line| line.trim_start().starts_with("test result:"));
     let counted = |verdict: &str| tests.iter().filter(|(_, _, v)| *v == verdict).count();
     let summary_of = |line: &str| -> Option<(usize, usize)> {
         let passed = passed_count(line)?;
@@ -6897,7 +6921,10 @@ pub(crate) fn render_tool(
         );
         trailing = true;
     }
-    if let Some(duration) = trail_duration(tool, row_cx.timings, row_cx.focused) {
+    // A change says its size; anything else says its time (`18s`).
+    if let Some(duration) =
+        trail_duration(tool, row_cx.timings, row_cx.focused).filter(|_| !trailing)
+    {
         trail = trail.child(
             div()
                 .debug_selector(|| "tool-trail-duration".into())
@@ -6954,17 +6981,10 @@ pub(crate) fn render_tool(
                     )),
                 ));
             }
-            if expanded && text::shows_input(tool) {
-                card = card.child(output_block(
-                    block,
-                    "command",
-                    &tool.summary,
-                    TEXT_MUTED,
-                    command,
-                    tool.result_line.is_none() && tool.progress.is_none(),
-                    selection,
-                    grid,
-                ));
+            // Opened while it runs: the command and what it has printed so
+            // far, live.
+            if expanded {
+                card = card.child(tool_details(block, tool, selection, grid));
             }
         }
         ToolState::Unavailable => {
@@ -7633,45 +7653,56 @@ fn diff_tokens(line: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// The changed tokens between a removed line and the added line it became:
-/// what is left of each once their common leading and trailing tokens go,
-/// trimmed of the whitespace at its edges — washes snap to whole tokens
-/// (`0x7fbf95` → `0x93cf8c`, `0x` included). `None` when nothing is common
-/// (the whole line changed) or nothing differs.
+/// what is left of each once their common leading and trailing characters
+/// go, snapped to whole tokens — the tokens wholly inside what changed, or,
+/// where no whole token is (`0x7fbf95` → `0x93cf8c` past their common `0x`;
+/// `live` past `if l`), the tokens it touches — and trimmed of whitespace
+/// at its edges. `None` when nothing is common (the whole line changed) or
+/// nothing differs.
 fn changed_words(old: &str, new: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
-    let a = diff_tokens(old);
-    let b = diff_tokens(new);
-    let same = |i: usize, j: usize| old[a[i].clone()] == new[b[j].clone()];
-    let mut prefix = 0;
-    while prefix < a.len() && prefix < b.len() && same(prefix, prefix) {
-        prefix += 1;
-    }
-    let mut suffix = 0;
-    while suffix < a.len() - prefix
-        && suffix < b.len() - prefix
-        && same(a.len() - 1 - suffix, b.len() - 1 - suffix)
-    {
-        suffix += 1;
-    }
+    // Common leading and trailing characters, in bytes, never splitting a
+    // character and never overlapping.
+    let prefix = old
+        .char_indices()
+        .zip(new.chars())
+        .take_while(|((_, x), y)| x == y)
+        .last()
+        .map_or(0, |((at, ch), _)| at + ch.len_utf8());
+    let suffix = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(x, y)| x == y)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
     if prefix == 0 && suffix == 0 {
         return None;
     }
-    let span = |line: &str, tokens: &[std::ops::Range<usize>]| -> std::ops::Range<usize> {
-        let mut first = prefix;
-        let mut last = tokens.len() - suffix;
-        // Snap to tokens, never to the spaces between them.
-        while first < last && line[tokens[first].clone()].trim().is_empty() {
-            first += 1;
+    let span = |line: &str| -> std::ops::Range<usize> {
+        let tokens = diff_tokens(line);
+        let (start, end) = (prefix, line.len() - suffix);
+        let solid = |token: &&std::ops::Range<usize>| !line[(*token).clone()].trim().is_empty();
+        // The tokens wholly inside the change, else those it touches.
+        let inside: Vec<&std::ops::Range<usize>> = tokens
+            .iter()
+            .filter(|token| token.start >= start && token.end <= end)
+            .filter(solid)
+            .collect();
+        let picked = if inside.is_empty() {
+            tokens
+                .iter()
+                .filter(|token| token.start < end && token.end > start)
+                .filter(solid)
+                .collect()
+        } else {
+            inside
+        };
+        match (picked.first(), picked.last()) {
+            (Some(first), Some(last)) => first.start..last.end,
+            _ => start.min(line.len())..start.min(line.len()),
         }
-        while last > first && line[tokens[last - 1].clone()].trim().is_empty() {
-            last -= 1;
-        }
-        if first >= last {
-            let at = tokens.get(first).map_or(line.len(), |token| token.start);
-            return at..at;
-        }
-        tokens[first].start..tokens[last - 1].end
     };
-    let (old_range, new_range) = (span(old, &a), span(new, &b));
+    let (old_range, new_range) = (span(old), span(new));
     if old_range.is_empty() && new_range.is_empty() {
         return None;
     }
@@ -7787,6 +7818,21 @@ fn file_section(path: &str, hunk: &ferrite_core::Hunk) -> Option<String> {
 /// a header only where the hunk names a section; each change's removed and
 /// added lines paired by likeness (`pair_lines`), their changed tokens
 /// marked.
+/// The rows a diff under a call draws: split, every row; unified (a
+/// narrow Pane), its changes alone under their hunk heads — the prototype's
+/// narrow `91 -` `91 +` `92 +` with no context between.
+pub(super) fn preview_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
+    let rows = diff_rows(diff, cap, split);
+    if split {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(
+            |row| !matches!(row, DiffRow::Unified { side, .. } if side.kind == DiffKind::Context),
+        )
+        .collect()
+}
+
 pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
     let mut rows = Vec::new();
     let mut drawn = 0usize;
@@ -8054,7 +8100,12 @@ fn render_diff(
         .w_full()
         .min_w_0()
         .text_color(rgb(TEXT));
-    for row in diff_rows(diff, cap, wide) {
+    let rows = if inset {
+        preview_rows(diff, cap, wide)
+    } else {
+        diff_rows(diff, cap, wide)
+    };
+    for row in rows {
         lines = lines.child(match &row {
             DiffRow::Hunk(header) => div()
                 .debug_selector(|| "diff-hunk".into())
@@ -8109,7 +8160,16 @@ fn render_diff(
         );
     }
     if inset {
-        content_row(grid).pt(px(grid.half())).child(lines)
+        // The prototype's `.diff` keeps its 1px border, clear: the rows sit
+        // a pixel in from every side.
+        content_row(grid).pt(px(grid.half())).child(
+            div()
+                .w_full()
+                .min_w_0()
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .child(lines),
+        )
     } else {
         div().w_full().min_w_0().child(lines)
     }
@@ -8502,9 +8562,9 @@ mod tests {
                 path: "/workspace/x.txt".into(),
                 hunks: vec![Hunk {
                     old_start: 1,
-                    old_lines: 3,
+                    old_lines: 2,
                     new_start: 1,
-                    new_lines: 3,
+                    new_lines: 2,
                     lines: vec![" alpha".into(), "-bravo".into(), "+delta".into()],
                     section: None,
                 }],
@@ -9390,7 +9450,7 @@ mod tests {
             text: "\u{25cf} Read(spikes/panes24/NOTES.md)".into(),
             wraps: false,
         };
-        assert_eq!(wall_rows(&[call.clone()], 10).len(), 1);
+        assert_eq!(wall_rows(std::slice::from_ref(&call), 10).len(), 1);
         // The budget is rows: a wrapped prose line spends two.
         let rows = wall_rows(
             &[
@@ -9786,6 +9846,15 @@ mod tests {
             Some((25..33, 25..33)),
             "a hex literal is one token, `0x` included"
         );
+        // Past a common `if l`, the old side keeps its whole tokens (from
+        // `Some`) and the new side, with none whole, its touched `live`.
+        let old = "if let Some(summary) = facts.and_then(|f| f.summary.clone()) {";
+        let (was, became) = changed_words(old, "if live {").expect("a pair");
+        assert_eq!(
+            &old[was],
+            "Some(summary) = facts.and_then(|f| f.summary.clone())"
+        );
+        assert_eq!(&"if live {"[became], "live");
         assert_eq!(changed_words("abc", "xyz"), None, "the whole line changed");
         assert_eq!(changed_words("same", "same"), None);
         let diff = Diff {

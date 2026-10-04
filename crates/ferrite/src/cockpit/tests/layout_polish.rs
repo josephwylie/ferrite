@@ -71,7 +71,10 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
             "content keeps a usable viewport above the fixed actions"
         );
         assert!(
-            island.contains(&send.origin) && island.contains(&send.bottom_right()),
+            (send.left() >= island.left()
+                && send.top() >= island.top()
+                && send.right() <= island.right()
+                && send.bottom() <= island.bottom()),
             "the fixed answer row must stay inside the complete island: {send:?} / {island:?}"
         );
     }
@@ -205,8 +208,9 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
             "scroll position must not affect the fit decision"
         );
     }
-    // The Decision's rows are list rows (28px), so only a Composer grown to
-    // its full height leaves the body too short for the form.
+    // The Decision is the transcript's tail: a Composer grown to its full
+    // height leaves the body shorter, and the form stays in the transcript,
+    // reached by scrolling — there is no fullscreen door.
     let draft = "Keep the entered values.\nShow the recovery action.\nRetain the selected option.\nRestore the form afterward.\nKeep the focus where it was.\nName the expired session.\nOffer to sign in again.\nThen resume the form.";
     view.update(cx, |view, cx| {
         view.panes[0]
@@ -214,31 +218,16 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
             .update(cx, |composer, cx| composer.set(draft.into(), cx))
     });
     tick(cx);
-    assert!(
-        cx.debug_bounds("question-island").is_none(),
-        "insufficient Group body space uses the expansion action"
-    );
-    assert!(cx.debug_bounds("question-expand").is_some());
-    cx.simulate_keystrokes("cmd-f");
-    tick(cx);
+    assert!(cx.debug_bounds("question-island").is_some());
+    assert!(cx.debug_bounds("question-expand").is_none());
     assert_eq!(composer_text(&view, cx), draft);
-    let first = cx.debug_bounds("question-choice-0-0").unwrap();
-    cx.simulate_click(first.center(), gpui::Modifiers::none());
-    tick(cx);
-    cx.simulate_keystrokes("cmd-f");
-    tick(cx);
-    assert!(cx.debug_bounds("question-expand").is_some());
     view.update(cx, |view, cx| {
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set(String::new(), cx))
     });
     tick(cx);
-    assert!(
-        cx.debug_bounds("question-island").is_some(),
-        "shrinking the Composer restores the inline form"
-    );
-    assert!(cx.debug_bounds("question-expand").is_none());
+    assert!(cx.debug_bounds("question-island").is_some());
     // Repeat geometry changes to catch stale collapsed state and feedback loops.
     for height in [1000., 800., 1000., 800.] {
         cx.simulate_resize(gpui::size(px(1200.), px(height)));
@@ -259,6 +248,9 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
                 .serial,
         )
     });
+    let choice = cx.debug_bounds("question-choice-0-0").unwrap();
+    cx.simulate_click(choice.center(), gpui::Modifiers::none());
+    tick(cx);
     let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
     cx.simulate_click(send.center(), gpui::Modifiers::none());
     tick(cx);

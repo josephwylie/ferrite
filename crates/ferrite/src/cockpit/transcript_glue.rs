@@ -84,19 +84,18 @@ impl CockpitView {
         })
     }
 
-    /// The row after a transcript's last: the pending Decision, as its card
-    /// is built for the tail (`CockpitView::decision_tail`, the Decision
-    /// card's owner). Until that builder is wired here the Decision keeps
-    /// its own card, no row is appended and no call is hidden.
-    pub(super) fn transcript_tail(&self, _index: usize) -> Option<TranscriptTail> {
-        None
+    /// The row after a transcript's last: the pending Decision, as its
+    /// card is built for the tail (`CockpitView::decision_tail`, the
+    /// Decision card's owner).
+    pub(super) fn transcript_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
+        self.decision_tail(index, cx)
     }
 
-    /// ⌘-click on a path target: the file in a reader beside the Thread —
-    /// the Pane's reader (an image in its preview), or the system's app
-    /// where the reader cannot show it. The transcript's event carries no
-    /// window, so the reader opens on the next turn of the loop.
-    pub(super) fn open_reader(
+    /// ⌘-click on a path target: the file in a reader beside the Thread
+    /// (`open_beside(Beside::Reader)`), at the link's line. The transcript's
+    /// event carries no window, so the reader opens on the next turn of the
+    /// loop, in the window that holds the cockpit.
+    pub(super) fn open_reader_from(
         &mut self,
         index: usize,
         path: PathBuf,
@@ -106,37 +105,13 @@ impl CockpitView {
         let Some(window) = cx.active_window() else {
             return;
         };
-        let Some(pane) = self.panes.get(index) else {
-            return;
-        };
-        let preview = pane.preview.clone();
         let cockpit = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
-                let name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.display().to_string());
-                let image = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str())
-                    });
-                let shown = if image {
-                    preview.open(path.clone(), name, window, cx);
-                    true
-                } else {
-                    path.is_file() && preview.open_text_document(path.clone(), name, window, cx)
-                };
-                if !shown {
-                    crate::file_links::FileLink {
-                        path,
-                        location: line.map(|line| line.to_string()),
-                    }
-                    .open(window, cx);
-                }
-                let _ = cockpit.update(cx, |_, cx| cx.notify());
+                let _ = cockpit.update(cx, |view, cx| {
+                    view.focus_pane(index);
+                    view.open_beside(super::beside::Beside::Reader { path, line }, window, cx);
+                });
             });
         });
     }
@@ -166,7 +141,6 @@ impl CockpitView {
     /// Send the prompt being read in Pane `index` again, attachments and
     /// all — queued behind a running turn. Only a Thread's Main Subject
     /// takes prompts. Whether it went.
-    #[allow(dead_code)] // the palette and keymap call it
     pub(crate) fn resend_reading_prompt(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
         if !self.panes.get(index).is_some_and(|pane| pane.is_main()) {
             return false;

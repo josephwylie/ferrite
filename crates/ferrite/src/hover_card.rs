@@ -8,7 +8,7 @@
 //! in a reader pane` at its right; its body six numbered lines,
 //! `line-3..line+2`, the target line on `paint::SELECTION` with its number in
 //! `ACCENT`, the code syntax-coloured and cut with `…`; its foot, over a
-//! `paint::LINE` rule, `modified in this thread · +9 −4 · 2 min ago` when
+//! `paint::LINE` rule, `modified in this thread · +9−4 · 2 min ago` when
 //! the Thread changed the file.
 //!
 //! State is a window-wide global: a path target on enter names itself and
@@ -168,6 +168,16 @@ impl HoverCard {
     pub(crate) fn new(target: PathTarget, fallback: Option<u32>, stat: Option<CardStat>) -> Self {
         let line = target.line.or(fallback).unwrap_or(1).max(1);
         let lines = read_window(&target.path, line);
+        // The age is the file's own: when it last changed on disk, which
+        // the Thread's latest edit made (`2 min ago`), else when that edit
+        // settled.
+        let modified = std::fs::metadata(&target.path)
+            .and_then(|meta| meta.modified())
+            .ok();
+        let stat = stat.map(|stat| CardStat {
+            at: modified.or(stat.at),
+            ..stat
+        });
         Self {
             target,
             line,
@@ -207,7 +217,7 @@ pub(crate) fn age_label(at: SystemTime, now: SystemTime) -> String {
     }
 }
 
-/// The foot's words and inks: `modified in this thread · +9 −4 · 2 min ago`.
+/// The foot's words and inks: `modified in this thread · +9−4 · 2 min ago`.
 pub(crate) fn foot_text(
     stat: &CardStat,
     now: SystemTime,
@@ -223,7 +233,8 @@ pub(crate) fn foot_text(
     let start = text.len();
     text.push_str(&added);
     highlights.push((start..text.len(), ink(theme::RUNNING)));
-    text.push(' ');
+    // `+9−4`, the two runs touching (the prototype's flex foot drops the
+    // space between them).
     let start = text.len();
     text.push_str(&removed);
     highlights.push((start..text.len(), ink(theme::BLOCKED)));
@@ -411,7 +422,7 @@ mod tests {
         let (text, highlights) = foot_text(&stat, now);
         assert_eq!(
             text,
-            "modified in this thread \u{b7} +9 \u{2212}4 \u{b7} 2 min ago"
+            "modified in this thread \u{b7} +9\u{2212}4 \u{b7} 2 min ago"
         );
         assert_eq!(&text[highlights[0].0.clone()], "+9");
         assert_eq!(&text[highlights[1].0.clone()], "\u{2212}4");
@@ -423,7 +434,7 @@ mod tests {
         let unknown = CardStat { at: None, ..stat };
         assert_eq!(
             foot_text(&unknown, now).0,
-            "modified in this thread \u{b7} +9 \u{2212}4"
+            "modified in this thread \u{b7} +9\u{2212}4"
         );
     }
 

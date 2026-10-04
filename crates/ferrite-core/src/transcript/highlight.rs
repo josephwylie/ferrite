@@ -245,10 +245,22 @@ fn scan(chars: &[char], at: usize, syntax: &Syntax) -> (Class, usize) {
             if syntax.keywords.contains(&word.as_str()) {
                 return (Class::Keyword, len);
             }
+            // `ROW_LIVE_H`: a constant wears the numbers' ink.
+            let screaming = len > 1
+                && word.chars().any(|c| c.is_ascii_uppercase())
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            if screaming {
+                return (Class::Number, len);
+            }
             match rest.get(len) {
+                // `Some(summary)`: a capitalised name is a type, called or not.
+                _ if rest[0].is_ascii_uppercase() => (Class::Type, len),
                 Some('(') => (Class::Function, len),
                 Some('!') if syntax.bang_calls => (Class::Function, len + 1),
-                _ if rest[0].is_ascii_uppercase() => (Class::Type, len),
+                // `theme::ROW_H`: a path's module reads as a type.
+                Some(':') if rest.get(len + 1) == Some(&':') => (Class::Type, len),
                 _ => (Class::Plain, len),
             }
         }

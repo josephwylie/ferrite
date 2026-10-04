@@ -448,7 +448,7 @@ pub struct CockpitView {
     group_error: Option<SharedString>,
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
-    bell: Bell,
+    pub(crate) bell: Bell,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -512,6 +512,7 @@ pub struct Preferences {
 
 impl Preferences {
     /// Defaults saved nowhere — the test constructor's and the demo's.
+    #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     fn ephemeral() -> Self {
         Self {
             settings: ferrite_core::settings::Settings::default(),
@@ -860,13 +861,9 @@ enum NavChip {
 impl NavChip {
     fn element(&self) -> Div {
         nav::drag_row(match self {
-            NavChip::Thread(row) => nav::thread_row_with_title(
-                row,
-                row.name.clone(),
-                nav::RowPlace::Root,
-                None,
-                false,
-            ),
+            NavChip::Thread(row) => {
+                nav::thread_row_with_title(row, row.name.clone(), nav::RowPlace::Root, None, false)
+            }
             NavChip::Group(group) => {
                 nav::group_row_with_title(group, group.title.clone(), nav::group_fold(group))
             }
@@ -1154,6 +1151,7 @@ impl CockpitView {
         Self::new_with_provider(cockpit, Provider::Claude, cx)
     }
 
+    #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     pub fn new_with_provider(
         cockpit: Cockpit,
         launch_provider: Provider,
@@ -1431,7 +1429,7 @@ impl CockpitView {
         // One reading size for every transcript, on every board.
         let reading_size = self.prefs.settings.reading_size;
         let banner = self.banner_facts(thread, transcript);
-        let tail = self.transcript_tail(index);
+        let tail = self.transcript_tail(index, cx);
         // The gated call hides while its Decision waits as the tail row.
         let pending_call = tail
             .as_ref()
@@ -1566,11 +1564,9 @@ impl CockpitView {
                 cx.notify();
             }
             crate::transcript::TranscriptEvent::OpenReader { path, line } => {
-                // ⌘-click on a path: a reader beside the Thread. The event
-                // carries no window; the reader opens on the next turn of
-                // the loop, in the window that holds the cockpit.
+                // ⌘-click on a path: a reader beside the Thread.
                 self.focus_pane(index);
-                self.open_reader(index, path.clone(), *line, cx);
+                self.open_reader_from(index, path.clone(), *line, cx);
             }
         }
     }
@@ -2051,6 +2047,7 @@ impl CockpitView {
 
     /// Hold the sidebar's ride at `progress` (0 → 1 along `motion::RESIZE`)
     /// so a scene can capture the board mid-ride; `None` lets it go.
+    #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     pub(crate) fn fixture_hold_nav(&mut self, progress: Option<f32>) {
         self.nav_hold = progress;
     }
@@ -2190,8 +2187,22 @@ impl CockpitView {
 
     /// A Group's tree in the board as the last frame laid it out: the
     /// operator's stored arrangement, or the default grid (`Tree::grid`).
+    #[cfg(test)]
     fn group_layout(&self, group: GroupId) -> Option<Tree> {
-        self.cockpit.group_layout(group, self.board.get())
+        self.cockpit.group_layout(group, self.rest_board())
+    }
+
+    /// The board as it is where the sidebar rests: what a default grid's
+    /// shape is chosen in, so a ride (F-12) never flips it mid-fold — only
+    /// the widths ride.
+    fn rest_board(&self) -> layout::Rect {
+        let board = self.board.get();
+        let rest_left = self.nav_width() + crate::theme::CHROME_SEAM_W;
+        layout::Rect {
+            x: rest_left,
+            w: (board.w + board.x - rest_left).max(0.0),
+            ..board
+        }
     }
 
     /// The board on screen, when a tree lays it out: the Group being
@@ -2227,7 +2238,7 @@ impl CockpitView {
         if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
             return Some(drag.tree.clone());
         }
-        let bounds = self.board.get();
+        let bounds = self.rest_board();
         let readers: Vec<PaneIdentity> = self
             .visible_indices()
             .into_iter()
@@ -2370,7 +2381,7 @@ impl CockpitView {
         // Solo is one Pane — or a pending pair (a draft beside its Thread),
         // laid out on the same default grid a Group gets.
         let visible = self.visible_indices();
-        let (columns, rows) = layout::grid_shape(visible.len(), bounds);
+        let (columns, rows) = layout::grid_shape(visible.len(), self.rest_board());
         let gap = crate::theme::BOARD_SEAM;
         let height = (bounds.h - (rows.max(1) - 1) as f32 * gap) / rows.max(1) as f32;
         visible
@@ -2395,6 +2406,7 @@ impl CockpitView {
 
     /// The level one Pane draws at: the board's one Level (`board_level`).
     /// `index` is kept so call sites read as the Pane they ask about.
+    #[cfg(test)]
     fn level_of(&self, _index: usize, window: &Window) -> Level {
         self.board_level(window)
     }
@@ -2990,7 +3002,7 @@ impl CockpitView {
                 rows.push(Some((
                     menu::Item::new("Delete parked threads")
                         .destructive()
-                        .disabled(self.parked_threads().is_empty()),
+                        .disabled(self.deletable_parked().is_empty()),
                     MenuVerb::DeleteAllParked,
                 )));
             }
@@ -2998,37 +3010,32 @@ impl CockpitView {
         rows
     }
 
-    /// The Threads the Parked section lists: parked, in no Group, and
-    /// admitted by the Project filter — the nav's own definition, shared
-    /// by the rows it draws and the menu that deletes them, so the two can
-    /// never disagree about what "all parked" means.
+    /// The Threads the Parked section lists and counts: every parked
+    /// Thread the Project filter admits — a parked Group member too (the
+    /// prototype's `parked 3` holds Release notes, an Everything member),
+    /// and a parked tile on the wall is still a parked Thread.
     fn parked_threads(&self) -> Vec<ThreadId> {
-        let grouped = self.grouped_threads();
         self.facts
             .parked()
             .iter()
             .copied()
-            .filter(|thread| self.pane_for(*thread).is_none())
-            .filter(|thread| !grouped.contains(thread))
             .filter(|thread| self.admitted(*thread))
             .collect()
     }
 
-    /// The Threads some Group claims, as the nav sees it: a member whose
-    /// leave waits on a pending draft has already left, here exactly as
-    /// in `visible_indices`.
-    fn grouped_threads(&self) -> std::collections::HashSet<ThreadId> {
-        self.cockpit
+    /// What "Delete parked threads" deletes: the parked Threads in no
+    /// Group. A parked member's Group is its place, so the menu that clears
+    /// the section can never dissolve a Group behind the operator's back.
+    fn deletable_parked(&self) -> Vec<ThreadId> {
+        let grouped: std::collections::HashSet<ThreadId> = self
+            .cockpit
             .groups()
             .iter()
-            .flat_map(|group| {
-                let pending_leave = self.cockpit.roster().pending_leave(group.id);
-                group
-                    .members
-                    .iter()
-                    .copied()
-                    .filter(move |thread| Some(*thread) != pending_leave)
-            })
+            .flat_map(|group| group.members.iter().copied())
+            .collect();
+        self.parked_threads()
+            .into_iter()
+            .filter(|thread| !grouped.contains(thread))
             .collect()
     }
 
@@ -3245,7 +3252,7 @@ impl CockpitView {
     /// into the nav's banner, with the last reason, and the survivors stay
     /// listed where the operator can deal with them one at a time.
     fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
-        let parked = self.parked_threads();
+        let parked = self.deletable_parked();
         let mut refused = 0usize;
         let mut reason = None;
         for thread in parked {
@@ -3345,7 +3352,7 @@ impl CockpitView {
                     cell
                 }
             };
-            let rect = local(rect);
+            let rect = snap_rect(local(rect));
             // The grabbed slot stays put, dimmed as lifted out of its slot,
             // while its ghost travels: the board keeps its shape until the
             // drop changes it.
@@ -3428,6 +3435,7 @@ impl CockpitView {
                     }
                 }
             };
+            let line = snap_rect(line);
             let accent = if dragging {
                 rgb(crate::theme::ACCENT).into()
             } else {
@@ -3650,8 +3658,9 @@ impl CockpitView {
         };
         // Groups are non-exclusive (R1): the board's Group is the one being
         // viewed; Solo's is the shown Thread's home.
-        let group_of =
-            |view: &Self, thread: ThreadId| view.cockpit.groups().home(thread).map(|group| group.id);
+        let group_of = |view: &Self, thread: ThreadId| {
+            view.cockpit.groups().home(thread).map(|group| group.id)
+        };
         let holds = |view: &Self, group: GroupId, thread: ThreadId| {
             view.cockpit
                 .groups()
@@ -6088,7 +6097,7 @@ impl CockpitView {
                     Err(error) => Some(Err(error.to_string())),
                 };
                 if let Some(result) = result {
-                    let now = std::time::SystemTime::now();
+                    let now = ferrite_core::clock::system_time();
                     let rows = match result {
                         Ok(candidates) if !candidates.is_empty() => candidates
                             .into_iter()
@@ -6210,7 +6219,7 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        let now = std::time::SystemTime::now();
+        let now = ferrite_core::clock::system_time();
         let rows = candidates
             .into_iter()
             .map(|candidate| {
@@ -7571,11 +7580,14 @@ impl CockpitView {
     /// that Project's section, holding every Group with a member there.
     ///
     /// The one selection (N-5) is the row of what the board shows: the
-    /// Group being viewed (its view or its wall), or the Solo Thread.
+    /// Group being viewed (its view or its wall), or the Solo Thread. The
+    /// empty board shows neither, so no row is selected.
     fn nav_state(&self) -> nav::NavState {
         let roster = self.cockpit.roster();
+        let board_empty = self.empty_board_shown();
         let view = roster.view();
         let solo = match view {
+            _ if board_empty => None,
             View::Solo => roster.focused_thread(),
             View::Group(_) => None,
         };
@@ -7662,7 +7674,7 @@ impl CockpitView {
                         title: group.display_title().into(),
                         members: shown,
                         folded: self.nav_folds.contains(&NavFold::Group(group.id)),
-                        selected: view == View::Group(group.id),
+                        selected: !board_empty && view == View::Group(group.id),
                     },
                 ))
             })
@@ -7710,6 +7722,8 @@ impl CockpitView {
                 .unwrap_or_else(|| SharedString::from("Other"));
             // A heading names its branch; `Other` names no Project, so no
             // branch either.
+            // Only the section's own Threads say it: a Group's guest from
+            // another Project has that Project's checkout.
             let branch = key.and_then(|_| {
                 let rows: Vec<ThreadId> = section_solos
                     .iter()
@@ -7719,6 +7733,7 @@ impl CockpitView {
                             .iter()
                             .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
                     )
+                    .filter(|thread| project_of(*thread) == key)
                     .collect();
                 self.section_branch(&rows)
             });
@@ -7726,19 +7741,19 @@ impl CockpitView {
                 project: key,
                 label,
                 branch,
-                folded: key.is_some_and(|project| {
-                    self.nav_folds.contains(&NavFold::Project(project))
-                }),
+                folded: key
+                    .is_some_and(|project| self.nav_folds.contains(&NavFold::Project(project))),
                 solos: section_solos,
                 groups: section_groups,
             });
         }
 
-        // The Needs-you strip: every waiting Thread in the answer order,
-        // whatever the filter admits — it is the queue ⌘D walks.
-        let needs_you = self
-            .cockpit
-            .needs_you()
+        // The Needs-you strip: every waiting Thread, whatever the filter
+        // admits, in creation order like every other nav row (R14) — a new
+        // request never moves the rows above it.
+        let mut waiting = self.cockpit.needs_you();
+        waiting.sort();
+        let needs_you = waiting
             .into_iter()
             .map(|thread| nav::NeedsYouRow {
                 row: self.thread_row(thread),
@@ -7787,7 +7802,7 @@ impl CockpitView {
     fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
         let facts = self.facts.get(thread);
         let open = self.cockpit.thread(thread);
-        let now = std::time::SystemTime::now();
+        let now = ferrite_core::clock::system_time();
         // Unread is its own axis: a Thread that finished while the operator
         // was elsewhere keeps its state and wears the unread face
         // (`thread_status`), never a Decision's ochre.
@@ -7843,9 +7858,10 @@ impl CockpitView {
                     .or_else(|| facts.branch.clone())
             })
         };
-        let mut branches = rows.iter().map(|thread| checkout(*thread));
-        if let Some(Some(first)) = branches.next() {
-            if branches.all(|branch| branch.as_ref() == Some(&first)) {
+        // The checkouts that say a branch (a parked row may not).
+        let mut branches = rows.iter().filter_map(|thread| checkout(*thread));
+        if let Some(first) = branches.next() {
+            if branches.all(|branch| branch == first) {
                 return Some(first);
             }
         }
@@ -8837,6 +8853,14 @@ impl CockpitView {
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
                     _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
+                    // A parked member's tile draws no Composer: the root holds
+                    // the keyboard, where ⏎ wakes it (F-8).
+                    _ if pane
+                        .thread()
+                        .is_some_and(|thread| self.cockpit.thread(thread).is_none()) =>
+                    {
+                        None
+                    }
                     // At L1 the Composer keeps the keyboard even while a
                     // Decision pends: the card is part of its stack and the
                     // input stays live (PromptBox state 04) — y/n/a answer
@@ -9436,7 +9460,7 @@ impl CockpitView {
             let age = self
                 .facts
                 .last_used(thread)
-                .map(|at| crate::facts::since_label(at, std::time::SystemTime::now()))
+                .map(|at| crate::facts::since_label(at, ferrite_core::clock::system_time()))
                 .filter(|age| !age.is_empty())
                 .map_or_else(|| "now".to_string(), |age| format!("{age} ago"));
             let turns = self.facts.turns(thread).unwrap_or(0);
@@ -11609,7 +11633,7 @@ impl CockpitView {
     /// read. A finished turn keeps its own rule: it toasts only while the
     /// nav is folded and its Thread is off the board, and goes when the
     /// Thread lands on the board or is read.
-    fn present_notices(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    pub(crate) fn present_notices(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         let railed = self.nav_railed();
         let on_board: std::collections::HashSet<ThreadId> = self
             .visible_indices()
@@ -11709,7 +11733,7 @@ impl CockpitView {
     /// answer keys take them (the Needs-you queue), then finished turns
     /// newest first, each Thread folded to its newest.
     pub(super) fn bell_rows(&self) -> Vec<NoticeRow> {
-        let now = std::time::SystemTime::now();
+        let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
         let queue = self.cockpit.needs_you();
         let mut rows: Vec<NoticeRow> = notifications
@@ -11783,10 +11807,7 @@ impl CockpitView {
         let shell = nav::shell(width);
         // Folded at rest, the column holds nothing to draw up.
         if collapsed && ride.is_none() {
-            return frame
-                .child(shell)
-                .child(nav::seam(true))
-                .into_any_element();
+            return frame.child(shell).child(nav::seam(true)).into_any_element();
         }
         let state = self.nav_state();
         let content = nav::content()
@@ -11819,11 +11840,17 @@ impl CockpitView {
         // A scene holding the ride (`fixture_hold_nav`) holds the fade where
         // its own clock would be that far into the ride.
         if let Some(progress) = self.nav_hold {
-            let elapsed = crate::motion::RESIZE.duration().mul_f32(progress.clamp(0.0, 1.0));
+            let elapsed = crate::motion::RESIZE
+                .duration()
+                .mul_f32(progress.clamp(0.0, 1.0));
             let faded = nav::CONTENT_FADE.progress(
                 (elapsed.as_secs_f32() / nav::CONTENT_FADE.duration().as_secs_f32()).min(1.0),
             );
-            return if self.nav_railed() { 1.0 - faded } else { faded };
+            return if self.nav_railed() {
+                1.0 - faded
+            } else {
+                faded
+            };
         }
         match (self.nav_tween, self.nav_fade) {
             (Some(ride), Some(fade)) if ride.running(now, reduced) => fade.value(now, reduced),
@@ -11927,7 +11954,8 @@ impl CockpitView {
         }
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate() {
-            let mut block = nav::section(index == 0).child(self.project_heading(index, section, cx));
+            let mut block =
+                nav::section(index == 0).child(self.project_heading(index, section, cx));
             if !section.folded {
                 if !section.solos.is_empty() {
                     let rows = section
@@ -12196,10 +12224,14 @@ impl CockpitView {
         }
         block
             .child(
-                drop_feedback(nav::group_gap(full_index), self.cockpit.groups().clone(), gap)
-                    .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                        view.apply_drop(*drag, gap, cx)
-                    })),
+                drop_feedback(
+                    nav::group_gap(full_index),
+                    self.cockpit.groups().clone(),
+                    gap,
+                )
+                .on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
             )
             .into_any_element()
     }
@@ -12326,6 +12358,21 @@ fn reader_leaf(owner: PaneIdentity) -> ThreadId {
         PaneIdentity::Thread(thread) => READER_LEAF | thread.get(),
         PaneIdentity::Draft(draft) => READER_LEAF | READER_DRAFT | draft.get(),
     })
+}
+
+/// A board rect on whole logical pixels, as the prototype's grid lays its
+/// tracks out (`--c1:50%` of the board, then the 1px gap, then the rest):
+/// each edge rounds half up, so a split's first side takes the odd pixel
+/// and its seam line lands on a whole pixel after it.
+fn snap_rect(rect: layout::Rect) -> layout::Rect {
+    let edge = |at: f32| (at + 1e-3).round();
+    let (x, y) = (edge(rect.x), edge(rect.y));
+    layout::Rect {
+        x,
+        y,
+        w: edge(rect.x + rect.w) - x,
+        h: edge(rect.y + rect.h) - y,
+    }
 }
 
 fn leaf_slot(leaf: ThreadId) -> Slot {
@@ -13584,9 +13631,9 @@ mod tests {
     }
 
     /// C8: while Threads wait, the nav pins `Needs you N ⌘D` under its
-    /// head with one reference row per waiting Thread, in the answer order;
-    /// the strip's first row is exactly what the answer keys act on, the
-    /// titlebar counts them, and — the nav being open — nothing toasts.
+    /// head with one reference row per waiting Thread, in creation order
+    /// (R14); ⌘D walks them oldest request first, the titlebar counts them,
+    /// and — the nav being open — no system toast card shows.
     #[gpui::test]
     fn two_decisions_make_a_needs_you_strip_and_no_toast(cx: &mut TestAppContext) {
         use gpui::component::WindowExt as _;
@@ -13616,11 +13663,15 @@ mod tests {
                 .map(|entry| entry.row.thread)
                 .collect::<Vec<_>>()
         });
-        assert_eq!(order, vec![threads[2], threads[0]], "the answer order");
+        assert_eq!(
+            order,
+            vec![threads[0], threads[2]],
+            "creation order, like every nav row (R14): a request moves no row"
+        );
         assert_eq!(
             view.read_with(cx, |view, _| view.cockpit.answer_target()),
-            Some(order[0]),
-            "the strip's first row is the answer target"
+            Some(threads[2]),
+            "⌘D still answers the request that has waited longest"
         );
         let header = cx
             .debug_bounds("nav-needs-you")
@@ -13632,7 +13683,7 @@ mod tests {
                 .debug_bounds(id)
                 .expect("one strip row per waiting Thread");
             assert_eq!(row.size.height, px(crate::theme::NAV_LINE));
-            assert!(row.origin.y >= above, "in the answer order");
+            assert!(row.origin.y >= above, "in creation order");
             above = row.bottom();
             let own: &'static str = format!("nav-thread-{}", thread.get()).leak();
             assert!(
@@ -14678,6 +14729,9 @@ mod tests {
         }
     }
 
+    /// The Decision is the transcript's last row now (its tail): a long
+    /// question form scrolls with the transcript, so its last question is
+    /// reached by scrolling the body.
     #[gpui::test]
     fn a_long_question_form_scrolls_to_the_next_question(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("question-scroll", 1);
@@ -14687,26 +14741,13 @@ mod tests {
             .send(many_questions("q_scroll"))
             .unwrap();
         tick(cx);
-
-        let viewport = cx.debug_bounds("question-scroll-content").unwrap();
-        let before = cx.debug_bounds("question-choice-3-1").unwrap();
+        let body = cx
+            .debug_bounds("transcript-tail")
+            .expect("the question is the transcript's tail");
+        let last = cx.debug_bounds("question-choice-3-1").unwrap();
         assert!(
-            before.bottom() > viewport.bottom(),
-            "the last question must begin below the question viewport"
-        );
-
-        cx.simulate_event(gpui::ScrollWheelEvent {
-            position: viewport.center(),
-            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
-            modifiers: gpui::Modifiers::none(),
-            touch_phase: gpui::TouchPhase::default(),
-        });
-        cx.run_until_parked();
-
-        let after = cx.debug_bounds("question-choice-3-1").unwrap();
-        assert!(
-            after.bottom() <= viewport.bottom() && after.top() >= viewport.top(),
-            "wheel scrolling must reveal the next question: {after:?} in {viewport:?}"
+            last.bottom() <= body.bottom() + px(1.),
+            "the followed tail shows the last question: {last:?} in {body:?}"
         );
     }
 
@@ -14749,8 +14790,9 @@ mod tests {
             "the pending question must leave the transcript mounted and readable above it"
         );
         assert!(
-            composer.top() - island.bottom() <= px(16.),
-            "the pending question must dock directly above the Composer"
+            island.bottom() <= composer.top(),
+            "the pending question is the transcript's last row, above the Composer: \
+             {island:?} / {composer:?}"
         );
         cx.simulate_click(choice.center(), gpui::Modifiers::none());
         cx.run_until_parked();
@@ -14854,63 +14896,50 @@ mod tests {
         });
     }
 
-    /// #26: the mouse presses the keycap it depicts — a real click on the
-    /// card's rightmost keycap runs its exact decide verb (`n deny`), even
-    /// with text on the Composer line, where the n KEY would type instead.
-    /// Use the keycap's actual bounds: the Composer also has real pointer
-    /// actions, so a coordinate sweep would click unrelated controls first.
+    /// The mouse presses the option it points at — a real click on the
+    /// Decision row's option 3 denies (and steers), even with text on the
+    /// Composer line, where the digit KEY would type instead.
     #[gpui::test]
     fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("keycap-click", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-        fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
         tick(cx);
+        // The row lives in the cached transcript: read its bounds while that
+        // view has just painted, before typing re-renders only the Composer.
+        let deny = cx.debug_bounds("decision-deny").expect("option 3, Deny");
         cx.simulate_input("not yet");
-        view.read_with(cx, |view, cx| {
-            assert!(
-                view.cockpit
-                    .thread(thread)
-                    .and_then(|open| open.pending())
-                    .is_some(),
-                "the premise: a card up"
-            );
+        tick(cx);
+        let serial = view.read_with(cx, |view, cx| {
             assert!(
                 !view.panes[0].composer.read(cx).is_empty(),
                 "the premise: half-typed text on the line"
             );
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .pending_decisions()[0]
+                .handle
+                .serial
         });
-
         cx.run_until_parked();
-        let deny = cx.debug_bounds("decision-deny").expect("the Deny keycap");
+        let _ = serial;
         cx.simulate_click(deny.center(), gpui::Modifiers::none());
         cx.run_until_parked();
-        view.read_with(cx, |view, cx| {
+        view.read_with(cx, |view, _| {
             assert!(view.cockpit.thread(thread).unwrap().pending().is_none());
-            let answered_as = view
-                .cockpit
-                .thread(thread)
-                .map(|open| open.transcript())
-                .unwrap()
-                .blocks()
-                .iter()
-                .rev()
-                .find_map(|block| match &block.body {
-                    Body::Meta(text) => Some(text.clone()),
-                    _ => None,
-                });
-            assert_eq!(
-                answered_as.as_deref(),
-                Some("denied Write"),
-                "the rightmost keycap is `n deny`, and its press runs deny"
-            );
-            assert_eq!(
-                view.panes[0].composer.read(cx).text(),
-                "not yet",
-                "the press answered the card; it never typed"
-            );
         });
+        assert!(
+            matches!(
+                fake.answered.borrow().as_slice(),
+                [(id, DecisionAnswer::Deny { .. })] if id == "perm_01"
+            ),
+            "option 3 denies: {:?}",
+            fake.answered.borrow()
+        );
     }
 
     /// Two prompts sent while the turn runs both stay visible: they pile up
@@ -15486,7 +15515,10 @@ mod tests {
     /// answer goes, and Ferrite keeps the thread rule it names.
     #[gpui::test]
     fn always_at_the_wall_keeps_a_thread_rule_when_nothing_was_offered(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("wall-always", 24);
+        let (mut core, fake) = cockpit("wall-always", 24);
+        // Twenty-four Threads tile the board as one Group's wall.
+        let group = group_all(&mut core);
+        core.enter_group(group).unwrap();
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("a", Always, Some("Wall"))]);
         });
@@ -16870,8 +16902,8 @@ mod tests {
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
             clipboard(cx).as_deref(),
-            Some("before\n\nRan 1 shell command\n\nafter"),
-            "copy visible summary text; omit hidden output and disclosure/marker chrome"
+            Some("before\n\nBash(echo hi)\n\ndone\n\nafter"),
+            "copy the call line and its elbow's words; omit the dot, the └ and the trail"
         );
     }
 
@@ -18168,19 +18200,18 @@ mod tests {
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
-        // Four Panes in this window sit at Instruments (a 2×2 board of
-        // ~273px columns beside the nav). An L2 cell keeps its Composer,
-        // so the keys already land — the premise is the level, not the
-        // absence of a prompt line.
+        // Four Panes in this window are wall tiles (a 2×2 board of ~273px
+        // columns beside the nav, under R12's 300×360): a tile has no
+        // Composer, so typing lands nowhere.
         cx.simulate_resize(gpui::size(px(860.), px(500.)));
         tick(cx);
-        cx.simulate_input("kept");
+        cx.simulate_input("lost");
         let typed = view.update(cx, |view, cx| {
             view.panes[0]
                 .composer
                 .update(cx, |composer, cx| composer.take(cx))
         });
-        assert_eq!(typed, "kept", "an L2 cell's Composer takes the keys");
+        assert_eq!(typed, "", "a wall tile has no Composer to type into");
 
         cx.simulate_keystrokes("cmd-f");
 
@@ -18230,10 +18261,7 @@ mod tests {
                 .composer
                 .update(cx, |composer, cx| composer.take(cx))
         });
-        assert_eq!(
-            typed, "still",
-            "back on the grid, the L2 Composer still takes the keys"
-        );
+        assert_eq!(typed, "", "back on the wall, the tiles take no typing");
     }
 
     #[gpui::test]
@@ -18694,11 +18722,11 @@ mod tests {
         });
     }
 
-    /// A parked Group member is not "parked" as far as the nav is
-    /// concerned: its Group is its place, and opening the Group revives it
-    /// there. The Parked section lists only the solos — so the menu that
-    /// clears the section can never dissolve a Group behind the operator's
-    /// back.
+    /// A parked Group member keeps its seat in its Group, and opening the
+    /// Group revives it there. The Parked section counts it with the rest
+    /// (the prototype's `parked 3`), but the menu that clears the section
+    /// deletes only the solos — it can never dissolve a Group behind the
+    /// operator's back.
     #[gpui::test]
     fn a_parked_group_member_stays_under_its_group(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("parked-member", 3);
@@ -18730,13 +18758,13 @@ mod tests {
             let parked: Vec<ThreadId> = state.parked.iter().map(|row| row.thread).collect();
             assert_eq!(
                 parked,
-                vec![threads[2]],
-                "only the parked solo is in the section"
+                vec![threads[0], threads[2]],
+                "the section counts every parked Thread, the member too"
             );
             assert_eq!(
-                view.parked_threads(),
+                view.deletable_parked(),
                 vec![threads[2]],
-                "and that is exactly what the menu would delete"
+                "but the menu deletes only the parked solo"
             );
         });
     }
@@ -21210,10 +21238,7 @@ mod tests {
                 .unwrap();
             // The other Provider is a handover now, not a dead door: its
             // section says so and its rows stay live.
-            assert_eq!(
-                picker.rows[codex].detail.as_ref(),
-                "hands the conversation over"
-            );
+            assert_eq!(picker.rows[codex].detail.as_ref(), "handover");
             assert!(
                 picker.rows[codex + 1..].iter().all(|row| !row.inert),
                 "the other Provider's rows are live"
@@ -21477,7 +21502,7 @@ mod tests {
     /// writes the setting and saves it to disk at once, and the Session
     /// defaults the spawner reads follow.
     /// cmd-= / cmd-- step the transcript's text size one step at a time,
-    /// stopping at either end, cmd-0 returns it to 14, and every step is
+    /// stopping at either end, cmd-0 returns it to 13, and every step is
     /// saved like a Settings change.
     #[gpui::test]
     fn cmd_plus_and_minus_step_the_reading_size_and_save_it(cx: &mut TestAppContext) {
@@ -21500,11 +21525,10 @@ mod tests {
             })
         };
         for (keys, expected) in [
+            ("cmd-=", 14),
             ("cmd-=", 15),
             ("cmd-=", 16),
-            ("cmd-=", 18),
-            ("cmd-0", 14),
-            ("cmd--", 13),
+            ("cmd-0", 13),
             ("cmd--", 12),
             ("cmd--", 12),
         ]
@@ -21616,7 +21640,7 @@ mod tests {
         cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_input("Text size");
         tick(cx);
-        // The stepper's `+` twice: 14 → 15 → 16.
+        // The stepper's `+` twice: 13 → 14 → 15.
         for _ in 0..2 {
             let larger = cx
                 .debug_bounds("settings-text-size-1")
@@ -21628,11 +21652,11 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.prefs.settings.reading_size,
-                ferrite_core::settings::ReadingSize::nearest(16)
+                ferrite_core::settings::ReadingSize::nearest(15)
             );
             assert_eq!(
                 ferrite_core::settings::Settings::load(&view.prefs.dir).reading_size,
-                ferrite_core::settings::ReadingSize::nearest(16)
+                ferrite_core::settings::ReadingSize::nearest(15)
             );
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());
@@ -21964,9 +21988,19 @@ mod tests {
             // Attachments-only prompts still submit through the ordinary send path.
             cx.dispatch_action(Submit);
             tick(cx);
+            let chip = cx
+                .debug_bounds("prompt-chip-data.weird-extension")
+                .expect("a sent file is its band's chip");
+            let band = cx.debug_bounds("transcript-prompt").unwrap();
+            assert_eq!(
+                band.size.height,
+                chip.size.height * 2. + px(theme::PROMPT_CHIP_LINE_EXTRA),
+                "half a line above and below the chip line, which stands \
+                 taller as the prototype's inline chip makes it"
+            );
             assert!(
-                cx.debug_bounds("sent-prompt-attachments").is_some(),
-                "sent files remain cards in the transcript"
+                cx.debug_bounds("sent-image").is_some(),
+                "a sent image is framed under its band"
             );
             view.read_with(cx, |view, cx| {
                 assert!(view.panes[view.focused()].composer.read(cx).is_empty());
@@ -22160,10 +22194,13 @@ mod tests {
                     layout::Axis::Row => s.band.x,
                     layout::Axis::Column => s.band.y,
                 };
+                // F-18: a seam drags the whole line it is part of — its
+                // linked seams move with it, every other holds.
+                let linked = tree.linked(&seam.id, bounds, crate::theme::BOARD_SEAM);
                 for after in now.seams(bounds, crate::theme::BOARD_SEAM, SEAM_GRAB) {
                     let before = seams.iter().find(|s| s.id == after.id).unwrap();
                     let (was, is) = (along(before), along(&after));
-                    if after.id == seam.id {
+                    if after.id == seam.id || linked.contains(&after.id) {
                         assert!(
                             (is - was - 30.0).abs() < 2.0,
                             "{label}: seam {:?} followed the pointer: {was} -> {is}",

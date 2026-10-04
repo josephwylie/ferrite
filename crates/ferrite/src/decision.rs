@@ -274,13 +274,9 @@ fn single_quoted(body: &str) -> Option<String> {
     while let Some(at) = rest.find('\'') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];
-        if let Some(after) = tail.strip_prefix("'\"'\"'") {
-            rest = after;
-        } else if let Some(after) = tail.strip_prefix("'\\''") {
-            rest = after;
-        } else {
-            return None;
-        }
+        rest = tail
+            .strip_prefix("'\"'\"'")
+            .or_else(|| tail.strip_prefix("'\\''"))?;
         out.push('\'');
     }
     out.push_str(rest);
@@ -725,6 +721,7 @@ fn head_line(
     };
     let glyph = match mark {
         Mark::Diamond => icons::icon(icons::DIAMOND, theme::DECISION_MARK, theme::ATTENTION)
+            .ml(px(-theme::DECISION_MARK_LEAD))
             .debug_selector(|| "decision-mark".into())
             .into_any_element(),
         Mark::Question => div()
@@ -897,6 +894,7 @@ pub fn key_label(key: &str) -> String {
 /// pointer `paint::HOVER`. No `↵`, no keycaps.
 pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let id = id.into();
+    let hover = crate::pointer::hover_key(&id);
     let ink = match (row.enabled, row.cursor) {
         (false, _) => theme::TEXT_MUTED,
         (true, true) => theme::TEXT_STRONG,
@@ -963,10 +961,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         .map(|button| match (row.enabled, row.cursor) {
             (_, true) => button.bg(theme::paint::SELECTION).cursor_pointer(),
             (false, false) => button.cursor_default(),
-            (true, false) => button
-                .cursor_pointer()
-                .hover(|style| style.bg(theme::paint::HOVER))
-                .press_raised(),
+            (true, false) => button.hover_raised(hover).press_raised(),
         })
         .focus_visible(components::control_focus)
         .child(
@@ -1060,11 +1055,7 @@ pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
                 .flex_shrink_0()
                 .items_center()
                 .h(px(theme::LH_UI))
-                .child(icons::icon(
-                    icons::CLOSE,
-                    theme::DECISION_MARK,
-                    theme::BLOCKED,
-                )),
+                .child(icons::icon(icons::CLOSE, 8.0, theme::BLOCKED)),
         )
         .child(
             div()
@@ -1170,6 +1161,7 @@ pub fn skip_button(
 /// the verb in `TEXT`; under the pointer the hover face and `TEXT_STRONG`.
 /// A narrow cell drops the verb and keeps the key (`verb` false): pairs go
 /// whole, never cut. No keycaps.
+#[cfg(test)]
 pub fn key_action(
     id: &'static str,
     key: &'static str,
@@ -1200,15 +1192,6 @@ pub fn key_action(
                     .child(verb),
             )
         })
-}
-
-/// The L2 quick answers' cluster.
-pub fn key_actions() -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::DECISION_KEYS_GAP))
 }
 
 #[cfg(test)]

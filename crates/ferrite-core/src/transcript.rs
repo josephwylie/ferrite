@@ -327,14 +327,40 @@ pub struct Diff {
 
 impl Diff {
     fn new(path: String, hunks: Vec<Hunk>) -> Self {
-        let lines = || hunks.iter().flat_map(|hunk| hunk.lines.iter());
+        let (added, removed) = hunks.iter().fold((0, 0), |(added, removed), hunk| {
+            let (a, r) = hunk_stat(hunk);
+            (added + a, removed + r)
+        });
         Self {
-            added: lines().filter(|line| line.starts_with('+')).count(),
-            removed: lines().filter(|line| line.starts_with('-')).count(),
+            added,
+            removed,
             path,
             hunks,
         }
     }
+}
+
+/// A hunk's change size: its `+` and `-` lines, or what its header counts
+/// when the lines a provider sent were cut short of it (`@@ -208,7
+/// +208,11 @@` over four context lines is `+7 −3`, however many rows came).
+fn hunk_stat(hunk: &Hunk) -> (usize, usize) {
+    let count = |mark: char| {
+        hunk.lines
+            .iter()
+            .filter(|line| line.starts_with(mark))
+            .count()
+    };
+    let (added, removed, context) = (count('+'), count('-'), count(' '));
+    // Only a change (lines both sides) reads its header: a pure insertion
+    // or deletion whose header is rough keeps its own count.
+    if added == 0 || removed == 0 {
+        return (added, removed);
+    }
+    let from_header = |lines: u32| (lines as usize).saturating_sub(context);
+    (
+        added.max(from_header(hunk.new_lines)),
+        removed.max(from_header(hunk.old_lines)),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1460,6 +1486,14 @@ impl Transcript {
                 Update::default()
             }
             Input::Event(SessionEvent::UsageDetails { details }) => {
+                // A turn's own report (Claude's `result`) is the turn's
+                // count, whatever the running reports summed to.
+                if details.scope == crate::UsageScope::Turn {
+                    self.turn_input_tokens = details.input_tokens;
+                    if details.output_tokens > 0 {
+                        self.turn_output_tokens = details.output_tokens;
+                    }
+                }
                 self.usage_details = Some(details);
                 Update::default()
             }
@@ -1996,8 +2030,9 @@ fn result_summary(
                 .and_then(|value| value.get("file"))
                 .and_then(|file| number(file, "numLines"))
                 .or_else(|| {
+                    // Whitespace alone says nothing worth a row.
                     let count = output.lines().count() as u64;
-                    (count > 0).then_some(count)
+                    (count > 0 && !output.trim().is_empty()).then_some(count)
                 })?;
             Some(counted(lines, "line", "lines"))
         }
@@ -2074,15 +2109,10 @@ fn same_file(a: &str, b: &str) -> bool {
 
 /// A diff's first changed line, on the new side: the line a hover card
 /// opens on.
+/// Where an edit landed, as the hover card opens on it (R10): its first
+/// hunk's new-side start — `Updated nav.rs at 211`, the prototype's `:211`.
 fn first_changed_line(diff: &Diff) -> Option<u32> {
     let hunk = diff.hunks.first()?;
-    let mut line = hunk.new_start;
-    for text in &hunk.lines {
-        match text.as_bytes().first() {
-            Some(b'+') | Some(b'-') => return Some(line.max(1)),
-            _ => line += 1,
-        }
-    }
     Some(hunk.new_start.max(1))
 }
 
@@ -2676,7 +2706,7 @@ mod tests {
             .file_stat("crates/ferrite/src/nav.rs")
             .expect("the file was changed");
         assert_eq!((stat.added, stat.removed), (3, 1));
-        assert_eq!(stat.last_change_line, Some(211));
+        assert_eq!(stat.last_change_line, Some(210));
         assert_eq!(stat.at, Some(std::time::SystemTime::UNIX_EPOCH));
         assert_eq!(transcript.file_stat("crates/ferrite/src/facts.rs"), None);
         assert_eq!(transcript.file_stat("nav.rs").map(|s| s.added), Some(3));

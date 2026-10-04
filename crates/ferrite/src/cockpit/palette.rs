@@ -132,8 +132,6 @@ impl CockpitView {
     fn clear_for_float(&mut self) {
         self.popover = None;
         self.context_menu = None;
-        self.nav_filter_open = false;
-        self.nav_order_open = false;
         self.session_controls = None;
         self.mode_picker = None;
         self.context_usage = None;
@@ -263,12 +261,23 @@ impl CockpitView {
             open.sort();
             open
         };
+        // The parked Threads the palette offers: those used within the
+        // last day. Older ones wait in the nav's parked fold (`show
+        // parked`, ⌘⇧P).
+        let recent = ferrite_core::clock::system_time();
         let parked: Vec<ThreadId> = self
             .facts
             .parked()
             .iter()
             .copied()
             .filter(|thread| !open_threads.contains(thread))
+            .filter(|thread| {
+                self.facts.last_used(*thread).is_some_and(|at| {
+                    recent
+                        .duration_since(at)
+                        .is_ok_and(|ago| ago < std::time::Duration::from_secs(24 * 60 * 60))
+                })
+            })
             .collect();
         // Items in creation order: a loose Thread by itself, a Group by its
         // first member (so it sits where that member was made).
@@ -304,7 +313,7 @@ impl CockpitView {
         projects.push(None);
         let mut seen: std::collections::HashSet<ThreadId> = std::collections::HashSet::new();
         let mut rows: Vec<PaletteRow> = Vec::new();
-        let now = std::time::SystemTime::now();
+        let now = ferrite_core::clock::system_time();
         for project in projects {
             let mut ordered: Vec<ThreadId> = Vec::new();
             for (_, item_project, item) in &items {
@@ -316,6 +325,20 @@ impl CockpitView {
                     Item::Group(members) => ordered.extend(members.iter().copied()),
                 }
             }
+            // A Group's guests from other Projects read under their own.
+            let mut guests: Vec<ThreadId> = Vec::new();
+            for (_, item_project, item) in &items {
+                if let (Item::Group(members), true) = (item, *item_project != project) {
+                    guests.extend(
+                        members
+                            .iter()
+                            .copied()
+                            .filter(|thread| project_of(*thread) == project),
+                    );
+                }
+            }
+            ordered.retain(|thread| project_of(*thread) == project);
+            ordered.extend(guests);
             ordered.extend(
                 parked
                     .iter()
@@ -560,7 +583,7 @@ impl CockpitView {
         }
         let order = self.prefs.settings.thread_list_order;
         add(
-            order != ThreadListOrder::ByProject,
+            order != ThreadListOrder::Created,
             "sort: created".into(),
             "",
             None,
@@ -761,7 +784,7 @@ impl CockpitView {
             Command::NewThreadIn(project) => self.open_draft_in_project(project, cx),
             Command::FilterAll => self.choose_nav_filter(None, cx),
             Command::FilterProject(project) => self.choose_nav_filter(Some(project), cx),
-            Command::SortCreated => self.set_thread_order(ThreadListOrder::ByProject, cx),
+            Command::SortCreated => self.set_thread_order(ThreadListOrder::Created, cx),
             Command::SortRecent => self.set_thread_order(ThreadListOrder::Recent, cx),
             Command::NewProject => self.open_project_creator(cx),
             Command::EditProject(project) => self.open_project_editor(project, cx),
@@ -774,8 +797,14 @@ impl CockpitView {
             Command::Notifications => self.toggle_notifications(&ToggleNotifications, window, cx),
             Command::Shortcuts => self.toggle_shortcuts(window, cx),
             Command::NextRequest => self.next_decision(&NextDecision, window, cx),
-            Command::CopyPrompt => self.copy_reading_prompt(cx),
-            Command::ResendPrompt => self.resend_reading_prompt(window, cx),
+            Command::CopyPrompt => {
+                let index = self.focused();
+                self.copy_reading_prompt(index, cx);
+            }
+            Command::ResendPrompt => {
+                let index = self.focused();
+                self.resend_reading_prompt(index, cx);
+            }
             Command::Model | Command::Effort => {
                 if let Some(thread) = thread {
                     if let Some(index) = self.pane_for(thread) {
@@ -1042,7 +1071,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let (target, _) = self.bell.toasts().last()?.clone();
-        let now = std::time::SystemTime::now();
+        let now = ferrite_core::clock::system_time();
         let row = match &target {
             crate::notifications::RowTarget::Notice(id) => {
                 let notice = self.cockpit.notifications().get(*id)?;

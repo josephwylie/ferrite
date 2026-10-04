@@ -364,12 +364,20 @@ impl gpui::RenderOnce for Markdown {
             Some(ink) => text_style.with_foreground(rgb(ink).into()),
             None => text_style,
         };
+        // A prompt's band runs its words the band's whole width (the
+        // prototype's `.prompt .txt` has no measure).
+        let text_style = if self.chips.is_some() {
+            text_style.with_prose_max_width(None)
+        } else {
+            text_style
+        };
         let actions_namespace = self.id.clone();
         let (cwd, preview) = self.cache.1.borrow().clone();
         let scope = self.cache.path_scope();
         let chips = self.chips.clone();
         let link_cwd = cwd.clone();
-        TextView::new(&state)
+        let hang = theme::tx_cell(f32::from(base));
+        let view = TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.
                 if let Some(path) = url.strip_prefix(CHIP_SCHEME) {
@@ -401,7 +409,11 @@ impl gpui::RenderOnce for Markdown {
                 view.selection_document(document, self.id)
             })
             .font_family(face)
-            .w_full()
+            // A line's trailing space hangs past its edge, as CSS lets it:
+            // GPUI counts it when wrapping, so a word that ends within a
+            // cell of the edge would wrap a line early. The view runs one
+            // cell past its column; its words still end inside it.
+            .mr(px(-hang))
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
@@ -461,7 +473,13 @@ impl gpui::RenderOnce for Markdown {
                     }
                 });
                 actions
-            })
+            });
+        // A block of the column's width; the view inside it stretches a
+        // cell past it (its negative margin), so a trailing space hangs.
+        gpui::div()
+            .w_full()
+            .min_w_0()
+            .child(view)
             .into_any_element()
     }
 }
@@ -676,6 +694,9 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         .with_link_underline_on_hover(true)
         // A column of numbers reads right-aligned, as a terminal table does.
         .with_numeric_columns_right(true)
+        // A table is as wide as its cells, its first column on the prose
+        // edge (the prototype's `table.t`, `.clean … :first-child`).
+        .with_table_fit(Some(px(cell)))
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE2` edge.
         .with_image(
@@ -698,6 +719,9 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 .pl(px(2.0 * cell))
                 .pr(px(0.))
                 .py(px(0.))
+                // A fence holds to the measure too (the prototype's `.code`,
+                // `max-width: 108ch`): its language word sits at that edge.
+                .max_w(px((theme::MEASURE_CH * cell).round()))
                 .border_l_1()
                 .border_color(theme::paint::LINE2)
                 .rounded(px(theme::R_BLOCK))
@@ -757,8 +781,9 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 .my(px(theme::RULE_MARGIN_Y)),
         )
         // Prose holds to the measure (`MEASURE_CH` cells), left-aligned;
-        // code, tables and rules keep the column.
-        .with_prose_max_width(Some(px((theme::MEASURE_CH * cell).round())))
+        // code, tables and rules keep the column. One cell more, for the
+        // trailing space a line hangs (see `Markdown::render`).
+        .with_prose_max_width(Some(px(((theme::MEASURE_CH + 1.0) * cell).round())))
         // A list's `•` hangs in the first of two cells, dim; its text on
         // the second's far side.
         .with_list_hang(Some(gpui::base::text::ListHang {
@@ -1786,14 +1811,16 @@ mod file_link_tests {
             assert!(selected.contains("Before report after."), "{selected}");
             assert!(selected.contains("notes") && selected.contains("data"));
         });
-        cx.simulate_resize(gpui::size(px(130.), px(500.)));
+        // Narrower than `Before ` and the card, less the cell a trailing
+        // space may hang into.
+        cx.simulate_resize(gpui::size(px(110.), px(500.)));
         let narrow = card(cx, "report.md");
         assert!(
             narrow.top() > wide.top(),
             "card wraps as a unit: {narrow:?}"
         );
         assert!(
-            narrow.right() <= px(130.),
+            narrow.right() <= px(110.),
             "card fits narrow pane: {narrow:?}"
         );
         // Appending source updates the same native parser/entity.
@@ -2481,7 +2508,10 @@ mod style_tests {
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
         assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
         assert_eq!(style.link(), solid(theme::PATH_INK));
-        assert_eq!(style.link_underline(), Some(gpui::transparent_black()));
+        // The underline is the link's own ink, painted only under the
+        // pointer (`with_link_underline_on_hover`).
+        assert_eq!(style.link_underline(), Some(solid(theme::PATH_INK)));
+        assert!(style.link_underline_on_hover());
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
         assert!(
             style.inline_code_wash().is_none(),
@@ -2599,14 +2629,20 @@ mod style_tests {
     #[test]
     fn prose_holds_the_measure_and_code_keeps_the_column() {
         let style = style(px(theme::FS_UI));
-        // `MEASURE_CH` cells at the Standard reading size.
+        // `MEASURE_CH` cells at the Standard reading size, and the cell a
+        // line's trailing space hangs into.
         assert_eq!(
             style.prose_max_width(),
-            Some(px(
-                (theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).round()
-            ))
+            Some(px(((theme::MEASURE_CH + 1.0)
+                * theme::tx_cell(theme::FS_PROSE))
+            .round()))
         );
-        assert_eq!(style.code_block().max_size.width, None);
+        // A fence holds to the measure (its language word at that edge); a
+        // table keeps the column.
+        assert_eq!(
+            style.code_block().max_size.width,
+            Some(px((theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).round()).into())
+        );
         assert_eq!(style.table().max_size.width, None);
     }
 
