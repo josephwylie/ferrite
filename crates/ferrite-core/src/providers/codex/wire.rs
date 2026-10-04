@@ -533,6 +533,7 @@ fn raw_file_hunk(content: &str, marker: char) -> Vec<Hunk> {
         new_start: if marker == '+' { 1 } else { 0 },
         new_lines: if marker == '+' { count } else { 0 },
         lines,
+        section: None,
     }]
 }
 
@@ -540,7 +541,8 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
     let mut hunks = Vec::new();
     let mut current: Option<Hunk> = None;
     for line in diff.lines() {
-        if let Some((old_start, old_lines, new_start, new_lines)) = parse_hunk_header(line) {
+        if let Some((old_start, old_lines, new_start, new_lines, section)) = parse_hunk_header(line)
+        {
             if let Some(hunk) = current.take() {
                 hunks.push(hunk);
             }
@@ -550,6 +552,7 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
                 new_start,
                 new_lines,
                 lines: Vec::new(),
+                section,
             });
         } else if current.is_some() && matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-')) {
             current.as_mut().unwrap().lines.push(line.to_string());
@@ -561,17 +564,20 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
     hunks
 }
 
-fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+/// `@@ -208,7 +208,11 @@ fn thread_row` → the ranges and the section git's
+/// funcname rule put after the second `@@` (none when it found none).
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32, Option<String>)> {
     let middle = line.strip_prefix("@@ -")?.split_once(" +")?;
     let (old, rest) = middle;
-    let (new, _) = rest.split_once(" @@")?;
+    let (new, tail) = rest.split_once(" @@")?;
     fn range(range: &str) -> Option<(u32, u32)> {
         let (start, count) = range.split_once(',').unwrap_or((range, "1"));
         Some((start.parse().ok()?, count.parse().ok()?))
     }
     let (old_start, old_lines) = range(old)?;
     let (new_start, new_lines) = range(new)?;
-    Some((old_start, old_lines, new_start, new_lines))
+    let section = crate::transcript::section_head(tail.trim());
+    Some((old_start, old_lines, new_start, new_lines, section))
 }
 
 /// The server blocks the turn on a Decision: a JSON-RPC request whose answer

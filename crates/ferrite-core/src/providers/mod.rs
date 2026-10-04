@@ -17,6 +17,7 @@ mod elicitation;
 pub mod limits;
 pub mod models;
 pub(crate) mod oneshot;
+pub mod shell;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.

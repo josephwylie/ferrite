@@ -4,6 +4,7 @@
 //! Decision, the held prompt — is folded in core and read from there.
 
 pub(crate) mod subagents;
+mod transcript_glue;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =
@@ -1397,7 +1398,9 @@ impl CockpitView {
     }
 
     /// Compare a visible Subject's key every root render, and only then copy
-    /// its bounded blocks and timings into its retained entity.
+    /// its bounded blocks and timings into its retained entity — with its
+    /// banner, its tail row, the call a pending Decision gates, and the
+    /// checkout its path targets resolve against (`transcript_glue`).
     fn sync_transcript(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some((thread, subject, namespace, focused, selection_scope, disclosure_revision)) =
             self.panes.get(index).and_then(|pane| {
@@ -1415,11 +1418,10 @@ impl CockpitView {
         else {
             return;
         };
-        let Some(subject_view) = self
-            .cockpit
-            .thread(thread)
-            .and_then(|open| open.activity().subject(&subject))
-        else {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let Some(subject_view) = open.activity().subject(&subject) else {
             return;
         };
         let transcript = subject_view.transcript();
@@ -1427,22 +1429,48 @@ impl CockpitView {
         let status = subagents::transcript_status(subject_view.status(), subject_view.fresh());
         // One reading size for every transcript, on every board.
         let reading_size = self.prefs.settings.reading_size;
+        let banner = self.banner_facts(thread, transcript);
+        let tail = self.transcript_tail(index);
+        // The gated call hides while its Decision waits as the tail row.
+        let pending_call = tail
+            .as_ref()
+            .and_then(|_| open.pending())
+            .map(|decision| decision.tool_use_id.clone())
+            .filter(|call| !call.is_empty());
+        let workspace =
+            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
+                .map(std::path::Path::to_path_buf);
+        let solo = self.cockpit.roster().fullscreen().is_some()
+            || matches!(self.cockpit.roster().view(), View::Solo);
+        let key = crate::transcript::TranscriptKey {
+            namespace: namespace.clone(),
+            content_revision: revision,
+            display_revision: disclosure_revision,
+            focused,
+            signal_status: Some(status),
+            reading_size,
+            banner: banner.clone(),
+            tail: tail.as_ref().map(|tail| tail.key),
+            pending_call: pending_call.clone(),
+            workspace: workspace.clone(),
+            solo,
+        };
         let entity = self.panes[index]
             .ensure_transcript(cx)
             .expect("thread Pane has a transcript entity");
         if self.transcript_entities.insert(entity.entity_id()) {
             cx.subscribe(&entity, Self::transcript_event).detach();
         }
-        if entity.read(cx).matches_key(
-            namespace.as_ref(),
-            revision,
-            disclosure_revision,
-            focused,
-            Some(status),
-            reading_size,
-        ) {
+        if entity.read(cx).matches(&key) {
             return;
         }
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let Some(subject_view) = open.activity().subject(&subject) else {
+            return;
+        };
+        let transcript = subject_view.transcript();
         let pane = &self.panes[index];
         let preview = pane.preview.clone();
         let disclosure = pane.transcript_disclosure_snapshot();
@@ -1452,10 +1480,9 @@ impl CockpitView {
             content_revision: revision,
             display_revision: disclosure_revision,
             blocks: pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec(),
-            turn_diff: transcript.turn_diff().cloned(),
             signal_status: Some(status),
             timings: subject_view.timings().clone(),
-            provider: self.cockpit.thread(thread).map(|open| open.provider()),
+            provider: Some(open.provider()),
             focused,
             reading_size,
             selection_scope,
@@ -1463,6 +1490,12 @@ impl CockpitView {
             expanded: disclosure.0,
             target: disclosure.1,
             disclosure_focus: disclosure.2,
+            tail,
+            banner,
+            pending_call,
+            workspace,
+            solo,
+            settled_at: transcript.settled_at().clone(),
             #[cfg(test)]
             disclosure_bounds: pane.tool_bounds_sink(),
         };
@@ -1531,29 +1564,12 @@ impl CockpitView {
                 self.panes[index].toggle_tool(call);
                 cx.notify();
             }
-            crate::transcript::TranscriptEvent::CopyPrompt(prompt) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(prompt.clone()));
-            }
-            crate::transcript::TranscriptEvent::ResendPrompt(prompt) => {
-                if !self.panes[index].is_main() {
-                    return;
-                }
-                let Some(thread) = self.panes[index].thread() else {
-                    return;
-                };
+            crate::transcript::TranscriptEvent::OpenReader { path, line } => {
+                // ⌘-click on a path: a reader beside the Thread. The event
+                // carries no window; the reader opens on the next turn of
+                // the loop, in the window that holds the cockpit.
                 self.focus_pane(index);
-                if self
-                    .cockpit
-                    .thread(thread)
-                    .is_some_and(|open| open.needs_queue())
-                {
-                    self.cockpit.queue(thread, prompt.clone());
-                } else {
-                    self.cockpit.send(thread, prompt.clone());
-                    self.scroll_transcript_to_bottom(index, cx);
-                }
-                self.facts.acted(&self.cockpit, thread);
-                cx.notify();
+                self.open_reader(index, path.clone(), *line, cx);
             }
         }
     }
@@ -1942,16 +1958,13 @@ impl CockpitView {
                 match &block.body {
                     ferrite_core::transcript::Body::Tool(tool) => {
                         valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
-                        valid.insert(pane::DisclosureId::Group(tool.call.clone()));
+                        valid.insert(pane::DisclosureId::Diff(tool.call.clone()));
                     }
                     ferrite_core::transcript::Body::Thinking(_) => {
                         valid.insert(pane::DisclosureId::Reasoning(block.id));
                     }
                     _ => {}
                 }
-            }
-            if let Some(call) = pane::turn_diff_disclosure(transcript, Level::Transcript) {
-                valid.insert(call);
             }
         }
         self.panes[index].prune_tools(&valid);
@@ -4943,24 +4956,14 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return Vec::new();
         };
-        let mut calls = self
-            .cockpit
+        self.cockpit
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .into_iter()
             .flat_map(|subject| {
                 pane::rendered_disclosures(&self.panes[index], subject.transcript().blocks(), level)
             })
-            .collect::<Vec<_>>();
-        if let Some(call) = self
-            .cockpit
-            .thread(thread)
-            .and_then(|open| open.activity().subject(&self.panes[index].selected))
-            .and_then(|subject| pane::turn_diff_disclosure(subject.transcript(), level))
-        {
-            calls.push(call);
-        }
-        calls
+            .collect::<Vec<_>>()
     }
 
     fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
@@ -8326,15 +8329,12 @@ impl CockpitView {
                                 .map(|subject| subject.transcript())
                         })
                         .is_some_and(|transcript| {
-                            let mut calls = pane::rendered_disclosures(
+                            pane::rendered_disclosures(
                                 &self.panes[index],
                                 transcript.blocks(),
                                 level,
-                            );
-                            if let Some(call) = pane::turn_diff_disclosure(transcript, level) {
-                                calls.push(call);
-                            }
-                            calls.contains(target)
+                            )
+                            .contains(target)
                         })
                 });
                 if !target_is_rendered {
@@ -12706,6 +12706,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 mod tests {
     mod completion_checks;
     mod composer_controls;
+    mod core_transcript_parity;
     mod layout_polish;
     mod provider_controls;
     mod provider_forms;
@@ -17097,11 +17098,11 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sent_prompt_actions_appear_on_hover_copy_and_resend(cx: &mut TestAppContext) {
+    fn the_prompt_being_read_copies_and_resends_from_commands(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("sent-prompt-actions", 1);
         let thread = core.threads()[0];
         core.send(thread, "Run the focused checks".into());
-        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         fake.streams.borrow()[0]
             .send(SessionEvent::TurnEnded {
@@ -17111,21 +17112,16 @@ mod tests {
             .unwrap();
         tick(cx);
 
-        let copy = "prompt-action-copy";
-        let resend = "prompt-action-resend";
-        assert!(cx.debug_bounds(copy).is_none(), "actions start hidden");
-
+        // Nothing on the band answers the pointer.
         let prompt = cx.debug_bounds("transcript-prompt").unwrap();
         cx.simulate_mouse_move(prompt.center(), None, gpui::Modifiers::none());
         tick(cx);
-        let copy_bounds = cx.debug_bounds(copy).expect("copy appears over the prompt");
-        let resend_bounds = cx
-            .debug_bounds(resend)
-            .expect("resend appears over the prompt");
+        assert!(cx.debug_bounds("prompt-action-copy").is_none());
+        assert!(cx.debug_bounds("prompt-action-resend").is_none());
 
-        cx.simulate_click(copy_bounds.center(), gpui::Modifiers::none());
+        assert!(view.update(cx, |view, cx| view.copy_reading_prompt(0, cx)));
         assert_eq!(clipboard(cx).as_deref(), Some("Run the focused checks"));
-        cx.simulate_click(resend_bounds.center(), gpui::Modifiers::none());
+        assert!(view.update(cx, |view, cx| view.resend_reading_prompt(0, cx)));
         assert_eq!(
             fake.sent.borrow().as_slice(),
             ["Run the focused checks", "Run the focused checks"]
@@ -17259,19 +17255,10 @@ mod tests {
         });
         cx.simulate_click(reasoning, gpui::Modifiers::none());
         tick(cx);
-        let group = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(pane::DisclosureId::Group("wrap-tool".into()))
-                .expect("completed tool group")
-                .center()
+        view.update(cx, |view, cx| {
+            view.panes[0].toggle_tool(&pane::DisclosureId::Tool("wrap-tool".into()));
+            cx.notify();
         });
-        cx.simulate_click(group, gpui::Modifiers::none());
-        tick(cx);
-
-        let chevron = view.read_with(cx, |view, _| {
-            view.panes[0].tool_bounds("wrap-tool").unwrap().center()
-        });
-        cx.simulate_click(chevron, gpui::Modifiers::none());
         tick(cx);
         for width in [1000., 740.] {
             cx.simulate_resize(gpui::size(px(width), px(1000.)));
@@ -17418,23 +17405,25 @@ mod tests {
             cx.simulate_resize(gpui::size(px(width), px(700.)));
             tick(cx);
             let prompt = cx.debug_bounds("transcript-prompt").unwrap();
-            let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
+            let tools = cx.debug_bounds("tool-row-spacing-0").unwrap();
+            let last_tool = cx.debug_bounds("tool-row-spacing-1").unwrap();
             let answer = cx.debug_bounds("transcript-answer").unwrap();
             let stamp = cx.debug_bounds("turn-stamp").unwrap();
             // Terminal-native: blocks sit one blank line apart under the
-            // prompt's band.
+            // prompt's band; consecutive calls stack with none between.
             let line = px(crate::theme::LH_PROSE);
             assert_eq!(tools.top() - prompt.bottom(), line);
-            assert_eq!(answer.top() - tools.bottom(), line);
+            assert!(last_tool.top() > tools.top(), "every call is its own row");
+            assert!(answer.top() - last_tool.bottom() >= line);
             // The stamp is one blank line under the turn's last block.
             assert_eq!(stamp.top() - answer.bottom(), line);
-            // One content edge: the prompt's text, the group summary and the
+            // One content edge: the prompt's text, the call line and the
             // answer's prose all start on the content column.
             let prompt_start = caret(&view, cx, 0, 0).x;
             let tools_start = caret(&view, cx, 1, 0).x;
             let answer_start = caret(&view, cx, 3, 0).x;
             assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
-            assert_eq!(tools_start, prompt_start, "the group summary sits on C1");
+            assert_eq!(tools_start, prompt_start, "the call line sits on C1");
             assert!(
                 (prompt_start
                     - tools.left()
@@ -17444,231 +17433,6 @@ mod tests {
                 "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset"
             );
         }
-    }
-
-    #[gpui::test]
-    fn singleton_tool_disclosure_keeps_the_users_choice_when_it_settles(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("singleton-disclosure", 1);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(1000.)));
-        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-
-        // Two separate turns: one call the operator closes before completion,
-        // and one they leave open. Grouping must honor both choices.
-        for (id, leave_open) in [("closed", false), ("open", true)] {
-            fake.streams.borrow()[0]
-                .send(SessionEvent::TextDelta {
-                    text: format!("Checking {id}.\n\n"),
-                })
-                .unwrap();
-            fake.streams.borrow()[0]
-                .send(SessionEvent::ToolStarted {
-                    id: id.into(),
-                    name: "Read".into(),
-                    input: serde_json::json!({"file_path": "sample.txt"}),
-                })
-                .unwrap();
-            tick(cx);
-            let control = view.read_with(cx, |view, _| {
-                view.panes[0].tool_bounds(id).unwrap().center()
-            });
-            cx.simulate_click(control, gpui::Modifiers::none());
-            tick(cx);
-            if !leave_open {
-                cx.simulate_click(control, gpui::Modifiers::none());
-                tick(cx);
-            }
-            fake.streams.borrow()[0]
-                .send(SessionEvent::ToolCompleted {
-                    id: id.into(),
-                    output: "first  line\nsecond   line".into(),
-                    is_error: false,
-                    result: ferrite_core::ToolResult::Opaque,
-                })
-                .unwrap();
-            tick(cx);
-            let selector = if leave_open {
-                "tool-group-open"
-            } else {
-                "tool-group-closed"
-            };
-            assert!(
-                cx.debug_bounds(selector).is_some(),
-                "a settled singleton has the same compact activity row as several tools"
-            );
-            view.read_with(cx, |view, _| {
-                let text = view.selection.registered(thread);
-                assert!(text.iter().any(|(_, _, _, text)| text == "Read 1 file"));
-                assert_eq!(
-                    text.iter()
-                        .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")),
-                    leave_open,
-                    "settling must honor the operator's last disclosure choice"
-                );
-            });
-        }
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolStarted {
-                id: "sibling".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({"command": "printf 'output'"}),
-            })
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolCompleted {
-                id: "sibling".into(),
-                output: "failure preview\nprivate detail".into(),
-                is_error: true,
-                result: ferrite_core::ToolResult::Opaque,
-            })
-            .unwrap();
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            let text = view.selection.registered(thread);
-            assert!(
-                text.iter()
-                    .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")),
-                "adding a sibling must preserve the first call's open details"
-            );
-            // Terminal-native: a collapsed call folds its output after the
-            // elbow line, so a two-line failure reads whole; its disclosed
-            // output (the whole run, one text) stays collapsed.
-            assert!(
-                !text
-                    .iter()
-                    .any(|(_, _, _, text)| text == "failure preview\nprivate detail"),
-                "the new sibling's detailed output starts independently collapsed"
-            );
-        });
-        let group = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(pane::DisclosureId::Group("open".into()))
-                .unwrap()
-                .center()
-        });
-        cx.simulate_click(group, gpui::Modifiers::none());
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            let text = view.selection.registered(thread);
-            assert!(
-                text.iter().any(|(_, _, _, text)| text == "failure preview"),
-                "closing a group must keep its failure preview visible"
-            );
-            assert!(!text
-                .iter()
-                .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")));
-        });
-    }
-
-    #[gpui::test]
-    fn consecutive_mixed_tools_share_one_disclosure_and_keep_failures_visible(
-        cx: &mut TestAppContext,
-    ) {
-        let (core, fake) = cockpit("shell-group", 1);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-        for (index, command) in ["uname -srm", "date", "pwd", "git status --short"]
-            .iter()
-            .enumerate()
-        {
-            fake.streams.borrow()[0]
-                .send(SessionEvent::ToolStarted {
-                    id: format!("shell-{index}"),
-                    name: ["Read", "mcp__docs__search", "Edit", "commandExecution"][index].into(),
-                    input: serde_json::json!({"command": command}),
-                })
-                .unwrap();
-            fake.streams.borrow()[0]
-                .send(SessionEvent::ToolCompleted {
-                    id: format!("shell-{index}"),
-                    output: format!("output {index}"),
-                    is_error: index == 2,
-                    result: ferrite_core::ToolResult::Opaque,
-                })
-                .unwrap();
-        }
-        tick(cx);
-        assert!(
-            cx.debug_bounds("tool-group-shell-0").is_some(),
-            "four calls should render one activity summary"
-        );
-        assert!(
-            cx.debug_bounds("tool-group-failures-shell-0").is_some(),
-            "failure remains visible when closed"
-        );
-        view.read_with(cx, |view, _| {
-            let runs = view.selection.registered(thread);
-            assert!(
-                !runs.iter().any(|(_, _, _, text)| text == "output 0"),
-                "successful output starts collapsed"
-            );
-        });
-        let chevron = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(pane::DisclosureId::Group("shell-0".into()))
-                .unwrap()
-                .center()
-        });
-        cx.simulate_click(chevron, gpui::Modifiers::none());
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            let runs = view.selection.registered(thread);
-            assert!(runs.iter().any(|(_, _, _, text)| text.starts_with("Read(")));
-            assert!(
-                !runs.iter().any(|(_, _, _, text)| text == "output 0"),
-                "group expansion shows summaries only"
-            );
-        });
-        let first_call = view.read_with(cx, |view, _| {
-            view.panes[0].tool_bounds("shell-0").unwrap().center()
-        });
-        cx.simulate_click(first_call, gpui::Modifiers::none());
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            let runs = view.selection.registered(thread);
-            assert!(runs.iter().any(|(_, _, _, text)| text == "output 0"));
-            assert!(
-                !runs.iter().any(|(_, _, _, text)| text == "output 1"),
-                "sibling output stays hidden"
-            );
-        });
-        cx.simulate_click(chevron, gpui::Modifiers::none());
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            assert!(!view
-                .selection
-                .registered(thread)
-                .iter()
-                .any(|(_, _, _, text)| text == "output 0"));
-        });
-        cx.simulate_click(chevron, gpui::Modifiers::none());
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            assert!(
-                view.selection
-                    .registered(thread)
-                    .iter()
-                    .any(|(_, _, _, text)| text == "output 0"),
-                "nested choice survives parent collapse"
-            );
-        });
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolStarted {
-                id: "shell-4".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({"command": "echo next"}),
-            })
-            .unwrap();
-        tick(cx);
-        assert!(cx.debug_bounds("tool-group-running-shell-0").is_some());
-        view.read_with(cx, |view, _| {
-            assert!(
-                view.panes[0].tool_expanded(pane::DisclosureId::Group("shell-0".into())),
-                "streaming preserves disclosure choice"
-            )
-        });
     }
 
     #[gpui::test]
@@ -17834,20 +17598,15 @@ mod tests {
             );
         });
 
-        let group = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(pane::DisclosureId::Group("toolu_9".into()))
-                .expect("completed tool group")
-                .center()
-        });
-        cx.simulate_click(group, gpui::Modifiers::none());
-        tick(cx);
-
         let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
         assert!(collapsed
             .iter()
             .any(|(_, _, _, text)| text == "Bash(echo hi)"));
-        assert!(!collapsed.iter().any(|(_, _, _, text)| text == "first line"));
+        // The first line hangs on the elbow; the rest folds behind it.
+        assert!(collapsed.iter().any(|(_, _, _, text)| text == "first line"));
+        assert!(!collapsed
+            .iter()
+            .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
         let chevron = view.read_with(cx, |view, _| {
             let bounds = view.panes[0]
                 .tool_bounds("toolu_9")
@@ -17981,7 +17740,7 @@ mod tests {
                 .selection
                 .registered(thread)
                 .iter()
-                .any(|(_, _, _, text)| text == "first line"));
+                .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
         });
 
         let composer = view.read_with(cx, |view, cx| {
@@ -18239,6 +17998,7 @@ mod tests {
                         new_start: 1,
                         new_lines: 1,
                         lines: vec!["+# Generated guide".into()],
+                        section: None,
                     }],
                 },
             })
@@ -18263,6 +18023,7 @@ mod tests {
                         new_start: 1,
                         new_lines: 1,
                         lines: vec!["-fn old() {}".into(), "+fn generated() {}".into()],
+                        section: None,
                     }],
                 },
             })
@@ -18357,15 +18118,7 @@ mod tests {
         tick(cx);
         cx.simulate_input("unsent draft");
 
-        cx.simulate_keystrokes("tab");
-        view.read_with(cx, |view, _| {
-            assert!(view.panes[0].tool_targeted(pane::DisclosureId::Group("toolu_9".into())));
-        });
-        cx.simulate_keystrokes("enter");
-        view.read_with(cx, |view, _| {
-            assert!(view.panes[0].tool_expanded(pane::DisclosureId::Group("toolu_9".into())));
-            assert_eq!(fake.sent.borrow().as_slice(), ["prior prompt"]);
-        });
+        // Every call is its own row: one Tab stop per call.
         cx.simulate_keystrokes("tab");
         view.read_with(cx, |view, _| {
             assert!(view.panes[0].tool_targeted("toolu_9"));

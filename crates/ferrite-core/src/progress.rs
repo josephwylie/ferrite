@@ -361,9 +361,57 @@ pub fn duration_label(elapsed: std::time::Duration) -> String {
 }
 
 /// The local wall clock as a turn's end stamps it (`7:41 pm`): the window's
-/// bottom bar reads it.
+/// bottom bar reads it. Through `clock`, so a fixture freezes it.
 pub fn clock_label() -> String {
-    chrono::Local::now().format("%-I:%M %P").to_string()
+    crate::clock::now_label()
+}
+
+/// A token count the way Claude Code prints it: `620`, `1.8k`, `3.2k`,
+/// `12k` (one decimal under ten thousand, whole thousands from there).
+pub fn token_label(tokens: u64) -> String {
+    if tokens >= 9_950 {
+        format!("{}k", tokens.max(10_000) / 1000)
+    } else if tokens >= 1000 {
+        format!("{:.1}k", tokens as f64 / 1000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// The working line's caption when the provider names no phase of its own:
+/// a Claude-Code-style verb, picked once per turn (`spinner_verb`).
+pub const SPINNER_VERBS: &[&str] = &[
+    "Reticulating",
+    "Instrumenting",
+    "Pondering",
+    "Percolating",
+    "Simmering",
+    "Tinkering",
+    "Untangling",
+    "Calibrating",
+    "Assembling",
+    "Composing",
+    "Distilling",
+    "Forging",
+    "Honing",
+    "Mulling",
+    "Noodling",
+    "Spelunking",
+    "Synthesizing",
+    "Whittling",
+    "Brewing",
+    "Cogitating",
+];
+
+/// The verb a turn's working line wears (`Reticulating…`): chosen from
+/// `SPINNER_VERBS` by the Thread and the turn's ordinal, so it holds still
+/// for the whole turn and differs from one turn to the next.
+pub fn spinner_verb(thread: u64, turn: usize) -> &'static str {
+    let mut hash = thread
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add((turn as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+    hash ^= hash >> 31;
+    SPINNER_VERBS[(hash % SPINNER_VERBS.len() as u64) as usize]
 }
 
 /// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
@@ -379,13 +427,28 @@ pub fn live_seconds(elapsed: std::time::Duration) -> String {
 }
 
 /// A settled span, printed once the work is over: `<1s` for anything under
-/// a second (never `0s`, which reads as nothing happened), otherwise the
-/// live counter's whole seconds — `3s`, `1m04s`.
+/// a second (never `0s`, which reads as nothing happened), whole seconds
+/// under a minute (`3s`), then minutes and seconds apart — `3m 12s` — the
+/// way a turn's stamp reads (a live counter keeps `1m04s`).
 pub fn settled_duration_label(elapsed: std::time::Duration) -> String {
+    let whole = elapsed.as_secs();
     if elapsed < std::time::Duration::from_secs(1) {
         "<1s".to_string()
+    } else if whole < 60 {
+        format!("{whole}s")
     } else {
-        live_seconds(elapsed)
+        format!("{}m {}s", whole / 60, whole % 60)
+    }
+}
+
+/// A live counter coarsened for a Pane that does not hold the keyboard:
+/// whole minutes from a minute up (`1m`), whole seconds under (`8s`).
+pub fn coarse_seconds(elapsed: std::time::Duration) -> String {
+    let whole = elapsed.as_secs();
+    if whole < 60 {
+        format!("{whole}s")
+    } else {
+        format!("{}m", whole / 60)
     }
 }
 
@@ -537,6 +600,35 @@ mod duration_tests {
         assert_eq!(settled_duration_label(Duration::from_millis(999)), "<1s");
         assert_eq!(settled_duration_label(Duration::from_secs(1)), "1s");
         assert_eq!(settled_duration_label(Duration::from_millis(3_800)), "3s");
-        assert_eq!(settled_duration_label(Duration::from_secs(64)), "1m04s");
+        assert_eq!(settled_duration_label(Duration::from_secs(64)), "1m 4s");
+        assert_eq!(settled_duration_label(Duration::from_secs(192)), "3m 12s");
+    }
+
+    #[test]
+    fn an_unfocused_counter_coarsens_past_a_minute() {
+        assert_eq!(coarse_seconds(Duration::from_secs(8)), "8s");
+        assert_eq!(coarse_seconds(Duration::from_secs(75)), "1m");
+        assert_eq!(live_seconds(Duration::from_secs(75)), "1m15s");
+    }
+
+    #[test]
+    fn token_counts_read_compactly() {
+        assert_eq!(token_label(620), "620");
+        assert_eq!(token_label(1_800), "1.8k");
+        assert_eq!(token_label(3_200), "3.2k");
+        assert_eq!(token_label(1_100), "1.1k");
+        assert_eq!(token_label(4_100), "4.1k");
+        assert_eq!(token_label(9_960), "10k");
+        assert_eq!(token_label(12_400), "12k");
+    }
+
+    #[test]
+    fn a_turn_keeps_one_spinner_verb() {
+        let first = spinner_verb(7, 1);
+        assert_eq!(spinner_verb(7, 1), first);
+        assert!(SPINNER_VERBS.contains(&first));
+        let verbs: std::collections::BTreeSet<_> =
+            (0..12).map(|turn| spinner_verb(7, turn)).collect();
+        assert!(verbs.len() > 1, "turns vary their verb");
     }
 }

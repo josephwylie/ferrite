@@ -216,9 +216,10 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
         })
         .unwrap();
     tick(cx);
+    // Every call is its own row: two calls, two Tab stops.
     cx.simulate_keystrokes("tab enter");
     tick(cx);
-    for keys in ["", "tab", "tab", "shift-tab", "shift-tab"] {
+    for keys in ["", "tab", "shift-tab"] {
         if !keys.is_empty() {
             cx.simulate_keystrokes(keys);
         }
@@ -233,7 +234,7 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
     }
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Group("visible-a".into())))
+        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Tool("visible-a".into())))
     });
     assert_eq!(fake.sent.borrow().as_slice(), ["Inspect output"]);
 }
@@ -622,7 +623,7 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         })
         .unwrap();
     tick(cx);
-    let group = pane::DisclosureId::Group("clicked-a".into());
+    let group = pane::DisclosureId::Tool("clicked-a".into());
     let at = view.read_with(cx, |view, _| {
         view.panes[0].tool_bounds(group.clone()).unwrap().center()
     });
@@ -631,7 +632,7 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     view.read_with(cx, |view, _| {
         assert!(
             view.panes[0].tool_expanded(group.clone()),
-            "the click opens the group"
+            "the click opens the call"
         );
         assert!(
             !view.panes[0].has_tool_target(),

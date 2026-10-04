@@ -1049,6 +1049,7 @@ fn conversation(label: &str) -> Scene {
                 "+        .unwrap_or_else(|| \"waiting for first output\".into());".into(),
                 "+    row = row.child(status_line(summary).h(px(theme::ROW_LINE_H)));".into(),
             ],
+            section: None,
         },
     )
     .bash(
@@ -1073,6 +1074,7 @@ fn conversation(label: &str) -> Scene {
                 "+    let summary = (!row_state.parked).then(|| facts".into(),
                 "+        .summary".into(),
             ],
+            section: None,
         },
     )
     .bash(
@@ -1141,6 +1143,7 @@ fn nav() -> (Scene, Setup) {
                     "-pub const FONT_PROSE: &str = \"JetBrains Mono\";".into(),
                     "+pub const FONT_PROSE: &str = \"Geist\";".into(),
                 ],
+                section: None,
             },
         )
         .text("Swapped the prose face; now checking every hard-coded line height against the new metrics");

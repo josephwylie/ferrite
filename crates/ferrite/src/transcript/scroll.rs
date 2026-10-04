@@ -16,8 +16,8 @@ pub(crate) struct TranscriptScroll {
     list: ListState,
     // A fully visible row's inset, sampled from native layout for width reflow.
     resize_anchor: Rc<Cell<Option<(Pixels, usize, Pixels)>>>,
-    // How much of the viewport's top a cut row's remnant is hidden under
-    // (`cut_row_mask`), sampled after layout and painted next frame.
+    // How much of the viewport's top the pinned band and the cut line under
+    // it hide (`band_mask`), sampled after layout and painted next frame.
     top_mask: Rc<Cell<Pixels>>,
 }
 
@@ -59,6 +59,16 @@ impl TranscriptScroll {
     pub(crate) fn scroll_to_bottom(&self) {
         self.list.set_follow_mode(FollowMode::Tail);
         self.list.scroll_to_end();
+    }
+
+    /// Hold the list at `item_ix`, `offset` into it (a scene's turn band, a
+    /// minimap jump): tail following pauses until the reader returns to the
+    /// end.
+    pub(crate) fn scroll_to(&self, item_ix: usize, offset: Pixels) {
+        self.list.scroll_to(gpui::ListOffset {
+            item_ix,
+            offset_in_item: offset,
+        });
     }
 
     pub(crate) fn is_following_tail(&self) -> bool {
@@ -110,20 +120,25 @@ impl TranscriptScroll {
         adjusted
     }
 
-    /// The first visible row is never cut under the head rule — or under
-    /// the pinned prompt band, `inset` below the viewport's top — while the
-    /// tail is followed: after layout, the remnant of the row that edge
-    /// cuts — when its content, not just its gap, is cut — is measured for
-    /// the mask the view paints over it (`cut_row_mask`), reaching from the
-    /// viewport's top. `gap_of` is a row's space above its content. Whether
-    /// the mask changed, so the caller repaints once; an unchanged frame
-    /// schedules nothing.
-    pub(crate) fn settle_top(&self, gap_of: impl Fn(usize) -> f32, inset: Pixels) -> bool {
-        let mask = if self.list.is_following_tail() {
+    /// The pinned band hides the viewport's top down to its foot, `band`
+    /// below the viewport's top (`None` when no band is pinned). Whatever
+    /// row passes under that foot is hidden down to its next whole line
+    /// (`band_mask`), so no partly cut glyph line shows beneath the band and
+    /// no void taller than one line opens. `content_top` is where a row's
+    /// lines start, from its top (its gap, and a prompt band's half line);
+    /// `line` the transcript's line. Whether the mask changed, so the caller
+    /// repaints once; an unchanged frame schedules nothing.
+    pub(crate) fn settle_top(
+        &self,
+        band: Option<Pixels>,
+        content_top: impl Fn(usize) -> f32,
+        line: f32,
+    ) -> bool {
+        let mask = band.map_or(px(0.), |band| {
             let viewport = self.list.viewport_bounds();
-            let edge = viewport.top() + inset.max(px(0.));
+            let edge = viewport.top() + band.max(px(0.));
             let mut index = self.list.logical_scroll_top().item_ix;
-            // The row the edge falls in: under a pinned band that is a row
+            // The row the foot falls in: under a pinned band that is a row
             // or two below the list's own first.
             while self
                 .list
@@ -132,17 +147,17 @@ impl TranscriptScroll {
             {
                 index += 1;
             }
-            self.list.bounds_for_item(index).map_or(px(0.), |row| {
-                let remnant = cut_row_mask(edge, row.top(), row.bottom(), px(gap_of(index)));
-                if remnant > px(0.) {
-                    edge - viewport.top() + remnant
-                } else {
-                    px(0.)
-                }
-            })
-        } else {
-            px(0.)
-        };
+            let cut = self.list.bounds_for_item(index).map_or(px(0.), |row| {
+                band_mask(
+                    edge,
+                    row.top(),
+                    row.bottom(),
+                    row.top() + px(content_top(index)),
+                    px(line),
+                )
+            });
+            edge - viewport.top() + cut
+        });
         let changed = (self.top_mask.get() - mask).abs() > px(0.5);
         self.top_mask.set(mask);
         changed
@@ -185,62 +200,82 @@ impl TranscriptScroll {
     }
 }
 
-/// How much of a viewport's top to hide so its first row is never cut: the
-/// remnant of a row whose content (below its `gap`) starts above
-/// `viewport_top`, so the body reads from the next whole row. A row cut
-/// only in its gap is whole already. A remnant taller than
-/// `theme::TRANSCRIPT_TOP_SNAP_MAX` is a long block read mid-way, and
-/// hiding it would open a void, so it stays.
-pub(crate) fn cut_row_mask(
-    viewport_top: Pixels,
+/// How far below the pinned band's foot (`edge`) to hide the row passing
+/// under it, whatever its height: down to the row's next whole line
+/// boundary, the lines sitting on the grid from `content_top` every `line`.
+/// A foot in the row's gap, or exactly on a line boundary, hides nothing;
+/// the mask never reaches past the row's bottom, and is always shorter than
+/// one line.
+pub(crate) fn band_mask(
+    edge: Pixels,
     row_top: Pixels,
     row_bottom: Pixels,
-    gap: Pixels,
+    content_top: Pixels,
+    line: Pixels,
 ) -> Pixels {
-    let remnant = row_bottom - viewport_top;
-    if row_top + gap >= viewport_top || remnant <= px(0.) {
+    if edge <= row_top || edge >= row_bottom || edge <= content_top || line <= px(0.) {
         return px(0.);
     }
-    if remnant <= px(crate::theme::TRANSCRIPT_TOP_SNAP_MAX) {
-        remnant
-    } else {
+    let into = f32::from(edge - content_top);
+    let line = f32::from(line);
+    let lines = (into / line).ceil();
+    let boundary = content_top + px(lines * line);
+    let mask = boundary.min(row_bottom) - edge;
+    if mask < px(0.5) {
         px(0.)
+    } else {
+        mask
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::TRANSCRIPT_TOP_SNAP_MAX;
 
-    /// group9's clipped prompt: a one-line row cut under the head rule is
-    /// hidden whole; a row cut only in its gap, a row wholly below the top
-    /// and a long block read mid-way are left alone.
+    /// CT-7: scrolling a row of any height under the band's foot one pixel
+    /// at a time never leaves part of a glyph line showing below the foot,
+    /// and never hides more than one line.
     #[test]
-    fn a_row_cut_under_the_head_rule_is_hidden_whole() {
-        let top = px(100.);
-        // A prompt: 32px turn gap, a 22px line; its content starts 6px
-        // above the viewport, so 16px of it would show cut.
-        assert_eq!(cut_row_mask(top, px(62.), px(116.), px(32.)), px(16.));
-        // Cut only in its gap: the content is whole.
-        assert_eq!(cut_row_mask(top, px(80.), px(134.), px(32.)), px(0.));
-        // Starts below the top: nothing is cut.
-        assert_eq!(cut_row_mask(top, px(100.), px(154.), px(32.)), px(0.));
-        // Scrolled wholly past.
-        assert_eq!(cut_row_mask(top, px(20.), px(100.), px(12.)), px(0.));
-        // A long answer read mid-way keeps its lines rather than a void.
+    fn the_band_hides_down_to_the_next_whole_line_at_every_offset() {
+        let line = 20.;
+        // A code block of 30 lines, a 9-row table on a 20px pitch, a long
+        // paragraph of 40 lines: rows that sit on the line grid from their
+        // content top, a gap above.
+        for (lines, gap) in [(30usize, 20.), (9, 20.), (40, 0.), (1, 20.)] {
+            let height = gap + lines as f32 * line;
+            for offset in 0..(height as i32 + 40) {
+                let row_top = px(100. - offset as f32);
+                let row_bottom = row_top + px(height);
+                let content_top = row_top + px(gap);
+                let edge = px(100.);
+                let mask = band_mask(edge, row_top, row_bottom, content_top, px(line));
+                assert!(mask < px(line), "{lines}x{offset}: a void of {mask:?}");
+                assert!(mask >= px(0.));
+                let reveal = edge + mask;
+                if reveal < row_bottom && reveal > content_top {
+                    // What shows first below the mask starts on a line.
+                    let into = f32::from(reveal - content_top);
+                    let rem = into % line;
+                    assert!(
+                        rem < 0.5 || line - rem < 0.5,
+                        "{lines} lines at {offset}: a cut line shows ({rem}px into one)"
+                    );
+                }
+            }
+        }
+        // A foot in the gap, or over nothing, hides nothing.
         assert_eq!(
-            cut_row_mask(
-                top,
-                px(-400.),
-                px(100. + TRANSCRIPT_TOP_SNAP_MAX + 1.),
-                px(12.)
-            ),
+            band_mask(px(105.), px(100.), px(160.), px(120.), px(20.)),
             px(0.)
         );
         assert_eq!(
-            cut_row_mask(top, px(-400.), px(100. + TRANSCRIPT_TOP_SNAP_MAX), px(12.)),
-            px(TRANSCRIPT_TOP_SNAP_MAX)
+            band_mask(px(50.), px(100.), px(160.), px(120.), px(20.)),
+            px(0.)
+        );
+        // Six pixels into a line: the other fourteen go.
+        assert_eq!(
+            band_mask(px(126.), px(100.), px(160.), px(120.), px(20.)),
+            px(14.)
         );
     }
 }

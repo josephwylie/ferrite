@@ -485,7 +485,7 @@ impl Thread {
     fn apply(&mut self, input: Input) -> Update {
         let applied = self.activity.apply(ActivityInput::Main {
             input,
-            at: Instant::now(),
+            at: crate::clock::instant(),
         });
         let mut update = Update::default();
         for (subject, changed) in applied.blocks {
@@ -1806,7 +1806,7 @@ impl Cockpit {
         state.activity.apply(ActivityInput::Answered {
             handle: handle.clone(),
             allowed,
-            at: Instant::now(),
+            at: crate::clock::instant(),
         });
         Ok(true)
     }
@@ -2309,8 +2309,14 @@ impl Cockpit {
                             );
                         } else {
                             thread.invalidate_suggestion();
+                            let sent_at = crate::clock::now_label();
+                            if let Err(error) = thread.writer.record_prompt_observation(&sent_at) {
+                                thread.report_store_error(error);
+                            }
                             let applied = thread.apply(Input::Prompt(text));
                             update.dirty.extend(applied.dirty);
+                            let stamped = thread.apply(Input::PromptObservation { sent_at });
+                            update.dirty.extend(stamped.dirty);
                         }
                     }
                     if let Some(notice) = change.notice {
@@ -2365,12 +2371,12 @@ impl Cockpit {
                         thread.activity.apply(ActivityInput::Observe {
                             generation: thread.generation,
                             event: event.clone(),
-                            at: Instant::now(),
+                            at: crate::clock::instant(),
                         })
                     }
                     _ => thread.activity.apply(ActivityInput::Main {
                         input: Input::Event(event.clone()),
-                        at: Instant::now(),
+                        at: crate::clock::instant(),
                     }),
                 };
                 turn_ended |= applied.main_turn_ended;
@@ -2401,11 +2407,13 @@ impl Cockpit {
                     _ => applied.main_turn_ended,
                 };
                 if completion_accepted {
-                    if let Some((subject, elapsed_ms, completed_at)) = completion {
+                    if let Some((subject, observed_facts)) = completion {
                         let observation = ActivityEvent::CompletionObservation {
                             subject: subject.clone(),
-                            elapsed_ms,
-                            completed_at: completed_at.clone(),
+                            elapsed_ms: observed_facts.elapsed_ms,
+                            completed_at: observed_facts.completed_at.clone(),
+                            input_tokens: observed_facts.input_tokens,
+                            output_tokens: observed_facts.output_tokens,
                         };
                         if matches!(&subject, Subject::Subagent(_)) {
                             thread.buffer_history(&observation, None);
@@ -2413,21 +2421,21 @@ impl Cockpit {
                         let observed = match subject {
                             Subject::Main => thread.activity.apply(ActivityInput::Main {
                                 input: Input::CompletionObservation {
-                                    elapsed_ms,
-                                    completed_at: completed_at.clone(),
+                                    elapsed_ms: observed_facts.elapsed_ms,
+                                    completed_at: observed_facts.completed_at.clone(),
+                                    input_tokens: observed_facts.input_tokens,
+                                    output_tokens: observed_facts.output_tokens,
                                 },
-                                at: Instant::now(),
+                                at: crate::clock::instant(),
                             }),
                             Subject::Subagent(_) => thread.activity.apply(ActivityInput::Observe {
                                 generation: thread.generation,
                                 event: observation,
-                                at: Instant::now(),
+                                at: crate::clock::instant(),
                             }),
                         };
                         if let Err(error) =
-                            thread
-                                .writer
-                                .record_completion(&subject, elapsed_ms, &completed_at)
+                            thread.writer.record_completion(&subject, &observed_facts)
                         {
                             thread.report_store_error(error);
                         }
@@ -2483,7 +2491,7 @@ impl Cockpit {
                     settled,
                     resumed: thread.native_queue.pending(),
                 },
-                Instant::now(),
+                crate::clock::instant(),
             );
             update.activity_changed |= born.is_some();
             if turn_ended && thread.provider == Provider::Claude {
@@ -2697,7 +2705,7 @@ impl Cockpit {
             event: ActivityEvent::DecisionCancelled {
                 id: handle.request_id,
             },
-            at: Instant::now(),
+            at: crate::clock::instant(),
         });
         true
     }
@@ -3977,11 +3985,20 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     state.preface_pending = false;
     // And the Thread's first locks its provider for good (#25, #29).
     state.first_prompt_sent = true;
+    // When it went out, kept beside it so replay draws the same `7:31 pm`.
+    let sent_at = crate::clock::now_label();
     if let Err(error) = state.writer.record_prompt(&text) {
         state.report_store_error(error);
     }
+    if let Err(error) = state.writer.record_prompt_observation(&sent_at) {
+        state.report_store_error(error);
+    }
     state.prompt_history.append(text.clone());
-    Ok(state.apply(Input::Prompt(text)))
+    let mut update = state.apply(Input::Prompt(text));
+    update
+        .dirty
+        .extend(state.apply(Input::PromptObservation { sent_at }).dirty);
+    Ok(update)
 }
 
 /// Everything the mirror held goes back to the provider as one prompt,
@@ -4132,7 +4149,10 @@ fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
     }
 }
 
-fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subject, u64, String)> {
+fn completion_observation(
+    thread: &Thread,
+    event: &SessionEvent,
+) -> Option<(Subject, crate::store::CompletionFacts)> {
     use crate::activity::ExecutionEvent;
     // Every outcome is timed: a completed turn's stamp, and the elapsed an
     // interrupted or failed turn's row reports.
@@ -4150,16 +4170,24 @@ fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subj
         SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { .. }) => Subject::Main,
         _ => return None,
     };
-    let elapsed = thread
-        .activity
-        .view()
-        .subject(&subject)?
-        .transcript()
-        .turn_elapsed()?;
+    let view = thread.activity.view();
+    let transcript = view.subject(&subject)?.transcript();
+    let elapsed = transcript.turn_elapsed()?;
+    // The turn's token counts, as its usage reports summed them; a turn
+    // that reported none keeps none rather than a guessed zero.
+    let (input, output) = (
+        transcript.turn_input_tokens(),
+        transcript.turn_output_tokens(),
+    );
+    let reported = input > 0 || output > 0;
     Some((
         subject,
-        elapsed.as_millis().min(u64::MAX as u128) as u64,
-        chrono::Local::now().format("%-I:%M %P").to_string(),
+        crate::store::CompletionFacts {
+            elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
+            completed_at: crate::clock::now_label(),
+            input_tokens: reported.then_some(input),
+            output_tokens: reported.then_some(output),
+        },
     ))
 }
 

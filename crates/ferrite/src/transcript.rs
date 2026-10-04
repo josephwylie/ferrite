@@ -8,27 +8,30 @@ mod scroll;
 
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime};
 
 use ferrite_core::{
     cockpit::ToolTiming,
     store::Provider,
-    transcript::{Block, BlockId, Body, Status, ToolActivity, ToolState, TurnDiff},
+    transcript::{Block, BlockId, Body, Status, ToolState},
     ThreadId,
 };
 use gpui::{
-    base::ElementExt, div, list, prelude::*, px, App, Context, Entity, EventEmitter, FocusHandle,
-    IntoElement, MouseButton, Render, SharedString, Window,
+    base::ElementExt, div, list, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter,
+    FocusHandle, IntoElement, MouseButton, Render, SharedString, Window,
 };
 
 use self::{
-    rows::{RowId, RowKind, TranscriptRow, TranscriptRows},
+    rows::{RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
     scroll::TranscriptScroll,
 };
 use crate::{
     attachment_preview::Preview,
+    file_links::{PathTarget, TargetContext},
+    hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
-    pointer::Pointer,
     rich::TextCache,
     select::{TextRuns, TranscriptText},
     theme,
@@ -44,7 +47,7 @@ pub(crate) const ANSWER_MARK_INK: u32 = theme::TEXT_STRONG;
 pub(crate) enum Speaker {
     /// Agent prose: an answer's paragraphs, lists, headings and fences.
     Agent,
-    /// The operator's prompt, or a machine action (a tool row or group).
+    /// The operator's prompt, or a machine action (a tool row).
     Other,
 }
 
@@ -65,9 +68,9 @@ impl Speaker {
 
 /// The answer mark's rule, one for every tier (the operator's ruling, Q2):
 /// the Ferrite mark is drawn once per speaker change to the agent — on the
-/// first prose after a prompt or after a tool or group row. Consecutive
-/// prose wears none; its gutter stays empty and its text keeps the C1 edge.
-/// Rows with no speaker are transparent to it.
+/// first prose after a prompt or after a tool row. Consecutive prose wears
+/// none; its gutter stays empty and its text keeps the C1 edge. Rows with no
+/// speaker are transparent to it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct AnswerMarks {
     agent_has_floor: bool,
@@ -87,6 +90,59 @@ impl AnswerMarks {
     }
 }
 
+/// A row another package appends after the transcript's last (the pending
+/// Decision, built by `CockpitView::decision_tail`): `key` names its content
+/// (a change re-renders it), `render` builds it.
+#[derive(Clone)]
+pub(crate) struct TranscriptTail {
+    pub key: u64,
+    pub render: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+}
+
+impl std::fmt::Debug for TranscriptTail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TranscriptTail")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the banner says about its Thread (filled by `sync_transcript`):
+/// `Nav rows jitter on stream start`, `claude · opus 5.5 (1M) · medium ·
+/// ~/ferrite on dev`, `started 7:18 pm · 2 turns · 41s working`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BannerFacts {
+    pub title: SharedString,
+    /// The provider, lowercase: `claude`, `codex`.
+    pub provider_word: SharedString,
+    /// The model as the status line names it (`opus 5.5 (1M)`).
+    pub model: Option<SharedString>,
+    /// The effort, only when one resolves (R3).
+    pub effort: Option<SharedString>,
+    /// The checkout, `~`-abbreviated.
+    pub workspace: SharedString,
+    pub workspace_path: PathBuf,
+    pub branch: Option<SharedString>,
+    /// The first prompt's send time.
+    pub started_at: Option<SharedString>,
+    /// How many turns have ended.
+    pub turns: usize,
+    /// The latest completed turn's settled time (R17).
+    pub working: Option<Duration>,
+}
+
+/// Where a scene (or a command) asks a transcript to scroll.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ScrollTarget {
+    /// The banner at the top.
+    Top,
+    /// The live tail, following again.
+    Tail,
+    /// `offset` pixels below the top of turn `turn`'s prompt band (0 is the
+    /// first prompt in the window), its band pinned above.
+    TurnBand { turn: usize, offset: f32 },
+}
+
 /// Owned input for one selected Subject. Cockpit clones only its retained L1
 /// render window when this revision changes; rendering never borrows core.
 pub(crate) struct TranscriptInput {
@@ -95,8 +151,6 @@ pub(crate) struct TranscriptInput {
     pub content_revision: (u64, u64),
     pub display_revision: u64,
     pub blocks: Vec<Block>,
-    /// The turn-wide native change summary, separate from provider tool calls.
-    pub turn_diff: Option<TurnDiff>,
     pub signal_status: Option<Status>,
     pub timings: HashMap<String, ToolTiming>,
     /// The Thread's provider: its `✻` at a turn's end wears its colour.
@@ -108,43 +162,93 @@ pub(crate) struct TranscriptInput {
     pub expanded: HashSet<DisclosureId>,
     pub target: Option<DisclosureId>,
     pub disclosure_focus: FocusHandle,
+    /// The row after the last (the pending Decision).
+    pub tail: Option<TranscriptTail>,
+    /// The banner heading the rows.
+    pub banner: Option<BannerFacts>,
+    /// The call a pending Decision gates: hidden while it waits.
+    pub pending_call: Option<String>,
+    /// The Thread's checkout, which path targets resolve against.
+    pub workspace: Option<PathBuf>,
+    /// The Pane stands alone (Solo): the banner takes the body's top
+    /// padding, which board Panes do not have.
+    pub solo: bool,
+    /// When each edit settled, seen live: the hover card's age.
+    pub settled_at: BTreeMap<String, SystemTime>,
     #[cfg(test)]
     pub disclosure_bounds: Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
 }
 
+/// Everything a transcript's render depends on besides its blocks and its
+/// disclosures, compared every root render before any block is cloned.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TranscriptKey {
+    pub namespace: SharedString,
+    pub content_revision: (u64, u64),
+    pub display_revision: u64,
+    pub focused: bool,
+    pub signal_status: Option<Status>,
+    pub reading_size: ferrite_core::settings::ReadingSize,
+    pub banner: Option<BannerFacts>,
+    pub tail: Option<u64>,
+    pub pending_call: Option<String>,
+    pub workspace: Option<PathBuf>,
+    pub solo: bool,
+}
+
 impl TranscriptInput {
-    fn content_key(&self) -> (&SharedString, (u64, u64), Option<&TurnDiff>) {
-        (
-            &self.namespace,
-            self.content_revision,
-            self.turn_diff.as_ref(),
-        )
+    pub(crate) fn key(&self) -> TranscriptKey {
+        TranscriptKey {
+            namespace: self.namespace.clone(),
+            content_revision: self.content_revision,
+            display_revision: self.display_revision,
+            focused: self.focused,
+            signal_status: self.signal_status,
+            reading_size: self.reading_size,
+            banner: self.banner.clone(),
+            tail: self.tail.as_ref().map(|tail| tail.key),
+            pending_call: self.pending_call.clone(),
+            workspace: self.workspace.clone(),
+            solo: self.solo,
+        }
     }
 
-    fn display_key(
-        &self,
-    ) -> (
-        u64,
-        bool,
-        gpui::base::TextSelectionScopeId,
-        Option<Status>,
-        ferrite_core::settings::ReadingSize,
-    ) {
-        (
-            self.display_revision,
-            self.focused,
-            self.selection_scope,
-            self.signal_status,
-            self.reading_size,
-        )
+    /// What the rows are projected with.
+    fn shape(&self) -> RowShape {
+        RowShape {
+            banner: self.banner.is_some(),
+            banner_pad: if self.solo { theme::BANNER_PAD_T } else { 0. },
+            tail: self.tail.as_ref().map(|tail| tail.key),
+            pending_call: self.pending_call.clone(),
+            opened_diffs: self
+                .expanded
+                .iter()
+                .filter_map(|id| match id {
+                    DisclosureId::Diff(call) => Some(call.clone()),
+                    _ => None,
+                })
+                .collect(),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) enum TranscriptEvent {
     ToggleDisclosure(DisclosureId),
-    CopyPrompt(String),
-    ResendPrompt(String),
+    /// ⌘-click on a path target: open it in a reader pane beside the
+    /// Thread (`CockpitView::open_beside`).
+    OpenReader {
+        path: PathBuf,
+        line: Option<u32>,
+    },
+}
+
+/// A minimap jump in flight: from one scroll position to another, eased.
+#[derive(Clone, Copy, Debug)]
+struct Glide {
+    from: f32,
+    to: f32,
+    started: Instant,
 }
 
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
@@ -155,7 +259,7 @@ pub(crate) struct TranscriptView {
     /// fade in rising into place (`motion::FADE_IN`). First paint, a history
     /// window growing at its head and a row scrolled back into view never
     /// do.
-    arrivals: HashMap<RowId, std::time::Instant>,
+    arrivals: HashMap<RowId, Instant>,
     scroll: TranscriptScroll,
     rich: TextCache,
     selection_source: TranscriptText,
@@ -182,6 +286,13 @@ pub(crate) struct TranscriptView {
     /// Each row's laid-out height, as the list last measured it: the
     /// minimap places its ticks and its view band from these.
     heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
+    /// What prose path targets resolve against: the checkout and the paths
+    /// this window's calls named.
+    targets: TargetContext,
+    /// The hover card this transcript hosts, while a path of its is hovered.
+    hover_card: Option<Entity<HoverCard>>,
+    /// A minimap jump easing in.
+    glide: Option<Glide>,
 }
 
 impl EventEmitter<TranscriptEvent> for TranscriptView {}
@@ -201,7 +312,6 @@ impl TranscriptView {
                 content_revision: (0, 0),
                 display_revision: 0,
                 blocks: Vec::new(),
-                turn_diff: None,
                 signal_status: None,
                 timings: HashMap::new(),
                 provider: None,
@@ -212,6 +322,12 @@ impl TranscriptView {
                 expanded: HashSet::new(),
                 target: None,
                 disclosure_focus: cx.focus_handle(),
+                tail: None,
+                banner: None,
+                pending_call: None,
+                workspace: None,
+                solo: false,
+                settled_at: BTreeMap::new(),
                 #[cfg(test)]
                 disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
             },
@@ -229,7 +345,7 @@ impl TranscriptView {
     ) -> Self {
         let rows = TranscriptRows::new(
             &input.blocks,
-            input.turn_diff.as_ref(),
+            &input.shape(),
             theme::answer_text_size(input.reading_size),
         );
         let scroll = TranscriptScroll::new(rows.len());
@@ -239,6 +355,17 @@ impl TranscriptView {
         } else {
             input.selection_scope
         };
+        // The hover card follows the pointer between path targets: a
+        // transcript hosting one (or asked to by a scene) draws again.
+        cx.observe_global::<crate::hover_card::HoverCards>(|view: &mut Self, cx| {
+            let involved = crate::hover_card::involves(&view.input.namespace, cx);
+            if !involved && view.hover_card.take().is_none() {
+                return;
+            }
+            cx.notify();
+        })
+        .detach();
+        let targets = target_context(&input);
         let mut view = Self {
             input,
             rows,
@@ -256,9 +383,34 @@ impl TranscriptView {
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
+            targets,
+            hover_card: None,
+            glide: None,
         };
+        view.register_scope(cx);
         view.sync_members(cx);
         view
+    }
+
+    /// Route ⌘-click on this transcript's path targets to
+    /// `TranscriptEvent::OpenReader`.
+    fn register_scope(&self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        crate::file_links::register_scope(
+            self.input.namespace.clone(),
+            Rc::new(move |path, line, _window, cx| {
+                let _ = weak.update(cx, |_, cx| {
+                    cx.emit(TranscriptEvent::OpenReader { path, line });
+                });
+            }),
+            cx,
+        );
+    }
+
+    /// Whether this view already shows `key` (the cockpit compares it every
+    /// root render before cloning a block).
+    pub(crate) fn matches(&self, key: &TranscriptKey) -> bool {
+        &self.input.key() == key
     }
 
     /// Reconcile only when Cockpit's revision key changes. Ordinary Cockpit
@@ -269,19 +421,34 @@ impl TranscriptView {
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
     ) {
-        let content_changed = self.input.content_key() != input.content_key();
-        let display_changed = self.input.display_key() != input.display_key();
-        let disclosure_changed = self.input.expanded != input.expanded;
-        let reading_changed = self.input.reading_size != input.reading_size;
+        let before = self.input.key();
+        let after = input.key();
+        let namespace_changed = before.namespace != after.namespace;
+        let content_changed =
+            namespace_changed || before.content_revision != after.content_revision;
+        let disclosure_changed =
+            self.input.expanded != input.expanded || self.input.target != input.target;
+        let reading_changed = before.reading_size != after.reading_size;
+        let shape_changed = self.input.shape() != input.shape();
+        let display_changed = before != after || disclosure_changed;
+        let workspace_changed = before.workspace != after.workspace;
         self.input = input;
         self.selection_source = selection_source;
+        if namespace_changed {
+            self.register_scope(cx);
+            self.hover_card = None;
+        }
+        if content_changed || workspace_changed {
+            self.targets = target_context(&self.input);
+        }
         // The gap table is part of the rows: a reading-size change
-        // re-projects them, re-spacing every row whose gap scales.
-        if content_changed || reading_changed {
+        // re-projects them, re-spacing every row whose gap scales; a diff
+        // opening or the banner and tail changing re-project them too.
+        if content_changed || reading_changed || shape_changed {
             let tail = self.rows.rows().last().map(|row| row.id().clone());
             let delta = self.rows.reconcile(
                 &self.input.blocks,
-                self.input.turn_diff.as_ref(),
+                &self.input.shape(),
                 theme::answer_text_size(self.input.reading_size),
             );
             self.scroll.reconcile(&delta);
@@ -297,7 +464,7 @@ impl TranscriptView {
                 self.input.selection_scope
             };
             self.document.set_scope(scope, cx);
-            if content_changed || disclosure_changed {
+            if content_changed || disclosure_changed || shape_changed || workspace_changed {
                 self.sync_members(cx);
             }
             cx.notify();
@@ -347,22 +514,6 @@ impl TranscriptView {
     }
     pub(crate) fn selection_document(&self) -> gpui::base::TextSelectionDocument {
         self.document.clone()
-    }
-    pub(crate) fn matches_key(
-        &self,
-        namespace: &str,
-        content_revision: (u64, u64),
-        disclosure_revision: u64,
-        focused: bool,
-        signal_status: Option<Status>,
-        reading_size: ferrite_core::settings::ReadingSize,
-    ) -> bool {
-        self.input.namespace == namespace
-            && self.input.content_revision == content_revision
-            && self.input.display_revision == disclosure_revision
-            && self.input.focused == focused
-            && self.input.signal_status == signal_status
-            && self.input.reading_size == reading_size
     }
     pub(crate) fn transcript_focus(&self) -> FocusHandle {
         self.transcript_focus.clone()
@@ -443,8 +594,77 @@ impl TranscriptView {
         })
     }
 
-    pub(crate) fn scroll_to_bottom(&self, cx: &mut Context<Self>) {
+    pub(crate) fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.glide = None;
         self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// Scroll to `target` (a scene's Solo views, the palette): the banner,
+    /// the live tail, or a turn's band with its output scrolled under it.
+    pub(crate) fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
+        self.glide = None;
+        match target {
+            ScrollTarget::Top => self.scroll.scroll_to(0, px(0.)),
+            ScrollTarget::Tail => self.scroll.scroll_to_bottom(),
+            ScrollTarget::TurnBand { turn, offset } => {
+                let Some((index, row)) = self
+                    .rows
+                    .rows()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| row.kind() == RowKind::Prompt)
+                    .nth(turn)
+                else {
+                    return;
+                };
+                self.scroll.scroll_to(index, px(row.gap() + offset));
+            }
+        }
+        cx.notify();
+    }
+
+    /// The prompt the operator is reading: the pinned band's turn, else the
+    /// last prompt in the window. What `copy prompt` and `resend prompt`
+    /// act on.
+    pub(crate) fn reading_prompt(&self) -> Option<String> {
+        let pinned = self
+            .pinned_prompt()
+            .and_then(|(index, _)| self.rows.get(index))
+            .and_then(|row| match &row.blocks().first()?.body {
+                Body::Prompt(line) => Some(line.clone()),
+                _ => None,
+            });
+        pinned.or_else(|| {
+            self.input
+                .blocks
+                .iter()
+                .rev()
+                .find_map(|block| match &block.body {
+                    Body::Prompt(line) => Some(line.clone()),
+                    _ => None,
+                })
+        })
+    }
+
+    /// Open the hover card on the first target naming `path` (a scene's
+    /// solo-hover view), at `line` or the Thread's latest change to it.
+    pub(crate) fn preview_path(
+        &mut self,
+        path: &str,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let resolved = match &self.input.workspace {
+            Some(root) if !std::path::Path::new(path).is_absolute() => root.join(path),
+            _ => PathBuf::from(path),
+        };
+        let target = PathTarget::new(resolved)
+            .at_line(line)
+            .shown(SharedString::from(path.to_string()))
+            .in_scope(self.input.namespace.clone());
+        crate::hover_card::request(target, window, cx);
         cx.notify();
     }
 
@@ -475,39 +695,41 @@ impl TranscriptView {
         self.document.sync_members(members, cx);
     }
 
+    /// An answer's Markdown with its path targets and issue refs linked
+    /// (`file_links::link_targets`): rendered and copied from the same text.
+    fn linked(&self, source: &str) -> String {
+        crate::file_links::link_targets(source, &self.targets)
+    }
+
     fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
-        if let Some(diff) = row.turn_diff() {
-            let _ = selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new());
-            if self.tool_state(DisclosureId::TurnDiff(diff.turn_id.clone()))
-                == DisclosureState::Expanded
-            {
-                pane::collect_output_text(BlockId::TURN_DIFF, "turn-diff", &diff.diff, selection);
+        match row.kind() {
+            RowKind::Banner => {
+                if let Some(facts) = &self.input.banner {
+                    for line in banner_lines(facts) {
+                        let _ = selection.line(BlockId::BANNER, line.text, Vec::new());
+                    }
+                }
+                return;
             }
-        } else if let Some(source) = row.source() {
+            RowKind::Tail => return,
+            _ => {}
+        }
+        if let Some(source) = row.source() {
             let block = &row.blocks()[0];
-            let _ = selection.answer(block.markdown_run.unwrap_or(block.id), source.to_owned());
-        } else if let Some(activity) = ToolActivity::at_start(row.blocks()) {
-            let expanded = self.tool_state(DisclosureId::Group(activity.leader().call.clone()))
-                == DisclosureState::Expanded;
-            pane::collect_activity_text(
-                activity,
-                expanded,
-                |call| self.tool_state(call),
-                self.wide.get(),
-                selection,
-            );
+            let _ = selection.answer(block.markdown_run.unwrap_or(block.id), self.linked(source));
         } else if let Some(block) = row.blocks().first() {
             let expanded = match &block.body {
                 Body::Tool(tool) => self.tool_state(DisclosureId::Tool(tool.call.clone())),
                 Body::Thinking(_) => self.tool_state(DisclosureId::Reasoning(block.id)),
                 _ => DisclosureState::Collapsed,
             } == DisclosureState::Expanded;
-            let signal = if row.live_notice() {
-                pane::signal_color(self.input.signal_status)
-            } else {
-                theme::TEXT_MUTED
-            };
-            pane::collect_block_text(block, expanded, signal, self.wide.get(), selection);
+            pane::collect_block_text(
+                block,
+                expanded,
+                row.diff_shown(),
+                self.wide.get(),
+                selection,
+            );
         }
     }
 
@@ -527,7 +749,7 @@ impl TranscriptView {
         selection.capture_members(|| {
             for row in self.rows.rows() {
                 selection.begin_row();
-                let _ = self.render_row(row, &selection, None, cx);
+                let _ = self.render_row(row, &selection, None, None, cx);
             }
         });
         assert_eq!(
@@ -537,15 +759,50 @@ impl TranscriptView {
         );
     }
 
+    /// What a row reads besides its block.
+    fn row_cx<'a>(&'a self, selection: &'a TextRuns) -> pane::RowCx<'a> {
+        pane::RowCx {
+            selection,
+            rich: &self.rich,
+            timings: Some(&self.input.timings),
+            provider: self.input.provider,
+            preview: &self.input.preview,
+            reading: self.input.reading_size,
+            wide: self.wide.get(),
+            focused: self.input.focused,
+            scope: &self.input.namespace,
+            workspace: self.input.workspace.as_deref(),
+        }
+    }
+
     fn render_row(
         &self,
         row: &TranscriptRow,
         selection: &TextRuns,
         view: Option<Entity<Self>>,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        if let Some(diff) = row.turn_diff() {
-            return self.render_turn_diff(diff, selection, view, cx);
+    ) -> AnyElement {
+        match row.kind() {
+            RowKind::Banner => {
+                return match &self.input.banner {
+                    Some(facts) => self.render_banner(facts, selection),
+                    None => div().into_any_element(),
+                };
+            }
+            RowKind::Tail => {
+                return match (&self.input.tail, window) {
+                    (Some(tail), Some(window)) => div()
+                        .debug_selector(|| "transcript-tail".into())
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
+                        .child((tail.render)(window, cx))
+                        .into_any_element(),
+                    _ => div().into_any_element(),
+                };
+            }
+            _ => {}
         }
         let blocks = row.blocks();
         if let Some(source) = row.source() {
@@ -580,167 +837,205 @@ impl TranscriptView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(selection.answer(first, source.to_owned())),
+                        .child(selection.answer(first, self.linked(source))),
                 )
                 .into_any_element();
-        }
-        if let Some(activity) = ToolActivity::at_start(blocks) {
-            let group = DisclosureId::Group(activity.leader().call.clone());
-            return pane::render_tool_activity_with(
-                activity,
-                selection,
-                Some(&self.input.timings),
-                self.tool_state(&group) == DisclosureState::Expanded,
-                view.as_ref()
-                    .map(|view| self.control(&group, view.clone(), cx)),
-                |call| self.tool_state(call),
-                |call| {
-                    view.as_ref()
-                        .map(|view| self.control(call, view.clone(), cx))
-                },
-                self.input.reading_size,
-                self.wide.get(),
-            );
         }
         let Some(block) = blocks.first() else {
             return div().into_any_element();
         };
-        // A sent prompt's actions blend in under the pointer; this view is
-        // cached, so while the blend is mid-flight it renders again next
-        // frame.
-        if matches!(block.body, Body::Prompt(_)) {
-            let shown = crate::motion::hover_t(&pane::prompt_hover_key(block.id));
-            if shown > 0. && shown < 1. {
-                cx.notify();
-            }
-        }
         if matches!(&block.body, Body::Thinking(text) if text.trim().is_empty()) {
             return div().into_any_element();
         }
-        let call = match &block.body {
-            Body::Tool(tool) if pane::tool_has_details(tool) => {
-                Some(DisclosureId::Tool(tool.call.clone()))
+        let row_cx = self.row_cx(selection);
+        match &block.body {
+            Body::Tool(tool) => {
+                let call = DisclosureId::Tool(tool.call.clone());
+                let expanded = self.tool_state(&call) == DisclosureState::Expanded;
+                let disclosure = view.as_ref().map(|view| {
+                    self.tool_control(&call, pane::tool_has_details(tool), view.clone())
+                });
+                let diff_toggle = view
+                    .as_ref()
+                    .map(|view| self.toggle(DisclosureId::Diff(tool.call.clone()), view.clone()));
+                pane::render_tool(
+                    block.id,
+                    tool,
+                    &row_cx,
+                    pane::ToolCx {
+                        expanded,
+                        disclosure,
+                        diff: pane::DiffFold {
+                            folds: row.diff_folds(),
+                            shown: row.diff_shown(),
+                            toggle: diff_toggle,
+                        },
+                    },
+                )
             }
-            Body::Thinking(text) if pane::reasoning_has_details(text) => {
-                Some(DisclosureId::Reasoning(block.id))
+            _ => {
+                let call = match &block.body {
+                    Body::Thinking(text) if pane::reasoning_has_details(text) => {
+                        Some(DisclosureId::Reasoning(block.id))
+                    }
+                    _ => None,
+                };
+                pane::render_block(
+                    block,
+                    &row_cx,
+                    call.as_ref()
+                        .is_some_and(|call| self.tool_state(call) == DisclosureState::Expanded),
+                    call.as_ref().and_then(|call| {
+                        view.as_ref()
+                            .map(|view| self.control(call, view.clone(), cx))
+                    }),
+                )
             }
-            _ => None,
-        };
-        pane::render_block(
-            block,
-            selection,
-            Some(&self.input.timings),
-            call.as_ref()
-                .is_some_and(|call| self.tool_state(call) == DisclosureState::Expanded),
-            call.as_ref().and_then(|call| {
-                view.as_ref()
-                    .map(|view| self.control(call, view.clone(), cx))
-            }),
-            if row.live_notice() {
-                pane::signal_color(self.input.signal_status)
-            } else {
-                theme::TEXT_MUTED
-            },
-            self.input.provider,
-            &self.input.preview,
-            view.map(|view| self.prompt_actions(block, view)),
-            self.input.reading_size,
-            self.wide.get(),
-        )
+        }
     }
 
-    fn prompt_actions(&self, block: &Block, view: Entity<Self>) -> gpui::AnyElement {
-        let Body::Prompt(prompt) = &block.body else {
-            return div().into_any_element();
-        };
-        let copy = prompt.clone();
-        let resend = prompt.clone();
-        let copy_view = view.clone();
-        pane::prompt_actions(block.id)
-            .on_copy(move |_, _, cx| {
-                cx.stop_propagation();
-                copy_view.update(cx, |_, cx| {
-                    cx.emit(TranscriptEvent::CopyPrompt(copy.clone()))
-                });
-            })
-            .on_resend(move |_, _, cx| {
-                cx.stop_propagation();
-                view.update(cx, |_, cx| {
-                    cx.emit(TranscriptEvent::ResendPrompt(resend.clone()))
-                });
-            })
-            .into_any_element()
-    }
-
-    fn render_turn_diff(
-        &self,
-        diff: &TurnDiff,
-        selection: &TextRuns,
-        view: Option<Entity<Self>>,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let call = DisclosureId::TurnDiff(diff.turn_id.clone());
-        let expanded = self.tool_state(&call) == DisclosureState::Expanded;
-        let disclosure = view
-            .as_ref()
-            .map(|view| self.control(&call, view.clone(), cx));
-        let targeted = disclosure.as_ref().is_some_and(|parts| parts.targeted);
-        let (overlay, chevron) = match disclosure {
-            Some(parts) => (Some(parts.overlay), Some(parts.chevron)),
-            None => (None, None),
-        };
-        // The group recipe: a muted `●` line, the chevron trailing it, no
-        // hover ground; the keyboard target alone is grounded.
+    /// The banner (the prototype's `.banner`): the steel mark three rows
+    /// tall two cells in, a three-cell gap, the title, the Thread's facts —
+    /// its checkout a path target — and its time. Its text is selectable.
+    fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
         let grid = Grid::of(self.input.reading_size);
-        let header = div()
-            .id(SharedString::from(format!(
-                "turn-diff-row-{}",
-                diff.turn_id
-            )))
-            .group(pane::DISCLOSURE_ROW)
-            .relative()
-            .flex()
-            .items_start()
-            .min_w_0()
-            .text_color(gpui::rgb(theme::TEXT_MUTED))
-            .when(targeted, |header| {
-                header
-                    .bg(theme::paint::HOVER)
-                    .debug_selector(|| "tool-disclosure-keyboard-target".into())
-            })
-            .child(pane::glyph_gutter(grid, pane::BULLET, theme::TEXT_MUTED))
-            .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()))
-            .children(chevron)
-            .children(overlay);
-        let mut card = gpui::component::collapsible::Collapsible::new()
-            .w_full()
-            .open(expanded)
-            .child(header);
-        if expanded {
-            let mut details = div().flex().flex_col().min_w_0().child(pane::output_block(
-                BlockId::TURN_DIFF,
-                "turn-diff",
-                &diff.diff,
-                theme::TEXT_MUTED,
-                false,
-                true,
-                selection,
-                grid,
-            ));
-            if diff.omitted_bytes > 0 {
-                details = details.child(pane::omitted_line(diff.omitted_bytes, grid));
-            }
-            card = card.content(details);
+        let mut column = div().flex().flex_col().min_w_0();
+        for (ordinal, line) in banner_lines(facts).into_iter().enumerate() {
+            let strong = ordinal == 0;
+            let highlights = line
+                .path
+                .map(|(start, len)| {
+                    let from = line
+                        .text
+                        .char_indices()
+                        .nth(start)
+                        .map_or(line.text.len(), |(at, _)| at);
+                    let to = line
+                        .text
+                        .char_indices()
+                        .nth(start + len)
+                        .map_or(line.text.len(), |(at, _)| at);
+                    vec![(
+                        from..to,
+                        gpui::HighlightStyle {
+                            color: Some(gpui::rgb(theme::PATH_INK).into()),
+                            ..Default::default()
+                        },
+                    )]
+                })
+                .unwrap_or_default();
+            let overlay = line.path.map(|(start, len)| {
+                crate::file_links::path_overlay(
+                    PathTarget::new(facts.workspace_path.clone())
+                        .shown(facts.workspace.clone())
+                        .in_scope(self.input.namespace.clone()),
+                    start,
+                    len,
+                    grid.size,
+                    grid.line,
+                )
+            });
+            column = column.child(
+                div()
+                    .relative()
+                    .min_w_0()
+                    .truncate()
+                    .map(|line| {
+                        if strong {
+                            line.font_weight(theme::W_STRONG)
+                                .text_color(gpui::rgb(theme::TEXT_STRONG))
+                        } else {
+                            line.text_color(gpui::rgb(theme::TEXT_MUTED))
+                        }
+                    })
+                    .child(selection.line(BlockId::BANNER, line.text, highlights))
+                    .children(overlay),
+            );
         }
         div()
-            .id(SharedString::from(format!("turn-diff-{}", diff.turn_id)))
-            .debug_selector(|| "turn-diff".into())
-            .flex_shrink_0()
+            .debug_selector(|| "transcript-banner".into())
+            .flex()
+            .items_start()
+            .gap(px(theme::BANNER_GAP_CELLS * grid.cell()))
             .w_full()
-            .child(card)
+            .min_w_0()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .debug_selector(|| "transcript-banner-mark".into())
+                    .child(banner_mark(theme::BANNER_MARK_ROWS * grid.line)),
+            )
+            .child(column)
             .into_any_element()
     }
 
+    /// A toggle that flips `call`'s disclosure from inside its row (a
+    /// fold's `+ N lines`, a diff's `+ show diff`).
+    fn toggle(&self, call: DisclosureId, view: Entity<Self>) -> pane::DisclosureToggle {
+        let weak = view.downgrade();
+        Rc::new(move |window, cx| {
+            gpui::base::TextSelection::clear(window, cx);
+            let _ = weak.update(cx, |view, cx| {
+                view.clear_output_selection(cx);
+                view.eased = Some((call.clone(), !view.input.expanded.contains(&call)));
+                cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
+            });
+        })
+    }
+
+    /// A tool row's disclosure: no chevron, no ground and no cursor change
+    /// (the row changes nothing under the pointer); its bullet's cell is the
+    /// pointer's toggle when the call has details to disclose; the keyboard
+    /// target's ground and focus, and the toggle its fold lines call.
+    fn tool_control(
+        &self,
+        call: &DisclosureId,
+        details: bool,
+        view: Entity<Self>,
+    ) -> pane::Disclosure {
+        let targeted = self.tool_targeted(call);
+        let toggle = self.toggle(call.clone(), view);
+        let overlay = details.then(|| {
+            let grid = Grid::of(self.input.reading_size);
+            let clicked = toggle.clone();
+            let control = div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(grid.gutter()))
+                .h(px(grid.line))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("tool-button-{call}")))
+                        .size_full(),
+                )
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    clicked(window, cx);
+                });
+            #[cfg(test)]
+            let control = {
+                let sink = self.input.disclosure_bounds.clone();
+                let measured = call.clone();
+                control.on_children_prepainted(move |bounds, _, _| {
+                    if let Some(bounds) = bounds.last() {
+                        sink.borrow_mut().insert(measured.clone(), *bounds);
+                    }
+                })
+            };
+            control.into_any_element()
+        });
+        pane::Disclosure {
+            overlay,
+            chevron: None,
+            targeted,
+            toggle: Some(toggle),
+            focus: targeted.then(|| self.input.disclosure_focus.clone()),
+        }
+    }
+
+    /// A reasoning row's disclosure: its header toggles under the pointer,
+    /// its chevron turning.
     fn control(
         &self,
         call: &DisclosureId,
@@ -751,16 +1046,7 @@ impl TranscriptView {
         let clicked = call.clone();
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
         let targeted = self.tool_targeted(&call);
-        let toggle_view = view.downgrade();
-        let toggled = call.clone();
-        let toggle: pane::DisclosureToggle = Rc::new(move |window, cx| {
-            gpui::base::TextSelection::clear(window, cx);
-            let _ = toggle_view.update(cx, |view, cx| {
-                view.clear_output_selection(cx);
-                view.eased = Some((toggled.clone(), !view.input.expanded.contains(&toggled)));
-                cx.emit(TranscriptEvent::ToggleDisclosure(toggled.clone()));
-            });
-        });
+        let toggle = self.toggle(call.clone(), view.clone());
         let control = pane::tool_disclosure_control(
             &call,
             expanded,
@@ -793,10 +1079,11 @@ impl TranscriptView {
         };
         let eased = self.eased.as_ref() == Some(&(call.clone(), expanded));
         pane::Disclosure {
-            overlay: control.into_any_element(),
-            chevron: pane::disclosure_chevron(expanded, targeted, eased),
+            overlay: Some(control.into_any_element()),
+            chevron: Some(pane::disclosure_chevron(expanded, targeted, eased)),
             targeted,
             toggle: Some(toggle),
+            focus: None,
         }
     }
 
@@ -807,14 +1094,15 @@ impl TranscriptView {
         if self.second_tick.is_some() {
             return;
         }
+        let now = ferrite_core::clock::instant();
         let next = self
             .input
             .timings
             .values()
             .filter_map(|timing| match timing {
                 ToolTiming::Running(started) => {
-                    let elapsed = started.elapsed();
-                    Some(std::time::Duration::from_secs(elapsed.as_secs() + 1) - elapsed)
+                    let elapsed = now.saturating_duration_since(*started);
+                    Some(Duration::from_secs(elapsed.as_secs() + 1) - elapsed)
                 }
                 ToolTiming::Done(_) => None,
             })
@@ -829,6 +1117,156 @@ impl TranscriptView {
                 cx.notify();
             });
         }));
+    }
+
+    /// The hover card this transcript hosts now, hung under its path.
+    fn hover_card(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Some(hovered) = crate::hover_card::current(&self.input.namespace, cx) else {
+            self.hover_card = None;
+            return None;
+        };
+        let reuse = self
+            .hover_card
+            .as_ref()
+            .filter(|card| card.read(cx).shows(&hovered.target))
+            .cloned();
+        let card = match reuse {
+            Some(card) => card,
+            None => {
+                let shown = hovered.target.display();
+                let stat = ferrite_core::transcript::file_stat_in(
+                    &self.input.blocks,
+                    &self.input.settled_at,
+                    &hovered.target.path.display().to_string(),
+                )
+                .or_else(|| {
+                    ferrite_core::transcript::file_stat_in(
+                        &self.input.blocks,
+                        &self.input.settled_at,
+                        shown.as_ref(),
+                    )
+                });
+                let target = hovered.target.clone();
+                let card = cx.new(|_| {
+                    HoverCard::new(
+                        target,
+                        stat.and_then(|stat| stat.last_change_line),
+                        stat.map(|stat| CardStat {
+                            added: stat.added,
+                            removed: stat.removed,
+                            at: stat.at,
+                        }),
+                    )
+                });
+                self.hover_card = Some(card.clone());
+                card
+            }
+        };
+        Some(crate::hover_card::hang(card, hovered.anchor, window, cx))
+    }
+}
+
+/// One banner line: its text, and where its path target sits in it (in
+/// characters), if it has one.
+struct BannerLine {
+    text: String,
+    path: Option<(usize, usize)>,
+}
+
+/// The banner's three lines.
+fn banner_lines(facts: &BannerFacts) -> [BannerLine; 3] {
+    let seam = " \u{b7} ";
+    let mut facts_line = String::new();
+    for part in [
+        Some(&facts.provider_word),
+        facts.model.as_ref(),
+        facts.effort.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        facts_line.push_str(part);
+        facts_line.push_str(seam);
+    }
+    let start = facts_line.chars().count();
+    facts_line.push_str(&facts.workspace);
+    let path = (!facts.workspace.is_empty()).then_some((start, facts.workspace.chars().count()));
+    if let Some(branch) = &facts.branch {
+        facts_line.push_str(" on ");
+        facts_line.push_str(branch);
+    }
+    let mut time = Vec::new();
+    if let Some(started) = &facts.started_at {
+        time.push(format!("started {started}"));
+    }
+    time.push(format!(
+        "{} turn{}",
+        facts.turns,
+        if facts.turns == 1 { "" } else { "s" }
+    ));
+    if let Some(working) = facts.working {
+        time.push(format!(
+            "{} working",
+            ferrite_core::progress::settled_duration_label(working)
+        ));
+    }
+    [
+        BannerLine {
+            text: facts.title.to_string(),
+            path: None,
+        },
+        BannerLine {
+            text: facts_line,
+            path,
+        },
+        BannerLine {
+            text: time.join(seam),
+            path: None,
+        },
+    ]
+}
+
+/// The steel mark, `height` tall, cropped to its shards (the prototype's
+/// `viewBox="280 30 700 1130"`), so the banner's text starts its gap after
+/// the mark rather than after its box.
+fn banner_mark(height: f32) -> gpui::Div {
+    // The shards span x 280..980 and y 30..1160 of the mark's 1254 box.
+    let size = height * 1254.0 / 1130.0;
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(height * 700.0 / 1130.0))
+        .h(px(height))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left(px(-size * 280.0 / 1254.0))
+                .top(px(-size * 30.0 / 1254.0))
+                .child(crate::icons::ferrite_icon(size)),
+        )
+}
+
+/// What prose path targets resolve against: the checkout, and every path
+/// this window's calls named (their arguments and their diffs).
+fn target_context(input: &TranscriptInput) -> TargetContext {
+    let mut known: Vec<String> = Vec::new();
+    for block in &input.blocks {
+        let Body::Tool(tool) = &block.body else {
+            continue;
+        };
+        if pane::argument_is_path(tool) && !known.contains(&tool.summary) {
+            known.push(tool.summary.clone());
+        }
+        for diff in &tool.diffs {
+            if !known.contains(&diff.path) {
+                known.push(diff.path.clone());
+            }
+        }
+    }
+    TargetContext {
+        workspace: input.workspace.clone(),
+        known,
     }
 }
 
@@ -852,11 +1290,13 @@ impl Mark {
     }
 
     /// What a row is worth a tick for, if anything: a prompt, a failed call
-    /// or turn, a Decision (its record, or the live notice of one waiting),
-    /// a passing check.
-    pub(crate) fn of(row: &TranscriptRow, signal: u32) -> Option<Self> {
-        if row.kind() == RowKind::Prompt {
-            return Some(Self::Prompt);
+    /// or turn, a Decision (its record, or the pending one at the tail), a
+    /// passing check.
+    pub(crate) fn of(row: &TranscriptRow) -> Option<Self> {
+        match row.kind() {
+            RowKind::Prompt => return Some(Self::Prompt),
+            RowKind::Tail => return Some(Self::Decision),
+            _ => {}
         }
         let mut pass = false;
         for block in row.blocks() {
@@ -872,9 +1312,6 @@ impl Mark {
                     }
                 }
                 Body::Meta(_) => return Some(Self::Decision),
-                Body::Notice(_) if row.live_notice() && signal == theme::ATTENTION => {
-                    return Some(Self::Decision)
-                }
                 _ => {}
             }
         }
@@ -890,36 +1327,19 @@ impl TranscriptView {
         pinned_of(&self.rows, self.scroll.list_state(), self.pinned_h.get())
     }
 
-    /// The pinned prompt band (the prototype's sticky `.prompt`): a plain
-    /// echo of the turn's band, laid over the top of the list on the plane
-    /// so it hides what scrolls under it. A click scrolls back to the
-    /// prompt itself.
-    fn pinned_band(
-        &self,
-        index: usize,
-        shift: gpui::Pixels,
-        cx: &Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    /// The pinned prompt band (the prototype's sticky `.prompt`): exactly
+    /// the turn's band — its `❯`, its words, its attachment chip and its
+    /// send time — laid over the top of the list on the plane so it hides
+    /// what scrolls under it. It answers nothing under the pointer.
+    fn pinned_band(&self, index: usize, shift: gpui::Pixels) -> Option<AnyElement> {
         let row = self.rows.get(index)?;
-        let Body::Prompt(line) = &row.blocks().first()?.body else {
+        let block = row.blocks().first()?;
+        let Body::Prompt(line) = &block.body else {
             return None;
         };
-        let grid = Grid::of(self.input.reading_size);
-        let (text, files) = ferrite_core::prompt_files::split(line.clone());
-        let names = files
-            .iter()
-            .map(|path| {
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
-        let state = self.scroll.list_state().clone();
-        let gap = row.gap();
+        let selection = self.text_runs();
+        let band = pane::prompt_row(block, line, &self.row_cx(&selection), true);
         let measured = self.pinned_h.clone();
-        let entity = cx.entity().downgrade();
         Some(
             div()
                 .absolute()
@@ -937,60 +1357,13 @@ impl TranscriptView {
                             "transcript-pinned-{}",
                             self.input.namespace
                         )))
-                        .debug_selector(|| "transcript-pinned-prompt".into())
                         .occlude()
-                        .cursor_pointer()
+                        .cursor_default()
                         .w_full()
                         // The band over an opaque plane: together they hide
-                        // the rows scrolling under it, glass or not (a 94%
-                        // glass plane under the 80% band let 1% through).
+                        // the rows scrolling under it, glass or not.
                         .bg(gpui::rgb(theme::PLANE))
-                        .child(
-                            div()
-                                .flex()
-                                .items_start()
-                                .w_full()
-                                .min_w_0()
-                                .bg(theme::paint::BAND)
-                                .py(px(grid.half()))
-                                .pl(px(theme::TX_PAD_L))
-                                .pr(px(theme::TX_PAD_R))
-                                .text_color(gpui::rgb(theme::TEXT_STRONG))
-                                .child(pane::mark_gutter(
-                                    grid,
-                                    crate::icons::icon(
-                                        crate::icons::PROMPT,
-                                        grid.mark(),
-                                        theme::ACCENT,
-                                    ),
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .when(!text.is_empty(), |column| {
-                                            column.child(SharedString::from(text))
-                                        })
-                                        .when(!names.is_empty(), |column| {
-                                            column.child(
-                                                div()
-                                                    .truncate()
-                                                    .text_color(gpui::rgb(theme::PATH_INK))
-                                                    .child(SharedString::from(names)),
-                                            )
-                                        }),
-                                ),
-                        )
-                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                            cx.stop_propagation();
-                            state.scroll_to(gpui::ListOffset {
-                                item_ix: index,
-                                offset_in_item: px(gap),
-                            });
-                            let _ = entity.update(cx, |_, cx| cx.notify());
-                        }),
+                        .child(band),
                 )
                 .into_any_element(),
         )
@@ -1020,11 +1393,71 @@ impl TranscriptView {
         (tops, at + theme::BODY_PAD_B)
     }
 
+    /// Where the viewport's top is, in the estimated tops' space.
+    fn scroll_position(&self, tops: &[f32], total: f32) -> f32 {
+        let state = self.scroll.list_state();
+        let view_h = f32::from(state.viewport_bounds().size.height);
+        if self.scroll.is_following_tail() {
+            return (total - view_h).max(0.);
+        }
+        let top = state.logical_scroll_top();
+        tops.get(top.item_ix).copied().unwrap_or(total) + f32::from(top.offset_in_item)
+    }
+
+    /// Hold the viewport's top at `at` in the estimated tops' space.
+    fn jump_to(&self, at: f32, tops: &[f32]) {
+        if tops.is_empty() {
+            return;
+        }
+        let index = tops.iter().rposition(|top| *top <= at).unwrap_or(0);
+        self.scroll.scroll_to(index, px((at - tops[index]).max(0.)));
+    }
+
+    /// Scroll to `goal` (estimated tops' space), easing over
+    /// `MINIMAP_SCROLL_MS`; reduced motion jumps.
+    fn glide_to(&mut self, goal: f32, cx: &mut Context<Self>) {
+        let (tops, total) = self.estimated_tops();
+        let goal = goal.clamp(0., total);
+        if crate::motion::reduced_motion(cx) {
+            self.glide = None;
+            self.jump_to(goal, &tops);
+        } else {
+            self.glide = Some(Glide {
+                from: self.scroll_position(&tops, total),
+                to: goal,
+                started: cx.background_executor().now(),
+            });
+        }
+        cx.notify();
+    }
+
+    /// One frame of a glide in flight.
+    fn advance_glide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(glide) = self.glide else {
+            return;
+        };
+        let spec = crate::motion::MotionSpec::new(theme::MINIMAP_SCROLL_MS, crate::motion::EASE);
+        let elapsed = cx
+            .background_executor()
+            .now()
+            .saturating_duration_since(glide.started);
+        let (tops, _) = self.estimated_tops();
+        if elapsed >= spec.duration() {
+            self.glide = None;
+            self.jump_to(glide.to, &tops);
+            return;
+        }
+        let at = crate::motion::lerp(glide.from, glide.to, spec.progress_at(elapsed));
+        self.jump_to(at, &tops);
+        window.request_animation_frame();
+    }
+
     /// The minimap (the WP-A minimap tokens): a tick per prompt, failure,
-    /// Decision and pass, the viewport as a translucent band, shown only
-    /// while the pointer is on the transcript. A click on a tick jumps to its
-    /// row; anywhere else on the rail centres the view on that point.
-    fn minimap(&self, group: SharedString, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+    /// Decision and pass, the viewport as a translucent band while the
+    /// transcript overflows, shown while the pointer is on the Pane. A click
+    /// on a tick glides to its row; anywhere else on the rail centres the
+    /// view on that point.
+    fn minimap(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let rows = self.rows.rows();
         if rows.is_empty() {
             return None;
@@ -1033,26 +1466,20 @@ impl TranscriptView {
         let viewport = state.viewport_bounds();
         let view_h = f32::from(viewport.size.height);
         let (tops, total) = self.estimated_tops();
-        if view_h <= 0. || total <= view_h + 1. {
+        if view_h <= 0. || total <= 0. {
             return None;
         }
-        let signal = pane::signal_color(self.input.signal_status);
-        let top = state.logical_scroll_top();
-        let scrolled = if self.scroll.is_following_tail() {
-            total - view_h
-        } else {
-            tops.get(top.item_ix).copied().unwrap_or(total) + f32::from(top.offset_in_item)
-        };
+        let overflows = total > view_h + 1.;
+        let scrolled = self.scroll_position(&tops, total);
         let band_top = (scrolled / total).clamp(0., 1.);
         let band_h = (view_h / total).clamp(0., 1.);
         let entity = cx.entity().downgrade();
         let tops = Rc::new(tops);
         let ticks = rows.iter().enumerate().filter_map(|(index, row)| {
-            let mark = Mark::of(row, signal)?;
+            let mark = Mark::of(row)?;
             let at = tops[index] / total;
-            let state = state.clone();
             let entity = entity.clone();
-            let gap = row.gap();
+            let goal = tops[index] + row.gap();
             Some(
                 div()
                     .id(SharedString::from(format!("minimap-tick-{index}")))
@@ -1070,25 +1497,32 @@ impl TranscriptView {
                         div()
                             .w_full()
                             .h(px(theme::MINIMAP_TICK_H))
+                            .rounded(px(theme::MINIMAP_TICK_R))
                             .bg(gpui::rgb(mark.ink())),
                     )
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
-                        state.scroll_to(gpui::ListOffset {
-                            item_ix: index,
-                            offset_in_item: px(gap),
-                        });
-                        let _ = entity.update(cx, |_, cx| cx.notify());
+                        let _ = entity.update(cx, |view, cx| view.glide_to(goal, cx));
                     }),
             )
         });
-        let jump_tops = tops.clone();
-        let jump_entity = entity.clone();
         let rail = SharedString::from(format!("transcript-minimap-{}", self.input.namespace));
+        let band_key = SharedString::from(format!("{rail}-band"));
+        let band_t = crate::motion::hover_t(&band_key);
+        let band_ink = crate::motion::mix(
+            gpui::rgba(theme::MINIMAP_BAND).into(),
+            gpui::rgba(theme::MINIMAP_BAND_HOVER).into(),
+            band_t,
+        );
+        if band_t > 0. && band_t < 1. {
+            crate::file_links::mark_fading();
+        }
+        let blend = crate::motion::hover_listener(band_key);
+        let hover_entity = entity.clone();
+        let jump_entity = entity;
         Some(
             div()
-                .id(rail.clone())
-                .group(rail.clone())
+                .id(rail)
                 .debug_selector(|| "transcript-minimap".into())
                 .absolute()
                 .top_0()
@@ -1097,19 +1531,25 @@ impl TranscriptView {
                 .w(px(theme::MINIMAP_W))
                 .cursor_pointer()
                 .opacity(0.)
-                .group_hover(group, |style| style.opacity(1.))
-                .child(
-                    div()
-                        .id("minimap-view")
-                        .absolute()
-                        .left(px(theme::MINIMAP_BAND_INSET))
-                        .right(px(theme::MINIMAP_BAND_INSET))
-                        .top(gpui::relative(band_top))
-                        .h(gpui::relative(band_h))
-                        .min_h(px(theme::MINIMAP_BAND_MIN_H))
-                        .bg(theme::paint::HOVER)
-                        .group_hover(rail, |style| style.bg(theme::paint::SELECTION)),
-                )
+                .group_hover(pane::PANE_GROUP, |style| style.opacity(1.))
+                .on_hover(move |over, window, cx| {
+                    blend(over, window, cx);
+                    let _ = hover_entity.update(cx, |_, cx| cx.notify());
+                })
+                .when(overflows, |rail| {
+                    rail.child(
+                        div()
+                            .id("minimap-view")
+                            .absolute()
+                            .left(px(theme::MINIMAP_BAND_INSET))
+                            .right(px(theme::MINIMAP_BAND_INSET))
+                            .top(gpui::relative(band_top))
+                            .h(gpui::relative(band_h))
+                            .min_h(px(theme::MINIMAP_BAND_MIN_H))
+                            .rounded(px(theme::MINIMAP_BAND_R))
+                            .bg(band_ink),
+                    )
+                })
                 .children(ticks)
                 .on_mouse_down(MouseButton::Left, move |event, _, cx| {
                     cx.stop_propagation();
@@ -1118,12 +1558,7 @@ impl TranscriptView {
                     let fraction =
                         (f32::from(event.position.y - viewport.top()) / height).clamp(0., 1.);
                     let goal = (fraction * total - view_h / 2.).max(0.);
-                    let index = jump_tops.iter().rposition(|top| *top <= goal).unwrap_or(0);
-                    state.scroll_to(gpui::ListOffset {
-                        item_ix: index,
-                        offset_in_item: px(goal - jump_tops[index]),
-                    });
-                    let _ = jump_entity.update(cx, |_, cx| cx.notify());
+                    let _ = jump_entity.update(cx, |view, cx| view.glide_to(goal, cx));
                 })
                 .into_any_element(),
         )
@@ -1181,9 +1616,13 @@ fn pinned_of(
 }
 
 impl Render for TranscriptView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arm_second_tick(cx);
         self.document.begin_viewport_update(cx);
+        crate::file_links::begin_layout(&self.input.namespace, cx);
+        // The answers' file links are this transcript's path targets.
+        self.rich.set_path_scope(self.input.namespace.clone());
+        self.advance_glide(window, cx);
         let rows = self.rows.clone();
         let selection = self.text_runs();
         let view = cx.entity();
@@ -1203,10 +1642,13 @@ impl Render for TranscriptView {
                 };
                 let (element, arrival) = view.update(cx, |view, cx| {
                     selection.begin_row();
-                    (
-                        view.render_row(&row, &selection, Some(cx.entity()), cx),
-                        view.arrival(row.id(), cx),
-                    )
+                    let element =
+                        view.render_row(&row, &selection, Some(cx.entity()), Some(window), cx);
+                    // A path underline mid-fade: draw again next frame.
+                    if crate::file_links::take_fading() {
+                        cx.notify();
+                    }
+                    (element, view.arrival(row.id(), cx))
                 });
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
@@ -1233,7 +1675,7 @@ impl Render for TranscriptView {
             },
         )
         // The bottom padding is the list's own: it counts in the scroll
-        // extent and the tail follow, and the working line overlays it.
+        // extent and the tail follow.
         .pb(px(theme::BODY_PAD_B))
         .size_full()
         .min_h_0();
@@ -1245,15 +1687,30 @@ impl Render for TranscriptView {
         let pinned_drawn = self.pinned_drawn.clone();
         let pinned_asked = self.pinned_asked.clone();
         let pinned_h = self.pinned_h.clone();
+        let line = grid.line;
+        let half = grid.half();
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
-                // A pinned band hides the list's top: a row it cuts is
-                // masked from the band's foot, not the head rule's.
+                // A pinned band hides the list's top down to its foot, and
+                // the row passing under the foot down to its next whole
+                // line.
                 let now = pinned_of(&gaps, scroll.list_state(), pinned_h.get());
-                let inset = now.map_or(px(0.), |(_, shift)| pinned_h.get() + shift);
-                let settled =
-                    scroll.settle_top(|index| gaps.get(index).map_or(0., |row| row.gap()), inset);
+                let band = now.map(|(_, shift)| pinned_h.get() + shift);
+                let settled = scroll.settle_top(
+                    band,
+                    |index| {
+                        gaps.get(index).map_or(0., |row| {
+                            row.gap()
+                                + if row.kind() == RowKind::Prompt {
+                                    half
+                                } else {
+                                    0.
+                                }
+                        })
+                    },
+                    line,
+                );
                 // What the list measured feeds the minimap's estimates.
                 {
                     let state = scroll.list_state();
@@ -1331,13 +1788,14 @@ impl Render for TranscriptView {
             } else {
                 self.input.selection_scope
             });
-        let group = SharedString::from(format!("transcript-body-{}", self.input.namespace));
-        let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift, cx));
-        let minimap = self.minimap(group.clone(), cx);
-        // A Thread with nothing in it yet shows nothing: the Composer's
-        // placeholder says what to do, once (rule 2.11.4).
+        let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift));
+        let minimap = self.minimap(cx);
+        if crate::file_links::take_fading() {
+            cx.notify();
+        }
+        let card = self.hover_card(window, cx);
         div()
-            .group(group)
+            .group(pane::PANE_GROUP)
             .relative()
             .flex()
             .flex_col()
@@ -1348,10 +1806,10 @@ impl Render for TranscriptView {
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)
-            // The first visible row is never cut under the head rule or
-            // the pinned band: a cut row's short remnant lies under an
-            // opaque plane (a 94% glass plane would let it ghost), so the
-            // body reads from its first whole row (`settle_top`).
+            // The band and the row passing under its foot, down to its next
+            // whole line: under an opaque plane (a 94% glass plane would let
+            // a cut glyph ghost through), so no partial line shows
+            // (`settle_top`).
             .children((self.scroll.top_mask() > px(0.)).then(|| {
                 div()
                     .debug_selector(|| "transcript-top-mask".into())
@@ -1364,5 +1822,6 @@ impl Render for TranscriptView {
             }))
             .children(pinned)
             .children(minimap)
+            .children(card)
     }
 }

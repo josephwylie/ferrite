@@ -427,11 +427,11 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
     }
 }
 
-/// A question without a header is named by its whole text, and the notice
-/// row cuts it by width at the column's edge: one line, reaching the edge,
-/// not a character count short of it.
+/// A blocking question leaves no notice: the Decision itself says what
+/// waits (the transcript's tail row while it pends), so no `asks 1
+/// question` line repeats it above.
 #[gpui::test]
-fn a_long_question_notice_is_cut_by_width_not_by_characters(cx: &mut TestAppContext) {
+fn a_blocking_question_leaves_no_notice_row(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("question-notice-width", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -454,27 +454,14 @@ fn a_long_question_notice_is_cut_by_width_not_by_characters(cx: &mut TestAppCont
         .send(typed_decision(DecisionKind::Questions(vec![q])))
         .unwrap();
     tick(cx);
-    let (id, notice) = view.read_with(cx, |v, _| {
+    view.read_with(cx, |v, _| {
         let thread = v.cockpit.thread(v.panes[0].thread().unwrap()).unwrap();
-        let block = thread.transcript().blocks().last().unwrap();
-        let ferrite_core::transcript::Body::Notice(line) = &block.body else {
-            panic!("the question leaves a notice: {:?}", block.body)
-        };
-        (block.id, line.clone())
+        assert!(
+            !thread.transcript().blocks().iter().any(
+                |block| matches!(&block.body, ferrite_core::transcript::Body::Notice(line)
+                    if line.starts_with("asks "))
+            ),
+            "no notice repeats the question"
+        );
     });
-    assert_eq!(notice, format!("asks 1 question · {text}"));
-    let row = debug_bounds(cx, format!("notice-{id:?}")).expect("the notice row");
-    // Terminal-native: the notice is one line on the transcript's grid, and
-    // the column's edge is the transcript's right inset.
-    let key = view.read_with(cx, |v, _| v.panes[0].thread().unwrap().get());
-    let body = debug_bounds(cx, format!("pane-body-{key}")).expect("the body");
-    assert_eq!(row.size.height, px(crate::theme::LH_PROSE), "one line");
-    assert!(
-        row.right() <= body.right() - px(crate::theme::TX_PAD_R) + px(0.5),
-        "the row {row:?} ends at the column's edge {body:?}"
-    );
-    assert!(
-        row.right() >= body.right() - px(crate::theme::TX_PAD_R) - px(0.5),
-        "the row {row:?} runs to the column's edge, not a character count short"
-    );
 }

@@ -18,8 +18,9 @@ pub struct BlockId(u64);
 
 impl BlockId {
     /// Render-only selection identity for transcript metadata that is not a
-    /// transcript Block. A Transcript holds at most one current turn diff.
-    pub const TURN_DIFF: Self = Self(u64::MAX);
+    /// transcript Block: the banner heading a transcript, whose title and
+    /// facts select and copy like any row.
+    pub const BANNER: Self = Self(u64::MAX - 1);
 }
 
 /// One rendered unit of the transcript.
@@ -34,6 +35,11 @@ pub struct Block {
     /// Original identity of adjacent Markdown sections. Carried by every
     /// section so history eviction cannot remount a streaming document.
     pub markdown_run: Option<BlockId>,
+    /// When the operator sent a prompt, as its band prints it (`7:31 pm`):
+    /// stamped by the `Input::PromptObservation` that follows the prompt,
+    /// live and on replay alike. `None` for every other Block and for a
+    /// prompt from a log written before the time was kept.
+    pub sent_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,15 +85,21 @@ pub struct TurnEnd {
     pub elapsed_ms: Option<u64>,
     /// The local clock when it completed, as the stamp shows it.
     pub completed_at: Option<String>,
+    /// The turn's input and output tokens (`↑ 3.2k ↓ 1.1k`), as the
+    /// provider's usage reports summed over the turn; `None` from a log
+    /// written before they were kept, or a turn that reported none.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
 }
 
 impl TurnEnd {
-    /// What the row says, and what copy and search see: `Worked for 38s ·
-    /// 8:53 pm` (whole seconds, `<1s` under one), `interrupted · 4.1s`,
-    /// `failed · 4.1s · <the provider's message>`. State words are always
-    /// lowercase, even leading a row (`INTERRUPTED`/`FAILED`: the app's
-    /// lexicon, `theme::words`, asserts they agree). A time that was never
-    /// observed (an older log) is left out rather than guessed.
+    /// What the row says, and what copy and search see: `Worked for 41s ·
+    /// 7:32 pm · ↑ 3.2k ↓ 1.1k` (whole seconds, `<1s` under one, `3m 12s`
+    /// past a minute), `interrupted · 4.1s`, `failed · 4.1s · <the
+    /// provider's message>`. State words are always lowercase, even leading
+    /// a row (`INTERRUPTED`/`FAILED`: the app's lexicon, `theme::words`,
+    /// asserts they agree). A time or a count that was never observed (an
+    /// older log) is left out rather than guessed.
     pub fn text(&self) -> String {
         let elapsed = self.elapsed_ms.map(std::time::Duration::from_millis);
         let mut parts: Vec<String> = Vec::new();
@@ -101,6 +113,13 @@ impl TurnEnd {
                     None => "Worked".into(),
                 });
                 parts.extend(self.completed_at.clone().filter(|at| !at.is_empty()));
+                if let (Some(input), Some(output)) = (self.input_tokens, self.output_tokens) {
+                    parts.push(format!(
+                        "\u{2191} {} \u{2193} {}",
+                        crate::progress::token_label(input),
+                        crate::progress::token_label(output)
+                    ));
+                }
             }
             TurnOutcome::Interrupted => {
                 parts.push(Self::INTERRUPTED.into());
@@ -148,6 +167,18 @@ pub struct ToolBlock {
     /// Exact provider output retained for inline disclosure, bounded so one
     /// noisy call cannot dominate a many-Pane cockpit.
     pub output: Option<ToolOutput>,
+    /// A test run's count while it streams (`212/357`): its total from the
+    /// runner's own announcement (`running 357 tests`), and how many result
+    /// lines have arrived. `None` for anything that is not a test run, or a
+    /// run whose output never said how many tests it holds.
+    pub progress: Option<TestProgress>,
+}
+
+/// A running test suite's count, folded from its streamed output.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TestProgress {
+    pub done: u32,
+    pub total: u32,
 }
 
 impl ToolBlock {
@@ -161,92 +192,116 @@ impl ToolBlock {
     }
 }
 
-/// A compact display run, never an assertion that calls executed in parallel.
-/// Visible prose, reasoning, prompts and notices remain chronological boundaries.
-pub struct ToolActivity<'a> {
-    pub blocks: &'a [Block],
-    pub running: usize,
-    pub failed: usize,
+/// The name a tool row shows, the way Claude Code prints it: a file edit is
+/// `Update` (Claude's `Edit` and `MultiEdit`, Codex's `fileChange`), a Codex
+/// shell call is `Bash`; `Write` and every other name stand as sent.
+pub fn display_tool_name(name: &str) -> &str {
+    match name {
+        "Edit" | "MultiEdit" | "fileChange" => "Update",
+        "commandExecution" => "Bash",
+        other => other,
+    }
 }
 
-impl<'a> ToolActivity<'a> {
-    pub fn at_start(blocks: &'a [Block]) -> Option<Self> {
-        let len = blocks
-            .iter()
-            .take_while(|block| matches!(&block.body, Body::Tool(_)))
-            .count();
-        if len == 0 {
-            return None;
+/// A command's head: the words before its first option (`gh issue close
+/// 212 --reason x` → `gh issue close 212`), the whole command when it has
+/// none.
+pub fn command_head(command: &str) -> &str {
+    let command = command.trim();
+    let mut at = 0;
+    for word in command.split_whitespace() {
+        let start = at + command[at..].find(word).unwrap_or(0);
+        if word.starts_with('-') {
+            return command[..start].trim_end();
         }
-        let blocks = &blocks[..len];
-        let running = blocks
-            .iter()
-            .filter(
-                |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running),
-            )
-            .count();
-        let failed = blocks.iter().filter(|block| matches!(&block.body, Body::Tool(tool) if matches!(tool.state, ToolState::Failed(_)))).count();
-        if len == 1 && running > 0 {
-            return None;
-        }
-        Some(Self {
-            blocks,
-            running,
-            failed,
-        })
+        at = start + word.len();
     }
+    command
+}
 
-    /// Describe observed tool kinds without guessing a shell command's intent.
-    pub fn summary(&self) -> String {
-        let mut counts: Vec<(usize, usize)> = Vec::new();
-        for block in self.blocks {
-            let Body::Tool(tool) = &block.body else {
-                continue;
-            };
-            let kind = match tool.name.as_str() {
-                "Grep" | "Glob" => 0,
-                "Read" | "read_file" => 1,
-                "Edit" | "Write" | "MultiEdit" | "fileChange" => 2,
-                "Bash" | "commandExecution" => 3,
-                "WebSearch" | "webSearch" => 4,
-                _ => 5,
-            };
-            if let Some((_, count)) = counts.iter_mut().find(|(seen, _)| *seen == kind) {
-                *count += 1;
-            } else {
-                counts.push((kind, 1));
+/// What `@@ … @@` names for a hunk, trimmed to the item's head the way the
+/// transcript draws it: `fn thread_row(&self, …) -> Div {` → `fn
+/// thread_row`, `impl Canvas {` → `impl Canvas`. `None` for an empty one.
+pub fn section_head(line: &str) -> Option<String> {
+    let line = line.trim();
+    let cut = [" where ", "(", "{", "<", " = ", " =", ";"]
+        .iter()
+        .filter_map(|stop| line.find(stop))
+        .min()
+        .unwrap_or(line.len());
+    let head = line[..cut].trim_end().trim_end_matches(':').trim_end();
+    (!head.is_empty()).then(|| head.to_string())
+}
+
+/// git's default funcname rule over a hunk's own leading context: the
+/// nearest context line above its first change that begins with a letter,
+/// `_` or `$` (an unindented item: `fn …`, `impl …`, `def …`), as its
+/// head (`section_head`). `None` when the context holds no such line.
+pub fn hunk_section(lines: &[String]) -> Option<String> {
+    let leading = lines
+        .iter()
+        .take_while(|line| !line.starts_with('+') && !line.starts_with('-'));
+    leading
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|line| line.strip_prefix(' ').unwrap_or(line.as_str()))
+        .find(|body| funcname_line(body))
+        .and_then(section_head)
+}
+
+/// Whether a line starts an item by git's default funcname rule.
+pub fn funcname_line(line: &str) -> bool {
+    line.chars()
+        .next()
+        .is_some_and(|ch| ch.is_alphabetic() || ch == '_' || ch == '$')
+}
+
+/// What a Thread did to one file, folded from its tool rows' diffs: the
+/// hover card's `modified in this thread · +9 −4 · 2 min ago`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStat {
+    pub added: usize,
+    pub removed: usize,
+    /// The first changed line of the most recent edit, on the new side.
+    pub last_change_line: Option<u32>,
+    /// When that edit landed, where a live fold saw it.
+    pub at: Option<std::time::SystemTime>,
+}
+
+/// What `blocks` did to `path` (`Transcript::file_stat` over a render
+/// window): matched whole or by a path suffix in either direction, the added
+/// and removed lines across every edit, the first changed line of the latest
+/// edit, and when that edit settled (`settled_at`, by call). `None` when no
+/// block changed the file.
+pub fn file_stat_in(
+    blocks: &[Block],
+    settled_at: &std::collections::BTreeMap<String, std::time::SystemTime>,
+    path: &str,
+) -> Option<FileStat> {
+    let mut stat: Option<FileStat> = None;
+    for block in blocks {
+        let Body::Tool(tool) = &block.body else {
+            continue;
+        };
+        for diff in tool.diffs.iter().filter(|diff| same_file(&diff.path, path)) {
+            let entry = stat.get_or_insert(FileStat {
+                added: 0,
+                removed: 0,
+                last_change_line: None,
+                at: None,
+            });
+            entry.added += diff.added;
+            entry.removed += diff.removed;
+            if let Some(line) = first_changed_line(diff) {
+                entry.last_change_line = Some(line);
+            }
+            if let Some(at) = settled_at.get(&tool.call) {
+                entry.at = Some(*at);
             }
         }
-        let mut parts = Vec::new();
-        for (kind, count) in counts {
-            let (active, done, noun) = match kind {
-                0 => ("Searching for", "Searched for", "pattern"),
-                1 => ("Reading", "Read", "file"),
-                2 => ("Updating", "Updated", "file"),
-                3 => ("Running", "Ran", "shell command"),
-                4 => ("Searching the web", "Searched the web", "time"),
-                _ => ("Using", "Used", "tool"),
-            };
-            let verb = if self.running > 0 { active } else { done };
-            let verb = if parts.is_empty() {
-                verb.to_owned()
-            } else {
-                verb.to_lowercase()
-            };
-            parts.push(format!(
-                "{verb} {count} {noun}{}",
-                if count == 1 { "" } else { "s" }
-            ));
-        }
-        parts.join(", ")
     }
-
-    pub fn leader(&self) -> &'a ToolBlock {
-        let Body::Tool(tool) = &self.blocks[0].body else {
-            unreachable!("tool activity contains tools")
-        };
-        tool
-    }
+    stat
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -386,6 +441,15 @@ pub enum Input {
     CompletionObservation {
         elapsed_ms: u64,
         completed_at: String,
+        /// The turn's token counts, as observed; `None` in older logs.
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+    },
+    /// When the prompt just before it was sent (`7:31 pm`), observed live
+    /// and recorded right after the prompt. Replay restores the stored
+    /// value; a log from before it was kept draws no time.
+    PromptObservation {
+        sent_at: String,
     },
 }
 
@@ -477,13 +541,162 @@ pub struct Transcript {
     /// total; the smaller-report fallback supports older stored events.
     turn_output_tokens: u64,
     last_report: u64,
+    /// Input tokens the running (or last) turn consumed, summed the same way
+    /// as `turn_output_tokens` (a running total grows; a smaller report is a
+    /// new message's own count).
+    turn_input_tokens: u64,
+    last_input_report: u64,
+    /// When each edit settled, where a live fold saw it (`note_settled_at`):
+    /// the hover card's `2 min ago`. Replay never stamps one.
+    settled_at: std::collections::BTreeMap<String, std::time::SystemTime>,
     /// Which reasoning summary part the tail Block belongs to.
     summary_index: Option<u64>,
     progress: Progress,
     output_tails: std::collections::BTreeMap<String, OutputTail>,
+    /// Each running test call's count, folded line by line from its stream.
+    test_counts: std::collections::BTreeMap<String, TestCounter>,
     thinking_open: bool,
     latest_reasoning_part: Option<BlockId>,
     reasoning_parts: std::collections::BTreeMap<(String, u64), BlockId>,
+}
+
+/// A test runner's progress, read off its output one complete line at a
+/// time: the total it announces and the result lines it prints.
+///
+/// - cargo: `running N tests` per test binary (summed), one `test <name> ...
+///   ok|FAILED|ignored` per test.
+/// - pytest: `collected N items`, then `path::test PASSED` (verbose) or a
+///   row of `.FsExX` per file.
+/// - jest/vitest: per-test `✓`/`✕` lines; `Tests: … N total` at the end.
+/// - `go test -v`: each `=== RUN` announces one, each `--- PASS|FAIL|SKIP`
+///   settles one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct TestCounter {
+    partial: String,
+    done: u32,
+    total: u32,
+}
+
+impl TestCounter {
+    fn push(&mut self, text: &str) {
+        for ch in text.chars() {
+            if matches!(ch, '\n' | '\r') {
+                let line = std::mem::take(&mut self.partial);
+                self.line(&line);
+            } else if self.partial.len() < 4096 {
+                self.partial.push(ch);
+            }
+        }
+    }
+
+    fn line(&mut self, line: &str) {
+        let line = crate::progress::one_line(line, 4096);
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        let count_before = |line: &str, word: &str| -> Option<u32> {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words.windows(2).find_map(|pair| {
+                (pair[1].trim_end_matches([',', '.', ';']) == word)
+                    .then(|| pair[0].parse().ok())
+                    .flatten()
+            })
+        };
+        // cargo
+        if let Some(rest) = line.strip_prefix("running ") {
+            if let Some(count) = rest
+                .strip_suffix(" tests")
+                .or_else(|| rest.strip_suffix(" test"))
+                .and_then(|count| count.trim().parse::<u32>().ok())
+            {
+                self.total = self.total.saturating_add(count);
+                return;
+            }
+        }
+        if test_result_line(line).is_some() {
+            self.done = self.done.saturating_add(1);
+            return;
+        }
+        // pytest
+        if let Some(rest) = line.strip_prefix("collected ") {
+            if let Some(count) = rest
+                .split_whitespace()
+                .next()
+                .and_then(|count| count.parse::<u32>().ok())
+            {
+                self.total = count;
+                return;
+            }
+        }
+        if line.contains("::")
+            && [
+                " PASSED", " FAILED", " SKIPPED", " ERROR", " XFAIL", " XPASS",
+            ]
+            .iter()
+            .any(|word| line.contains(word))
+        {
+            self.done = self.done.saturating_add(1);
+            return;
+        }
+        if let Some((path, marks)) = line.split_once(".py ") {
+            let marks = marks.split('[').next().unwrap_or("").trim();
+            if !path.contains(' ')
+                && !marks.is_empty()
+                && marks
+                    .chars()
+                    .all(|ch| matches!(ch, '.' | 'F' | 's' | 'E' | 'x' | 'X'))
+            {
+                self.done = self.done.saturating_add(marks.chars().count() as u32);
+                return;
+            }
+        }
+        // jest / vitest
+        if let Some(rest) = line.strip_prefix("Tests:") {
+            if let Some(total) = count_before(rest, "total") {
+                self.total = total;
+            }
+            return;
+        }
+        if ["\u{2713} ", "\u{2715} ", "\u{221a} ", "\u{d7} "]
+            .iter()
+            .any(|mark| line.starts_with(mark))
+        {
+            self.done = self.done.saturating_add(1);
+            return;
+        }
+        // go test -v
+        if line.starts_with("=== RUN ") {
+            self.total = self.total.saturating_add(1);
+        } else if line.starts_with("--- PASS")
+            || line.starts_with("--- FAIL")
+            || line.starts_with("--- SKIP")
+        {
+            self.done = self.done.saturating_add(1);
+        }
+    }
+
+    fn progress(&self) -> Option<TestProgress> {
+        (self.total > 0).then_some(TestProgress {
+            done: self.done.min(self.total),
+            total: self.total,
+        })
+    }
+}
+
+/// One cargo test result line (`test nav::rows ... ok`), as `(name,
+/// verdict)`: `ok`, `FAILED` or `ignored` (an `ignored, reason` counts as
+/// ignored). Shared with the transcript's elbow (`test_run_summary`).
+pub fn test_result_line(line: &str) -> Option<(&str, &str)> {
+    let rest = line.trim().strip_prefix("test ")?;
+    let (name, verdict) = rest.rsplit_once(" ... ")?;
+    let verdict = verdict.trim();
+    let verdict = match verdict {
+        "ok" | "FAILED" | "ignored" => verdict,
+        other if other.starts_with("ignored") => "ignored",
+        _ => return None,
+    };
+    Some((name.trim(), verdict))
 }
 
 /// Keep the latest output line even after the disclosed prefix reaches its
@@ -535,6 +748,10 @@ pub(crate) struct Runtime {
     turn_started: Option<std::time::Instant>,
     turn_output_tokens: u64,
     last_report: u64,
+    turn_input_tokens: u64,
+    last_input_report: u64,
+    settled_at: std::collections::BTreeMap<String, std::time::SystemTime>,
+    test_counts: std::collections::BTreeMap<String, TestCounter>,
     turn_diff: Option<TurnDiff>,
     usage_details: Option<crate::UsageDetails>,
     context_details: Option<crate::ContextDetails>,
@@ -586,9 +803,13 @@ impl Transcript {
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
+            turn_input_tokens: 0,
+            last_input_report: 0,
+            settled_at: Default::default(),
             summary_index: None,
             progress: Progress::default(),
             output_tails: Default::default(),
+            test_counts: Default::default(),
             thinking_open: false,
             latest_reasoning_part: None,
             reasoning_parts: Default::default(),
@@ -652,6 +873,10 @@ impl Transcript {
             turn_started: self.turn_started,
             turn_output_tokens: self.turn_output_tokens,
             last_report: self.last_report,
+            turn_input_tokens: self.turn_input_tokens,
+            last_input_report: self.last_input_report,
+            settled_at: self.settled_at.clone(),
+            test_counts: self.test_counts.clone(),
             turn_diff: self.turn_diff.clone(),
             usage_details: self.usage_details.clone(),
             context_details: self.context_details.clone(),
@@ -686,6 +911,16 @@ impl Transcript {
         self.turn_started = runtime.turn_started;
         self.turn_output_tokens = runtime.turn_output_tokens;
         self.last_report = runtime.last_report;
+        self.turn_input_tokens = runtime.turn_input_tokens;
+        self.last_input_report = runtime.last_input_report;
+        // An edit's time is a live observation the rebuilt content cannot
+        // replay: keep what was seen.
+        for (call, at) in runtime.settled_at {
+            self.settled_at.entry(call).or_insert(at);
+        }
+        for (call, count) in runtime.test_counts {
+            self.test_counts.entry(call).or_insert(count);
+        }
         self.turn_diff = runtime.turn_diff;
         self.usage_details = runtime.usage_details;
         self.context_details = runtime.context_details;
@@ -743,14 +978,70 @@ impl Transcript {
         self.rate_limits
     }
 
-    /// How long the running turn has been going; None between turns.
+    /// How long the running turn has been going; None between turns. Read
+    /// off `clock::instant`, so a fixture freezes it.
     pub fn turn_elapsed(&self) -> Option<std::time::Duration> {
-        self.turn_started.map(|started| started.elapsed())
+        self.turn_started
+            .map(|started| crate::clock::instant().saturating_duration_since(started))
     }
 
     /// Output tokens the running (or last) turn produced.
     pub fn turn_output_tokens(&self) -> u64 {
         self.turn_output_tokens
+    }
+
+    /// Input tokens the running (or last) turn consumed.
+    pub fn turn_input_tokens(&self) -> u64 {
+        self.turn_input_tokens
+    }
+
+    /// When the Thread's first prompt in this window was sent, as its band
+    /// prints it: the banner's `started 7:18 pm`.
+    pub fn started_at(&self) -> Option<&str> {
+        self.blocks
+            .iter()
+            .find(|block| matches!(block.body, Body::Prompt(_)))
+            .and_then(|block| block.sent_at.as_deref())
+    }
+
+    /// How many turns have ended in this window: the banner's `2 turns`.
+    pub fn turn_count(&self) -> usize {
+        self.blocks
+            .iter()
+            .filter(|block| matches!(block.body, Body::TurnEnd(_)))
+            .count()
+    }
+
+    /// The latest completed turn's settled time: the banner's `41s working`.
+    pub fn last_working_ms(&self) -> Option<u64> {
+        self.blocks
+            .iter()
+            .rev()
+            .find_map(|block| match &block.body {
+                Body::TurnEnd(end) if end.completed() => end.elapsed_ms,
+                _ => None,
+            })
+    }
+
+    /// Record when an edit settled, observed live (`activity` calls this for
+    /// a live completion only): the hover card's age.
+    pub(crate) fn note_settled_at(&mut self, call: &str, at: std::time::SystemTime) {
+        self.settled_at.insert(call.to_owned(), at);
+    }
+
+    /// What this Thread did to `path` (matched whole, or by a path suffix in
+    /// either direction, so `crates/x.rs` meets `/repo/crates/x.rs`): its
+    /// added and removed lines across every edit, the first changed line of
+    /// the latest edit, and when that edit landed. `None` when the Thread
+    /// never changed the file.
+    pub fn file_stat(&self, path: &str) -> Option<FileStat> {
+        file_stat_in(&self.blocks, &self.settled_at, path)
+    }
+
+    /// When each edit settled, where a live fold saw it, by call: what a
+    /// render window's `file_stat_in` reads.
+    pub fn settled_at(&self) -> &std::collections::BTreeMap<String, std::time::SystemTime> {
+        &self.settled_at
     }
 
     /// The Thread's plan, once it has made one.
@@ -816,7 +1107,7 @@ impl Transcript {
         // first thing that streams.
         match self.status {
             Status::Streaming if self.turn_started.is_none() => {
-                self.turn_started = Some(std::time::Instant::now());
+                self.turn_started = Some(crate::clock::instant());
             }
             Status::Idle => self.turn_started = None,
             _ => {}
@@ -833,6 +1124,12 @@ impl Transcript {
             self.reasoning_parts
                 .retain(|_, id| first.is_some_and(|first| *id >= first));
             self.output_tails.retain(|id, _| self.blocks.iter().any(|block| matches!(&block.body, Body::Tool(tool) if &tool.call == id && tool.state == ToolState::Running)));
+            self.test_counts.retain(|id, _| self.blocks.iter().any(|block| matches!(&block.body, Body::Tool(tool) if &tool.call == id && tool.state == ToolState::Running)));
+            self.settled_at.retain(|id, _| {
+                self.blocks
+                    .iter()
+                    .any(|block| matches!(&block.body, Body::Tool(tool) if &tool.call == id))
+            });
         }
         update
     }
@@ -845,6 +1142,8 @@ impl Transcript {
             Input::CompletionObservation {
                 elapsed_ms,
                 completed_at,
+                input_tokens,
+                output_tokens,
             } => {
                 // An interrupted or failed turn already left its row; the
                 // observation times it. A completed turn ends without a row,
@@ -854,6 +1153,8 @@ impl Transcript {
                         if !end.completed() && end.elapsed_ms.is_none() {
                             end.elapsed_ms = Some(elapsed_ms);
                             end.completed_at = Some(completed_at);
+                            end.input_tokens = input_tokens;
+                            end.output_tokens = output_tokens;
                             return Update {
                                 dirty: vec![block.id],
                                 ..Update::default()
@@ -865,9 +1166,30 @@ impl Transcript {
                     outcome: TurnOutcome::Completed,
                     elapsed_ms: Some(elapsed_ms),
                     completed_at: Some(completed_at),
+                    input_tokens,
+                    output_tokens,
                 }));
                 Update {
                     dirty: vec![id],
+                    ..Update::default()
+                }
+            }
+            Input::PromptObservation { sent_at } => {
+                // The prompt it was recorded right after: the latest one.
+                let Some(block) = self
+                    .blocks
+                    .iter_mut()
+                    .rev()
+                    .find(|block| matches!(block.body, Body::Prompt(_)))
+                else {
+                    return Update::default();
+                };
+                if block.sent_at.as_deref() == Some(sent_at.as_str()) {
+                    return Update::default();
+                }
+                block.sent_at = Some(sent_at);
+                Update {
+                    dirty: vec![block.id],
                     ..Update::default()
                 }
             }
@@ -1004,6 +1326,13 @@ impl Transcript {
                 }
                 output.text.push_str(&text[..end]);
                 output.omitted_bytes = output.omitted_bytes.saturating_add(text.len() - end);
+                // A test run counts its results as they stream: the row's
+                // `running 357 tests` bar and `212/357`.
+                if crate::docview::is_test_run(tool) {
+                    let counter = self.test_counts.entry(id.clone()).or_default();
+                    counter.push(&text);
+                    tool.progress = counter.progress();
+                }
                 // The latest complete/partial output line is visible while the
                 // bounded full output stays available through disclosure.
                 tool.result_line = self.output_tails.entry(id).or_default().push(&text);
@@ -1094,6 +1423,7 @@ impl Transcript {
             Input::Event(SessionEvent::TokenUsage {
                 total_tokens,
                 context_window,
+                input_tokens,
                 output_tokens,
                 ..
             }) => {
@@ -1109,6 +1439,14 @@ impl Transcript {
                     self.turn_output_tokens += output_tokens;
                 }
                 self.last_report = output_tokens;
+                // Input the same way: Claude's per-turn usage and Codex's
+                // cumulative counters both land as the turn's own total.
+                if input_tokens >= self.last_input_report {
+                    self.turn_input_tokens += input_tokens - self.last_input_report;
+                } else {
+                    self.turn_input_tokens += input_tokens;
+                }
+                self.last_input_report = input_tokens;
                 Update::default()
             }
             Input::Event(SessionEvent::ContextUsage {
@@ -1173,9 +1511,13 @@ impl Transcript {
                 // blocked: nothing is streaming in either.
                 if let Status::Idle | Status::Streaming = self.status {
                     self.status = Status::Streaming;
-                    self.turn_started = Some(std::time::Instant::now());
+                    self.turn_started = Some(crate::clock::instant());
                     self.turn_output_tokens = 0;
                     self.last_report = 0;
+                    // The last input report carries over: Codex's counter
+                    // is cumulative, so the turn's input is what it grows
+                    // by from here.
+                    self.turn_input_tokens = 0;
                 }
                 Update {
                     dirty: vec![self.push(Body::Prompt(line))],
@@ -1207,9 +1549,27 @@ impl Transcript {
                     _ => (Vec::new(), None),
                 };
                 // A failure already carries its message in the state; a
-                // success keeps its first output line for the `⎿` row.
+                // success keeps its summary (`412 lines`, `6 matches in 2
+                // files`) or its first output line for the `└` row.
                 self.output_tails.remove(&id);
-                let result_line = (!is_error).then(|| result_line(&output)).flatten();
+                self.test_counts.remove(&id);
+                let name = self
+                    .blocks
+                    .iter()
+                    .rev()
+                    .find_map(|block| match &block.body {
+                        Body::Tool(tool) if tool.call == id => Some(tool.name.clone()),
+                        _ => None,
+                    });
+                let result_line = (!is_error)
+                    .then(|| {
+                        name.as_deref()
+                            .and_then(|name| {
+                                result_summary(name, structured_result.as_ref(), &output)
+                            })
+                            .or_else(|| result_line(&output))
+                    })
+                    .flatten();
                 let output = retained_output(&output);
                 Update {
                     dirty: self
@@ -1233,7 +1593,7 @@ impl Transcript {
                 self.progress.phase(Phase::Working);
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
-                    summary: tool_summary(&input),
+                    summary: tool_summary(&name, &input),
                     title: ["title", "description", "reason"]
                         .into_iter()
                         .find_map(|key| {
@@ -1250,6 +1610,7 @@ impl Transcript {
                     structured_result: None,
                     result_line: None,
                     output: None,
+                    progress: None,
                 }));
                 Update {
                     dirty: vec![block],
@@ -1286,11 +1647,15 @@ impl Transcript {
                         outcome: TurnOutcome::Interrupted,
                         elapsed_ms: None,
                         completed_at: None,
+                        input_tokens: None,
+                        output_tokens: None,
                     }))),
                     TurnOutcome::Error(message) => dirty.push(self.push(Body::TurnEnd(TurnEnd {
                         outcome: TurnOutcome::Error(message.clone()),
                         elapsed_ms: None,
                         completed_at: None,
+                        input_tokens: None,
+                        output_tokens: None,
                     }))),
                 }
                 self.turn_outcome = Some(outcome);
@@ -1310,28 +1675,14 @@ impl Transcript {
             }
             Input::Event(SessionEvent::DecisionRequested { decision }) => {
                 if decision.blocks_execution() {
+                    // The Decision itself says what waits — it is the
+                    // transcript's last row while it pends (the app's tail
+                    // row) — so no notice repeats `Bash needs approval`.
                     self.status = Status::Blocked;
-                } else {
-                    return Update {
-                        dirty: vec![self.push(Body::Notice(decision.description))],
-                        ..Update::default()
-                    };
+                    return Update::default();
                 }
-                // What is waiting, in words: the questions by name, or the
-                // tool that needs approval and what it touches.
                 Update {
-                    dirty: vec![self.push(Body::Notice(match &decision.kind {
-                        crate::DecisionKind::Questions(questions) => {
-                            format!("asks {}", crate::questions::summary(questions))
-                        }
-                        _ if decision.description.is_empty() => {
-                            format!("{} needs approval", decision.tool_name)
-                        }
-                        _ => format!(
-                            "{} needs approval · {}",
-                            decision.tool_name, decision.description
-                        ),
-                    }))],
+                    dirty: vec![self.push(Body::Notice(decision.description))],
                     ..Update::default()
                 }
             }
@@ -1409,6 +1760,7 @@ impl Transcript {
 
     fn retire_tools(&mut self) -> Vec<BlockId> {
         self.output_tails.clear();
+        self.test_counts.clear();
         self.blocks
             .iter_mut()
             .filter_map(|block| match &mut block.body {
@@ -1474,6 +1826,7 @@ impl Transcript {
                     body,
                     markdown: Some(source.to_string()),
                     markdown_run: Some(markdown_run),
+                    sent_at: None,
                 });
                 self.open = Some(id);
                 Some(id)
@@ -1566,6 +1919,7 @@ impl Transcript {
             body,
             markdown: None,
             markdown_run: None,
+            sent_at: None,
         });
         self.open = None;
         self.source.clear();
@@ -1620,10 +1974,135 @@ fn result_line(output: &str) -> Option<String> {
     Some(trim(line.trim_end(), RESULT_CHARS))
 }
 
+/// `1 line` / `412 lines`.
+fn counted(count: u64, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// What a read or a search found, as Claude Code's own rows summarize it:
+/// a Read's `412 lines` (its result's `file.numLines`, else the lines it
+/// printed); a Grep's `6 matches in 2 files` (content mode), `2 files`
+/// (files-with-matches) or `6 matches` (count). `None` for any other tool,
+/// which keeps its first output line.
+fn result_summary(
+    name: &str,
+    structured: Option<&serde_json::Value>,
+    output: &str,
+) -> Option<String> {
+    let number = |value: &serde_json::Value, key: &str| value.get(key).and_then(|v| v.as_u64());
+    match name {
+        "Read" | "read_file" => {
+            let lines = structured
+                .and_then(|value| value.get("file"))
+                .and_then(|file| number(file, "numLines"))
+                .or_else(|| {
+                    let count = output.lines().count() as u64;
+                    (count > 0).then_some(count)
+                })?;
+            Some(counted(lines, "line", "lines"))
+        }
+        "Grep" => {
+            let value = structured?;
+            let filenames = value
+                .get("filenames")
+                .and_then(|names| names.as_array())
+                .map(|names| names.len() as u64);
+            let content = value.get("content").and_then(|content| content.as_str());
+            let files = number(value, "numFiles")
+                .filter(|files| *files > 0)
+                .or(filenames.filter(|files| *files > 0))
+                .or_else(|| {
+                    // Content lines are `path:line:text`; distinct paths
+                    // are the files that matched.
+                    let paths: std::collections::BTreeSet<&str> = content?
+                        .lines()
+                        .filter_map(|line| line.split_once(':').map(|(path, _)| path))
+                        .collect();
+                    (!paths.is_empty()).then_some(paths.len() as u64)
+                })
+                .unwrap_or(0);
+            match value.get("mode").and_then(|mode| mode.as_str()) {
+                Some("files_with_matches") => Some(counted(files, "file", "files")),
+                Some("count") => {
+                    let matches = number(value, "numMatches").or_else(|| {
+                        content.map(|content| {
+                            content
+                                .lines()
+                                .filter_map(|line| line.rsplit_once(':'))
+                                .filter_map(|(_, count)| count.trim().parse::<u64>().ok())
+                                .sum()
+                        })
+                    })?;
+                    Some(counted(matches, "match", "matches"))
+                }
+                Some("content") | None => {
+                    let matches = number(value, "numMatches")
+                        .or_else(|| number(value, "numLines"))
+                        .or_else(|| {
+                            content.map(|content| {
+                                content
+                                    .lines()
+                                    .filter(|line| !line.trim().is_empty())
+                                    .count() as u64
+                            })
+                        })?;
+                    Some(format!(
+                        "{} in {}",
+                        counted(matches, "match", "matches"),
+                        counted(files.max(u64::from(matches > 0)), "file", "files")
+                    ))
+                }
+                Some(_) => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Whether two spellings of a path name one file: equal, or one is the
+/// other's tail at a path boundary (`crates/x.rs` and `/repo/crates/x.rs`).
+fn same_file(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_start_matches("./"), b.trim_start_matches("./"));
+    if a == b {
+        return true;
+    }
+    let (long, short) = if a.len() > b.len() { (a, b) } else { (b, a) };
+    !short.is_empty()
+        && long.ends_with(short)
+        && long.as_bytes()[long.len() - short.len() - 1] == b'/'
+}
+
+/// A diff's first changed line, on the new side: the line a hover card
+/// opens on.
+fn first_changed_line(diff: &Diff) -> Option<u32> {
+    let hunk = diff.hunks.first()?;
+    let mut line = hunk.new_start;
+    for text in &hunk.lines {
+        match text.as_bytes().first() {
+            Some(b'+') | Some(b'-') => return Some(line.max(1)),
+            _ => line += 1,
+        }
+    }
+    Some(hunk.new_start.max(1))
+}
+
 /// The one line a collapsed tool row shows. Tool inputs are the vendor's own
 /// schema, so this reads the few keys that name a subject and gives up
-/// quietly on anything else rather than guessing.
-fn tool_summary(input: &serde_json::Value) -> String {
+/// quietly on anything else rather than guessing. A search names what it
+/// looks for, then where: `Grep(status_line, crates/ferrite/src)`.
+fn tool_summary(name: &str, input: &serde_json::Value) -> String {
+    if matches!(name, "Grep" | "Glob") {
+        if let Some(pattern) = input.get("pattern").and_then(|v| v.as_str()) {
+            return match input.get("path").and_then(|v| v.as_str()) {
+                Some(path) if !path.is_empty() => format!("{pattern}, {path}"),
+                _ => pattern.to_string(),
+            };
+        }
+    }
+    tool_subject(input)
+}
+
+fn tool_subject(input: &serde_json::Value) -> String {
     for key in [
         "command",
         "file_path",
@@ -1640,7 +2119,7 @@ fn tool_summary(input: &serde_json::Value) -> String {
         }
     }
     if let Some(args) = input.get("arguments").filter(|value| value.is_object()) {
-        return tool_summary(args);
+        return tool_subject(args);
     }
     String::new()
 }
@@ -1853,40 +2332,11 @@ mod tests {
     use super::*;
     use crate::Decision;
 
+    /// CT-10/11: every call is its own Block under its own name — adjacent
+    /// calls are never folded into a summary — and the names read as Claude
+    /// Code prints them.
     #[test]
-    fn completed_single_tool_has_a_compact_summary_without_crossing_commentary() {
-        let mut transcript = Transcript::default();
-        transcript.apply(started(
-            "first",
-            "Read",
-            serde_json::json!({"file_path": "one.txt"}),
-        ));
-        transcript.apply(completed("first", "contents", false));
-        transcript.apply(text("Now checking another file."));
-        transcript.apply(started(
-            "second",
-            "Read",
-            serde_json::json!({"file_path": "two.txt"}),
-        ));
-
-        let first = ToolActivity::at_start(transcript.blocks())
-            .expect("one completed read has a compact activity summary");
-        assert_eq!(first.summary(), "Read 1 file");
-        assert_eq!(first.blocks.len(), 1, "commentary ends the activity group");
-        assert_eq!(first.leader().call, "first");
-        assert!(ToolActivity::at_start(&transcript.blocks()[1..]).is_none());
-        assert!(
-            ToolActivity::at_start(&transcript.blocks()[2..]).is_none(),
-            "a lone running call retains its live command presentation"
-        );
-        transcript.apply(completed("second", "contents", false));
-        let second = ToolActivity::at_start(&transcript.blocks()[2..]).unwrap();
-        assert_eq!(second.summary(), "Read 1 file");
-        assert_eq!(second.leader().call, "second");
-    }
-
-    #[test]
-    fn mixed_tools_group_between_visible_reasoning_and_commentary() {
+    fn every_call_keeps_its_own_block_and_display_name() {
         let mut transcript = Transcript::default();
         transcript.apply(text("Checking the files."));
         for (id, name) in [
@@ -1901,35 +2351,336 @@ mod tests {
                 serde_json::json!({"file_path": "src/main.rs"}),
             ));
         }
-        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
-            text: "The changes fit together.".into(),
-        }));
-        transcript.apply(started(
-            "verify",
-            "commandExecution",
-            serde_json::json!({"command": "check"}),
-        ));
-        transcript.apply(text("Checks passed."));
-        let blocks = transcript.blocks();
-        let group = ToolActivity::at_start(&blocks[1..])
-            .expect("all adjacent tool kinds share a disclosure");
-        assert_eq!(group.blocks.len(), 4);
-        assert_eq!(
-            group.summary(),
-            "Reading 1 file, using 1 tool, updating 1 file, running 1 shell command"
-        );
-        assert!(matches!(&blocks[5].body, Body::Thinking(s) if s == "The changes fit together."));
-        assert_eq!(blocks[0].markdown.as_deref(), Some("Checking the files."));
-        assert_eq!(blocks[7].markdown.as_deref(), Some("Checks passed."));
-        for id in ["read", "mcp", "edit", "shell"] {
-            transcript.apply(completed(id, "done", false));
+        let tools: Vec<_> = transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Tool(tool) => Some(tool.call.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools, ["read", "mcp", "edit", "shell"]);
+        for (name, shown) in [
+            ("Edit", "Update"),
+            ("MultiEdit", "Update"),
+            ("fileChange", "Update"),
+            ("commandExecution", "Bash"),
+            ("Write", "Write"),
+            ("Read", "Read"),
+            ("mcp__docs__search", "mcp__docs__search"),
+        ] {
+            assert_eq!(display_tool_name(name), shown, "{name}");
         }
+    }
+
+    /// CT-12: a search names its pattern, then where it looked.
+    #[test]
+    fn a_search_names_its_pattern_then_its_path() {
+        for (name, input, summary) in [
+            (
+                "Grep",
+                serde_json::json!({"pattern": "status_line", "path": "crates/ferrite/src"}),
+                "status_line, crates/ferrite/src",
+            ),
+            (
+                "Grep",
+                serde_json::json!({"pattern": "status_line"}),
+                "status_line",
+            ),
+            (
+                "Glob",
+                serde_json::json!({"pattern": "**/*.rs", "path": "crates"}),
+                "**/*.rs, crates",
+            ),
+            (
+                "Read",
+                serde_json::json!({"file_path": "crates/ferrite/src/nav.rs"}),
+                "crates/ferrite/src/nav.rs",
+            ),
+        ] {
+            assert_eq!(tool_summary(name, &input), summary, "{name} {input}");
+        }
+    }
+
+    /// CT-13: a Read reports its line count, a Grep its matches and files.
+    #[test]
+    fn reads_and_searches_summarize_what_they_found() {
+        let read =
+            serde_json::json!({"type": "text", "file": {"filePath": "/w/nav.rs", "numLines": 412}});
         assert_eq!(
-            ToolActivity::at_start(&transcript.blocks()[1..])
-                .unwrap()
-                .summary(),
-            "Read 1 file, used 1 tool, updated 1 file, ran 1 shell command"
+            result_summary("Read", Some(&read), "ignored").as_deref(),
+            Some("412 lines")
         );
+        assert_eq!(
+            result_summary("Read", None, "     1\u{2192}a\n     2\u{2192}b").as_deref(),
+            Some("2 lines")
+        );
+        let content = serde_json::json!({"mode": "content", "numFiles": 2, "filenames": [], "content": "a.rs:1:x\na.rs:9:x\nb.rs:3:x\nb.rs:4:x\nb.rs:5:x\nb.rs:6:x", "numLines": 6});
+        assert_eq!(
+            result_summary("Grep", Some(&content), "").as_deref(),
+            Some("6 matches in 2 files")
+        );
+        let counted_files =
+            serde_json::json!({"mode": "content", "numFiles": 0, "content": "a.rs:1:x\nb.rs:3:x"});
+        assert_eq!(
+            result_summary("Grep", Some(&counted_files), "").as_deref(),
+            Some("2 matches in 2 files")
+        );
+        let files = serde_json::json!({"mode": "files_with_matches", "filenames": ["a.rs", "b.rs"], "numFiles": 2});
+        assert_eq!(
+            result_summary("Grep", Some(&files), "").as_deref(),
+            Some("2 files")
+        );
+        let count =
+            serde_json::json!({"mode": "count", "numFiles": 2, "content": "a.rs:2\nb.rs:4"});
+        assert_eq!(
+            result_summary("Grep", Some(&count), "").as_deref(),
+            Some("6 matches")
+        );
+        assert_eq!(result_summary("Bash", None, "anything"), None);
+
+        // Through the fold: the row's `└` line.
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "r",
+            "Read",
+            serde_json::json!({"file_path": "crates/ferrite/src/canvas.rs"}),
+        ));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "r".into(),
+            output: "     1\u{2192}fn main() {}".into(),
+            is_error: false,
+            result: crate::ToolResult::Structured {
+                value: serde_json::json!({"type": "text", "file": {"numLines": 640}}),
+                duration_ms: None,
+            },
+        }));
+        let Body::Tool(tool) = &transcript.blocks()[0].body else {
+            panic!("a tool row")
+        };
+        assert_eq!(tool.result_line.as_deref(), Some("640 lines"));
+    }
+
+    #[test]
+    fn a_command_head_stops_at_its_first_option() {
+        assert_eq!(
+            command_head("gh issue close 212 --reason \"not planned\""),
+            "gh issue close 212"
+        );
+        assert_eq!(command_head("cargo test -p ferrite nav::"), "cargo test");
+        assert_eq!(command_head("  ls  "), "ls");
+        assert_eq!(command_head("--help"), "");
+    }
+
+    /// CT-20: a hunk's section is its header's tail, trimmed to the item's
+    /// head, or git's funcname rule over its leading context.
+    #[test]
+    fn a_hunk_names_its_enclosing_section() {
+        assert_eq!(
+            section_head("fn thread_row(&self, t: &ThreadRow, cx: &App) -> Div {").as_deref(),
+            Some("fn thread_row")
+        );
+        assert_eq!(
+            section_head("impl Canvas {").as_deref(),
+            Some("impl Canvas")
+        );
+        assert_eq!(section_head("  ").as_deref(), None);
+        let lines = |lines: &[&str]| {
+            lines
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            hunk_section(&lines(&[
+                " fn thread_row(&self, t: &ThreadRow, cx: &App) -> Div {",
+                "     let facts = self.facts.get(&t.id);",
+                "-    let mut row = div();",
+                "+    let live = t.session.is_some();",
+            ]))
+            .as_deref(),
+            Some("fn thread_row")
+        );
+        // Indented context names no item; a change with no context neither.
+        assert_eq!(
+            hunk_section(&lines(&["     let facts = 1;", "-a", "+b"])),
+            None
+        );
+        assert_eq!(
+            hunk_section(&lines(&["-pub const RUNNING: u32 = 0x7fbf95;", "+x"])),
+            None
+        );
+    }
+
+    /// CT-24: the turn's stamp carries its tokens; a settled span past a
+    /// minute reads `3m 12s`.
+    #[test]
+    fn the_turn_stamp_reads_its_time_and_tokens() {
+        let end = TurnEnd {
+            outcome: crate::TurnOutcome::Completed,
+            elapsed_ms: Some(192_000),
+            completed_at: Some("7:33 pm".into()),
+            input_tokens: None,
+            output_tokens: None,
+        };
+        assert_eq!(end.text(), "Worked for 3m 12s \u{b7} 7:33 pm");
+        let end = TurnEnd {
+            elapsed_ms: Some(41_000),
+            completed_at: Some("7:32 pm".into()),
+            input_tokens: Some(3_200),
+            output_tokens: Some(1_100),
+            ..end
+        };
+        assert_eq!(
+            end.text(),
+            "Worked for 41s \u{b7} 7:32 pm \u{b7} \u{2191} 3.2k \u{2193} 1.1k"
+        );
+        let end = TurnEnd {
+            elapsed_ms: Some(12_000),
+            completed_at: Some("7:19 pm".into()),
+            input_tokens: Some(1_800),
+            output_tokens: Some(620),
+            ..end
+        };
+        assert_eq!(
+            end.text(),
+            "Worked for 12s \u{b7} 7:19 pm \u{b7} \u{2191} 1.8k \u{2193} 620"
+        );
+    }
+
+    /// CT-3: a prompt's send time rides the observation recorded after it;
+    /// a prompt with none draws no time, never a fresh clock.
+    #[test]
+    fn a_prompt_takes_its_send_time_from_the_observation() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("first".into()));
+        assert_eq!(transcript.blocks()[0].sent_at, None);
+        let update = transcript.apply(Input::PromptObservation {
+            sent_at: "7:18 pm".into(),
+        });
+        assert_eq!(update.dirty, vec![transcript.blocks()[0].id]);
+        assert_eq!(transcript.blocks()[0].sent_at.as_deref(), Some("7:18 pm"));
+        assert_eq!(transcript.started_at(), Some("7:18 pm"));
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        transcript.apply(Input::CompletionObservation {
+            elapsed_ms: 12_000,
+            completed_at: "7:19 pm".into(),
+            input_tokens: Some(1_800),
+            output_tokens: Some(620),
+        });
+        transcript.apply(Input::Prompt("second".into()));
+        transcript.apply(Input::PromptObservation {
+            sent_at: "7:31 pm".into(),
+        });
+        let prompts: Vec<_> = transcript
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block.body, Body::Prompt(_)))
+            .map(|block| block.sent_at.as_deref())
+            .collect();
+        assert_eq!(prompts, [Some("7:18 pm"), Some("7:31 pm")]);
+        assert_eq!(transcript.started_at(), Some("7:18 pm"));
+        assert_eq!(transcript.turn_count(), 1);
+        assert_eq!(transcript.last_working_ms(), Some(12_000));
+    }
+
+    /// CT-25: a streamed cargo run counts its results against the total
+    /// its binaries announce.
+    #[test]
+    fn a_streaming_test_run_counts_its_results() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "t",
+            "Bash",
+            serde_json::json!({"command": "cargo test --workspace"}),
+        ));
+        let delta = |text: &str| {
+            Input::Event(SessionEvent::ToolOutputDelta {
+                id: "t".into(),
+                text: text.into(),
+            })
+        };
+        let progress = |transcript: &Transcript| match &transcript.blocks()[0].body {
+            Body::Tool(tool) => tool.progress,
+            _ => None,
+        };
+        transcript.apply(delta("   Compiling ferrite v0.4.0\n"));
+        assert_eq!(progress(&transcript), None, "no total yet");
+        transcript.apply(delta("\nrunning 300 tests\ntest a ... ok\ntest b ... FAI"));
+        assert_eq!(
+            progress(&transcript),
+            Some(TestProgress {
+                done: 1,
+                total: 300
+            })
+        );
+        transcript.apply(delta("LED\ntest c ... ignored, slow\n\nrunning 57 tests\n"));
+        assert_eq!(
+            progress(&transcript),
+            Some(TestProgress {
+                done: 3,
+                total: 357
+            })
+        );
+        // A command that is not a test run counts nothing.
+        let mut other = Transcript::default();
+        other.apply(started("t", "Bash", serde_json::json!({"command": "ls"})));
+        other.apply(delta("running 3 tests\ntest a ... ok\n"));
+        assert_eq!(progress(&other), None);
+
+        let mut counter = TestCounter::default();
+        counter.push(
+            "collected 4 items\n\ntests/test_a.py ..F\ntests/test_b.py::test_x PASSED [100%]\n",
+        );
+        assert_eq!(counter.progress(), Some(TestProgress { done: 4, total: 4 }));
+        let mut go = TestCounter::default();
+        go.push("=== RUN   TestA\n--- PASS: TestA (0.00s)\n=== RUN   TestB\n");
+        assert_eq!(go.progress(), Some(TestProgress { done: 1, total: 2 }));
+    }
+
+    /// CT-31: what a Thread did to a file, for the hover card.
+    #[test]
+    fn a_file_stat_folds_every_edit_to_one_file() {
+        let mut transcript = Transcript::default();
+        for (id, start, lines) in [
+            ("e1", 208u32, vec![" fn a() {", "-old", "+new", "+more"]),
+            ("e2", 210, vec!["     ctx", "+added"]),
+        ] {
+            transcript.apply(started(
+                id,
+                "Edit",
+                serde_json::json!({"file_path": "/repo/crates/ferrite/src/nav.rs"}),
+            ));
+            transcript.note_settled_at(id, std::time::SystemTime::UNIX_EPOCH);
+            transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: String::new(),
+                is_error: false,
+                result: crate::ToolResult::FileEdit {
+                    path: "/repo/crates/ferrite/src/nav.rs".into(),
+                    hunks: vec![crate::Hunk {
+                        old_start: start,
+                        old_lines: 1,
+                        new_start: start,
+                        new_lines: 1,
+                        lines: lines.into_iter().map(String::from).collect(),
+                        section: None,
+                    }],
+                },
+            }));
+        }
+        let stat = transcript
+            .file_stat("crates/ferrite/src/nav.rs")
+            .expect("the file was changed");
+        assert_eq!((stat.added, stat.removed), (3, 1));
+        assert_eq!(stat.last_change_line, Some(211));
+        assert_eq!(stat.at, Some(std::time::SystemTime::UNIX_EPOCH));
+        assert_eq!(transcript.file_stat("crates/ferrite/src/facts.rs"), None);
+        assert_eq!(transcript.file_stat("nav.rs").map(|s| s.added), Some(3));
+        assert!(!same_file("/repo/xnav.rs", "nav.rs"));
     }
 
     fn started(id: &str, name: &str, input: serde_json::Value) -> Input {
@@ -2423,11 +3174,14 @@ mod tests {
         }
     }
 
+    /// CT-40: a blocking Decision blocks the Session and leaves no notice —
+    /// the Decision row is what says it waits, once.
     #[test]
-    fn a_decision_blocks_the_session_and_says_what_is_waiting() {
+    fn a_decision_blocks_the_session_without_a_second_notice() {
         let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("write the file".into()));
 
-        transcript.apply(Input::Event(SessionEvent::DecisionRequested {
+        let update = transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
                 kind: Default::default(),
@@ -2442,26 +3196,24 @@ mod tests {
         }));
 
         assert_eq!(transcript.status(), Status::Blocked);
-        let last = transcript.blocks().last().unwrap();
-        assert!(matches!(last.body, Body::Notice(_)));
-        assert_eq!(body_text(last), "Write needs approval · ferrite-perm.txt");
+        assert!(update.dirty.is_empty());
+        assert!(transcript
+            .blocks()
+            .iter()
+            .all(|block| !matches!(block.body, Body::Notice(_))));
     }
 
     #[test]
-    fn a_blocking_question_names_its_questions_without_a_dangling_dash() {
+    fn a_blocking_question_leaves_no_notice_either() {
         let questions = crate::questions::parse(&serde_json::json!({"questions": [{
             "question": "Which approach?",
             "header": "Approach",
             "options": [{"label": "A"}, {"label": "B"}]
         }]}))
         .unwrap();
-        for (kind, description, said) in [
-            (
-                crate::DecisionKind::Questions(questions),
-                "",
-                "asks 1 question · Approach",
-            ),
-            (crate::DecisionKind::Approval, "", "Bash needs approval"),
+        for kind in [
+            crate::DecisionKind::Questions(questions),
+            crate::DecisionKind::Approval,
         ] {
             let mut transcript = Transcript::default();
             transcript.apply(Input::Event(SessionEvent::DecisionRequested {
@@ -2472,14 +3224,13 @@ mod tests {
                     id: "q_01".into(),
                     tool_use_id: "toolu_02".into(),
                     tool_name: "Bash".into(),
-                    description: description.into(),
+                    description: String::new(),
                     input: serde_json::Value::Null,
                     suggestions: vec![],
                 },
             }));
-            let text = body_text(transcript.blocks().last().unwrap());
-            assert_eq!(text, said);
-            assert!(!text.contains('—') && !text.ends_with(' '));
+            assert!(transcript.blocks().is_empty());
+            assert_eq!(transcript.status(), Status::Blocked);
         }
     }
 
@@ -2908,6 +3659,7 @@ mod tests {
                         "+delta".into(),
                         " charlie".into(),
                     ],
+                    section: None,
                 }],
             },
         }));
@@ -2945,6 +3697,7 @@ mod tests {
                     new_start: 1,
                     new_lines: 1,
                     lines: vec!["-old".into(), "+new".into()],
+                    section: None,
                 }],
             },
         }));
@@ -3126,6 +3879,8 @@ mod tests {
             let update = transcript.apply(Input::CompletionObservation {
                 elapsed_ms: 4_100,
                 completed_at: "8:53 pm".into(),
+                input_tokens: None,
+                output_tokens: None,
             });
             let ends: Vec<_> = transcript
                 .blocks()
@@ -3145,6 +3900,8 @@ mod tests {
             outcome: crate::TurnOutcome::Completed,
             elapsed_ms: Some(400),
             completed_at: Some("8:53 pm".into()),
+            input_tokens: None,
+            output_tokens: None,
         };
         assert_eq!(end.text(), "Worked for <1s \u{b7} 8:53 pm");
         let end = TurnEnd {

@@ -999,6 +999,40 @@ impl Table {
         self.column_aligns.get(index).copied().unwrap_or_default()
     }
 
+    /// Ferrite: the alignment a column is drawn with — its own, except that
+    /// with `numeric_right` a column left at the default whose body cells
+    /// are all numbers reads right-aligned
+    /// (`TextViewStyle::with_numeric_columns_right`).
+    pub(crate) fn display_align(&self, index: usize, numeric_right: bool) -> ColumnumnAlign {
+        let align = self.column_align(index);
+        if numeric_right && align == ColumnumnAlign::Left && self.column_is_numeric(index) {
+            ColumnumnAlign::Right
+        } else {
+            align
+        }
+    }
+
+    /// Whether every non-empty body cell of a column is a number, and at
+    /// least one is.
+    fn column_is_numeric(&self, index: usize) -> bool {
+        let mut any = false;
+        for row in self.children.iter().skip(1) {
+            let Some(cell) = row.children.get(index) else {
+                continue;
+            };
+            let text = cell.children.text();
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if !is_numeric_cell(text) {
+                return false;
+            }
+            any = true;
+        }
+        any
+    }
+
     /// Serialize the table back to GFM pipe-table Markdown (`| a | b |`),
     /// preserving column alignments. Cell newlines collapse to spaces and
     /// `|` is escaped so rows stay intact.
@@ -1059,6 +1093,30 @@ impl Table {
             span: self.span.map(|span| span.start..span.end),
         }
     }
+}
+
+/// Ferrite: a table cell that reads as a number: digits with at most a
+/// sign, thousands commas, one decimal point, and one unit after them
+/// (`%`, `k`, `M`, `ms`, `s`, `x`, `×`), or a leading currency sign.
+pub(crate) fn is_numeric_cell(text: &str) -> bool {
+    let text = text.trim();
+    let text = text
+        .strip_prefix(['+', '-', '\u{2212}', '$', '\u{20ac}', '\u{a3}'])
+        .unwrap_or(text);
+    let digits_end = text
+        .char_indices()
+        .find(|(_, ch)| !(ch.is_ascii_digit() || *ch == ',' || *ch == '.'))
+        .map_or(text.len(), |(at, _)| at);
+    let (number, unit) = text.split_at(digits_end);
+    let number_ok = number.chars().any(|ch| ch.is_ascii_digit())
+        && number.matches('.').count() <= 1
+        && !number.starts_with(',')
+        && !number.ends_with(',');
+    let unit = unit.trim();
+    number_ok
+        && (unit.is_empty()
+            || ["%", "k", "K", "M", "B", "ms", "s", "x", "\u{d7}", "KB", "MB", "GB"]
+                .contains(&unit))
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
@@ -1431,11 +1489,16 @@ impl Paragraph {
                     );
                 }
                 let link_click_handler = node_cx.link_click_handler.clone();
-                child_nodes.push(
+                // Ferrite: a frame set by `TextViewStyle::with_image` holds the
+                // picture, which fills its width at its own proportions.
+                let frame = node_cx.style.image();
+                let framed = frame != StyleRefinement::default();
+                let picture =
                     img(image_source(&image.url))
                         .id(ix)
                         .object_fit(ObjectFit::Contain)
                         .max_w(relative(1.))
+                        .when(framed, |this| this.w_full())
                         .when_some(image.width, |this, width| this.w(width))
                         .when_some(image.link.clone(), |this, link| {
                             let link_click_handler = link_click_handler.clone();
@@ -1465,8 +1528,18 @@ impl Paragraph {
                                     );
                                 })
                         })
-                        .into_any_element(),
-                );
+                        .into_any_element();
+                child_nodes.push(if framed {
+                    div()
+                        .flex_shrink_0()
+                        .max_w(relative(1.))
+                        .overflow_hidden()
+                        .refine_style(&frame)
+                        .child(picture)
+                        .into_any_element()
+                } else {
+                    picture
+                });
 
                 text.clear();
                 links.clear();
@@ -2192,7 +2265,7 @@ impl BlockNode {
         for (row_ix, row) in table.children.iter().enumerate() {
             let mut cells = Vec::with_capacity(row.children.len());
             for (ix, cell) in row.children.iter().enumerate() {
-                let align = table.column_align(ix);
+                let align = table.display_align(ix, style.numeric_columns_right());
                 let is_last_col = ix == row.children.len() - 1;
                 let width = col_w.get(ix).copied().unwrap_or(CELL_MIN_PX);
                 let min_width = col_min_w.get(ix).copied().unwrap_or(CELL_MIN_PX);
@@ -2314,7 +2387,7 @@ impl BlockNode {
         for (row_ix, row) in table.children.iter().enumerate() {
             let mut cells = Vec::with_capacity(row.children.len());
             for (ix, cell) in row.children.iter().enumerate() {
-                let align = table.column_align(ix);
+                let align = table.display_align(ix, style.numeric_columns_right());
                 let is_last_col = ix == row.children.len() - 1;
                 let len = col_lens
                     .get(ix)

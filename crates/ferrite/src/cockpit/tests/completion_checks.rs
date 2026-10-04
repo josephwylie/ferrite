@@ -289,7 +289,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     // The retained list mounts only its viewport. Scroll the existing tool
     // into view before measuring the reading anchor, as a reader would.
     for _ in 0..30 {
-        if cx.debug_bounds("tool-group-anchor-tool").is_some() {
+        if cx.debug_bounds("tool-row-anchor-tool").is_some() {
             break;
         }
         cx.simulate_event(gpui::ScrollWheelEvent {
@@ -299,7 +299,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         });
         tick(cx);
     }
-    let initial = cx.debug_bounds("tool-group-anchor-tool").unwrap();
+    let initial = cx.debug_bounds("tool-row-anchor-tool").unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: viewport.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(
@@ -309,7 +309,7 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         ..Default::default()
     });
     tick(cx);
-    let held = cx.debug_bounds("tool-group-anchor-tool").unwrap().top();
+    let held = cx.debug_bounds("tool-row-anchor-tool").unwrap().top();
     assert!(!view.read_with(cx, |view, cx| view.panes[0]
         .transcript()
         .unwrap()
@@ -321,25 +321,25 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    assert!((cx.debug_bounds("tool-group-anchor-tool").unwrap().top() - held).abs() < px(1.));
+    assert!((cx.debug_bounds("tool-row-anchor-tool").unwrap().top() - held).abs() < px(1.));
     let group = view.read_with(cx, |view, _| {
         view.panes[0]
-            .tool_bounds(pane::DisclosureId::Group("anchor-tool".into()))
+            .tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()))
             .unwrap()
             .center()
     });
     cx.simulate_click(group, gpui::Modifiers::none());
     tick(cx);
-    assert!((cx.debug_bounds("tool-group-anchor-tool").unwrap().top() - held).abs() < px(1.));
+    assert!((cx.debug_bounds("tool-row-anchor-tool").unwrap().top() - held).abs() < px(1.));
     cx.simulate_resize(gpui::size(px(740.), px(900.)));
     tick(cx);
-    let after = cx.debug_bounds("tool-group-anchor-tool").unwrap().top();
+    let after = cx.debug_bounds("tool-row-anchor-tool").unwrap().top();
     assert!(
         (after - held).abs() < px(1.),
         "resize must preserve the visible reading anchor: {held:?} -> {after:?}"
     );
     assert!(view.read_with(cx, |view, _| view.panes[0]
-        .tool_expanded(pane::DisclosureId::Group("anchor-tool".into()))));
+        .tool_expanded(pane::DisclosureId::Tool("anchor-tool".into()))));
     assert!(!view.read_with(cx, |view, cx| view.panes[0]
         .transcript()
         .unwrap()
@@ -443,7 +443,7 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
             .scroll()
             .bounds()
     });
-    let initial = cx.debug_bounds("tool-group-visible").unwrap();
+    let initial = cx.debug_bounds("tool-row-visible").unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: viewport.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(
@@ -453,14 +453,14 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
         ..Default::default()
     });
     tick(cx);
-    let held = cx.debug_bounds("tool-group-visible").unwrap().top();
+    let held = cx.debug_bounds("tool-row-visible").unwrap().top();
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Group("earlier".into()));
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("earlier".into()));
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("earlier".into()));
         cx.notify();
     });
     tick(cx);
-    let after = cx.debug_bounds("tool-group-visible").unwrap().top();
+    let after = cx.debug_bounds("tool-row-visible").unwrap().top();
     assert!(
         (after - held).abs() < px(1.),
         "opening earlier details must preserve reading position: {held:?} -> {after:?}"
@@ -491,7 +491,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         .unwrap();
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Group("exact".into()));
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         cx.notify();
     });

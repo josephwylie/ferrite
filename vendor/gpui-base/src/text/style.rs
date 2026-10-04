@@ -41,6 +41,9 @@ pub struct TextViewStyle {
     list_ordinal: StyleRefinement,
     prose_max_width: Option<Pixels>,
     list_hang: Option<ListHang>,
+    link_underline_on_hover: bool,
+    numeric_columns_right: bool,
+    image: StyleRefinement,
 }
 
 /// A fixed hang for list text: markers right-aligned in a box `width` wide,
@@ -108,6 +111,9 @@ impl PartialEq for TextViewStyle {
             && self.list_ordinal == other.list_ordinal
             && self.prose_max_width == other.prose_max_width
             && self.list_hang == other.list_hang
+            && self.link_underline_on_hover == other.link_underline_on_hover
+            && self.numeric_columns_right == other.numeric_columns_right
+            && self.image == other.image
     }
 }
 
@@ -167,6 +173,9 @@ impl TextViewStyle {
             list_ordinal: StyleRefinement::default(),
             prose_max_width: None,
             list_hang: None,
+            link_underline_on_hover: false,
+            numeric_columns_right: false,
+            image: StyleRefinement::default(),
         }
     }
 
@@ -315,6 +324,29 @@ impl TextViewStyle {
         self
     }
 
+    /// Draws a link's underline only while the pointer is on the link
+    /// (`true`); `false` (the default) underlines every link at rest.
+    pub fn with_link_underline_on_hover(mut self, on_hover: bool) -> Self {
+        self.link_underline_on_hover = on_hover;
+        self
+    }
+
+    /// Right-aligns a table column whose body cells are all numbers (`41`,
+    /// `-3.5`, `12%`, `1,204`, `3.2k`) when the Markdown left it at the
+    /// default alignment (`true`); `false` (the default) keeps it left.
+    pub fn with_numeric_columns_right(mut self, right: bool) -> Self {
+        self.numeric_columns_right = right;
+        self
+    }
+
+    /// Refines the frame a Markdown image is drawn in (its border, width,
+    /// ground), after the defaults. The image fills the frame at its own
+    /// proportions.
+    pub fn with_image(mut self, style: StyleRefinement) -> Self {
+        self.image = style;
+        self
+    }
+
     /// Sets the font family inline code runs are shaped in. `None` (the
     /// default) keeps the surrounding family.
     pub fn with_inline_code_font(mut self, family: Option<SharedString>) -> Self {
@@ -397,6 +429,21 @@ impl TextViewStyle {
     /// A link's underline color; `None` is the link's ink.
     pub fn link_underline(&self) -> Option<Hsla> {
         self.link_underline
+    }
+
+    /// Whether a link is underlined only under the pointer.
+    pub fn link_underline_on_hover(&self) -> bool {
+        self.link_underline_on_hover
+    }
+
+    /// Whether all-number table columns right-align by default.
+    pub fn numeric_columns_right(&self) -> bool {
+        self.numeric_columns_right
+    }
+
+    /// The refinement on a Markdown image's frame.
+    pub fn image(&self) -> StyleRefinement {
+        self.image.clone()
     }
 
     /// The family inline code is shaped in, when it differs.
@@ -568,6 +615,11 @@ mod tests {
         assert!(base != base.clone().with_heading_spacing(rems(1.), None));
         assert!(base != base.clone().with_strong(HighlightStyle::default()));
         assert!(base != base.clone().with_link_underline(Some(gpui::red())));
+        assert!(!base.link_underline_on_hover());
+        assert!(!base.numeric_columns_right());
+        assert!(base != base.clone().with_link_underline_on_hover(true));
+        assert!(base != base.clone().with_numeric_columns_right(true));
+        assert!(base != base.clone().with_image(gpui::Styled::w(StyleRefinement::default(), px(10.))));
         assert!(base != base.clone().with_inline_code_font(Some("Mono".into())));
         assert!(base != base.clone().with_blockquote(heading.clone()));
         assert!(base != base.clone().with_rule(heading.clone()));

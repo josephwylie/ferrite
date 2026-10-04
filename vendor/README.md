@@ -80,6 +80,20 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
   the defaults (a quote's `not_italic()` wins over the default italic).
 - `with_list_markers(bullet, ordinal)`: marker refinements; their text
   refinement also measures the shared marker column.
+- `with_link_underline_on_hover(bool)`: a link's underline is painted only
+  while the pointer is on that link (`Inline::paint_underlines`); `<u>`
+  underlines are unaffected. The inline keeps the hovered link's ordinal in its
+  state and notifies only when the pointer moves onto another link or off one
+  (leaving the text included), where upstream notified on every glyph crossed.
+- `with_numeric_columns_right(bool)`: a table column left at the default
+  alignment whose non-empty body cells all read as numbers (`41`, `-3.5`,
+  `12%`, `1,204`, `3.2k`, `$12`) is drawn right-aligned
+  (`Table::display_align`); the source and a copy keep the column's own
+  alignment.
+- `with_image(StyleRefinement)`: a block Markdown image is drawn in a frame
+  refined by this style (its width, border, ground), the picture filling the
+  frame's width at its own proportions. The default draws no frame, exactly as
+  upstream does. Images inside an `InlineFlow` paragraph are unchanged.
 
 Ferrite's `rich.rs` `vendor_knob_tests` pin these through the real renderer
 (this crate is not a workspace member, so its own tests do not run there).

@@ -585,9 +585,10 @@ pub const SHADOW_FLOAT_BLUR: f32 = 7.0;
 // bar, Pane heads, menus, pickers, the palette, sheets, toasts, tooltips,
 // the Composer and its status line — is `FS_UI` 13 on `LH_UI` 20. The
 // transcript is the reading size on its own line (`answer_text_size`,
-// `answer_line_height`; 14 on 21 at Standard) and every transcript measure
-// scales from it. Hierarchy is ink and weight, never a size: no surface
-// sets a second size, and headings are the body size.
+// `answer_line_height`; 13 on 20 at Standard, the chrome's own grid) and
+// every transcript measure scales from it. Hierarchy is ink and weight,
+// never a size: no surface sets a second size, and headings are the body
+// size.
 //
 // **Weights:** `W_BODY` (400) for everything that is read; `W_LABEL` (500)
 // a surface's one title, a tool's name, a label; `W_STRONG` (600) the
@@ -603,11 +604,12 @@ pub const SHADOW_FLOAT_BLUR: f32 = 7.0;
 pub const FS_UI: f32 = 13.0;
 /// 20px — the grid's row.
 pub const LH_UI: f32 = 20.0;
-/// 14px — the Standard reading size (`ReadingSize::STANDARD`): agent prose
-/// and every transcript row at the default zoom, on `LH_PROSE`.
-pub const FS_PROSE: f32 = 14.0;
-/// 21px — the Standard reading size's line: 1.5×.
-pub const LH_PROSE: f32 = 21.0;
+/// 13px — the Standard reading size (`ReadingSize::STANDARD`): agent prose
+/// and every transcript row at the default zoom, on `LH_PROSE` — the
+/// chrome's own grid.
+pub const FS_PROSE: f32 = 13.0;
+/// 20px — the Standard reading size's line: 1.5×, whole.
+pub const LH_PROSE: f32 = 20.0;
 
 /// Weights (see the type notes above): 400 body; 500 a title, a tool's
 /// name, a label; 600 the prompt mark, headings, `**strong**`.
@@ -628,8 +630,7 @@ pub fn answer_text_size(size: ferrite_core::settings::ReadingSize) -> f32 {
 pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
     match size.px() {
         13 => LH_UI,
-        14 => LH_PROSE,
-        px => (f32::from(px) * 1.5).round(),
+        px => prose_line_height(f32::from(px)),
     }
 }
 
@@ -641,7 +642,7 @@ pub fn heading_scale(_level: u8) -> f32 {
 
 /// A prose size's pixel line height: `round(size × 1.5)`.
 pub fn prose_line_height(size: f32) -> f32 {
-    (size * LH_PROSE / FS_PROSE).round()
+    (size * 1.5).round()
 }
 
 /// 0.6em — Geist Mono's advance width (600/1000 em): every glyph's cell.
@@ -777,12 +778,12 @@ pub const TOAST_GAP: f32 = SPACE_3;
 /// 16px — the inline padding every Pane strip shares.
 pub const PANE_PAD_X: f32 = SPACE_4;
 /// The Pane body's padding: 16px top, so the first line never kisses the
-/// head rule, and at the bottom the room the working line overlays —
-/// `GAP_BLOCK` above the line, the line, `GAP_ROW` under it (36px) — so the
-/// last row sits 12px above the working line, the line 4px above the
-/// Composer, and starting or stopping a turn reflows nothing.
+/// head rule, and half a row (10px) at the bottom (the prototype's `.tx`
+/// `padding-bottom: calc(var(--lh)/2)`): an idle followed tail ends 10px
+/// above the Composer's rule. The working line is not an overlay: it sits
+/// in the Composer's stack and pushes the transcript up while it shows.
 pub const BODY_PAD_T: f32 = SPACE_4;
-pub const BODY_PAD_B: f32 = GAP_BLOCK + LH_UI + GAP_ROW;
+pub const BODY_PAD_B: f32 = LH_UI / 2.0;
 /// 12px — the glyph box every transcript and Composer row hangs its mark in
 /// (`❯`, a tool dot, the answer mark, an elbow).
 pub const GLYPH_BOX: f32 = 12.0;
@@ -1117,41 +1118,49 @@ mod legacy {
 //   done, `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (drawn,
 //   `icons::WORKED`, in the provider's colour) the turn's end; `◆` (drawn,
 //   `ATTENTION`) a Decision. `∴` (drawn) heads reasoning.
+// - **The banner.** Every transcript opens on the Thread's banner: the
+//   steel mark three rows tall, then three lines — the title (`W_STRONG`
+//   `TEXT_STRONG`), `claude · opus 5.5 (1M) · medium · ~/ferrite on dev`
+//   and `started 7:18 pm · 2 turns · 41s working` (both `TEXT_MUTED`).
 // - **The prompt band.** The prompt echo is a full-width `paint::BAND` with
 //   half a line above and below its text: `❯` in the gutter, the text in
-//   `TEXT_STRONG` at body weight. The band of the turn being read stays
-//   pinned at the top of the body while its output scrolls under it (a
-//   plain echo laid over the list, pushed up by the next turn's band).
-// - **Tool rows.** `● Name(args)`: the name `TEXT_STRONG` at `W_LABEL`, the
-//   parens and arguments `TEXT_MUTED`, one line that truncates; the trail
-//   hard right (`+N −M` in `RUNNING`/`BLOCKED`, then the duration
+//   `TEXT_STRONG` at body weight, its attachments inline after the words
+//   (`CYAN` names on `paint::BAND2`), and its send time (`7:31 pm`,
+//   `TEXT_MUTED`) in its own right-aligned column on the first line. The
+//   band of the turn being read stays pinned at the top of the body while
+//   its output scrolls under it — exactly the band, pushed up by the next
+//   turn's band. Nothing on a band answers the pointer.
+// - **Tool rows.** `● Name(args)`, one row per call (never folded into a
+//   summary): the name `TEXT_STRONG` at `W_LABEL` (`Update`, `Bash`, the
+//   way Claude Code names them), the parens and arguments `TEXT_MUTED` (a
+//   path argument `CYAN`, a hover target), one line that truncates; the
+//   trail hard right (`+N −M` in `RUNNING`/`BLOCKED`, then the duration
 //   `TEXT_MUTED`, tabular). What it produced hangs under a typed `└ ` elbow
 //   (`TEXT_FAINT`) on the content column, in `TEXT_MUTED`; further output
 //   lines align after the elbow. Long output folds to
-//   `OUTPUT_PREVIEW_LINES` and a `+ N lines` line that toggles it.
+//   `OUTPUT_PREVIEW_LINES` and a `+ N lines` line that toggles it. A tool
+//   row changes nothing under the pointer but a path's underline.
 // - **Rhythm in rows.** Blocks are one blank line apart (a turn's prompt
 //   band, prose, a run of tool calls, the stamp); the calls of one run and
-//   the rows that hang on an elbow under the row they answer sit flush.
-//   The space above a row is chosen at reconcile from the row before it
+//   the rows that hang on an elbow under the row they answer sit flush,
+//   except that a call after a shown diff sits a line below it. The space
+//   above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
-// - **The turn's end.** `✻ Worked for 41s · 7:32 pm`, `TEXT_MUTED`, the `·`
-//   seams `TEXT_FAINT`. A failed or interrupted turn hangs under the last
-//   row: `└ failed · 0.1s · <message>`, the lead word in its state ink.
-// - **Diffs** have no box: a `TEXT_MUTED` hunk header, `TEXT_MUTED` line
-//   numbers, red and green row washes (`DIFF_*_WASH`) with the changed
-//   words washed deeper (`DIFF_*_WORD`), code in full syntax colour, the
-//   sign carrying the hue. Side by side once the transcript is
-//   `SPLIT_DIFF_MIN_W` wide, unified when narrower; a split row's empty
-//   side is `paint::NODIFF`.
+// - **The turn's end.** `✻ Worked for 41s · 7:32 pm · ↑ 3.2k ↓ 1.1k`,
+//   `TEXT_MUTED`, every `·` too. A failed or interrupted turn hangs under
+//   the last row: `└ failed · 0.1s · <message>`, the lead word in its state
+//   ink.
+// - **Diffs** have no box: a `TEXT_MUTED` hunk header naming its section
+//   (none when it has none), `TEXT_MUTED` line numbers, red and green row
+//   washes (`DIFF_*_WASH`) with the changed tokens washed deeper
+//   (`DIFF_*_WORD`), code in full syntax colour and one line per row, cut
+//   with `…`, the sign carrying the hue. Side by side once the transcript
+//   is `SPLIT_DIFF_MIN_W` wide, unified when narrower; a split row's empty
+//   side is `paint::NODIFF`. A later edit to a file already diffed in the
+//   turn shows `+ show diff` instead.
 // - **No transcript row has a hover ground** but the keyboard's disclosure
-//   target (`paint::HOVER`); a disclosure's chevron shows under the pointer.
+//   target (`paint::HOVER`).
 
-/// 66px — the tallest remnant of a cut row the transcript hides under its
-/// top edge while it follows the tail (three prose lines): a prompt, a tool
-/// row or a short paragraph cut under the head rule goes whole, so the
-/// body reads from a whole row; a long block read mid-way stays, since
-/// hiding more would open a void (rule 2.3.4).
-pub const TRANSCRIPT_TOP_SNAP_MAX: f32 = 3.0 * LH_PROSE;
 /// 12px — the block step: between the blocks of one turn (prompt → the
 /// agent's first row, prose ↔ tools, anything ↔ reasoning, notices, the
 /// turn's changes, the last block → its stamp).
@@ -1208,7 +1217,7 @@ pub const HUNK_MAX_ROWS: usize = 24;
 /// target (the whole row toggles too) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
 /// One cell of the transcript grid at reading size `size`: Geist Mono's
-/// advance (`CODE_ADVANCE`), 8.4px at Standard.
+/// advance (`CODE_ADVANCE`), 7.8px at Standard.
 pub fn tx_cell(size: f32) -> f32 {
     size * CODE_ADVANCE
 }
@@ -1220,9 +1229,9 @@ pub fn tx_gutter(size: f32) -> f32 {
 }
 
 /// A drawn transcript mark (`❯ ✻ ◆ ∴`) at reading size `size`: sized like
-/// a glyph of the face, 12px at Standard.
+/// a glyph of the face, 12px at Standard — the Composer's `❯` (`GLYPH_BOX`).
 pub fn tx_mark(size: f32) -> f32 {
-    (size * 6.0 / 7.0).round()
+    (size * GLYPH_BOX / FS_PROSE).round()
 }
 
 /// Half a transcript line, whole pixels: the prompt band's padding above
@@ -1247,23 +1256,76 @@ pub const SPLIT_DIFF_MIN_W: f32 = 1000.0;
 /// sign column.
 pub const DIFF_NUMBER_CELLS: f32 = 5.0;
 pub const DIFF_SIGN_CELLS: f32 = 2.0;
-/// An inline image's width in cells (the prototype's `.img{width:48ch}`),
-/// never wider than the image itself.
+/// An inline image's frame in cells, its 1px `paint::LINE2` border included
+/// (the prototype's `.img{width:48ch}`, 374.4px at Standard); the picture
+/// fills it.
 pub const IMAGE_CELLS: f32 = 48.0;
 
 /// **The minimap** (the transcript's scrollbar): a `MINIMAP_W` rail at the
-/// body's right edge, shown only while the pointer is on the transcript. A
-/// `MINIMAP_TICK_H` tick per prompt (`ACCENT`), failed call (`BLOCKED`),
-/// Decision (`ATTENTION`) and passing check (`RUNNING`), inset
-/// `MINIMAP_TICK_INSET`; the viewport as a translucent band (`paint::HOVER`,
-/// `paint::SELECTION` under the pointer) inset `MINIMAP_BAND_INSET`, never
-/// shorter than `MINIMAP_BAND_MIN_H`. A click on a tick jumps to its row;
-/// anywhere else centres the view on that point.
+/// body's right edge, shown while the pointer is anywhere on the Pane
+/// (Composer included) and fading over `MOTION_HOVER_FADE_MS`. A
+/// `MINIMAP_TICK_H` tick (`MINIMAP_TICK_R` corners) per prompt (`ACCENT`),
+/// failed call (`BLOCKED`), Decision (`ATTENTION`) and passing check
+/// (`RUNNING`), inset `MINIMAP_TICK_INSET` — 6px wide; the viewport as a
+/// white band at 6% (`MINIMAP_BAND`), 11% under the pointer
+/// (`MINIMAP_BAND_HOVER`), `MINIMAP_BAND_R` corners, inset
+/// `MINIMAP_BAND_INSET`, never shorter than `MINIMAP_BAND_MIN_H`; the band
+/// hides while the whole transcript fits, the ticks stay. A click on a tick
+/// scrolls smoothly to its row; anywhere else centres the view on that
+/// point.
 pub const MINIMAP_W: f32 = 12.0;
 pub const MINIMAP_TICK_H: f32 = 2.0;
 pub const MINIMAP_TICK_INSET: f32 = 3.0;
+pub const MINIMAP_TICK_R: f32 = 1.0;
 pub const MINIMAP_BAND_INSET: f32 = 1.0;
 pub const MINIMAP_BAND_MIN_H: f32 = 12.0;
+pub const MINIMAP_BAND_R: f32 = 2.0;
+pub const MINIMAP_BAND: u32 = 0xffffff0f;
+pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
+/// A minimap jump's scroll: eased over this long (reduced motion jumps).
+pub const MINIMAP_SCROLL_MS: u64 = 300;
+
+/// **The banner** (the prototype's `.banner` in a transcript): the steel
+/// mark `BANNER_MARK_ROWS` rows tall `BANNER_MARK_X_CELLS` in, a
+/// `BANNER_GAP_CELLS` gap, its three lines; Solo pads `BANNER_PAD_T` above
+/// it (board Panes none, `.tx{padding-top:0}`), and the first band sits a
+/// line below it.
+pub const BANNER_MARK_ROWS: f32 = 3.0;
+pub const BANNER_GAP_CELLS: f32 = 3.0;
+pub const BANNER_PAD_T: f32 = LH_UI;
+/// The prompt band's send time: its own right-aligned column, this many
+/// cells of padding on its left (the prototype's `.when{padding-left:2ch}`).
+pub const PROMPT_TIME_PAD_CELLS: f32 = 2.0;
+/// A running test's bar (the prototype's `.bar`): `TEST_BAR_CELLS` wide,
+/// `TEST_BAR_H` tall on a `paint::LINE2` track, `RUNNING` fill at sub-pixel
+/// precision easing over `TEST_BAR_EASE_MS`, a cell's margin each side,
+/// `TEST_BAR_R` corners.
+pub const TEST_BAR_CELLS: f32 = 20.0;
+pub const TEST_BAR_H: f32 = 6.0;
+pub const TEST_BAR_R: f32 = 1.0;
+pub const TEST_BAR_EASE_MS: u64 = 300;
+/// A fold's height eases open or shut over this long (the prototype's
+/// `.fold{transition:grid-template-rows .22s}`); reduced motion snaps.
+pub const FOLD_EASE_MS: u64 = 220;
+/// **The hover card** (the prototype's `#hover`): `HOVER_CARD_CELLS` chrome
+/// cells wide (780px), `HOVER_CARD_GAP` below the hovered path (above when
+/// it would overflow), at most `HOVER_CARD_EDGE` from the cockpit's right
+/// edge; six numbered lines (`HOVER_CARD_LINES`), the number column
+/// `HOVER_CARD_NUMBER_CELLS` wide with `HOVER_CARD_NUMBER_PAD_CELLS` after.
+pub const HOVER_CARD_CELLS: f32 = 100.0;
+pub const HOVER_CARD_GAP: f32 = 6.0;
+pub const HOVER_CARD_EDGE: f32 = 16.0;
+pub const HOVER_CARD_LINES: u32 = 6;
+pub const HOVER_CARD_NUMBER_CELLS: f32 = 6.0;
+pub const HOVER_CARD_NUMBER_PAD_CELLS: f32 = 2.0;
+/// The working line's room below it, above the Composer's input band.
+pub const WORKING_LINE_GAP_B: f32 = SPACE_1_5;
+/// A path's hover underline (the prototype's `.path`): `PATH_UNDERLINE_W`
+/// thick, `PATH_UNDERLINE_OFFSET` below the baseline, in the path's own
+/// ink, fading in over `PATH_UNDERLINE_FADE_MS`; transparent at rest.
+pub const PATH_UNDERLINE_W: f32 = 1.0;
+pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
+pub const PATH_UNDERLINE_FADE_MS: u64 = 120;
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars
@@ -1276,15 +1338,20 @@ pub const MINIMAP_BAND_MIN_H: f32 = 12.0;
 /// rules keep the whole column. Blocks sit one blank line apart; headings
 /// are the body size in `W_STRONG` `TEXT_STRONG`, `**strong**` the same.
 /// Inline code is `INLINE_CODE` cyan with no chip; links and file paths are
-/// `PATH_INK` cyan with no underline at rest (a file link underlines under
-/// the pointer). A list's `•` is `TEXT_MUTED`, hanging in the first of two
-/// cells. A fence has no ground: a 1px `paint::LINE2` rule on its left, the
-/// code two cells in, in full syntax colour, its language tag dim at its
-/// top right and `Copy` before it under the pointer. A table is a `W_STRONG`
-/// `TEXT_STRONG` head over a `paint::LINE2` rule, row rules in `paint::LINE`,
-/// no vertical rules and no box, figures tabular (a `---:` column aligns
-/// right). A quote is a 2px `LINE2` rule and `TEXT_MUTED`; a thematic break
-/// one `LINE`.
+/// `PATH_INK` cyan with no underline at rest, every link underlining under
+/// the pointer (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_MUTED`, hanging
+/// in the first of two cells. A fence has no ground: a 1px `paint::LINE2`
+/// rule on its left, the code two cells in, in full syntax colour, at most
+/// `MEASURE_CH` cells from the content column; its language tag dim at its
+/// top right and a lowercase `copy` `CODE_COPY_RIGHT_CELLS` in from the
+/// block's right edge, fading in under the pointer over
+/// `CODE_COPY_FADE_MS`. A table takes its content's width: a `W_STRONG`
+/// `TEXT_STRONG` head over a `paint::LINE2` rule, row rules in `paint::LINE`
+/// (each row exactly one line), no vertical rules and no box, the first
+/// column flush, figures tabular; a column of numbers aligns right (head
+/// included) unless the Markdown says otherwise. An image is framed like a
+/// prompt's (`IMAGE_CELLS`) with its caption under it. A quote is a 2px
+/// `LINE2` rule and `TEXT_MUTED`; a thematic break one `LINE`.
 ///
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
@@ -1315,6 +1382,12 @@ pub const CODE_ACTIONS_TOP: f32 = 0.0;
 pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
+/// `copy` sits with its right edge this many cells in from the block's
+/// right edge (the prototype's `.code .copy{right:6ch}`), two cells left of
+/// the language tag, and fades in over `CODE_COPY_FADE_MS` under the
+/// pointer.
+pub const CODE_COPY_RIGHT_CELLS: f32 = 6.0;
+pub const CODE_COPY_FADE_MS: u64 = 120;
 /// The html preview dialog: the reading column's width, and a height cap
 /// before its body scrolls.
 pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
