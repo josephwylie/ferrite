@@ -119,6 +119,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
+    // `--demo parity`: the approved prototype's world, on its own store.
+    let parity = flag(&args, "--demo") == Some("parity");
     // The operator's settings live beside the store: `~/.ferrite`.
     let settings_dir = settings_dir();
     let settings = Settings::load(&settings_dir);
@@ -191,11 +193,15 @@ fn main() {
             } else {
                 Box::new(session::Spawn::new(defaults.clone()))
             };
-            let mut core = match Cockpit::try_new(store, spawner) {
-                Ok(core) => core,
-                Err(e) => {
-                    eprintln!("ferrite: cannot open the workspace registry: {e}");
-                    std::process::exit(1);
+            let mut core = if parity {
+                demo::parity_world()
+            } else {
+                match Cockpit::try_new(store, spawner) {
+                    Ok(core) => core,
+                    Err(e) => {
+                        eprintln!("ferrite: cannot open the workspace registry: {e}");
+                        std::process::exit(1);
+                    }
                 }
             };
             // A Dock launch has no directory of its own either: launchd starts
@@ -231,7 +237,7 @@ fn main() {
             // view is Solo (#28), which is right for a launch but wrong here —
             // the board the demo exists to draw is a Group's membership, and
             // Solo would show one Pane of it.
-            let seeded_group = demo
+            let seeded_group = (demo && !parity)
                 .then(|| core.groups().iter().next().map(|group| group.id))
                 .flatten();
 
