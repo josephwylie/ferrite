@@ -55,7 +55,6 @@ pub struct ThreadFacts {
     /// The provider the log declared — a parked Thread's, peeked. An open
     /// Thread's provider comes live from the Cockpit. (The nav draws no
     /// logo and no tooltip now; kept for the surfaces that name it.)
-    #[allow(dead_code)]
     pub provider: Option<Provider>,
     /// When the Thread was last written to (#21) — what the nav orders
     /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
@@ -68,7 +67,6 @@ pub struct ThreadFacts {
     pub default_branch: Option<SharedString>,
     /// Subagents observed for this Thread, retained while parked without
     /// reopening logs. (The nav row no longer names the count.)
-    #[allow(dead_code)]
     pub subagents: usize,
     /// How many turns the Thread holds (its prompts): counted while open,
     /// read back from a parked log once — the parked tile's `11 turns`.

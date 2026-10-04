@@ -52,12 +52,6 @@ impl Fixture {
     pub(crate) fn set(&self, at: SystemTime) {
         self.0.set(at.into());
     }
-
-    /// Step the clock forward by `by`.
-    #[allow(dead_code)]
-    pub(crate) fn advance(&self, by: Duration) {
-        self.0.advance(by);
-    }
 }
 
 /// A wall-clock time of the capture's day, in seconds since local midnight:

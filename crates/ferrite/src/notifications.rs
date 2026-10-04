@@ -588,8 +588,11 @@ fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Statefu
                 .min_w_0()
                 .overflow_hidden()
                 .child(
+                    // Exactly its cells (a measured run rounds up a pixel and
+                    // would push the detail off the grid).
                     div()
                         .flex_shrink_0()
+                        .w(px(components::cells_width(&row.title) + 0.1))
                         .max_w_full()
                         .truncate()
                         .text_color(rgb(if row.read { TEXT } else { TEXT_STRONG }))
@@ -635,13 +638,17 @@ fn quick_button(
     let id = id.into();
     let blend = crate::pointer::hover_key(&id);
     let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+    // Exactly its cells, a cell of padding each side and its edge: padded
+    // runs would snap each pad from 7.8 to 8 and drift the row.
+    let width = components::cells_width(key) + components::cells_width(word) + 2.0 * CH + 2.0;
     div()
         .id(id)
         .flex()
         .flex_shrink_0()
         .items_center()
+        .justify_center()
         .h(px(TOAST_BUTTON_H))
-        .px(px(CH))
+        .w(px(width))
         .border_1()
         .border_color(FLOAT_EDGE)
         .whitespace_nowrap()
@@ -665,12 +672,7 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
             .flex()
             .min_w_0()
             .overflow_hidden()
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(rgb(TEXT))
-                    .child(SharedString::from(format!("{tool} wants to run "))),
-            )
+            .child(components::cells(format!("{tool} wants to run ")).text_color(rgb(TEXT)))
             .child(
                 div()
                     .min_w_0()

@@ -4310,7 +4310,6 @@ impl CockpitView {
     }
 
     /// Open the card on an existing Project, seeded with its name.
-    #[allow(dead_code)] // the ⌘K palette's "edit project" (the nav's pencil is gone)
     pub(crate) fn open_project_editor(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         let Some(title) = self
             .cockpit
@@ -6593,7 +6592,6 @@ impl CockpitView {
     /// How the nav orders the rows inside each Project (N-3): creation
     /// order, or `sort: recent` (last used first) — the ⌘K palette's sort
     /// command. Saved with the settings.
-    #[allow(dead_code)] // the ⌘K palette's sort command
     pub(crate) fn set_thread_order(&mut self, order: ThreadListOrder, cx: &mut Context<Self>) {
         if self.prefs.settings.thread_list_order == order {
             return;
@@ -6627,7 +6625,6 @@ impl CockpitView {
     /// Show the parked Threads (N-18): the nav unfolds if it is folded away,
     /// the Parked section opens, and the tree scrolls it into view — the
     /// ⌘K palette's "show parked" command.
-    #[allow(dead_code)] // the ⌘K palette's "show parked" command
     pub(crate) fn show_parked(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.nav_railed() {
             self.toggle_nav_now(cx);
@@ -6645,7 +6642,6 @@ impl CockpitView {
     /// A new Thread in a named Project — the ⌘K palette's "new thread in
     /// <project>". It is a loose draft like every pointer-made one, and it
     /// moves the fallback Project, so the draft after it starts here too.
-    #[allow(dead_code)] // the ⌘K palette's "new thread in <project>"
     pub(crate) fn open_draft_in_project(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         self.launch_project = Some(project);
         let provider = self.default_choice();
@@ -9542,7 +9538,6 @@ impl CockpitView {
             // `refresh MCP`): the status line has no `•••`.
             session_controls: None,
             mode_picker: l1.then(|| self.mode_picker(index, cx)).flatten(),
-            decide: None,
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — a tile with no
             // handle could not be rearranged at all.
@@ -21992,11 +21987,14 @@ mod tests {
                 .debug_bounds("prompt-chip-data.weird-extension")
                 .expect("a sent file is its band's chip");
             let band = cx.debug_bounds("transcript-prompt").unwrap();
-            assert_eq!(
-                band.size.height,
-                chip.size.height * 2. + px(theme::PROMPT_CHIP_LINE_EXTRA),
-                "half a line above and below the chip line, which stands \
-                 taller as the prototype's inline chip makes it"
+            // Half a line above and below the chips, which wrap in a
+            // half-width Pane; the last chip line stands taller, as the
+            // prototype's inline chip makes it.
+            let lines =
+                (band.size.height - px(crate::theme::PROMPT_CHIP_LINE_EXTRA)) / chip.size.height;
+            assert!(
+                lines >= 2. && lines.fract() == 0.,
+                "whole lines plus the chip line's extra: {band:?} / {chip:?}"
             );
             assert!(
                 cx.debug_bounds("sent-image").is_some(),

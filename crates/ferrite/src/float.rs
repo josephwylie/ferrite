@@ -22,13 +22,11 @@ pub(crate) enum FloatPlace {
     Below { gap: f32 },
     /// Over the anchor, its left edge on the anchor's, its foot `gap` above.
     Above { gap: f32 },
-    /// Under the anchor, or over it when the window has no room below (the
-    /// path hover card's, core-transcript's to hang).
-    #[allow(dead_code)]
-    BelowOrAbove { gap: f32 },
-    /// Centred on the anchor (the board), its head `top` below the anchor's
-    /// top: the palette and the shortcuts sheet.
-    BoardTop { top: f32 },
+    /// Centred on the anchor (the board), `width` wide, its head `top`
+    /// below the anchor's top: the palette and the shortcuts sheet. The
+    /// left edge is solved from the authored width, as the browser centres
+    /// it, before gpui snaps it to the device pixel.
+    BoardTop { top: f32, width: f32 },
 }
 
 /// The priority every float paints at: over the Panes' own deferred menus
@@ -39,9 +37,6 @@ pub(crate) const VEIL_PRIORITY: usize = 3;
 
 /// The anchored corner, the point it is pinned to and the offset for a
 /// placement — pure, so the geometry is testable without a window.
-/// `BelowOrAbove` pins the foot above the anchor and offsets the head below
-/// it: gpui's anchored element tries the offset placement first and, when
-/// that overflows the window, the flipped corner at the bare position.
 pub(crate) fn placement(
     anchor: Bounds<Pixels>,
     place: FloatPlace,
@@ -58,23 +53,16 @@ pub(crate) fn placement(
             point(anchor.left(), anchor.top() - px(gap)),
             zero,
         ),
-        FloatPlace::BelowOrAbove { gap } => (
+        FloatPlace::BoardTop { top, width } => (
             Anchor::TopLeft,
-            point(anchor.left(), anchor.top() - px(gap)),
-            point(px(0.), anchor.size.height + px(2. * gap)),
-        ),
-        FloatPlace::BoardTop { top } => (
-            Anchor::TopCenter,
-            point(anchor.center().x, anchor.top() + px(top)),
+            point(anchor.center().x - px(width / 2.), anchor.top() + px(top)),
             zero,
         ),
     }
 }
 
 /// Hang `view` against `anchor` (window coordinates): deferred so it paints
-/// over every Pane, anchored so it never leaves the window. A placement
-/// that may flip (`BelowOrAbove`) switches corners; the rest snap inside
-/// the window.
+/// over every Pane, anchored and snapped so it never leaves the window.
 pub(crate) fn hang(
     view: AnyView,
     anchor: Bounds<Pixels>,
@@ -93,11 +81,11 @@ pub(crate) fn hang_element(
     place: FloatPlace,
 ) -> AnyElement {
     let (corner, at, offset) = placement(anchor, place);
-    let anchored = anchored().anchor(corner).position(at).offset(offset);
-    let anchored = match place {
-        FloatPlace::BelowOrAbove { .. } => anchored,
-        _ => anchored.snap_to_window(),
-    };
+    let anchored = anchored()
+        .anchor(corner)
+        .position(at)
+        .offset(offset)
+        .snap_to_window();
     deferred(anchored.child(float))
         .with_priority(FLOAT_PRIORITY)
         .into_any_element()
@@ -118,9 +106,15 @@ mod tests {
     #[test]
     fn each_place_pins_its_corner() {
         let board = bounds(281.8, 32., 1158.2, 844.);
-        let (corner, at, offset) = placement(board, FloatPlace::BoardTop { top: 56. });
-        assert_eq!(corner, Anchor::TopCenter);
-        assert_eq!(at, point(px(281.8 + 1158.2 / 2.), px(88.)));
+        let (corner, at, offset) = placement(
+            board,
+            FloatPlace::BoardTop {
+                top: 56.,
+                width: 655.2,
+            },
+        );
+        assert_eq!(corner, Anchor::TopLeft);
+        assert_eq!(at, point(px(281.8 + 1158.2 / 2. - 655.2 / 2.), px(88.)));
         assert_eq!(offset, point(px(0.), px(0.)));
 
         let bell = bounds(245., 4., 28., 24.);
@@ -132,11 +126,5 @@ mod tests {
         let (corner, at, _) = placement(band, FloatPlace::Above { gap: 5. });
         assert_eq!(corner, Anchor::BottomLeft);
         assert_eq!(at, point(px(419.), px(810.)));
-
-        let path = bounds(100., 200., 80., 20.);
-        let (corner, at, offset) = placement(path, FloatPlace::BelowOrAbove { gap: 6. });
-        assert_eq!(corner, Anchor::TopLeft);
-        assert_eq!(at + offset, point(px(100.), px(226.)), "the head 6px under");
-        assert_eq!(at, point(px(100.), px(194.)), "the flipped foot 6px over");
     }
 }

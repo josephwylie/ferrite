@@ -1327,13 +1327,15 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
             // own left edge.
             let inner = px(rect.x);
             let c1 = inner + px(crate::theme::HEAD_PAD_X + crate::theme::HEAD_DOT_W);
+            // gpui snaps every edge to a device pixel: up to a pixel off
+            // the unsnapped split.
             assert!(
-                (title.left() - c1).abs() <= px(0.5),
+                (title.left() - c1).abs() < px(1.),
                 "{width}: the title {title:?} starts after the dot column {c1:?}"
             );
             let axis = inner + px(crate::theme::HEAD_PAD_X);
             assert!(
-                (dot.left() - axis).abs() <= px(0.5),
+                (dot.left() - axis).abs() < px(1.),
                 "{width}: the dot column {dot:?} sits a cell in {axis:?}"
             );
             assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));

@@ -737,7 +737,9 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
                         .flex_shrink_0()
                         .child("\u{21e7}")
                         .into_any_element(),
-                    (None, key) => SharedString::from(key.to_string()).into_any_element(),
+                    // A key's letter holds exactly its cell: hints sit
+                    // right-aligned, and a measured run rounds up a pixel.
+                    (None, key) => cells(key.to_string()).into_any_element(),
                 }
             }))
     });
@@ -875,41 +877,6 @@ pub fn key_word(key: &str) -> String {
         key => key.to_uppercase(),
     }
 }
-
-/// An icon-only control: `ICON_BUTTON` square, the glyph at
-/// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, brightening to `TEXT` over
-/// `paint::HOVER` under the pointer, a tooltip naming what it does.
-#[allow(dead_code)] // the nav's new-thread door, its last caller, is gone
-pub fn icon_button(
-    id: impl Into<ElementId>,
-    glyph: &'static str,
-    tooltip: &'static str,
-    cx: &App,
-) -> Button {
-    faded_button(
-        id,
-        rgba(theme::TRANSPARENT).into(),
-        theme::paint::HOVER.into(),
-        theme::paint::PRESS.into(),
-        rgb(theme::TEXT_MUTED).into(),
-        cx,
-    )
-    .group(ICON_BUTTON_GROUP)
-    .size(px(theme::ICON_BUTTON))
-    .tip(tooltip)
-    .accessibility_label(tooltip)
-    .child(
-        icons::icon(glyph, theme::ICON_BUTTON_GLYPH, theme::TEXT_MUTED)
-            .group_hover(ICON_BUTTON_GROUP, |style| {
-                style.text_color(rgb(theme::TEXT))
-            }),
-    )
-}
-
-/// An `svg()` paints from its own style, never an ambient text colour, so
-/// the button's hover reaches its glyph through a named group. Every icon
-/// button shares the name: `group_hover` resolves to the nearest one.
-const ICON_BUTTON_GROUP: &str = "icon-button";
 
 /// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT`;
 /// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
@@ -1218,7 +1185,7 @@ pub fn menu_row(
 /// A menu section title: the grid's type, `W_LABEL` `TEXT_MUTED`, an optional
 /// leading mark and an optional note after it. Its mark and title share the
 /// rows' leading edge. A section that follows rows is set apart from them
-/// by `menu_separator` (space) or `.mt(MENU_GROUP_GAP)`, never a rule.
+/// by `.mt(MENU_GROUP_GAP)` (space), never a rule.
 pub fn menu_section(
     title: impl Into<SharedString>,
     leading: Option<(&'static str, u32)>,
@@ -1265,14 +1232,6 @@ pub fn on_bounds<E: ParentElement>(
         .absolute()
         .inset_0(),
     )
-}
-
-/// The one separator inside a floating surface: `MENU_GROUP_GAP` of space.
-/// Grouping is space, not a line; the surface's own hairline edge is the
-/// only rule a menu draws.
-#[allow(dead_code)] // the nav's filter menu, its last caller, is gone
-pub fn menu_separator() -> Div {
-    div().flex_shrink_0().h(px(theme::MENU_GROUP_GAP))
 }
 
 /// An inert status line (loading, empty, error) in a menu.

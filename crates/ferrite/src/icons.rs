@@ -58,9 +58,7 @@ icons![
     "ferrite-upper",
     "ferrite-lower",
     "ferrite-steel",
-    "plus",
     "gear",
-    "group",
     "subagents",
     "window-minimize",
     "window-maximize",
@@ -155,16 +153,8 @@ const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
 /// prototype's banner `viewBox="280 30 700 1130"`): drawn as an image, so
 /// the gradient paints (an `svg()` element is a one-ink mask).
 pub const FERRITE_STEEL: &str = "icons/ferrite-steel.svg";
-/// `+` — add a Project. (The nav no longer draws it: a new Thread in a
-/// Project is a palette command.)
-#[allow(dead_code)]
-pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
-/// Four Panes held together as one durable Group. (The nav no longer marks
-/// membership after a title: a Thread is listed under its Groups.)
-#[allow(dead_code)]
-pub const GROUP: &str = "icons/group.svg";
 /// A parent Agent branching to two children. (The nav no longer draws it:
 /// a row's subagents are its tooltip.)
 #[allow(dead_code)]
@@ -504,7 +494,6 @@ mod tests {
             FERRITE_UPPER,
             FERRITE_LOWER,
             GEAR,
-            GROUP,
             SUBAGENTS,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
@@ -543,7 +532,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            58,
+            56,
             "the prototype and app controls, the steel banner mark, including close, the four Windows caption glyphs, \
              the option and control key glyphs, the image mark, the three mode markers, the \
              failed cross, the CLI update mark, the sixteen spinner frames (ten braille, six \
@@ -617,7 +606,6 @@ mod tests {
             WARNING,
             PENCIL,
             GEAR,
-            GROUP,
             SUBAGENTS,
             COPY,
             RESEND,

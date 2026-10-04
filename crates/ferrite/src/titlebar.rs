@@ -263,7 +263,9 @@ pub fn commands_door(chord: Option<&str>) -> Stateful<Div> {
         .on_hover(crate::motion::hover_listener(DOOR_GROUP.into()))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .children(chord.map(|chord| components::key_combo(chord, TEXT_MUTED).text_color(ink)))
-        .child("commands")
+        // Exactly its cells: the door is right-aligned, and a measured run
+        // rounds up a pixel and would stand it that much left.
+        .child(components::cells("commands"))
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -299,13 +301,40 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
         )
 }
 
-/// The location (F-10), on one UI baseline, its words one cell apart: the
-/// title `TEXT_STRONG` at `W_LABEL`, the one strong word, and everything
-/// else — the Project, `/`, `·`, the counts, the state, the branch —
-/// `TEXT_MUTED`. Only the title truncates (with the whole of it one hover
-/// away); every other word keeps its width.
+/// The location (F-10), on one UI baseline, its words one space apart as
+/// the prototype's one inline run sets them: the title `TEXT_STRONG` at
+/// `W_LABEL`, the one strong word, and everything else — the Project, `/`,
+/// `·`, the counts, the state, the branch — `TEXT_MUTED`. Only the title
+/// truncates (with the whole of it one hover away); every other word keeps
+/// its width.
 fn title_region(title: &Title) -> Div {
+    // The plain words either side of the title join into one run each,
+    // the separating spaces inside them: every run holds exactly its cells
+    // (measured runs round up a pixel each, and a flex gap snaps 7.8 to
+    // 8.0), so nothing drifts from the prototype's single line.
     let words = title.words();
+    let strong_at = words.iter().position(|(_, strong)| *strong);
+    let mut runs: Vec<(SharedString, bool)> = Vec::new();
+    match strong_at {
+        Some(at) => {
+            let before: Vec<&str> = words[..at].iter().map(|(word, _)| word.as_ref()).collect();
+            if !before.is_empty() {
+                runs.push((format!("{} ", before.join(" ")).into(), false));
+            }
+            runs.push((words[at].0.clone(), true));
+            let after: Vec<&str> = words[at + 1..]
+                .iter()
+                .map(|(word, _)| word.as_ref())
+                .collect();
+            if !after.is_empty() {
+                runs.push((format!(" {}", after.join(" ")).into(), false));
+            }
+        }
+        None => {
+            let all: Vec<&str> = words.iter().map(|(word, _)| word.as_ref()).collect();
+            runs.push((all.join(" ").into(), false));
+        }
+    }
     div()
         .debug_selector(|| "titlebar-location".into())
         .h_full()
@@ -314,15 +343,12 @@ fn title_region(title: &Title) -> Div {
         .justify_start()
         .min_w_0()
         .px(px(TITLE_PAD_X))
-        .gap(px(TITLE_GAP))
         .whitespace_nowrap()
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(LH_UI))
         .text_color(rgb(TEXT_MUTED))
-        .children(words.into_iter().enumerate().map(|(at, (word, strong))| {
-            // Every word holds exactly its cells: measured runs round up
-            // a pixel each and would drift the row (`components::cells`).
+        .children(runs.into_iter().enumerate().map(|(at, (word, strong))| {
             if strong {
                 div()
                     .id(("titlebar-title", at))

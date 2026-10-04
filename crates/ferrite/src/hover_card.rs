@@ -84,6 +84,7 @@ pub(crate) fn leave(target: &PathTarget, window: &mut Window, cx: &mut App) {
 /// Ask for the card on the first target naming `target`'s file in its scope
 /// (a scene's `preview_path`): at once when one has laid out, else when one
 /// does.
+#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
 pub(crate) fn request(target: PathTarget, window: &mut Window, cx: &mut App) {
     let Some(scope) = target.scope.clone() else {
         return;

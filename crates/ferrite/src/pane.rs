@@ -668,10 +668,6 @@ pub struct PaneWiring {
     /// permission modes and a pick switches the running Session. `None`
     /// draws the plain chip.
     pub mode_picker: Option<AnyElement>,
-    /// The pending Decision's keycaps, wired to the exact decide verbs the
-    /// keys run (#26) — laid into the L1 card or the L2 body. None while
-    /// nothing pends, and at the wall, which draws no keycaps.
-    pub decide: Option<AnyElement>,
     /// The head's title cell, wired: the name with a double-click that
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
@@ -1192,10 +1188,6 @@ pub(crate) struct PaneCtx<'a> {
     pub mode_picker: Option<AnyElement>,
     /// A Subagent's footer, drawn where the Composer would be.
     pub child_footer: Option<AnyElement>,
-    /// `l1_dock`: the pending Decision's wired keys, where a level docks
-    /// them (none does since the Decision became the transcript's tail).
-    #[allow(dead_code)]
-    pub decide: Option<AnyElement>,
     /// `l1_dock`: activity requests that were not docked in the body.
     pub activity_decisions: Option<AnyElement>,
     /// The docked Decision merges into this Pane's Composer (one block).
@@ -1245,7 +1237,6 @@ pub fn render_pane(
         usage_meter,
         session_controls,
         mode_picker,
-        decide,
         title,
         agents,
         activity_decisions,
@@ -1383,7 +1374,6 @@ pub fn render_pane(
         session_controls,
         mode_picker,
         child_footer,
-        decide,
         activity_decisions: None,
         decision_joined,
     };
@@ -3238,6 +3228,10 @@ fn working_line_for(
         .line_height(px(theme::LH_UI));
     if let Some((selector, caption)) = caption {
         let caption = SharedString::from(caption);
+        // The caption and the facts hold exactly their cells, the facts'
+        // leading space inside their run: measured runs round up a pixel
+        // and a 7.8 pad snaps to 8, drifting the facts off the grid.
+        let caption_w = components::cells_width(&caption) + 0.1;
         let text = if live {
             components::shimmer(caption, ink)
         } else {
@@ -3248,8 +3242,9 @@ fn working_line_for(
                 .child(caption)
                 .into_any_element()
         };
-        let metadata = SharedString::from(format!("({})", facts.join(" \u{b7} ")));
+        let metadata = SharedString::from(format!(" ({})", facts.join(" \u{b7} ")));
         let highlights = separators(&metadata);
+        let metadata_w = components::cells_width(&metadata);
         row = row
             .debug_selector(move || selector.clone())
             .child(
@@ -3266,6 +3261,8 @@ fn working_line_for(
                     .debug_selector(|| "progress-reasoning".into())
                     .flex()
                     .min_w_0()
+                    .w(px(caption_w))
+                    .flex_shrink(1.)
                     .child(text),
             )
             .when(!facts.is_empty(), |row| {
@@ -3273,8 +3270,8 @@ fn working_line_for(
                     div()
                         .debug_selector(|| "progress-metadata".into())
                         .flex_shrink_0()
+                        .w(px(metadata_w))
                         .whitespace_nowrap()
-                        .pl(px(theme::CH))
                         .text_color(rgb(TEXT_MUTED))
                         .child(StyledText::new(metadata).with_highlights(highlights)),
                 ))
@@ -5823,9 +5820,13 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool
         ))
         .child(div().flex().flex_col().flex_1().min_w_0().children(words))
         .children(time.map(|time| {
+            // Exactly its cells after its pad: right-aligned, a measured
+            // run's rounding would stand it a pixel left.
+            let cells = time.chars().count() as f32 + theme::PROMPT_TIME_PAD_CELLS;
             div()
                 .debug_selector(|| "prompt-time".into())
                 .flex_shrink_0()
+                .w(px(cells * grid.cell()))
                 .pl(px(theme::PROMPT_TIME_PAD_CELLS * grid.cell()))
                 .whitespace_nowrap()
                 .text_color(rgb(TEXT_MUTED))
@@ -5962,8 +5963,8 @@ pub(crate) fn prompt_chip(
 }
 
 /// A sent image under its prompt (the prototype's `.img` and `.cap`): a
-/// frame exactly `IMAGE_CELLS` wide at the reading size, its 1px
-/// `paint::LINE2` border included (374.4px at Standard), the picture filling
+/// frame `IMAGE_CELLS` wide at the reading size, its 1px `paint::LINE2`
+/// border included (374.4px at Standard, drawn 374), the picture filling
 /// it at its own proportions; under it `name · W×H · 41 KB`, all of it
 /// `TEXT_MUTED`. A click opens the preview.
 fn inline_image(
@@ -5979,7 +5980,11 @@ fn inline_image(
         .to_string_lossy()
         .to_string();
     let facts = image_facts(path);
-    let frame_w = theme::IMAGE_CELLS * grid.cell();
+    // Whole pixels, as the prototype's frame paints: a browser snaps a box's
+    // edges to the CSS pixel (374.4 draws 374, a 205.46 picture 205), where
+    // gpui would round each length to the half pixel and push every row
+    // under the frame down by one.
+    let frame_w = (theme::IMAGE_CELLS * grid.cell()).floor();
     let width = frame_w - 2.0;
     let height = match facts {
         Some(ImageFacts {
@@ -5988,7 +5993,8 @@ fn inline_image(
             ..
         }) if w > 0 && h > 0 => width * h as f32 / w as f32,
         _ => width * 0.5,
-    };
+    }
+    .floor();
     let caption = image_caption(&name, facts);
     let host = preview.clone();
     let open = path.to_path_buf();
@@ -6913,10 +6919,14 @@ pub(crate) fn render_tool(
     );
     let mut trailing = false;
     if let Some(ToolVerdict::Diff(added, removed)) = tool_verdicts(tool).into_iter().next() {
+        // Right-aligned words hold exactly their cells: a measured run
+        // rounds up a pixel and would stand its ink that much left.
+        let cells = format!("+{added} \u{2212}{removed}").chars().count() as f32;
         trail = trail.child(
             div()
                 .debug_selector(|| "tool-trail-diff".into())
                 .flex_shrink_0()
+                .w(px(cells * grid.cell()))
                 .child(trail_diff_stat(added, removed)),
         );
         trailing = true;
@@ -6925,9 +6935,12 @@ pub(crate) fn render_tool(
     if let Some(duration) =
         trail_duration(tool, row_cx.timings, row_cx.focused).filter(|_| !trailing)
     {
+        let cells = duration.chars().count() as f32;
         trail = trail.child(
             div()
                 .debug_selector(|| "tool-trail-duration".into())
+                .flex_shrink_0()
+                .w(px(cells * grid.cell()))
                 .child(SharedString::from(duration)),
         );
         trailing = true;
@@ -7061,11 +7074,15 @@ pub(crate) fn render_tool(
             } else if let Some((first, rest)) = command_fold(tool) {
                 // `└ 7 issues · + 7 lines`: the whole output folds behind its
                 // elbow; open, the rest hangs under it.
+                // Each run holds exactly its cells: a measured run rounds
+                // up a pixel and would push the fold's words off the grid.
+                let first_w = first.chars().count() as f32 * grid.cell();
                 card = card.child(
                     elbow_line(grid, TEXT_MUTED)
                         .child(
                             div()
                                 .flex_shrink_0()
+                                .w(px(first_w))
                                 .whitespace_nowrap()
                                 .child(selection.line(
                                     block,
@@ -7076,6 +7093,7 @@ pub(crate) fn render_tool(
                         .child(
                             div()
                                 .flex_shrink_0()
+                                .w(px(3.0 * grid.cell()))
                                 .whitespace_nowrap()
                                 .text_color(rgb(TEXT_MUTED))
                                 .child(" \u{b7} "),
@@ -8045,6 +8063,12 @@ fn render_diff(
             wash,
         } = side.kind.paint();
         let highlights = diff_highlights(side, language);
+        let cut = CellCut::new(
+            side.body.clone(),
+            highlights.clone(),
+            rgb(code_color).into(),
+            grid.cell(),
+        );
         let code = match selection {
             Some((selection, block)) if selectable => selection
                 .line(block, side.body.clone(), highlights)
@@ -8064,9 +8088,10 @@ fn render_diff(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .text_color(rgb(code_color))
-                .child(code),
+                .child(cut.child(code)),
             wash,
         )
     };
@@ -8175,11 +8200,181 @@ fn render_diff(
     }
 }
 
+/// A one-line code run cut at its column's edge as the prototype's
+/// `text-overflow: ellipsis` cuts it: the whole cells that leave room for
+/// `…`, then `…` in the ink of the first character it hides, and a word
+/// wash that runs past the cut keeps washing to the edge. gpui's own
+/// truncation trims trailing punctuation before its `…` (`clone…` where
+/// the browser draws `clone(…`), so a diff row draws its text whole and
+/// this clips it; the text itself — what a selection copies — is never cut.
+struct CellCut {
+    text: String,
+    highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+    ink: gpui::Hsla,
+    cell: f32,
+    child: Option<AnyElement>,
+}
+
+impl CellCut {
+    fn new(
+        text: String,
+        highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+        ink: gpui::Hsla,
+        cell: f32,
+    ) -> Self {
+        Self {
+            text,
+            highlights,
+            ink,
+            cell,
+            child: None,
+        }
+    }
+
+    fn child(mut self, child: AnyElement) -> Self {
+        self.child = Some(child);
+        self
+    }
+
+    /// How many whole cells stay when `width` cannot hold the run: the
+    /// cells that leave one for `…`. `None` when the whole run fits.
+    fn kept(&self, width: f32) -> Option<usize> {
+        let whole = self.text.chars().count() as f32 * self.cell;
+        (whole > width + 0.01)
+            .then(|| ((width - self.cell) / self.cell + 0.001).floor().max(0.) as usize)
+    }
+
+    /// The ink and the wash at byte `at`, as the highlights paint it.
+    fn paint_at(&self, at: usize) -> (gpui::Hsla, Option<gpui::Hsla>) {
+        let mut ink = self.ink;
+        let mut wash = None;
+        for (range, style) in &self.highlights {
+            if range.contains(&at) {
+                if let Some(color) = style.color {
+                    ink = color;
+                }
+                if let Some(color) = style.background_color {
+                    wash = Some(color);
+                }
+            }
+        }
+        (ink, wash)
+    }
+}
+
+impl IntoElement for CellCut {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for CellCut {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, ()) {
+        let child = self.child.get_or_insert_with(|| div().into_any_element());
+        (child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        if let Some(child) = self.child.as_mut() {
+            child.prepaint(window, cx);
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let Some(kept) = self.kept(f32::from(bounds.size.width)) else {
+            child.paint(window, cx);
+            return;
+        };
+        // On the device pixel: the clip and the wash after it then meet
+        // without the one column both would otherwise paint.
+        let scale = window.scale_factor();
+        let cut =
+            px(((f32::from(bounds.left()) + kept as f32 * self.cell) * scale).round() / scale);
+        let shown = gpui::Bounds::from_corners(bounds.origin, gpui::point(cut, bounds.bottom()));
+        window.with_content_mask(Some(gpui::ContentMask { bounds: shown }), |window| {
+            child.paint(window, cx)
+        });
+        let at = self
+            .text
+            .char_indices()
+            .nth(kept)
+            .map_or(self.text.len(), |(at, _)| at);
+        let (ink, wash) = self.paint_at(at);
+        if let Some(wash) = wash {
+            window.paint_quad(gpui::fill(
+                gpui::Bounds::from_corners(gpui::point(cut, bounds.top()), bounds.bottom_right()),
+                wash,
+            ));
+        }
+        let style = window.text_style();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let line_height = style.line_height_in_pixels(window.rem_size());
+        let ellipsis = "\u{2026}";
+        let run = gpui::TextRun {
+            len: ellipsis.len(),
+            font: style.font(),
+            color: ink,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = window
+            .text_system()
+            .shape_line(ellipsis.into(), size, &[run], None);
+        let _ = line.paint(
+            gpui::point(cut, bounds.top()),
+            line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+}
+
 /// A change set as the compare reader shows it (frame's `Beside::Compare`):
 /// each file's head — its path in `TEXT_STRONG` at `W_LABEL`, `+N −M` at its
 /// right — then its whole diff, split when `wide`, on the transcript's grid
 /// at the reading size. Nothing in it registers with a selection.
-#[allow(dead_code)] // the frame's compare reader is its caller
 pub(crate) fn diff_document(
     edits: &[ferrite_core::FileEdit],
     reading: ferrite_core::settings::ReadingSize,

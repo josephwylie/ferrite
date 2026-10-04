@@ -39,19 +39,20 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
     for (index, rect) in rects {
         let key = view.read_with(cx, |view, _| view.panes[index].thread().unwrap().get());
         let head = bounds(cx, format!("pane-head-{key}"));
+        // gpui snaps every edge to a device pixel, so a head can stand up
+        // to a pixel off the unsnapped split.
         assert!(
-            (head.left() - px(rect.x)).abs() <= px(0.5)
-                && (head.top() - px(rect.y)).abs() <= px(0.5),
+            (head.left() - px(rect.x)).abs() < px(1.) && (head.top() - px(rect.y)).abs() < px(1.),
             "the head starts at the Pane's corner: {head:?} / {rect:?}"
         );
         assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
         let title = bounds(cx, format!("pane-head-title-{key}"));
         assert!(
-            (title.left() - px(rect.x + 3.0 * crate::theme::CH)).abs() <= px(0.5),
+            (title.left() - px(rect.x + 3.0 * crate::theme::CH)).abs() < px(1.),
             "the title 23.4px in: {title:?} / {rect:?}"
         );
         let root = bounds(cx, format!("pane-root-{key}"));
-        assert!((root.left() - px(rect.x)).abs() <= px(0.5));
+        assert!((root.left() - px(rect.x)).abs() < px(1.));
     }
     assert_eq!(pane::PANE_GROUP, "pane");
 }

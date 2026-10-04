@@ -128,7 +128,6 @@ impl CockpitView {
 
     /// Copy the prompt being read in Pane `index` (its words, without its
     /// attachments). Whether there was one.
-    #[allow(dead_code)] // the palette and keymap call it
     pub(crate) fn copy_reading_prompt(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
         let Some(prompt) = self.reading_prompt(index, cx) else {
             return false;
@@ -169,7 +168,7 @@ impl CockpitView {
 
     /// Scroll Pane `index`'s transcript to `target`: the banner, the live
     /// tail, or a turn's band with its output under it (a scene's views).
-    #[allow(dead_code)] // scenes and the palette call it
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub(crate) fn scroll_transcript(
         &mut self,
         index: usize,
@@ -184,7 +183,7 @@ impl CockpitView {
     /// Open the hover card on the first path target in Pane `index`'s
     /// transcript that names `path`, at `line` or the Thread's latest
     /// change to it (a scene's solo-hover view).
-    #[allow(dead_code)] // scenes call it
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub(crate) fn preview_path(
         &mut self,
         index: usize,

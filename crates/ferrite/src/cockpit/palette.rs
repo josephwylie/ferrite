@@ -1056,6 +1056,7 @@ impl CockpitView {
             anchor,
             FloatPlace::BoardTop {
                 top: crate::theme::PALETTE_TOP,
+                width: crate::theme::PALETTE_W,
             },
             window,
             cx,

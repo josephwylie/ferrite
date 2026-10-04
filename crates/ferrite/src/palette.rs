@@ -251,24 +251,6 @@ impl Palette {
         cx.notify();
     }
 
-    /// Replace the rows (a Thread's state changed under an open palette),
-    /// keeping the line and, where it survives, the cursor's row.
-    #[allow(dead_code)]
-    pub(crate) fn set_rows(&mut self, rows: Vec<Row>, cx: &mut Context<Self>) {
-        let held = self.selected().map(|row| row.act.clone());
-        self.rows = rows;
-        let query = self.query(cx);
-        self.shown = filter(&self.rows, &query);
-        self.cursor = held
-            .and_then(|act| {
-                self.shown
-                    .iter()
-                    .position(|shown| self.rows[shown.row].act == act)
-            })
-            .unwrap_or(0);
-        cx.notify();
-    }
-
     /// ↑ / ↓: the cursor steps over the survivors, wrapping.
     pub(crate) fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.shown.is_empty() {
@@ -296,7 +278,7 @@ impl Palette {
     }
 
     /// The surviving rows, in order — what the tests read.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn survivors(&self) -> Vec<&Row> {
         self.shown
             .iter()
@@ -305,7 +287,7 @@ impl Palette {
     }
 
     /// The lit ranges of survivor `at`'s name — what the tests read.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn lit(&self, at: usize) -> Option<&[Range<usize>]> {
         self.shown.get(at).map(|shown| shown.lit.as_slice())
     }

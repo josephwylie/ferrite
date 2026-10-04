@@ -15,6 +15,8 @@ use super::{Class, HighlightRequest, Highlighter, Input, Token};
 /// how comments open, and which quotes open strings.
 struct Syntax {
     keywords: &'static [&'static str],
+    /// Built-in type names that read as types though lowercase (`u32`).
+    types: &'static [&'static str],
     line_comments: &'static [&'static str],
     block_comment: Option<(&'static str, &'static str)>,
     quotes: &'static [char],
@@ -32,6 +34,13 @@ const RUST: &[&str] = &[
     "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
     "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
     "unsafe", "use", "where", "while",
+];
+
+/// Rust's primitive types: lowercase, but types (`pub const X: u32`).
+#[rustfmt::skip]
+const RUST_TYPES: &[&str] = &[
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32",
+    "i64", "i128", "isize", "f32", "f64",
 ];
 
 /// Python's keywords, soft keywords included.
@@ -101,6 +110,7 @@ fn syntax(language: &str) -> Option<Syntax> {
             "rust" | "rs" => {
                 return Some(Syntax {
                     keywords: RUST,
+                    types: RUST_TYPES,
                     line_comments: SLASHES,
                     block_comment: C_BLOCK,
                     quotes: &['"', '\''],
@@ -125,6 +135,7 @@ fn syntax(language: &str) -> Option<Syntax> {
         };
     Some(Syntax {
         keywords,
+        types: &[],
         line_comments,
         block_comment,
         quotes,
@@ -245,6 +256,9 @@ fn scan(chars: &[char], at: usize, syntax: &Syntax) -> (Class, usize) {
             if syntax.keywords.contains(&word.as_str()) {
                 return (Class::Keyword, len);
             }
+            if syntax.types.contains(&word.as_str()) {
+                return (Class::Type, len);
+            }
             // `ROW_LIVE_H`: a constant wears the numbers' ink.
             let screaming = len > 1
                 && word.chars().any(|c| c.is_ascii_uppercase())
@@ -344,6 +358,19 @@ mod tests {
                 (Class::Punct, "=".into()),
                 (Class::Plain, " ".into()),
                 (Class::Number, "42".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rust_primitives_read_as_types() {
+        assert_eq!(
+            classed("x: u32"),
+            [
+                (Class::Plain, "x".into()),
+                (Class::Punct, ":".into()),
+                (Class::Plain, " ".into()),
+                (Class::Type, "u32".into()),
             ]
         );
     }

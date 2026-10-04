@@ -853,7 +853,7 @@ pub const MENU_SECTION_H: f32 = 24.0;
 /// 10px — a section title's mark.
 pub const MENU_SECTION_ICON: f32 = KEY_GLYPH;
 /// 8px — what splits one group of rows from the next inside any floating
-/// surface. Space, never a rule (`components::menu_separator`).
+/// surface. Space, never a rule.
 pub const MENU_GROUP_GAP: f32 = SPACE_2;
 /// An aligned name column (slash commands): clamped between these.
 pub const MENU_NAME_MIN_W: f32 = 96.0;
@@ -1290,10 +1290,10 @@ pub const FOLD_EASE_MS: u64 = 220;
 /// edge; six numbered lines (`HOVER_CARD_LINES`), the number column
 /// `HOVER_CARD_NUMBER_CELLS` wide with `HOVER_CARD_NUMBER_PAD_CELLS` after.
 pub const HOVER_CARD_CELLS: f32 = 100.0;
-/// (The prototype measures its 6px from the path's text box, which ends
-/// half a leading — 1.5px — above the row's foot; the card hangs from the
-/// row, so 4.5 here.)
-pub const HOVER_CARD_GAP: f32 = 4.5;
+/// (The prototype measures its 6px from the path's inline box — the face's
+/// content area, which ends 2.5px above the 20px row's foot; the card hangs
+/// from the row, so 3.5 here.)
+pub const HOVER_CARD_GAP: f32 = 3.5;
 pub const HOVER_CARD_EDGE: f32 = 16.0;
 pub const HOVER_CARD_LINES: u32 = 6;
 pub const HOVER_CARD_NUMBER_CELLS: f32 = 6.0;
@@ -1464,9 +1464,6 @@ pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
-/// The titlebar location's segments: one cell apart, on the grid
-/// (`ferrite / title · state · branch`).
-pub const TITLE_GAP: f32 = CH;
 /// The titlebar's right cell (over the board) holds its words two cells in
 /// from either edge, the transcript's own gutter.
 pub const TITLE_PAD_X: f32 = 2.0 * CH;

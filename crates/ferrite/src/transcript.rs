@@ -628,8 +628,9 @@ impl TranscriptView {
         cx.notify();
     }
 
-    /// Scroll to `target` (a scene's Solo views, the palette): the banner,
+    /// Scroll to `target` (a scene's Solo views): the banner,
     /// the live tail, or a turn's band with its output scrolled under it.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub(crate) fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
         self.glide = None;
         match target {
@@ -693,6 +694,7 @@ impl TranscriptView {
 
     /// Open the hover card on the first target naming `path` (a scene's
     /// solo-hover view), at `line` or the Thread's latest change to it.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub(crate) fn preview_path(
         &mut self,
         path: &str,

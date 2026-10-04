@@ -14,7 +14,7 @@
 //! | selection move | none | the nav's one selection ground (`paint::SELECTION`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms, and the titlebar cell over it cross-fades over 200ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
@@ -283,23 +283,6 @@ where
         float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
             .relative()
             .top(px(opens.shift(t)))
-    })
-}
-
-/// `menu-in` for a floating surface placed absolutely at `top`: the same
-/// entrance, the shift riding its own inset.
-#[allow(dead_code)] // the nav's filter and order menus, its last callers, are gone
-pub fn menu_in_at<E>(
-    id: impl Into<ElementId>,
-    element: E,
-    opens: Opens,
-    top: f32,
-) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, MENU_IN.animation(), move |el, t| {
-        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)).top(px(top + opens.shift(t)))
     })
 }
 

@@ -241,6 +241,7 @@ pub(crate) fn begin_layout(scope: &str, cx: &mut App) {
 
 /// Where a target naming `path` in `scope` last laid out: the exact path,
 /// else one that names the same file by a path suffix.
+#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
 pub(crate) fn laid_out(scope: &str, path: &Path, cx: &App) -> Option<Bounds<Pixels>> {
     let scopes = cx.try_global::<PathScopes>()?;
     scopes

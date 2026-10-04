@@ -721,7 +721,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 .py(px(0.))
                 // A fence holds to the measure too (the prototype's `.code`,
                 // `max-width: 108ch`): its language word sits at that edge.
-                .max_w(px((theme::MEASURE_CH * cell).round()))
+                .max_w(px(theme::MEASURE_CH * cell))
                 .border_l_1()
                 .border_color(theme::paint::LINE2)
                 .rounded(px(theme::R_BLOCK))
@@ -2641,7 +2641,7 @@ mod style_tests {
         // table keeps the column.
         assert_eq!(
             style.code_block().max_size.width,
-            Some(px((theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).round()).into())
+            Some(px(theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).into())
         );
         assert_eq!(style.table().max_size.width, None);
     }

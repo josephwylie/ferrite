@@ -85,14 +85,15 @@ pub fn section(
         .when_some(logo, |line, (path, ink)| {
             line.child(icons::icon(path, STATUS_LOGO, ink))
         })
-        .child(title.into())
-        .when_some(note, |line, note| {
-            line.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(format!("\u{b7} {note}"))),
-            )
+        // The title and its note are one run, a space either side of the
+        // `·`, as the prototype sets them: no gap to snap, no run to round.
+        .child({
+            let title: SharedString = title.into();
+            let words = match note {
+                Some(note) => SharedString::from(format!("{title} \u{b7} {note}")),
+                None => title,
+            };
+            div().min_w_0().truncate().child(words)
         })
 }
 
@@ -186,16 +187,20 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                     .child(icons::icon(path, ROW_ICON, mark)),
             )
         })
-        .child(
+        .child({
+            // The label holds exactly its cells (a measured run rounds up
+            // a pixel and would push the detail off the prototype's grid);
+            // the tenth keeps a whole label from truncating on the snap.
+            let cells = components::cells_width(&label) + 0.1;
             div()
                 .min_w_0()
                 .truncate()
-                .map(|label| match item.label_w {
-                    Some(width) => label.w(px(width)).flex_shrink_0(),
-                    None => label.flex_shrink(1.),
+                .map(|cell| match item.label_w {
+                    Some(width) => cell.w(px(width)).flex_shrink_0(),
+                    None => cell.w(px(cells)).flex_shrink(1.),
                 })
-                .child(gpui::StyledText::new(label).with_highlights(highlights)),
-        )
+                .child(gpui::StyledText::new(label).with_highlights(highlights))
+        })
         .map(|row| match item.detail.clone() {
             Some(detail) => {
                 let cell = div()
@@ -223,12 +228,15 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         })
         .when(item.checked, |row| {
             row.child(
+                // The `✓` is a glyph of the row's type: one cell, the drawn
+                // mark's box hanging from the cell's text origin.
                 div()
                     .flex()
                     .flex_shrink_0()
+                    .w(px(CH))
                     .ml(px(CH))
                     .debug_selector(|| "float-check".into())
-                    .child(icons::icon(icons::CHECK, ROW_ICON, RUNNING)),
+                    .child(icons::icon(icons::CHECK, ROW_ICON, RUNNING).flex_shrink_0()),
             )
         })
 }
@@ -316,15 +324,19 @@ pub fn token(
 ) -> Stateful<Div> {
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
+    // Exactly its cells and a cell either side: padded runs would snap
+    // each pad from 7.8 to 8 and round each word up, drifting the ladder.
+    let label: SharedString = label.into();
     let token = div()
         .id(id)
         .flex()
         .flex_shrink_0()
         .items_center()
+        .justify_center()
         .h(px(FLOAT_ROW_H))
-        .px(px(TOKEN_PAD_X))
+        .w(px(components::cells_width(&label) + 2.0 * TOKEN_PAD_X))
         .whitespace_nowrap()
-        .child(label.into());
+        .child(components::cells(label));
     if chosen {
         token
             .bg(rgb(ACCENT_STRONG))
@@ -719,7 +731,8 @@ impl ChoiceContent {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .pr(px(TOKEN_PAD_X))
+                        .w(px(components::cells_width(&ladder.label) + TOKEN_PAD_X))
+                        .whitespace_nowrap()
                         .text_color(rgb(TEXT_MUTED))
                         .child(ladder.label.clone()),
                 );

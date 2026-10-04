@@ -255,7 +255,13 @@ pub fn inline_file(
     let size_px = window.text_style().font_size.to_pixels(window.rem_size());
     let link_w = inline_file_width(&name, &location, image, size_px, window);
     let line_h = window.line_height();
-    let size = gpui::size(link_w, line_h);
+    // The line reserves the path's exact advance, as the prototype's inline
+    // span takes it; the link's own box keeps its pixel to spare and hangs
+    // past it, so the words after it stand where the browser sets them.
+    let size = gpui::size(
+        inline_file_advance(&name, &location, link_w, size_px, window),
+        line_h,
+    );
     let host = preview.cloned();
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
@@ -356,6 +362,43 @@ pub fn inline_file(
         crate::file_links::wire_inline(element, target, f32::from(size_px), f32::from(line_h))
             .into_any_element(),
     )
+}
+
+/// What an inline file link reserves on its line: the name and `:line`
+/// shaped in the code face at the prose's size, unrounded — the box's own
+/// width (`link_w`) when the clamp decided it.
+fn inline_file_advance(
+    name: &str,
+    location: &str,
+    link_w: gpui::Pixels,
+    size: gpui::Pixels,
+    window: &mut Window,
+) -> gpui::Pixels {
+    use crate::theme;
+    let mut face = window.text_style();
+    face.font_family = theme::FONT_CODE.into();
+    face.font_weight = theme::W_BODY;
+    face.font_style = gpui::FontStyle::Normal;
+    let shaped = |text: &str| {
+        if text.is_empty() {
+            return px(0.);
+        }
+        window
+            .text_system()
+            .shape_line(
+                gpui::SharedString::from(text.to_owned()),
+                size,
+                &[face.to_run(text.len())],
+                None,
+            )
+            .width()
+    };
+    let exact = shaped(name) + shaped(location);
+    if link_w <= px(theme::INLINE_FILE_MIN_W) || link_w >= px(theme::INLINE_FILE_MAX_W) {
+        link_w
+    } else {
+        exact.min(link_w)
+    }
 }
 
 /// An inline file link's width: the name and `:line` each shaped whole in

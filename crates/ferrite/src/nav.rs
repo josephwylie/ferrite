@@ -459,7 +459,9 @@ fn word_cell(word: Option<SharedString>) -> Div {
         .h(px(NAV_LINE))
         .when(word.is_some(), |cell| cell.pl(px(NAV_WORD_GAP)))
         .text_color(rgb(TEXT_MUTED))
-        .children(word)
+        // Exactly its cells: the word is right-aligned, and a measured run
+        // rounds up a pixel and would stand it that much left.
+        .children(word.map(components::cells))
 }
 
 /// One line of the column at its inline padding: the frame every row,
