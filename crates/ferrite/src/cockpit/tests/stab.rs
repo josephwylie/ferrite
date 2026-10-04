@@ -787,14 +787,13 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
         .expect("the own-answer field");
     let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
     assert_eq!(field.size.height, px(crate::theme::QUESTION_OTHER_H));
-    let labels = choice.left()
-        + px(crate::theme::DECISION_ROW_PAD_X
-            + crate::theme::GLYPH_BOX
-            + crate::theme::DECISION_ROW_INNER_GAP);
-    assert_eq!(
-        field.left(),
-        labels,
-        "the line's text starts on the labels' column"
+    // An option reads `❯ 1. label`: the `❯` gutter, then the ordinal's
+    // three cells, then the label.
+    let labels = choice.left() + px(crate::theme::GLYPH_GUTTER + 3.0 * crate::theme::CH);
+    assert!(
+        (field.left() - labels).abs() <= px(0.5),
+        "the line's text starts on the labels' column: {:?} / {labels:?}",
+        field.left()
     );
 }
 

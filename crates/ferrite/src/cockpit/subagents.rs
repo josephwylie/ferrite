@@ -16,8 +16,61 @@ use gpui::KeyDownEvent;
 use gpui_base::ElementExt as _;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+/// A Pane's Decision state, shared with the cards it draws: each question
+/// or MCP form's answers, and each Decision's cursor and amend note.
 #[derive(Clone, Default)]
-pub(crate) struct RequestForms(Rc<RefCell<HashMap<DecisionHandle, RequestForm>>>);
+pub(crate) struct RequestForms(
+    Rc<RefCell<HashMap<DecisionHandle, RequestForm>>>,
+    pub(super) Rc<RefCell<HashMap<DecisionHandle, DecisionCursor>>>,
+);
+
+/// One Decision's keyboard state (D-5, D-6): the option under the `❯`
+/// once the operator moved it (the first option that can act until then),
+/// and the amend note while it is open.
+#[derive(Default)]
+pub(crate) struct DecisionCursor {
+    pub(super) index: Option<usize>,
+    pub(super) note: Option<Entity<crate::composer::Composer>>,
+}
+
+impl RequestForms {
+    /// Where `handle`'s cursor was moved, if it was.
+    pub(super) fn cursor(&self, handle: &DecisionHandle) -> Option<usize> {
+        self.1.borrow().get(handle).and_then(|cursor| cursor.index)
+    }
+
+    pub(super) fn set_cursor(&self, handle: &DecisionHandle, index: Option<usize>) {
+        self.1.borrow_mut().entry(handle.clone()).or_default().index = index;
+    }
+
+    /// `handle`'s amend note, while it is open.
+    pub(super) fn note(
+        &self,
+        handle: &DecisionHandle,
+    ) -> Option<Entity<crate::composer::Composer>> {
+        self.1
+            .borrow()
+            .get(handle)
+            .and_then(|cursor| cursor.note.clone())
+    }
+
+    pub(super) fn set_note(
+        &self,
+        handle: &DecisionHandle,
+        note: Option<Entity<crate::composer::Composer>>,
+    ) {
+        self.1.borrow_mut().entry(handle.clone()).or_default().note = note;
+    }
+
+    /// A question form's answers so far, once its card has drawn.
+    pub(super) fn answers(
+        &self,
+        handle: &DecisionHandle,
+    ) -> Option<Vec<ferrite_core::questions::Answer>> {
+        self.0.borrow().get(handle).map(|form| form.answers.clone())
+    }
+}
+
 struct RequestForm {
     answers: Vec<ferrite_core::questions::Answer>,
     inputs: Vec<Entity<InputState>>,
@@ -169,13 +222,12 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
         })
 }
 
-/// Every request card's frame in the overlay: the Pane's full width, the
-/// card insetting its own sections on the transcript's axes (no centred
-/// column). For a question this frame is the island `QuestionFit`
-/// measures.
-fn request_frame(card: impl IntoElement, _joined: bool) -> Div {
-    // The card runs the Pane's full width and insets its own sections on
-    // the transcript's axes.
+/// Every request card's frame. In the transcript the card is the row
+/// itself, on the transcript's own column; in the requests overlay it lies
+/// on the plane, inset on the transcript's axes, so the rows it docks over
+/// do not show through. For a question this frame is the island
+/// `QuestionFit` measures.
+fn request_frame(card: impl IntoElement, overlay: bool) -> Div {
     native_keys(
         div()
             .w_full()
@@ -184,31 +236,27 @@ fn request_frame(card: impl IntoElement, _joined: bool) -> Div {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .when(overlay, |frame| {
+                frame
+                    .bg(theme::paint::PLANE)
+                    .pl(px(theme::TX_PAD_L))
+                    .pr(px(theme::TX_PAD_R))
+                    .py(px(theme::DECISION_PAD_Y))
+            })
             .child(card),
     )
 }
 
 /// Whether `pane` shows `request`: its selected Subject's, and on Main
 /// also a request whose owner the provider did not name.
-fn shown_on(pane: &PaneView, request: &PendingDecision) -> bool {
+pub(super) fn shown_on(pane: &PaneView, request: &PendingDecision) -> bool {
     request.subject.as_ref() == Some(&pane.selected)
         || (request.subject.is_none() && pane.is_main())
 }
 
-/// A head's `· detail`: the tool or header, and `agent unknown` when the
-/// provider named no owner.
-fn request_detail(detail: &str, unowned: bool) -> Option<SharedString> {
-    match (detail.is_empty(), unowned) {
-        (true, false) => None,
-        (false, false) => Some(detail.to_string().into()),
-        (true, true) => Some("agent unknown".into()),
-        (false, true) => Some(format!("{detail} · agent unknown").into()),
-    }
-}
-
 /// The question digit keys pick in: the first with options and no pick
 /// yet, else the first with options (a multi-select keeps toggling).
-fn digit_question(
+pub(super) fn digit_question(
     answers: &[ferrite_core::questions::Answer],
     questions: &[ferrite_core::questions::Question],
 ) -> Option<usize> {
@@ -318,7 +366,7 @@ fn mark_slot(mark: Option<u32>) -> Div {
 
 /// One Subject tab's face on the headless tab (its role and selection are
 /// the platform's): `width` wide (`tab_width`), `CHIP_H` high. Selected, a
-/// `FILL` pill in `TEXT_STRONG` that goes to `FILL_HOVER` under the pointer
+/// `SELECTION` pill in `TEXT_STRONG` that goes to `SELECTION_HOVER` under the pointer
 /// (`hover_carried`); otherwise no ground, `TEXT_MUTED` blending to `TEXT`
 /// through the one hover blend. No edge and no rule: the pill says which.
 fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) -> gpui_base::Tab {
@@ -335,8 +383,8 @@ fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) ->
         .overflow_hidden()
         .rounded(px(theme::R_CHIP))
         .cursor_pointer()
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .when(selected, |tab| {
             // The tab's own debug name is its Subject's; the pill is named
             // by a box laid exactly over it.
@@ -480,7 +528,7 @@ impl CockpitView {
             let run = gpui::TextRun {
                 len: text.len(),
                 font: gpui::font(theme::FONT_UI),
-                color: rgb(theme::TEXT_2).into(),
+                color: rgb(theme::TEXT_MUTED).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -488,7 +536,7 @@ impl CockpitView {
             f32::from(
                 window
                     .text_system()
-                    .shape_line(text.to_string().into(), px(theme::FS_SM), &[run], None)
+                    .shape_line(text.to_string().into(), px(theme::FS_UI), &[run], None)
                     .width,
             )
         };
@@ -546,7 +594,7 @@ impl CockpitView {
         let identity = format!("subject-tabs-{}-{:?}", thread.get(), nav);
         // Our own row, not the kit's TabBar: the kit edges its active tab
         // and rules the bar in the global border colour. The active tab is
-        // a `FILL` pill and nothing else; the id carries the ordered Subjects
+        // a `SELECTION` pill and nothing else; the id carries the ordered Subjects
         // so a reorder discards positional press state before any release.
         let selected_at = nav.iter().position(|subject| subject == &pane.selected);
         let mut tabs = gpui_base::Tabs::new(SharedString::from(identity))
@@ -567,7 +615,7 @@ impl CockpitView {
         .child(
             div()
                 .debug_selector(move || format!("subject-main-label-{}", thread.get()))
-                .text_size(px(theme::FS_SM))
+                .text_size(px(theme::FS_UI))
                 .child("Main"),
         );
         tabs = tabs.child(self.subject_tab(
@@ -598,7 +646,7 @@ impl CockpitView {
                     div()
                         .max_w(px(theme::SUBJECT_LABEL_MAX_W))
                         .truncate()
-                        .text_size(px(theme::FS_SM))
+                        .text_size(px(theme::FS_UI))
                         .child(name.clone()),
                 );
             let selector = format!(
@@ -691,8 +739,8 @@ impl CockpitView {
                             .flex()
                             .items_center()
                             .gap(px(theme::SUBJECT_TAB_INNER_GAP))
-                            .text_size(px(theme::FS_SM))
-                            .line_height(px(theme::LH_META))
+                            .text_size(px(theme::FS_UI))
+                            .line_height(px(theme::LH_UI))
                             .text_color(rgb(theme::TEXT_MUTED))
                             .child(mark_slot(hidden_waiting.then_some(theme::ATTENTION)))
                             .child(components::tabular(
@@ -889,7 +937,7 @@ impl CockpitView {
                 ),
             (None, Some((lead, tail))) => text
                 .flex_wrap()
-                .h(px(theme::LH_META))
+                .h(px(theme::LH_UI))
                 .child(div().flex_shrink_0().child(lead))
                 .children(tail.map(|tail| div().flex_shrink_0().child(tail))),
             (None, None) => text,
@@ -906,8 +954,8 @@ impl CockpitView {
             .pl(px(theme::BOX_INSET_X + theme::GUTTER_W))
             .pr(px(theme::COMPOSER_PAD_END))
             .font_family(theme::FONT_UI)
-            .text_size(px(theme::FS_SM))
-            .line_height(px(theme::LH_META))
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
             .child(text)
             .child(
                 div()
@@ -970,11 +1018,9 @@ impl CockpitView {
                             .any(|p| &p.handle == handle)
                     });
                     if !pending {
-                        self.panes[index]
-                            .request_forms
-                            .0
-                            .borrow_mut()
-                            .remove(handle);
+                        let forms = &self.panes[index].request_forms;
+                        forms.0.borrow_mut().remove(handle);
+                        forms.1.borrow_mut().remove(handle);
                     }
                     self.panes[index].request_error = None;
                 }
@@ -1054,10 +1100,67 @@ impl CockpitView {
         Some(measure.into_any_element())
     }
 
+    /// The Decision cards this Pane's selected Subject shows, as a snapshot
+    /// of the cockpit: the requests, their owner's provider and context,
+    /// and the Pane's forms. `overlay` cards lie on the plane over the
+    /// transcript's foot (a question too big for the body answers in
+    /// fullscreen there); the transcript's own cards scroll with its rows.
+    pub(super) fn decision_cards(&self, index: usize, overlay: bool, short: bool) -> Option<Cards> {
+        let pane = self.panes.get(index)?;
+        let thread = pane.thread()?;
+        let open = self.cockpit.thread(thread)?;
+        let activity = open.activity();
+        let fullscreen = self.cockpit.roster().fullscreen() == Some(pane.identity);
+        let requests: Vec<(PendingDecision, bool)> = activity
+            .pending_decisions()
+            .iter()
+            .filter(|request| shown_on(pane, request))
+            .filter(|request| {
+                !overlay
+                    || fullscreen
+                    || !pane
+                        .request_forms
+                        .0
+                        .borrow()
+                        .get(&request.handle)
+                        .is_some_and(|form| form.fit.needs_expansion())
+            })
+            .map(|request| {
+                // An async question asks while its agent works on.
+                let working = !request.decision.blocks_execution()
+                    && request
+                        .subject
+                        .as_ref()
+                        .and_then(|subject| activity.subject(subject))
+                        .is_some_and(|subject| subject.busy());
+                (request.clone(), working)
+            })
+            .collect();
+        if requests.is_empty() {
+            return None;
+        }
+        let (provider, context) = self.decision_context(thread);
+        Some(Cards {
+            owner: self.decisions.owner(),
+            thread,
+            provider,
+            context,
+            workspace: open
+                .workspace()
+                .map(|workspace| workspace.cwd().to_path_buf()),
+            rich: pane.rich.clone(),
+            forms: pane.request_forms.clone(),
+            request_error: pane.request_error.clone(),
+            short,
+            overlay,
+            requests,
+        })
+    }
+
     pub(super) fn activity_decisions(
         &self,
         index: usize,
-        joined: bool,
+        _joined: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -1067,28 +1170,6 @@ impl CockpitView {
         if self.level_of(index, window) == Level::Instruments && self.l2_decision_card(index) {
             return None;
         }
-        let pane = &self.panes[index];
-        let thread = pane.thread()?;
-        let activity = self.cockpit.thread(thread)?.activity();
-        let fullscreen = self.cockpit.roster().fullscreen() == Some(pane.identity);
-        let requests: Vec<_> = activity
-            .pending_decisions()
-            .iter()
-            .filter(|request| shown_on(pane, request))
-            .filter(|request| {
-                fullscreen
-                    || !pane
-                        .request_forms
-                        .0
-                        .borrow()
-                        .get(&request.handle)
-                        .is_some_and(|form| form.fit.needs_expansion())
-            })
-            .cloned()
-            .collect();
-        if requests.is_empty() {
-            return None;
-        }
         // Below the short-Pane height a question body keeps two option rows
         // and scrolls, so its head and answer row stay in reach.
         let short = self
@@ -1096,30 +1177,7 @@ impl CockpitView {
             .into_iter()
             .find(|(at, _)| *at == index)
             .is_some_and(|(_, rect)| rect.h < theme::DECISION_SHORT_PANE_H);
-        let multiple_requests = requests.len() > 1;
-        let mut cards = div()
-            .id(("subject-requests", thread.get()))
-            .w_full()
-            .min_w_0()
-            .flex()
-            .min_h_0()
-            .max_h_full()
-            .flex_col();
-        let last = requests.len() - 1;
-        for (at, request) in requests.into_iter().enumerate() {
-            // Only the card nearest the Composer merges into it.
-            let joined = joined && at == last;
-            cards =
-                cards.child(self.request_card(index, thread, request, short, joined, window, cx));
-        }
-        if multiple_requests {
-            Some(native_keys(cards.max_h_full().overflow_y_scrollbar()).into_any_element())
-        } else {
-            // A single request owns its own bounded content viewport. Giving
-            // its surrounding stack another scroll container makes that
-            // stack consume the transcript's flex space instead of docking.
-            Some(native_keys(cards).into_any_element())
-        }
+        self.decision_cards(index, true, short)?.render(window, cx)
     }
 
     /// Whether this Pane's L2 cell shows Main's pending approval as its own
@@ -1145,67 +1203,520 @@ impl CockpitView {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn request_card(
-        &self,
-        index: usize,
+    fn send_form(
+        &mut self,
         thread: ThreadId,
-        request: PendingDecision,
-        short: bool,
-        joined: bool,
+        handle: &DecisionHandle,
+        fields: &[ferrite_core::FormField],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let forms = self.panes[index].request_forms.clone();
+        let mut state = forms.0.borrow_mut();
+        let Some(form) = state.get_mut(handle) else {
+            return;
+        };
+        for field in fields {
+            let Some(input) = form.form_inputs.get(&field.id) else {
+                continue;
+            };
+            let text = input.read(cx).value().to_string();
+            if text.trim().is_empty() {
+                if field.required {
+                    form.values
+                        .insert(field.id.clone(), serde_json::Value::Null);
+                } else {
+                    form.values.remove(&field.id);
+                }
+                continue;
+            }
+            let value = match &field.kind {
+                ferrite_core::FormFieldKind::String { .. } => serde_json::Value::String(text),
+                ferrite_core::FormFieldKind::Number { .. } => match text
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                {
+                    Some(value) => serde_json::Value::Number(value),
+                    None => serde_json::Value::String(text),
+                },
+                ferrite_core::FormFieldKind::Integer { .. } => match text.parse::<i64>() {
+                    Ok(value) => serde_json::Value::from(value),
+                    Err(_) => serde_json::Value::String(text),
+                },
+                _ => continue,
+            };
+            form.values.insert(field.id.clone(), value);
+        }
+        let values = serde_json::Value::Object(form.values.clone());
+        drop(state);
+        if let Err(error) = ferrite_core::validate_form(fields, &values) {
+            self.panes[index].request_error = Some((handle.clone(), error));
+            cx.notify();
+            return;
+        }
+        self.respond_exact(thread, handle, DecisionAnswer::Form { values }, cx);
+    }
+
+    fn clear_request_error(&mut self, thread: ThreadId, handle: &DecisionHandle) {
+        if let Some(index) = self.pane_for(thread) {
+            if self.panes[index]
+                .request_error
+                .as_ref()
+                .is_some_and(|(failed, _)| failed == handle)
+            {
+                self.panes[index].request_error = None;
+            }
+        }
+    }
+
+    /// Send a question form: every question needs a pick or typed words.
+    /// `quiet` (the ↵ path) leaves an incomplete form alone instead of
+    /// flagging it. Returns whether an answer went out.
+    pub(super) fn send_question_form(
+        &mut self,
+        thread: ThreadId,
+        handle: &DecisionHandle,
+        quiet: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.pane_for(thread) else {
+            return false;
+        };
+        let forms = self.panes[index].request_forms.clone();
+        let mut state = forms.0.borrow_mut();
+        let Some(form) = state.get_mut(handle) else {
+            return false;
+        };
+        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
+            answer.other =
+                Some(input.read(cx).value().to_string()).filter(|text| !text.trim().is_empty());
+        }
+        if form
+            .answers
+            .iter()
+            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
+        {
+            drop(state);
+            if !quiet {
+                self.panes[index].request_error = Some((
+                    handle.clone(),
+                    "Answer each question before sending.".into(),
+                ));
+                cx.notify();
+            }
+            return false;
+        }
+        let answers = form.answers.clone();
+        drop(state);
+        self.respond_exact(thread, handle, DecisionAnswer::Questions { answers }, cx);
+        true
+    }
+
+    /// ↵ on an empty Main Composer line: send the question this Pane shows
+    /// when every one of its questions is answered. False leaves the key to
+    /// the Composer (an empty line's ↵ takes a held prompt back).
+    pub(super) fn send_ready_question(&mut self, cx: &mut Context<Self>) -> bool {
+        let index = self.focused();
+        let Some(request) = self.shown_request(index) else {
+            return false;
+        };
+        if request.submitting || pane::questions_of(&request.decision).is_none() {
+            return false;
+        }
+        let thread = self.panes[index].thread().expect("a request has a Thread");
+        self.send_question_form(thread, &request.handle, true, cx)
+    }
+
+    /// The first request this Pane's selected Subject shows — the one its
+    /// digit keys pick in.
+    pub(super) fn shown_request(&self, index: usize) -> Option<PendingDecision> {
+        let pane = self.panes.get(index)?;
+        self.cockpit
+            .thread(pane.thread()?)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .find(|request| shown_on(pane, request))
+            .cloned()
+    }
+
+    /// Digit `n` (0-based) on the request this Pane shows: an approval
+    /// answers option n (`1` allow, `2` allow for this thread, `3` deny and
+    /// steer); a question picks option n of its digit question — a single
+    /// single-select question with no typed words then sends at once (one
+    /// key) — or focuses the words field one past its options. False when
+    /// nothing here takes the digit, so it types.
+    pub(super) fn pick_request_row(
+        &mut self,
+        index: usize,
+        n: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(request) = self.shown_request(index) else {
+            return false;
+        };
+        let thread = self.panes[index].thread().expect("a request has a Thread");
+        if request.submitting {
+            return true;
+        }
+        let Some(questions) = pane::questions_of(&request.decision) else {
+            if !matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
+                return false;
+            }
+            let Some(choice) = decision::ApprovalChoice::from_index(n) else {
+                return false;
+            };
+            if !self.approval_choice_enabled(thread, &request, choice) {
+                return false;
+            }
+            let note = self.take_decision_note(thread, &request.handle, cx);
+            self.answer_approval_request(thread, &request, choice, note, Some(window), cx);
+            return true;
+        };
+        let forms = self.panes[index].request_forms.clone();
+        let mut state = forms.0.borrow_mut();
+        // The card builds its form on first paint; a question never drawn
+        // (a compact cell's expander) has nothing to pick in yet.
+        let Some(form) = state.get_mut(&request.handle) else {
+            return false;
+        };
+        let Some(qi) = digit_question(&form.answers, questions) else {
+            return false;
+        };
+        let question = &questions[qi];
+        if n < question.options.len() {
+            let one_key = questions.len() == 1
+                && !question.multi_select
+                && form.inputs[qi].read(cx).value().trim().is_empty();
+            if one_key {
+                drop(state);
+                // One key answers a lone single-select question outright.
+                return self.answer_question_option(thread, n, window, cx);
+            }
+            pick_option(&mut form.answers[qi].picks, n, question.multi_select);
+            drop(state);
+            forms.set_cursor(&request.handle, Some(n));
+            self.clear_request_error(thread, &request.handle);
+            cx.notify();
+            true
+        } else if question.allow_other && n == question.options.len() {
+            let focus = form.inputs[qi].read(cx).focus_handle(cx);
+            drop(state);
+            window.focus(&focus, cx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let subject = self.panes[index].selected.clone();
+        self.panes[index].history_error = self
+            .cockpit
+            .retry_subject_history(thread, &subject)
+            .err()
+            .map(|error| error.to_string());
+        cx.notify();
+    }
+
+    pub(super) fn retry_subject_history(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(thread) = self.panes[index].thread() else {
+            return;
+        };
+        let subject = self.panes[index].selected.clone();
+        self.panes[index].history_error = self
+            .cockpit
+            .ensure_subject_history(thread, &subject)
+            .err()
+            .map(|error| error.to_string())
+            .or_else(|| {
+                self.cockpit
+                    .subject_history_error(thread, &subject)
+                    .map(str::to_string)
+            });
+        cx.notify();
+    }
+
+    pub(super) fn prune_request_forms(&mut self, index: usize) {
+        let Some(thread) = self.panes[index]
+            .thread()
+            .and_then(|id| self.cockpit.thread(id))
+        else {
+            return;
+        };
+        let pending = thread.activity().pending_decisions();
+        let forms = &self.panes[index].request_forms;
+        forms
+            .0
+            .borrow_mut()
+            .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
+        forms
+            .1
+            .borrow_mut()
+            .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
+    }
+
+    pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {
+        let index = self.focused();
+        let Some(thread) = self.panes[index].thread() else {
+            return;
+        };
+        let Some(request) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|thread| {
+                thread
+                    .activity()
+                    .pending_decisions()
+                    .iter()
+                    .find(|request| request.subject.as_ref() == Some(&self.panes[index].selected))
+            })
+            .cloned()
+        else {
+            return;
+        };
+        self.answer_request(thread, request, answer, cx);
+    }
+
+    /// The letter keys (`y` `n` `a`) and the L2 keycaps: an approval takes
+    /// its option (`y` 1, `a` 2, `n` 3) through the one answer path; a
+    /// question, form or link takes only a deny.
+    pub(super) fn answer_request(
+        &mut self,
+        thread: ThreadId,
+        request: PendingDecision,
+        answer: Answer,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
+            let choice = match answer {
+                Answer::Allow => decision::ApprovalChoice::Allow,
+                Answer::Always => decision::ApprovalChoice::AllowForThread,
+                Answer::Deny => decision::ApprovalChoice::DenyAndSteer,
+            };
+            self.answer_approval_request(thread, &request, choice, None, None, cx);
+            return;
+        }
+        if answer != Answer::Deny || !request.decision.policy.deny {
+            return;
+        }
+        self.respond_exact(
+            thread,
+            &request.handle,
+            DecisionAnswer::Deny {
+                message: "The operator denied this tool.".into(),
+            },
+            cx,
+        );
+    }
+}
+
+/// What a Pane's Decision cards are drawn from: a snapshot of the cockpit
+/// taken when they are asked for, so the transcript — a cached view — draws
+/// them without reading the cockpit (a read would re-render the transcript
+/// on every cockpit change). Every press goes back through `owner`.
+#[derive(Clone)]
+pub(super) struct Cards {
+    pub(super) owner: gpui::WeakEntity<CockpitView>,
+    pub(super) thread: ThreadId,
+    pub(super) provider: Option<Provider>,
+    /// The head's last detail: Codex's sandbox, Claude's permission mode.
+    pub(super) context: Option<SharedString>,
+    pub(super) workspace: Option<std::path::PathBuf>,
+    pub(super) rich: crate::rich::TextCache,
+    pub(super) forms: RequestForms,
+    pub(super) request_error: Option<(DecisionHandle, String)>,
+    /// The overlay's Pane is short: a question body keeps two rows.
+    pub(super) short: bool,
+    /// Drawn in the requests overlay, on the plane, rather than in the
+    /// transcript.
+    pub(super) overlay: bool,
+    /// The requests shown, each with whether its agent works on meanwhile.
+    pub(super) requests: Vec<(PendingDecision, bool)>,
+}
+
+/// Ask the cockpit to draw again (a pick that lives in the Pane's forms).
+fn refresh(owner: &gpui::WeakEntity<CockpitView>, cx: &mut gpui::App) {
+    let _ = owner.update(cx, |_, cx| cx.notify());
+}
+
+impl Cards {
+    /// Everything the drawn cards depend on, for the transcript's cache
+    /// key: the requests and their sending state, the cursors and notes,
+    /// the picks, the errors and the head's words.
+    pub(super) fn key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.thread.hash(&mut hasher);
+        self.provider.map(decision::provider_word).hash(&mut hasher);
+        self.context.as_deref().hash(&mut hasher);
+        self.request_error.hash(&mut hasher);
+        let cursors = self.forms.1.borrow();
+        let forms = self.forms.0.borrow();
+        for (request, working) in &self.requests {
+            request.handle.hash(&mut hasher);
+            request.submitting.hash(&mut hasher);
+            request.reply_error.hash(&mut hasher);
+            working.hash(&mut hasher);
+            if let Some(cursor) = cursors.get(&request.handle) {
+                cursor.index.hash(&mut hasher);
+                cursor
+                    .note
+                    .as_ref()
+                    .map(|note| note.entity_id())
+                    .hash(&mut hasher);
+            }
+            if let Some(form) = forms.get(&request.handle) {
+                for answer in &form.answers {
+                    answer.picks.hash(&mut hasher);
+                }
+                serde_json::Value::Object(form.values.clone())
+                    .to_string()
+                    .hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    /// A press that acts on the cockpit.
+    fn act<E: 'static>(
+        &self,
+        f: impl Fn(&mut CockpitView, &mut Window, &mut Context<CockpitView>) + 'static,
+    ) -> impl Fn(&E, &mut Window, &mut gpui::App) + 'static {
+        let owner = self.owner.clone();
+        move |_, window, cx| {
+            let _ = owner.update(cx, |view, cx| f(view, window, cx));
+        }
+    }
+
+    /// The cards, stacked: in the transcript a blank row apart, in the
+    /// overlay flush and scrolling together when there are several.
+    pub(super) fn render(&self, window: &mut Window, cx: &mut gpui::App) -> Option<AnyElement> {
+        if self.requests.is_empty() {
+            return None;
+        }
+        let mut stack = div()
+            .id((
+                if self.overlay {
+                    "subject-requests"
+                } else {
+                    "decision-tail"
+                },
+                self.thread.get(),
+            ))
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .when(self.overlay, |stack| stack.max_h_full());
+        for (at, (request, working)) in self.requests.iter().enumerate() {
+            let card = self.request_card(request.clone(), *working, window, cx);
+            stack = stack.child(if at > 0 && !self.overlay {
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .mt(px(theme::ROW))
+                    .child(card)
+                    .into_any_element()
+            } else {
+                card
+            });
+        }
+        Some(if self.overlay && self.requests.len() > 1 {
+            native_keys(stack.overflow_y_scrollbar()).into_any_element()
+        } else {
+            // A single request owns its own bounded content viewport. Giving
+            // its surrounding stack another scroll container makes that
+            // stack consume the transcript's flex space instead of docking.
+            native_keys(stack).into_any_element()
+        })
+    }
+
+    fn request_card(
+        &self,
+        request: PendingDecision,
+        working: bool,
+        window: &mut Window,
+        cx: &mut gpui::App,
     ) -> AnyElement {
         // Keep this dispatcher shallow. Windows gives the GUI main thread a
         // 1 MiB stack; compiling every Decision builder into this one frame
         // overflowed it as soon as a question arrived.
         if let Some(questions) = pane::questions_of(&request.decision) {
-            let handle = request.handle.clone();
             let questions = questions.to_vec();
-            return self.question_request_card(
-                index, thread, request, handle, questions, short, joined, window, cx,
-            );
+            return self.question_card(request, questions, working, window, cx);
         }
         match &request.decision.kind {
-            ferrite_core::DecisionKind::Form { .. } => {
-                self.form_request_card(index, thread, request, joined, window, cx)
-            }
+            ferrite_core::DecisionKind::Form { .. } => self.form_card(request, window, cx),
             ferrite_core::DecisionKind::External { .. }
-            | ferrite_core::DecisionKind::Unsupported { .. } => {
-                self.link_request_card(index, thread, request, joined, cx)
-            }
-            _ => self.approval_request_card(index, thread, request, short, joined, cx),
+            | ferrite_core::DecisionKind::Unsupported { .. } => self.link_card(request, cx),
+            _ => self.approval_card(request),
         }
     }
 
+    /// The head's details: the provider, an approval's context, and
+    /// `agent unknown` when the provider named no owner.
+    fn detail(&self, tool: Option<&str>, context: bool, unowned: bool) -> Option<SharedString> {
+        decision::head_detail([
+            tool.unwrap_or_default(),
+            self.provider
+                .map(decision::provider_word)
+                .unwrap_or_default(),
+            if context {
+                self.context.as_deref().unwrap_or_default()
+            } else {
+                ""
+            },
+            if unowned { "agent unknown" } else { "" },
+        ])
+    }
+
     /// The head, the prose and the send error every non-question card
-    /// shares; the tool's name rides the head, the description reads as
-    /// prose (`request-title-*`).
-    fn request_preamble(
-        &self,
-        index: usize,
-        thread: ThreadId,
-        request: &PendingDecision,
-    ) -> (Div, Option<Div>, Option<SharedString>) {
+    /// shares (`request-title-*`).
+    fn preamble(&self, request: &PendingDecision) -> (Div, Option<Div>, Option<SharedString>) {
+        let thread = self.thread;
         let decision = &request.decision;
-        // The head names the kind; a status word rides it only when it adds
-        // something — a card is waiting by being there.
+        // A status word rides the head only when it adds something — a
+        // card is waiting by being there.
         let status = request
             .submitting
             .then(|| decision::sending().into_any_element());
-        let head = decision::head(
-            decision::kind_word(decision),
-            request_detail(&decision.tool_name, request.subject.is_none()),
-            status,
-        );
+        let unowned = request.subject.is_none();
+        let head = if matches!(decision.kind, ferrite_core::DecisionKind::Approval) {
+            decision::head(
+                decision::approval_lead(decision),
+                self.detail(None, true, unowned),
+                status,
+            )
+        } else {
+            decision::head(
+                decision::kind_word(decision),
+                self.detail(
+                    Some(decision::tool_word(&decision.tool_name)),
+                    false,
+                    unowned,
+                ),
+                status,
+            )
+        };
         let title = if decision.description.is_empty() && decision.tool_name.is_empty() {
             Some(SharedString::from(
                 "The provider sent a request Ferrite could not read.",
             ))
         } else {
             // The subject is printed once: prose that only repeats the
-            // command in the well below goes.
-            let command = pane::approval_source(decision);
+            // command in the band below goes.
+            let command = decision::shell_source(decision)
+                .map(std::borrow::Cow::into_owned)
+                .or_else(|| pane::approval_source(decision));
             (!decision.description.is_empty()
                 && !decision::prose_repeats_command(&decision.description, command.as_deref()))
             .then(|| SharedString::from(decision.description.clone()))
@@ -1220,8 +1731,7 @@ impl CockpitView {
             .clone()
             .map(SharedString::from)
             .or_else(|| {
-                self.panes[index]
-                    .request_error
+                self.request_error
                     .as_ref()
                     .filter(|(failed, _)| failed == &request.handle)
                     .map(|(_, error)| SharedString::from(error.clone()))
@@ -1229,184 +1739,190 @@ impl CockpitView {
         (head, title, error)
     }
 
-    fn approval_request_card(
-        &self,
-        index: usize,
-        thread: ThreadId,
-        request: PendingDecision,
-        short: bool,
-        joined: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// An approval (D-1…D-7): the head, the command band, the three options
+    /// with the cursor on one, the amend note while it is open, and the
+    /// hint.
+    fn approval_card(&self, request: PendingDecision) -> AnyElement {
+        let thread = self.thread;
         let handle = request.handle.clone();
-        let (head, title, error) = self.request_preamble(index, thread, &request);
+        let serial = handle.serial;
+        let (head, title, error) = self.preamble(&request);
         let mut children = vec![head.into_any_element()];
         // A short Pane gives up the prose first — the head and the command
-        // still say what is asked — so the rows stay whole.
-        children.extend(title.filter(|_| !short).map(IntoElement::into_any_element));
+        // still say what is asked.
+        children.extend(
+            title
+                .filter(|_| !self.short)
+                .map(|title| decision::section(title).into_any_element()),
+        );
         if let Some(input) = pane::approval_input(
             &request.decision,
-            &self.panes[index].rich,
+            &self.rich,
             format!(
-                "approval-input-request-{}-{}-{}",
+                "approval-input-{}-{}-{}-{}",
+                if self.overlay { "overlay" } else { "tail" },
                 thread.get(),
                 handle.generation,
-                handle.serial
+                serial
             )
             .into(),
         ) {
             children.push(
-                decision::well(pane::shell_command(&request.decision), input)
-                    .debug_selector(|| "approval-well".into())
-                    .into_any_element(),
+                decision::section(
+                    decision::well(pane::shell_command(&request.decision), input)
+                        .debug_selector(|| "approval-well".into()),
+                )
+                .into_any_element(),
             );
         }
-        children.extend(
-            error.map(|error| decision::error_line("could not send", error).into_any_element()),
-        );
-        let mut rows = div()
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .gap(px(theme::DECISION_ROW_GAP));
-        let approval_rows = decision::approval_rows(&request.decision);
-        // The hint line says what the keys do: the digits pick a row, and
-        // the letters the CLI grammar gives its answers.
-        let picks = approval_rows
-            .iter()
-            .take(decision::DIGIT_KEYS)
-            .filter(|row| row.enabled)
-            .count();
-        let pick_range = match picks {
-            0 => None,
-            1 => Some("1".to_string()),
-            n => Some(format!("1\u{2013}{n}")),
-        };
-        let mut hints: Vec<(String, &str)> = Vec::new();
-        if let Some(range) = pick_range {
-            hints.push((range, "pick"));
-        }
-        for row in &approval_rows {
-            let verb = match row.verb {
-                decision::Verb::Allow => "allow",
-                decision::Verb::Always(_) => "always",
-                decision::Verb::Deny => "deny",
-                decision::Verb::Choose(_) => continue,
-            };
-            if let Some(key) = row
-                .key
-                .as_ref()
-                .filter(|key| row.enabled && !key.bytes().all(|byte| byte.is_ascii_digit()))
-            {
-                hints.push((key.to_string(), verb));
-            }
-        }
-        for (at, row) in approval_rows.into_iter().enumerate() {
-            let serial = handle.serial;
-            let selector = match row.verb {
-                decision::Verb::Allow => format!("request-allow-{}-{serial}", thread.get()),
-                decision::Verb::Deny => format!("request-deny-{}-{serial}", thread.get()),
-                decision::Verb::Always(choice) | decision::Verb::Choose(choice) => {
-                    format!("approval-choice-{choice}")
+        children.extend(error.map(|error| {
+            decision::section(decision::error_line("could not send", error)).into_any_element()
+        }));
+        let rows =
+            decision::approval_rows(&request.decision, self.provider, self.workspace.as_deref());
+        let cursor = self
+            .forms
+            .cursor(&handle)
+            .filter(|at| *at < rows.len())
+            .unwrap_or_else(|| decision::first_enabled(&rows));
+        let mut options = div().flex().flex_col().flex_shrink_0().w_full().min_w_0();
+        for (at, row) in rows.into_iter().enumerate() {
+            let choice = row.choice;
+            let selector = match choice {
+                decision::ApprovalChoice::Allow => {
+                    format!("request-allow-{}-{serial}", thread.get())
+                }
+                decision::ApprovalChoice::AllowForThread => {
+                    format!("request-always-{}-{serial}", thread.get())
+                }
+                decision::ApprovalChoice::DenyAndSteer => {
+                    format!("request-deny-{}-{serial}", thread.get())
                 }
             };
-            let verb = row.verb;
-            let request = request.clone();
+            let pick = request.clone();
             let mut button = decision::option_row(
                 SharedString::from(format!(
-                    "request-row-{}-{}-{at}",
-                    handle.generation, handle.serial
+                    "request-row-{}-{}-{serial}-{at}",
+                    u8::from(self.overlay),
+                    handle.generation
                 )),
                 decision::Row {
-                    // Every row reads its ordinal, as the CLIs number them;
-                    // the digit picks it.
-                    key: (row.enabled && at < decision::DIGIT_KEYS)
-                        .then(|| SharedString::from((at + 1).to_string()))
-                        .or(row.key),
+                    key: Some(row.key),
                     label: row.label,
-                    scope: row.scope,
-                    description: None,
-                    recommended: false,
-                    selected: false,
+                    code: row.code,
+                    cursor: at == cursor,
                     enabled: row.enabled && !request.submitting,
-                    quiet: verb == decision::Verb::Deny,
-                    // No key but the row's own letter picks an approval:
-                    // ↵ chooses nothing here, so no row shows it.
-                    enter: false,
+                    ..Default::default()
                 },
             )
             .debug_selector(move || selector.clone())
-            .on_click(
-                cx.listener(move |view, _, _, cx| view.pick_approval(thread, &request, verb, cx)),
-            );
-            if verb == decision::Verb::Deny {
-                // The Main card's deny has always answered to this name.
-                button = button.child(
+            .on_click(self.act(move |view, window, cx| {
+                let note = view.take_decision_note(thread, &pick.handle, cx);
+                view.answer_approval_request(thread, &pick, choice, note, Some(window), cx);
+            }));
+            if choice == decision::ApprovalChoice::DenyAndSteer {
+                // The deny row has always answered to this name.
+                button = button.relative().child(
                     div()
                         .absolute()
                         .inset_0()
                         .debug_selector(|| "decision-deny".into()),
                 );
             }
-            rows = rows.child(button);
+            options = options.child(button);
         }
-        children.push(rows.into_any_element());
-        if !hints.is_empty() {
-            let hints: Vec<(&str, &str)> = hints
-                .iter()
-                .map(|(key, verb)| (key.as_str(), *verb))
-                .collect();
-            children.push(decision::hint_line(&hints).into_any_element());
+        children.push(decision::section(options).into_any_element());
+        if let Some(note) = self.forms.note(&handle) {
+            children.push(self.note_field(&handle, note));
         }
-        request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
+        children.push(
+            decision::section(decision::hint_line(&decision::APPROVAL_HINTS[..]))
+                .into_any_element(),
+        );
+        request_frame(decision::card(serial, children), self.overlay).into_any_element()
     }
 
-    /// An approval row's verb, from its click or its digit. The standing
-    /// "always" row keeps the native `Choose` a click has always sent; only
-    /// the `a` key sends `AllowAlways` (`answer_request`).
-    fn pick_approval(
-        &mut self,
-        thread: ThreadId,
-        request: &PendingDecision,
-        verb: decision::Verb,
-        cx: &mut Context<Self>,
-    ) {
-        match verb {
-            decision::Verb::Allow => {
-                self.answer_request(thread, request.clone(), Answer::Allow, cx)
-            }
-            decision::Verb::Deny => self.answer_request(thread, request.clone(), Answer::Deny, cx),
-            decision::Verb::Always(choice) | decision::Verb::Choose(choice) => {
-                if let Some(choice) = request.decision.suggestions.get(choice) {
-                    self.respond_exact(
-                        thread,
-                        &request.handle,
-                        DecisionAnswer::Choose {
-                            value: choice.value.clone(),
-                        },
-                        cx,
-                    )
-                }
-            }
-        }
-    }
-
-    fn form_request_card(
+    /// The amend note (⇥, D-6): the one-line field under the options. ⏎
+    /// sends the cursor's option with it; esc closes it. Inside a child's
+    /// `Decision` context the answer keys are bound — in the note they are
+    /// letters again.
+    fn note_field(
         &self,
-        index: usize,
-        thread: ThreadId,
-        request: PendingDecision,
-        joined: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        handle: &DecisionHandle,
+        note: Entity<crate::composer::Composer>,
     ) -> AnyElement {
+        let thread = self.thread;
+        let (send, confirm, close, dismiss) = (
+            handle.clone(),
+            handle.clone(),
+            handle.clone(),
+            handle.clone(),
+        );
+        let owner = self.owner.clone();
+        let enter = handle.clone();
+        let mut field = div()
+            .w_full()
+            .min_w_0()
+            // The card's controls keep ↵ for themselves (`native_keys`), so
+            // no binding reaches the note: it hears its own ↵.
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                let keys = &event.keystroke;
+                let plain = !(keys.modifiers.shift
+                    || keys.modifiers.control
+                    || keys.modifiers.alt
+                    || keys.modifiers.platform);
+                if keys.key == "enter" && plain {
+                    cx.stop_propagation();
+                    window.prevent_default();
+                    let _ = owner.update(cx, |view, cx| {
+                        view.send_decision_note(thread, &enter, window, cx)
+                    });
+                }
+            })
+            .on_action(self.act::<Submit>(move |view, window, cx| {
+                view.send_decision_note(thread, &send, window, cx)
+            }))
+            .on_action(self.act::<decision::Confirm>(move |view, window, cx| {
+                view.send_decision_note(thread, &confirm, window, cx)
+            }))
+            .on_action(self.act::<Interrupt>(move |view, window, cx| {
+                view.close_decision_note(thread, &close, window, cx);
+            }))
+            .on_action(self.act::<decision::Dismiss>(move |view, window, cx| {
+                view.close_decision_note(thread, &dismiss, window, cx);
+            }));
+        macro_rules! letter {
+            ($action:ty, $text:expr) => {{
+                let note = note.clone();
+                field = field.on_action(move |_: &$action, _: &mut Window, cx: &mut gpui::App| {
+                    note.update(cx, |line, cx| line.insert($text, cx));
+                });
+            }};
+        }
+        letter!(Allow, "y");
+        letter!(Deny, "n");
+        letter!(Always, "a");
+        letter!(PickOption1, "1");
+        letter!(PickOption2, "2");
+        letter!(PickOption3, "3");
+        letter!(PickOption4, "4");
+        field.child(decision::note_row(note)).into_any_element()
+    }
+
+    fn form_card(
+        &self,
+        request: PendingDecision,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> AnyElement {
+        let thread = self.thread;
         let handle = request.handle.clone();
         let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind else {
             unreachable!("dispatched on the Form kind")
         };
         let fields = fields.clone();
-        let (head, title, error) = self.request_preamble(index, thread, &request);
-        let forms = self.panes[index].request_forms.clone();
+        let (head, title, error) = self.preamble(&request);
+        let forms = self.forms.clone();
         if !forms.0.borrow().contains_key(&handle) {
             let mut form_inputs = HashMap::new();
             for field in &fields {
@@ -1483,18 +1999,19 @@ impl CockpitView {
                     let forms = forms.clone();
                     let handle = handle.clone();
                     let id = field.id.clone();
+                    let owner = self.owner.clone();
                     section = section.child(
                         Checkbox::new(("form-bool", field_index))
                             .checked(checked)
                             .disabled(request.submitting)
                             .child("Enabled")
-                            .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                            .on_click(move |checked: &bool, _: &mut Window, cx: &mut gpui::App| {
                                 if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
                                     form.values
                                         .insert(id.clone(), serde_json::Value::Bool(*checked));
                                 }
-                                cx.notify();
-                            })),
+                                refresh(&owner, cx);
+                            }),
                     );
                 }
                 ferrite_core::FormFieldKind::Enum {
@@ -1517,30 +2034,40 @@ impl CockpitView {
                             let handle = handle.clone();
                             let id = field.id.clone();
                             let value = option.value.clone();
+                            let owner = self.owner.clone();
                             section = section.child(
                                 Checkbox::new(("form-enum", field_index * 256 + option_index))
                                     .checked(checked)
                                     .disabled(request.submitting)
                                     .child(option.label.clone())
-                                    .on_click(cx.listener(move |_, checked: &bool, _, cx| {
-                                        if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                            let values =
-                                                form.values.entry(id.clone()).or_insert_with(
-                                                    || serde_json::Value::Array(Vec::new()),
-                                                );
-                                            let values = values
-                                                .as_array_mut()
-                                                .expect("form enum is an array");
-                                            values.retain(|item| {
-                                                item != &serde_json::Value::String(value.clone())
-                                            });
-                                            if *checked {
-                                                values
-                                                    .push(serde_json::Value::String(value.clone()));
+                                    .on_click(
+                                        move |checked: &bool, _: &mut Window, cx: &mut gpui::App| {
+                                            if let Some(form) =
+                                                forms.0.borrow_mut().get_mut(&handle)
+                                            {
+                                                let values = form
+                                                    .values
+                                                    .entry(id.clone())
+                                                    .or_insert_with(|| {
+                                                        serde_json::Value::Array(Vec::new())
+                                                    });
+                                                let values = values
+                                                    .as_array_mut()
+                                                    .expect("form enum is an array");
+                                                values.retain(|item| {
+                                                    item != &serde_json::Value::String(
+                                                        value.clone(),
+                                                    )
+                                                });
+                                                if *checked {
+                                                    values.push(serde_json::Value::String(
+                                                        value.clone(),
+                                                    ));
+                                                }
                                             }
-                                        }
-                                        cx.notify();
-                                    })),
+                                            refresh(&owner, cx);
+                                        },
+                                    ),
                             );
                         }
                     } else {
@@ -1554,6 +2081,7 @@ impl CockpitView {
                         let handle = handle.clone();
                         let id = field.id.clone();
                         let options = options.clone();
+                        let owner = self.owner.clone();
                         section = section.child(
                             RadioGroup::vertical(("form-enum", field_index))
                                 .selected_index(selected_index)
@@ -1561,18 +2089,20 @@ impl CockpitView {
                                 .children(options.iter().enumerate().map(|(index, option)| {
                                     Radio::new(index).child(option.label.clone())
                                 }))
-                                .on_click(cx.listener(move |_, selected: &usize, _, cx| {
-                                    if let (Some(form), Some(option)) = (
-                                        forms.0.borrow_mut().get_mut(&handle),
-                                        options.get(*selected),
-                                    ) {
-                                        form.values.insert(
-                                            id.clone(),
-                                            serde_json::Value::String(option.value.clone()),
-                                        );
-                                    }
-                                    cx.notify();
-                                })),
+                                .on_click(
+                                    move |selected: &usize, _: &mut Window, cx: &mut gpui::App| {
+                                        if let (Some(form), Some(option)) = (
+                                            forms.0.borrow_mut().get_mut(&handle),
+                                            options.get(*selected),
+                                        ) {
+                                            form.values.insert(
+                                                id.clone(),
+                                                serde_json::Value::String(option.value.clone()),
+                                            );
+                                        }
+                                        refresh(&owner, cx);
+                                    },
+                                ),
                         );
                     }
                 }
@@ -1581,31 +2111,35 @@ impl CockpitView {
         }
         let cancel_handle = handle.clone();
         let mut children = vec![head.into_any_element()];
-        children.extend(title.map(IntoElement::into_any_element));
+        children.extend(title.map(|title| decision::section(title).into_any_element()));
         children.push(
-            div()
-                .min_h_0()
-                .max_h(px(theme::DECISION_BODY_MAX_H))
-                .flex()
-                .flex_col()
-                .overflow_y_scrollbar()
-                .child(body)
-                .into_any_element(),
+            decision::section(
+                div()
+                    .min_h_0()
+                    .max_h(px(theme::DECISION_BODY_MAX_H))
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scrollbar()
+                    .child(body),
+            )
+            .into_any_element(),
         );
         children.extend(error.map(|error| {
-            decision::error_line("not sent", error)
-                .debug_selector(|| "form-validation-error".into())
-                .into_any_element()
+            decision::section(
+                decision::error_line("not sent", error)
+                    .debug_selector(|| "form-validation-error".into()),
+            )
+            .into_any_element()
         }));
         let sending = request.submitting;
         children.push(
-            decision::footer(
+            decision::section(decision::footer::<&str>(
                 &[],
                 [
                     decision::skip_button("form-cancel", "Cancel", cx)
                         .disabled(!request.decision.policy.deny || sending)
                         .debug_selector(|| "form-cancel".into())
-                        .on_click(cx.listener(move |view, _, _, cx| {
+                        .on_click(self.act(move |view, _, cx| {
                             view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
                         }))
                         .into_any_element(),
@@ -1617,89 +2151,26 @@ impl CockpitView {
                         cx,
                     )
                     .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |view, _, _, cx| {
+                    .on_click(self.act(move |view, _, cx| {
                         view.send_form(thread, &submit_handle, &fields, cx)
                     }))
                     .into_any_element(),
                 ],
-            )
+            ))
             .into_any_element(),
         );
-        request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
-    }
-
-    fn send_form(
-        &mut self,
-        thread: ThreadId,
-        handle: &DecisionHandle,
-        fields: &[ferrite_core::FormField],
-        cx: &mut Context<Self>,
-    ) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let forms = self.panes[index].request_forms.clone();
-        let mut state = forms.0.borrow_mut();
-        let Some(form) = state.get_mut(handle) else {
-            return;
-        };
-        for field in fields {
-            let Some(input) = form.form_inputs.get(&field.id) else {
-                continue;
-            };
-            let text = input.read(cx).value().to_string();
-            if text.trim().is_empty() {
-                if field.required {
-                    form.values
-                        .insert(field.id.clone(), serde_json::Value::Null);
-                } else {
-                    form.values.remove(&field.id);
-                }
-                continue;
-            }
-            let value = match &field.kind {
-                ferrite_core::FormFieldKind::String { .. } => serde_json::Value::String(text),
-                ferrite_core::FormFieldKind::Number { .. } => match text
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(serde_json::Number::from_f64)
-                {
-                    Some(value) => serde_json::Value::Number(value),
-                    None => serde_json::Value::String(text),
-                },
-                ferrite_core::FormFieldKind::Integer { .. } => match text.parse::<i64>() {
-                    Ok(value) => serde_json::Value::from(value),
-                    Err(_) => serde_json::Value::String(text),
-                },
-                _ => continue,
-            };
-            form.values.insert(field.id.clone(), value);
-        }
-        let values = serde_json::Value::Object(form.values.clone());
-        drop(state);
-        if let Err(error) = ferrite_core::validate_form(fields, &values) {
-            self.panes[index].request_error = Some((handle.clone(), error));
-            cx.notify();
-            return;
-        }
-        self.respond_exact(thread, handle, DecisionAnswer::Form { values }, cx);
+        request_frame(decision::card(handle.serial, children), self.overlay).into_any_element()
     }
 
     /// A request finished outside Ferrite (`External`), or one it cannot
     /// answer here (`Unsupported`): the reason, and the actions it allows.
-    fn link_request_card(
-        &self,
-        index: usize,
-        thread: ThreadId,
-        request: PendingDecision,
-        joined: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn link_card(&self, request: PendingDecision, cx: &mut gpui::App) -> AnyElement {
+        let thread = self.thread;
         let handle = request.handle.clone();
-        let (head, title, error) = self.request_preamble(index, thread, &request);
+        let (head, title, error) = self.preamble(&request);
         let sending = request.submitting;
         let mut children = vec![head.into_any_element()];
-        children.extend(title.map(IntoElement::into_any_element));
+        children.extend(title.map(|title| decision::section(title).into_any_element()));
         let cancel_handle = handle.clone();
         let cancel = decision::skip_button(
             match &request.decision.kind {
@@ -1710,22 +2181,24 @@ impl CockpitView {
             cx,
         )
         .disabled(!request.decision.policy.deny || sending)
-        .on_click(cx.listener(move |view, _, _, cx| {
+        .on_click(self.act(move |view, _, cx| {
             view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
         }))
         .into_any_element();
         let actions = match &request.decision.kind {
             ferrite_core::DecisionKind::External { url } => {
                 children.push(
-                    decision::note("Complete this request in your browser, then confirm here.")
-                        .into_any_element(),
+                    decision::section(decision::note(
+                        "Complete this request in your browser, then confirm here.",
+                    ))
+                    .into_any_element(),
                 );
                 let url = url.clone();
                 let complete_handle = handle.clone();
                 vec![
                     decision::skip_button("external-open", "Open link", cx)
                         .disabled(!safe_external_url(&url))
-                        .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url)))
+                        .on_click(move |_, _, cx| cx.open_url(&url))
                         .into_any_element(),
                     cancel,
                     decision::send_button(
@@ -1735,7 +2208,7 @@ impl CockpitView {
                         false,
                         cx,
                     )
-                    .on_click(cx.listener(move |view, _, _, cx| {
+                    .on_click(self.act(move |view, _, cx| {
                         view.respond_exact(
                             thread,
                             &complete_handle,
@@ -1749,32 +2222,33 @@ impl CockpitView {
                 ]
             }
             ferrite_core::DecisionKind::Unsupported { reason } => {
-                children.push(decision::note(reason.clone()).into_any_element());
+                children.push(decision::section(decision::note(reason.clone())).into_any_element());
                 vec![cancel]
             }
             _ => vec![cancel],
         };
-        children.extend(
-            error.map(|error| decision::error_line("could not send", error).into_any_element()),
-        );
-        children.push(decision::footer(&[], actions).into_any_element());
-        request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
+        children.extend(error.map(|error| {
+            decision::section(decision::error_line("could not send", error)).into_any_element()
+        }));
+        children.push(decision::section(decision::footer::<&str>(&[], actions)).into_any_element());
+        request_frame(decision::card(handle.serial, children), self.overlay).into_any_element()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn question_request_card(
+    /// A question (D-8): the form, in the Decision's row grammar — the `?`
+    /// head with the question, numbered options with the `❯` cursor and its
+    /// bar, the own-answer line, and the dim hint beside the form's Skip
+    /// and Send.
+    fn question_card(
         &self,
-        index: usize,
-        thread: ThreadId,
         request: PendingDecision,
-        handle: DecisionHandle,
         questions: Vec<ferrite_core::questions::Question>,
-        short: bool,
-        joined: bool,
+        working: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut gpui::App,
     ) -> AnyElement {
-        let forms = self.panes[index].request_forms.clone();
+        let thread = self.thread;
+        let handle = request.handle.clone();
+        let forms = self.forms.clone();
         if !forms.0.borrow().contains_key(&handle) {
             let inputs = questions
                 .iter()
@@ -1801,32 +2275,46 @@ impl CockpitView {
         let sending = request.submitting;
         let answers = forms.0.borrow()[&handle].answers.clone();
         let scroll = forms.0.borrow()[&handle].scroll.clone();
-        // The question the digit keys pick in; only its rows show digits.
+        // The question the digit keys and the cursor pick in; only its rows
+        // show digits.
         let target = digit_question(&answers, &questions);
+        let cursor = target.map(|qi| {
+            forms
+                .cursor(&handle)
+                .unwrap_or(0)
+                .min(questions[qi].options.len().saturating_sub(1))
+        });
+        let single = questions.len() == 1;
+        // Only the overlay measures its question against the body (a card
+        // too big answers in fullscreen); in the transcript it scrolls with
+        // the rows and never asks.
+        let measure = |part: QuestionMeasure| {
+            measure_question(forms.clone(), handle.clone(), part, self.owner.clone())
+        };
+        let overlay = self.overlay;
         let mut content = div()
             .id(("question-content", handle.serial as usize))
             .debug_selector(|| "question-scroll-content".into())
-            .on_prepaint(measure_question(
-                forms.clone(),
-                handle.clone(),
-                QuestionMeasure::Content,
-                cx.entity().downgrade(),
-            ))
+            .when(overlay, |content| {
+                content.on_prepaint(measure(QuestionMeasure::Content))
+            })
             .w_full()
             .min_w_0()
             .flex_shrink_1()
-            .max_h(px(if short {
-                theme::DECISION_SHORT_BODY_MAX_H
-            } else {
-                theme::DECISION_BODY_MAX_H
-            }))
-            .overflow_y_scroll()
-            .track_scroll(&scroll)
-            .vertical_scrollbar(&scroll)
-            .pr(px(theme::DECISION_SCROLL_GUTTER))
             .flex()
-            .flex_col()
-            .gap(px(theme::DECISION_QUESTIONS_GAP));
+            .flex_col();
+        if self.overlay {
+            content = content
+                .max_h(px(if self.short {
+                    theme::DECISION_SHORT_BODY_MAX_H
+                } else {
+                    theme::DECISION_BODY_MAX_H
+                }))
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .vertical_scrollbar(&scroll)
+                .pr(px(theme::DECISION_SCROLL_GUTTER));
+        }
         for (qi, question) in questions.iter().enumerate() {
             let keyed = target == Some(qi);
             let digit = |at: usize| {
@@ -1839,23 +2327,26 @@ impl CockpitView {
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(theme::DECISION_QUESTION_GAP))
-                .child(decision::question_text(question.question.clone()));
-            // The footer's `1-N toggle` already says "choose any" for the
+                .when(qi > 0, |section| {
+                    section.mt(px(theme::DECISION_QUESTIONS_GAP))
+                });
+            // A lone question is the head itself; several each lead their
+            // own rows.
+            if !single {
+                section = section.child(
+                    decision::question_text(question.question.clone())
+                        .mb(px(theme::DECISION_QUESTION_GAP)),
+                );
+            }
+            // The hint's `1–N pick` already says "choose any" for the
             // question the digits reach; another multi-select says it here.
             if question.multi_select && !keyed {
                 section = section.child(decision::note("choose any"));
             }
-            let mut rows = div()
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(theme::DECISION_ROW_GAP));
+            let mut rows = div().w_full().min_w_0().flex().flex_col();
             for (oi, option) in question.options.iter().enumerate() {
-                let selected = answers[qi].picks.contains(&oi);
                 let (label, recommended) = decision::split_recommended(&option.label);
-                let forms = forms.clone();
+                let pick_forms = forms.clone();
                 let pick_handle = handle.clone();
                 let multi = question.multi_select;
                 rows = rows.child(
@@ -1864,28 +2355,23 @@ impl CockpitView {
                         decision::Row {
                             key: digit(oi),
                             label: SharedString::from(label.to_string()),
-                            scope: None,
                             description: Some(option.description.clone().into()),
                             recommended,
-                            selected,
+                            cursor: keyed && cursor == Some(oi),
+                            picked: answers[qi].picks.contains(&oi),
                             enabled: !sending,
-                            quiet: false,
-                            enter: false,
+                            ..Default::default()
                         },
                     )
                     .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                    .when(qi == 0 && oi == 0, |row| {
-                        row.on_prepaint(measure_question(
-                            forms.clone(),
-                            handle.clone(),
-                            QuestionMeasure::FirstControl,
-                            cx.entity().downgrade(),
-                        ))
+                    .when(overlay && qi == 0 && oi == 0, |row| {
+                        row.on_prepaint(measure(QuestionMeasure::FirstControl))
                     })
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        if let Some(form) = forms.0.borrow_mut().get_mut(&pick_handle) {
+                    .on_click(self.act(move |view, _, cx| {
+                        if let Some(form) = pick_forms.0.borrow_mut().get_mut(&pick_handle) {
                             pick_option(&mut form.answers[qi].picks, oi, multi);
                         }
+                        pick_forms.set_cursor(&pick_handle, Some(oi));
                         view.clear_request_error(thread, &pick_handle);
                         cx.notify();
                     })),
@@ -1894,9 +2380,9 @@ impl CockpitView {
             section = section.child(rows);
             if question.allow_other {
                 // The own answer is not a second field: one bare mono line
-                // on the rows' grid — its digit on the glyph column, its
-                // text on the labels' column — that the digit one past the
-                // options arms.
+                // on the options' grid — its digit where theirs stand, its
+                // text on their labels' column — that the digit one past
+                // the options arms.
                 let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
                 section = section.child(
                     div()
@@ -1904,16 +2390,16 @@ impl CockpitView {
                         .min_w_0()
                         .flex()
                         .items_center()
-                        .gap(px(theme::DECISION_ROW_INNER_GAP))
+                        .child(div().flex_shrink_0().w(px(theme::GLYPH_GUTTER)))
                         .child(
                             div()
-                                .flex()
                                 .flex_shrink_0()
-                                .items_center()
-                                .justify_center()
-                                .w(px(theme::GLYPH_BOX))
-                                .h(px(theme::QUESTION_OTHER_H))
-                                .children(digit(question.options.len()).map(components::kbd)),
+                                .w(px(3.0 * theme::CH))
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .children(
+                                    digit(question.options.len())
+                                        .map(|key| SharedString::from(decision::key_label(&key))),
+                                ),
                         )
                         .child(
                             div()
@@ -1921,13 +2407,8 @@ impl CockpitView {
                                 .min_w_0()
                                 .h(px(theme::QUESTION_OTHER_H))
                                 .debug_selector(move || selector.clone())
-                                .when(qi == 0 && question.options.is_empty(), |input| {
-                                    input.on_prepaint(measure_question(
-                                        forms.clone(),
-                                        handle.clone(),
-                                        QuestionMeasure::FirstControl,
-                                        cx.entity().downgrade(),
-                                    ))
+                                .when(overlay && qi == 0 && question.options.is_empty(), |input| {
+                                    input.on_prepaint(measure(QuestionMeasure::FirstControl))
                                 })
                                 .cursor_text()
                                 .child(
@@ -1948,113 +2429,86 @@ impl CockpitView {
             }
             content = content.child(section);
         }
-        let async_question = !request.decision.blocks_execution();
-        let working = async_question
-            && request
-                .subject
-                .as_ref()
-                .and_then(|subject| self.cockpit.thread(thread)?.activity().subject(subject))
-                .is_some_and(|subject| subject.busy());
         // A plain wait says nothing the card does not: only a status that
         // adds something rides the head.
         let status = if sending {
-            Some(theme::words::SENDING)
+            Some(decision::sending().into_any_element())
         } else if working {
-            Some("work continues")
-        } else if async_question {
-            Some("answer when ready")
+            Some(decision::status("work continues").into_any_element())
+        } else if !request.decision.blocks_execution() {
+            Some(decision::status("answer when ready").into_any_element())
         } else {
             None
-        }
-        .map(|word| {
-            if sending {
-                decision::sending().into_any_element()
-            } else {
-                decision::status(word).into_any_element()
-            }
-        });
-        let detail = match questions.as_slice() {
-            [question] if !question.header.is_empty() => Some(question.header.clone()),
-            _ => None,
         };
-        let head = decision::head(
-            if questions.len() == 1 {
-                "question".to_string()
+        let lead = if single {
+            questions[0].question.clone()
+        } else {
+            format!("{} questions", questions.len())
+        };
+        let head = decision::question_head(
+            lead,
+            decision::head_detail([if request.subject.is_none() {
+                "agent unknown"
             } else {
-                format!("{} questions", questions.len())
-            },
-            request_detail(
-                detail.as_deref().unwrap_or_default(),
-                request.subject.is_none(),
-            ),
+                ""
+            }]),
             status,
         );
         let mut children = vec![
             head.into_any_element(),
-            div()
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .overflow_hidden()
-                .debug_selector(|| "question-viewport".into())
-                .on_prepaint(measure_question(
-                    forms.clone(),
-                    handle.clone(),
-                    QuestionMeasure::Viewport,
-                    cx.entity().downgrade(),
-                ))
-                .child(content)
-                .into_any_element(),
+            decision::section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .debug_selector(|| "question-viewport".into())
+                    .when(overlay, |viewport| {
+                        viewport.on_prepaint(measure(QuestionMeasure::Viewport))
+                    })
+                    .child(content),
+            )
+            .into_any_element(),
         ];
         if let Some(error) = request.reply_error.as_ref().or_else(|| {
-            self.panes[index]
-                .request_error
+            self.request_error
                 .as_ref()
                 .filter(|(failed, _)| failed == &handle)
                 .map(|(_, error)| error)
         }) {
-            children.push(decision::error_line("not sent", error.clone()).into_any_element());
+            children.push(
+                decision::section(decision::error_line("not sent", error.clone()))
+                    .into_any_element(),
+            );
         }
+        if let Some(note) = self.forms.note(&handle) {
+            children.push(self.note_field(&handle, note));
+        }
+        let keys = target
+            .map(|qi| {
+                (questions[qi].options.len() + usize::from(questions[qi].allow_other))
+                    .min(decision::DIGIT_KEYS)
+            })
+            .unwrap_or(0);
+        let hints = decision::question_hints(keys);
+        // The form keeps its Skip and Send for the pointer (several
+        // questions, several picks, typed words); the keys say the rest.
         let skip_handle = handle.clone();
         let submit_handle = handle.clone();
         let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
-        let hints: Vec<(String, &str)> = target
-            .map(|qi| {
-                let question = &questions[qi];
-                let keys = (question.options.len() + usize::from(question.allow_other))
-                    .min(decision::DIGIT_KEYS);
-                let range = if keys > 1 {
-                    format!("1\u{2013}{keys}")
-                } else {
-                    "1".into()
-                };
-                // ↵ lives on the Send button, not in the hints.
-                let verb = if question.multi_select {
-                    "toggle"
-                } else if questions.len() == 1 {
-                    "answer"
-                } else {
-                    "pick"
-                };
-                vec![(range, verb)]
-            })
-            .unwrap_or_default();
-        let hints: Vec<(&str, &str)> = hints
-            .iter()
-            .map(|(key, verb)| (key.as_str(), *verb))
-            .collect();
         children.push(
-            decision::footer(
-                &hints,
+            decision::section(decision::footer(
+                hints.as_slice(),
                 [
                     decision::skip_button("question-skip", "Skip", cx)
                         .disabled(sending)
-                        .on_click(cx.listener(move |view, _, _, cx| {
+                        .on_click(self.act(move |view, _, cx| {
                             view.respond_exact(
                                 thread,
                                 &skip_handle,
                                 DecisionAnswer::Deny {
-                                    message: "The operator skipped this question.".into(),
+                                    message: decision::QUESTION_SKIPPED.into(),
                                 },
                                 cx,
                             )
@@ -2068,283 +2522,22 @@ impl CockpitView {
                         cx,
                     )
                     .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |view, _, _, cx| {
+                    .on_click(self.act(move |view, _, cx| {
                         view.send_question_form(thread, &submit_handle, false, cx);
                     }))
                     .into_any_element(),
                 ],
-            )
+            ))
             .into_any_element(),
         );
         // The frame is the island QuestionFit measures: it carries the dock
         // gap as well as the card, so `required` counts every pixel the
         // overlay must hold.
-        request_frame(decision::card(handle.serial, joined, children), joined)
-            .on_prepaint(measure_question(
-                forms,
-                handle.clone(),
-                QuestionMeasure::Island,
-                cx.entity().downgrade(),
-            ))
-            .into_any_element()
-    }
-
-    fn clear_request_error(&mut self, thread: ThreadId, handle: &DecisionHandle) {
-        if let Some(index) = self.pane_for(thread) {
-            if self.panes[index]
-                .request_error
-                .as_ref()
-                .is_some_and(|(failed, _)| failed == handle)
-            {
-                self.panes[index].request_error = None;
-            }
-        }
-    }
-
-    /// Send a question form: every question needs a pick or typed words.
-    /// `quiet` (the ↵ path) leaves an incomplete form alone instead of
-    /// flagging it. Returns whether an answer went out.
-    pub(super) fn send_question_form(
-        &mut self,
-        thread: ThreadId,
-        handle: &DecisionHandle,
-        quiet: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(index) = self.pane_for(thread) else {
-            return false;
-        };
-        let forms = self.panes[index].request_forms.clone();
-        let mut state = forms.0.borrow_mut();
-        let Some(form) = state.get_mut(handle) else {
-            return false;
-        };
-        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
-            answer.other =
-                Some(input.read(cx).value().to_string()).filter(|text| !text.trim().is_empty());
-        }
-        if form
-            .answers
-            .iter()
-            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
-        {
-            drop(state);
-            if !quiet {
-                self.panes[index].request_error = Some((
-                    handle.clone(),
-                    "Answer each question before sending.".into(),
-                ));
-                cx.notify();
-            }
-            return false;
-        }
-        let answers = form.answers.clone();
-        drop(state);
-        self.respond_exact(thread, handle, DecisionAnswer::Questions { answers }, cx);
-        true
-    }
-
-    /// ↵ on an empty Main Composer line: send the question this Pane shows
-    /// when every one of its questions is answered. False leaves the key to
-    /// the Composer (an empty line's ↵ takes a held prompt back).
-    pub(super) fn send_ready_question(&mut self, cx: &mut Context<Self>) -> bool {
-        let index = self.focused();
-        let Some(request) = self.shown_request(index) else {
-            return false;
-        };
-        if request.submitting || pane::questions_of(&request.decision).is_none() {
-            return false;
-        }
-        let thread = self.panes[index].thread().expect("a request has a Thread");
-        self.send_question_form(thread, &request.handle, true, cx)
-    }
-
-    /// The first request this Pane's selected Subject shows — the one its
-    /// digit keys pick in.
-    fn shown_request(&self, index: usize) -> Option<PendingDecision> {
-        let pane = self.panes.get(index)?;
-        self.cockpit
-            .thread(pane.thread()?)?
-            .activity()
-            .pending_decisions()
-            .iter()
-            .find(|request| shown_on(pane, request))
-            .cloned()
-    }
-
-    /// Digit `n` (0-based) on the request this Pane shows: an approval runs
-    /// row n's verb; a question picks option n of its digit question — a
-    /// single single-select question with no typed words then sends at
-    /// once (one key) — or focuses the words field one past its options.
-    /// False when nothing here takes the digit, so it types.
-    pub(super) fn pick_request_row(
-        &mut self,
-        index: usize,
-        n: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(request) = self.shown_request(index) else {
-            return false;
-        };
-        let thread = self.panes[index].thread().expect("a request has a Thread");
-        if request.submitting {
-            return true;
-        }
-        let Some(questions) = pane::questions_of(&request.decision) else {
-            if !matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
-                return false;
-            }
-            let Some(verb) = decision::digit_verb(&request.decision, n) else {
-                return false;
-            };
-            self.pick_approval(thread, &request, verb, cx);
-            return true;
-        };
-        let forms = self.panes[index].request_forms.clone();
-        let mut state = forms.0.borrow_mut();
-        // The card builds its form on first paint; a question never drawn
-        // (a compact cell's expander) has nothing to pick in yet.
-        let Some(form) = state.get_mut(&request.handle) else {
-            return false;
-        };
-        let Some(qi) = digit_question(&form.answers, questions) else {
-            return false;
-        };
-        let question = &questions[qi];
-        if n < question.options.len() {
-            pick_option(&mut form.answers[qi].picks, n, question.multi_select);
-            let one_key = questions.len() == 1
-                && !question.multi_select
-                && form.inputs[qi].read(cx).value().trim().is_empty();
-            drop(state);
-            self.clear_request_error(thread, &request.handle);
-            if one_key {
-                self.send_question_form(thread, &request.handle, false, cx);
-            }
-            cx.notify();
-            true
-        } else if question.allow_other && n == question.options.len() {
-            let focus = form.inputs[qi].read(cx).focus_handle(cx);
-            drop(state);
-            window.focus(&focus, cx);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self
-            .cockpit
-            .retry_subject_history(thread, &subject)
-            .err()
-            .map(|error| error.to_string());
-        cx.notify();
-    }
-
-    pub(super) fn retry_subject_history(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(thread) = self.panes[index].thread() else {
-            return;
-        };
-        let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self
-            .cockpit
-            .ensure_subject_history(thread, &subject)
-            .err()
-            .map(|error| error.to_string())
-            .or_else(|| {
-                self.cockpit
-                    .subject_history_error(thread, &subject)
-                    .map(str::to_string)
-            });
-        cx.notify();
-    }
-
-    pub(super) fn prune_request_forms(&mut self, index: usize) {
-        let Some(thread) = self.panes[index]
-            .thread()
-            .and_then(|id| self.cockpit.thread(id))
-        else {
-            return;
-        };
-        let pending = thread.activity().pending_decisions();
-        self.panes[index]
-            .request_forms
-            .0
-            .borrow_mut()
-            .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
-    }
-
-    pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {
-        let index = self.focused();
-        let Some(thread) = self.panes[index].thread() else {
-            return;
-        };
-        let Some(request) = self
-            .cockpit
-            .thread(thread)
-            .and_then(|thread| {
-                thread
-                    .activity()
-                    .pending_decisions()
-                    .iter()
-                    .find(|request| request.subject.as_ref() == Some(&self.panes[index].selected))
+        request_frame(decision::card(handle.serial, children), overlay)
+            .when(overlay, |frame| {
+                frame.on_prepaint(measure(QuestionMeasure::Island))
             })
-            .cloned()
-        else {
-            return;
-        };
-        self.answer_request(thread, request, answer, cx);
-    }
-
-    pub(super) fn answer_request(
-        &mut self,
-        thread: ThreadId,
-        request: PendingDecision,
-        answer: Answer,
-        cx: &mut Context<Self>,
-    ) {
-        if (pane::questions_of(&request.decision).is_some()
-            || matches!(
-                request.decision.kind,
-                ferrite_core::DecisionKind::Form { .. }
-                    | ferrite_core::DecisionKind::External { .. }
-                    | ferrite_core::DecisionKind::Unsupported { .. }
-            ))
-            && answer != Answer::Deny
-        {
-            return;
-        }
-        if request.decision.policy.interaction_required && answer != Answer::Deny {
-            return;
-        }
-        if answer == Answer::Allow && !request.decision.policy.allow {
-            return;
-        }
-        if answer == Answer::Deny && !request.decision.policy.deny {
-            return;
-        }
-        let response = match answer {
-            Answer::Allow => DecisionAnswer::Allow {
-                input: request.decision.input.clone(),
-            },
-            Answer::Deny => DecisionAnswer::Deny {
-                message: "The operator denied this tool.".into(),
-            },
-            Answer::Always => match request.decision.standing_answer() {
-                Some(suggestion) => DecisionAnswer::AllowAlways {
-                    input: request.decision.input.clone(),
-                    suggestion: suggestion.clone(),
-                },
-                None => return,
-            },
-        };
-        self.respond_exact(thread, &request.handle, response, cx);
+            .into_any_element()
     }
 }
 

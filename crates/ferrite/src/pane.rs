@@ -4649,18 +4649,15 @@ pub(crate) fn approval_source(decision: &Decision) -> Option<String> {
 }
 
 /// Whether an approval's well holds a shell command, which reads after a
-/// `$ ` prompt.
+/// `$ ` prompt: Claude's `Bash` and Codex's `commandExecution` alike.
 pub(crate) fn shell_command(decision: &Decision) -> bool {
-    decision.tool_name == "Bash"
-        && decision
-            .input
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .is_some()
+    decision::shell_source(decision).is_some()
 }
 
-/// The exact tool input an approval would send. Commands retain their source;
-/// other provider input remains inspectable as its JSON value.
+/// The exact tool input an approval would send. A shell command reads as
+/// the operator would type it — Codex's login-shell wrapper (`/bin/zsh -lc
+/// "…"`) taken off, so both providers read `gh issue close 212`; other
+/// provider input remains inspectable as its JSON value.
 pub(crate) fn approval_input(
     decision: &Decision,
     cache: &crate::rich::TextCache,
@@ -4668,7 +4665,10 @@ pub(crate) fn approval_input(
 ) -> Option<AnyElement> {
     use gpui::component::scroll::ScrollableElement as _;
 
-    let source = approval_source(decision)?;
+    let source = match decision::shell_source(decision) {
+        Some(command) => command.into_owned(),
+        None => approval_source(decision)?,
+    };
     Some(
         div()
             .debug_selector(|| "approval-input".into())
@@ -9119,29 +9119,25 @@ mod tests {
                 .text_size(px(crate::theme::FS_UI))
                 .line_height(px(crate::theme::LH_UI))
                 .children(self.decisions.iter().enumerate().map(|(at, decision)| {
-                    let rows = decision::approval_rows(decision)
+                    let rows = decision::approval_rows(decision, None, None)
                         .into_iter()
                         .enumerate()
                         .map(|(row_at, row)| {
                             decision::option_row(
                                 ("decision-row", at * 16 + row_at),
                                 decision::Row {
-                                    key: row.key,
+                                    key: Some(row.key),
                                     label: row.label,
-                                    scope: row.scope,
-                                    description: None,
-                                    recommended: false,
-                                    selected: false,
+                                    code: row.code,
+                                    cursor: row_at == 0,
                                     enabled: row.enabled,
-                                    quiet: row.verb == decision::Verb::Deny,
-                                    enter: false,
+                                    ..Default::default()
                                 },
                             )
                             .into_any_element()
                         });
                     decision::card(
                         at as u64,
-                        false,
                         [
                             decision::head(
                                 decision::kind_word(decision),

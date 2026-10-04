@@ -1891,31 +1891,33 @@ pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 // Owner: WP-F (decision.rs, subagents.rs, the Decision card and keycaps.)
 // Edit values and append tokens only inside this section.
 
-/// The Decision block (approvals, questions, forms, links — Main's and a
-/// Subagent's alike, rule 2.8), in the provider CLIs' own grammar (the
-/// prototype's `.dec`, clean): no box, a 1px `paint::LINE` above it where
-/// it docks over the transcript, the plane under it. `◆ Bash needs approval
-/// · codex` heads it — the drawn `◆` (`DECISION_MARK`) in the 2-cell
-/// gutter, the lead in `ATTENTION`, each detail after a `TEXT_FAINT` `·` in
-/// `TEXT_MUTED` — and every other section sits on the content column after
-/// the gutter, `DECISION_GAP` (half a row) apart: the prose, the command on
-/// a `paint::BAND` behind a faint `$ `, the options as one-row lines
-/// (`❯ 1. Allow`: the accent `❯` on the row ↵ would choose, the ordinal
-/// dim, a picked row on `paint::SELECTION`, the pointer's on
-/// `paint::HOVER`), and a dim hint line (`1–3 pick · y allow · n deny`).
-/// No keycaps, no pills. Deny is not red. Every section keeps its natural
-/// height — nothing clips; when the Pane runs short the prose goes first,
-/// then the command band gives way down to one line.
+/// The Decision (approvals, questions, forms, links — Main's and a
+/// Subagent's alike, rule 2.8) is a transcript row in the provider CLIs'
+/// own grammar (the prototype's `.r` holding a `.dec`, clean): no box, no
+/// ground, no rule. `◆ Bash needs approval · codex · read-only sandbox`
+/// heads it — the drawn `◆` (`DECISION_MARK`) at the gutter's text origin,
+/// the lead in `ATTENTION`, every detail and its `·` in `TEXT_MUTED` — and
+/// every other section sits on the content column after the 2-cell gutter,
+/// `DECISION_GAP` (half a row) below the one above: the command on a
+/// `paint::BAND` behind a faint `$ `, the three options as one-row lines
+/// (`❯ 1. Allow`: the accent `❯` and a `paint::SELECTION` bar across the
+/// content column on the cursor's row, its label `TEXT_STRONG`; the
+/// ordinal dim; a pattern in `INLINE_CODE`; the pointer's row on
+/// `paint::HOVER`), and, half a row down, the dim hint line (`↑↓ select ·
+/// 1–3 pick · esc deny · tab amend`). No keycaps, no pills, no `↵`, no
+/// `✓`. Deny is not red. Head 20 · gap 10 · band 30 · gap 10 · options
+/// 3 × 20 · gap 10 · hint 20.
+///
+/// Where a card still docks over the transcript's foot (the requests
+/// overlay) it lies on the plane, `DECISION_PAD_Y` inside.
 pub const DECISION_PAD_Y: f32 = HALF_ROW;
 pub const DECISION_GAP: f32 = HALF_ROW;
-/// The head's drawn diamond: 10px in the gutter of an `LH_UI` line.
-pub const DECISION_MARK: f32 = 10.0;
-/// An option row (rule 2.8.4): one `LH_UI` row, flush with the next; a
-/// description adds a line under the label. Its `❯` gutter is two cells.
-pub const DECISION_ROW_PAD_X: f32 = 0.0;
-pub const DECISION_ROW_PAD_Y: f32 = 0.0;
+/// The head's drawn diamond: an 8px box, so the `◆` reads ~7px wide like
+/// the prototype's glyph, starting at the gutter's text origin.
+pub const DECISION_MARK: f32 = 8.0;
+/// Option rows sit flush, one `LH_UI` row each; a description adds a line
+/// under the label.
 pub const DECISION_ROW_GAP: f32 = 0.0;
-pub const DECISION_ROW_INNER_GAP: f32 = 0.0;
 /// The picked row's trailing check.
 pub const DECISION_CHECK: f32 = SPACE_3;
 /// A question's text to its rows, and one question to the next.

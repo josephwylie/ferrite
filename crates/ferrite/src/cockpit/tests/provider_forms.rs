@@ -277,11 +277,14 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
     ));
 }
 
+/// An approval offers exactly three options (the terminal-native ruling):
+/// the provider's standing answer is option 2, and where a plain Allow is
+/// forbidden it goes back as the provider's own opaque choice, unchanged.
 #[gpui::test]
-fn contract_every_native_approval_choice_is_selectable(cx: &mut TestAppContext) {
+fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("approval-choice-ui", 1);
     bind_production_keys(cx);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(800.)));
     let SessionEvent::DecisionRequested { mut decision } = typed_decision(DecisionKind::Approval)
     else {
@@ -304,14 +307,33 @@ fn contract_every_native_approval_choice_is_selectable(cx: &mut TestAppContext) 
         .send(SessionEvent::DecisionRequested { decision })
         .unwrap();
     tick(cx);
-    let choice = cx
-        .debug_bounds("approval-choice-1")
-        .expect("all native choices need a shared labeled button");
+    let (thread, serial) = view.read_with(cx, |v, _| {
+        let thread = v.panes[0].thread().unwrap();
+        let serial = v
+            .cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .pending_decisions()[0]
+            .handle
+            .serial;
+        (thread, serial)
+    });
+    let allow = debug_bounds(cx, format!("request-allow-{}-{serial}", thread.get()))
+        .expect("option 1 is always drawn");
+    cx.simulate_click(allow.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        fake.answered.borrow().is_empty(),
+        "a forbidden plain Allow cannot act"
+    );
+    let choice = debug_bounds(cx, format!("request-always-{}-{serial}", thread.get()))
+        .expect("option 2 carries the standing answer");
     cx.simulate_click(choice.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(
-        matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Choose{value} if *value==serde_json::json!({"opaque":"second"})),
-        "opaque native choices survive UI unchanged even when plain Allow is forbidden"
+        matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Choose{value} if *value==serde_json::json!({"opaque":"first"})),
+        "the opaque standing choice survives unchanged even when plain Allow is forbidden"
     );
 }
 
