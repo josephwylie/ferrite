@@ -23,18 +23,19 @@
 //! `components::faded_button`, whose variant (`button_variant`) holds hover
 //! equal to rest so the kit's own hover never snaps over it.
 //!
-//! **The ladder on `RAISED`** (theme rule 4): rest `RAISED`; hover
-//! `HOVER_RAISED` (`RAISED_2`); the cursor or a selected row `FILL`; that
-//! row under the pointer `FILL_HOVER`; press `FILL_HOVER`.
+//! **One ladder on every ground** (theme rules 3 and 4): rest nothing;
+//! hover `paint::HOVER`; the cursor or a selected row `paint::SELECTION`;
+//! that row under the pointer `paint::SELECTION_HOVER`; press
+//! `paint::PRESS`. On glass (macOS) every face is a white overlay, so it
+//! reads on chrome, the plane, a band or a float alike; elsewhere each is
+//! its opaque grey.
 
 use gpui::component::button::ButtonCustomVariant;
 use gpui::prelude::*;
-use gpui::{rgb, rgba, App, Hsla, SharedString, StyleRefinement};
+use gpui::{rgba, App, Hsla, SharedString, StyleRefinement};
 
 use crate::motion;
-use crate::theme::{
-    FILL, FILL_HOVER, HAIRLINE_STRONG, HOVER, HOVER_RAISED, PRESSED, RAISED, TRANSPARENT,
-};
+use crate::theme::{paint, HAIRLINE_STRONG, TRANSPARENT};
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
 /// and interactive can say what role it plays. `key` names the element's
@@ -42,9 +43,8 @@ use crate::theme::{
 /// delivers hover only to an element it keeps state for.
 pub trait Pointer: Styled + InteractiveElement + Sized {
     /// A row picked whole, drawn on its container's ground (menu, selector
-    /// and nav rows): nothing at rest, the opaque HOVER face under the
-    /// pointer, pointer cursor. Soft's hover is a solid `#1d2024`, not a
-    /// wash — nothing translucent is layered once it lands.
+    /// and nav rows): nothing at rest, the hover face under the pointer,
+    /// pointer cursor.
     fn hover_row(self, key: impl Into<SharedString>) -> Self {
         blended(
             self.cursor_pointer(),
@@ -55,7 +55,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     }
 
     /// A self-grounded control that does one verb (window controls, root
-    /// chip): the HOVER face, pointer cursor. Soft gives it no border.
+    /// chip): the hover face, pointer cursor, no border.
     fn hover_control(self, key: impl Into<SharedString>) -> Self {
         blended(
             self.cursor_pointer(),
@@ -65,26 +65,25 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
         )
     }
 
-    /// A control resting on the opaque RAISED ground (keycaps, menu rows,
-    /// options): `HOVER_RAISED`, one step above RAISED. Every Soft face is
-    /// opaque, so nothing behind the chip can bleed through a hover.
+    /// A control on a float or a band (keycaps, menu rows, options): the
+    /// same hover face as every other ground — one ladder everywhere.
     fn hover_raised(self, key: impl Into<SharedString>) -> Self {
         blended(
             self.cursor_pointer(),
             key.into(),
-            rgb(RAISED).into(),
+            rgba(TRANSPARENT).into(),
             raised_face(),
         )
     }
 
-    /// A click target already carrying the selected FILL (the current
-    /// Group row, the menu cursor, `.current:hover` in the prototype): hover
-    /// cannot wash over a ground stronger than itself, so it steps the
-    /// ground up instead, `FILL` → `FILL_HOVER`. The `FILL` is painted here,
-    /// at once: arming a row is a keyboard change.
+    /// A click target already carrying the selection (the current Group
+    /// row, the menu cursor): hover cannot wash over a ground stronger than
+    /// itself, so it steps the ground up instead, `SELECTION` →
+    /// `SELECTION_HOVER`. The selection is painted here, at once: arming a
+    /// row is a keyboard change.
     fn hover_carried(self, key: impl Into<SharedString>) -> Self {
         let key = key.into();
-        let ground = motion::hover_blend(&key, rgb(FILL).into(), carried_face());
+        let ground = motion::hover_blend(&key, paint::SELECTION.into(), carried_face());
         let mut element = self.cursor_pointer().bg(ground);
         listen(&mut element, key);
         element
@@ -137,18 +136,17 @@ impl<E: Styled + InteractiveElement> Pointer for E {}
 /// because gpui's `.active()` tracks the pressed element, which takes
 /// element identity: only stateful widgets can wear one.
 pub trait PointerPressed: Pointer + StatefulInteractiveElement {
-    /// A pressed row: the PRESSED face (nav rows, rail dots).
+    /// A pressed row: the press face (nav rows, rail dots).
     fn press_row(self) -> Self {
         self.active(row_press)
     }
 
-    /// A pressed self-grounded control: the PRESSED face.
+    /// A pressed self-grounded control: the press face.
     fn press_control(self) -> Self {
         self.active(control_press)
     }
 
-    /// A pressed control on the RAISED ground: the PRESSED face, opaque
-    /// for the same no-bleed reason as `hover_raised`.
+    /// A pressed control on a float or a band: the press face.
     fn press_raised(self) -> Self {
         self.active(raised_press)
     }
@@ -178,19 +176,19 @@ pub fn button_variant(ground: Hsla, ink: Hsla, press: Hsla, cx: &App) -> ButtonC
 // Each role's hover face, named so the tokens are assertable as data.
 
 fn row_face() -> Hsla {
-    rgb(HOVER).into()
+    paint::HOVER.into()
 }
 
 fn control_face() -> Hsla {
-    rgb(HOVER).into()
+    paint::HOVER.into()
 }
 
 fn raised_face() -> Hsla {
-    rgb(HOVER_RAISED).into()
+    paint::HOVER.into()
 }
 
 fn carried_face() -> Hsla {
-    rgb(FILL_HOVER).into()
+    paint::SELECTION_HOVER.into()
 }
 
 #[allow(dead_code)]
@@ -199,15 +197,15 @@ fn edge_lift(surface: StyleRefinement) -> StyleRefinement {
 }
 
 fn row_press(row: StyleRefinement) -> StyleRefinement {
-    row.bg(rgb(PRESSED))
+    row.bg(paint::PRESS)
 }
 
 fn control_press(control: StyleRefinement) -> StyleRefinement {
-    control.bg(rgb(PRESSED))
+    control.bg(paint::PRESS)
 }
 
 fn raised_press(control: StyleRefinement) -> StyleRefinement {
-    control.bg(rgb(PRESSED))
+    control.bg(paint::PRESS)
 }
 
 #[cfg(test)]
@@ -219,36 +217,28 @@ mod tests {
         refinement.background.as_ref()
     }
 
-    /// The pairing the trait owns: each role's face is exactly its token,
-    /// and every role sets the pointer cursor. Every Soft face is opaque —
-    /// `rgb`, never `rgba` — so nothing behind a hovered surface, the
-    /// Decision card's amber included, can tint it. On `RAISED` the hover
-    /// face is `HOVER_RAISED` (`RAISED_2`), one step under the cursor's
-    /// `FILL`, so a hovered row never reads as the armed one.
+    /// The pairing the trait owns: each role's face is exactly its paint
+    /// (theme rule 4: a white overlay on glass, the opaque grey elsewhere),
+    /// and every role sets the pointer cursor. One hover face on every
+    /// ground, one step under the selection, so a hovered row never reads
+    /// as the armed one. (The old opaque-only rule, `rgb` never `rgba`, is
+    /// retired with the glass frame.)
     #[test]
     fn each_role_pairs_its_token_with_the_pointer() {
-        assert_eq!(row_face(), Hsla::from(rgb(HOVER)));
-        assert_eq!(control_face(), Hsla::from(rgb(HOVER)));
-        assert_eq!(raised_face(), Hsla::from(rgb(HOVER_RAISED)));
-        assert_eq!(HOVER_RAISED, crate::theme::RAISED_2);
-        assert_ne!(raised_face(), Hsla::from(rgb(FILL)));
-        assert_eq!(
-            background(&row_press(StyleRefinement::default())),
-            Some(&Fill::from(rgb(PRESSED)))
-        );
-        assert_eq!(
-            background(&control_press(StyleRefinement::default())),
-            Some(&Fill::from(rgb(PRESSED)))
-        );
-        assert_eq!(
-            background(&raised_press(StyleRefinement::default())),
-            Some(&Fill::from(rgb(PRESSED)))
-        );
+        assert_eq!(row_face(), Hsla::from(paint::HOVER));
+        assert_eq!(control_face(), Hsla::from(paint::HOVER));
+        assert_eq!(raised_face(), Hsla::from(paint::HOVER));
+        assert_ne!(raised_face(), Hsla::from(paint::SELECTION));
+        for press in [row_press, control_press, raised_press] {
+            assert_eq!(
+                background(&press(StyleRefinement::default())),
+                Some(&Fill::from(paint::PRESS))
+            );
+        }
 
         // The selected Group row steps its own ground up rather than
-        // washing over it: FILL -> FILL_HOVER, the prototype's
-        // `.current:hover`.
-        assert_eq!(carried_face(), Hsla::from(rgb(FILL_HOVER)));
+        // washing over it: SELECTION -> SELECTION_HOVER.
+        assert_eq!(carried_face(), Hsla::from(paint::SELECTION_HOVER));
 
         for element in [
             div().id("row").hover_row("pointer-test-row"),
@@ -269,7 +259,10 @@ mod tests {
         let mut row = div().id("rest").hover_row("pointer-test-rest");
         assert_eq!(background(row.style()), None);
         let mut carried = div().id("armed").hover_carried("pointer-test-armed");
-        assert_eq!(background(carried.style()), Some(&Fill::from(rgb(FILL))));
+        assert_eq!(
+            background(carried.style()),
+            Some(&Fill::from(Hsla::from(paint::SELECTION)))
+        );
 
         // The text role speaks the I-beam, not the pointer: characters are
         // grabbable, nothing is a button (#27).

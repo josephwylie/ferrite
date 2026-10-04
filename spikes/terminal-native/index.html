@@ -1,0 +1,1104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ferrite · terminal-native prototype</title>
+<style>
+@font-face{font-family:"Geist Mono";src:url("../../crates/ferrite/assets/fonts/GeistMono.ttf");font-weight:400;font-style:normal}
+@font-face{font-family:"Geist Mono";src:url("../../crates/ferrite/assets/fonts/GeistMono-Medium.ttf");font-weight:500;font-style:normal}
+@font-face{font-family:"Geist Mono";src:url("../../crates/ferrite/assets/fonts/GeistMono-SemiBold.ttf");font-weight:600;font-style:normal}
+@font-face{font-family:"Geist Mono";src:url("../../crates/ferrite/assets/fonts/GeistMono-Bold.ttf");font-weight:700;font-style:normal}
+@font-face{font-family:"Geist Mono";src:url("../../crates/ferrite/assets/fonts/GeistMono-Italic.ttf");font-weight:400;font-style:italic}
+
+/* ------------------------------------------------------------------ tokens
+   One face, one size, one line height. Every vertical metric is a multiple
+   of half a row; every horizontal metric is in ch. Colour is real terminal
+   colour: state words, syntax, diff rows, status segments. */
+:root{
+  --fs:13px; --lh:20px;
+  /* Grey: a dark-grey reading plane, a lifted sidebar, bands a step up.
+     Sampled from the operator's references (#1b1b1c, #242425). */
+  --bg:#1b1b1c; --nav:#242425; --head:#242425; --band:#2e2e30; --band2:#363638; --hover:#2c2c2e; --sel:#343437; --float:#2a2a2c;
+  --line:#2f2f31; --line2:#3c3c3f; --vline:transparent; --rule:transparent; --inband:#242425;
+  --sb:#242425; --hunk:#202022; --nodiff:#18181a; --frame:#3a3a3c; --sessbg:transparent; --sessfg:var(--accent);
+  --fg:#d7d7d9; --hi:#f4f4f5; --dim:#98989d; --faint:#5e5e63;
+  --accent:#8eb1f0;
+  --red:#ef8a80; --green:#93cf8c; --yellow:#e6c47c; --blue:#82b1f2;
+  --magenta:#c59df0; --cyan:#78ccd0; --orange:#eda879;
+  --claude:#d97757; --codex:#10a37f;
+}
+.dark{
+  --bg:#0d0e11; --nav:#0b0c0e; --head:#17191e; --band:#17191e; --band2:#1f2228; --hover:#17191e; --sel:#1a2232; --float:#121419;
+  --line:#22252c; --line2:#30343c; --vline:#22252c; --rule:#30343c; --inband:transparent;
+  --sb:#101216; --hunk:#121418; --nodiff:#0a0b0d; --frame:#2a2c31; --sessbg:var(--accent); --sessfg:#0b0d12;
+  --fg:#c6cad2; --hi:#eef0f3; --dim:#80868f; --faint:#4a4f58;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:#000;color:var(--fg);font:400 var(--fs)/var(--lh) "Geist Mono",ui-monospace,monospace;
+  font-variant-ligatures:none;-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+/* ------------------------------------------------- prototype controls (not app) */
+#controls{position:absolute;top:0;left:0;right:0;height:44px;display:flex;align-items:center;gap:6px;padding:0 16px;
+  font:12px/1.4 -apple-system,system-ui,sans-serif;color:#8a8a8a;background:#070707;border-bottom:1px solid #1a1a1a;z-index:100}
+#controls button{background:#141414;color:#bbb;border:1px solid #2a2a2a;border-radius:6px;padding:6px 10px}
+#controls button.on{background:#202838;color:#dfe8ff;border-color:#3a4a6a}
+#controls kbd{opacity:.55;margin-left:6px;font:inherit}
+#controls .sep{width:1px;height:20px;background:#222;margin:0 6px}
+#controls .lbl{margin-right:4px}
+#legend{position:absolute;top:52px;right:16px;width:380px;background:rgba(10,10,12,.94);border:1px solid #2a2a2a;border-radius:8px;
+  padding:12px 14px;font:12px/1.5 -apple-system,system-ui,sans-serif;color:#bbb;z-index:100;display:none}
+#legend.on{display:block}
+#legend h3{font-size:12px;color:#eee;margin-bottom:6px;font-weight:600}
+#legend li{list-style:none;display:flex;gap:8px;margin:3px 0}
+#legend li b{flex:none;width:18px;height:18px;border-radius:9px;background:var(--accent);color:#0b0d12;font:700 10px/18px "Geist Mono";text-align:center}
+#stage{position:absolute;top:44px;left:0;right:0;bottom:0;display:grid;place-items:center;overflow:hidden}
+#scaler{transform-origin:center center}
+.shot #controls,.shot #legend{display:none}
+.shot #stage{top:0}
+
+/* ------------------------------------------------------------------ window */
+.win{width:1440px;height:900px;background:var(--bg);display:grid;grid-template-rows:32px minmax(0,1fr) calc(var(--lh) + 4px);
+  position:relative;overflow:hidden;border-radius:10px;box-shadow:0 0 0 1px var(--frame),0 30px 80px rgba(0,0,0,.6)}
+.shot .win{border-radius:0;box-shadow:none}
+.win{--navw:36ch;--tbw:36ch}
+.win.collapsed{--navw:0px;--tbw:20ch}
+.tb{display:grid;grid-template-columns:var(--tbw) 1px minmax(0,1fr);align-items:stretch;background:var(--bg);white-space:pre;transition:grid-template-columns .2s ease}
+.dark .tb{border-bottom:1px solid var(--line)}
+.tbl{display:flex;align-items:center;background:var(--nav);padding:0 1ch 0 14px;min-width:0;overflow:hidden;transition:background .2s ease}
+.collapsed .tbl{background:var(--bg)}
+.collapsed .tb .vline,.collapsed .main > .vline{background:var(--bg)}
+.tbl .sp{flex:1}
+.lights{display:flex;gap:8px;align-items:center;flex:none;margin-right:2ch}
+.ib{flex:none;width:28px;height:24px;display:grid;place-items:center;color:var(--dim);position:relative;transition:background .1s,color .1s}
+.ib:hover,.ib.on{background:var(--hover);color:var(--fg)}
+.ib svg{width:15px;height:15px}
+.ib .badge{position:absolute;top:0;right:1px;font:600 10px/12px "Geist Mono";color:var(--yellow)}
+.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}
+.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.tb .vline{height:100%}
+.tb .title{display:flex;align-items:center;justify-content:space-between;padding:0 2ch;color:var(--dim);overflow:hidden}
+.tb .title .hi{color:var(--hi);font-weight:500}
+.vline{background:var(--vline)}
+.main{display:grid;grid-template-columns:var(--navw) 1px minmax(0,1fr);min-height:0;transition:grid-template-columns .2s ease}
+
+/* --------------------------------------------------------------------- nav */
+.nav{background:var(--nav);overflow:hidden;padding:calc(var(--lh)/2) 0;display:flex;flex-direction:column;min-height:0;min-width:0}
+.nav > *{min-width:36ch;transition:opacity .15s ease}
+.collapsed .nav > *{opacity:0}
+#notes{width:76ch;left:8px;top:30px}
+.nt{display:grid;grid-template-columns:2ch 10ch minmax(0,1fr) 5ch;height:var(--lh);align-items:center;padding:0 1ch;white-space:pre;cursor:default}
+.nt > :nth-child(3){overflow:hidden;text-overflow:ellipsis}
+.nt > :last-child{text-align:right;color:var(--dim)}
+.nt:hover{background:var(--hover)}
+.nt.sel{background:var(--sel)}
+.nt .t{color:var(--fg)}
+.nt.unread .t{color:var(--hi)}
+.nrow{height:var(--lh);display:flex;align-items:center;white-space:pre;padding:0 1ch;cursor:default;transition:background .08s}
+.nrow:hover{background:var(--hover)}
+.nrow.sel{background:var(--sel)}
+.nrow .cur{color:var(--accent);font-weight:600;width:2ch;flex:none}
+.nrow .tr{color:var(--faint);flex:none}
+.nrow .t{flex:1;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.nrow.sel .t{color:var(--hi)}
+.nrow .s{margin-left:1ch;color:var(--dim)}
+.nrow.head{color:var(--dim)}
+.nrow.head .t{color:var(--dim)}
+.nrow.proj .t{color:var(--hi);font-weight:600}
+.nav .fill{flex:1}
+.dot{flex:none;width:2ch}
+.d-run{color:var(--green)}
+.dot.d-run{font-weight:600}
+.d-attn{color:var(--yellow)} .d-fail{color:var(--red)} .d-done{color:var(--dim)} .d-park{color:var(--faint)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+svg.logo{width:11px;height:11px;flex:none;margin-left:1ch;vertical-align:-1px}
+svg.logo.claude{color:var(--claude)} svg.logo.codex{color:var(--codex)}
+
+/* -------------------------------------------------------------- status bar */
+.sb{display:flex;align-items:stretch;background:var(--sb);border-top:1px solid var(--line);white-space:pre;color:var(--dim)}
+.sb > *{display:flex;align-items:center;padding:0 1ch}
+.sb .sess{background:var(--sessbg);color:var(--sessfg);font-weight:600}
+.sb .tab.cur{color:var(--hi);background:var(--band2)}
+.sb .tab:hover,.sb .seg:hover{color:var(--fg);background:var(--hover)}
+.sb .sp{flex:1}
+.sb .clock{color:var(--fg)}
+
+/* ----------------------------------------------------------------- cockpit */
+.cockpit{position:relative;min-width:0;min-height:0;display:flex}
+.view{display:none;flex:1;min-width:0;min-height:0}
+.view.on{display:flex}
+
+.pane{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg);container-type:inline-size;flex:1}
+.pane::after{content:"";position:absolute;inset:0;border:1px solid transparent;pointer-events:none;z-index:6}
+.pane.focus::after{border-color:var(--accent)}
+.pane.attn::after{border-color:rgba(230,196,124,.75)}
+.ph{flex:none;height:calc(var(--lh) + 4px);display:flex;align-items:center;padding:0 1ch;border-bottom:1px solid var(--line);white-space:pre;color:var(--dim);cursor:grab}
+.ph .n{color:var(--dim);margin-right:1ch}
+.ph .tt{color:var(--fg);font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis}
+.pane.focus .ph{background:var(--head)}
+/* the head names the thread; its state reads at the foot of the Pane (the
+   working line, the turn's end, the Decision), so the head carries no state word */
+.ph > span:not(.n):not(.dot):not(.tt){display:none}
+.pane.focus .ph .tt{color:var(--hi)}
+.body{position:relative;flex:1;min-height:0;display:flex}
+.scroll{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;padding:0 3ch 0 2ch;scrollbar-width:none;position:relative}
+.scroll::-webkit-scrollbar{display:none}
+.tx{padding:var(--lh) 0 calc(var(--lh)/2)}
+
+/* minimap: prompts, failures, decisions as ticks; the view as a band */
+.mm{position:absolute;top:0;right:0;bottom:0;width:12px;cursor:pointer;z-index:4}
+.mm .tick{position:absolute;left:3px;right:3px;height:2px;border-radius:1px}
+.mm .t-prompt{background:var(--accent)} .mm .t-fail{background:var(--red)}
+.mm .t-attn{background:var(--yellow)} .mm .t-ok{background:var(--green)}
+.mm .mmv{position:absolute;left:1px;right:1px;background:rgba(255,255,255,.06);border-radius:2px;transition:background .15s}
+.mm:hover .mmv{background:rgba(255,255,255,.11)}
+
+/* ------------------------------------------------------------- transcript */
+.turn{position:relative}
+.r{display:grid;grid-template-columns:2ch minmax(0,1fr)}
+.r > .g{user-select:none}
+.gap{height:var(--lh)}
+.half{height:calc(var(--lh)/2)}
+.p{max-width:108ch}
+.dim{color:var(--dim)} .faint{color:var(--faint)} .hi{color:var(--hi)} .b{font-weight:600;color:var(--hi)}
+.ok{color:var(--green)} .bad{color:var(--red)} .warn{color:var(--yellow)} .acc{color:var(--accent)}
+.g-prose{color:var(--hi)} .g-tool{color:var(--dim)} .g-run{color:var(--green);animation:pulse 1.6s ease-in-out infinite}
+.g-fail{color:var(--red)} .g-attn{color:var(--yellow)}
+.line{display:flex;justify-content:space-between;gap:2ch;white-space:pre}
+.line > :first-child{overflow:hidden;text-overflow:ellipsis}
+.name{color:var(--hi);font-weight:500}
+.args{color:var(--dim)}
+.el{color:var(--faint);user-select:none}
+.out{color:var(--dim);white-space:pre}
+code.i{color:var(--cyan);font-family:inherit}
+.path{color:var(--cyan);text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;cursor:pointer;transition:text-decoration-color .12s}
+.path:hover{text-decoration-color:currentColor}
+ul.md{list-style:none}
+ul.md li{display:grid;grid-template-columns:2ch minmax(0,1fr)}
+ul.md li::before{content:"•";color:var(--dim)}
+.add{color:var(--green)} .del{color:var(--red)}
+
+.prompt{position:sticky;top:0;z-index:3;background:var(--band);margin:0 -3ch 0 -2ch;
+  padding:calc(var(--lh)/2) 3ch calc(var(--lh)/2) 2ch;display:grid;grid-template-columns:2ch minmax(0,1fr) auto}
+.prompt .g{color:var(--accent);font-weight:600;user-select:none}
+.prompt .txt{color:var(--hi)}
+.prompt .when{color:var(--dim);padding-left:2ch;white-space:pre}
+.att{display:inline-flex;align-items:center;gap:1ch;color:var(--cyan);background:var(--band2);padding:0 1ch;cursor:pointer}
+.att svg{width:12px;height:12px}
+.img{margin-top:calc(var(--lh)/2);border:1px solid var(--line2);display:block;width:48ch;position:relative}
+.img img{display:block;width:100%}
+.cap{color:var(--dim);white-space:pre}
+
+.code{position:relative;margin:var(--lh) 0;padding-left:2ch;border-left:1px solid var(--line2);max-width:108ch}
+.code pre{font:inherit;white-space:pre;overflow-x:auto}
+.code .lang{position:absolute;top:0;right:0;color:var(--dim)}
+.code .copy{position:absolute;top:0;right:6ch;color:var(--dim);opacity:0;transition:opacity .12s}
+.code:hover .copy{opacity:1}
+.code .copy:hover{color:var(--hi)}
+.sk{color:var(--magenta)} .sf{color:var(--blue)} .ss{color:var(--green)} .sn{color:var(--orange)} .st{color:var(--yellow)} .sc{color:var(--dim);font-style:italic} .sp{color:var(--dim)}
+
+table.t{border-collapse:collapse;margin:var(--lh) 0}
+table.t th,table.t td{border:1px solid var(--line2);padding:0 1ch;height:var(--lh);line-height:calc(var(--lh) - 1px);white-space:pre;text-align:left}
+table.t th{color:var(--hi);font-weight:600}
+table.t .num{text-align:right}
+
+/* diffs: split when the Pane is wide, unified when it is narrow */
+.diff{margin-top:calc(var(--lh)/2);border:1px solid var(--line)}
+.diff code,.diff .hunk,.diff .dh{white-space:pre}
+.diff .dh{display:flex;justify-content:space-between;padding:0 1ch;background:var(--band);color:var(--dim)}
+.diff .hunk{color:var(--dim);padding:0 1ch;background:var(--hunk)}
+.dl{display:grid;grid-template-columns:minmax(0,1fr) 1px minmax(0,1fr)}
+.dl > .mid{background:var(--line)}
+.h{display:grid;grid-template-columns:5ch 2ch minmax(0,1fr);min-height:var(--lh)}
+.h > b{font-weight:400;color:var(--dim);text-align:right;padding-right:1ch;user-select:none}
+.h > i{font-style:normal;user-select:none;padding-left:.5ch}
+.h > code{font-family:inherit;overflow:hidden;text-overflow:ellipsis}
+.h.rm{background:rgba(239,138,128,.11)} .h.rm > i{color:var(--red)}
+.h.ad{background:rgba(147,207,140,.10)} .h.ad > i{color:var(--green)}
+.h.no{background:var(--nodiff)}
+.wr{background:rgba(239,138,128,.28)} .wa{background:rgba(147,207,140,.24)}
+.du .h{grid-template-columns:5ch 5ch 2ch minmax(0,1fr)}
+.ds{display:none}
+@container (min-width: 1000px){.ds{display:block}.du{display:none}}
+
+.more{color:var(--dim);cursor:pointer;user-select:none}
+.more:hover{color:var(--fg)}
+.fold{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s ease}
+.fold > *{overflow:hidden;min-height:0}
+.fold.open{grid-template-rows:1fr}
+
+.spin{color:var(--claude);display:inline-block;width:2ch;user-select:none}
+.spin.codex{color:var(--codex)}
+.shim{background:linear-gradient(90deg,var(--claude) 35%,#ffe1d3 50%,var(--claude) 65%);background-size:300% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;animation:shim 2.4s linear infinite}
+@keyframes shim{from{background-position:100% 0}to{background-position:0 0}}
+.done-line{color:var(--dim)}
+.done-line .star{color:var(--claude)}
+.bar{display:inline-block;width:20ch;height:6px;background:var(--line2);vertical-align:middle;position:relative;margin:0 1ch;border-radius:1px;overflow:hidden}
+.bar > i{position:absolute;left:0;top:0;bottom:0;width:100%;background:var(--green);transform-origin:left;transition:transform .3s linear}
+
+/* Decision, in the provider CLIs' own grammar */
+.dec{margin-top:calc(var(--lh)/2)}
+.dec .rule{height:0;border-top:1px dashed var(--line2);margin:calc(var(--lh)/2) 0}
+.dec .cmd{color:var(--hi);white-space:pre}
+.dec .cmd .sigil{color:var(--faint);user-select:none}
+.opt{display:grid;grid-template-columns:2ch minmax(0,1fr);cursor:pointer}
+.opt:hover{background:var(--hover)}
+.opt.sel{background:var(--sel)}
+.opt .g{color:var(--accent);font-weight:600}
+.opt .k{color:var(--dim)}
+.opt.sel .txt{color:var(--hi)}
+
+/* --------------------------------------------------------------- composer */
+.comp{flex:none;padding:0 3ch 0 2ch}
+.comp .rule{height:1px;background:var(--rule);margin:0 -3ch 0 -2ch}
+.comp .in{display:grid;grid-template-columns:2ch minmax(0,1fr);padding:6px 3ch 6px 2ch;margin:0 -3ch 0 -2ch;background:var(--inband)}
+.comp .in .g{color:var(--accent);font-weight:600}
+.caret{display:inline-block;width:1ch;height:var(--lh);vertical-align:top;background:var(--accent);animation:blink 1.1s ease-in-out infinite}
+@keyframes blink{0%,45%{opacity:1}55%,95%{opacity:.12}100%{opacity:1}}
+.pane:not(.focus):not(.solo) .caret{animation:none;background:transparent;box-shadow:inset 0 0 0 1px var(--faint)}
+.ph-text{color:var(--dim)}
+.status{display:flex;white-space:pre;color:var(--dim);height:var(--lh);align-items:center;margin:2px 0 6px}
+.status .seg{cursor:pointer;padding:0 1ch;transition:background .1s,color .1s}
+.status .seg:first-child{margin-left:-1ch}
+.status .seg:hover{background:var(--hover);color:var(--fg)}
+.status .mode{color:var(--magenta)}
+.status .sp{flex:1}
+.meter{display:inline-block;width:8ch;height:4px;background:var(--line2);vertical-align:middle;position:relative;margin:0 1ch;border-radius:1px;overflow:hidden}
+.meter > i{position:absolute;left:0;top:0;bottom:0;background:var(--green)}
+.status svg.logo{margin:0 1ch 0 0}
+
+/* ------------------------------------------------------------------ group */
+.grid4{display:grid;grid-template-columns:var(--c1) minmax(0,1fr);grid-template-rows:var(--r1) minmax(0,1fr);gap:1px;background:var(--line);
+  flex:1;position:relative;--c1:50%;--r1:50%;min-width:0;min-height:0}
+.seam{position:absolute;z-index:20}
+.seam.x{top:0;bottom:0;left:var(--c1);width:9px;margin-left:-4px;cursor:col-resize}
+.seam.y{left:0;right:0;top:var(--r1);height:9px;margin-top:-4px;cursor:row-resize}
+.seam::before{content:"";position:absolute;background:var(--accent);opacity:0;transition:opacity .12s}
+.seam.x::before{left:4px;top:0;bottom:0;width:1px}
+.seam.y::before{top:4px;left:0;right:0;height:1px}
+.seam:hover::before,.seam.drag::before{opacity:1}
+
+/* ------------------------------------------------------------------- wall */
+.grid9{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);flex:1;min-width:0;min-height:0}
+.wbody{padding:calc(var(--lh)/2) 2ch;display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+.wbody .state{font-weight:600}
+.wbody .ln{white-space:pre;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.wbody .fill{flex:1}
+.spark{display:block;width:100%;height:28px}
+.qa{display:flex;gap:1ch;margin-top:calc(var(--lh)/2)}
+.qa button{border:1px solid var(--line2);padding:0 1ch;color:var(--fg)}
+.qa button:hover{background:var(--band2);color:var(--hi)}
+.qa button .k{color:var(--dim)}
+
+/* ------------------------------------------------------------------ empty */
+.empty{flex:1;padding:calc(var(--lh)*2) 4ch}
+.banner{display:flex;gap:3ch;align-items:flex-start}
+.banner > svg{height:calc(var(--lh)*3);width:auto;flex:none}
+.krow{display:grid;grid-template-columns:2ch 30ch 10ch;width:fit-content;padding-right:1ch;cursor:pointer}
+.krow:hover{background:var(--hover)}
+.krow.sel{background:var(--sel)}
+.krow .g{color:var(--accent);font-weight:600}
+.krow .k{color:var(--dim);text-align:right}
+.rrow{display:grid;grid-template-columns:2ch 2ch 44ch 14ch 6ch;width:fit-content;cursor:pointer}
+.rrow:hover{background:var(--hover)}
+
+/* --------------------------------------------------------------- floating */
+.veil{position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:39;display:none}
+.veil.on{display:block}
+.float{position:absolute;background:var(--float);border:1px solid var(--line2);box-shadow:0 6px 14px rgba(0,0,0,.5);
+  z-index:40;display:none;white-space:nowrap}
+.float.on{display:block}
+.frow{height:var(--lh);display:flex;align-items:center;padding:0 1ch;cursor:default;white-space:pre}
+.frow:hover{background:var(--hover)}
+.frow.sel{background:var(--sel)}
+.frow .g{width:2ch;color:var(--accent);font-weight:600;flex:none}
+.frow .nm{color:var(--fg)}
+.frow.sel .nm{color:var(--hi)}
+.frow .ds2{color:var(--dim);margin-left:2ch;flex:1;overflow:hidden;text-overflow:ellipsis}
+.frow .k{color:var(--dim);margin-left:2ch}
+.fhead{height:var(--lh);display:flex;align-items:center;padding:0 1ch;color:var(--dim);justify-content:space-between;white-space:pre}
+.fhead .hi{font-weight:600}
+.fsec{height:var(--lh);display:flex;align-items:center;padding:0 1ch;color:var(--dim);margin-top:calc(var(--lh)/2);white-space:pre}
+.fsec svg.logo{margin:0 1ch 0 0}
+.ffoot{border-top:1px solid var(--line);color:var(--dim);padding:0 1ch;height:calc(var(--lh) + 1px);display:flex;align-items:center;margin-top:calc(var(--lh)/2)}
+.effort{display:flex;align-items:center;padding:0 1ch;height:var(--lh);margin-top:calc(var(--lh)/2);border-top:1px solid var(--line);padding-top:calc(var(--lh)/2);box-sizing:content-box}
+.effort span{padding:0 1ch;color:var(--dim)}
+.effort span.on{background:var(--accent);color:#0b0d12;font-weight:600}
+.m{color:var(--accent);font-weight:600}
+#picker{width:66ch}
+#palette{width:84ch;left:50%;top:56px;transform:translateX(-50%)}
+#palette .in{height:calc(var(--lh) + 12px);display:flex;align-items:center;padding:0 1ch;border-bottom:1px solid var(--line)}
+#palette .in .g{color:var(--accent);font-weight:600;width:2ch}
+#hover{width:100ch;pointer-events:none}
+#hover .hl,#hover .ffoot{white-space:pre}
+#hover .hl > span{overflow:hidden;text-overflow:ellipsis}
+#hover .hl{display:grid;grid-template-columns:6ch minmax(0,1fr);padding:0 1ch}
+#hover .hl b{font-weight:400;color:var(--dim);text-align:right;padding-right:2ch}
+#hover .hl.on{background:var(--sel)}
+#hover .hl.on b{color:var(--accent)}
+.toast{position:absolute;right:2ch;bottom:calc(var(--lh) + 16px);width:52ch;z-index:30;display:none}
+.toast.on{display:block}
+
+/* ------------------------------------------------------- GPUI annotations */
+.annot [data-gpui]{outline:1px dashed rgba(142,177,240,.85);outline-offset:1px}
+.annot [data-gpui]:not([data-pos]){position:relative}
+.annot [data-gpui]::after{content:attr(data-gpui);position:absolute;top:0;right:4px;transform:translateY(-50%);background:var(--accent);
+  color:#0b0d12;font:700 10px/16px "Geist Mono";min-width:16px;height:16px;text-align:center;padding:0 3px;border-radius:8px;z-index:60;pointer-events:none}
+/* ------------------------------------------------------------- clean pass
+   Same terminal, less at once: one thing moves (the focused thread's
+   spinner), each fact shows in one place, unfocused Panes carry no
+   composer, and blocks lose the boxes around them. Q toggles it. */
+.clean .g-run{animation:none}
+.clean .pane:not(.focus):not(.solo) .comp .status{display:none}
+.clean .pane:not(.focus):not(.solo) .comp{padding-bottom:6px}
+.clean .pane:not(.focus) .shim{animation:none}
+.clean .ph .n{display:none}
+.clean .nav svg.logo{display:none}
+.clean #nav-hints{display:none}
+.clean .sb .count{display:none}
+.clean .tb .warn,.clean .tb .bad{color:inherit}
+.clean .mm{opacity:0;transition:opacity .15s}
+.clean .pane:hover .mm{opacity:1}
+.clean .diff{border-color:transparent}
+.clean .diff .hunk{background:none;padding-left:0}
+.clean table.t th,.clean table.t td{border:0;border-bottom:1px solid var(--line)}
+.clean table.t th{border-bottom-color:var(--line2)}
+.clean table.t tr > :first-child{padding-left:0}
+.clean .dec .rule{display:none}
+.clean .dec .cmd{background:var(--band);padding:calc(var(--lh)/4) 1ch;margin:calc(var(--lh)/2) 0}
+.clean .spark{display:none}
+.clean .wbody .ln:has(.bar){display:none}
+.clean .wbody .ln:nth-of-type(n+6){display:none}
+/* ------------------------------------------------------------------ glass
+   Glass on the frame, terminal in the content. GPUI's
+   WindowBackgroundAppearance::Blurred makes the window see-through with a
+   system blur behind it; Ferrite paints translucent fills over that.
+   The chrome (sidebar, the title over it, bottom bar, floats) is thin
+   glass; the reading plane stays a terminal surface at ~94% opacity, the
+   way Ghostty and iTerm do background opacity, so a hint of the desktop
+   shows and text never sits on a busy picture. Inside, nothing changes:
+   square, mono, on the grid. The sticky prompt band frosts what scrolls
+   under it. G toggles, W cycles the wallpaper. */
+.glass{
+  --bg:rgba(26,26,27,.94); --nav:rgba(36,36,39,.72); --sb:rgba(36,36,39,.72);
+  --band:rgba(52,52,55,.80); --head:rgba(255,255,255,.05); --inband:rgba(255,255,255,.05);
+  --hover:rgba(255,255,255,.06); --sel:rgba(255,255,255,.11); --band2:rgba(255,255,255,.10);
+  --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14); --vline:rgba(0,0,0,.30);
+  --hunk:rgba(0,0,0,.12); --nodiff:rgba(0,0,0,.2); --float:rgba(44,44,47,.74); --frame:rgba(255,255,255,.16);
+}
+.glass #stage{background:#111 var(--wall) center/cover no-repeat}
+.glass .win{background:transparent;-webkit-backdrop-filter:blur(60px) saturate(1.35);backdrop-filter:blur(60px) saturate(1.35);
+  box-shadow:0 0 0 1px var(--frame),0 30px 80px rgba(0,0,0,.45)}
+.glass .tb{background:transparent}
+.glass .tb .title{background:var(--bg)}
+.glass #v-empty{background:var(--bg)}
+.glass .prompt{background:linear-gradient(rgba(255,255,255,.07),rgba(255,255,255,.07)),var(--bg);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px)}
+.glass .float{-webkit-backdrop-filter:blur(30px) saturate(1.6);backdrop-filter:blur(30px) saturate(1.6)}
+.glass .veil{background:rgba(0,0,0,.2)}
+.shot.frame #stage{top:0}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="steel" x1="0" y1="50" x2="0" y2="1139" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C7D5E8"/><stop offset="0.52" stop-color="#9FB3D0"/><stop offset="1" stop-color="#748EBA"/>
+    </linearGradient>
+  </defs>
+  <symbol id="claude" viewBox="0 0 24 24"><path fill="currentColor" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></symbol>
+  <symbol id="codex" viewBox="0 0 24 24"><path fill="currentColor" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.4593a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></symbol>
+  <symbol id="image" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M2 3h12v10H2zM2 11l3.5-3.5 3 3 2-2L14 12"/><circle cx="10.5" cy="6" r="1.2" fill="currentColor"/></symbol>
+</svg>
+
+<div id="controls">
+  <span class="lbl">View</span>
+  <button data-view="solo">Solo<kbd>1</kbd></button>
+  <button data-view="group">Group<kbd>2</kbd></button>
+  <button data-view="wall">Wall<kbd>3</kbd></button>
+  <button data-view="empty">Empty<kbd>4</kbd></button>
+  <span class="sep"></span>
+  <button id="b-sidebar">Sidebar<kbd>B</kbd></button>
+  <button id="b-notes">Notifications<kbd>N</kbd></button>
+  <button id="b-picker">Model picker<kbd>M</kbd></button>
+  <button id="b-palette">Palette<kbd>K</kbd></button>
+  <button id="b-toast">Toast<kbd>T</kbd></button>
+  <span class="sep"></span>
+  <button id="b-glass">Glass<kbd>G</kbd></button>
+  <button id="b-wall">Wallpaper<kbd>W</kbd></button>
+  <button id="b-dark">Dark<kbd>D</kbd></button>
+  <button id="b-clean" class="on">Clean<kbd>Q</kbd></button>
+  <button id="b-annot">GPUI-only callouts<kbd>A</kbd></button>
+  <span class="sep"></span>
+  <button id="b-zout">Text −</button><button id="b-zin">Text +</button>
+  <span class="sep"></span>
+  <span>hover paths · drag seams in Group · click “+ N lines” · click the minimap</span>
+</div>
+<div id="legend">
+  <h3>What a terminal can't do (GPUI does)</h3>
+  <ul id="legend-list"></ul>
+</div>
+
+<div id="stage"><div id="scaler">
+<div class="win" id="win">
+
+  <!-- ============================================================ titlebar -->
+  <div class="tb">
+    <div class="tbl">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <span class="sp"></span>
+      <button class="ib" id="b-side" title="Toggle sidebar ⌘B"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="15" height="14" rx="2.5"/><path d="M7.5 3v14"/></svg></button>
+      <button class="ib" id="b-bell" title="Notifications"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.33a4 4 0 0 1 8 0c0 4.67 2 6 2 6H2s2-1.33 2-6"/><path d="M6.87 14a1.3 1.3 0 0 0 2.26 0"/></svg><span class="badge">2</span></button>
+    </div>
+    <div class="vline"></div>
+    <div class="title" id="title"></div>
+  </div>
+
+  <div class="main">
+    <!-- ========================================================== nav -->
+    <div class="nav" id="nav">
+      <div class="nrow head"><span class="t">needs you 2</span><span class="s">⌘D</span></div>
+      <div class="nrow" data-for="group"><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s warn">approval</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="dot d-attn">●</span><span class="t">Flaky provider test</span><span class="s warn">question</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="half"></div>
+      <div class="nrow proj"><span class="tr">▾ </span><span class="t">ferrite</span><span class="s">dev</span></div>
+      <div class="nrow" id="n-solo"><span class="cur"></span><span class="dot d-done">●</span><span class="t">Nav rows jitter on stream start</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow" id="n-group"><span class="cur"></span><span class="tr">▾ </span><span class="t">Perf sweep</span><span class="s">4</span></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-run">●</span><span class="t">Perf: layout cache</span><span class="s">1m04s</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s warn">needs you</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-done">●</span><span class="t">Theme retune</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow"><span class="tr">  └ </span><span class="dot d-fail">●</span><span class="t">Fold regression</span><span class="s bad">failing 2</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow" id="n-wall"><span class="cur"></span><span class="tr">▸ </span><span class="t">Everything</span><span class="s">9</span></div>
+      <div class="half"></div>
+      <div class="nrow proj"><span class="tr">▾ </span><span class="t">zeron</span><span class="s">main</span></div>
+      <div class="nrow"><span class="cur"></span><span class="dot d-run">●</span><span class="t">Port onboarding flow</span><span class="s">12s</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow"><span class="cur"></span><span class="dot d-done">●</span><span class="t">Bump deps</span><span class="s">done</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="cur"></span><span class="dot d-run">●</span><span class="t">Docs: ADR 0008</span><span class="s">3s</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="fill"></div>
+      <div class="nrow head"><span class="tr">▸ </span><span class="t">parked 3</span></div>
+      <div class="nrow head" id="nav-hints"><span class="t">⌘N new · ⌘⇧N worktree · ⌘K all</span></div>
+    </div>
+    <div class="vline"></div>
+
+    <!-- ========================================================== cockpit -->
+    <div class="cockpit" id="cockpit">
+
+      <!-- ---------------------------------------------------- SOLO -->
+      <div class="view" id="v-solo">
+        <div class="pane solo" id="solo">
+          <div class="body" data-gpui="14">
+            <div class="scroll" id="solo-scroll">
+              <div class="tx">
+
+                <div class="banner" style="margin-bottom:var(--lh);width:fit-content;padding-right:3ch" data-gpui="1">
+                  <svg viewBox="280 30 700 1130"><path fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round" d="M628 50 950 572 901 658 469 307Z"/><path fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round" d="M437 363 305 568 619 1139 806 834 751 767Z"/></svg>
+                  <div>
+                    <div class="b">Nav rows jitter on stream start</div>
+                    <div class="dim">claude · opus 5.5 (1M) · medium · <span class="path">~/ferrite</span> on dev</div>
+                    <div class="dim">started 7:18 pm · 2 turns · 41s working</div>
+                  </div>
+                </div>
+
+                <!-- ============ turn 1 -->
+                <div class="turn" data-mark="prompt">
+                  <div class="prompt" data-pos>
+                    <span class="g">❯</span>
+                    <span class="txt">Nav rows jitter when a thread starts streaming: the whole tree shifts down under the pointer. Screenshot attached. <span class="att" data-gpui="2"><svg><use href="#image"/></svg>nav-jitter.png</span></span>
+                    <span class="when">7:18 pm</span>
+                  </div>
+                  <div class="r"><span class="g"></span><div><div class="img"><img src="img/nav-jitter.png" alt=""></div><div class="cap">nav-jitter.png · 580×320 · 41 KB</div></div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Read</span><span class="args">(</span><span class="path" data-hover="nav">crates/ferrite/src/nav.rs</span><span class="args">)</span></span></div></div>
+                  <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span>412 lines</div></div>
+                  <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Grep</span><span class="args">(status_line, crates/ferrite/src)</span></span></div></div>
+                  <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span>6 matches in 2 files</div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g g-prose">●</span><div class="p">The jitter comes from the status line under each Thread row in <span class="path" data-hover="nav" data-gpui="6">nav.rs</span>. It only exists once a Session reports its first fact, so a row grows from <code class="i">44px</code> to <code class="i">58px</code> the moment streaming starts, and every row below it moves under the pointer.<div class="gap"></div>Reserving the line from the first frame fixes it:
+                    <div class="code" data-gpui="15"><span class="lang">rust</span><button class="copy">copy</button><pre><span class="sk">let</span> summary = facts
+    .summary
+    .<span class="sf">clone</span>()
+    .<span class="sf">unwrap_or_else</span>(|| <span class="ss">"waiting for first output"</span>.<span class="sf">into</span>());
+row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<span class="sf">h</span>(<span class="sf">px</span>(<span class="st">theme</span>::<span class="sn">ROW_LINE_H</span>)))</pre></div>
+                    <table class="t"><tr><th>Row state</th><th class="num">Before</th><th class="num">After</th></tr>
+                      <tr><td>idle</td><td class="num">44px</td><td class="num">58px</td></tr>
+                      <tr><td>streaming</td><td class="num">58px</td><td class="num">58px</td></tr>
+                      <tr><td>parked</td><td class="num">44px</td><td class="num">44px</td></tr></table>
+                    Want me to apply it and run the nav tests?</div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g done-line"><span class="star">✻</span></span><div class="done-line">Worked for 12s · 7:19 pm · ↑ 1.8k ↓ 620</div></div>
+                  <div class="gap"></div>
+                </div>
+
+                <!-- ============ turn 2 -->
+                <div class="turn" data-mark="prompt">
+                  <div class="prompt" data-pos data-gpui="3">
+                    <span class="g">❯</span>
+                    <span class="txt">Yes, apply it and run the nav tests.</span>
+                    <span class="when">7:31 pm</span>
+                  </div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Update</span><span class="args">(</span><span class="path" data-hover="nav">crates/ferrite/src/nav.rs</span><span class="args">)</span></span><span><span class="add">+7</span> <span class="del">−3</span></span></div></div>
+                  <div class="r"><span class="g"></span><div>
+                    <div class="diff ds" data-gpui="4">
+                      <div class="hunk">@@ -208,7 +208,11 @@ fn thread_row</div>
+                      <div class="dl"><span class="h"><b>208</b><i> </i><code><span class="sk">fn</span> <span class="sf">thread_row</span>(&amp;<span class="sk">self</span>, t: &amp;<span class="st">ThreadRow</span>, cx: &amp;<span class="st">App</span>) -&gt; <span class="st">Div</span> {</code></span><span class="mid"></span><span class="h"><b>208</b><i> </i><code><span class="sk">fn</span> <span class="sf">thread_row</span>(&amp;<span class="sk">self</span>, t: &amp;<span class="st">ThreadRow</span>, cx: &amp;<span class="st">App</span>) -&gt; <span class="st">Div</span> {</code></span></div>
+                      <div class="dl"><span class="h"><b>209</b><i> </i><code>    <span class="sk">let</span> facts = <span class="sk">self</span>.facts.<span class="sf">get</span>(&amp;t.id);</code></span><span class="mid"></span><span class="h"><b>209</b><i> </i><code>    <span class="sk">let</span> facts = <span class="sk">self</span>.facts.<span class="sf">get</span>(&amp;t.id);</code></span></div>
+                      <div class="dl"><span class="h no"><b></b><i></i><code></code></span><span class="mid"></span><span class="h ad"><b>210</b><i>+</i><code>    <span class="sk">let</span> <span class="wa">live = t.session.<span class="sf">is_some</span>();</span></code></span></div>
+                      <div class="dl"><span class="h rm"><b>210</b><i>-</i><code>    <span class="sk">let mut</span> row = <span class="sf">div</span>().<span class="sf">h</span>(<span class="sf">px</span>(<span class="wr"><span class="st">theme</span>::<span class="sn">ROW_H</span></span>));</code></span><span class="mid"></span><span class="h ad"><b>211</b><i>+</i><code>    <span class="sk">let mut</span> row = <span class="sf">div</span>().<span class="sf">h</span>(<span class="sf">px</span>(<span class="wa"><span class="sk">if</span> live { <span class="st">theme</span>::<span class="sn">ROW_LIVE_H</span> } <span class="sk">else</span> { <span class="st">theme</span>::<span class="sn">ROW_H</span> }</span>));</code></span></div>
+                      <div class="dl"><span class="h rm"><b>211</b><i>-</i><code>    <span class="sk">if let</span> <span class="wr"><span class="st">Some</span>(summary) = facts.<span class="sf">and_then</span>(|f| f.summary.<span class="sf">clone</span>())</span> {</code></span><span class="mid"></span><span class="h ad"><b>212</b><i>+</i><code>    <span class="sk">if</span> <span class="wa">live</span> {</code></span></div>
+                      <div class="dl"><span class="h no"><b></b><i></i><code></code></span><span class="mid"></span><span class="h ad"><b>213</b><i>+</i><code>        <span class="sk">let</span> summary = facts.<span class="sf">and_then</span>(|f| f.summary.<span class="sf">clone</span>())</code></span></div>
+                      <div class="dl"><span class="h no"><b></b><i></i><code></code></span><span class="mid"></span><span class="h ad"><b>214</b><i>+</i><code>            .<span class="sf">unwrap_or_else</span>(|| <span class="ss">"waiting for first output"</span>.<span class="sf">into</span>());</code></span></div>
+                      <div class="dl"><span class="h rm"><b>212</b><i>-</i><code>        row = row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary));</code></span><span class="mid"></span><span class="h ad"><b>215</b><i>+</i><code>        row = row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary)<span class="wa">.<span class="sf">h</span>(<span class="sf">px</span>(<span class="st">theme</span>::<span class="sn">ROW_LINE_H</span>))</span>);</code></span></div>
+                      <div class="dl"><span class="h"><b>213</b><i> </i><code>    }</code></span><span class="mid"></span><span class="h"><b>216</b><i> </i><code>    }</code></span></div>
+                      <div class="dl"><span class="h"><b>214</b><i> </i><code>    row</code></span><span class="mid"></span><span class="h"><b>217</b><i> </i><code>    row</code></span></div>
+                    </div>
+                    <div class="diff du">
+                      <div class="hunk">@@ -208,7 +208,11 @@ fn thread_row</div>
+                      <div class="h"><b>209</b><b>209</b><i> </i><code>    <span class="sk">let</span> facts = <span class="sk">self</span>.facts.<span class="sf">get</span>(&amp;t.id);</code></div>
+                      <div class="h rm"><b>210</b><b></b><i>-</i><code>    <span class="sk">let mut</span> row = <span class="sf">div</span>().<span class="sf">h</span>(<span class="sf">px</span>(<span class="wr">theme::ROW_H</span>));</code></div>
+                      <div class="h ad"><b></b><b>210</b><i>+</i><code>    <span class="sk">let</span> <span class="wa">live = t.session.is_some();</span></code></div>
+                      <div class="h ad"><b></b><b>211</b><i>+</i><code>    <span class="sk">let mut</span> row = <span class="sf">div</span>().<span class="sf">h</span>(<span class="sf">px</span>(<span class="wa">if live { theme::ROW_LIVE_H } else { theme::ROW_H }</span>));</code></div>
+                    </div>
+                  </div></div>
+                  <div class="gap"></div>
+                  <div class="r" data-mark="fail"><span class="g g-fail">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(cargo test -p ferrite nav::)</span></span><span class="dim">18s</span></div></div>
+                  <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span><span class="bad">failed</span> · running 38 tests</div></div>
+                  <div class="r"><span class="g"></span><div class="out">  test nav::rows_reserve_status_line ... <span class="ok">ok</span>
+  test nav::live_row_height_is_stable ... <span class="ok">ok</span>
+  test nav::parked_rows_keep_their_height ... <span class="bad">FAILED</span></div></div>
+                  <div class="r"><span class="g"></span><div class="fold" id="fold1"><div class="out">  test nav::group_rail_spans_members ... <span class="ok">ok</span>
+  test nav::needs_you_section_orders_by_age ... <span class="ok">ok</span>
+  test nav::filter_keeps_selection ... <span class="ok">ok</span>
+  ...
+  ---- nav::parked_rows_keep_their_height stdout ----
+  thread 'nav::parked_rows_keep_their_height' panicked at crates/ferrite/src/nav.rs:1184:9:
+  assertion `left == right` failed
+    left: 58.0
+   right: 44.0
+  test result: <span class="bad">FAILED</span>. 37 passed; 1 failed; 0 ignored</div></div></div>
+                  <div class="r"><span class="g"></span><div class="out"><span class="more" data-fold="fold1" data-gpui="5">  + 35 lines</span></div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g g-prose">●</span><div class="p">One regression: parked rows picked up the reserved line too. Parked rows have no live facts, so the reservation should apply to open Threads only.</div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Update</span><span class="args">(</span><span class="path" data-hover="nav">crates/ferrite/src/nav.rs</span><span class="args">)</span></span><span><span class="add">+2</span> <span class="del">−1</span></span></div></div>
+                  <div class="r"><span class="g"></span><div class="out"><span class="more">  + show diff</span></div></div>
+                  <div class="r" data-mark="ok"><span class="g g-tool">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(cargo test -p ferrite nav::)</span></span><span class="dim">9s</span></div></div>
+                  <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span><span class="ok">ok</span> · 38 passed</div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g g-prose">●</span><div class="p">Fixed. Live rows now reserve their status line from the first frame, so a Thread that starts streaming no longer shifts the tree under the pointer, and parked rows keep their compact <code class="i">44px</code> height.
+                    <div class="gap"></div>
+                    <ul class="md"><li><span><span class="path" data-hover="nav">nav.rs</span>: reserve the status line for open Threads only</span></li>
+                    <li><span>all 38 <code class="i">nav::</code> tests pass, including <code class="i">parked_rows_keep_their_height</code></span></li></ul>
+                    <div class="gap"></div>
+                    I left <span class="path">facts.rs</span> alone: the refresh cadence is fine once the height no longer depends on it.</div></div>
+                  <div class="gap"></div>
+                  <div class="r"><span class="g done-line"><span class="star">✻</span></span><div class="done-line">Worked for 41s · 7:32 pm · ↑ 3.2k ↓ 1.1k</div></div>
+                </div>
+
+              </div>
+            </div>
+            <div class="mm" data-pos data-gpui="7"></div>
+          </div>
+          <div class="comp">
+            <div class="rule"></div>
+            <div class="in"><span class="g">❯</span><span><span class="caret" data-gpui="11"></span><span class="ph-text"> Steer this thread · / for commands · drop or paste images</span></span></div>
+            <div class="rule"></div>
+            <div class="status" data-gpui="9">
+              <span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span>
+              <span class="seg" id="model-seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5 (1M) · medium</span><span class="faint">·</span>
+              <span class="seg">ctx<span class="meter" data-gpui="8"><i style="width:32%"></i></span>32%</span><span class="faint">·</span>
+              <span class="seg">1 file <span class="add">+9</span> <span class="del">−4</span></span>
+              <span class="sp"></span>
+              <span class="seg">⇧⇥ mode · ? shortcuts</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- GROUP -->
+      <div class="view" id="v-group">
+        <div class="grid4" id="grid4" data-gpui="10">
+          <!-- pane 1: working, focused -->
+          <div class="pane focus">
+            <div class="ph"><span class="n">1</span><span class="dot d-run">●</span><span class="tt">Perf: layout cache</span><span>working <span class="secs" data-s="64">1m04s</span></span><svg class="logo claude"><use href="#claude"/></svg></div>
+            <div class="body"><div class="scroll"><div class="tx" style="padding-top:0">
+              <div class="turn" data-mark="prompt">
+                <div class="prompt" data-pos><span class="g">❯</span><span class="txt">Perf: layout cache. The glyph atlas rebuilds every frame on a 12-pane board; keep it per-cell.</span><span class="when">7:40 pm</span></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Read</span><span class="args">(</span><span class="path">crates/ferrite/src/canvas.rs</span><span class="args">)</span></span></div></div>
+                <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span>640 lines</div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-prose">●</span><div class="p">Wiring the joiner into the canvas path so the atlas stays per-cell; the fold keeps the tail following the newest line while it streams.</div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Update</span><span class="args">(</span><span class="path">crates/ferrite/src/canvas.rs</span><span class="args">)</span></span><span><span class="add">+31</span> <span class="del">−9</span></span></div></div>
+                <div class="r"><span class="g"></span><div>
+                  <div class="diff du">
+                    <div class="hunk">@@ -88,6 +88,9 @@ impl Canvas</div>
+                    <div class="h rm"><b>91</b><b></b><i>-</i><code>    <span class="sk">let</span> atlas = <span class="st">Atlas</span>::<span class="sf">build</span>(<span class="wr">&amp;self.glyphs</span>);</code></div>
+                    <div class="h ad"><b></b><b>91</b><i>+</i><code>    <span class="sk">let</span> atlas = <span class="sk">self</span>.<span class="wa">cells.<span class="sf">entry</span>(cell)</span></code></div>
+                    <div class="h ad"><b></b><b>92</b><i>+</i><code>        .<span class="sf">or_insert_with</span>(|| <span class="st">Atlas</span>::<span class="sf">build</span>(&amp;<span class="sk">self</span>.glyphs));</code></div>
+                  </div>
+                </div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-run">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(cargo test --workspace)</span></span><span class="dim secs" data-s="22">22s</span></div></div>
+                <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span>running 357 tests<span class="bar" data-gpui="8"><i id="bar1" style="transform:scaleX(.59)"></i></span><span id="bar1n">212</span>/357</div></div>
+              </div>
+            </div></div><div class="mm" data-pos></div></div>
+            <div class="comp">
+              <div class="r" style="margin-bottom:6px"><span class="g spin">✶</span><span><span class="shim" data-gpui="11">Reticulating…</span> <span class="dim">(<span class="secs" data-s="64">1m04s</span> · ↑ 4.1k tokens · esc to interrupt)</span></span></div>
+              <div class="rule"></div>
+              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> queue a follow-up · ⏎ sends when the turn ends</span></span></div>
+              <div class="rule"></div>
+              <div class="status"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:61%;background:var(--yellow)"></i></span>61%</span></div>
+            </div>
+          </div>
+
+          <!-- pane 2: needs you -->
+          <div class="pane attn">
+            <div class="ph"><span class="n">2</span><span class="dot d-attn">●</span><span class="tt">Close stale issues</span><span class="warn">needs you</span><span class="dim"> · approval</span><svg class="logo codex"><use href="#codex"/></svg></div>
+            <div class="body"><div class="scroll"><div class="tx" style="padding-top:0">
+              <div class="turn" data-mark="prompt">
+                <div class="prompt" data-pos><span class="g">❯</span><span class="txt">Close stale issues older than 0.3.0.</span><span class="when">7:36 pm</span></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(gh issue list --state open --label stale)</span></span><span class="dim">2s</span></div></div>
+                <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span>7 issues · <span class="more">+ 7 lines</span></div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-prose">●</span><div class="p">Six were closed. Closing <span class="path">#212</span> needs your ruling: it's superseded by <span class="path">#240</span> but still has a linked PR.</div></div>
+                <div class="gap"></div>
+                <div class="r" data-mark="attn"><span class="g g-attn">◆</span><div><span class="warn">Bash needs approval</span><span class="dim"> · codex · read-only sandbox</span>
+                  <div class="dec">
+                    <div class="rule"></div>
+                    <div class="cmd"><span class="sigil">$ </span>gh issue close 212 --reason "not planned"</div>
+                    <div class="rule"></div>
+                    <div class="opt sel"><span class="g">❯</span><span class="txt"><span class="k">1.</span> Allow</span></div>
+                    <div class="opt"><span class="g"></span><span class="txt"><span class="k">2.</span> Allow <code class="i">gh issue *</code> for this thread</span></div>
+                    <div class="opt"><span class="g"></span><span class="txt"><span class="k">3.</span> Deny, and tell Codex what to do instead</span></div>
+                    <div class="half"></div>
+                    <div class="dim">↑↓ select · 1–3 pick · esc deny · tab amend</div>
+                  </div>
+                </div></div>
+              </div>
+            </div></div><div class="mm" data-pos></div></div>
+            <div class="comp">
+              <div class="rule"></div>
+              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> answer above, or steer</span></span></div>
+              <div class="rule"></div>
+              <div class="status"><span class="seg mode">⏵ on request</span><span class="faint">·</span><span class="seg"><svg class="logo codex"><use href="#codex"/></svg>gpt-6 astra · medium</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:9%"></i></span>9%</span></div>
+            </div>
+          </div>
+
+          <!-- pane 3: done -->
+          <div class="pane">
+            <div class="ph"><span class="n">3</span><span class="dot d-done">●</span><span class="tt">Theme retune</span><span>done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+            <div class="body"><div class="scroll"><div class="tx" style="padding-top:0">
+              <div class="turn" data-mark="prompt">
+                <div class="prompt" data-pos><span class="g">❯</span><span class="txt">Theme retune: lift the status inks to 4.5:1 on the pane.</span><span class="when">7:29 pm</span></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-tool">●</span><div class="line"><span><span class="name">Update</span><span class="args">(</span><span class="path">crates/ferrite/src/theme.rs</span><span class="args">)</span></span><span><span class="add">+3</span> <span class="del">−3</span></span></div></div>
+                <div class="r"><span class="g"></span><div>
+                  <div class="diff du">
+                    <div class="h rm"><b>237</b><b></b><i>-</i><code><span class="sk">pub const</span> <span class="sn">RUNNING</span>: <span class="st">u32</span> = <span class="wr"><span class="sn">0x7fbf95</span></span>;</code></div>
+                    <div class="h ad"><b></b><b>237</b><i>+</i><code><span class="sk">pub const</span> <span class="sn">RUNNING</span>: <span class="st">u32</span> = <span class="wa"><span class="sn">0x93cf8c</span></span>;</code></div>
+                    <div class="h rm"><b>240</b><b></b><i>-</i><code><span class="sk">pub const</span> <span class="sn">ATTENTION</span>: <span class="st">u32</span> = <span class="wr"><span class="sn">0xcbb280</span></span>;</code></div>
+                    <div class="h ad"><b></b><b>240</b><i>+</i><code><span class="sk">pub const</span> <span class="sn">ATTENTION</span>: <span class="st">u32</span> = <span class="wa"><span class="sn">0xe6c47c</span></span>;</code></div>
+                  </div>
+                </div></div>
+                <div class="gap"></div>
+                <div class="r" data-mark="ok"><span class="g g-tool">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(cargo test -p ferrite theme::)</span></span><span class="dim">6s</span></div></div>
+                <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span><span class="ok">ok</span> · 24 passed</div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-prose">●</span><div class="p">Landed the retune behind the theme tokens; every status ink now clears 4.5:1 on <code class="i">PANE</code> and the suite is green.</div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g done-line"><span class="star">✻</span></span><div class="done-line">Worked for 3m 12s · 7:33 pm</div></div>
+              </div>
+            </div></div><div class="mm" data-pos></div></div>
+            <div class="comp">
+              <div class="rule"></div>
+              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> </span></span></div>
+              <div class="rule"></div>
+              <div class="status"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>sonnet 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:18%"></i></span>18%</span></div>
+            </div>
+          </div>
+
+          <!-- pane 4: failing -->
+          <div class="pane">
+            <div class="ph"><span class="n">4</span><span class="dot d-fail">●</span><span class="tt">Fold regression</span><span class="bad">failing 2</span><svg class="logo claude"><use href="#claude"/></svg></div>
+            <div class="body"><div class="scroll"><div class="tx" style="padding-top:0">
+              <div class="turn" data-mark="prompt">
+                <div class="prompt" data-pos><span class="g">❯</span><span class="txt">Fold regression after the retune: find it.</span><span class="when">7:34 pm</span></div>
+                <div class="gap"></div>
+                <div class="r" data-mark="fail"><span class="g g-fail">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(cargo test --workspace)</span></span><span class="dim">1m01s</span></div></div>
+                <div class="r"><span class="g"></span><div class="out"><span class="el">└ </span><span class="bad">failed</span> · 357 passed; 2 failed
+  fold::tail_follows_newest_line ... <span class="bad">FAILED</span>
+  fold::collapse_keeps_anchor ... <span class="bad">FAILED</span>
+<span class="more">  + 41 lines</span></div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-prose">●</span><div class="p">Two cases regressed after the retune; rerunning the pair with the fold instrumented.</div></div>
+                <div class="gap"></div>
+                <div class="r"><span class="g g-run">●</span><div class="line"><span><span class="name">Bash</span><span class="args">(FOLD_TRACE=1 cargo test fold::tail)</span></span><span class="dim secs" data-s="3">3s</span></div></div>
+              </div>
+            </div></div><div class="mm" data-pos></div></div>
+            <div class="comp">
+              <div class="r" style="margin-bottom:6px"><span class="g spin">✶</span><span><span class="shim">Instrumenting…</span> <span class="dim">(<span class="secs" data-s="8">8s</span> · esc to interrupt)</span></span></div>
+              <div class="rule"></div>
+              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> </span></span></div>
+              <div class="rule"></div>
+              <div class="status"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:44%"></i></span>44%</span></div>
+            </div>
+          </div>
+
+          <div class="seam x" data-axis="x"></div>
+          <div class="seam y" data-axis="y"></div>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- WALL -->
+      <div class="view" id="v-wall"><div class="grid9" id="grid9" data-gpui="13"></div></div>
+
+      <!-- ---------------------------------------------------- EMPTY -->
+      <div class="view" id="v-empty">
+        <div class="empty">
+          <div class="banner">
+            <svg viewBox="280 30 700 1130"><path fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round" d="M628 50 950 572 901 658 469 307Z"/><path fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round" d="M437 363 305 568 619 1139 806 834 751 767Z"/></svg>
+            <div>
+              <div><span class="b">Ferrite</span> <span class="dim">0.5.0</span></div>
+              <div class="dim"><svg class="logo claude" style="margin:0 .5ch 0 0"><use href="#claude"/></svg>claude 2.1.289 · <svg class="logo codex" style="margin:0 .5ch 0 0"><use href="#codex"/></svg>codex 0.160.0 · 3 projects · 9 open threads</div>
+              <div class="dim"><span class="path">~/Desktop/Projects</span></div>
+            </div>
+          </div>
+          <div class="gap"></div><div class="gap"></div>
+          <div class="krow sel"><span class="g">❯</span><span class="hi">new thread</span><span class="k">⌘N</span></div>
+          <div class="krow"><span class="g"></span><span>new worktree thread</span><span class="k">⌘⇧N</span></div>
+          <div class="krow"><span class="g"></span><span>reopen last</span><span class="k">⌘O</span></div>
+          <div class="krow"><span class="g"></span><span>open a group</span><span class="k">⌘G</span></div>
+          <div class="krow"><span class="g"></span><span>everything else</span><span class="k">⌘K</span></div>
+          <div class="gap"></div><div class="gap"></div>
+          <div class="dim">recent</div>
+          <div class="half"></div>
+          <div class="rrow"><span></span><span class="d-done">●</span><span>Nav rows jitter on stream start</span><span class="dim">ferrite</span><span class="dim">12m</span></div>
+          <div class="rrow"><span></span><span class="d-fail">●</span><span>Fold regression</span><span class="dim">ferrite</span><span class="dim">20m</span></div>
+          <div class="rrow"><span></span><span class="d-done">●</span><span>Bump deps</span><span class="dim">zeron</span><span class="dim">1h</span></div>
+          <div class="rrow"><span></span><span class="d-park">○</span><span>Release 0.5.0 notes</span><span class="dim">ferrite</span><span class="dim">2h</span></div>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- floats -->
+      <div class="veil" id="veil"></div>
+
+      <div class="float" id="picker" data-pos data-gpui="12">
+        <div class="fhead"><span class="hi" style="color:var(--hi)">model</span><span>/model</span></div>
+        <div class="fsec"><svg class="logo claude"><use href="#claude"/></svg>claude</div>
+        <div class="frow"><span class="g"></span><span class="nm">default</span><span class="ds2">the CLI's own default</span></div>
+        <div class="frow"><span class="g"></span><span class="nm">Fable 5.1</span><span class="ds2">most capable, for the hardest work</span></div>
+        <div class="frow sel"><span class="g">❯</span><span class="nm">Opus 5.5 (1M)</span><span class="ds2">1M context, for long sessions</span><span class="ok">✓</span></div>
+        <div class="frow"><span class="g"></span><span class="nm">Sonnet 5.5</span><span class="ds2">efficient for routine tasks</span></div>
+        <div class="frow"><span class="g"></span><span class="nm">Haiku 4.5</span><span class="ds2">fastest, for quick answers</span></div>
+        <div class="fsec"><svg class="logo codex"><use href="#codex"/></svg>codex<span class="dim"> · handover</span></div>
+        <div class="frow"><span class="g"></span><span class="nm">GPT-6 Astra</span><span class="ds2">frontier, for the hardest tasks</span></div>
+        <div class="frow"><span class="g"></span><span class="nm">GPT-6 Sol</span><span class="ds2">workhorse for coding</span></div>
+        <div class="frow"><span class="g"></span><span class="nm">GPT-6 Luna</span><span class="ds2">fast and affordable</span></div>
+        <div class="effort"><span style="padding-left:0;color:var(--dim)">effort</span><span>low</span><span class="on">medium</span><span>high</span><span>max</span></div>
+        <div class="ffoot">↑↓ model · ←→ effort · ⏎ apply · esc</div>
+      </div>
+
+      <div class="float" id="palette" data-pos>
+        <div class="in"><span class="g">❯</span><span class="hi">par</span><span class="caret"></span></div>
+        <div class="fsec">threads</div>
+        <div class="frow sel"><span class="g">❯</span><span class="d-run" style="width:2ch">●</span><span class="nm"><span class="m">P</span>erf: l<span class="m">a</span>yout cache</span><span class="ds2" style="margin-left:4ch">perf sweep · working</span><span class="k">⌘1</span></div>
+        <div class="frow"><span class="g"></span><span class="d-park" style="width:2ch">○</span><span class="nm"><span class="m">Par</span>ked · Release 0.5.0 notes</span><span class="ds2" style="margin-left:4ch">ferrite · 2h</span></div>
+        <div class="frow"><span class="g"></span><span class="d-run" style="width:2ch">●</span><span class="nm"><span class="m">P</span>ort onbo<span class="m">ar</span>ding flow</span><span class="ds2" style="margin-left:4ch">zeron · working</span></div>
+        <div class="fsec">commands</div>
+        <div class="frow"><span class="g"></span><span style="width:2ch"></span><span class="nm"><span class="m">par</span>k thread</span><span class="ds2"></span><span class="k">⌘⌫</span></div>
+        <div class="frow"><span class="g"></span><span style="width:2ch"></span><span class="nm">show <span class="m">par</span>ked</span><span class="ds2"></span><span class="k">⌘⇧P</span></div>
+        <div class="frow"><span class="g"></span><span style="width:2ch"></span><span class="nm">com<span class="m">par</span>e with main</span><span class="ds2">open the diff reader</span><span class="k">⌘⇧D</span></div>
+        <div class="ffoot">↑↓ select · ⏎ open · ⇥ preview in a pane · esc</div>
+      </div>
+
+      <div class="float" id="hover" data-pos>
+        <div class="fhead"><span class="path" style="text-decoration:none">crates/ferrite/src/nav.rs<span class="dim">:211</span></span><span>⌘-click opens in a reader pane</span></div>
+        <div class="hl"><b>208</b><span><span class="sk">fn</span> <span class="sf">thread_row</span>(&amp;<span class="sk">self</span>, t: &amp;<span class="st">ThreadRow</span>, cx: &amp;<span class="st">App</span>) -&gt; <span class="st">Div</span> {</span></div>
+        <div class="hl"><b>209</b><span>    <span class="sk">let</span> facts = <span class="sk">self</span>.facts.<span class="sf">get</span>(&amp;t.id);</span></div>
+        <div class="hl"><b>210</b><span>    <span class="sk">let</span> live = t.session.<span class="sf">is_some</span>();</span></div>
+        <div class="hl on"><b>211</b><span>    <span class="sk">let mut</span> row = <span class="sf">div</span>().<span class="sf">h</span>(<span class="sf">px</span>(<span class="sk">if</span> live { <span class="st">theme</span>::<span class="sn">ROW_LIVE_H</span> } <span class="sk">else</span> { <span class="st">theme</span>::<span class="sn">ROW_H</span> }));</span></div>
+        <div class="hl"><b>212</b><span>    <span class="sk">if</span> live {</span></div>
+        <div class="hl"><b>213</b><span>        <span class="sk">let</span> summary = facts.<span class="sf">and_then</span>(|f| f.summary.<span class="sf">clone</span>())</span></div>
+        <div class="ffoot" style="margin-top:0">modified in this thread · <span class="add">+9</span> <span class="del">−4</span> · 2 min ago</div>
+      </div>
+
+      <div class="float toast" id="toast">
+        <div class="fhead"><span><span class="warn">◆ needs you</span> <span class="dim">· Close stale issues</span></span><span>⌘D</span></div>
+        <div style="padding:0 1ch">Bash wants to run <code class="i">gh issue close 212</code></div>
+        <div class="qa" style="padding:0 1ch calc(var(--lh)/2)"><button><span class="k">1 </span>allow</button><button><span class="k">3 </span>deny</button><button><span class="k">⏎ </span>open</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="float" id="notes" data-pos>
+    <div class="fhead"><span style="color:var(--hi);font-weight:600">notifications</span><span>mark all read</span></div>
+    <div class="nt unread sel"><span class="warn">◆</span><span class="warn">needs you</span><span><span class="t">Close stale issues</span><span class="dim"> · Bash wants to run gh issue close 212</span></span><span>2m</span></div>
+    <div class="nt unread"><span class="warn">?</span><span class="warn">needs you</span><span><span class="t">Flaky provider test</span><span class="dim"> · Which fix do you want?</span></span><span>5m</span></div>
+    <div class="nt"><span class="bad">✗</span><span class="bad">failed</span><span><span class="t">Fold regression</span><span class="dim"> · 357 passed; 2 failed</span></span><span>9m</span></div>
+    <div class="nt"><span class="dim">✓</span><span class="dim">done</span><span><span class="t">Theme retune</span><span class="dim"> · worked for 3m 12s</span></span><span>12m</span></div>
+    <div class="nt"><span class="dim">✓</span><span class="dim">done</span><span><span class="t">Bump deps</span><span class="dim"> · 14 crates bumped, deny clean</span></span><span>43m</span></div>
+    <div class="ffoot">↑↓ select · ⏎ open · ⌫ dismiss · esc</div>
+  </div>
+
+  <!-- ========================================================== status bar -->
+  <div class="sb" id="sb">
+    <span class="sess">ferrite</span>
+    <span class="tab" data-tab="solo"> 1 solo </span>
+    <span class="tab" data-tab="group"> 2 perf sweep </span>
+    <span class="tab" data-tab="wall"> 3 everything </span>
+    <span class="sp"></span>
+    <span class="seg count"><span class="ok">●</span> 4 working</span>
+    <span class="seg count"><span class="warn">◆</span> 2 need you</span>
+    <span class="seg count"><span class="bad">✗</span> 1 failing</span>
+    <span class="seg"><svg class="logo claude" style="margin:0 1ch 0 0"><use href="#claude"/></svg>5h 41%</span>
+    <span class="seg"><svg class="logo codex" style="margin:0 1ch 0 0"><use href="#codex"/></svg>wk 12%</span>
+    <span class="clock" id="clock">7:41 pm</span>
+  </div>
+</div>
+</div></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const win=$('#win');
+const P=new URLSearchParams(location.search);
+if(P.has('shot')) document.body.classList.add('shot');
+
+const LEGEND=[
+  'Real vector marks and provider logos, crisp at any zoom (a terminal gets block art)',
+  'Images inline: attachments, Markdown images, screenshots, at full resolution',
+  'The prompt band of the turn you are reading stays pinned while its output scrolls',
+  'Diffs go side by side when the Pane is wide and unified when it is narrow, with word-level marks',
+  'Long output folds in place; click to unfold without re-printing the screen',
+  'Hover a path for a live preview; ⌘-click opens it in a reader pane beside the thread',
+  'A minimap scrollbar marks prompts, failures and decisions; click to jump',
+  'Sub-cell meters and progress bars (context, tests) instead of ▰▱ characters',
+  'Every status-line segment is a control: mode, model, context, changed files',
+  'Real panes: drag the 1px seams to resize, drag a header to swap',
+  'Spinner shimmer and a soft block-cursor blink at display refresh, not at a TTY tick',
+  'Floating pickers and the palette hang over the grid without redrawing it',
+  'Semantic zoom: at wall size a Pane switches to its status, a sparkline and quick answers',
+  'Selection skips gutters and glyphs, so a copy is clean text, and scrolling is pixel-smooth',
+  'Code blocks carry a copy control and a language tag; links and paths are real hit targets',
+];
+$('#legend-list').innerHTML=LEGEND.map((t,i)=>`<li><b>${i+1}</b><span>${t}</span></li>`).join('');
+
+/* ------------------------------------------------------------ views */
+const TITLES={
+  solo:'<span>ferrite / <span class="hi">Nav rows jitter on stream start</span> · done · dev</span><span>⌘K commands</span>',
+  group:'<span>ferrite / <span class="hi">Perf sweep</span> · 4 · <span class="warn">1 needs you</span> · dev</span><span>⌘K commands</span>',
+  wall:'<span>all projects / <span class="hi">Everything</span> · 9 · <span class="warn">2 need you</span> · <span class="bad">1 failing</span></span><span>⌘K commands</span>',
+  empty:'<span>Ferrite</span><span>⌘K commands</span>',
+};
+let view=P.get('view')||'solo';
+function setView(v){
+  view=v;
+  $$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
+  $$('#controls [data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
+  $$('.sb .tab').forEach(t=>t.classList.toggle('cur',t.dataset.tab===v));
+  $('#title').innerHTML=TITLES[v];
+  ['solo','group','wall'].forEach(k=>{
+    const n=$('#n-'+k); n.classList.toggle('sel',k===v); n.querySelector('.cur').textContent=k===v?'❯':'';
+  });
+  closeFloats();
+  requestAnimationFrame(()=>{ $$('.pane').forEach(minimap); if(v==='solo') scrollSoloToTurn(); });
+}
+$$('#controls [data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
+$$('.sb .tab').forEach(t=>t.onclick=()=>setView(t.dataset.tab));
+$('#n-solo').onclick=()=>setView('solo'); $('#n-group').onclick=()=>setView('group'); $('#n-wall').onclick=()=>setView('wall');
+
+function scrollSoloToTurn(){
+  const sc=$('#solo-scroll'); const turns=sc.querySelectorAll('.turn');
+  sc.scrollTop=P.has('top')?0:turns[1].offsetTop+180;
+}
+
+/* ------------------------------------------------------------ fit */
+let scale=1;
+function fit(){
+  if(document.body.classList.contains('shot')){scale=1;$('#scaler').style.transform='none';return}
+  const st=$('#stage').getBoundingClientRect();
+  scale=Math.min(1,(st.width-32)/1440,(st.height-32)/900);
+  $('#scaler').style.transform=`scale(${scale})`;
+}
+addEventListener('resize',()=>{fit();$$('.pane').forEach(minimap)});
+
+function relRect(el,ref){
+  const a=el.getBoundingClientRect(), w=(ref||$('#cockpit')).getBoundingClientRect();
+  return {x:(a.left-w.left)/scale,y:(a.top-w.top)/scale,w:a.width/scale,h:a.height/scale,W:w.width/scale,H:w.height/scale};
+}
+
+/* ------------------------------------------------------------ minimap */
+function minimap(pane){
+  const sc=pane.querySelector('.scroll'), mm=pane.querySelector('.mm');
+  if(!sc||!mm||!pane.offsetParent) return;
+  mm.innerHTML='';
+  const H=sc.scrollHeight, h=mm.clientHeight;
+  sc.querySelectorAll('[data-mark]').forEach(el=>{
+    const t=document.createElement('i'); t.className='tick t-'+el.dataset.mark;
+    t.style.top=Math.min(h-2,el.offsetTop/H*h)+'px';
+    t.onclick=e=>{e.stopPropagation();sc.scrollTo({top:el.offsetTop-4,behavior:'smooth'})};
+    mm.appendChild(t);
+  });
+  const v=document.createElement('b'); v.className='mmv'; mm.appendChild(v);
+  const upd=()=>{ if(H<=sc.clientHeight){v.style.display='none';return}
+    v.style.top=(sc.scrollTop/H*h)+'px'; v.style.height=Math.max(12,sc.clientHeight/H*h)+'px'};
+  sc.onscroll=upd; upd();
+  mm.onclick=e=>{const r=mm.getBoundingClientRect();sc.scrollTo({top:(e.clientY-r.top)/r.height*H-sc.clientHeight/2,behavior:'smooth'})};
+}
+
+/* ------------------------------------------------------------ folds */
+$$('.more[data-fold]').forEach(m=>m.onclick=()=>{
+  const f=$('#'+m.dataset.fold); const open=f.classList.toggle('open');
+  m.textContent=open?'  − fold':'  + 35 lines';
+  setTimeout(()=>minimap($('#solo')),260);
+});
+
+/* ------------------------------------------------------------ hover card */
+const hover=$('#hover');
+$$('[data-hover]').forEach(p=>{
+  p.addEventListener('mouseenter',()=>{
+    const r=relRect(p); hover.classList.add('on');
+    let y=r.y+r.h+6; if(y+hover.offsetHeight>r.H-8) y=r.y-hover.offsetHeight-6;
+    hover.style.left=Math.min(r.x,r.W-hover.offsetWidth-16)+'px'; hover.style.top=y+'px';
+  });
+  p.addEventListener('mouseleave',()=>hover.classList.remove('on'));
+});
+
+/* ------------------------------------------------------------ floats */
+function closeFloats(){ ['#picker','#palette','#veil','#notes'].forEach(s=>$(s).classList.remove('on')); $('#b-bell').classList.remove('on'); $('#b-notes').classList.remove('on'); $('#b-picker').classList.remove('on'); $('#b-palette').classList.remove('on') }
+function togglePicker(){
+  const on=!$('#picker').classList.contains('on'); closeFloats(); if(!on) return;
+  if(view!=='solo') setView('solo');
+  const pk=$('#picker'); pk.classList.add('on'); $('#b-picker').classList.add('on');
+  const r=relRect($('#model-seg')), c=relRect($('#solo .comp'));
+  pk.style.left=Math.max(8,r.x-8)+'px';
+  pk.style.top=(c.y-pk.offsetHeight-4)+'px';
+}
+function togglePalette(){
+  const on=!$('#palette').classList.contains('on'); closeFloats(); if(!on) return;
+  $('#palette').classList.add('on'); $('#veil').classList.add('on'); $('#b-palette').classList.add('on');
+}
+$('#b-picker').onclick=togglePicker; $('#model-seg').onclick=togglePicker; $('#b-palette').onclick=togglePalette; $('#veil').onclick=closeFloats;
+function toggleToast(){ $('#toast').classList.toggle('on'); $('#b-toast').classList.toggle('on') }
+$('#b-toast').onclick=toggleToast;
+function toggleNotes(){
+  const on=!$('#notes').classList.contains('on'); closeFloats(); if(!on) return;
+  const n=$('#notes'); n.classList.add('on'); $('#b-bell').classList.add('on'); $('#b-notes').classList.add('on');
+  const r=relRect($('#b-bell'),win); n.style.left=Math.max(8,r.x+r.w-n.offsetWidth*0+0-28)+'px'; n.style.top=(r.y+r.h+4)+'px';
+}
+function toggleSidebar(force){
+  const on=win.classList.toggle('collapsed',force); $('#b-side').classList.toggle('on',false); $('#b-sidebar').classList.toggle('on',on);
+  setTimeout(()=>$$('.pane').forEach(minimap),220);
+}
+$('#b-bell').onclick=toggleNotes; $('#b-notes').onclick=toggleNotes; $('#b-side').onclick=()=>toggleSidebar(); $('#b-sidebar').onclick=()=>toggleSidebar();
+
+/* ------------------------------------------------------------ annotations */
+function toggleAnnot(force){
+  const on=document.body.classList.toggle('annot',force);
+  $('#legend').classList.toggle('on',on && !document.body.classList.contains('shot'));
+  $('#b-annot').classList.toggle('on',on);
+}
+$('#b-annot').onclick=()=>toggleAnnot();
+function toggleClean(force){ const on=document.body.classList.toggle('clean',force); $('#b-clean').classList.toggle('on',on); requestAnimationFrame(()=>$$('.pane').forEach(minimap)) }
+$('#b-clean').onclick=()=>toggleClean();
+function toggleDark(force){ const on=document.body.classList.toggle('dark',force); $('#b-dark').classList.toggle('on',on) }
+$('#b-dark').onclick=()=>toggleDark();
+toggleDark(P.has('dark'));
+const WALLS=['imac-blue','imac-orange','imac-purple','radial-sky-blue']; let wi=Math.max(0,WALLS.indexOf(P.get('wall')||'imac-blue'));
+function setWall(){ document.body.style.setProperty('--wall',`url("file:///tmp/ferrite-wallpapers/${WALLS[wi]}.jpg")`) }
+function nextWall(){ wi=(wi+1)%WALLS.length; setWall() }
+function toggleGlass(force){ const on=document.body.classList.toggle('glass',force); $('#b-glass').classList.toggle('on',on) }
+$('#b-glass').onclick=()=>toggleGlass(); $('#b-wall').onclick=nextWall;
+setWall(); toggleGlass(!P.has('noglass'));
+if(P.has('frame')) document.body.classList.add('frame');
+toggleClean(!P.has('busy'));
+
+/* ------------------------------------------------------------ zoom */
+const ZOOM=[[11,17],[12,18],[13,20],[14,21],[15,23],[16,24]]; let zi=2;
+function zoom(d){ zi=Math.max(0,Math.min(ZOOM.length-1,zi+d)); const [f,l]=ZOOM[zi];
+  document.documentElement.style.setProperty('--fs',f+'px'); document.documentElement.style.setProperty('--lh',l+'px');
+  requestAnimationFrame(()=>$$('.pane').forEach(minimap)); }
+$('#b-zin').onclick=()=>zoom(1); $('#b-zout').onclick=()=>zoom(-1);
+
+/* ------------------------------------------------------------ seams */
+const g4=$('#grid4'); let drag=null;
+$$('.seam').forEach(s=>s.addEventListener('mousedown',e=>{drag=s;s.classList.add('drag');e.preventDefault()}));
+addEventListener('mousemove',e=>{ if(!drag) return; const r=g4.getBoundingClientRect();
+  if(drag.dataset.axis==='x'){ const f=Math.max(.22,Math.min(.78,(e.clientX-r.left)/r.width)); g4.style.setProperty('--c1',(f*100)+'%') }
+  else { const f=Math.max(.22,Math.min(.78,(e.clientY-r.top)/r.height)); g4.style.setProperty('--r1',(f*100)+'%') } });
+addEventListener('mouseup',()=>{ if(drag){drag.classList.remove('drag');drag=null;$$('.pane').forEach(minimap)} });
+
+/* ------------------------------------------------------------ wall */
+const W=[
+  {t:'Perf: layout cache',d:'d-run',p:'claude',s:'working',w:'<span class="ok">working</span> <span class="dim">1m04s</span>',l:['● Update(canvas.rs) +31 −9','● Bash(cargo test --workspace)','  └ 212/357 tests','✶ Reticulating… 1m04s'],bar:.59,sp:[3,5,4,8,9,7,11,12,10,13,15,14]},
+  {t:'Close stale issues',d:'d-attn',p:'codex',s:'attn',w:'<span class="warn">needs you</span>',l:['● Six of seven stale issues closed','◆ Bash wants to run','  $ gh issue close 212 --reason "not planned"'],qa:['1 allow','2 always','3 deny'],sp:[6,8,7,9,5,3,2,1,0,0,0,0]},
+  {t:'Theme retune',d:'d-done',p:'claude',s:'done',w:'<span class="dim">done · 3m 12s</span>',l:['● Update(theme.rs) +3 −3','● Bash(cargo test -p ferrite theme::) ok','● Landed the retune; suite green','✻ Worked for 3m 12s · 7:33 pm'],sp:[2,4,6,9,8,7,6,3,1,0,0,0]},
+  {t:'Fold regression',d:'d-fail',p:'claude',s:'fail',w:'<span class="bad">failing 2</span>',l:['● Bash(cargo test --workspace) 1m01s','  └ 357 passed; 2 failed','● Rerunning the pair, fold instrumented','● FOLD_TRACE=1 cargo test fold::tail'],sp:[4,5,9,12,6,8,11,13,9,10,12,11]},
+  {t:'Port onboarding flow',d:'d-run',p:'claude',s:'working',w:'<span class="ok">working</span> <span class="dim">12s</span>',l:['● Read(docs/onboarding-copy.md)','● Update(src/onboarding/steps.tsx) +48 −12','● Wiring step 3 to the new copy deck'],sp:[1,2,2,3,5,8,10,9,12,14,13,15]},
+  {t:'Bump deps',d:'d-done',p:'codex',s:'done',w:'<span class="dim">done · 2m 40s</span>',l:['● Ran cargo update; 14 crates moved','● Ran cargo deny check · clean','● Bumped 14 crates; deny is clean','✻ Worked for 2m 40s · 6:58 pm'],sp:[5,7,9,8,6,4,2,1,0,0,0,0]},
+  {t:'Docs: ADR 0008',d:'d-run',p:'codex',s:'working',w:'<span class="ok">working</span> <span class="dim">3s</span>',l:['● Read(spikes/panes24/NOTES.md)','● Drafting the decision section','  from the spike notes'],sp:[0,0,1,1,2,4,6,7,9,8,10,12]},
+  {t:'Flaky provider test',d:'d-attn',p:'claude',s:'attn',w:'<span class="warn">needs you</span>',l:['● The flake is a reused temp folder','? Which fix do you want?'],qa:['1 retry on EEXIST','2 isolate per pid'],sp:[8,9,7,6,4,2,1,0,0,0,0,0]},
+  {t:'Release 0.5.0 notes',d:'d-park',p:'claude',s:'park',w:'<span class="dim">parked</span>',l:['Parked 2h ago · 11 turns','⏎ wakes it on a fresh Session'],sp:[0,0,0,0,0,0,0,0,0,0,0,0]},
+];
+const colour={working:'var(--green)',attn:'var(--yellow)',fail:'var(--red)',done:'var(--dim)',park:'var(--faint)'};
+$('#grid9').innerHTML=W.map((x,i)=>{
+  const max=16, pts=x.sp.map((v,j)=>`${(j/(x.sp.length-1)*100).toFixed(1)},${(26-v/max*24).toFixed(1)}`).join(' ');
+  return `<div class="pane ${x.s==='attn'?'attn':''} ${i===0?'focus':''}">
+    <div class="ph"><span class="n">${i+1}</span><span class="dot ${x.d}">${x.s==='park'?'○':'●'}</span><span class="tt">${x.t}</span><svg class="logo ${x.p}"><use href="#${x.p}"/></svg></div>
+    <div class="wbody">
+      <div class="state">${x.w}</div>
+      <div class="half"></div>
+      ${x.l.map(l=>`<div class="ln">${l}</div>`).join('')}
+      <div class="fill"></div>
+      ${x.bar?`<div class="ln"><span class="bar" style="width:100%;margin:0"><i style="transform:scaleX(${x.bar})"></i></span></div><div class="half"></div>`:''}
+      ${x.qa?`<div class="qa">${x.qa.map(q=>`<button><span class="k">${q.split(' ')[0]} </span>${q.split(' ').slice(1).join(' ')}</button>`).join('')}</div>`:''}
+      ${!x.qa?`<svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${colour[x.s]}" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>`:''}
+    </div></div>`}).join('');
+
+/* ------------------------------------------------------------ live bits */
+const SP=['·','✢','✳','✶','✻','✽','✻','✶','✳','✢']; let fi=0;
+setInterval(()=>{fi=(fi+1)%SP.length;$$('.spin').forEach(s=>s.textContent=SP[fi])},120);
+/* a working thread's dot is a spinner, in the sidebar and in Pane heads */
+const BR=['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']; let bi=0;
+setInterval(()=>{bi=(bi+1)%BR.length;$$('.dot.d-run').forEach(d=>d.textContent=BR[bi])},80);
+const fmt=s=>s>=60?`${Math.floor(s/60)}m${String(s%60).padStart(2,'0')}s`:`${s}s`;
+let n1=212;
+setInterval(()=>{
+  const clean=document.body.classList.contains('clean');
+  $$('.secs').forEach(e=>{const s=+e.dataset.s+1;e.dataset.s=s;
+    const quiet=clean&&!e.closest('.pane.focus');
+    e.textContent=quiet&&s>=60?`${Math.floor(s/60)}m`:fmt(s)});
+  n1=n1>=357?212:n1+3; $('#bar1').style.transform=`scaleX(${n1/357})`; $('#bar1n').textContent=n1;
+},1000);
+if(P.has('shot')) setTimeout(()=>{},0);
+
+/* ------------------------------------------------------------ keys */
+addEventListener('keydown',e=>{
+  if(e.metaKey&&e.key==='k'){e.preventDefault();togglePalette();return}
+  if(e.metaKey&&e.key==='b'){e.preventDefault();toggleSidebar();return}
+  if(e.metaKey||e.ctrlKey) return;
+  const k=e.key.toLowerCase();
+  if(k==='1')setView('solo'); else if(k==='2')setView('group'); else if(k==='3')setView('wall'); else if(k==='4')setView('empty');
+  else if(k==='m')togglePicker(); else if(k==='k')togglePalette(); else if(k==='a')toggleAnnot(); else if(k==='t')toggleToast(); else if(k==='q')toggleClean(); else if(k==='b')toggleSidebar(); else if(k==='n')toggleNotes(); else if(k==='d')toggleDark(); else if(k==='g')toggleGlass(); else if(k==='w')nextWall();
+  else if(k==='='||k==='+')zoom(1); else if(k==='-')zoom(-1); else if(k==='escape')closeFloats();
+});
+
+document.fonts.ready.then(()=>{
+  fit(); setView(view);
+  if(P.has('annot')) toggleAnnot(true);
+  if(P.get('float')==='picker') togglePicker();
+  if(P.get('float')==='palette') togglePalette();
+  if(P.get('float')==='toast') toggleToast();
+  if(P.get('float')==='notes') toggleNotes();
+  if(P.has('collapsed')) toggleSidebar(true);
+  if(P.get('hover')) setTimeout(()=>{ const p=$$('[data-hover]')[+P.get('hover')]; p.dispatchEvent(new Event('mouseenter')); },120);
+  if(P.get('fold')) $('.more[data-fold]').click();
+  document.body.dataset.ready='1';
+});
+</script>
+</body>
+</html>

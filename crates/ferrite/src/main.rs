@@ -74,22 +74,19 @@ fn keep_mouse_cursor_visible(cx: &mut App) {
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
-/// The bundled faces, compiled in. gpui has no variation-axis support, so
-/// each weight is its own static file. Every face in a family shares its
-/// typographic family name (`theme::FONT_UI` = Geist,
-/// `theme::FONT_CODE` = Geist Mono), and CoreText / DirectWrite resolve the right
-/// face from `.font_weight(..)` — never reach a weight by family name.
-pub(crate) static FONTS: [&[u8]; 10] = [
+/// The bundled face, compiled in: Geist Mono, the one face on every surface
+/// (theme rule 1). gpui has no variation-axis support, so each weight is its
+/// own static file. Every weight shares the typographic family name
+/// (`theme::FONT_UI` = `theme::FONT_CODE` = Geist Mono), and CoreText /
+/// DirectWrite resolve the right one from `.font_weight(..)` — never reach a
+/// weight by family name. (Geist, the proportional face, is no longer
+/// registered: nothing may fall back to it.)
+pub(crate) static FONTS: [&[u8]; 5] = [
     include_bytes!("../assets/fonts/GeistMono.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Italic.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Medium.ttf"),
     include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Bold.ttf"),
-    include_bytes!("../assets/fonts/Geist.ttf"),
-    include_bytes!("../assets/fonts/Geist-Italic.ttf"),
-    include_bytes!("../assets/fonts/Geist-Medium.ttf"),
-    include_bytes!("../assets/fonts/Geist-SemiBold.ttf"),
-    include_bytes!("../assets/fonts/Geist-Bold.ttf"),
 ];
 
 /// Registers the bundled faces. Call it before anything lays out text:
@@ -264,6 +261,11 @@ fn main() {
                             px(theme::WINDOW_MIN_W),
                             px(theme::WINDOW_MIN_H),
                         )),
+                        // Glass on the frame (theme rule 4): macOS blurs
+                        // what is behind the window, and every region paints
+                        // its own translucent fill over it; elsewhere the
+                        // window is opaque grey.
+                        window_background: theme::window_background(),
                         // Windows draws a DirectComposition window with no
                         // redirection bitmap: shown before gpui presents,
                         // it is an empty see-through frame. It opens hidden
@@ -290,7 +292,15 @@ fn main() {
                             }
                             view
                         });
-                        cx.new(|cx| kit::component::Root::new(view, window, cx).bordered(false))
+                        // The kit Root paints its theme's opaque `background`
+                        // under everything; on glass the window's root paints
+                        // nothing (`paint::WINDOW`), so the blur reaches the
+                        // regions' own fills.
+                        cx.new(|cx| {
+                            kit::component::Root::new(view, window, cx)
+                                .bordered(false)
+                                .bg(theme::paint::WINDOW)
+                        })
                     },
                 )
                 .unwrap();

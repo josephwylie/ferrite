@@ -126,10 +126,12 @@ fn compact_group_paints_complete_latest_rows_after_composer_growth(cx: &mut Test
             cost_usd: None,
         })
         .unwrap();
+    // 490 tall: the 32px titlebar band (`WIN_CHROME_H`) leaves the 2×2
+    // cells exactly as tall as the old 42px band did at 500.
     for (width, height, draft) in [
-        (860., 500., ""),
-        (860., 500., "First line\nSecond line\nThird line"),
-        (900., 560., ""),
+        (860., 490., ""),
+        (860., 490., "First line\nSecond line\nThird line"),
+        (900., 550., ""),
     ] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         view.update(cx, |view, cx| {
@@ -245,7 +247,8 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
     let group = group_all(&mut core);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(860.), px(500.)));
+    // 490 tall: the cells the old 42px band left at 500 (`WIN_CHROME_H`).
+    cx.simulate_resize(gpui::size(px(860.), px(490.)));
     view.update(cx, |view, cx| {
         view.enter_group(group, cx);
         view.focus_pane(0);

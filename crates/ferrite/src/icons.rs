@@ -71,6 +71,25 @@ icons![
     "ferrite-mono",
     "option",
     "control",
+    // ---- foundation: the spinner frames (theme rule 8; Geist Mono has
+    // neither braille nor the dingbat stars, so every frame is drawn)
+    "braille-0",
+    "braille-1",
+    "braille-2",
+    "braille-3",
+    "braille-4",
+    "braille-5",
+    "braille-6",
+    "braille-7",
+    "braille-8",
+    "braille-9",
+    "working-dot",
+    "working-four",
+    "working-eight",
+    "working-star",
+    "working-six",
+    "working-heavy",
+    // (end foundation)
     // ---- WP-A icons (append names above the end line)
     "reasoning",
     // (end WP-A)
@@ -161,6 +180,60 @@ pub const PROMPT: &str = "icons/prompt.svg";
 /// gradient mark is reserved for the animated working line).
 #[allow(dead_code)]
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
+
+// ---- foundation: spinner frames (theme rule 8)
+/// The braille spinner's ten frames in order, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (dots 1–6 of
+/// a 2×3 cell, centred in a 12-unit box): `components::braille_spinner`
+/// draws them at `MOTION_BRAILLE_FRAME_MS`.
+#[allow(dead_code)]
+pub const BRAILLE_FRAMES: [&str; 10] = [
+    "icons/braille-0.svg",
+    "icons/braille-1.svg",
+    "icons/braille-2.svg",
+    "icons/braille-3.svg",
+    "icons/braille-4.svg",
+    "icons/braille-5.svg",
+    "icons/braille-6.svg",
+    "icons/braille-7.svg",
+    "icons/braille-8.svg",
+    "icons/braille-9.svg",
+];
+/// The working line's glyphs, drawn: `·`, `✢` (four teardrops), `✳` (eight
+/// spokes), `✶` (six-pointed star), `✻` (six teardrops), `✽` (eight heavy
+/// teardrops). Fill marks in a 12-unit box, `✳` a round-capped stroke.
+#[allow(dead_code)]
+pub const WORKING_DOT: &str = "icons/working-dot.svg";
+#[allow(dead_code)]
+pub const WORKING_FOUR: &str = "icons/working-four.svg";
+#[allow(dead_code)]
+pub const WORKING_EIGHT: &str = "icons/working-eight.svg";
+#[allow(dead_code)]
+pub const WORKING_STAR: &str = "icons/working-star.svg";
+#[allow(dead_code)]
+pub const WORKING_SIX: &str = "icons/working-six.svg";
+#[allow(dead_code)]
+pub const WORKING_HEAVY: &str = "icons/working-heavy.svg";
+/// The working spinner's ten frames, Claude Code's cycle out and back:
+/// `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢` at `MOTION_WORKING_FRAME_MS`
+/// (`components::working_spinner`). Frame 4, `✻`, is its still state.
+#[allow(dead_code)]
+pub const WORKING_FRAMES: [&str; 10] = [
+    WORKING_DOT,
+    WORKING_FOUR,
+    WORKING_EIGHT,
+    WORKING_STAR,
+    WORKING_SIX,
+    WORKING_HEAVY,
+    WORKING_SIX,
+    WORKING_STAR,
+    WORKING_EIGHT,
+    WORKING_FOUR,
+];
+/// `✻`, still: a finished turn's mark (`✻ Worked for 41s`) and the working
+/// spinner under reduced motion.
+#[allow(dead_code)]
+pub const WORKED: &str = WORKING_SIX;
+// (end foundation)
 
 // ---- WP-A icon names (append consts above the end line)
 /// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
@@ -430,7 +503,16 @@ mod tests {
             SHIELD,
             SLIDERS,
             INFO,
-        ] {
+            WORKING_DOT,
+            WORKING_FOUR,
+            WORKING_EIGHT,
+            WORKING_STAR,
+            WORKING_SIX,
+            WORKING_HEAVY,
+        ]
+        .into_iter()
+        .chain(BRAILLE_FRAMES)
+        {
             let bytes = Assets
                 .load(key)
                 .expect("the asset source never errors")
@@ -441,10 +523,10 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            41,
+            57,
             "the prototype and app controls, including close, the four Windows caption glyphs, \
-             the option and control key glyphs, the Settings sheet's five marks and the CLI \
-             update mark"
+             the option and control key glyphs, the Settings sheet's five marks, the CLI \
+             update mark, and the sixteen spinner frames (ten braille, six working glyphs)"
         );
     }
 

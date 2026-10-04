@@ -130,7 +130,7 @@ pub fn action_tooltip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{deferred, div, rgb, Context, CursorStyle, Render};
+    use gpui::{deferred, div, Context, CursorStyle, Render};
     use std::{cell::Cell, rc::Rc};
 
     struct OcclusionHarness {
@@ -211,7 +211,10 @@ mod tests {
     fn an_armed_destructive_row_holds_the_fill_and_colours_its_word() {
         let delete = Item::new("Delete thread").destructive();
         let mut drawn = row(2, &delete, true);
-        assert_eq!(drawn.style().background, Some(rgb(FILL).into()));
+        assert_eq!(
+            drawn.style().background,
+            Some(crate::theme::paint::SELECTION.into())
+        );
         let mut calm = row(2, &delete, false);
         assert_eq!(calm.style().background, None);
         assert_eq!(

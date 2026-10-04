@@ -8712,7 +8712,7 @@ impl CockpitView {
 
         // Two full-height columns under the titlebar band: the board starts
         // at `BOARD_TOP` and keeps its own padding on the other three sides.
-        // The chrome face is Geist (`FONT_UI`); machine text opts into the code face.
+        // One face on every surface (`FONT_UI`, Geist Mono).
         div()
             .flex()
             .flex_row()
@@ -8720,7 +8720,9 @@ impl CockpitView {
             // the board reserves rather than take a row of its own.
             .relative()
             .size_full()
-            .bg(rgb(crate::theme::GROUND))
+            // The window's root paints nothing on glass (theme rule 4):
+            // each region lays its own fill over the blur.
+            .bg(crate::theme::paint::WINDOW)
             .font_family(crate::theme::FONT_UI)
             .track_focus(&self.focus)
             .key_context("Ferrite")

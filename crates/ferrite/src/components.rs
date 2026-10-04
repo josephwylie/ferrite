@@ -1,7 +1,9 @@
 //! Ferrite's shared primitives: the one way render code opens a text run,
-//! lays a plane or a floating surface, draws a status mark or a keycap, and
-//! builds a control or a menu row. Longbridge owns the control
-//! mechanics; `theme.rs` is the only token source.
+//! lays a plane or a floating surface, draws a status mark or a keycap,
+//! builds a control or a menu row, and runs the few loops the terminal
+//! grammar allows (the braille and working spinners, the shimmer, the caret
+//! blink — theme rule 8). Longbridge owns the control mechanics; `theme.rs`
+//! is the only token source.
 //!
 //! Frozen after the foundation (F3): a package that needs something new
 //! builds it privately and asks for a promotion. A bug fix comes with a
@@ -106,9 +108,8 @@ impl Tip for Button {
     }
 }
 
-/// Form actions need an opaque hover face on the modal's raised ground:
-/// nothing at rest, `HOVER_RAISED` under the pointer (blended), `FILL_HOVER`
-/// pressed.
+/// A form action: nothing at rest, `paint::HOVER` under the pointer
+/// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
     form_button_on(id, rgba(theme::TRANSPARENT).into(), cx)
 }
@@ -119,17 +120,18 @@ pub fn form_button_on(id: impl Into<ElementId>, rest: Hsla, cx: &App) -> Button 
     faded_button(
         id,
         rest,
-        rgb(theme::HOVER_RAISED).into(),
-        rgb(theme::FILL_HOVER).into(),
+        theme::paint::HOVER.into(),
+        theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
     )
     .tab_stop(true)
 }
 
-/// The completing action: steel `ACCENT_STRONG` with white ink, hovering to
-/// `PRIMARY_HOVER` and pressing to `PRIMARY_ACTIVE`; disabled is `FILL` with
-/// `TEXT_MUTED` ink. On the filled face the focus outline is `TEXT_STRONG`.
+/// The completing action: the accent as a fill (`ACCENT_STRONG`) with dark
+/// `ON_ACCENT` ink, hovering to `PRIMARY_HOVER` and pressing to
+/// `PRIMARY_ACTIVE`; disabled is `SELECTION` with `TEXT_MUTED` ink. Flat,
+/// square. On the filled face the focus outline is `TEXT_STRONG`.
 pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> Button {
     use gpui::component::Disableable;
     let face: Hsla = rgb(primary_face(disabled)).into();
@@ -151,10 +153,6 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
     )
     .tab_stop(true)
     .text_color(rgb(primary_ink(disabled)))
-    // An enabled primary is a control's face, lit; disabled lies flat.
-    .when(!disabled, |button| {
-        button.shadow(elevation(Elevation::Control))
-    })
     .focus_visible(|style| focus_outline(style, theme::TEXT_STRONG))
     .disabled(disabled)
     .when(disabled, |button| button.cursor_default())
@@ -162,7 +160,7 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
 
 fn primary_face(disabled: bool) -> u32 {
     if disabled {
-        theme::FILL
+        theme::SELECTION
     } else {
         theme::ACCENT_STRONG
     }
@@ -189,7 +187,8 @@ pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
 
 // ------------------------------------------------------------------- type
 
-/// A UI line: `FONT_UI` · `FS_UI` on `LH_UI` · `TEXT`.
+/// A line of the grid: Geist Mono (`FONT_UI`) · `FS_UI` 13 on `LH_UI` 20 ·
+/// `TEXT`.
 pub fn text_ui() -> Div {
     div()
         .font_family(theme::FONT_UI)
@@ -198,7 +197,8 @@ pub fn text_ui() -> Div {
         .text_color(rgb(theme::TEXT))
 }
 
-/// Metadata: `FONT_UI` · `FS_SM` on `LH_META` · `TEXT_MUTED`.
+/// Metadata: the same grid line in `TEXT_MUTED` (one size per surface:
+/// metadata is ink, not a smaller size).
 pub fn text_meta() -> Div {
     div()
         .font_family(theme::FONT_UI)
@@ -225,9 +225,9 @@ pub fn tabular<E: Styled>(mut element: E) -> E {
 
 // ------------------------------------------------- planes and elevation
 
-/// An in-flow raised block (code, cards): `RAISED`, `R_BLOCK`, no edge and
-/// no shadow — content, not an object. An object that rests on the Pane
-/// (the Composer, a Decision block) adds `Elevation::Raised`.
+/// A legacy in-flow block (`RAISED`, square, no edge, no shadow). New
+/// surfaces paint a band (`paint::BAND`) or nothing: code blocks and cards
+/// have no ground in the terminal grammar.
 pub fn raised() -> Div {
     div().bg(rgb(theme::RAISED)).rounded(px(theme::R_BLOCK))
 }
@@ -238,22 +238,23 @@ pub fn raised_edged(edge: u32) -> Div {
     raised().border_1().border_color(rgba(edge))
 }
 
-/// A rung of the elevation ladder (rule 4, the table beside `LIGHT_LOW`).
+/// The old elevation ladder's rungs, kept as names (theme rule 2: square
+/// and flat inside). Only a floating surface casts; nothing is lit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Elevation {
-    /// A Pane on the field.
+    /// A Pane on the field: flat.
     Pane,
-    /// The focused Pane of a board, lifted off the field.
+    /// The focused Pane of a board: flat (its border says focus).
     Lifted,
-    /// An object resting on a plane: the Composer, a Decision block, a
-    /// Settings card.
+    /// The Composer, a Decision block, a Settings card: flat.
     Raised,
-    /// A control's face: an armed control, a chip on its tray. Lit only.
+    /// A control's face: flat.
     Control,
-    /// Menus, popovers, tooltips, a dragged ghost. (Toasts wear the
-    /// kit's own lift.)
+    /// Menus, pickers, the palette, popovers, tooltips, a dragged ghost:
+    /// the one float shadow.
     Float,
-    /// A modal sheet over the veil.
+    /// A modal sheet over the veil: the float shadow (the veil does the
+    /// rest).
     Sheet,
 }
 
@@ -267,118 +268,29 @@ fn layer(color: u32, y: f32, blur: f32, spread: f32) -> BoxShadow {
     }
 }
 
-/// The 1px top light: an inset line along the top edge that follows the
-/// corner arcs (gpui paints it over the ground and under the edge, so over
-/// a hairline it reads as the edge catching light).
-fn top_light(color: u32) -> BoxShadow {
-    BoxShadow {
-        inset: true,
-        ..layer(color, 1., 0., 0.)
-    }
-}
-
-fn contact() -> BoxShadow {
-    layer(
-        theme::SHADOW_CONTACT,
-        theme::SHADOW_CONTACT_Y,
-        theme::SHADOW_CONTACT_BLUR,
-        0.,
-    )
-}
-
-/// A rung's light and shadow, cast layers far to near, the top light last.
+/// A rung's shadow: nothing, except a floating surface's one small shadow
+/// (`float_shadow`).
 pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
-    use theme::*;
     match rung {
-        Elevation::Pane => vec![
-            layer(
-                SHADOW_PANE,
-                SHADOW_PANE_Y,
-                SHADOW_PANE_BLUR,
-                SHADOW_PANE_SPREAD,
-            ),
-            contact(),
-            top_light(LIGHT_LOW),
-        ],
-        Elevation::Lifted => vec![
-            layer(
-                SHADOW_LIFTED,
-                SHADOW_LIFTED_Y,
-                SHADOW_LIFTED_BLUR,
-                SHADOW_LIFTED_SPREAD,
-            ),
-            contact(),
-            top_light(LIGHT_LOW),
-        ],
-        Elevation::Raised => vec![
-            layer(
-                SHADOW_RAISED,
-                SHADOW_RAISED_Y,
-                SHADOW_RAISED_BLUR,
-                SHADOW_RAISED_SPREAD,
-            ),
-            contact(),
-            top_light(LIGHT_LOW),
-        ],
-        // A face catches the light but casts nothing: kit buttons rest
-        // translucent, and gpui paints a drop shadow under the whole box,
-        // so a cast layer would darken the face it sits beneath.
-        Elevation::Control => vec![top_light(LIGHT_HIGH)],
-        Elevation::Float => vec![
-            layer(SHADOW_FAR, SHADOW_FAR_Y, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD),
-            layer(
-                SHADOW_NEAR,
-                SHADOW_NEAR_Y,
-                SHADOW_NEAR_BLUR,
-                SHADOW_NEAR_SPREAD,
-            ),
-            contact(),
-            top_light(LIGHT_HIGH),
-        ],
-        Elevation::Sheet => vec![
-            layer(
-                SHADOW_SHEET,
-                SHADOW_SHEET_Y,
-                SHADOW_SHEET_BLUR,
-                SHADOW_SHEET_SPREAD,
-            ),
-            layer(
-                SHADOW_NEAR,
-                SHADOW_NEAR_Y,
-                SHADOW_NEAR_BLUR,
-                SHADOW_NEAR_SPREAD,
-            ),
-            contact(),
-            top_light(LIGHT_HIGH),
-        ],
+        Elevation::Pane | Elevation::Lifted | Elevation::Raised | Elevation::Control => Vec::new(),
+        Elevation::Float | Elevation::Sheet => float_shadow(),
     }
 }
 
-/// The contact line alone: a small opaque knob (a switch's thumb) resting
-/// on its track.
+/// Legacy: a knob resting on its track. Nothing casts inside (rule 2).
 pub fn contact_line() -> Vec<BoxShadow> {
-    vec![contact()]
+    Vec::new()
 }
 
-/// A keycap's light: the control rung's top light over a dark foot, so the
-/// key reads as a physical cap. It casts nothing: a key sits in its row.
+/// Legacy: a keycap's light. Keycaps are flat (rule 2).
+#[allow(dead_code)]
 pub fn key_light() -> Vec<BoxShadow> {
-    vec![
-        top_light(theme::LIGHT_HIGH),
-        BoxShadow {
-            inset: true,
-            ..layer(theme::KEY_FOOT, -1., 0., 0.)
-        },
-    ]
+    Vec::new()
 }
 
-/// A well's shade: what is recessed (a segmented tray, a switch track, a
-/// field) catches the light from above as a soft dark lip on its top edge.
+/// Legacy: a well's lip. Nothing is recessed (rule 2).
 pub fn well_shade() -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        inset: true,
-        ..layer(theme::WELL_SHADE, 1., 1., 0.)
-    }]
+    Vec::new()
 }
 
 /// A scroll fade: `SCROLL_FADE_H` of `ground` from clear to solid toward a
@@ -419,15 +331,22 @@ pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
         .collect()
 }
 
-/// Every floating surface's light and shadow: `Elevation::Float`.
+/// The one cast shadow (theme rule 2): CSS `0 6px 14px` at 50%, under
+/// every floating surface and nothing else.
 pub fn float_shadow() -> Vec<BoxShadow> {
-    elevation(Elevation::Float)
+    vec![layer(
+        theme::SHADOW_FLOAT,
+        theme::SHADOW_FLOAT_Y,
+        theme::SHADOW_FLOAT_BLUR,
+        0.,
+    )]
 }
 
-/// A floating surface (menu, popover, card): `MENU` ground, a
-/// `HAIRLINE_STRONG` edge, `R_BLOCK`, the float shadow, `FLOAT_PAD` inside,
-/// UI type. It occludes what it covers and owns its cursor. The caller
-/// states its width and position.
+/// A floating surface (menu, picker, palette, popover, card): the float
+/// ground (`paint::FLOAT`, near-opaque glass on macOS), a 1px `paint::LINE2`
+/// edge, square, the float shadow, `FLOAT_PAD` inside, the grid's type. It
+/// occludes what it covers and owns its cursor. The caller states its
+/// width and position.
 pub fn floating_surface() -> Div {
     text_ui()
         .cursor_default()
@@ -436,9 +355,9 @@ pub fn floating_surface() -> Div {
         .flex_col()
         .p(px(theme::FLOAT_PAD))
         .rounded(px(theme::R_BLOCK))
-        .bg(rgb(theme::MENU))
+        .bg(theme::paint::FLOAT)
         .border_1()
-        .border_color(rgba(theme::HAIRLINE_STRONG))
+        .border_color(theme::paint::LINE2)
         .shadow(float_shadow())
 }
 
@@ -486,11 +405,10 @@ pub fn status_ring(ink: u32) -> Div {
         .border_color(rgb(ink))
 }
 
-/// A status dot whose own opacity breathes on the one breath
-/// (`MOTION_BREATH_MS`, read off `motion::pulse_phase`, so every breathing
-/// dot on screen shares one ~30fps tick and a board of them costs no more
-/// than one). Unread is the only state that breathes (rule 2.10.3). Held at
-/// its start under reduced motion.
+/// Legacy: a status dot whose opacity breathes (`MOTION_BREATH_MS`). The
+/// terminal grammar pulses no dot (theme rule 8): unread is ink, and a
+/// working Thread's dot is the `braille_spinner`. Kept until the nav and
+/// Pane heads stop calling it.
 pub fn breathing_dot(ink: u32, reduce_motion: bool) -> AnyElement {
     BreathingDot { ink, reduce_motion }.into_any_element()
 }
@@ -516,31 +434,248 @@ impl RenderOnce for BreathingDot {
     }
 }
 
-/// Ferrite's mark struck into a surface: its `body` ink a little over the
-/// ground, lit along its upper edges (`EMBOSS_LIGHT`, 1px up) and shaded
-/// along its lower ones (`EMBOSS_SHADE`, 1px down), the one light from
-/// above (rule 4). A watermark, never a control: it takes no pointer.
+// ------------------------------------------------------------------ loops
+//
+// The few loops the terminal grammar allows (theme rule 8). Each rides the
+// shared pulse clock (`motion::pulse_phase`: one ~30fps tick for the whole
+// window, parked when nothing loops), leasing the view that paints it, and
+// holds a static end state under reduced motion that says the same thing.
+
+#[allow(unused_imports)] // until the builders call them
+pub use loops::*;
+
+/// The loops (see the section note above): re-exported, so callers name
+/// `components::braille_spinner` and friends.
+#[allow(dead_code)] // the builders' API: the sidebar, Pane heads, the working line, the Composer
+mod loops {
+    use super::*;
+
+    /// The braille spinner's frames as characters, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, for copy and
+    /// tests: what `icons::BRAILLE_FRAMES` draws (Geist Mono has no braille, so
+    /// they are never text, rule 10).
+    pub const BRAILLE_FRAMES: [char; 10] = [
+        '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}',
+        '\u{2827}', '\u{2807}', '\u{280f}',
+    ];
+
+    /// The working spinner's frames as characters, `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`: what
+    /// `icons::WORKING_FRAMES` draws.
+    pub const WORKING_FRAMES: [char; 10] = [
+        '\u{b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273b}',
+        '\u{2736}', '\u{2733}', '\u{2722}',
+    ];
+
+    /// Which of `frames` a loop shows at `phase` [0, 1) of its turn.
+    pub fn frame_at(phase: f32, frames: usize) -> usize {
+        ((phase.rem_euclid(1.0) * frames as f32) as usize).min(frames.saturating_sub(1))
+    }
+
+    /// The braille spinner (theme rule 8): `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, one frame per
+    /// `MOTION_BRAILLE_FRAME_MS`, in `ink` (`RUNNING`), drawn as an SVG in a
+    /// `size` glyph box. It stands in place of a *working* Thread's status dot,
+    /// in the sidebar and in Pane heads, so a board of them shares one tick.
+    /// Under reduced motion it is the still dot (`status_dot(ink)`), centred in
+    /// the same box.
+    pub fn braille_spinner(ink: u32, size: f32) -> AnyElement {
+        Spinner {
+            frames: &icons::BRAILLE_FRAMES,
+            frame_ms: theme::MOTION_BRAILLE_FRAME_MS,
+            still: Still::Dot,
+            ink,
+            size,
+            selector: "braille-spinner",
+        }
+        .into_any_element()
+    }
+
+    /// The working line's spinner (theme rule 8): `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`, one
+    /// frame per `MOTION_WORKING_FRAME_MS`, in `ink` (the provider's brand
+    /// colour: `PROVIDER_CLAUDE`, `PROVIDER_CODEX`), drawn as an SVG in a
+    /// `size` glyph box — the focused Pane's gutter mark while a turn runs.
+    /// Under reduced motion it holds `✻` (`icons::WORKED`), the mark a finished
+    /// turn wears.
+    pub fn working_spinner(ink: u32, size: f32) -> AnyElement {
+        Spinner {
+            frames: &icons::WORKING_FRAMES,
+            frame_ms: theme::MOTION_WORKING_FRAME_MS,
+            still: Still::Frame(icons::WORKED),
+            ink,
+            size,
+            selector: "working-spinner",
+        }
+        .into_any_element()
+    }
+
+    #[derive(Clone, Copy)]
+    enum Still {
+        /// The status dot.
+        Dot,
+        /// One drawn frame.
+        Frame(&'static str),
+    }
+
+    #[derive(IntoElement)]
+    struct Spinner {
+        frames: &'static [&'static str],
+        frame_ms: u64,
+        still: Still,
+        ink: u32,
+        size: f32,
+        selector: &'static str,
+    }
+
+    impl RenderOnce for Spinner {
+        fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+            let mark = if motion::reduced_motion(cx) {
+                match self.still {
+                    Still::Dot => status_dot(self.ink).into_any_element(),
+                    Still::Frame(path) => icons::icon(path, self.size, self.ink).into_any_element(),
+                }
+            } else {
+                let turn = Duration::from_millis(self.frame_ms * self.frames.len() as u64);
+                let phase = motion::pulse_phase(turn, window.current_view(), cx);
+                let frame = self.frames[frame_at(phase, self.frames.len())];
+                icons::icon(frame, self.size, self.ink).into_any_element()
+            };
+            let selector = self.selector;
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .size(px(self.size))
+                .debug_selector(move || selector.into())
+                .child(mark)
+        }
+    }
+
+    /// The colour the shimmer crests at over `base`: `base` lifted toward white
+    /// by `SHIMMER_LIFT` (Claude's clay crests near `#ffe1d3`).
+    pub fn shimmer_crest(base: u32) -> Hsla {
+        motion::mix(rgb(base).into(), rgb(0xffffff).into(), theme::SHIMMER_LIFT)
+    }
+
+    /// The per-character colours of the shimmer at `phase` [0, 1): a soft crest
+    /// `2 × SHIMMER_HALF_WIDTH` of the run wide, linear on each side, travelling
+    /// left to right from half a run before the text to half a run past it (the
+    /// prototype's 300% gradient). Characters off the crest carry no highlight
+    /// (they take the run's own `base` colour). Byte ranges, sorted, disjoint.
+    pub fn shimmer_highlights(
+        text: &str,
+        base: Hsla,
+        crest: Hsla,
+        phase: f32,
+    ) -> Vec<(Range<usize>, HighlightStyle)> {
+        let count = text.chars().count();
+        if count == 0 {
+            return Vec::new();
+        }
+        let centre = -0.5 + 2.0 * phase.rem_euclid(1.0);
+        text.char_indices()
+            .enumerate()
+            .filter_map(|(index, (at, ch))| {
+                let x = (index as f32 + 0.5) / count as f32;
+                let k = 1.0 - (x - centre).abs() / theme::SHIMMER_HALF_WIDTH;
+                (k > 0.0).then(|| {
+                    (
+                        at..at + ch.len_utf8(),
+                        HighlightStyle {
+                            color: Some(motion::mix(base, crest, k)),
+                            ..Default::default()
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The working caption's shimmer (theme rule 8): `text` in `base` (the
+    /// provider's colour) under a crest of `shimmer_crest(base)` sweeping left
+    /// to right every `MOTION_SHIMMER_MS`. One `StyledText`, recoloured per
+    /// character, so nothing reflows; one line that truncates at its end. Only
+    /// the focused Pane's working line wears it; under reduced motion it is
+    /// plain `base`. The caller sets the face, size and line height.
+    pub fn shimmer(text: impl Into<SharedString>, base: u32) -> AnyElement {
+        Shimmer {
+            text: text.into(),
+            base,
+        }
+        .into_any_element()
+    }
+
+    #[derive(IntoElement)]
+    struct Shimmer {
+        text: SharedString,
+        base: u32,
+    }
+
+    impl RenderOnce for Shimmer {
+        fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+            let base: Hsla = rgb(self.base).into();
+            let text = if motion::reduced_motion(cx) {
+                gpui::StyledText::new(self.text)
+            } else {
+                let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
+                let phase = motion::pulse_phase(turn, window.current_view(), cx);
+                let highlights =
+                    shimmer_highlights(&self.text, base, shimmer_crest(self.base), phase);
+                gpui::StyledText::new(self.text).with_highlights(highlights)
+            };
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(base)
+                .debug_selector(|| "shimmer".into())
+                .child(text)
+        }
+    }
+
+    /// The soft block caret's opacity at `phase` [0, 1) of
+    /// `MOTION_CARET_BLINK_MS` (the prototype's keyframes): full to 45%, eased
+    /// down to `CARET_BLINK_MIN` by 55%, held to 95%, eased back to full.
+    pub fn caret_blink(phase: f32) -> f32 {
+        const EASE_IN_OUT: motion::CubicBezier = motion::CubicBezier::new(0.42, 0.0, 0.58, 1.0);
+        let low = theme::CARET_BLINK_MIN;
+        let p = phase.rem_euclid(1.0);
+        if p < 0.45 {
+            1.0
+        } else if p < 0.55 {
+            motion::lerp(1.0, low, EASE_IN_OUT.eval((p - 0.45) / 0.10))
+        } else if p < 0.95 {
+            low
+        } else {
+            motion::lerp(low, 1.0, EASE_IN_OUT.eval((p - 0.95) / 0.05))
+        }
+    }
+
+    /// The focused Composer's caret opacity now, leasing the painting view on
+    /// the pulse clock; full and still under reduced motion. An unfocused
+    /// Composer draws no blinking caret (its caret is a faint outline, still).
+    pub fn caret_opacity(window: &mut Window, cx: &mut App) -> f32 {
+        if motion::reduced_motion(cx) {
+            return 1.0;
+        }
+        let turn = Duration::from_millis(theme::MOTION_CARET_BLINK_MS);
+        caret_blink(motion::pulse_phase(turn, window.current_view(), cx))
+    }
+}
+
+/// Ferrite's mark as a flat watermark in its `body` ink: nothing is lit or
+/// embossed (theme rule 2). It takes no pointer.
 pub fn embossed_mark(size: f32, body: u32) -> Div {
-    let layer = |dy: f32, ink: gpui::Hsla| {
+    div().relative().flex_shrink_0().size(px(size)).child(
         gpui::svg()
             .path(icons::FERRITE_MONO)
             .absolute()
             .left_0()
-            .top(px(dy))
+            .top_0()
             .size(px(size))
-            .text_color(ink)
-    };
-    div()
-        .relative()
-        .flex_shrink_0()
-        .size(px(size))
-        .child(layer(1., rgba(theme::EMBOSS_SHADE).into()))
-        .child(layer(-1., rgba(theme::EMBOSS_LIGHT).into()))
-        .child(layer(0., rgb(body).into()))
+            .text_color(rgb(body)),
+    )
 }
 
-/// The one keycap: `KBD_H`, at least square, `RAISED_2` under the key
-/// light, mono `FS_SM` `TEXT_2`, centred.
+/// The one keycap: `KBD_H`, at least square, flat and square on
+/// `paint::BAND2`, the grid's type in `TEXT_2`, centred.
 pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
 }
@@ -561,8 +696,7 @@ fn kbd_face() -> Div {
         .min_w(px(theme::KBD_H))
         .px(px(theme::KBD_PAD_X))
         .rounded(px(theme::R_CHIP))
-        .bg(rgb(theme::RAISED_2))
-        .shadow(key_light())
+        .bg(theme::paint::BAND2)
         .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
@@ -743,8 +877,8 @@ fn key_word(key: &str) -> String {
 }
 
 /// An icon-only control: `ICON_BUTTON` square, the glyph at
-/// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, brightening to `TEXT` under the
-/// pointer, a tooltip naming what it does.
+/// `ICON_BUTTON_GLYPH` in `TEXT_MUTED`, brightening to `TEXT` over
+/// `paint::HOVER` under the pointer, a tooltip naming what it does.
 pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: &'static str,
@@ -754,8 +888,8 @@ pub fn icon_button(
     faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        rgb(theme::HOVER).into(),
-        rgb(theme::PRESSED).into(),
+        theme::paint::HOVER.into(),
+        theme::paint::PRESS.into(),
         rgb(theme::TEXT_MUTED).into(),
         cx,
     )
@@ -776,15 +910,15 @@ pub fn icon_button(
 /// button shares the name: `group_hover` resolves to the nearest one.
 const ICON_BUTTON_GROUP: &str = "icon-button";
 
-/// A quiet text control: `CONTROL_H`, UI `FS_UI` `W_BODY` `TEXT_2`;
-/// hover `RAISED_2`, press `FILL_HOVER`. A button is read like any row, so
-/// it never takes the heading weight.
+/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT_2`;
+/// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
+/// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        rgb(theme::HOVER_RAISED).into(),
-        rgb(theme::FILL_HOVER).into(),
+        theme::paint::HOVER.into(),
+        theme::paint::PRESS.into(),
         rgb(theme::TEXT_2).into(),
         cx,
     )
@@ -930,8 +1064,8 @@ pub struct RowInks {
 
 /// The row state table, as data: rest, cursor, disabled, armed. A
 /// destructive row reads like any other until it arms; armed, it holds the
-/// cursor's `FILL` ground and its label alone turns `BLOCKED` — colour on
-/// the word, never a wash (rule 2.2.4).
+/// cursor's `paint::SELECTION` ground and its label alone turns `BLOCKED` —
+/// colour on the word, never a wash (rule 2.2.4).
 pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if item.disabled {
         return RowInks {
@@ -946,7 +1080,7 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
             label: theme::BLOCKED,
             detail: theme::TEXT_2,
             shortcut: theme::TEXT_MUTED,
-            ground: Some((theme::FILL << 8) | 0xff),
+            ground: Some(theme::paint::SELECTION.rgba()),
         };
     }
     let label = if cursor {
@@ -962,7 +1096,7 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
             theme::TEXT_MUTED
         },
         shortcut: theme::TEXT_MUTED,
-        ground: cursor.then_some((theme::FILL << 8) | 0xff),
+        ground: cursor.then_some(theme::paint::SELECTION.rgba()),
     }
 }
 
@@ -1529,57 +1663,41 @@ mod tests {
         rgb(value).into()
     }
 
+    /// Theme rule 2: the one cast shadow, down and small, never inset.
     #[test]
-    fn the_float_shadow_is_far_near_contact_then_the_top_light() {
+    fn the_float_shadow_is_one_small_cast() {
         let layers = float_shadow();
-        assert_eq!(layers.len(), 4);
-        assert_eq!(layers[0].color, rgba(theme::SHADOW_FAR).into());
-        assert_eq!(layers[0].offset.y, px(theme::SHADOW_FAR_Y));
-        assert_eq!(layers[0].blur_radius, px(theme::SHADOW_FAR_BLUR));
-        assert_eq!(layers[0].spread_radius, px(theme::SHADOW_FAR_SPREAD));
-        assert_eq!(layers[1].color, rgba(theme::SHADOW_NEAR).into());
-        assert_eq!(layers[2].color, rgba(theme::SHADOW_CONTACT).into());
-        assert!(layers[..3].iter().all(|layer| !layer.inset));
-        let light = &layers[3];
-        assert!(light.inset);
-        assert_eq!(light.color, rgba(theme::LIGHT_HIGH).into());
-        assert_eq!((light.offset.y, light.blur_radius), (px(1.), px(0.)));
+        assert_eq!(layers.len(), 1);
+        let shadow = &layers[0];
+        assert!(!shadow.inset);
+        assert_eq!(shadow.color, rgba(theme::SHADOW_FLOAT).into());
+        assert_eq!(shadow.offset.y, px(theme::SHADOW_FLOAT_Y));
+        assert_eq!(shadow.blur_radius, px(theme::SHADOW_FLOAT_BLUR));
+        assert_eq!(shadow.spread_radius, px(0.));
     }
 
-    /// Every rung casts downward and never haloes: each cast layer is
-    /// offset down, and any blur wider than its offset is pulled under the
-    /// surface by a negative spread. Height orders the far layers.
+    /// Theme rule 2: square and flat inside. Only a float (and a sheet,
+    /// which floats) casts; no rung, keycap, well or knob is lit.
     #[test]
-    fn every_rung_is_lit_from_above_and_casts_down() {
+    fn only_a_float_casts_and_nothing_is_lit() {
         use Elevation::*;
-        let rungs = [Pane, Lifted, Raised, Control, Float, Sheet];
-        for rung in rungs {
-            let layers = elevation(rung);
-            let light = layers.last().unwrap();
-            assert!(light.inset && light.offset.y == px(1.), "{rung:?} lit");
-            for cast in layers.iter().filter(|layer| !layer.inset) {
-                assert!(cast.offset.y > px(0.), "{rung:?} casts down");
-                if cast.blur_radius > cast.offset.y {
-                    assert!(cast.spread_radius < px(0.), "{rung:?} haloes");
-                }
-            }
+        for rung in [Pane, Lifted, Raised, Control] {
+            assert!(elevation(rung).is_empty(), "{rung:?} is flat");
         }
-        let far = |rung| elevation(rung)[0].offset.y;
-        assert!(far(Pane) < far(Lifted));
-        assert!(far(Lifted) < far(Float));
-        assert!(far(Float) < far(Sheet));
-        assert!(key_light().iter().all(|layer| layer.inset));
+        for rung in [Float, Sheet] {
+            assert_eq!(elevation(rung), float_shadow(), "{rung:?} floats");
+        }
+        assert!(key_light().is_empty() && well_shade().is_empty() && contact_line().is_empty());
+        assert!(float_shadow_faded(0.5)[0].color.a < float_shadow()[0].color.a);
     }
 
     #[test]
-    fn a_floating_surface_wears_the_raised_ground_the_strong_edge_and_the_shadow() {
+    fn a_floating_surface_wears_the_float_ground_the_strong_line_and_the_shadow() {
         let mut surface = floating_surface();
         let style = surface.style();
-        assert_eq!(style.background, Some(Fill::from(rgb(theme::MENU))));
-        assert_eq!(
-            style.border_color,
-            Some(rgba(theme::HAIRLINE_STRONG).into())
-        );
+        assert_eq!(style.background, Some(Fill::from(theme::paint::FLOAT)));
+        assert_eq!(style.border_color, Some(theme::paint::LINE2.into()));
+        assert_eq!(style.corner_radii.top_left, Some(px(0.).into()));
         assert_eq!(style.box_shadow, Some(float_shadow()));
         assert_eq!(style.text.font_family, Some(theme::FONT_UI.into()));
     }
@@ -1643,8 +1761,9 @@ mod tests {
         assert_eq!(key.style().size.height, Some(px(theme::KBD_H).into()));
         assert_eq!(
             key.style().background,
-            Some(Fill::from(rgb(theme::RAISED_2)))
+            Some(Fill::from(theme::paint::BAND2))
         );
+        assert_eq!(key.style().box_shadow, None, "a keycap is flat");
         let mut gutter = gutter(div(), theme::LH_UI);
         assert_eq!(gutter.style().size.width, Some(px(theme::GUTTER_W).into()));
     }
@@ -1668,7 +1787,7 @@ mod tests {
     #[test]
     fn menu_rows_follow_the_state_table() {
         let rest = MenuItem::new("Rename");
-        let fill = (theme::FILL << 8) | 0xff;
+        let fill = theme::paint::SELECTION.rgba();
         assert_eq!(
             row_inks(&rest, false, false),
             RowInks {
@@ -1773,5 +1892,102 @@ mod tests {
         assert_eq!(cursor_steps(&picked), 4, "0 → Sonnet → Opus → GPT");
         assert_eq!(cursor_steps(&[row("a", false), row("b", true)]), 2);
         assert_eq!(cursor_steps(&[row("a", false)]), 1);
+    }
+
+    /// The loops' frame arithmetic: ten frames a turn, wrapping, never out
+    /// of range.
+    #[test]
+    fn a_loop_shows_one_frame_per_tick_of_its_turn() {
+        assert_eq!(frame_at(0.0, 10), 0);
+        assert_eq!(frame_at(0.099, 10), 0);
+        assert_eq!(frame_at(0.1, 10), 1);
+        assert_eq!(frame_at(0.95, 10), 9);
+        assert_eq!(frame_at(1.0, 10), 0, "a turn wraps");
+        assert_eq!(frame_at(0.9999999, 10), 9);
+        assert_eq!(icons::BRAILLE_FRAMES.len(), BRAILLE_FRAMES.len());
+        assert_eq!(icons::WORKING_FRAMES.len(), WORKING_FRAMES.len());
+        // The working cycle goes out and back, and holds ✻ when still.
+        assert_eq!(WORKING_FRAMES[4], '\u{273b}');
+        assert_eq!(icons::WORKING_FRAMES[4], icons::WORKED);
+        for (out, back) in [(1, 9), (2, 8), (3, 7), (4, 6)] {
+            assert_eq!(WORKING_FRAMES[out], WORKING_FRAMES[back]);
+            assert_eq!(icons::WORKING_FRAMES[out], icons::WORKING_FRAMES[back]);
+        }
+        // 80ms and 120ms frames, as the prototype ticks them.
+        assert_eq!(theme::MOTION_BRAILLE_FRAME_MS * 10, 800);
+        assert_eq!(theme::MOTION_WORKING_FRAME_MS * 10, 1_200);
+    }
+
+    /// The shimmer's crest travels left to right across the run, peaks at
+    /// the crest colour, and leaves the rest of the run in its base colour.
+    #[test]
+    fn the_shimmer_crest_sweeps_left_to_right() {
+        let base: Hsla = rgb(theme::PROVIDER_CLAUDE).into();
+        let crest = shimmer_crest(theme::PROVIDER_CLAUDE);
+        let text = "Reticulating\u{2026}";
+        // Before and after the sweep: nothing is lit.
+        assert!(shimmer_highlights(text, base, crest, 0.0).is_empty());
+        assert!(shimmer_highlights(text, base, crest, 0.999).len() <= 1);
+        // Mid-sweep: the crest sits at the run's middle, symmetric.
+        let mid = shimmer_highlights(text, base, crest, 0.5);
+        assert!(!mid.is_empty());
+        let lit = |phase: f32| -> Vec<usize> {
+            shimmer_highlights(text, base, crest, phase)
+                .iter()
+                .map(|(range, _)| range.start)
+                .collect()
+        };
+        let early = lit(0.35);
+        let late = lit(0.65);
+        assert!(early.first() < late.first(), "{early:?} then {late:?}");
+        // Ranges are byte ranges over whole characters, in order.
+        for pair in mid.windows(2) {
+            assert!(pair[0].0.end <= pair[1].0.start);
+        }
+        let last = mid.last().unwrap().0.clone();
+        assert!(text.is_char_boundary(last.start) && text.is_char_boundary(last.end));
+        // The crest is lighter than the base, and no highlight is brighter.
+        assert!(crest.l > base.l);
+        for (_, style) in &mid {
+            assert!(style.color.unwrap().l <= crest.l + 1e-4);
+        }
+        assert!(shimmer_highlights("", base, crest, 0.5).is_empty());
+    }
+
+    /// The caret's soft blink: full, eased down, held low, eased back.
+    #[test]
+    fn the_caret_blinks_softly() {
+        assert_eq!(caret_blink(0.0), 1.0);
+        assert_eq!(caret_blink(0.44), 1.0);
+        assert_eq!(caret_blink(0.6), theme::CARET_BLINK_MIN);
+        assert_eq!(caret_blink(0.9), theme::CARET_BLINK_MIN);
+        let falling = caret_blink(0.5);
+        assert!(theme::CARET_BLINK_MIN < falling && falling < 1.0);
+        assert!((caret_blink(0.9999) - 1.0).abs() < 0.01);
+        assert_eq!(caret_blink(1.0), 1.0, "a period wraps");
+    }
+
+    /// In tests the kit rests (reduced motion): each loop draws its still
+    /// state and leases nothing, so a board of spinners schedules no frame.
+    #[gpui::test]
+    fn spinners_and_the_shimmer_hold_still_at_rest(cx: &mut gpui::TestAppContext) {
+        struct Board;
+        impl gpui::Render for Board {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div()
+                    .child(braille_spinner(theme::RUNNING, theme::GLYPH_BOX))
+                    .child(working_spinner(theme::PROVIDER_CLAUDE, theme::GLYPH_BOX))
+                    .child(shimmer("Working", theme::PROVIDER_CLAUDE))
+            }
+        }
+        let window = cx.add_window(|_, _| Board);
+        window
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                assert_eq!(caret_opacity(window, cx), 1.0);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| assert!(motion::pulse_parked(cx), "no loop leased the clock"));
     }
 }

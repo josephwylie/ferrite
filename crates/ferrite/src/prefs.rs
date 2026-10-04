@@ -1230,7 +1230,8 @@ mod tests {
     fn rows_keep_the_one_list_pitch_and_the_sheet_fits_its_pages() {
         assert_eq!(SETTINGS_NAV_ROW_H, NAV_ROW_H);
         assert_eq!(SETTINGS_ROW_H, 36.0);
-        assert_eq!(SETTINGS_ROW_HINT_H, 44.0);
+        // One line height on the grid: a label and its hint are two rows.
+        assert_eq!(SETTINGS_ROW_HINT_H, 48.0);
         // Checked at compile time: the rhythm and the size can never drift.
         const _: () = assert!(SETTINGS_GROUP_GAP >= 2.0 * SETTINGS_LABEL_GAP);
         const _: () = assert!(SETTINGS_CONTROL_H <= SETTINGS_ROW_H - 2.0 * SPACE_1);

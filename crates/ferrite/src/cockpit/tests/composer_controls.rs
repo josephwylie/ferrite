@@ -398,7 +398,9 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             composer.set("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(), cx);
         });
     });
-    for (width, height) in [(860., 500.), (1000., 520.)] {
+    // 490 / 510 tall: the cells the old 42px band left at 500 / 520
+    // (`WIN_CHROME_H` is the 32px titlebar now).
+    for (width, height) in [(860., 490.), (1000., 510.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
         let queue = bounds(cx, format!("composer-queue-{namespace}"));

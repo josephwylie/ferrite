@@ -2404,18 +2404,20 @@ mod style_tests {
             .expect("inline code sits on a chip");
         assert_eq!(wash.color, rgba(theme::INLINE_CODE_WASH).into());
         assert_eq!(wash.radius, px(theme::R_CHIP));
-        assert_eq!(style.inline_code().color, Some(solid(theme::TEXT)));
+        assert_eq!(
+            style.inline_code().color,
+            Some(solid(theme::INLINE_CODE_INK))
+        );
         assert_eq!(style.code_background(), solid(theme::RAISED));
     }
 
+    /// Theme rule 1: a heading is the body size, set apart by weight and
+    /// ink, on the reading size's own line.
     #[test]
     fn headings_follow_the_type_table_at_every_reading_size() {
-        for (base, h1_line) in [(14., 28.), (18., 36.)] {
+        for (base, h1_line) in [(14., 21.), (18., 27.)] {
             let style = style_at(px(theme::FS_UI), px(base));
-            assert_eq!(
-                style.heading_font_size(1),
-                Some(px((base * 18. / 14.).round()))
-            );
+            assert_eq!(style.heading_font_size(1), Some(px(base)));
             assert_eq!(style.heading_font_size(3), Some(px(base)));
             let h1 = style.heading(1);
             assert_eq!(h1.text.font_weight, Some(theme::W_STRONG));
@@ -2427,12 +2429,11 @@ mod style_tests {
             assert_eq!(h4.text.color, Some(solid(theme::TEXT_STRONG)));
             assert_eq!(h4.text.font_style, None, "headings are never italic");
         }
-        // Every heading is a whole pixel at every reading size, on the type
-        // table: 18 · 16 · 14, 21 · 18 · 16, 23 · 21 · 18.
+        // Every heading is the body size at every reading size.
         for (base, sizes) in [
-            (14., [18., 16., 14.]),
-            (16., [21., 18., 16.]),
-            (18., [23., 21., 18.]),
+            (14., [14., 14., 14.]),
+            (16., [16., 16., 16.]),
+            (18., [18., 18., 18.]),
         ] {
             let style = style_at(px(theme::FS_UI), px(base));
             for level in 1..=6 {
@@ -2467,16 +2468,18 @@ mod style_tests {
         }
     }
 
+    /// Theme rule 6: inline code is cyan (`INLINE_CODE`), at body weight.
     #[test]
-    fn inline_code_is_a_neutral_body_ink_chip_at_body_weight() {
+    fn inline_code_is_cyan_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
-        assert_eq!(theme::INLINE_CODE_INK, theme::TEXT);
+        assert_eq!(theme::INLINE_CODE_INK, theme::INLINE_CODE);
         assert_eq!(theme::inline_code_size(ReadingSize::STANDARD), theme::FS_UI);
-        // The chip centres in the prose line box at every reading size.
+        // The chip centres in the prose line box (1.5× now) at every
+        // reading size.
         for (size, chip, inset) in [
-            (ReadingSize::STANDARD, 18., 2.),
+            (ReadingSize::STANDARD, 18., 1.5),
             (ReadingSize::nearest(16), 20., 2.),
-            (ReadingSize::nearest(18), 22., 3.),
+            (ReadingSize::nearest(18), 22., 2.5),
         ] {
             assert_eq!(theme::inline_code_chip_h(size), chip);
             assert_eq!(theme::inline_code_inset_y(size), inset);

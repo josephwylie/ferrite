@@ -1823,7 +1823,7 @@ mod tests {
         );
         assert_eq!(
             fill(thread_row(&current_thread(Some(Provider::Claude), true))),
-            Some(rgb(FILL).into()),
+            Some(gpui::Hsla::from(paint::SELECTION).into()),
             "the focused Thread's own row carries the tree's one fill"
         );
         assert_eq!(fill(thread_row(&thread(Some(Provider::Claude)))), None);
@@ -1835,7 +1835,7 @@ mod tests {
                 false,
                 false
             )),
-            Some(rgb(FILL).into()),
+            Some(gpui::Hsla::from(paint::SELECTION).into()),
             "Project order marks the same row the same way"
         );
     }
