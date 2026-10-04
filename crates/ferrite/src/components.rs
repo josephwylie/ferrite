@@ -696,11 +696,51 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
         }))
 }
 
-/// The prompt mark `❯`, drawn (neither face has the glyph): `prompt.svg` in a
-/// `GLYPH_BOX`. The transcript prompt and the Composer share it; `ink` is
-/// `ACCENT` where it marks the live input, `TEXT_MUTED` where it does not.
+/// The prompt mark `❯`, drawn (Geist Mono lacks U+276F): the heavy wedge of
+/// `prompt.svg`, laid in one character cell exactly as the prototype's
+/// fallback face sets the glyph — a 5 × 9.5px wedge 0.9px into the cell,
+/// centred on the line a hair low. Placed at a gutter's start its left edge
+/// is `TX_PAD_L + 0.9` (pane.left + 16.5); centred in the nav's cursor cell
+/// it spans the cell's ink box. The transcript prompt, the Composer, the
+/// nav cursor and every selection bar share it; `ink` is `ACCENT` where it
+/// marks the live input or the selected row, `TEXT_MUTED` where it does not.
 pub fn prompt_mark(ink: u32) -> AnyElement {
-    glyph_box(icons::icon(icons::PROMPT, theme::GLYPH_BOX, ink)).into_any_element()
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(theme::CH))
+        .h(px(theme::GLYPH_BOX))
+        .child(
+            icons::icon(icons::PROMPT, theme::GLYPH_BOX, ink)
+                .absolute()
+                .left_0()
+                .top_0(),
+        )
+        .into_any_element()
+}
+
+/// Ferrite's steel mark, `height` tall, cropped to the shards themselves —
+/// the prototype's `viewBox="280 30 700 1130"` (the two paths of the
+/// 1254-unit mark, the `#C7D5E8 → #9FB3D0 → #748EBA` gradient, a 26-unit
+/// stroke with round joins) — so what follows it starts the gap after the
+/// mark, not after its box. The empty board's banner and every transcript's
+/// banner draw it three rows tall.
+pub fn steel_mark(height: f32) -> Div {
+    // The shards span x 280..980 and y 30..1160 of the mark's 1254 box.
+    let size = height * 1254.0 / 1130.0;
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(height * 700.0 / 1130.0))
+        .h(px(height))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left(px(-size * 280.0 / 1254.0))
+                .top(px(-size * 30.0 / 1254.0))
+                .child(icons::ferrite_icon(size)),
+        )
 }
 
 /// A `GLYPH_BOX` square that centres its mark.
@@ -715,7 +755,9 @@ pub fn glyph_box(mark: impl IntoElement) -> Div {
 }
 
 /// The row gutter: `GUTTER_W` (C1) wide, its mark centred on the first line
-/// box (`first_line_h` high), so text starts at C1 on every row.
+/// box (`first_line_h` high), so text starts at C1 on every row. (Its one
+/// caller, the L2 tail, went with the L2 cell; the tests keep the recipe.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn gutter(mark: impl IntoElement, first_line_h: f32) -> Div {
     div()
         .flex()

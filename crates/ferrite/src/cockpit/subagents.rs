@@ -1164,12 +1164,6 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        // An L2 cell draws Main's single approval as its own compact body
-        // with y/n keycaps; every other request, at L1 all of them, is the
-        // one card in the requests overlay.
-        if self.level_of(index, window) == Level::Instruments && self.l2_decision_card(index) {
-            return None;
-        }
         // Below the short-Pane height a question body keeps two option rows
         // and scrolls, so its head and answer row stay in reach.
         let short = self
@@ -1178,29 +1172,6 @@ impl CockpitView {
             .find(|(at, _)| *at == index)
             .is_some_and(|(_, rect)| rect.h < theme::DECISION_SHORT_PANE_H);
         self.decision_cards(index, true, short)?.render(window, cx)
-    }
-
-    /// Whether this Pane's L2 cell shows Main's pending approval as its own
-    /// compact card (`l2_decision_body`) — the only request the cell draws
-    /// without a Composer, so the keyboard must go to `decision_focus`.
-    pub(super) fn l2_decision_card(&self, index: usize) -> bool {
-        let pane = &self.panes[index];
-        if !pane.is_main() {
-            return false;
-        }
-        let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) else {
-            return false;
-        };
-        let pending = open.activity().pending_decisions();
-        let mut shown = pending.iter().filter(|request| shown_on(pane, request));
-        match (shown.next(), shown.next()) {
-            (Some(request), None) => {
-                request.subject == Some(Subject::Main)
-                    && matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
-                    && open.pending() == Some(&request.decision)
-            }
-            _ => false,
-        }
     }
 
     fn send_form(

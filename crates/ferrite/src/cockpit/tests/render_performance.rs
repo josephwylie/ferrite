@@ -351,9 +351,9 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
         Some(file.clone()),
         "the file card opens the Thread-workspace file in the native reader"
     );
-    let close = debug_bounds(cx, "close-markdown-reader".to_string())
-        .expect("the native reader exposes its close control");
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    // The reader closes from the keyboard (escape, or cmd-w in it; F-14).
+    view.update(cx, |view, cx| view.close_reader(0, cx));
+    tick(cx);
 
     let id = view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();

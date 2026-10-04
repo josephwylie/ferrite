@@ -457,6 +457,91 @@ impl Tree {
         true
     }
 
+    /// The seams that read and move as one line with `seam` (itself first):
+    /// every seam on the same axis whose line sits where this one's does
+    /// (within half a pixel) and that continues it across the board, end to
+    /// end through the gap of the seam that crosses it. A default grid's
+    /// column seams — one per row in the tree — are one vertical line from
+    /// the board's top to its foot. Empty when the path names no Split.
+    pub fn linked(&self, seam: &SeamId, bounds: Rect, gap: f32) -> Vec<SeamId> {
+        let all = self.seams(bounds, gap, 0.0);
+        let Some(own) = all.iter().find(|found| found.id == *seam) else {
+            return Vec::new();
+        };
+        let axis = own.axis;
+        // Where a seam's line sits across its axis, and the span it runs
+        // along the other.
+        let line = |found: &Seam| match axis {
+            Axis::Row => found.band.x + found.band.w / 2.0,
+            Axis::Column => found.band.y + found.band.h / 2.0,
+        };
+        let span = |found: &Seam| match axis {
+            Axis::Row => (found.area.y, found.area.y + found.area.h),
+            Axis::Column => (found.area.x, found.area.x + found.area.w),
+        };
+        let at = line(own);
+        let candidates: Vec<&Seam> = all
+            .iter()
+            .filter(|found| found.axis == axis && (line(*found) - at).abs() <= 0.5)
+            .collect();
+        let mut group: Vec<&Seam> = vec![own];
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for &candidate in &candidates {
+                if group.iter().any(|member| member.id == candidate.id) {
+                    continue;
+                }
+                let (start, end) = span(candidate);
+                let touches = group.iter().any(|&member| {
+                    let (from, to) = span(member);
+                    start <= to + gap + 0.5 && end + gap + 0.5 >= from
+                });
+                if touches {
+                    group.push(candidate);
+                    grew = true;
+                }
+            }
+        }
+        group.into_iter().map(|member| member.id.clone()).collect()
+    }
+
+    /// A seam dragged as the operator sees it (F-18): the seam and every
+    /// seam `linked` to it follow the pointer together, and the line never
+    /// leaves `SEAM_CLAMP` of the board's length — dragging a 2x2 board's
+    /// vertical seam moves both rows' boundary. False when nothing changed.
+    pub fn drag_linked(&mut self, seam: &SeamId, bounds: Rect, pointer: Point, gap: f32) -> bool {
+        let group = self.linked(seam, bounds, gap);
+        let Some(axis) = self
+            .seams(bounds, gap, 0.0)
+            .into_iter()
+            .find(|found| found.id == *seam)
+            .map(|found| found.axis)
+        else {
+            return false;
+        };
+        let (low, high) = SEAM_CLAMP;
+        let pointer = match axis {
+            Axis::Row => Point {
+                x: pointer
+                    .x
+                    .clamp(bounds.x + low * bounds.w, bounds.x + high * bounds.w),
+                ..pointer
+            },
+            Axis::Column => Point {
+                y: pointer
+                    .y
+                    .clamp(bounds.y + low * bounds.h, bounds.y + high * bounds.h),
+                ..pointer
+            },
+        };
+        let mut changed = false;
+        for id in group {
+            changed |= self.drag(&id, bounds, pointer, gap);
+        }
+        changed
+    }
+
     /// Every leaf's rect in DFS order. A split shares its length minus the
     /// gap by ratio and pushes `second` past the gap; a single leaf fills the
     /// bounds.
@@ -714,6 +799,10 @@ impl Node {
 /// The gap between two Panes on the board, both axes (px): the 1px seam
 /// the terminal-native board draws between flush Panes.
 pub const GRID_GAP: f32 = 1.0;
+
+/// How far a seam drag can take its line, as shares of the board's length
+/// along the drag (the prototype's `.22`..`.78`).
+pub const SEAM_CLAMP: (f32, f32) = (0.22, 0.78);
 
 /// The cell aspect (w / h) the default grid prefers once every candidate
 /// draws at the same `Level`: a little wider than tall, like a terminal.
@@ -1030,15 +1119,16 @@ mod tests {
         }
         assert_eq!(Tree::grid(&[], LAPTOP), Tree::default());
         // The specified boards: 4 → 2×2, 9 → 3×3, 12 → 4×3 (rows × columns
-        // below), every cell of 4 and 9 at the transcript Level.
+        // below); every cell of 4 at the transcript Level, every cell of 9
+        // a wall tile (R12).
         assert_eq!(shape(&Tree::grid(&ids(1..5), LAPTOP)), (2, 2));
         assert_eq!(shape(&Tree::grid(&ids(1..10), LAPTOP)), (3, 3));
         assert_eq!(shape(&Tree::grid(&ids(1..13), LAPTOP)), (3, 4));
-        for count in [4, 9] {
+        for (count, level) in [(4, Level::Transcript), (9, Level::Wall)] {
             let (columns, rows) = grid_shape(count, LAPTOP);
             assert_eq!(
                 Level::for_cell(grid_cell(LAPTOP, columns, rows)),
-                Level::Transcript,
+                level,
                 "n = {count}"
             );
         }
@@ -1669,5 +1759,64 @@ mod tests {
             set(&serde_json::from_str::<Tree>(&json).unwrap().leaves()),
             set(&ids(1..4))
         );
+    }
+
+    /// F-18: a default 2x2 is one vertical line (the two rows' column seams,
+    /// linked) and one horizontal line spanning the width.
+    #[test]
+    fn a_two_by_two_reads_as_one_vertical_and_one_horizontal_seam() {
+        let tree = Tree::grid(&ids(1..5), LAPTOP);
+        let seams = tree.seams(LAPTOP, GRID_GAP, 9.0);
+        let horizontal: Vec<&Seam> = seams.iter().filter(|seam| seam.axis == Column).collect();
+        let vertical: Vec<&Seam> = seams.iter().filter(|seam| seam.axis == Row).collect();
+        assert_eq!(horizontal.len(), 1);
+        assert!(close(horizontal[0].band.w, LAPTOP.w), "spans the width");
+        assert_eq!(vertical.len(), 2, "one per row in the tree");
+        let group = tree.linked(&vertical[0].id, LAPTOP, GRID_GAP);
+        assert_eq!(group.len(), 2, "the two read as one line");
+        assert!(group.contains(&vertical[1].id));
+        assert_eq!(
+            tree.linked(&horizontal[0].id, LAPTOP, GRID_GAP),
+            [horizontal[0].id.clone()]
+        );
+        // The hit band is 9px, centred on the 1px line.
+        assert!(close(vertical[0].band.w, 9.0));
+    }
+
+    #[test]
+    fn dragging_the_vertical_seam_moves_both_rows_and_clamps_to_the_board() {
+        let mut tree = Tree::grid(&ids(1..5), LAPTOP);
+        let seam = tree
+            .seams(LAPTOP, GRID_GAP, 9.0)
+            .into_iter()
+            .find(|seam| seam.axis == Row)
+            .unwrap()
+            .id;
+        assert!(tree.drag_linked(&seam, LAPTOP, at(400.0, 100.0), GRID_GAP));
+        let rects = tree.rects(LAPTOP, GRID_GAP);
+        // 1 | 2 over 3 | 4: both rows' first Panes end where the line is.
+        assert!(close(rects[0].1.w, rects[2].1.w), "{rects:?}");
+        assert!(close(rects[0].1.x + rects[0].1.w + GRID_GAP / 2.0, 400.0));
+        // Far left clamps to 22% of the board, far right to 78%.
+        tree.drag_linked(&seam, LAPTOP, at(10.0, 100.0), GRID_GAP);
+        let rects = tree.rects(LAPTOP, GRID_GAP);
+        let line = rects[0].1.x + rects[0].1.w + GRID_GAP / 2.0;
+        assert!(close(line, 0.22 * LAPTOP.w), "{line}");
+        assert!(close(rects[2].1.w, rects[0].1.w));
+        tree.drag_linked(&seam, LAPTOP, at(LAPTOP.w - 2.0, 100.0), GRID_GAP);
+        let rects = tree.rects(LAPTOP, GRID_GAP);
+        let line = rects[0].1.x + rects[0].1.w + GRID_GAP / 2.0;
+        assert!(close(line, 0.78 * LAPTOP.w), "{line}");
+        // The horizontal seam clamps the same way, down the height.
+        let across = tree
+            .seams(LAPTOP, GRID_GAP, 9.0)
+            .into_iter()
+            .find(|seam| seam.axis == Column)
+            .unwrap()
+            .id;
+        tree.drag_linked(&across, LAPTOP, at(100.0, LAPTOP.h), GRID_GAP);
+        let rects = tree.rects(LAPTOP, GRID_GAP);
+        let line = rects[0].1.y + rects[0].1.h + GRID_GAP / 2.0;
+        assert!(close(line, 0.78 * LAPTOP.h), "{line}");
     }
 }

@@ -1465,6 +1465,9 @@ impl Cockpit {
             return Ok(());
         }
         let Some(state) = self.threads.get_mut(&thread) else {
+            // A parked Group member's tile (`enter_group`) has a Pane and no
+            // Session: parking it again only takes the Pane away.
+            self.roster.remove_thread(thread);
             return Ok(());
         };
         // A failed write keeps the live owner and its retry buffer reachable.
@@ -3499,21 +3502,43 @@ impl Cockpit {
     /// Open a Group (#28): every member gets a Pane, parked ones included.
     /// A Group *is* its membership on screen, so entering one that has a
     /// parked member and showing the rest would be showing a different
-    /// Group. Focus stays put when the operator was already on a member,
-    /// so entering from one of its own rows does not jump them.
+    /// Group — but entering spends no Session on a Thread the operator put
+    /// away: a parked member's Pane is its parked tile (`Parked 2h ago ·
+    /// 11 turns`), and ⏎ on it wakes it (`wake`). Focus stays put when the
+    /// operator was already on a member, so entering from one of its own
+    /// rows does not jump them.
     pub fn enter_group(&mut self, group: GroupId) -> Result<(), ReviveGroupError> {
-        let members = self.revive_group(group)?;
+        let members = self
+            .groups
+            .get(group)
+            .ok_or(ReviveGroupError::MissingGroup)?
+            .members
+            .clone();
         let retain = self
             .roster
             .focused_thread()
             .filter(|thread| members.contains(thread));
         for thread in &members {
-            self.roster.note_revived(*thread);
+            // Open or parked, the member holds its slot on the board.
+            self.roster.insert_thread(*thread);
         }
         self.roster.set_view(View::Group(group));
         if let Some(thread) = retain.or_else(|| members.first().copied()) {
             self.roster.focus(PaneIdentity::Thread(thread));
         }
+        Ok(())
+    }
+
+    /// ⏎ on a parked Group member's tile: revive it on a fresh Session in
+    /// place — its Pane keeps the slot the board gave it, takes focus, and
+    /// the park order forgets it. An open Thread is left alone.
+    pub fn wake(&mut self, thread: ThreadId) -> Result<(), LoadError> {
+        if self.threads.contains_key(&thread) {
+            return Ok(());
+        }
+        self.revive(thread)?;
+        self.roster.note_revived(thread);
+        self.roster.focus(PaneIdentity::Thread(thread));
         Ok(())
     }
 
@@ -4309,6 +4334,13 @@ impl LogReader {
             activity.apply(input);
         }
         Ok(activity.view().children().len())
+    }
+
+    /// How many turns a parked Thread's log holds — its prompts since the
+    /// last conversation reset: the wall's parked tile reads `11 turns`.
+    /// A whole-log read, so never on the UI thread for more than one.
+    pub fn turn_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
+        Ok(self.store.load(thread)?.prompt_texts().len())
     }
 }
 
@@ -8684,7 +8716,7 @@ mod tests {
     }
 
     #[test]
-    fn entering_a_group_revives_parked_members_and_keeps_focus_on_a_member() {
+    fn entering_a_group_shows_parked_members_parked_and_keeps_focus_on_a_member() {
         let (mut cockpit, _) = cockpit("roster-enter");
         let threads = opened(&mut cockpit, 3);
         let group = pair(&mut cockpit, threads[1], threads[2]);
@@ -8704,13 +8736,27 @@ mod tests {
             "focus stays on the member the operator was on"
         );
         assert!(
-            cockpit.thread(threads[2]).is_some(),
-            "the parked member revived"
+            cockpit.thread(threads[2]).is_none(),
+            "entering spends no Session on the parked member"
         );
+        assert!(
+            cockpit
+                .visible()
+                .contains(&PaneIdentity::Thread(threads[2])),
+            "but it keeps its slot on the board, as its parked tile"
+        );
+        assert_eq!(cockpit.roster().park_order(), [threads[2]]);
+
+        // ⏎ on the tile wakes it in place, and cmd-o forgets it.
+        cockpit.wake(threads[2]).unwrap();
+        assert!(cockpit.thread(threads[2]).is_some(), "woken");
+        assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
+        assert_eq!(cockpit.roster().view(), View::Group(group));
         assert!(
             cockpit.roster().park_order().is_empty(),
             "and cmd-o forgets it"
         );
+        cockpit.focus(PaneIdentity::Thread(threads[1]));
 
         assert!(cockpit.focus_thread(threads[0]));
         assert_eq!(

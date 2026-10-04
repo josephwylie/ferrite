@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::pane::{wall_card, WallCard};
+use crate::pane::{wall_card, wall_card_timed, WallCard};
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::{FileChange, Instruments};
@@ -70,6 +70,9 @@ pub struct ThreadFacts {
     /// reopening logs. (The nav row no longer names the count.)
     #[allow(dead_code)]
     pub subagents: usize,
+    /// How many turns the Thread holds (its prompts): counted while open,
+    /// read back from a parked log once — the parked tile's `11 turns`.
+    pub turns: Option<usize>,
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.
     pub wall: WallCard,
@@ -308,6 +311,11 @@ impl Facts {
                 self.threads.entry(thread).or_default().subagents = count;
             }
         }
+        for (thread, turns) in answers.turns {
+            if cockpit.thread(thread).is_none() {
+                self.threads.entry(thread).or_default().turns = turns;
+            }
+        }
     }
 
     /// The checkout label and the Project — a `git` call and a peek —
@@ -394,21 +402,39 @@ impl Facts {
     }
 
     /// When a Thread was last used, from the cache.
+    /// How many turns `thread` holds, where known (`ThreadFacts::turns`).
+    pub fn turns(&self, thread: ThreadId) -> Option<usize> {
+        self.threads.get(&thread).and_then(|facts| facts.turns)
+    }
+
     pub fn last_used(&self, thread: ThreadId) -> Option<SystemTime> {
         self.threads.get(&thread).and_then(|facts| facts.last_used)
     }
 
-    /// Refold one Thread's wall card, wherever its transcript can change.
+    /// Refold one Thread's wall card, wherever its transcript can change —
+    /// with its calls' clocks, so a settled call's tile line carries its
+    /// time (`● Bash(cargo test --workspace) 1m01s`).
     fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let open = cockpit.thread(thread);
-        let card = wall_card(
+        let card = wall_card_timed(
             open.map(|open| open.transcript()),
             open.and_then(|open| open.pending()),
+            open.map(|open| open.tool_timings()),
         );
+        let turns = open.map(|open| {
+            open.transcript()
+                .blocks()
+                .iter()
+                .filter(|block| matches!(block.body, ferrite_core::transcript::Body::Prompt(_)))
+                .count()
+        });
         let last_used = cockpit.last_used(thread);
         let changed_files = open.map(changed_files);
         let facts = self.threads.entry(thread).or_default();
         facts.wall = card;
+        if turns.is_some() {
+            facts.turns = turns;
+        }
         if let Some(changed_files) = changed_files {
             facts.changed_files = changed_files;
         }
@@ -552,7 +578,8 @@ fn at_word_boundary(title: &str) -> String {
 pub struct ParkedLookups {
     /// Parked Threads whose checkout branch only `git` can say.
     pub branches: Vec<(ThreadId, std::path::PathBuf)>,
-    /// Parked Threads whose subagent count needs a replay of their log.
+    /// Parked Threads whose subagent count (and turn count) needs a read
+    /// of their log.
     pub subagents: Vec<ThreadId>,
 }
 
@@ -572,6 +599,11 @@ impl ParkedLookups {
                     (thread, ferrite_core::workspace::checkout_branch(&checkout))
                 })
                 .collect(),
+            turns: self
+                .subagents
+                .iter()
+                .map(|thread| (*thread, logs.turn_count(*thread).ok()))
+                .collect(),
             subagents: self
                 .subagents
                 .into_iter()
@@ -585,6 +617,7 @@ impl ParkedLookups {
 pub struct ParkedAnswers {
     branches: Vec<(ThreadId, Option<String>)>,
     subagents: Vec<(ThreadId, usize)>,
+    turns: Vec<(ThreadId, Option<usize>)>,
 }
 
 #[cfg(test)]

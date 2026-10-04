@@ -11,13 +11,14 @@
 //! | Zeron | Spec | Ferrite surface |
 //! | --- | --- | --- |
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
-//! | selection move | none | the nav's one `FILL` moves at once: selection is keyboard-rate, a high-frequency interaction |
+//! | selection move | none | the nav's one selection ground (`paint::SELECTION`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms, and the titlebar cell over it cross-fades over 200ms (the nav's `MOTION_NAV_*` tokens) |
+//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms, and the titlebar cell over it cross-fades over 200ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
+//! | seam accent | [`SEAM_FADE`] 120ms | a board seam's accent line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
@@ -207,7 +208,13 @@ impl MotionSpec {
 
 pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
 pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
-pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE_OUT);
+/// The sidebar's ride (cmd-B) and the board riding with it: the
+/// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
+/// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
+pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
+/// A board seam's accent line fading in under the pointer: the prototype's
+/// `.seam::before{transition: opacity .12s}`.
+pub const SEAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_SEAM_FADE_MS, EASE);
 pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
@@ -1022,7 +1029,8 @@ mod tests {
         assert_eq!(FADE_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
         assert_eq!(theme::MOTION_FADE_IN_RISE, 4.0);
         assert_eq!(RESIZE.duration_ms, 200);
-        assert_eq!(RESIZE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
+        assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
+        assert_eq!(SEAM_FADE.duration_ms, 120);
         assert_eq!(COLLAPSE.duration_ms, 180);
         assert_eq!(FADE_QUICK.duration_ms, 150);
         assert_eq!(MENU_IN.duration_ms, 140);
@@ -1084,6 +1092,29 @@ mod tests {
         close(fades.value_at("row", ms(75)), at_flip, 1e-4, "continuity");
         assert!(fades.value_at("row", ms(140)) < at_flip, "falls back");
         assert_eq!(fades.value_at("row", ms(225)), 0.0, "lands at rest");
+    }
+
+    /// F-12: the sidebar ride is CSS `ease` — at half its time it is 80% of
+    /// the way, not ease-out's 68%.
+    #[test]
+    fn the_sidebar_ride_is_css_ease() {
+        close(RESIZE.progress(0.5), 0.80, 0.01, "ease at half time");
+        let t0 = Instant::now();
+        let ride = Tween::new(280.8, 0.0, RESIZE, t0);
+        let half = t0 + Duration::from_millis(100);
+        close(ride.value(half, false), 280.8 * 0.1976, 0.5, "mid-ride");
+    }
+
+    /// A seam's accent line fades over its own 120ms, not the hover 150ms.
+    #[test]
+    fn a_seam_blend_runs_on_its_own_timeline() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("seam");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        fades.set_with(&key, true, false, t0, SEAM_FADE);
+        assert!(fades.value_at("seam", ms(60)) < 1.0);
+        assert_eq!(fades.value_at("seam", ms(120)), 1.0);
     }
 
     #[test]
