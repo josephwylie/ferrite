@@ -1295,20 +1295,22 @@ pub fn render_pane(
 /// reading column on the transcript rows' axis, over the Pane's ground.
 fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
     let transcript = cx.transcript?;
+    let provider = cx.thread.map(|thread| thread.provider());
     let line = if transcript.status() == Status::Streaming {
-        working_line(
+        working_line_for(
             transcript,
             false,
-            // Only the Pane holding the keyboard offers `esc to interrupt`:
-            // the key acts nowhere else.
+            // Only the Pane holding the keyboard animates its line and
+            // offers `esc to interrupt`: the key acts nowhere else.
             cx.focused,
             cx.received_reasoning_visible,
             cx.reduce_motion,
+            provider,
         )
     } else if cx.starting {
         // A Session starting or being replaced, with nothing streaming yet:
         // the same line, saying so.
-        starting_line(cx.reduce_motion)
+        starting_line(cx.reduce_motion || !cx.focused, provider_ink(provider))
     } else {
         return None;
     };
@@ -1325,34 +1327,57 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
                     .left_0()
                     .right_0()
                     .bottom_0()
-                    .px(px(theme::PANE_PAD_X))
+                    .pl(px(theme::TX_PAD_L))
+                    .pr(px(theme::TX_PAD_R))
                     .pb(px(theme::GAP_ROW))
-                    .bg(rgb(PANE))
-                    // The rows above dissolve into the line's band.
-                    .child(components::fade_band(PANE, false).top(px(-theme::SCROLL_FADE_H)))
-                    .child(components::reading_column(
-                        div().px(px(theme::BOX_INSET_X)).child(line),
-                    )),
+                    // The line lies over the transcript's own bottom padding;
+                    // rows scrolled under it are hidden by the plane.
+                    .bg(theme::paint::PLANE)
+                    .child(line),
             )
             .into_any_element(),
     )
 }
 
-/// The working line's shape while a Session starts: the Ferrite mark (still
-/// under reduced motion) and `Starting`, in the working line's own row.
-fn starting_line(reduce_motion: bool) -> Div {
-    let mark = working_mark(reduce_motion);
+/// The working line's shape while a Session starts: nothing the provider
+/// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
+/// the focused Pane, assembled and still elsewhere and under reduced motion
+/// — and `Starting` in `TEXT_MUTED`. Its element id is a constant: the
+/// timeline has to survive every re-render of the line.
+fn starting_line(still: bool, _ink: u32) -> Div {
+    let mark = if still {
+        div()
+            .debug_selector(|| "starting-mark-still".into())
+            .child(icons::ferrite_icon(theme::GLYPH_BOX))
+            .into_any_element()
+    } else {
+        div()
+            .debug_selector(|| "starting-mark-live".into())
+            .child(icons::animated_ferrite_icon(
+                theme::GLYPH_BOX,
+                "starting-progress-indicator",
+            ))
+            .into_any_element()
+    };
     div()
         .debug_selector(|| "transcript-starting".into())
         .flex()
         .items_center()
         .w_full()
         .min_w_0()
+        .h(px(theme::LH_UI))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_2))
-        .child(components::gutter(mark, theme::LH_UI))
+        .text_color(rgb(TEXT_MUTED))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .w(px(theme::GLYPH_GUTTER))
+                .child(mark),
+        )
         .child(div().min_w_0().truncate().child("Starting"))
 }
 
@@ -3558,38 +3583,30 @@ pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<Dis
         .map(|diff| DisclosureId::TurnDiff(diff.turn_id.clone()))
 }
 
-/// The working line's mark: the Ferrite shards snapping on their 3s
-/// timeline, or the assembled mark at rest when the operator asked for
-/// reduced motion. Its element id is a constant: the timeline has to
-/// survive every re-render of the line.
-fn working_mark(reduce_motion: bool) -> AnyElement {
-    if reduce_motion {
+/// The working line's mark (the prototype's `.spin`): the star spinner
+/// cycling `· ✢ ✳ ✶ ✻ ✽` in the provider's colour on the focused Pane
+/// (`live`), the still `✻` everywhere else and under reduced motion. Its
+/// selector says which.
+fn working_mark(ink: u32, live: bool) -> AnyElement {
+    if live {
         div()
-            .debug_selector(|| "progress-mark-still".into())
-            .child(icons::ferrite_icon(theme::GLYPH_BOX))
+            .debug_selector(|| "progress-mark-live".into())
+            .child(components::working_spinner(ink, theme::GLYPH_BOX))
             .into_any_element()
     } else {
         div()
-            .debug_selector(|| "progress-mark-live".into())
-            .child(icons::animated_ferrite_icon(
-                theme::GLYPH_BOX,
-                "live-progress-indicator",
-            ))
+            .debug_selector(|| "progress-mark-still".into())
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(theme::GLYPH_BOX))
+            .child(icon(icons::WORKED, theme::GLYPH_BOX, ink))
             .into_any_element()
     }
 }
 
-/// The working line (rule 2.6.2): one row, the animated Ferrite mark in the
-/// gutter (at rest under reduced motion), the provider's live caption —
-/// `Working` unless it has something better to say — then `(3s · ↓ 312
-/// tokens)` in `TEXT_MUTED` at the same size, Claude Code's `✻ Working…
-/// (12s · ↓ 1.2k tokens)`. The seconds are whole (`progress::live_seconds`),
-/// tabular, so the text changes once a second however often the mark's
-/// 33ms tick repaints it. On the focused Pane only (`focused`) it appends
-/// `· esc to interrupt`, dropped whole where the row cannot hold it. The
-/// caption is what truncates; the facts keep their room. L2 (`compact`)
-/// draws the same row without the token count. Command details stay in the
-/// tool rows.
+/// The working line with no provider known (the L2 cell): the spinner and
+/// caption in `TEXT_MUTED`.
 fn working_line(
     transcript: &Transcript,
     compact: bool,
@@ -3597,13 +3614,46 @@ fn working_line(
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
 ) -> Div {
+    working_line_for(
+        transcript,
+        compact,
+        focused,
+        received_reasoning_is_visible,
+        reduce_motion,
+        None,
+    )
+}
+
+/// The working line (the prototype's `.comp > .r`): one row on the chrome
+/// grid, the star spinner in the gutter, the provider's live caption in its
+/// colour — `Working` unless it has something better to say — and then
+/// `(1m04s · ↓ 4.1k tokens · esc to interrupt)` in `TEXT_MUTED`. Only the
+/// focused Pane animates it: the spinner cycles and the caption's shimmer
+/// sweeps there; elsewhere the `✻` and the caption hold still. The seconds
+/// are whole (`progress::live_seconds`), tabular, so the text changes once a
+/// second. `esc to interrupt` rides only the Pane holding the keyboard (the
+/// key acts nowhere else). The caption is what truncates; the facts keep
+/// their room. L2 (`compact`) draws the same row without the token count.
+fn working_line_for(
+    transcript: &Transcript,
+    compact: bool,
+    focused: bool,
+    received_reasoning_is_visible: bool,
+    reduce_motion: bool,
+    provider: Option<Provider>,
+) -> Div {
+    let ink = provider_ink(provider);
+    let live = focused && !reduce_motion;
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
         facts.push(ferrite_core::progress::live_seconds(elapsed));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
-        facts.push(format!("↓ {} tokens", tokens_label(tokens)));
+        facts.push(format!("\u{2193} {} tokens", tokens_label(tokens)));
+    }
+    if focused {
+        facts.push("esc to interrupt".into());
     }
     let progress = transcript.progress();
     let caption = progress.caption().map(|caption| {
@@ -3619,72 +3669,54 @@ fn working_line(
         .flex_shrink_0()
         .w_full()
         .min_w_0()
+        .h(px(theme::LH_UI))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI));
     if let Some(caption) = caption {
         let selector = format!("progress-caption-{caption}");
-        // The caption and its facts share one piece that may take the whole
-        // row; the esc hint after it wraps onto the clipped second line —
-        // gone, whole — when the row cannot hold both.
-        let main = div()
-            .flex()
-            .items_center()
-            .min_w_0()
-            .max_w_full()
+        let caption = SharedString::from(caption);
+        let text = if live {
+            components::shimmer(caption, ink)
+        } else {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(ink))
+                .child(caption)
+                .into_any_element()
+        };
+        let metadata = SharedString::from(format!("({})", facts.join(" \u{b7} ")));
+        let highlights = separators(&metadata);
+        row = row
+            .debug_selector(move || selector.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .w(px(theme::GLYPH_GUTTER))
+                    .h(px(theme::LH_UI))
+                    .child(working_mark(ink, live)),
+            )
             .child(
                 div()
                     .debug_selector(|| "progress-reasoning".into())
+                    .flex()
                     .min_w_0()
-                    .truncate()
-                    .text_color(rgb(TEXT_2))
-                    .child(SharedString::from(caption)),
+                    .child(text),
             )
-            .when(!facts.is_empty(), |main| {
-                main.child(components::tabular(
+            .when(!facts.is_empty(), |row| {
+                row.child(components::tabular(
                     div()
                         .debug_selector(|| "progress-metadata".into())
                         .flex_shrink_0()
                         .whitespace_nowrap()
-                        .pl(px(theme::WORD_GAP))
+                        .pl(px(theme::CH))
                         .text_color(rgb(TEXT_MUTED))
-                        .child(SharedString::from(format!("({})", facts.join(" \u{b7} ")))),
+                        .child(StyledText::new(metadata).with_highlights(highlights)),
                 ))
             });
-        row = row
-            .debug_selector(move || selector.clone())
-            // The shard snap is this row's liveness signal, so the text
-            // carries no extra opacity pulse.
-            .child(components::gutter(
-                working_mark(reduce_motion),
-                theme::LH_UI,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(theme::LH_UI))
-                    .overflow_hidden()
-                    .child(main)
-                    .when(focused, |line| {
-                        line.child(
-                            div()
-                                .debug_selector(|| "progress-esc".into())
-                                .flex()
-                                .flex_shrink_0()
-                                .whitespace_nowrap()
-                                .child(
-                                    div()
-                                        .px(px(theme::SPACE_1_5))
-                                        .text_color(rgb(TEXT_FAINT))
-                                        .child("\u{b7}"),
-                                )
-                                .child(div().text_color(rgb(TEXT_MUTED)).child("esc to interrupt")),
-                        )
-                    }),
-            );
     }
     div().w_full().min_w_0().flex_shrink_0().child(row)
 }
@@ -5695,15 +5727,142 @@ pub(crate) fn reasoning_has_details(thought: &str) -> bool {
     reasoning_text(thought).1.is_some()
 }
 
-/// One Block as a transcript row, in the terminal grammar `theme.rs`'s WP-A
-/// section states: a drawn mark in the gutter, centred on the first line
-/// box, and the text at C1. Rows own no spacing; the list gives each row its
-/// gap from the gap table.
+// ---------------------------------------------------------- transcript rows
+
+/// The grid a transcript row is set on (the WP-A grammar in `theme.rs`):
+/// the reading size, its 1.5x line and its cell. The transcript list sets
+/// the size and the line once; rows read the numbers for their gutters,
+/// elbows and folds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Grid {
+    pub size: f32,
+    pub line: f32,
+}
+
+impl Grid {
+    pub(crate) fn of(reading: ferrite_core::settings::ReadingSize) -> Self {
+        Self {
+            size: theme::answer_text_size(reading),
+            line: theme::answer_line_height(reading),
+        }
+    }
+
+    /// One cell of the grid.
+    pub(crate) fn cell(self) -> f32 {
+        theme::tx_cell(self.size)
+    }
+
+    /// The 2-cell glyph gutter.
+    pub(crate) fn gutter(self) -> f32 {
+        theme::tx_gutter(self.size)
+    }
+
+    /// A drawn mark's box (`❯ ✻ ◆ ∴`).
+    pub(crate) fn mark(self) -> f32 {
+        theme::tx_mark(self.size)
+    }
+
+    /// Half a line, whole pixels.
+    pub(crate) fn half(self) -> f32 {
+        theme::tx_half(self.line)
+    }
+}
+
+/// The agent's and a tool call's bullet: Geist Mono's own `●`.
+pub(crate) const BULLET: &str = "\u{25cf}";
+/// A call whose result never came: the hollow `○`.
+const RING: &str = "\u{25cb}";
+/// The result elbow: Geist Mono's own `└`.
+const ELBOW: &str = "\u{2514}";
+
+/// A provider's brand colour, for its `✻` and its working spinner;
+/// `TEXT_MUTED` when the provider is not known.
+pub(crate) fn provider_ink(provider: Option<Provider>) -> u32 {
+    match provider {
+        Some(Provider::Claude) => theme::PROVIDER_CLAUDE,
+        Some(Provider::Codex) => theme::PROVIDER_CODEX,
+        None => TEXT_MUTED,
+    }
+}
+
+/// A typed gutter glyph (`●`, `○`) in `ink`: the face's own, in the
+/// gutter's first cell on the row's first line. Plain text, so it is never
+/// part of a selection.
+pub(crate) fn glyph_gutter(grid: Grid, glyph: &'static str, ink: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .w(px(grid.gutter()))
+        .h(px(grid.line))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(ink))
+        .child(glyph)
+}
+
+/// A drawn gutter mark (`❯ ✻ ◆ ∴`): centred on the row's first line, at the
+/// gutter's left edge.
+pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .w(px(grid.gutter()))
+        .h(px(grid.line))
+        .child(mark)
+}
+
+/// A transcript row: its gutter, then the content column (the caller's next
+/// child, `flex_1 min_w_0`); wrapped lines hang under the content column.
+fn grid_row(gutter: Div) -> Div {
+    div().flex().items_start().w_full().min_w_0().child(gutter)
+}
+
+/// A row whose gutter is empty: its content starts on the content column.
+fn content_row(grid: Grid) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .w_full()
+        .min_w_0()
+        .pl(px(grid.gutter()))
+}
+
+/// A row that hangs under the one above it: the typed `└` (`TEXT_FAINT`)
+/// in the content column's first two cells, the caller's text after it in
+/// `ink`.
+pub(crate) fn elbow_line(grid: Grid, ink: u32) -> Div {
+    content_row(grid).text_color(rgb(ink)).child(
+        div()
+            .debug_selector(|| "transcript-elbow".into())
+            .flex_shrink_0()
+            .w(px(2.0 * grid.cell()))
+            .whitespace_nowrap()
+            .text_color(rgb(TEXT_FAINT))
+            .child(ELBOW),
+    )
+}
+
+/// A line under an elbow line, on the text after its elbow: more output, a
+/// fold's `+ N lines`.
+fn after_elbow(grid: Grid) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .w_full()
+        .min_w_0()
+        .pl(px(grid.gutter() + 2.0 * grid.cell()))
+}
+
+/// One Block as a transcript row, in the terminal grammar of `theme.rs`'s
+/// WP-A section: a mark in the 2-cell gutter, the content after it. Rows own
+/// no spacing; the list gives each row its gap from the gap table.
 ///
 /// Every text run routes through the selection overlay (#27) — that is what
 /// makes it selectable and copyable; the marks, elbows, trails, the `$` and
 /// the diff numbers around the runs are chrome, and stay plain. Anything a
 /// row registers is mirrored by its `pane/text.rs` collector.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_block(
     block: &Block,
     selection: &TextRuns,
@@ -5711,135 +5870,78 @@ pub(crate) fn render_block(
     expanded: bool,
     disclosure: Option<Disclosure>,
     signal: u32,
-    _provider: Option<Provider>,
+    provider: Option<Provider>,
     preview: &crate::attachment_preview::Preview,
     prompt_actions: Option<AnyElement>,
     reading: ferrite_core::settings::ReadingSize,
+    wide: bool,
 ) -> AnyElement {
+    let grid = Grid::of(reading);
     let row = div().w_full().min_w_0().flex_shrink_0();
-    // Prose rows read at the answer's size; tool rows and the stamp do not
-    // scale.
-    let (prose_size, prose_line) = (
-        theme::answer_text_size(reading),
-        theme::answer_line_height(reading),
-    );
     match &block.body {
-        // No band and no hover ground: the accent `❯`, the label weight and
-        // the strongest ink carry the prompt. Its actions show under the
-        // pointer, their box always reserved.
-        Body::Prompt(line) => {
-            let (text, files) = ferrite_core::prompt_files::split(line.clone());
-            let blank = text.is_empty();
-            div()
-                .debug_selector(|| "transcript-prompt".into())
-                .group("sent-prompt")
-                .id(SharedString::from(format!("prompt-{:?}", block.id)))
-                .relative()
-                .flex()
-                .items_start()
-                .min_w_0()
-                .flex_shrink_0()
-                .hover_text()
-                .on_hover(crate::motion::hover_listener(prompt_hover_key(block.id)))
-                // The operator's own words head the turn: the answer's size
-                // in the UI face, set apart from the answer under it by the
-                // `❯`, the label weight and the strong ink.
-                .font_family(theme::FONT_UI)
-                .font_weight(theme::W_LABEL)
-                .text_size(px(prose_size))
-                .line_height(px(prose_line))
-                .text_color(rgb(TEXT_STRONG))
-                .child(components::gutter(
-                    components::prompt_mark(ACCENT),
-                    prose_line,
-                ))
-                .child(
+        Body::Prompt(line) => prompt_row(block.id, line, selection, preview, prompt_actions, grid),
+        // Fallback prose (a block with no Markdown source) reads as the
+        // answer does, on the content column.
+        Body::Paragraph { spans } => row
+            .child(
+                content_row(grid).text_color(rgb(TEXT)).child(
                     div()
-                        .flex()
-                        .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .gap(px(theme::GAP_ROW))
-                        .child(
-                            div()
-                                .flex()
-                                .items_start()
-                                .w_full()
-                                .min_w_0()
-                                .gap(px(theme::SPACE_2))
-                                .when(!blank, |line| {
-                                    line.child(div().flex_1().min_w_0().child(selection.line(
-                                        block.id,
-                                        text,
-                                        Vec::new(),
-                                    )))
-                                })
-                                .when(blank, |line| line.child(div().flex_1()))
-                                .children(prompt_actions),
-                        )
-                        .when(!files.is_empty(), |column| {
-                            column
-                                .debug_selector(|| "sent-prompt-attachments".into())
-                                .child(crate::attachments::Attachments::new(
-                                    format!("sent-attachments-{:?}", block.id),
-                                    files,
-                                    preview,
-                                ))
-                        }),
-                )
-                .into_any_element()
-        }
-        // Fallback prose (a block with no Markdown source) reads as the
-        // answer does, at C1.
-        Body::Paragraph { spans } => prose_row(row, prose_size, prose_line)
-            .child(prose(block.id, spans, selection))
+                        .child(prose(block.id, spans, selection)),
+                ),
+            )
             .into_any_element(),
-        Body::Heading { spans, .. } => prose_row(row, prose_size, prose_line)
-            .font_weight(theme::W_STRONG)
-            .text_color(rgb(TEXT_STRONG))
-            .child(prose(block.id, spans, selection))
+        Body::Heading { spans, .. } => row
+            .child(
+                content_row(grid)
+                    .font_weight(theme::W_STRONG)
+                    .text_color(rgb(TEXT_STRONG))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(prose(block.id, spans, selection)),
+                    ),
+            )
             .into_any_element(),
-        // A fallback list item: Claude's `-` marker right-aligned in the
-        // Markdown lists' hang, the text `PROSE_HANG` in.
-        Body::Bullet { spans } => {
-            let hang = theme::reading_step(theme::PROSE_HANG, prose_size);
-            prose_row(row, prose_size, prose_line)
-                .relative()
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(theme::GUTTER_W))
-                        .top_0()
-                        .w(px(hang))
-                        .pr(px(theme::LIST_MARKER_GAP))
-                        .text_right()
-                        .text_color(rgb(TEXT_MUTED))
-                        .child("-"),
-                )
-                .child(div().pl(px(hang)).child(prose(block.id, spans, selection)))
-                .into_any_element()
-        }
+        // A fallback list item: a dim `•` hanging in two cells, its text
+        // after it.
+        Body::Bullet { spans } => row
+            .child(
+                content_row(grid)
+                    .text_color(rgb(TEXT))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(2.0 * grid.cell()))
+                            .text_color(rgb(TEXT_MUTED))
+                            .child("\u{2022}"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(prose(block.id, spans, selection)),
+                    ),
+            )
+            .into_any_element(),
         // A blank thought from an older log (redacted thinking, before the
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
-        // Reasoning is agent prose one ink down, under `∴`: Geist 14/22,
-        // `TEXT_MUTED`, never italic. A short thought shows whole; a long
-        // one is its first line with the rest disclosed.
+        // Reasoning is agent prose one ink down, under the drawn `∴`,
+        // `TEXT_MUTED`, never italic. A short thought shows whole; a long one
+        // is its first line with the rest disclosed.
         Body::Thinking(thought) => {
             let (summary, details) = reasoning_text(thought);
-            let mark = icon(icons::REASONING, theme::GLYPH_BOX, TEXT_FAINT);
-            let reasoning = div()
-                .font_family(theme::FONT_UI)
-                .text_size(px(prose_size))
-                .line_height(px(prose_line))
-                .text_color(rgb(TEXT_MUTED));
+            let mark = || mark_gutter(grid, icon(icons::REASONING, grid.mark(), TEXT_FAINT));
             let Some(details) = details else {
                 // Nothing more was supplied. Keep the whole short block
                 // visible, wrapped and selectable without a false disclosure.
                 return row
                     .child(
-                        gutter_row(mark, prose_line).child(
-                            reasoning.flex_1().min_w_0().child(
+                        grid_row(mark()).text_color(rgb(TEXT_MUTED)).child(
+                            div().flex_1().min_w_0().child(
                                 selection
                                     .markdown(block.id, thought.trim().to_owned())
                                     .muted(),
@@ -5849,11 +5951,10 @@ pub(crate) fn render_block(
                     .into_any_element();
             };
             let (overlay, chevron, targeted) = disclosure_parts(disclosure);
-            let header = gutter_row(mark, prose_line)
+            let header = grid_row(mark())
                 .id(SharedString::from(format!("reasoning-row-{:?}", block.id)))
                 .group(DISCLOSURE_ROW)
                 .relative()
-                .items_center()
                 .child(
                     div()
                         .debug_selector(|| "reasoning-summary".into())
@@ -5870,19 +5971,23 @@ pub(crate) fn render_block(
                 .child(header);
             if expanded {
                 body = body.content(
-                    div()
-                        .min_w_0()
-                        .pl(px(theme::GUTTER_W))
-                        .child(selection.markdown(block.id, details.clone()).muted()),
+                    content_row(grid).child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(selection.markdown(block.id, details.clone()).muted()),
+                    ),
                 );
             }
-            row.child(reasoning.child(body)).into_any_element()
+            row.text_color(rgb(TEXT_MUTED))
+                .child(body)
+                .into_any_element()
         }
         // A notice: a dot and one line, cut by width at the column's edge
         // with the whole of it one hover away. Only the transcript's latest
         // notice wears the Pane's state (`signal`), and then only on its dot
         // and its lead phrase (`Bash needs approval`, `asks 1 question`):
-        // the `·` is `TEXT_FAINT` and the detail `TEXT_2`. While the
+        // the `·` is `TEXT_FAINT` and the detail `TEXT_MUTED`. While the
         // Decision it announces is docked below, the detail is the card's
         // to say, so only the lead prints (and copies). History stays
         // neutral.
@@ -5910,101 +6015,434 @@ pub(crate) fn render_block(
             }
             let text = SharedString::from(text);
             row.child(
-                gutter_row(
-                    components::status_dot(mark).size(px(theme::TOOL_DOT)),
-                    theme::LH_UI,
-                )
-                .text_size(px(theme::FS_UI))
-                .line_height(px(theme::LH_UI))
-                .text_color(rgb(TEXT_2))
-                .child(
-                    div()
-                        .id(SharedString::from(format!("notice-{:?}", block.id)))
-                        .debug_selector({
-                            let id = block.id;
-                            move || format!("notice-{id:?}")
-                        })
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .tooltip(crate::menu::tooltip(text.clone()))
-                        .child(selection.line(block.id, text, highlights)),
-                ),
+                grid_row(glyph_gutter(grid, BULLET, mark))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("notice-{:?}", block.id)))
+                            .debug_selector({
+                                let id = block.id;
+                                move || format!("notice-{id:?}")
+                            })
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .tooltip(crate::menu::tooltip(text.clone()))
+                            .child(selection.line(block.id, text, highlights)),
+                    ),
             )
             .into_any_element()
         }
         // A decision record (`allowed Write`) or a revival note hangs under
         // the row it answers.
         Body::Meta(text) => row
-            .child(
-                result_line(TEXT_MUTED).child(div().flex_1().min_w_0().child(selection.line(
+            .child(elbow_line(grid, TEXT_MUTED).child(
+                div().flex_1().min_w_0().child(selection.line(
                     block.id,
                     text.clone(),
                     separators(text),
-                ))),
-            )
+                )),
+            ))
             .into_any_element(),
         Body::TurnEnd(end) => row
-            .child(turn_end(block.id, end, selection))
+            .child(turn_end(block.id, end, selection, provider, grid))
             .into_any_element(),
-        // Code keeps literal indentation and highlighting without a
-        // separate language header or raised container.
+        // Code keeps literal indentation and highlighting on a 1px rule,
+        // with no ground.
         Body::Code {
             language: _,
             source,
             tokens,
         } => row
-            .pl(px(theme::GUTTER_W))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .font_family(theme::FONT_CODE)
-                    .text_size(px(theme::FS_UI))
-                    .line_height(px(theme::LH_CODE))
-                    .text_color(rgb(TEXT_2))
-                    .children(code_lines(
-                        block.id,
-                        source,
-                        code(source, tokens.as_deref()),
-                        selection,
-                    )),
+                content_row(grid).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .pl(px(2.0 * grid.cell()))
+                        .border_l_1()
+                        .border_color(theme::paint::LINE2)
+                        .font_family(theme::FONT_CODE)
+                        .text_color(rgb(TEXT))
+                        .children(code_lines(
+                            block.id,
+                            source,
+                            code(source, tokens.as_deref()),
+                            selection,
+                        )),
+                ),
             )
             .into_any_element(),
         Body::Tool(tool) => render_tool(
-            row, block.id, tool, selection, timings, expanded, disclosure, false,
+            row, block.id, tool, selection, timings, expanded, disclosure, false, grid, wide,
         ),
     }
+}
+
+/// The prompt echo (the prototype's `.prompt`): a full-width
+/// `paint::BAND` with half a line above and below, the accent `❯` in the
+/// gutter and the operator's words in `TEXT_STRONG` at body weight. Its
+/// files ride the band as chips (`paint::BAND2`, `CYAN` names); an image
+/// hangs under the band in its 1px frame with its caption. Copy and Resend
+/// show at the band's right under the pointer, their box always reserved.
+fn prompt_row(
+    block: BlockId,
+    line: &str,
+    selection: &TextRuns,
+    preview: &crate::attachment_preview::Preview,
+    prompt_actions: Option<AnyElement>,
+    grid: Grid,
+) -> AnyElement {
+    let (text, files) = ferrite_core::prompt_files::split(line.to_owned());
+    let blank = text.is_empty();
+    let chips = files
+        .iter()
+        .enumerate()
+        .map(|(index, path)| file_chip(block, index, path, preview, grid));
+    let band = div()
+        .debug_selector(|| "transcript-prompt".into())
+        .group("sent-prompt")
+        .id(SharedString::from(format!("prompt-{block:?}")))
+        .relative()
+        .flex()
+        .items_start()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .bg(theme::paint::BAND)
+        .py(px(grid.half()))
+        .pl(px(theme::TX_PAD_L))
+        .pr(px(theme::TX_PAD_R))
+        .hover_text()
+        .on_hover(crate::motion::hover_listener(prompt_hover_key(block)))
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(TEXT_STRONG))
+        .child(mark_gutter(
+            grid,
+            icon(icons::PROMPT, grid.mark(), ACCENT).debug_selector(|| "prompt-mark".into()),
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .when(!blank, |column| {
+                    column.child(div().w_full().min_w_0().child(selection.line(
+                        block,
+                        text,
+                        Vec::new(),
+                    )))
+                })
+                .when(!files.is_empty(), |column| {
+                    column.child(
+                        div()
+                            .debug_selector(|| "sent-prompt-attachments".into())
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(grid.cell()))
+                            .min_w_0()
+                            .children(chips),
+                    )
+                }),
+        )
+        .children(prompt_actions.map(|actions| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .h(px(grid.line))
+                .pl(px(2.0 * grid.cell()))
+                .child(actions)
+        }));
+    let images: Vec<_> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, path)| is_image(path))
+        .map(|(index, path)| inline_image(block, index, path, preview, grid))
+        .collect();
+    if images.is_empty() {
+        return band.into_any_element();
+    }
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .child(band)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(grid.half()))
+                .w_full()
+                .min_w_0()
+                .pt(px(grid.half()))
+                .pl(px(theme::TX_PAD_L + grid.gutter()))
+                .pr(px(theme::TX_PAD_R))
+                .children(images),
+        )
+        .into_any_element()
+}
+
+/// Whether a file is an image gpui can draw.
+fn is_image(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// Open a sent file: an image in the Pane's preview, anything else with the
+/// system.
+fn open_file(
+    path: &std::path::Path,
+    preview: &crate::attachment_preview::Preview,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    if is_image(path) {
+        preview.open(path.to_path_buf(), name, window, cx);
+    } else {
+        crate::file_links::FileLink {
+            path: path.to_path_buf(),
+            location: None,
+        }
+        .open(window, cx);
+    }
+}
+
+/// A sent file on the prompt band: its name in `CYAN` on `paint::BAND2`,
+/// one cell of padding, a click opens it.
+fn file_chip(
+    block: BlockId,
+    index: usize,
+    path: &std::path::Path,
+    preview: &crate::attachment_preview::Preview,
+    grid: Grid,
+) -> Stateful<Div> {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let host = preview.clone();
+    let open = path.to_path_buf();
+    div()
+        .id(SharedString::from(format!("sent-file-{block:?}-{index}")))
+        .debug_selector(move || format!("sent-file-{index}"))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .min_w_0()
+        .px(px(grid.cell()))
+        .bg(theme::paint::BAND2)
+        .cursor_pointer()
+        .text_color(rgb(theme::PATH_INK))
+        .tooltip(crate::menu::tooltip(SharedString::from(
+            path.display().to_string(),
+        )))
+        .child(div().min_w_0().truncate().child(SharedString::from(name)))
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            open_file(&open, &host, window, cx);
+        })
+}
+
+/// A sent image under its prompt (the prototype's `.img` and `.cap`): the
+/// picture at most `IMAGE_CELLS` wide in a 1px `paint::LINE2` frame, and
+/// `name · W×H · size` under it in `TEXT_MUTED`. A click opens the preview.
+fn inline_image(
+    block: BlockId,
+    index: usize,
+    path: &std::path::Path,
+    preview: &crate::attachment_preview::Preview,
+    grid: Grid,
+) -> AnyElement {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let facts = image_facts(path);
+    let max_w = theme::IMAGE_CELLS * grid.cell();
+    let (width, height) = match facts {
+        Some(ImageFacts {
+            width: w,
+            height: h,
+            ..
+        }) if w > 0 && h > 0 => {
+            let width = (w as f32).min(max_w).floor();
+            (width, (width * h as f32 / w as f32).round())
+        }
+        _ => (max_w.floor(), (max_w * 0.5).round()),
+    };
+    let mut caption = vec![name];
+    if let Some(facts) = facts {
+        caption.push(format!("{}\u{d7}{}", facts.width, facts.height));
+        caption.push(text::byte_size(facts.bytes as usize));
+    }
+    let caption = caption.join(" \u{b7} ");
+    let highlights = separators(&caption);
+    let host = preview.clone();
+    let open = path.to_path_buf();
+    div()
+        .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
+        .debug_selector(|| "sent-image".into())
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .cursor_pointer()
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            open_file(&open, &host, window, cx);
+        })
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(width + 2.))
+                .border_1()
+                .border_color(theme::paint::LINE2)
+                .child(
+                    gpui::img(path.to_path_buf())
+                        .w(px(width))
+                        .h(px(height))
+                        .object_fit(gpui::ObjectFit::Contain),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "sent-image-caption".into())
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(StyledText::new(SharedString::from(caption)).with_highlights(highlights)),
+        )
+        .into_any_element()
+}
+
+/// What an image caption says about the file: its pixel size, read from
+/// its header, and its size on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageFacts {
+    width: u32,
+    height: u32,
+    bytes: u64,
+}
+
+thread_local! {
+    /// Image headers are read once per path: a caption is drawn every frame
+    /// its row is on screen.
+    static IMAGE_FACTS: std::cell::RefCell<HashMap<std::path::PathBuf, Option<ImageFacts>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// An image's pixel size and byte size, or `None` when the file cannot be
+/// read or its format is not one the header reader knows (PNG, GIF, JPEG,
+/// WebP, BMP).
+fn image_facts(path: &std::path::Path) -> Option<ImageFacts> {
+    IMAGE_FACTS.with(|cache| {
+        if let Some(facts) = cache.borrow().get(path) {
+            return *facts;
+        }
+        let facts = read_image_facts(path);
+        cache.borrow_mut().insert(path.to_path_buf(), facts);
+        facts
+    })
+}
+
+fn read_image_facts(path: &std::path::Path) -> Option<ImageFacts> {
+    use std::io::Read as _;
+    let bytes = std::fs::metadata(path).ok()?.len();
+    let mut head = Vec::with_capacity(64 * 1024);
+    std::fs::File::open(path)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_end(&mut head)
+        .ok()?;
+    let (width, height) = image_size(&head)?;
+    Some(ImageFacts {
+        width,
+        height,
+        bytes,
+    })
+}
+
+/// An image's pixel size from the first bytes of its file.
+fn image_size(head: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |at: usize| Some(u16::from_be_bytes([*head.get(at)?, *head.get(at + 1)?]) as u32);
+    let le16 = |at: usize| Some(u16::from_le_bytes([*head.get(at)?, *head.get(at + 1)?]) as u32);
+    let be32 = |at: usize| {
+        Some(u32::from_be_bytes([
+            *head.get(at)?,
+            *head.get(at + 1)?,
+            *head.get(at + 2)?,
+            *head.get(at + 3)?,
+        ]))
+    };
+    let le32 = |at: usize| {
+        Some(u32::from_le_bytes([
+            *head.get(at)?,
+            *head.get(at + 1)?,
+            *head.get(at + 2)?,
+            *head.get(at + 3)?,
+        ]))
+    };
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some((be32(16)?, be32(20)?));
+    }
+    if head.starts_with(b"GIF8") {
+        return Some((le16(6)?, le16(8)?));
+    }
+    if head.starts_with(b"BM") {
+        return Some((le32(18)?, (le32(22)? as i32).unsigned_abs()));
+    }
+    if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
+        return match head.get(12..16)? {
+            b"VP8X" => Some((1 + (le32(24)? & 0xff_ffff), 1 + (le32(27)? & 0xff_ffff))),
+            b"VP8L" => {
+                let bits = le32(21)?;
+                Some((1 + (bits & 0x3fff), 1 + ((bits >> 14) & 0x3fff)))
+            }
+            b"VP8 " => Some((le16(26)? & 0x3fff, le16(28)? & 0x3fff)),
+            _ => None,
+        };
+    }
+    if head.starts_with(&[0xff, 0xd8]) {
+        let mut at = 2;
+        while at + 9 < head.len() {
+            if head[at] != 0xff {
+                at += 1;
+                continue;
+            }
+            let marker = head[at + 1];
+            let length = be16(at + 2)? as usize;
+            // Start-of-frame markers carry the size; the rest are skipped.
+            if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+                return Some((be16(at + 7)?, be16(at + 5)?));
+            }
+            at += 2 + length;
+        }
+    }
+    None
 }
 
 /// The `group` every disclosable row names, so its trailing chevron shows
 /// under the pointer anywhere on the row.
 pub(crate) const DISCLOSURE_ROW: &str = "disclosure-row";
 
-/// A transcript row: its mark in the gutter, centred on a `first_line` box,
-/// and its text at C1 (the caller's next child, `flex_1 min_w_0`).
-fn gutter_row(mark: impl IntoElement, first_line: f32) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .w_full()
-        .min_w_0()
-        .child(components::gutter(mark, first_line))
-}
-
-/// Fallback prose at C1, in the answer's face and size.
-fn prose_row(row: Div, size: f32, line: f32) -> Div {
-    row.pl(px(theme::GUTTER_W))
-        .font_family(theme::FONT_UI)
-        .text_size(px(size))
-        .line_height(px(line))
-        .text_color(rgb(TEXT))
-}
-
 /// The `⎿` elbow, painted in a `GLYPH_BOX`-wide cell one `line_box` tall:
 /// its stem runs from the top of the row box to the first line's centre and
-/// turns along it, so it hangs under the call name above whatever the font.
+/// turns along it. The L2 tail's elbow; the transcript types `└`
+/// (`elbow_line`).
 fn elbow(line_box: f32) -> Div {
     div()
         .relative()
@@ -6024,16 +6462,9 @@ fn elbow(line_box: f32) -> Div {
         )
 }
 
-/// A row that hangs under the one above it: the elbow at C1, its text at
-/// C2. The caller adds the text as the next child.
+/// An L2 tail row that hangs under the one above it: the elbow at C1, its
+/// text at C2. The caller adds the text as the next child.
 pub(crate) fn result_line(ink: u32) -> Div {
-    elbow_row(theme::LH_UI)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(ink))
-}
-
-fn elbow_row(line_box: f32) -> Div {
     div()
         .flex()
         .items_start()
@@ -6041,44 +6472,60 @@ fn elbow_row(line_box: f32) -> Div {
         .w_full()
         .min_w_0()
         .pl(px(theme::GUTTER_W))
-        .child(elbow(line_box))
+        .child(elbow(theme::LH_UI))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(ink))
 }
 
 /// What a row of output omitted, under the output it belongs to.
-pub(crate) fn omitted_line(bytes: usize) -> Div {
-    result_line(TEXT_MUTED).child(div().min_w_0().truncate().child(SharedString::from(format!(
-        "… {} not kept",
-        text::byte_size(bytes)
-    ))))
+pub(crate) fn omitted_line(bytes: usize, grid: Grid) -> Div {
+    after_elbow(grid)
+        .text_color(rgb(TEXT_MUTED))
+        .child(div().min_w_0().truncate().child(SharedString::from(format!(
+            "\u{2026} {} not kept",
+            text::byte_size(bytes)
+        ))))
 }
 
-/// How a turn ended. A completed turn is a quiet stamp at C1 —
-/// `Worked for 38s · 8:53 pm`, metadata ink, no mark. An interrupted or
-/// failed one hangs under the turn's last row in the failure-line grammar
-/// (`failure_line`): `⎿ failed · 0.1s · API Error: 529 overloaded`, its lead
-/// word the only coloured one — `interrupted` in `TEXT_2` (the operator did
-/// it; nothing failed), `failed` in `BLOCKED` — and the provider's message
-/// in the code face.
-fn turn_end(block: BlockId, end: &ferrite_core::transcript::TurnEnd, selection: &TextRuns) -> Div {
+/// How a turn ended. A completed turn is `✻ Worked for 38s · 8:53 pm`: the
+/// drawn `✻` in the provider's colour in the gutter, the words
+/// `TEXT_MUTED`, the `·` seams `TEXT_FAINT`. An interrupted or failed one
+/// hangs under the turn's last row in the failure-line grammar
+/// (`failure_line`): `└ failed · 0.1s · API Error: 529 overloaded`, its lead
+/// word the only coloured one — `interrupted` in `TEXT` (the operator did
+/// it; nothing failed), `failed` in `BLOCKED`.
+fn turn_end(
+    block: BlockId,
+    end: &ferrite_core::transcript::TurnEnd,
+    selection: &TextRuns,
+    provider: Option<Provider>,
+    grid: Grid,
+) -> Div {
     use ferrite_core::TurnOutcome;
     let text = end.text();
     let (lead, ink, message) = match &end.outcome {
         TurnOutcome::Completed => {
             return components::tabular(
-                div()
-                    .debug_selector(|| "turn-stamp".into())
-                    .pl(px(theme::GUTTER_W))
-                    .text_size(px(theme::FS_SM))
-                    .line_height(px(theme::LH_META))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(selection.line(block, text.clone(), separators(&text))),
+                grid_row(mark_gutter(
+                    grid,
+                    icon(icons::WORKED, grid.mark(), provider_ink(provider))
+                        .debug_selector(|| "turn-stamp-mark".into()),
+                ))
+                .debug_selector(|| "turn-stamp".into())
+                .text_color(rgb(TEXT_MUTED))
+                .child(div().flex_1().min_w_0().child(selection.line(
+                    block,
+                    text.clone(),
+                    separators(&text),
+                ))),
             );
         }
-        TurnOutcome::Interrupted => (theme::words::INTERRUPTED, TEXT_2, None),
+        TurnOutcome::Interrupted => (theme::words::INTERRUPTED, TEXT, None),
         TurnOutcome::Error(_) => (theme::words::FAILED, BLOCKED, turn_end_message(end)),
     };
     let (head, excerpt) = turn_end_runs(&text, message);
-    failure_line(block, head, lead.len(), ink, excerpt, selection)
+    failure_line(block, head, lead.len(), ink, excerpt, selection, grid)
         .debug_selector(|| "turn-stamp".into())
 }
 
@@ -6099,8 +6546,6 @@ pub(super) fn turn_end_message(end: &ferrite_core::transcript::TurnEnd) -> Optio
     }
 }
 
-/// The `·` seams in a UI line: glyph ink, never a weight. Highlighted in
-/// place so the line stays one run and copies back exactly as written.
 /// Whether the notice drawn with this signal announces a Decision docked in
 /// the same Pane: the live notice wears `ATTENTION` exactly while one waits.
 pub(crate) fn notice_docked(signal: u32) -> bool {
@@ -6116,6 +6561,8 @@ pub(crate) fn notice_text(text: &str, docked: bool) -> &str {
     }
 }
 
+/// The `·` seams in a line: glyph ink, never a weight. Highlighted in place
+/// so the line stays one run and copies back exactly as written.
 fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     text.match_indices('\u{b7}')
         .map(|(at, dot)| {
@@ -6142,14 +6589,14 @@ pub(crate) fn signal_color(status: Option<Status>) -> u32 {
     }
 }
 
-/// A tool call's dot: state is the dot, never the name. Settled work
-/// recedes (`TEXT_FAINT`), live work is a static green dot (the working
-/// line is the one live thing), a failure is `BLOCKED`, a call whose result
-/// never came is a hollow ring. Green never means finished.
+/// A tool call's bullet: state is the bullet, never the name. Settled work
+/// is `TEXT_MUTED`, live work a still green `●` (no pulse: the working line
+/// is the one live thing), a failure `BLOCKED`, a call whose result never
+/// came a hollow `○`. Green never means finished.
 fn tool_dot_ink(state: &ToolState) -> (u32, DotShape) {
     match state {
         ToolState::Running => (RUNNING, DotShape::Solid),
-        ToolState::Ok => (TEXT_FAINT, DotShape::Solid),
+        ToolState::Ok => (TEXT_MUTED, DotShape::Solid),
         ToolState::Failed(_) => (BLOCKED, DotShape::Solid),
         ToolState::Unavailable => (TEXT_FAINT, DotShape::Ring),
     }
@@ -6161,31 +6608,58 @@ enum DotShape {
     Ring,
 }
 
-fn tool_dot(tool: &ToolBlock) -> AnyElement {
-    let (ink, shape) = tool_dot_ink(&tool.state);
-    match shape {
-        DotShape::Solid => components::status_dot(ink)
-            .size(px(theme::TOOL_DOT))
-            .into_any_element(),
-        DotShape::Ring => components::status_ring(ink)
-            .size(px(theme::TOOL_DOT))
-            .into_any_element(),
+impl DotShape {
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Solid => BULLET,
+            Self::Ring => RING,
+        }
     }
 }
 
-/// A call line `Name(args)`, all of it one CLI token in the code face at
-/// `W_BODY` (rule 6, the operator's Q1): the name in `TEXT`, the parens and
-/// arguments in the line's `TEXT_MUTED`, one selectable line that copies
-/// back exactly as it reads.
+/// Whether a call's argument is a file path (`Read(crates/x.rs)`), which
+/// reads in `PATH_INK` like every path in the transcript.
+fn argument_is_path(tool: &ToolBlock) -> bool {
+    const PATH_TOOLS: &[&str] = &[
+        "Read",
+        "Edit",
+        "Write",
+        "Update",
+        "MultiEdit",
+        "NotebookEdit",
+        "NotebookRead",
+    ];
+    tool.title.is_none()
+        && !tool.summary.is_empty()
+        && !tool.summary.contains(char::is_whitespace)
+        && (PATH_TOOLS.contains(&tool.name.as_str()) || !tool.diffs.is_empty())
+}
+
+/// A call line `Name(args)`, one CLI token on the grid (the prototype's
+/// `.name` and `.args`): the name in `TEXT_STRONG` at `W_LABEL`, the parens
+/// and arguments in the line's `TEXT_MUTED` — a path argument in
+/// `PATH_INK` — one selectable line that copies back exactly as it reads.
 fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
-    let name = tool.name.len().min(text::tool_label(tool).len());
-    vec![(
+    let label = text::tool_label(tool);
+    let name = tool.name.len().min(label.len());
+    let mut highlights = vec![(
         0..name,
         HighlightStyle {
-            color: Some(rgb(TEXT).into()),
+            color: Some(rgb(TEXT_STRONG).into()),
+            font_weight: Some(theme::W_LABEL),
             ..Default::default()
         },
-    )]
+    )];
+    if argument_is_path(tool) && label.len() > name + 2 {
+        highlights.push((
+            name + 1..label.len() - 1,
+            HighlightStyle {
+                color: Some(rgb(theme::PATH_INK).into()),
+                ..Default::default()
+            },
+        ));
+    }
+    highlights
 }
 
 /// A call's time in its trail: a live call ticks whole seconds from `1s`
@@ -6207,21 +6681,42 @@ fn trail_duration(
 }
 
 /// The word a settled edit's result says, moved into its trail when a diff
-/// card follows (`applied`): the card shows what changed, the trail says it
-/// landed, and no `⎿ applied` row repeats it.
+/// follows (`applied`): the diff shows what changed, the trail says it
+/// landed, and no `└ applied` row repeats it.
 fn trail_result(tool: &ToolBlock) -> Option<&str> {
     (tool.state == ToolState::Ok && !tool.diffs.is_empty())
         .then_some(tool.result_line.as_deref())
         .flatten()
 }
 
+/// A change's size in a call's trail: `+7 −3`, the added count in
+/// `RUNNING` and the removed in `BLOCKED`, at the transcript's size.
+fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
+    let added = format!("+{added}");
+    let text = format!("{added} \u{2212}{removed}");
+    let removed_at = added.len() + 1;
+    let ink = |range: std::ops::Range<usize>, ink: u32| {
+        (
+            range,
+            HighlightStyle {
+                color: Some(rgb(ink).into()),
+                ..Default::default()
+            },
+        )
+    };
+    let highlights = vec![
+        ink(0..added.len(), RUNNING),
+        ink(removed_at..text.len(), BLOCKED),
+    ];
+    StyledText::new(SharedString::from(text)).with_highlights(highlights)
+}
+
 /// One failure-line grammar, for a failed call and a failed or interrupted
-/// turn alike: `⎿ failed · 0.1s · API Error: 529 overloaded`. The head —
-/// the lead word in its state ink (`BLOCKED` failed, `TEXT_2` interrupted),
-/// `·` seams in `TEXT_FAINT`, the duration `TEXT_MUTED` — is Geist, one
-/// selectable run with its trailing seam; the excerpt the machine printed is
-/// its own run in the code face, `TEXT_MUTED`, soft-wrapping and never cut.
-/// The runs sit a word space apart, so a copy reads the line as printed.
+/// turn alike: `└ failed · 0.1s · API Error: 529 overloaded`. The head —
+/// the lead word in its state ink (`BLOCKED` failed, `TEXT` interrupted),
+/// `·` seams in `TEXT_FAINT`, the rest `TEXT_MUTED` — is one selectable run
+/// with its trailing seam; the excerpt the machine printed is its own run,
+/// `TEXT_MUTED`, soft-wrapping and never cut.
 fn failure_line(
     block: BlockId,
     head: String,
@@ -6229,6 +6724,7 @@ fn failure_line(
     lead_ink: u32,
     excerpt: Option<String>,
     selection: &TextRuns,
+    grid: Grid,
 ) -> Div {
     let mut highlights = separators(&head);
     highlights.insert(
@@ -6241,7 +6737,7 @@ fn failure_line(
             },
         ),
     );
-    result_line(TEXT_MUTED).child(
+    elbow_line(grid, TEXT_MUTED).child(
         div()
             .flex()
             .items_start()
@@ -6251,24 +6747,19 @@ fn failure_line(
                 div()
                     .flex_shrink_0()
                     .whitespace_nowrap()
-                    .font_family(theme::FONT_UI)
                     .child(selection.line(block, head, highlights)),
             ))
             .when_some(excerpt, |line, excerpt| {
-                line.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(theme::FONT_CODE)
-                        .text_size(px(theme::FS_UI))
-                        .line_height(px(theme::LH_UI))
-                        .child(selection.line(block, excerpt, Vec::new())),
-                )
+                line.child(div().flex_1().min_w_0().child(selection.line(
+                    block,
+                    excerpt,
+                    Vec::new(),
+                )))
             }),
     )
 }
 
-/// A failed call's head run: `failed · `, its seam carried so the excerpt
+/// A failed call's head run: `failed · `, its seam carried so the detail
 /// after it copies back as one line.
 fn failed_head() -> String {
     format!("{} \u{b7} ", theme::words::FAILED)
@@ -6287,16 +6778,80 @@ fn failed_excerpt(tool: &ToolBlock) -> Option<&str> {
     (!first.is_empty() && tool.result_line.as_deref() != Some(first)).then_some(first)
 }
 
-/// A tool call: `● Name(args)` with its trail hard right — `applied · +N −M`
-/// when a diff card follows, then the time (ticking while live, frozen when
-/// done) — and what it produced hanging under it on elbows. Nothing on the
-/// row is a pill, a bold weight or a state-coloured word except the one
-/// `failed` that says so. The row has no hover ground: under the pointer
-/// only its trailing chevron shows.
+/// A collapsed call's fold of its output (the prototype's `.out` and
+/// `.more`): up to `OUTPUT_PREVIEW_LINES` of what it printed after the line
+/// its elbow already shows, and how many lines that leaves out. `None` when
+/// the call printed nothing worth a fold: only a command's output, or a
+/// failure's, folds.
+pub(super) fn output_fold(tool: &ToolBlock) -> Option<(String, usize)> {
+    let runs = ferrite_core::docview::is_command_run(&tool.name);
+    if !runs && !matches!(tool.state, ToolState::Failed(_)) {
+        return None;
+    }
+    let output = text::disclosed_output(tool)?;
+    let mut lines = output.text.lines().peekable();
+    // The elbow already prints the first line (the result line, or a
+    // failure's first line): the fold continues after it.
+    let elbow = tool.result_line.as_deref().or_else(|| failed_excerpt(tool));
+    if let (Some(first), Some(shown)) = (lines.peek(), elbow) {
+        if first.trim() == shown.trim() {
+            lines.next();
+        }
+    }
+    let rest: Vec<&str> = lines.collect();
+    let shown: Vec<&str> = rest
+        .iter()
+        .copied()
+        .take(theme::OUTPUT_PREVIEW_LINES)
+        .collect();
+    if shown.iter().all(|line| line.trim().is_empty()) {
+        return None;
+    }
+    let hidden = rest.len() - shown.len();
+    Some((shown.join("\n"), hidden))
+}
+
+/// A fold's toggle line, `+ N lines` (collapsed) or `− fold` (open): dim,
+/// lifting to `TEXT` under the pointer, a click flips the call's
+/// disclosure.
+fn fold_toggle(
+    id: SharedString,
+    label: String,
+    toggle: Option<DisclosureToggle>,
+    grid: Grid,
+) -> Div {
+    let group = id.clone();
+    after_elbow(grid).child(
+        div()
+            .id(id)
+            .group(group.clone())
+            .debug_selector(|| "tool-fold".into())
+            .flex_shrink_0()
+            .whitespace_nowrap()
+            .cursor_pointer()
+            .text_color(rgb(TEXT_MUTED))
+            .group_hover(group, |style| style.text_color(rgb(TEXT)))
+            .child(SharedString::from(label))
+            .when_some(toggle, |line, toggle| {
+                line.on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    toggle(window, cx);
+                })
+            }),
+    )
+}
+
+/// A tool call (the prototype's `.r` with `.line`): `● Name(args)` with its
+/// trail hard right — `applied · +N −M` when a diff follows, then the time
+/// (ticking while live, frozen when done) — and what it produced hanging
+/// under it on the `└` elbow: its result line (`failed · …` when it
+/// failed), a fold of its output and its diffs. The row has no hover
+/// ground: under the pointer only its trailing chevron shows.
 ///
 /// Expanded, it shows the input where the call line could not show it
 /// whole (`$` first for a command), the output, and any structured result,
 /// none of them labelled.
+#[allow(clippy::too_many_arguments)]
 fn render_tool(
     row: Div,
     block: BlockId,
@@ -6306,13 +6861,15 @@ fn render_tool(
     expanded: bool,
     disclosure: Option<Disclosure>,
     in_group: bool,
+    grid: Grid,
+    wide: bool,
 ) -> AnyElement {
     let has_disclosure = disclosure.is_some();
+    let toggle = disclosure.as_ref().and_then(|parts| parts.toggle.clone());
     let (overlay, chevron, targeted) = disclosure_parts(disclosure);
     let call = div()
         .min_w_0()
         .truncate()
-        .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
         .child(selection.line(block, text::tool_label(tool), call_highlights(tool)));
     let mut trail = components::tabular(
@@ -6320,9 +6877,8 @@ fn render_tool(
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(theme::WORD_GAP))
-            .text_size(px(theme::FS_SM))
-            .line_height(px(theme::LH_UI))
+            .gap(px(grid.cell()))
+            .whitespace_nowrap()
             .text_color(rgb(TEXT_MUTED)),
     );
     let mut trailing = false;
@@ -6339,42 +6895,53 @@ fn render_tool(
         trailing = true;
     }
     if let Some(ToolVerdict::Diff(added, removed)) = tool_verdicts(tool).into_iter().next() {
-        trail = trail.child(diff_stat(added, removed));
+        trail = trail.child(
+            div()
+                .debug_selector(|| "tool-trail-diff".into())
+                .flex_shrink_0()
+                .child(trail_diff_stat(added, removed)),
+        );
         trailing = true;
     }
     if let Some(duration) = trail_duration(tool, timings) {
         trail = trail.child(
             div()
                 .debug_selector(|| "tool-trail-duration".into())
-                .when(trailing, |time| time.pl(px(theme::SPACE_1)))
                 .child(SharedString::from(duration)),
         );
         trailing = true;
     }
-    let line = gutter_row(tool_dot(tool), theme::LH_UI)
-        .id(SharedString::from(format!("tool-row-{}", tool.call)))
-        .relative()
-        .items_center()
-        .gap_0()
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED))
-        .when(has_disclosure, |line| line.group(DISCLOSURE_ROW))
-        .child(call)
-        .children(chevron)
-        .child(div().flex_1())
-        .when(trailing, |line| line.child(trail.pl(px(theme::SPACE_3))))
-        .children(overlay);
+    let (ink, shape) = tool_dot_ink(&tool.state);
+    let line =
+        grid_row(glyph_gutter(grid, shape.glyph(), ink).debug_selector(|| "tool-dot".into()))
+            .id(SharedString::from(format!("tool-row-{}", tool.call)))
+            .relative()
+            .text_color(rgb(TEXT_MUTED))
+            .when(has_disclosure, |line| line.group(DISCLOSURE_ROW))
+            .child(call)
+            .children(chevron)
+            .child(div().flex_1())
+            .when(trailing, |line| line.child(trail.pl(px(2.0 * grid.cell()))))
+            .children(overlay);
     let line = Disclosure::ground(targeted, line);
     let mut card = gpui::component::collapsible::Collapsible::new()
         .w_full()
         .open(expanded)
         .child(line);
+    let failed = matches!(tool.state, ToolState::Failed(_));
+    let fold = output_fold(tool);
+    let fold_id = |open: bool| {
+        SharedString::from(format!(
+            "tool-fold-{}-{}",
+            tool.call,
+            if open { "open" } else { "shut" }
+        ))
+    };
     if expanded {
-        let mut details = div().flex().flex_col().min_w_0().gap(px(theme::GAP_ROW));
+        let mut details = div().flex().flex_col().min_w_0();
         let mut first = true;
         let mut part = |details: Div, name: &str, text: &str, ink: u32, command: bool| {
-            let block = output_block(block, name, text, ink, command, first, selection);
+            let block = output_block(block, name, text, ink, command, first, selection, grid);
             first = false;
             details.child(block)
         };
@@ -6389,64 +6956,128 @@ fn render_tool(
         }
         if let Some(output) = text::disclosed_output(tool) {
             // Ordinary output stays neutral even when a command failed: the
-            // dot and the one `failed` word carry the failure.
+            // bullet and the one `failed` word carry the failure.
             details = part(details, "result", &output.text, TEXT_MUTED, false);
             if output.omitted_bytes > 0 {
-                details = details.child(omitted_line(output.omitted_bytes));
+                details = details.child(omitted_line(output.omitted_bytes, grid));
             }
         }
         if let Some(structured) = tool.structured_output() {
             details = part(details, "details", &structured.text, TEXT_MUTED, false);
             if structured.omitted_bytes > 0 {
-                details = details.child(omitted_line(structured.omitted_bytes));
+                details = details.child(omitted_line(structured.omitted_bytes, grid));
             }
         }
-        card = card.content(details);
-    } else if !text::redundant_test_result(tool)
-        && applied.is_none()
-        && (!in_group || matches!(tool.state, ToolState::Failed(_)))
-    {
-        if let Some(line) = &tool.result_line {
-            let (ink, face) = result_ink(&tool.state);
-            card =
-                card.child(result_line(ink).font_family(face).child(
-                    div().min_w_0().truncate().child(selection.line(
-                        block,
-                        line.clone(),
-                        Vec::new(),
-                    )),
-                ));
+        if fold.as_ref().is_some_and(|(_, hidden)| *hidden > 0) {
+            details = details.child(fold_toggle(
+                fold_id(true),
+                "\u{2212} fold".into(),
+                toggle.clone(),
+                grid,
+            ));
         }
-    }
-    if tool.state == ToolState::Unavailable {
-        card = card.child(result_line(TEXT_MUTED).child(text::NO_RESULT));
-    }
-    if !expanded {
-        if let Some(excerpt) = failed_excerpt(tool) {
+        card = card.content(details);
+    } else {
+        let quiet = in_group && !failed;
+        if failed {
+            // `└ failed · <what it said>`: the result line, else the first
+            // line of the error.
+            let detail = tool
+                .result_line
+                .clone()
+                .or_else(|| failed_excerpt(tool).map(str::to_owned));
             card = card.child(failure_line(
                 block,
                 failed_head(),
                 theme::words::FAILED.len(),
                 BLOCKED,
-                Some(excerpt.to_owned()),
+                detail,
                 selection,
+                grid,
             ));
+        } else if !text::redundant_test_result(tool) && applied.is_none() && !quiet {
+            if let Some(line) = &tool.result_line {
+                card = card.child(elbow_line(grid, TEXT_MUTED).child(
+                    div().flex_1().min_w_0().truncate().child(selection.line(
+                        block,
+                        line.clone(),
+                        result_highlights(line),
+                    )),
+                ));
+            }
         }
+        if !quiet {
+            if let Some((shown, hidden)) = fold {
+                card = card.child(
+                    after_elbow(grid)
+                        .debug_selector(|| "tool-fold-preview".into())
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(div().flex_1().min_w_0().child(selection.line(
+                            block,
+                            shown.clone(),
+                            result_highlights(&shown),
+                        ))),
+                );
+                if hidden > 0 {
+                    card = card.child(fold_toggle(
+                        fold_id(false),
+                        format!("+ {hidden} line{}", if hidden == 1 { "" } else { "s" }),
+                        toggle.clone(),
+                        grid,
+                    ));
+                }
+            }
+        }
+    }
+    if tool.state == ToolState::Unavailable {
+        card = card.child(elbow_line(grid, TEXT_MUTED).child(text::NO_RESULT));
     }
     if expanded || !in_group {
         for diff in &tool.diffs {
-            card = card.child(render_diff(block, diff, selection));
+            card = card.child(render_diff(block, diff, selection, grid, wide));
         }
     }
     row.child(card).into_any_element()
 }
 
+/// A result's verdict words in their state ink, the rest in the line's:
+/// `ok` and `passed` in `RUNNING`, `FAILED` and `failed` in `BLOCKED` (the
+/// prototype's test lines). Whole words only.
+fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    let bytes = text.as_bytes();
+    let mut highlights = Vec::new();
+    for (word, ink) in [
+        ("ok", RUNNING),
+        ("passed", RUNNING),
+        ("FAILED", BLOCKED),
+        ("failed", BLOCKED),
+    ] {
+        for (at, _) in text.match_indices(word) {
+            let end = at + word.len();
+            let before = at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+            let after = end >= bytes.len() || !bytes[end].is_ascii_alphanumeric();
+            if before && after {
+                highlights.push((
+                    at..end,
+                    HighlightStyle {
+                        color: Some(rgb(ink).into()),
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+    }
+    highlights.sort_by_key(|(range, _)| range.start);
+    highlights
+}
+
 /// A run of tool calls as one quiet line: the core's own summary, one
 /// `TEXT_MUTED` run with tabular figures, ` · N failed` the only state ink,
-/// the worst-state dot in the gutter and the chevron trailing. While a
+/// the worst-state `●` in the gutter and the chevron trailing. While a
 /// member runs the running call hangs under the line; failed members stay
 /// previewed under a collapsed group (ADR 0003). Expanded, every member is
-/// a tool row on the lone row's axes, a row step under the summary.
+/// a tool row on the lone row's axes, flush under the summary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_tool_activity_with<S, C>(
     activity: ToolActivity<'_>,
     selection: &TextRuns,
@@ -6455,28 +7086,29 @@ pub(crate) fn render_tool_activity_with<S, C>(
     disclosure: Option<Disclosure>,
     state: S,
     mut control: C,
+    reading: ferrite_core::settings::ReadingSize,
+    wide: bool,
 ) -> AnyElement
 where
     S: Fn(&DisclosureId) -> DisclosureState,
     C: FnMut(&DisclosureId) -> Option<Disclosure>,
 {
+    let grid = Grid::of(reading);
     let (overlay, chevron, targeted) = disclosure_parts(disclosure);
     let call = activity.leader().call.clone();
     let label = text::activity_label(&activity);
     let highlights = separators(&label);
-    // The gutter holds the group's worst-state dot; the counts climb while
-    // the run is live, so its digits are tabular and the words after them
-    // hold still.
-    let mut header = components::tabular(gutter_row(
-        components::status_dot(group_dot_ink(&activity)).size(px(theme::TOOL_DOT)),
-        theme::LH_UI,
-    ))
+    // The gutter holds the group's worst-state bullet; the counts climb
+    // while the run is live, so its digits are tabular and the words after
+    // them hold still.
+    let mut header = components::tabular(grid_row(glyph_gutter(
+        grid,
+        BULLET,
+        group_dot_ink(&activity),
+    )))
     .id(SharedString::from(format!("tool-group-row-{call}")))
     .group(DISCLOSURE_ROW)
     .relative()
-    .items_center()
-    .text_size(px(theme::FS_UI))
-    .line_height(px(theme::LH_UI))
     .text_color(rgb(TEXT_MUTED))
     .child(div().min_w_0().truncate().child(selection.line(
         activity.blocks[0].id,
@@ -6494,9 +7126,9 @@ where
                 .whitespace_nowrap()
                 .child(
                     div()
-                        .px(px(theme::WORD_GAP))
+                        .px(px(grid.cell()))
                         .text_color(rgb(TEXT_FAINT))
-                        .child("·"),
+                        .child("\u{b7}"),
                 )
                 .child(
                     div()
@@ -6516,24 +7148,29 @@ where
         .w_full()
         .open(expanded)
         .child(header);
-    // Members hang a row step under the summary and under each other, on
-    // the same axes as a lone tool row: one run of work, evenly spaced.
+    // Members hang flush under the summary and under each other, on the
+    // same axes as a lone tool row: one run of work.
+    let member = |block: &Block, tool: &ToolBlock, control: &mut C| {
+        render_tool(
+            div(),
+            block.id,
+            tool,
+            selection,
+            timings,
+            state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
+            control(&DisclosureId::Tool(tool.call.clone())),
+            true,
+            grid,
+            wide,
+        )
+    };
     if expanded {
         let mut details = div().flex().flex_col().min_w_0();
         for block in activity.blocks {
             let Body::Tool(tool) = &block.body else {
                 continue;
             };
-            details = details.child(div().pt(px(theme::GAP_ROW)).child(render_tool(
-                div(),
-                block.id,
-                tool,
-                selection,
-                timings,
-                state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
-                control(&DisclosureId::Tool(tool.call.clone())),
-                true,
-            )));
+            details = details.child(member(block, tool, &mut control));
         }
         group = group.content(details);
     } else {
@@ -6542,16 +7179,7 @@ where
                 continue;
             };
             if matches!(tool.state, ToolState::Failed(_)) {
-                group = group.child(div().pt(px(theme::GAP_ROW)).child(render_tool(
-                    div(),
-                    block.id,
-                    tool,
-                    selection,
-                    timings,
-                    state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
-                    control(&DisclosureId::Tool(tool.call.clone())),
-                    true,
-                )));
+                group = group.child(member(block, tool, &mut control));
             }
         }
     }
@@ -6569,29 +7197,19 @@ where
         group = group.child(if expanded {
             running.into_any_element()
         } else {
-            // One line, never the raw multi-line input: a call line, all
-            // mono, the name in body ink and its arguments muted.
+            // One line, never the raw multi-line input: the call line on
+            // the elbow, the name lifted and its arguments muted.
             running
                 .w_full()
                 .min_w_0()
-                .child({
-                    let label = text::tool_label(tool);
-                    let name = tool.name.len().min(label.len());
-                    result_line(TEXT_MUTED).child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme::FONT_CODE)
-                            .font_weight(theme::W_BODY)
-                            .child(StyledText::new(label).with_highlights(vec![(
-                                0..name,
-                                HighlightStyle {
-                                    color: Some(rgb(TEXT).into()),
-                                    ..Default::default()
-                                },
-                            )])),
-                    )
-                })
+                .child(
+                    elbow_line(grid, TEXT_MUTED).child(
+                        div().min_w_0().truncate().child(
+                            StyledText::new(text::tool_label(tool))
+                                .with_highlights(call_highlights(tool)),
+                        ),
+                    ),
+                )
                 .into_any_element()
         });
     }
@@ -6604,8 +7222,9 @@ where
         .into_any_element()
 }
 
-/// A group's gutter dot, inked by its worst member: `BLOCKED` if any call
-/// failed, `RUNNING` while one is live, otherwise the settled `TEXT_FAINT`.
+/// A group's gutter bullet, inked by its worst member: `BLOCKED` if any
+/// call failed, `RUNNING` while one is live, otherwise the settled
+/// `TEXT_MUTED`.
 fn group_dot_ink(activity: &ToolActivity<'_>) -> u32 {
     let states = activity
         .blocks
@@ -6614,7 +7233,7 @@ fn group_dot_ink(activity: &ToolActivity<'_>) -> u32 {
             Body::Tool(tool) => Some(&tool.state),
             _ => None,
         });
-    let mut ink = TEXT_FAINT;
+    let mut ink = TEXT_MUTED;
     for state in states {
         match state {
             ToolState::Failed(_) => return BLOCKED,
@@ -6634,29 +7253,19 @@ fn tool_summary_line(tool: &ToolBlock) -> std::borrow::Cow<'_, str> {
             .lines()
             .find(|line| !line.trim().is_empty())
             .unwrap_or("");
-        format!("{} …", first.trim()).into()
+        format!("{} \u{2026}", first.trim()).into()
     } else {
         summary.into()
     }
 }
 
-/// A compact result's ink and face: every result line is `TEXT_MUTED` —
-/// the dot and the one `failed` word carry the state — and a failed call's
-/// line is the machine's own words, in the code face.
-fn result_ink(state: &ToolState) -> (u32, &'static str) {
-    match state {
-        ToolState::Failed(_) => (TEXT_MUTED, theme::FONT_CODE),
-        _ => (TEXT_MUTED, theme::FONT_UI),
-    }
-}
-
 /// A disclosed block of text — a command (`$` first when it is one),
 /// output, a structured result. Only the first part of a disclosure hangs
-/// on the `⎿` elbow; later parts sit on the same text column (C2) a row
-/// step apart. Text draws inline, keeping its whitespace; text past
-/// `OUTPUT_INLINE_BYTES` scrolls in one bounded, selectable native control
-/// `OUTPUT_MAX_LINES` high, and `… +N lines` under it says how much is out
-/// of view.
+/// on the `└` elbow; later parts sit after it. Text draws inline, keeping
+/// its whitespace; text past `OUTPUT_INLINE_BYTES` scrolls in one bounded,
+/// selectable native control `OUTPUT_MAX_LINES` high, and `… +N lines`
+/// under it says how much is out of view.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn output_block(
     block: BlockId,
     part: &str,
@@ -6665,25 +7274,21 @@ pub(crate) fn output_block(
     command: bool,
     first: bool,
     selection: &TextRuns,
+    grid: Grid,
 ) -> Div {
-    // Output is machine text: the code face, like the call's arguments.
     let rows = if first {
-        elbow_row(theme::LH_CODE)
+        elbow_line(grid, ink)
     } else {
-        div()
-            .flex()
-            .items_start()
-            .gap(px(theme::GUTTER_GAP))
-            .w_full()
-            .min_w_0()
-            .pl(px(theme::GUTTER_W + theme::ELBOW_INDENT))
+        after_elbow(grid).text_color(rgb(ink))
     }
-    .font_family(theme::FONT_CODE)
-    .text_size(px(theme::FS_UI))
-    .line_height(px(theme::LH_CODE))
-    .text_color(rgb(ink))
     .when(command, |rows| {
-        rows.child(div().flex_shrink_0().text_color(rgb(TEXT_FAINT)).child("$"))
+        rows.child(
+            div()
+                .flex_shrink_0()
+                .w(px(2.0 * grid.cell()))
+                .text_color(rgb(TEXT_FAINT))
+                .child("$"),
+        )
     });
     if text::output_scrolls(text) {
         let hidden = text::output_lines(text).saturating_sub(theme::OUTPUT_MAX_LINES);
@@ -6703,20 +7308,16 @@ pub(crate) fn output_block(
             .min_w_0()
             .child(output)
             .child(
-                div()
-                    .pl(px(theme::GUTTER_W + theme::ELBOW_INDENT))
-                    .text_size(px(theme::FS_SM))
-                    .line_height(px(theme::LH_META))
+                after_elbow(grid)
                     .text_color(rgb(TEXT_MUTED))
-                    .child(SharedString::from(format!("… +{hidden} lines"))),
+                    .child(SharedString::from(format!("\u{2026} +{hidden} lines"))),
             );
     }
-    rows.child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .child(selection.line(block, text.to_string(), Vec::new())),
-    )
+    rows.child(div().flex_1().min_w_0().child(selection.line(
+        block,
+        text.to_string(),
+        result_highlights(text),
+    )))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -6739,28 +7340,33 @@ fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
     verdicts
 }
 
+/// Flip one disclosure from inside its row (a fold's `+ N lines`).
+pub type DisclosureToggle = std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
+
 /// A disclosable row's parts, built by the transcript for the row renderer:
 /// the click target over the whole row, the chevron laid out after the
-/// row's label, and whether the keyboard targets the row.
+/// row's label, whether the keyboard targets the row, and the toggle a fold
+/// line inside the row calls.
 pub struct Disclosure {
     /// An overlay over the whole row, so the label and the trail toggle it
     /// too. The row adds it last.
     pub overlay: AnyElement,
-    /// The trailing chevron (`disclosure_chevron`), `SPACE_1` after the
+    /// The trailing chevron (`disclosure_chevron`), one cell after the
     /// label.
     pub chevron: AnyElement,
-    /// Keyboard cycling has landed on this row: it wears the `HOVER` ground
-    /// (at `R_CHIP`) so the operator sees which row Enter will toggle. The
-    /// pointer never sets it, and no other row ever wears a ground.
+    /// Keyboard cycling has landed on this row: it wears the `paint::HOVER`
+    /// ground so the operator sees which row Enter will toggle. The pointer
+    /// never sets it, and no other row ever wears a ground.
     pub targeted: bool,
+    /// What a fold's toggle line calls.
+    pub toggle: Option<DisclosureToggle>,
 }
 
 impl Disclosure {
     /// The row's keyboard-target ground, and its selector.
     fn ground(targeted: bool, row: Stateful<Div>) -> Stateful<Div> {
         row.when(targeted, |row| {
-            row.bg(rgb(HOVER))
-                .rounded(px(theme::R_CHIP))
+            row.bg(theme::paint::HOVER)
                 .debug_selector(|| "tool-disclosure-keyboard-target".into())
         })
     }
@@ -6775,6 +7381,7 @@ fn disclosure_parts(
             overlay,
             chevron,
             targeted,
+            ..
         }) => (Some(overlay), Some(chevron), targeted),
         None => (None, None, false),
     }
@@ -6782,14 +7389,15 @@ fn disclosure_parts(
 
 /// A disclosure row's click target: an overlay over the whole row, so the
 /// label and the trail toggle it too. The row keeps its own mark in the
-/// gutter (a tool's dot, a group's worst-state dot, reasoning's `∴`); the
-/// disclosure is the trailing chevron (`disclosure_chevron`). Nothing
+/// gutter (a tool's bullet, a group's worst-state bullet, reasoning's `∴`);
+/// the disclosure is the trailing chevron (`disclosure_chevron`). Nothing
 /// grounds the row under the pointer.
 pub fn tool_disclosure_control(
     call: &DisclosureId,
     expanded: bool,
     targeted: bool,
     focus: &FocusHandle,
+    hit: f32,
 ) -> Div {
     let tooltip = match (call, expanded) {
         (DisclosureId::Reasoning(_), false) => "Show reasoning",
@@ -6801,9 +7409,9 @@ pub fn tool_disclosure_control(
         (_, false) => "Show tool details",
         (_, true) => "Hide tool details",
     };
-    // The whole row is the target; its gutter keeps the named
-    // `TOOL_DISCLOSURE_HIT` box (with the tooltip) where the row's mark
-    // hangs, so the pointer finds the same target it always has.
+    // The whole row is the target; its gutter keeps the named `hit` box
+    // (the 2-cell gutter, with the tooltip) where the row's mark hangs, so
+    // the pointer finds the same target it always has.
     div()
         .absolute()
         .inset_0()
@@ -6818,8 +7426,8 @@ pub fn tool_disclosure_control(
             div()
                 .id(SharedString::from(format!("tool-button-{call}")))
                 .flex_shrink_0()
-                .w(px(theme::TOOL_DISCLOSURE_HIT))
-                .h(px(theme::TOOL_DISCLOSURE_HIT))
+                .w(px(hit))
+                .h(px(hit.max(theme::TOOL_DISCLOSURE_HIT)))
                 .tooltip(move |window, cx| {
                     gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)
                 }),
@@ -6909,8 +7517,7 @@ pub(crate) fn prompt_hover_key(block: BlockId) -> SharedString {
 }
 
 /// A sent prompt's Copy and Resend: their box always reserved, blended in
-/// over the pointer's 150ms fade while the pointer is on the prompt, never
-/// a ground on the prompt itself.
+/// over the pointer's 150ms fade while the pointer is on the prompt band.
 pub fn prompt_actions(block: BlockId) -> PromptActions {
     let key = prompt_hover_key(block);
     let shown = crate::motion::hover_t(&key);
@@ -6952,9 +7559,8 @@ fn prompt_action(
         .justify_center()
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
-        .rounded(px(theme::R_CHIP))
-        // A self-grounded control on the Pane: `HOVER` under the pointer
-        // over the one blend, pressed at once.
+        // A self-grounded control on the band: the hover overlay under the
+        // pointer over the one blend, pressed at once.
         .hover_control(hover)
         .press_control()
         .tooltip(move |window, cx| {
@@ -6963,135 +7569,387 @@ fn prompt_action(
         .child(icon(icon_key, theme::ICON_CHEVRON, TEXT_MUTED))
 }
 
-/// A diff card at C2 (§ transcript grammar): `RAISED`, `R_CHIP`, no file
-/// header — the call above already names the file. Each row is
-/// `[number][sign][code]`: the number column as wide as the largest line
-/// number needs, the ASCII sign, and the code with its indentation intact.
-/// Added and removed rows wear full-bleed washes; a second hunk opens under
-/// a `…` row.
-///
-/// The code cells route through the overlay — their lines copy honestly;
-/// the number and sign columns are chrome and never do (#27).
-///
-/// The card draws at most `HUNK_MAX_ROWS` rows and then names what it left
-/// out. A patch is normally a handful of lines, but a written file's patch
-/// is the whole file, and the card is a note about a change rather than the
-/// change itself. The count it reports is the truth — `Diff::added` counts
-/// every line, drawn or not.
-fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoElement {
-    let (cap, omitted) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
-    let number_w = diff_number_width(diff_max_number(diff, cap));
-    let mut lines = div()
-        .flex()
-        .flex_col()
-        .mt(px(theme::HUNK_MARGIN_T))
-        // The card hangs at the tool name's x, under the `E` of `Edit(`.
-        .ml(px(theme::GUTTER_W))
-        .py(px(theme::HUNK_PAD_Y))
-        .rounded(px(theme::R_BLOCK))
-        .overflow_hidden()
-        .bg(rgb(RAISED))
-        .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        // A whole-pixel line box: a fractional one rounds each row's origin
-        // and height independently, and the added/removed washes can leave a
-        // 1px unpainted seam between them.
-        .line_height(px(theme::LH_CODE))
-        .text_color(rgb(TEXT_MUTED));
-    // Two inks per row: the number column is structure (`TEXT_FAINT`), the
-    // sign takes its row's code ink.
-    let columns = |number: SharedString, sign: &'static str, sign_color: u32| {
-        div()
-            .flex()
-            .items_start()
-            .px(px(theme::HUNK_PAD_X))
-            .child(components::tabular(
-                div()
-                    .flex_shrink_0()
-                    .w(px(number_w))
-                    .text_right()
-                    .text_color(rgb(TEXT_FAINT))
-                    .child(number),
-            ))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .ml(px(theme::DIFF_GAP))
-                    .mr(px(theme::DIFF_SIGN_GAP))
-                    .w(px(theme::DIFF_SIGN_W))
-                    .text_color(rgb(sign_color))
-                    .child(sign),
-            )
-    };
+// ------------------------------------------------------------------ diffs
+
+/// One side of a diff row: its line number, its kind, its code and the
+/// changed words' range in it (a removed line paired with an added one).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DiffSide {
+    pub kind: DiffKind,
+    pub number: u32,
+    pub body: String,
+    pub words: Option<std::ops::Range<usize>>,
+}
+
+/// A diff as rows (the prototype's `.diff`). `Unified` rows carry both line
+/// numbers; `Split` pairs a removed line with the added line beside it, a
+/// side with no partner left empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum DiffRow {
+    /// `@@ -208,7 +208,11 @@`.
+    Hunk(String),
+    Unified {
+        old: Option<u32>,
+        new: Option<u32>,
+        side: DiffSide,
+    },
+    Split {
+        left: Option<DiffSide>,
+        right: Option<DiffSide>,
+    },
+}
+
+impl DiffRow {
+    /// The code a copy takes from this row, in order: every unified line;
+    /// a split row's changed left side and its right side (context once).
+    pub(super) fn selectable(&self) -> Vec<&DiffSide> {
+        match self {
+            Self::Hunk(_) => Vec::new(),
+            Self::Unified { side, .. } => vec![side],
+            Self::Split { left, right } => {
+                let left = left
+                    .as_ref()
+                    .filter(|side| side.kind != DiffKind::Context || right.is_none());
+                left.into_iter().chain(right.as_ref()).collect()
+            }
+        }
+    }
+}
+
+/// The changed words between a removed line and the added line it became:
+/// what is left of each once their common prefix and suffix go. `None`
+/// when nothing is common (the whole line changed) or nothing differs.
+fn changed_words(old: &str, new: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    let prefix = old
+        .char_indices()
+        .zip(new.chars())
+        .take_while(|((_, a), b)| a == b)
+        .last()
+        .map_or(0, |((at, ch), _)| at + ch.len_utf8());
+    let (old_rest, new_rest) = (&old[prefix..], &new[prefix..]);
+    let suffix = old_rest
+        .chars()
+        .rev()
+        .zip(new_rest.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum::<usize>();
+    let old_end = old.len() - suffix.min(old_rest.len());
+    let new_end = new.len() - suffix.min(new_rest.len());
+    if prefix == 0 && suffix == 0 {
+        return None;
+    }
+    if prefix >= old_end && prefix >= new_end {
+        return None;
+    }
+    Some((prefix..old_end.max(prefix), prefix..new_end.max(prefix)))
+}
+
+/// A diff's rows, at most `cap` code lines (`hunk_rows`), unified or split.
+pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
+    let mut rows = Vec::new();
     let mut drawn = 0usize;
-    for (index, hunk) in diff.hunks.iter().enumerate() {
+    for hunk in &diff.hunks {
         if drawn == cap {
             break;
         }
-        if index > 0 {
-            lines = lines.child(columns("…".into(), "", TEXT_FAINT));
-        }
-        let mut old = hunk.old_start;
-        let mut new = hunk.new_start;
-        for line in &hunk.lines {
-            if drawn == cap {
-                break;
-            }
-            drawn += 1;
-            let kind = DiffKind::of(line);
-            let number = match kind {
-                DiffKind::Added => {
-                    let n = new;
-                    new += 1;
-                    n
-                }
-                DiffKind::Removed => {
-                    let n = old;
-                    old += 1;
-                    n
-                }
+        rows.push(DiffRow::Hunk(format!(
+            "@@ -{},{} +{},{} @@",
+            hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
+        )));
+        let (mut old, mut new) = (hunk.old_start, hunk.new_start);
+        let lines: Vec<&str> = hunk
+            .lines
+            .iter()
+            .take(cap - drawn)
+            .map(String::as_str)
+            .collect();
+        drawn += lines.len();
+        let mut at = 0;
+        while at < lines.len() {
+            match DiffKind::of(lines[at]) {
                 DiffKind::Context => {
-                    let n = new;
+                    let body = text::diff_body(lines[at]).to_owned();
+                    let side = |number| DiffSide {
+                        kind: DiffKind::Context,
+                        number,
+                        body: body.clone(),
+                        words: None,
+                    };
+                    rows.push(if split {
+                        DiffRow::Split {
+                            left: Some(side(old)),
+                            right: Some(side(new)),
+                        }
+                    } else {
+                        DiffRow::Unified {
+                            old: Some(old),
+                            new: Some(new),
+                            side: side(new),
+                        }
+                    });
                     old += 1;
                     new += 1;
-                    n
+                    at += 1;
                 }
-            };
-            let DiffPaint {
-                sign,
-                sign_color,
-                code_color,
-                wash,
-            } = kind.paint();
-            let body = text::diff_body(line).to_owned();
-            // Machine text is never cut: a long line soft-wraps inside its
-            // row, the number and sign standing on its first line only and
-            // the row's wash under every line of it.
-            lines = lines.child(
-                columns(SharedString::from(number.to_string()), sign, sign_color)
-                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_color(rgb(code_color))
-                            .child(selection.line(block, body, Vec::new())),
-                    ),
-            );
+                _ => {
+                    // A change: its removed run, then its added run, paired
+                    // line by line for the word marks.
+                    let removed: Vec<&str> = lines[at..]
+                        .iter()
+                        .take_while(|line| DiffKind::of(line) == DiffKind::Removed)
+                        .map(|line| text::diff_body(line))
+                        .collect();
+                    at += removed.len();
+                    let added: Vec<&str> = lines[at..]
+                        .iter()
+                        .take_while(|line| DiffKind::of(line) == DiffKind::Added)
+                        .map(|line| text::diff_body(line))
+                        .collect();
+                    at += added.len();
+                    let words: Vec<_> = (0..removed.len().max(added.len()))
+                        .map(|pair| match (removed.get(pair), added.get(pair)) {
+                            (Some(old), Some(new)) => changed_words(old, new),
+                            _ => None,
+                        })
+                        .collect();
+                    let left: Vec<DiffSide> = removed
+                        .iter()
+                        .enumerate()
+                        .map(|(pair, body)| DiffSide {
+                            kind: DiffKind::Removed,
+                            number: old + pair as u32,
+                            body: (*body).to_owned(),
+                            words: words[pair].clone().map(|(old, _)| old),
+                        })
+                        .collect();
+                    let right: Vec<DiffSide> = added
+                        .iter()
+                        .enumerate()
+                        .map(|(pair, body)| DiffSide {
+                            kind: DiffKind::Added,
+                            number: new + pair as u32,
+                            body: (*body).to_owned(),
+                            words: words[pair].clone().map(|(_, new)| new),
+                        })
+                        .collect();
+                    old += removed.len() as u32;
+                    new += added.len() as u32;
+                    if split {
+                        for pair in 0..left.len().max(right.len()) {
+                            rows.push(DiffRow::Split {
+                                left: left.get(pair).cloned(),
+                                right: right.get(pair).cloned(),
+                            });
+                        }
+                    } else {
+                        for side in left {
+                            rows.push(DiffRow::Unified {
+                                old: Some(side.number),
+                                new: None,
+                                side,
+                            });
+                        }
+                        for side in right {
+                            rows.push(DiffRow::Unified {
+                                old: None,
+                                new: Some(side.number),
+                                side,
+                            });
+                        }
+                    }
+                }
+            }
         }
+    }
+    rows
+}
+
+/// A diff line's syntax colours and its changed words' wash, as one
+/// highlight list.
+fn diff_highlights(
+    side: &DiffSide,
+    language: Option<&str>,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    let syntax = language
+        .map(|language| {
+            let tokens = ferrite_core::transcript::highlight_tokens(Some(language), &side.body);
+            code(&side.body, Some(&tokens))
+        })
+        .unwrap_or_default();
+    let Some(words) = side.words.clone().filter(|words| !words.is_empty()) else {
+        return syntax;
+    };
+    let wash = match side.kind {
+        DiffKind::Added => theme::DIFF_ADDED_WORD,
+        DiffKind::Removed => theme::DIFF_REMOVED_WORD,
+        DiffKind::Context => return syntax,
+    };
+    gpui::combine_highlights(
+        syntax,
+        [(
+            words,
+            HighlightStyle {
+                background_color: Some(rgba(wash).into()),
+                ..Default::default()
+            },
+        )],
+    )
+    .collect()
+}
+
+/// A diff under its call (the prototype's `.diff`, clean): no box, half a
+/// line under the call, on the content column. A `TEXT_MUTED` hunk header
+/// opens each hunk; each row is `[number][sign][code]` (unified carries the
+/// old and the new number), the numbers `TEXT_MUTED` right-aligned in
+/// `DIFF_NUMBER_CELLS`, the sign in its hue, the code in full syntax colour
+/// with its indentation intact. Removed and added rows wear their washes,
+/// the changed words a deeper one. `wide` lays it side by side, a 1px
+/// `paint::LINE` between the halves and an empty side on `paint::NODIFF`.
+///
+/// The code cells route through the overlay — their lines copy honestly;
+/// numbers, signs and headers are chrome and never do (#27).
+///
+/// The diff draws at most `HUNK_MAX_ROWS` lines and then names what it left
+/// out: a written file's patch is the whole file, and the transcript shows a
+/// note about a change rather than the change itself.
+fn render_diff(
+    block: BlockId,
+    diff: &Diff,
+    selection: &TextRuns,
+    grid: Grid,
+    wide: bool,
+) -> impl IntoElement {
+    let (cap, omitted) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
+    let cells = diff_number_cells(diff_max_number(diff, cap));
+    let number_w = cells * grid.cell();
+    let sign_w = theme::DIFF_SIGN_CELLS * grid.cell();
+    let language = ferrite_core::transcript::language_for_path(std::path::Path::new(&diff.path));
+    let number = |number: Option<u32>| {
+        components::tabular(
+            div()
+                .flex_shrink_0()
+                .w(px(number_w))
+                .pr(px(grid.cell()))
+                .text_right()
+                .whitespace_nowrap()
+                .text_color(rgb(TEXT_MUTED))
+                .children(number.map(|number| SharedString::from(number.to_string()))),
+        )
+    };
+    let cell = |side: &DiffSide, selectable: bool| {
+        let DiffPaint {
+            sign,
+            sign_color,
+            code_color,
+            wash,
+        } = side.kind.paint();
+        let highlights = diff_highlights(side, language);
+        let code = if selectable {
+            selection
+                .line(block, side.body.clone(), highlights)
+                .into_any_element()
+        } else {
+            StyledText::new(SharedString::from(side.body.clone()))
+                .with_highlights(highlights)
+                .into_any_element()
+        };
+        (
+            div()
+                .flex_shrink_0()
+                .w(px(sign_w))
+                .pl(px(grid.cell() / 2.))
+                .text_color(rgb(sign_color))
+                .child(sign),
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(rgb(code_color))
+                .child(code),
+            wash,
+        )
+    };
+    let side_view = |side: Option<&DiffSide>, selectable: bool| -> Div {
+        match side {
+            Some(side) => {
+                let (sign, code, wash) = cell(side, selectable);
+                div()
+                    .flex()
+                    .items_start()
+                    .flex_1()
+                    .min_w_0()
+                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
+                    .child(number(Some(side.number)))
+                    .child(sign)
+                    .child(code)
+            }
+            None => div()
+                .flex_1()
+                .min_w_0()
+                .self_stretch()
+                .min_h(px(grid.line))
+                .bg(theme::paint::NODIFF),
+        }
+    };
+    let mut lines = div()
+        .debug_selector(|| "tool-diff".into())
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .text_color(rgb(TEXT));
+    for row in diff_rows(diff, cap, wide) {
+        lines = lines.child(match &row {
+            DiffRow::Hunk(header) => div()
+                .debug_selector(|| "diff-hunk".into())
+                .w_full()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(header.clone())),
+            DiffRow::Unified { old, new, side } => {
+                let (sign, code, wash) = cell(side, true);
+                div()
+                    .flex()
+                    .items_start()
+                    .w_full()
+                    .min_w_0()
+                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
+                    .child(number(*old))
+                    .child(number(*new))
+                    .child(sign)
+                    .child(code)
+            }
+            DiffRow::Split { left, right } => {
+                let selectable = row.selectable();
+                let pick = |side: &Option<DiffSide>| {
+                    side.as_ref().is_some_and(|side| {
+                        selectable.iter().any(|picked| std::ptr::eq(*picked, side))
+                    })
+                };
+                div()
+                    .flex()
+                    .items_stretch()
+                    .w_full()
+                    .min_w_0()
+                    .child(side_view(left.as_ref(), pick(left)))
+                    .child(div().flex_shrink_0().w(px(1.)).bg(theme::paint::LINE))
+                    .child(side_view(right.as_ref(), pick(right)))
+            }
+        });
     }
     // What the cap left out, on the code column — never a silent truncation.
     if omitted > 0 {
         lines = lines.child(
-            columns(SharedString::default(), "", TEXT_MUTED).child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(format!("… +{omitted} lines"))),
-            ),
+            div()
+                .w_full()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(format!("\u{2026} +{omitted} lines"))),
         );
     }
-    lines
+    content_row(grid).pt(px(grid.half())).child(lines)
 }
 
 /// How many of a diff's rows the card draws, and how many are left for
@@ -7102,7 +7960,7 @@ fn hunk_rows(total: usize) -> (usize, usize) {
     (drawn, total - drawn)
 }
 
-/// The largest line number the card will draw.
+/// The largest line number the diff will draw.
 fn diff_max_number(diff: &Diff, cap: usize) -> usize {
     let mut drawn = 0;
     let mut max = 0usize;
@@ -7129,22 +7987,22 @@ fn diff_max_number(diff: &Diff, cap: usize) -> usize {
     max
 }
 
-/// The number column: as many mono cells as the largest number has digits
-/// (at least two), rounded up to a whole pixel.
-fn diff_number_width(max: usize) -> f32 {
-    let digits = max.max(1).ilog10() as usize + 1;
-    (digits.max(2) as f32 * theme::CODE_CELL).ceil()
+/// The number column in cells: `DIFF_NUMBER_CELLS` (four digits and the
+/// cell after them), wider only for a number past four digits.
+fn diff_number_cells(max: usize) -> f32 {
+    let digits = max.max(1).ilog10() as f32 + 1.;
+    theme::DIFF_NUMBER_CELLS.max(digits + 1.)
 }
 
 /// What a unified-diff line is, read from its first byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiffKind {
+pub(super) enum DiffKind {
     Added,
     Removed,
     Context,
 }
 
-/// A hunk row's colours: the sign column, the code, and the row's wash.
+/// A diff row's colours: the sign column, the code, and the row's wash.
 #[derive(Debug, PartialEq, Eq)]
 struct DiffPaint {
     sign: &'static str,
@@ -7162,28 +8020,28 @@ impl DiffKind {
         }
     }
 
-    /// Both CLIs sign a diff in ASCII, `+` and `-`. The code carries the
-    /// colour — green added, red removed, lifted a step so a whole line stays
-    /// readable on its 8% wash — the sign wears its row's code ink, and a
-    /// context line is muted.
+    /// Both CLIs sign a diff in ASCII, `+` and `-`. The sign carries the
+    /// hue (`DIFF_*_SIGN`); the code keeps body ink under its syntax
+    /// colours on the row's wash; a context line is the same code with no
+    /// wash.
     fn paint(self) -> DiffPaint {
         match self {
             Self::Added => DiffPaint {
                 sign: "+",
-                sign_color: DIFF_ADDED_INK,
+                sign_color: theme::DIFF_ADDED_SIGN,
                 code_color: DIFF_ADDED_INK,
                 wash: Some(DIFF_ADDED_WASH),
             },
             Self::Removed => DiffPaint {
                 sign: "-",
-                sign_color: DIFF_REMOVED_INK,
+                sign_color: theme::DIFF_REMOVED_SIGN,
                 code_color: DIFF_REMOVED_INK,
                 wash: Some(DIFF_REMOVED_WASH),
             },
             Self::Context => DiffPaint {
                 sign: "",
                 sign_color: TEXT_MUTED,
-                code_color: TEXT_MUTED,
+                code_color: theme::SYN_PLAIN,
                 wash: None,
             },
         }
@@ -7212,63 +8070,35 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
 fn span_style(style: Style) -> Option<HighlightStyle> {
     match style {
         Style::Plain => None,
-        // Inline code keeps its own ink without adding a chip to prose.
+        // Inline code is cyan ink with no chip (rule 6).
         Style::Code => Some(HighlightStyle {
             color: Some(rgb(INLINE_CODE_INK).into()),
             ..Default::default()
         }),
-        // `strong` (§E.5): weight 600 in `--text-strong`.
+        // `strong`: weight 600 in `TEXT_STRONG`.
         Style::Bold => Some(HighlightStyle {
             color: Some(rgb(TEXT_STRONG).into()),
             font_weight: Some(W_STRONG),
             ..Default::default()
         }),
-        // `a` (§E.6): underlined 1px. The prototype sets it in `--text`
-        // over a `--sep` rule; the operator asked for a link to read as
-        // one, so ink and underline are the same blue. Inert — paths
-        // render, nothing opens.
+        // A link or a path reads cyan, like every path in the transcript,
+        // with no underline at rest. Inert — paths render, nothing opens.
         Style::Link => Some(HighlightStyle {
-            color: Some(rgb(LINK_INK).into()),
-            underline: Some(gpui::UnderlineStyle {
-                thickness: px(1.),
-                color: Some(rgb(LINK_INK).into()),
-                wavy: false,
-            }),
+            color: Some(rgb(theme::PATH_INK).into()),
             ..Default::default()
         }),
     }
 }
 
-/// A prose Block's text (§E.1/E.2/E.3): one wrapping run, so a sentence
-/// breaks where the prototype's does.
-///
-/// Inline `code` is the one span that cannot live inside that run — §E.4
-/// gives it `padding: 1px 4px` and a 3px radius, and a gpui highlight has
-/// neither. A Block that carries one is composed of flex pieces instead,
-/// with the chip as its own padded element; a Block that does not — nearly
-/// every one — keeps the single run untouched.
+/// A prose Block's text: one wrapping run, so a sentence breaks where the
+/// terminal's does.
 fn prose(block: BlockId, spans: &[Span], selection: &TextRuns) -> AnyElement {
-    // One shaped run for the whole paragraph, whatever it holds. Inline
-    // code used to be its own chip element in a wrapping flex row, which
-    // gave it padding and corners — and broke every paragraph that held
-    // one: a long text piece became a wrapping box of its own, and the
-    // pieces staggered down the column. The code wash is a highlight now;
-    // the text wraps as text.
     let (text, highlights) = inline(spans);
     selection.line(block, text, highlights).into_any_element()
 }
 
-/// A fenced block's rows, one element per hard line, each carrying that
-/// line's slice of the block's highlight runs.
-///
-/// The indent is drawn as width, not as glyphs. One element per line is not
-/// enough on its own: gpui shapes a run of leading U+0020 to zero advance —
-/// and U+00A0 in its place shapes to zero too — so every inner line landed
-/// flush left however the string was cut. So the leading spaces go into
-/// their own box, sized from the code advance (Geist Mono is 600/1000
-/// em, `CODE_ADVANCE`), and the code follows in a second run. The spaces are
-/// still emitted as a text fragment inside that box, so a copy takes the
-/// line back whole; only its painting is guaranteed by the width.
+/// A fenced block's rows: the whole block as one literal run, so a copy
+/// takes it back exactly and the indentation is the text's own.
 fn code_lines(
     block: BlockId,
     source: &str,
@@ -7531,6 +8361,7 @@ mod tests {
                 blocks: self.blocks.clone(),
                 turn_diff: None,
                 signal_status: Some(Status::Idle),
+                provider: None,
                 timings: HashMap::new(),
                 focused: true,
                 reading_size: Default::default(),
@@ -7564,6 +8395,7 @@ mod tests {
                     blocks: blocks.clone(),
                     turn_diff: None,
                     signal_status: Some(Status::Idle),
+                    provider: None,
                     timings: HashMap::new(),
                     focused: true,
                     reading_size: Default::default(),
@@ -8353,11 +9185,13 @@ mod tests {
         assert_eq!(DiffKind::of("-let x = 1;"), DiffKind::Removed);
         assert_eq!(DiffKind::of(" let x = 1;"), DiffKind::Context);
         assert_eq!(DiffKind::of(""), DiffKind::Context);
+        // Terminal-native: the sign carries the hue; the code keeps body
+        // ink under its syntax colours on the row's wash.
         assert_eq!(
             DiffKind::Added.paint(),
             DiffPaint {
                 sign: "+",
-                sign_color: DIFF_ADDED_INK,
+                sign_color: theme::DIFF_ADDED_SIGN,
                 code_color: DIFF_ADDED_INK,
                 wash: Some(DIFF_ADDED_WASH),
             }
@@ -8366,7 +9200,7 @@ mod tests {
             DiffKind::Removed.paint(),
             DiffPaint {
                 sign: "-",
-                sign_color: DIFF_REMOVED_INK,
+                sign_color: theme::DIFF_REMOVED_SIGN,
                 code_color: DIFF_REMOVED_INK,
                 wash: Some(DIFF_REMOVED_WASH),
             }
@@ -8376,7 +9210,7 @@ mod tests {
             DiffPaint {
                 sign: "",
                 sign_color: TEXT_MUTED,
-                code_color: TEXT_MUTED,
+                code_color: theme::SYN_PLAIN,
                 wash: None,
             }
         );
@@ -8446,24 +9280,22 @@ mod tests {
     fn inline_code_and_links_carry_their_own_ink() {
         let code = span_style(Style::Code).unwrap();
         assert_eq!(code.color, Some(rgb(INLINE_CODE_INK).into()));
-        assert_eq!(code.background_color, None);
+        assert_eq!(code.background_color, None, "inline code has no chip");
+        // Terminal-native: a link reads cyan like every path, with no
+        // underline at rest.
         let link = span_style(Style::Link).unwrap();
-        assert_eq!(link.color, Some(rgb(LINK_INK).into()));
-        assert_eq!(
-            link.underline.unwrap().color,
-            Some(rgb(LINK_INK).into()),
-            "the underline is the link's own ink, not the seam"
-        );
+        assert_eq!(link.color, Some(rgb(theme::PATH_INK).into()));
+        assert_eq!(link.underline, None);
         assert!(span_style(Style::Plain).is_none());
     }
 
     #[test]
-    fn a_tool_row_reads_its_outcome_from_its_dot_and_keeps_its_name_neutral() {
+    fn a_tool_row_reads_its_outcome_from_its_bullet_and_keeps_its_name_neutral() {
         let failed = ToolState::Failed("boom".into());
-        // Settled work recedes; live work is a static green dot (only the
-        // working line moves); a failure is the blocked dot; a lost result
-        // is a hollow ring. Green never means finished.
-        assert_eq!(tool_dot_ink(&ToolState::Ok), (TEXT_FAINT, DotShape::Solid));
+        // Terminal-native: settled work is a dim `●`; live work a still
+        // green one (only the working line moves); a failure the blocked
+        // one; a lost result the hollow `○`. Green never means finished.
+        assert_eq!(tool_dot_ink(&ToolState::Ok), (TEXT_MUTED, DotShape::Solid));
         assert_eq!(
             tool_dot_ink(&ToolState::Running),
             (RUNNING, DotShape::Solid)
@@ -8473,6 +9305,8 @@ mod tests {
             tool_dot_ink(&ToolState::Unavailable),
             (TEXT_FAINT, DotShape::Ring)
         );
+        assert_eq!(DotShape::Solid.glyph(), "\u{25cf}");
+        assert_eq!(DotShape::Ring.glyph(), "\u{25cb}");
         for state in [ToolState::Ok, ToolState::Running, failed.clone()] {
             let tool = ToolBlock {
                 call: "c".into(),
@@ -8490,28 +9324,81 @@ mod tests {
             assert_eq!(
                 highlights.len(),
                 1,
-                "one line, one face: only the name is lifted"
+                "one line: only the name is lifted, the arguments keep the line's ink"
             );
             assert_eq!(highlights[0].0, 0..4, "only the name is lifted");
             assert_eq!(
                 highlights[0].1,
                 HighlightStyle {
-                    color: Some(rgb(TEXT).into()),
+                    color: Some(rgb(TEXT_STRONG).into()),
+                    font_weight: Some(theme::W_LABEL),
                     ..Default::default()
                 },
-                "the name changes ink only: never a weight, never a face"
+                "the name is the prototype's `.name`: strong ink at 500, whatever happened"
             );
         }
-        assert_eq!(result_ink(&ToolState::Ok), (TEXT_MUTED, theme::FONT_UI));
+        // A path argument reads cyan, like every path in the transcript.
+        let read = ToolBlock {
+            call: "r".into(),
+            name: "Read".into(),
+            title: None,
+            summary: "crates/ferrite/src/nav.rs".into(),
+            state: ToolState::Ok,
+            diffs: Vec::new(),
+            structured_result: None,
+            result_line: None,
+            output: None,
+        };
+        let highlights = call_highlights(&read);
+        assert_eq!(highlights.len(), 2);
+        assert_eq!(highlights[1].0, 5..30);
+        assert_eq!(highlights[1].1.color, Some(rgb(theme::PATH_INK).into()));
+        // Verdict words in a result take their state ink, whole words only.
+        let runs = result_highlights("test nav::a ... ok\ntest nav::b ... FAILED\nbook");
+        let inks: Vec<_> = runs
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color))
+            .collect();
         assert_eq!(
-            result_ink(&failed),
-            (TEXT_MUTED, theme::FONT_CODE),
-            "the failure's message is machine text; the dot and one word carry the state"
+            inks,
+            vec![
+                (16..18, Some(rgb(RUNNING).into())),
+                (35..41, Some(rgb(BLOCKED).into())),
+            ]
         );
     }
 
     #[test]
-    fn a_diff_keeps_its_indentation_and_sizes_its_number_column_by_digits() {
+    fn a_long_command_output_folds_after_the_line_its_elbow_shows() {
+        let output = (1..=8)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool = |name: &str, state: ToolState| ToolBlock {
+            call: "c".into(),
+            name: name.into(),
+            title: None,
+            summary: "cargo test".into(),
+            state,
+            diffs: Vec::new(),
+            structured_result: None,
+            result_line: Some("line 1".into()),
+            output: Some(ferrite_core::transcript::ToolOutput {
+                text: output.clone(),
+                omitted_bytes: 0,
+            }),
+        };
+        let (shown, hidden) = output_fold(&tool("Bash", ToolState::Ok)).expect("a command folds");
+        assert_eq!(shown, "line 2\nline 3\nline 4");
+        assert_eq!(hidden, 4);
+        // A read's output is the file: it does not fold under the call.
+        assert!(output_fold(&tool("Read", ToolState::Ok)).is_none());
+        // A failure folds whatever the tool.
+        assert!(output_fold(&tool("Read", ToolState::Failed("boom".into()))).is_some());
+    }
+
+    #[test]
+    fn a_diff_pairs_its_changes_and_marks_the_words_that_changed() {
         assert_eq!(text::diff_body("+    let x = 1;"), "    let x = 1;");
         assert_eq!(text::diff_body("-\tfoo"), "\tfoo");
         assert_eq!(text::diff_body("  indented context"), " indented context");
@@ -8521,15 +9408,75 @@ mod tests {
         );
         assert_eq!(text::diff_body(""), "");
         assert_eq!(DiffKind::Removed.paint().sign, "-", "ASCII, like both CLIs");
-        let cell = theme::CODE_CELL;
+        // The number column is `DIFF_NUMBER_CELLS` until a number outgrows it.
+        assert_eq!(diff_number_cells(7), theme::DIFF_NUMBER_CELLS);
+        assert_eq!(diff_number_cells(9_999), theme::DIFF_NUMBER_CELLS);
+        assert_eq!(diff_number_cells(10_000), 6.);
+        // Word marks: what is left once the common prefix and suffix go.
         assert_eq!(
-            diff_number_width(7),
-            (2. * cell).ceil(),
-            "never under two cells"
+            changed_words("let row = h(ROW_H);", "let row = h(ROW_LIVE_H);"),
+            Some((16..16, 16..21))
         );
-        assert_eq!(diff_number_width(99), (2. * cell).ceil());
-        assert_eq!(diff_number_width(100), (3. * cell).ceil());
-        assert_eq!(diff_number_width(10_000), (5. * cell).ceil());
+        assert_eq!(changed_words("abc", "xyz"), None, "the whole line changed");
+        assert_eq!(changed_words("same", "same"), None);
+        let diff = Diff {
+            path: "src/nav.rs".into(),
+            hunks: vec![ferrite_core::Hunk {
+                old_start: 10,
+                old_lines: 3,
+                new_start: 10,
+                new_lines: 3,
+                lines: vec![
+                    " fn a() {".into(),
+                    "-    old();".into(),
+                    "+    new();".into(),
+                    "+    more();".into(),
+                    " }".into(),
+                ],
+            }],
+            added: 2,
+            removed: 1,
+        };
+        let unified = diff_rows(&diff, 24, false);
+        assert_eq!(unified.len(), 6, "the hunk header and five lines");
+        assert_eq!(unified[0], DiffRow::Hunk("@@ -10,3 +10,3 @@".into()));
+        let split = diff_rows(&diff, 24, true);
+        assert_eq!(split.len(), 5, "the change pairs side by side");
+        let DiffRow::Split { left, right } = &split[2] else {
+            panic!("a split row")
+        };
+        assert_eq!(left.as_ref().unwrap().body, "    old();");
+        assert_eq!(right.as_ref().unwrap().body, "    new();");
+        assert_eq!(left.as_ref().unwrap().words, Some(4..7));
+        let DiffRow::Split { left, right } = &split[3] else {
+            panic!("a split row")
+        };
+        assert!(
+            left.is_none(),
+            "an added line with no partner leaves the left empty"
+        );
+        assert_eq!(right.as_ref().unwrap().number, 12);
+        // A copy takes a context line once and both sides of a change.
+        let copied: Vec<_> = split
+            .iter()
+            .flat_map(DiffRow::selectable)
+            .map(|side| side.body.as_str())
+            .collect();
+        assert_eq!(
+            copied,
+            vec!["fn a() {", "    old();", "    new();", "    more();", "}"]
+        );
+    }
+
+    #[test]
+    fn an_image_header_names_its_size() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&580u32.to_be_bytes());
+        png.extend_from_slice(&320u32.to_be_bytes());
+        assert_eq!(image_size(&png), Some((580, 320)));
+        let gif = b"GIF89a\x40\x01\xf0\x00";
+        assert_eq!(image_size(gif), Some((320, 240)));
+        assert_eq!(image_size(b"not an image"), None);
     }
 
     #[test]
@@ -8555,7 +9502,7 @@ mod tests {
     /// A turn's end leads with the lexicon's own lowercase words, and the
     /// answer's mark is structure ink.
     #[test]
-    fn turn_ends_speak_the_lexicon_and_the_answer_mark_is_faint() {
+    fn turn_ends_speak_the_lexicon_and_the_answer_bullet_is_bright() {
         use ferrite_core::transcript::TurnEnd;
         assert_eq!(TurnEnd::INTERRUPTED, theme::words::INTERRUPTED);
         assert_eq!(TurnEnd::FAILED, theme::words::FAILED);
@@ -8582,7 +9529,7 @@ mod tests {
                 "the two runs copy back as the line"
             );
         }
-        assert_eq!(crate::transcript::ANSWER_MARK_INK, TEXT_FAINT);
+        assert_eq!(crate::transcript::ANSWER_MARK_INK, TEXT_STRONG);
     }
 
     #[test]

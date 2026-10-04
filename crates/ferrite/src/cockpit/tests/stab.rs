@@ -1363,8 +1363,8 @@ fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
 }
 
 /// The prompt heads its turn: the operator's line is at prose size, the
-/// same size as the answer under it, and turns sit `GAP_TURN` apart while
-/// the blocks inside one (the stamp included) sit a block step apart.
+/// same size as the answer under it, on its band. Terminal-native: one
+/// blank line sits above the band, and the band's half line above its text.
 #[gpui::test]
 fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("prompt-heads-turn", 1);
@@ -1415,7 +1415,6 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         crate::rich::testing::font_size(&format!("literal-{namespace}-{:?}-0", prompts[1]), cx)
     });
     assert_eq!(size, Some(px(crate::theme::FS_PROSE)), "prose size");
-    assert_eq!(crate::theme::GAP_TURN, 32.);
     let mut line = |id| {
         cx.update(|_, cx| {
             crate::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx).unwrap()
@@ -1425,8 +1424,8 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     // prompt is the turn step.
     assert_eq!(
         line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(crate::theme::GAP_TURN),
-        "turns sit a turn step apart"
+        px(crate::theme::LH_PROSE + crate::theme::tx_half(crate::theme::LH_PROSE)),
+        "turns sit a blank line and the band's half line apart"
     );
 }
 

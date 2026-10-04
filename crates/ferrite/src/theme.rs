@@ -1183,77 +1183,53 @@ mod legacy {
 
 // ---------------------------------------------------- transcript grammar
 //
-// The transcript is Claude Code's layout in Ferrite's ink:
+// The transcript is a terminal: Claude Code's own layout on one monospace
+// grid, in Ferrite's ink (the prototype's `.r`, `.prompt`, `.line`, `.out`).
 //
-// - **One content edge.** Every row is `[gutter | text]`: a `GLYPH_BOX`
-//   glyph centred on the row's first line box, `GUTTER_GAP`, then text at
-//   C1 (`GUTTER_W`). Prompt text, answer prose, tool calls, group summaries,
-//   reasoning and the turn stamp all start at C1. A result hangs one gutter
-//   further in, at C2, under a drawn elbow whose stem sits under the call's
-//   name. Rows are inset `BOX_INSET_X` inside the reading column, so the
-//   transcript `❯` and the Composer's share one axis.
-// - **Glyphs are drawn, never typed.** `❯` is `prompt.svg`, `∴` is
-//   `reasoning.svg`, the answer mark is the monochrome `ferrite-mono.svg`,
-//   the tool dot and the elbow are painted. None of them registers text.
-// - **One left edge, three gutter marks.** The gutter holds `❯` (you
-//   spoke), a `TOOL_DOT` (a machine action and its state; a group's dot is
-//   its worst member's) and the Ferrite mark (the agent spoke). The mark is
-//   drawn once per speaker change to the agent, at every tier: on the first
-//   prose after a prompt or after a tool or group row. Prose that follows
-//   prose — across reasoning, a notice or a record, which neither speak nor
-//   hand the floor back — wears none; its gutter stays empty and its text
-//   keeps the C1 edge (`transcript::AnswerMarks`, the operator's Q2). A
-//   disclosure is a trailing `ICON_CHEVRON` after its row's label, its box
-//   always reserved, shown under the pointer or on the keyboard target and
-//   turned a quarter when open. No transcript row has a hover ground; the
-//   keyboard target alone wears `HOVER`. Nothing sits at the reading
-//   column's right but a call's trail (`applied · +N −M`, then its time,
-//   tabular; a live call's time ticks whole seconds at 1Hz and freezes when
-//   it settles).
-// - **State lives in the dot.** A tool's name is neutral ink whatever
-//   happened; its dot says how it went (`tool_dot`, static even while
-//   live), and a failure colours the one word that says so. A collapsed
-//   group is one `TEXT_MUTED` line with tabular figures whose only state ink
-//   is ` · N failed`.
-// - **One failure line.** A failed call and a failed or interrupted turn
-//   read `⎿ failed · 0.1s · <excerpt>`: the lowercase lead in its state ink
-//   (`BLOCKED`, or `TEXT_2` for `interrupted`), `·` in `TEXT_FAINT`, the
-//   duration `TEXT_MUTED`, and the excerpt the machine printed in the code
-//   face, soft-wrapped, never cut.
-// - **Machine text is never cut.** Diff lines soft-wrap inside their row
-//   (the number and sign on the first line, the wash under every line);
-//   only `HUNK_MAX_ROWS` and `OUTPUT_MAX_LINES` hide rows, and they say how
-//   many.
-// - **Rhythm in three steps**, each at least twice the one inside it
-//   (grouping by space, not lines). A turn opens `GAP_TURN` (32) under the
-//   one before it; the blocks inside a turn — a prose answer, a group
-//   summary, a lone tool row, the stamp — sit `GAP_BLOCK` (12, the block
-//   step) apart; the rows of one run of work sit `GAP_ROW` (4, the row
-//   step) apart: tool rows, a group's members under its summary, a
-//   one-paragraph commentary over the call it introduces, and any row that
-//   hangs on an elbow under the row it answers (a decision record, an
-//   interrupted or failed turn's end). A call and its own `⎿` result are
-//   one unit, with no step between them. Paragraphs inside an answer sit a
-//   block step apart too (`PROSE_GAP`, 0.86em), so an answer's paragraphs
-//   and the blocks around it read as siblings of one turn.
-// - **The rhythm scales with the reading size.** The turn and block steps
-//   and the prose gaps are em-proportional to the answer's size
-//   (`reading_step`): exactly the tokens at Standard, 37/14 at Comfortable,
-//   41/15 at Large, so a paragraph gap never outgrows the block step. The
-//   row step spaces UI rows, which do not scale, and stays 4.
-// - **Chosen once.** The space above a row is chosen at reconcile from the
-//   row before it, its own kind and the reading size, and is part of the
-//   row's identity, so a changed gap is a changed row and nothing is
-//   measured per frame.
-// - **The prompt anchors its turn.** The operator's line is the turn's
-//   heading: the answer's size (`answer_text_size`/`answer_line_height`,
-//   14/22 at Standard) at `W_LABEL` in `TEXT_STRONG` under the accent `❯`,
-//   with no band, pill or hover ground, over answers at the same size,
-//   regular, in `TEXT`. An answer's own H1/H2 may be larger: they head sections of
-//   one answer, while the prompt heads the turn by place — the turn step
-//   above it, the accent in the gutter — not by size. Structural rows (tool
-//   calls, summaries) are `FS_UI`/`LH_UI`; the stamp and the trail are
-//   `FS_SM`/`LH_META`, their changing digits tabular.
+// - **One grid.** Every transcript row is set at the operator's reading
+//   size on its 1.5x line (`answer_text_size`, `answer_line_height`), set
+//   once on the transcript list and inherited by every row: prose, tool
+//   calls, results, diffs, the stamp. Horizontal measures are cells at that
+//   size (`tx_cell`); vertical ones are its line and half line.
+// - **The 2-cell gutter.** Every row is `[gutter | content]`: the mark in
+//   the gutter's first cell (`tx_gutter`, two cells wide), the content
+//   column after it, and wrapped lines hang under the content column, never
+//   under the mark. Rows sit `TX_PAD_L` (two chrome cells) from the Pane's
+//   left edge and `TX_PAD_R` from its right; there is no centred column.
+// - **Marks.** `❯` (accent, drawn: `icons::PROMPT`) heads the operator's
+//   prompt; a typed `●` heads agent prose (`TEXT_STRONG`, once per speaker
+//   change: `transcript::AnswerMarks`) and every tool call (`TEXT_MUTED`
+//   done, `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (drawn,
+//   `icons::WORKED`, in the provider's colour) the turn's end; `◆` (drawn,
+//   `ATTENTION`) a Decision. `∴` (drawn) heads reasoning.
+// - **The prompt band.** The prompt echo is a full-width `paint::BAND` with
+//   half a line above and below its text: `❯` in the gutter, the text in
+//   `TEXT_STRONG` at body weight. The band of the turn being read stays
+//   pinned at the top of the body while its output scrolls under it (a
+//   plain echo laid over the list, pushed up by the next turn's band).
+// - **Tool rows.** `● Name(args)`: the name `TEXT_STRONG` at `W_LABEL`, the
+//   parens and arguments `TEXT_MUTED`, one line that truncates; the trail
+//   hard right (`+N −M` in `RUNNING`/`BLOCKED`, then the duration
+//   `TEXT_MUTED`, tabular). What it produced hangs under a typed `└ ` elbow
+//   (`TEXT_FAINT`) on the content column, in `TEXT_MUTED`; further output
+//   lines align after the elbow. Long output folds to
+//   `OUTPUT_PREVIEW_LINES` and a `+ N lines` line that toggles it.
+// - **Rhythm in rows.** Blocks are one blank line apart (a turn's prompt
+//   band, prose, a run of tool calls, the stamp); the calls of one run and
+//   the rows that hang on an elbow under the row they answer sit flush.
+//   The space above a row is chosen at reconcile from the row before it
+//   (`rows::gap_before`) and is part of the row's identity.
+// - **The turn's end.** `✻ Worked for 41s · 7:32 pm`, `TEXT_MUTED`, the `·`
+//   seams `TEXT_FAINT`. A failed or interrupted turn hangs under the last
+//   row: `└ failed · 0.1s · <message>`, the lead word in its state ink.
+// - **Diffs** have no box: a `TEXT_MUTED` hunk header, `TEXT_MUTED` line
+//   numbers, red and green row washes (`DIFF_*_WASH`) with the changed
+//   words washed deeper (`DIFF_*_WORD`), code in full syntax colour, the
+//   sign carrying the hue. Side by side once the transcript is
+//   `SPLIT_DIFF_MIN_W` wide, unified when narrower; a split row's empty
+//   side is `paint::NODIFF`.
+// - **No transcript row has a hover ground** but the keyboard's disclosure
+//   target (`paint::HOVER`); a disclosure's chevron shows under the pointer.
 
 /// 66px — the tallest remnant of a cut row the transcript hides under its
 /// top edge while it follows the tail (three prose lines): a prompt, a tool
@@ -1264,6 +1240,7 @@ pub const TRANSCRIPT_TOP_SNAP_MAX: f32 = 3.0 * LH_PROSE;
 /// 32px — above every prompt but the first: the turn boundary. No rule is
 /// drawn between turns; this space, the prompt's weight and the stamp do the
 /// job.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const GAP_TURN: f32 = SPACE_8;
 /// 12px — the block step: between the blocks of one turn (prompt → the
 /// agent's first row, prose ↔ tools, anything ↔ reasoning, notices, the
@@ -1276,6 +1253,7 @@ pub const GAP_ROW: f32 = SPACE_1;
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
 /// Markdown gaps go through it; UI-row steps do not.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub fn reading_step(step: f32, size: f32) -> f32 {
     (step * size / FS_PROSE).round()
 }
@@ -1310,20 +1288,20 @@ pub const DIFF_REMOVED_INK: u32 = TEXT;
 /// (`BLOCKED_WASH` is for one-line uses only.)
 pub const DIFF_ADDED_WASH: u32 = 0x93cf8c1a;
 pub const DIFF_REMOVED_WASH: u32 = 0xef8a801c;
-/// A diff card at the tool name's x (C1, under the call's first letter):
-/// `RAISED`, `R_BLOCK`, 4px above it, the fence's 12px inline. Its columns
-/// are `[number][8][sign][4][code]`: the number column (`TEXT_FAINT`) is as
-/// wide as the largest number's digits (`CODE_CELL` each), the sign is one
-/// whole-pixel mono cell in its row's code ink, and code keeps its
-/// indentation and soft-wraps rather than being cut. `HUNK_PAD_Y` 4 is the
-/// one deliberate difference from a fence (`CODE_PAD_Y` 10): the rows'
-/// washes run edge to edge, and 4px keeps the first and last rows' washes
-/// off the card's corners without a slab of empty ground.
+/// The previous grammar's diff card (`RAISED`, padded, rounded): unused by
+/// the terminal grammar, whose diff has no box and measures in cells
+/// (`DIFF_NUMBER_CELLS`, `DIFF_SIGN_CELLS`).
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const HUNK_PAD_X: f32 = CODE_PAD_X;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const HUNK_PAD_Y: f32 = SPACE_1;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const HUNK_MARGIN_T: f32 = SPACE_1;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const DIFF_SIGN_W: f32 = SPACE_2;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const DIFF_GAP: f32 = SPACE_2;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const DIFF_SIGN_GAP: f32 = SPACE_1;
 /// How many rows one hunk card draws before it stops and says how many it
 /// did not. An edit's patch is a handful of lines; a written file's is
@@ -1334,38 +1312,96 @@ pub const HUNK_MAX_ROWS: usize = 24;
 /// 20px — an invisible hit area, not a drawn thing: a disclosure's gutter
 /// target (the whole row toggles too) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
+/// One cell of the transcript grid at reading size `size`: Geist Mono's
+/// advance (`CODE_ADVANCE`), 8.4px at Standard.
+pub fn tx_cell(size: f32) -> f32 {
+    size * CODE_ADVANCE
+}
+
+/// The transcript's 2-cell glyph gutter at reading size `size`: the row's
+/// mark in its first cell, the content column after its second.
+pub fn tx_gutter(size: f32) -> f32 {
+    2.0 * tx_cell(size)
+}
+
+/// A drawn transcript mark (`❯ ✻ ◆ ∴`) at reading size `size`: sized like
+/// a glyph of the face, 12px at Standard.
+pub fn tx_mark(size: f32) -> f32 {
+    (size * 6.0 / 7.0).round()
+}
+
+/// Half a transcript line, whole pixels: the prompt band's padding above
+/// and below its text.
+pub fn tx_half(line: f32) -> f32 {
+    (line / 2.0).floor()
+}
+
+/// The transcript's inset in the Pane body: two chrome cells on the left
+/// (the prototype's `.scroll{padding:0 3ch 0 2ch}`), so the transcript `❯`
+/// and the Composer's share one axis whatever the reading size, and three
+/// on the right, clear of the minimap rail.
+pub const TX_PAD_L: f32 = GLYPH_GUTTER;
+pub const TX_PAD_R: f32 = 3.0 * CH;
+/// Long tool output folds to this many lines under its elbow, then a
+/// `+ N lines` line that unfolds it in place.
+pub const OUTPUT_PREVIEW_LINES: usize = 3;
+/// A diff goes side by side once the transcript is this wide (the
+/// prototype's `@container (min-width: 1000px)`), unified when narrower.
+pub const SPLIT_DIFF_MIN_W: f32 = 1000.0;
+/// A diff's line-number column, in cells (its 1-cell pad included), and its
+/// sign column.
+pub const DIFF_NUMBER_CELLS: f32 = 5.0;
+pub const DIFF_SIGN_CELLS: f32 = 2.0;
+/// An inline image's width in cells (the prototype's `.img{width:48ch}`),
+/// never wider than the image itself.
+pub const IMAGE_CELLS: f32 = 48.0;
+
+/// **The minimap** (the transcript's scrollbar): a `MINIMAP_W` rail at the
+/// body's right edge, shown only while the pointer is on the transcript. A
+/// `MINIMAP_TICK_H` tick per prompt (`ACCENT`), failed call (`BLOCKED`),
+/// Decision (`ATTENTION`) and passing check (`RUNNING`), inset
+/// `MINIMAP_TICK_INSET`; the viewport as a translucent band (`paint::HOVER`,
+/// `paint::SELECTION` under the pointer) inset `MINIMAP_BAND_INSET`, never
+/// shorter than `MINIMAP_BAND_MIN_H`. A click on a tick jumps to its row;
+/// anywhere else centres the view on that point.
+pub const MINIMAP_W: f32 = 12.0;
+pub const MINIMAP_TICK_H: f32 = 2.0;
+pub const MINIMAP_TICK_INSET: f32 = 3.0;
+pub const MINIMAP_BAND_INSET: f32 = 1.0;
+pub const MINIMAP_BAND_MIN_H: f32 = 12.0;
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars
 // Owner: WP-B (rich.rs, scrollbar.rs, attachments::inline_file, the Markdown vendor knobs.)
 // Edit values and append tokens only inside this section.
 
-/// **Markdown.** Agent prose is Geist in `TEXT` at the reading size
-/// (`answer_text_size`, set by the answer row), its paragraphs, list items
-/// and quotes held to `PROSE_MEASURE`; code, tables and diffs keep the whole
-/// column. Blocks sit `PROSE_GAP` apart; a heading takes more space above
-/// (`PROSE_GAP + HEADING_SPACE_ABOVE` = 20) than below (`HEADING_SPACE_BELOW`
-/// = 8). H1–H3 are `W_STRONG` `TEXT_STRONG`, H4–H6 `W_LABEL` `TEXT_STRONG`
-/// (set apart from prose by weight, never dimmer than it), never italic or
-/// underlined, each a whole pixel size on its own pixel line
-/// (`prose_line_height`). A table is its header rule alone: no row rules, a
-/// `W_BODY` `TEXT_MUTED` header, cells at the UI size, figures tabular. A
-/// quote is a 2px `HAIRLINE_STRONG` rule and `TEXT_2`, not italic; a
-/// thematic break is one `HAIRLINE`. List and quote text share one hang,
-/// `PROSE_HANG`, with markers `TEXT_MUTED` right-aligned in it. Code is a
-/// `RAISED` block whose language and `Copy` are a hover overlay, never a
-/// header row; **inline code is mono `FS_UI` on a neutral `INLINE_CODE_WASH`
-/// chip**, in `TEXT` at weight 400 whatever it sits in; links are `ACCENT`
-/// over an `ACCENT_EDGE` underline.
+/// **Markdown** (the prototype's `.p`, `.code`, `table.t`, `ul.md`, clean).
+/// Agent prose is the one face in `TEXT` at the reading size, left-aligned
+/// on the content column and held to `MEASURE_CH` cells; code, tables and
+/// rules keep the whole column. Blocks sit one blank line apart; headings
+/// are the body size in `W_STRONG` `TEXT_STRONG`, `**strong**` the same.
+/// Inline code is `INLINE_CODE` cyan with no chip; links and file paths are
+/// `PATH_INK` cyan with no underline at rest (a file link underlines under
+/// the pointer). A list's `•` is `TEXT_MUTED`, hanging in the first of two
+/// cells. A fence has no ground: a 1px `paint::LINE2` rule on its left, the
+/// code two cells in, in full syntax colour, its language tag dim at its
+/// top right and `Copy` before it under the pointer. A table is a `W_STRONG`
+/// `TEXT_STRONG` head over a `paint::LINE2` rule, row rules in `paint::LINE`,
+/// no vertical rules and no box, figures tabular (a `---:` column aligns
+/// right). A quote is a 2px `LINE2` rule and `TEXT_MUTED`; a thematic break
+/// one `LINE`.
 ///
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
 /// sizes scale them with `reading_step`.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const PROSE_GAP: f32 = SPACE_3;
 /// 8px — added above a heading that follows a sibling, on top of
 /// `PROSE_GAP`, so a heading opens a section rather than closing one.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const HEADING_SPACE_ABOVE: f32 = SPACE_2;
 /// 8px — below a heading, in place of `PROSE_GAP`.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const HEADING_SPACE_BELOW: f32 = SPACE_2;
 /// Inline code's ink: cyan (`INLINE_CODE`, rule 6). The Markdown path
 /// paints it; the plain-text fallback carries the ink alone.
@@ -1375,11 +1411,13 @@ pub const INLINE_CODE_INK: u32 = INLINE_CODE;
 pub const INLINE_CODE_WASH: u32 = 0xffffff0f;
 /// The inline-code chip reaches 2px past its glyphs. Painted, never laid
 /// out; its height is `inline_code_chip_h`, centred in the prose line box.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
 
 /// Inline code's size at each reading size: the UI size at 14 (`FS_UI`, so
 /// a code cell is `CODE_CELL`), 1.5 under the prose up to 15 and 2 under it
 /// above. Tables set their cells at the same size.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub fn inline_code_size(size: ferrite_core::settings::ReadingSize) -> f32 {
     let px = f32::from(size.px());
     if px <= 15. {
@@ -1390,18 +1428,21 @@ pub fn inline_code_size(size: ferrite_core::settings::ReadingSize) -> f32 {
 }
 
 /// The inline-code chip's height: 4px over the prose size (18 at 14).
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub fn inline_code_chip_h(size: ferrite_core::settings::ReadingSize) -> f32 {
     f32::from(size.px()) + 4.
 }
 
 /// How far the chip stays inside the prose line box, top and bottom:
 /// `(answer_line_height − inline_code_chip_h) / 2`.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub fn inline_code_inset_y(size: ferrite_core::settings::ReadingSize) -> f32 {
     (answer_line_height(size) - inline_code_chip_h(size)) / 2.
 }
 
 /// A table row's line box: 6px over the prose size, so at 14 it is `LH_UI`
 /// 20 and a row is 4 + 20 + 4 = 28, the list pitch.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub fn table_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
     f32::from(size.px()) + 6.
 }
@@ -1410,6 +1451,7 @@ pub fn table_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
 /// paragraph, a list item or a quote runs before it wraps. Fixed, not scaled
 /// by the reading size. Code, tables, diffs, tool rows and the Composer keep
 /// the whole `READING_MAX_W` column.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const PROSE_MEASURE: f32 = 570.0;
 /// 28px — the one hang lists and quotes share at Standard: bullet and
 /// ordered text start this far in, their markers right-aligned inside it
@@ -1417,8 +1459,10 @@ pub const PROSE_MEASURE: f32 = 570.0;
 /// widens), and a quote's text lands on the same x past its rule. Each
 /// nesting level adds another. Scales with the reading size (`reading_step`:
 /// 28 · 32 · 36).
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const PROSE_HANG: f32 = 28.0;
 /// 6px — between a list marker and its text.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const LIST_MARKER_GAP: f32 = SPACE_1_5;
 /// A quote's rule. Its text inset is the hang less the rule
 /// (`PROSE_HANG − QUOTE_RULE_W`, 26 at Standard), so quoted text starts
@@ -1427,8 +1471,10 @@ pub const QUOTE_RULE_W: f32 = 2.0;
 /// 4px — a table cell's block padding, so a Standard row is 28px (its
 /// inline padding is the vendor's 8px, which its column measurement
 /// assumes).
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const TABLE_CELL_PAD_Y: f32 = SPACE_1;
 /// The rule under a table's header row: one step stronger than the rows'.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const TABLE_HEAD_RULE: u32 = HAIRLINE_STRONG;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
@@ -1436,18 +1482,22 @@ pub const RULE_MARGIN_Y: f32 = SPACE_1;
 /// A fenced code block: 12px inline, 10px block padding (Zeron's code body;
 /// 10 is off the scale so a one-line block is 10 + 18 + 10 = 38, and the
 /// hover overlay's 24px actions centre on its first line).
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const CODE_PAD_X: f32 = SPACE_3;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const CODE_PAD_Y: f32 = 10.0;
 /// A fence's actions overlay: the language id, html `Preview`,
 /// `Copy`/`Copied`, top-right over the block. It is always laid out (so it
 /// never moves the block) and only shown under the pointer (the 150ms
 /// hover blend), while its keys have focus, or while the caret or a
 /// selection is inside the block — those two instantly.
-pub const CODE_ACTIONS_TOP: f32 = 7.0;
-pub const CODE_ACTIONS_RIGHT: f32 = SPACE_1;
+pub const CODE_ACTIONS_TOP: f32 = 0.0;
+pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const CODE_ACTION_H: f32 = 24.;
 pub const CODE_ACTION_MIN_W: f32 = 56.;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const CODE_ACTION_PAD_X: f32 = SPACE_2;
 /// The html preview dialog: the reading column's width, and a height cap
 /// before its body scrolls.
@@ -1455,11 +1505,15 @@ pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
 /// An inline file chip: `CHIP_H` tall so it fits a 22px prose line without
 /// moving it; 6px inline padding; no file mark (an image leads with its
 /// 14px thumbnail, 6px from the name); clamped between 64 and 280px wide.
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const INLINE_FILE_H: f32 = CHIP_H;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const INLINE_FILE_PAD_X: f32 = SPACE_1_5;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const INLINE_FILE_GAP: f32 = SPACE_1_5;
+#[allow(dead_code)] // the previous grammar; remove after integration
 pub const INLINE_FILE_THUMB: f32 = 14.0;
-pub const INLINE_FILE_MIN_W: f32 = 64.0;
+pub const INLINE_FILE_MIN_W: f32 = CH;
 pub const INLINE_FILE_MAX_W: f32 = 280.0;
 /// **Scrollbars** are a thin overlay with no track, never in layout: a
 /// `SCROLLBAR_GUTTER` hit strip at the scroller's right edge; while
@@ -1960,52 +2014,44 @@ pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 // Edit values and append tokens only inside this section.
 
 /// The Decision block (approvals, questions, forms, links — Main's and a
-/// Subagent's alike, rule 2.8): `RAISED`, one 1px `COMPOSER_EDGE`,
-/// `R_BLOCK`, in the reading column. Docked on a live Composer it merges
-/// into it — one outlined block: the Decision section, one full-width
-/// seam (the Composer's own top edge, held in layout so nothing moves),
-/// the Composer's mono input line — so there is no gap and no second
-/// outline. Ochre is only on `◆` and the kind word
-/// (`◆ approval · Bash`, `FS_SM`, the word `W_BODY` `ATTENTION`, each
-/// detail after a `TEXT_FAINT` `·` in `TEXT_MUTED`): no wash, no state
-/// edge. Prose question (Geist `FS_PROSE` `W_STRONG` `TEXT_STRONG`), option
-/// rows that each show the one key that picks them. Deny is not red. 12px
-/// inline and 10px block padding; the block step (12) between sections.
-/// The head names the kind and nothing else unless a status adds something
-/// (`sending`, `work continues`); a card is waiting by being there. Every
-/// section keeps its natural height — nothing clips; when the Pane runs
-/// short the prose goes first, then the command well gives way down to one
-/// line.
-pub const DECISION_PAD_X: f32 = SPACE_3;
-pub const DECISION_PAD_Y: f32 = 10.0;
-pub const DECISION_GAP: f32 = SPACE_3;
-/// The head's drawn diamond: 8px in the glyph box of a `LH_META` line.
-pub const DECISION_MARK: f32 = SPACE_2;
-/// An option row (rule 2.8.4): a title-only row is a list row,
-/// `MENU_ROW_H` — `LH_UI` plus 4px above and below — and a description
-/// adds `LH_PROSE_SM` a line; rows sit flush. It hangs 8px left of the
-/// card's content so its hover ground reaches around the keycap, which is
-/// centred on the glyph column; the title starts 8px after the glyph box,
-/// on the text column. Hover is `RAISED_2`, selected is `FILL` plus a
-/// trailing `ACCENT` check — never a focus-coloured border.
-pub const DECISION_ROW_PAD_X: f32 = SPACE_2;
-pub const DECISION_ROW_PAD_Y: f32 = (MENU_ROW_H - LH_UI) / 2.0;
+/// Subagent's alike, rule 2.8), in the provider CLIs' own grammar (the
+/// prototype's `.dec`, clean): no box, a 1px `paint::LINE` above it where
+/// it docks over the transcript, the plane under it. `◆ Bash needs approval
+/// · codex` heads it — the drawn `◆` (`DECISION_MARK`) in the 2-cell
+/// gutter, the lead in `ATTENTION`, each detail after a `TEXT_FAINT` `·` in
+/// `TEXT_MUTED` — and every other section sits on the content column after
+/// the gutter, `DECISION_GAP` (half a row) apart: the prose, the command on
+/// a `paint::BAND` behind a faint `$ `, the options as one-row lines
+/// (`❯ 1. Allow`: the accent `❯` on the row ↵ would choose, the ordinal
+/// dim, a picked row on `paint::SELECTION`, the pointer's on
+/// `paint::HOVER`), and a dim hint line (`1–3 pick · y allow · n deny`).
+/// No keycaps, no pills. Deny is not red. Every section keeps its natural
+/// height — nothing clips; when the Pane runs short the prose goes first,
+/// then the command band gives way down to one line.
+#[allow(dead_code)] // the previous grammar; remove after integration
+pub const DECISION_PAD_X: f32 = CH;
+pub const DECISION_PAD_Y: f32 = HALF_ROW;
+pub const DECISION_GAP: f32 = HALF_ROW;
+/// The head's drawn diamond: 10px in the gutter of an `LH_UI` line.
+pub const DECISION_MARK: f32 = 10.0;
+/// An option row (rule 2.8.4): one `LH_UI` row, flush with the next; a
+/// description adds a line under the label. Its `❯` gutter is two cells.
+pub const DECISION_ROW_PAD_X: f32 = 0.0;
+pub const DECISION_ROW_PAD_Y: f32 = 0.0;
 pub const DECISION_ROW_GAP: f32 = 0.0;
-pub const DECISION_ROW_INNER_GAP: f32 = GUTTER_GAP;
-/// The selected row's trailing check.
+pub const DECISION_ROW_INNER_GAP: f32 = 0.0;
+/// The picked row's trailing check.
 pub const DECISION_CHECK: f32 = SPACE_3;
 /// A question's text to its rows, and one question to the next.
-pub const DECISION_QUESTION_GAP: f32 = SPACE_2;
-pub const DECISION_QUESTIONS_GAP: f32 = SPACE_4;
-/// The command well (C5): `RAISED_2` — code one step up from its card,
-/// never darker than the Pane — `R_CONTROL`, 6/10 padding, mono
-/// `TEXT_STRONG`, a shell command after a `TEXT_FAINT` `$ ` that copy
-/// leaves out. It scrolls past 160px, and when the Pane is short it is
-/// the one section that shrinks, never below one line
-/// (`DECISION_WELL_MIN_H`).
-pub const DECISION_WELL_PAD_X: f32 = 10.0;
-pub const DECISION_WELL_PAD_Y: f32 = SPACE_1_5;
-pub const DECISION_WELL_MIN_H: f32 = LH_CODE + 2.0 * DECISION_WELL_PAD_Y;
+pub const DECISION_QUESTION_GAP: f32 = HALF_ROW;
+pub const DECISION_QUESTIONS_GAP: f32 = ROW;
+/// The command band (C5): one cell inside, a quarter row above and below,
+/// mono `TEXT_STRONG`, a shell command after a `TEXT_FAINT` `$ ` that copy
+/// leaves out. It scrolls past 160px, and when the Pane is short it is the
+/// one section that shrinks, never below one line (`DECISION_WELL_MIN_H`).
+pub const DECISION_WELL_PAD_X: f32 = CH;
+pub const DECISION_WELL_PAD_Y: f32 = ROW / 4.0;
+pub const DECISION_WELL_MIN_H: f32 = LH_UI + 2.0 * DECISION_WELL_PAD_Y;
 pub const DECISION_INPUT_MAX_H: f32 = 160.0;
 /// A question body's scroll cap inside the card (head and footer stay
 /// pinned); container-relative, never a window fraction.
@@ -2013,7 +2059,7 @@ pub const DECISION_BODY_MAX_H: f32 = 320.0;
 /// Below a 360px Pane the body caps at two described option rows and
 /// scrolls, so the head and the answer row always stay in reach.
 pub const DECISION_SHORT_PANE_H: f32 = 360.0;
-pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (MENU_ROW_H + LH_PROSE_SM) + DECISION_ROW_GAP;
+pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (LH_UI + LH_UI) + DECISION_ROW_GAP;
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// A question's own answer (rule 2.8.6) is not a second field: it is one
@@ -2021,11 +2067,12 @@ pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// `Or type your own answer…` in `TEXT_MUTED`; the digit one past the last
 /// option arms it.
 pub const QUESTION_OTHER_H: f32 = LH_UI;
-/// The primary's `↵`: `ON_ACCENT` at 70%, so the key reads under its label.
-pub const SEND_KEY_INK: u32 = 0xffffffb3;
-/// An L2 keycap pair (`y allow`): key, 4px, verb; pairs 12px apart.
+/// The primary's `↵`: `ON_ACCENT` at 70%, so the key reads under its label
+/// on the accent fill.
+pub const SEND_KEY_INK: u32 = 0x111214b3;
+/// An L2 quick-answer pair (`y allow`); pairs one cell apart.
 pub const DECISION_KEY_GAP: f32 = SPACE_1;
-pub const DECISION_KEYS_GAP: f32 = SPACE_3;
+pub const DECISION_KEYS_GAP: f32 = CH;
 /// The L2 Decision body: 6px between its lines, `GAP_BLOCK` above the
 /// Composer line.
 pub const DECISION_L2_GAP: f32 = SPACE_1_5;

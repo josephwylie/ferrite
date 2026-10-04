@@ -169,13 +169,13 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
         })
 }
 
-/// Every request card's frame in the overlay: the Pane's inline inset and
-/// the card centred in the reading column. A card merged into the live
-/// Composer sits flush on it (they are one block); one that is not keeps
-/// `GAP_BLOCK` above whatever line is below it. For a question this frame
-/// is the island `QuestionFit` measures, so that gap is part of what must
-/// fit.
-fn request_frame(card: impl IntoElement, joined: bool) -> Div {
+/// Every request card's frame in the overlay: the Pane's full width, the
+/// card insetting its own sections on the transcript's axes (no centred
+/// column). For a question this frame is the island `QuestionFit`
+/// measures.
+fn request_frame(card: impl IntoElement, _joined: bool) -> Div {
+    // The card runs the Pane's full width and insets its own sections on
+    // the transcript's axes.
     native_keys(
         div()
             .w_full()
@@ -183,10 +183,7 @@ fn request_frame(card: impl IntoElement, joined: bool) -> Div {
             .min_h_0()
             .flex()
             .flex_col()
-            .items_center()
             .overflow_hidden()
-            .px(px(theme::PANE_PAD_X))
-            .when(!joined, |frame| frame.pb(px(theme::GAP_BLOCK)))
             .child(card),
     )
 }
@@ -1272,10 +1269,39 @@ impl CockpitView {
             .flex_col()
             .flex_shrink_0()
             .gap(px(theme::DECISION_ROW_GAP));
-        for (at, row) in decision::approval_rows(&request.decision)
-            .into_iter()
-            .enumerate()
-        {
+        let approval_rows = decision::approval_rows(&request.decision);
+        // The hint line says what the keys do: the digits pick a row, and
+        // the letters the CLI grammar gives its answers.
+        let picks = approval_rows
+            .iter()
+            .take(decision::DIGIT_KEYS)
+            .filter(|row| row.enabled)
+            .count();
+        let pick_range = match picks {
+            0 => None,
+            1 => Some("1".to_string()),
+            n => Some(format!("1\u{2013}{n}")),
+        };
+        let mut hints: Vec<(String, &str)> = Vec::new();
+        if let Some(range) = pick_range {
+            hints.push((range, "pick"));
+        }
+        for row in &approval_rows {
+            let verb = match row.verb {
+                decision::Verb::Allow => "allow",
+                decision::Verb::Always(_) => "always",
+                decision::Verb::Deny => "deny",
+                decision::Verb::Choose(_) => continue,
+            };
+            if let Some(key) = row
+                .key
+                .as_ref()
+                .filter(|key| row.enabled && !key.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                hints.push((key.to_string(), verb));
+            }
+        }
+        for (at, row) in approval_rows.into_iter().enumerate() {
             let serial = handle.serial;
             let selector = match row.verb {
                 decision::Verb::Allow => format!("request-allow-{}-{serial}", thread.get()),
@@ -1292,7 +1318,11 @@ impl CockpitView {
                     handle.generation, handle.serial
                 )),
                 decision::Row {
-                    key: row.key,
+                    // Every row reads its ordinal, as the CLIs number them;
+                    // the digit picks it.
+                    key: (row.enabled && at < decision::DIGIT_KEYS)
+                        .then(|| SharedString::from((at + 1).to_string()))
+                        .or(row.key),
                     label: row.label,
                     scope: row.scope,
                     description: None,
@@ -1321,6 +1351,13 @@ impl CockpitView {
             rows = rows.child(button);
         }
         children.push(rows.into_any_element());
+        if !hints.is_empty() {
+            let hints: Vec<(&str, &str)> = hints
+                .iter()
+                .map(|(key, verb)| (key.as_str(), *verb))
+                .collect();
+            children.push(decision::hint_line(&hints).into_any_element());
+        }
         request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
     }
 

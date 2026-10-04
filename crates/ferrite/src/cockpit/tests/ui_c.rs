@@ -352,10 +352,10 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     }
 }
 
-/// Terminal-native (WP-D): the Composer's `❯` hangs in the prototype's
-/// 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's edge, at L1 and L2
-/// alike (the transcript's rows take the same gutter in WP-A; the two axes
-/// meet at integration). The L2 tail's own marks and text keep theirs.
+/// Terminal-native (WP-A, WP-D): the Composer's `❯` hangs in the
+/// prototype's 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's edge, at
+/// L1 and L2 alike, on the same axis as the transcript's prompt `❯`. The L2
+/// tail's own marks and text keep theirs.
 #[gpui::test]
 fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
@@ -370,11 +370,24 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
         })
         .unwrap();
     tick(cx);
-    let mark = cx.debug_bounds("composer-mark").unwrap();
+    // The Composer's `❯` hangs `COMPOSER_PAD_L` in from the Pane's edge
+    // (`.comp{padding-left:2ch}`), and the transcript's `❯` two chrome
+    // cells in from the body's left edge (`TX_PAD_L`): one axis.
+    let composer = cx.debug_bounds("composer-mark").unwrap();
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        (mark.left() - px(rect.x + 1. + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
-        "L1: {mark:?} / {rect:?}"
+        (composer.left() - px(rect.x + 1. + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
+        "L1: {composer:?} / {rect:?}"
+    );
+    let mark = cx.debug_bounds("prompt-mark").unwrap();
+    let body = cx.debug_bounds("transcript-prompt").unwrap();
+    assert!(
+        (mark.left() - (body.left() + px(crate::theme::TX_PAD_L))).abs() <= px(1.),
+        "L1: {mark:?} / {body:?}"
+    );
+    assert!(
+        (mark.left() - composer.left()).abs() <= px(1.),
+        "the transcript's ❯ {mark:?} and the Composer's {composer:?} share an axis"
     );
 
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
@@ -620,7 +633,8 @@ fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
         island.contains(&deny.origin) && island.contains(&deny.bottom_right()),
         "{deny:?} inside {island:?}"
     );
-    assert!(deny.size.height >= px(crate::theme::MENU_ROW_H));
+    // Terminal-native: an option is one grid row.
+    assert!(deny.size.height >= px(crate::theme::LH_UI));
 }
 
 /// Rule 2.8.6: the digit one past a question's options arms its one answer

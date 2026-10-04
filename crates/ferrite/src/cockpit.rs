@@ -1455,6 +1455,7 @@ impl CockpitView {
             turn_diff: transcript.turn_diff().cloned(),
             signal_status: Some(status),
             timings: subject_view.timings().clone(),
+            provider: self.cockpit.thread(thread).map(|open| open.provider()),
             focused,
             reading_size,
             selection_scope,
@@ -17188,12 +17189,14 @@ mod tests {
                 summary.size.width < px(160.),
                 "a short summary must size to its text: {summary:?}"
             );
+            // Terminal-native: the hit box is the 2-cell gutter at the
+            // reading size, the summary on the content column after it.
+            let gutter = px(crate::theme::tx_gutter(crate::theme::FS_PROSE));
             assert!(
                 control.right() <= summary.left() + px(0.5)
-                    && (control.size.width - px(crate::theme::TOOL_DISCLOSURE_HIT)).abs() <= px(1.)
-                    && (summary.left() - control.left() - px(crate::theme::GUTTER_W)).abs()
-                        <= px(0.5),
-                "the disclosure mark leads in the gutter, the text at C1: {summary:?} / {control:?}"
+                    && (control.size.width - gutter).abs() <= px(1.)
+                    && (summary.left() - control.left() - gutter).abs() <= px(0.5),
+                "the disclosure mark leads in the gutter, the text on the content column: {summary:?} / {control:?}"
             );
         }
 
@@ -17326,8 +17329,10 @@ mod tests {
     }
 
     /// The prompt echo reads at the answer's size at every reading size
-    /// (14/22, 16/24, 18/28): the turn's heading is set apart by its `❯`,
-    /// weight and ink, never by being smaller than the answer under it.
+    /// (14/21, 16/24, 18/27): the turn's heading is set apart by its band,
+    /// its `❯` and its ink, never by being smaller than the answer under it.
+    /// Terminal-native: the band is the answer's line with half a line
+    /// above and below.
     #[gpui::test]
     fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestAppContext) {
         use ferrite_core::settings::ReadingSize;
@@ -17355,10 +17360,11 @@ mod tests {
             });
             tick(cx);
             let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+            let line = crate::theme::answer_line_height(size);
             assert_eq!(
                 prompt.size.height,
-                px(crate::theme::answer_line_height(size)),
-                "{size:?}: the echo sits on the answer's line"
+                px(line + 2. * crate::theme::tx_half(line)),
+                "{size:?}: the echo sits on the answer's line in its band"
             );
             let echo = view.read_with(cx, |view, cx| {
                 let pane = &view.panes[0];
@@ -17427,22 +17433,27 @@ mod tests {
             let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
             let answer = cx.debug_bounds("transcript-answer").unwrap();
             let stamp = cx.debug_bounds("turn-stamp").unwrap();
-            // The prompt has no hover ground: its bounds are its line box.
-            assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::GAP_BLOCK));
-            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_BLOCK));
-            // The stamp is one block step under the turn's last block.
-            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_BLOCK));
+            // Terminal-native: blocks sit one blank line apart under the
+            // prompt's band.
+            let line = px(crate::theme::LH_PROSE);
+            assert_eq!(tools.top() - prompt.bottom(), line);
+            assert_eq!(answer.top() - tools.bottom(), line);
+            // The stamp is one blank line under the turn's last block.
+            assert_eq!(stamp.top() - answer.bottom(), line);
             // One content edge: the prompt's text, the group summary and the
-            // answer's prose all start on C1.
+            // answer's prose all start on the content column.
             let prompt_start = caret(&view, cx, 0, 0).x;
             let tools_start = caret(&view, cx, 1, 0).x;
             let answer_start = caret(&view, cx, 3, 0).x;
             assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
             assert_eq!(tools_start, prompt_start, "the group summary sits on C1");
-            assert_eq!(
-                prompt_start - tools.left(),
-                px(crate::theme::GUTTER_W + 0.5),
-                "C1 past the row's left edge, plus the caret helper's half-pixel inset"
+            assert!(
+                (prompt_start
+                    - tools.left()
+                    - px(crate::theme::tx_gutter(crate::theme::FS_PROSE) + 0.5))
+                .abs()
+                    <= px(0.5),
+                "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset"
             );
         }
     }
@@ -17532,10 +17543,13 @@ mod tests {
                     .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")),
                 "adding a sibling must preserve the first call's open details"
             );
+            // Terminal-native: a collapsed call folds its output after the
+            // elbow line, so a two-line failure reads whole; its disclosed
+            // output (the whole run, one text) stays collapsed.
             assert!(
                 !text
                     .iter()
-                    .any(|(_, _, _, text)| text.contains("private detail")),
+                    .any(|(_, _, _, text)| text == "failure preview\nprivate detail"),
                 "the new sibling's detailed output starts independently collapsed"
             );
         });
@@ -17850,7 +17864,11 @@ mod tests {
             let bounds = view.panes[0]
                 .tool_bounds("toolu_9")
                 .expect("the actual rendered chevron bounds");
-            assert_eq!(bounds.size.width, px(crate::theme::TOOL_DISCLOSURE_HIT));
+            // Terminal-native: the hit box is the 2-cell gutter.
+            assert!(
+                (bounds.size.width - px(crate::theme::tx_gutter(crate::theme::FS_PROSE))).abs()
+                    <= px(1.)
+            );
             bounds.center()
         });
         cx.simulate_click(chevron, gpui::Modifiers::none());
