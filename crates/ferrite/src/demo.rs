@@ -4,6 +4,9 @@
 //! adapter beside the production one in `crate::session` — both hand the
 //! pump the same `Receiver<SessionEvent>`, so the demo exercises the real
 //! render path. Nothing here may reach a store an operator keeps work in.
+//!
+//! `--demo parity` opens the approved prototype's world instead (`parity`),
+//! the same one the visual reference's parity scenes capture.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +27,45 @@ use ferrite_core::{
 };
 
 use crate::cockpit::here;
+
+/// The prototype's world: its Projects, Threads, Groups and clock. It lives
+/// beside the visual reference's scenes, which capture it; it is declared
+/// here because the live demo is always built and the reference is not.
+#[path = "cockpit/visual_reference/parity.rs"]
+pub(crate) mod parity;
+
+/// `--demo parity`: the prototype's roster, live, on a disposable store and
+/// HOME — never the operator's. The fixture clock stays at the prototype's
+/// 7:41 pm for the run, so every stamp, age and duration reads as the
+/// prototype prints it; HOME and the working directory point into the
+/// disposable root so paths read `~/ferrite` and `~/Desktop/Projects`.
+pub fn parity_world() -> Cockpit {
+    let root = std::env::temp_dir().join("ferrite-parity-demo");
+    // Only our own disposable directory; never the operator's store.
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create the parity demo root");
+    let midnight = parity::midnight();
+    let at = parity::Clock {
+        midnight,
+        fixture: None,
+    }
+    .instant(parity::CAPTURE);
+    let fixture: &'static parity::phase0::clock::Fixture =
+        Box::leak(Box::new(parity::phase0::clock::Fixture::install(at)));
+    let world = parity::build(
+        &root,
+        parity::Look::Solo,
+        parity::Clock {
+            midnight,
+            fixture: Some(fixture),
+        },
+    );
+    std::env::set_var("HOME", &world.home);
+    if let Err(e) = std::env::set_current_dir(&world.launch) {
+        eprintln!("ferrite: cannot stand in the parity launch directory: {e}");
+    }
+    world.core
+}
 
 /// A scripted event stream: no process, same channel, same pump.
 pub struct DemoSession {

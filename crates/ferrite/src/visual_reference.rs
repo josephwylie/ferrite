@@ -5,8 +5,17 @@
 //! system temp directory, feeds fixture Sessions the events a real provider
 //! would, and saves `{state}-{size}.png`. `FERRITE_REF_STATES` and
 //! `FERRITE_REF_SIZES` (comma lists) narrow a run to a subset.
+//!
+//! The `parity-*` states rebuild the approved terminal-native prototype's
+//! views on one shared world (`parity_scenes.rs`); run them with
+//! `--features visual-reference,opaque` so paints are the opaque greys the
+//! prototype's shots use.
+
+#[path = "cockpit/visual_reference/parity_scenes.rs"]
+mod parity_scenes;
 
 use super::{CockpitView, DraftTarget, MenuTarget};
+use crate::demo::parity::phase0::{NavFold, PaletteScope, Phase0Hooks as _};
 use ferrite_core::{
     activity::TranscriptCoverage,
     activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject},
@@ -178,6 +187,9 @@ struct Scene {
     core: Cockpit,
     feeds: Feeds,
     root: PathBuf,
+    /// What must outlive the capture and go with it: a fixture clock, the
+    /// HOME a scene pointed at its own root. Dropped after the screenshot.
+    hold: Vec<Box<dyn std::any::Any>>,
 }
 
 type Setup = Box<dyn FnOnce(&mut CockpitView, &mut Window, &mut Context<CockpitView>)>;
@@ -195,7 +207,12 @@ impl Scene {
             Box::new(Fixture(feeds.clone())),
         );
         core.set_suggestions_enabled(false);
-        Self { core, feeds, root }
+        Self {
+            core,
+            feeds,
+            root,
+            hold: Vec::new(),
+        }
     }
 
     /// A Project directory named `name` (its leaf is the Project's title),
@@ -333,10 +350,25 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-F)
 
     // ---- WP-G states (append above the end line)
-    ("navfilter", &["app"]),
-    ("navprojects", &["app"]),
     ("navrail", &["app"]),
+    ("palettefilter", &["app"]),
     // (end WP-G)
+
+    // ---- parity: the approved prototype's views, one shared world
+    // (`parity_scenes.rs`); compared against /tmp/ferrite-tn-proto/<view>.png
+    ("parity-solo", &["app"]),
+    ("parity-solo-top", &["app"]),
+    ("parity-solo-hover", &["app"]),
+    ("parity-solo-picker", &["app"]),
+    ("parity-group", &["app"]),
+    ("parity-group-toast", &["app"]),
+    ("parity-group-notes", &["app"]),
+    ("parity-palette", &["app"]),
+    ("parity-wall", &["app"]),
+    ("parity-empty", &["app"]),
+    ("parity-collapsed", &["app"]),
+    ("parity-collapsed-ride", &["app"]),
+    // (end parity)
 ];
 
 /// A comma list from the environment; `None` is "everything".
@@ -403,7 +435,12 @@ fn render(
 ) {
     let (mut scene, setup) = build(state, label);
     scene.core.pump();
-    let Scene { core, feeds, root } = scene;
+    let Scene {
+        core,
+        feeds,
+        root,
+        hold,
+    } = scene;
 
     let mut cx = HeadlessAppContext::with_platform(
         platform.text_system(),
@@ -491,6 +528,7 @@ fn render(
         );
     }
     drop(feeds);
+    drop(hold);
     // Only our fresh disposable root; never the operator's store.
     std::fs::remove_dir_all(root).expect("remove disposable reference store");
 }
@@ -498,6 +536,7 @@ fn render(
 fn build(state: &str, label: &str) -> (Scene, Setup) {
     let none: Setup = Box::new(|_, _, _| {});
     match state {
+        state if parity_scenes::handles(state) => parity_scenes::build(state),
         "conversation" => (conversation(label), none),
         "nav" => nav(),
         "group4" => group4(),
@@ -511,10 +550,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let scene = conversation(label);
             let setup: Setup = Box::new(|view, _, _| {
                 use crate::pane::DisclosureId;
-                // The failed group opens itself; its Edit and the second
-                // group's Edit show their hunks once disclosed.
+                // Every call is its own row (no group summaries): each Edit
+                // shows its hunks once disclosed.
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-1".into()));
-                view.panes[0].toggle_tool(&DisclosureId::Group("edit-2".into()));
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-2".into()));
             });
             (scene, setup)
@@ -786,34 +824,12 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-F)
 
         // ---- WP-G scene arms (append above the end line)
-        // The nav scene with the Project filter's menu down, and the
-        // focused Thread's row renaming (the editor must not move the row).
-        "navfilter" => {
+        // The filter row is gone: Project filter, order and new Project are
+        // palette commands now. The nav scene with ⌘K asking for them.
+        "palettefilter" => {
             let (scene, _) = nav();
-            let setup: Setup = Box::new(|view, _, cx| {
-                if let Some(thread) = view.cockpit.roster().focused_thread() {
-                    view.start_rename(super::RenameTarget::Thread(thread), cx);
-                }
-                view.nav_filter_open = true;
-                view.nav_parked_open = true;
-                cx.notify();
-            });
-            (scene, setup)
-        }
-        // Project order, with the order menu down and the Parked fold open.
-        "navprojects" => {
-            let (scene, _) = nav();
-            let setup: Setup = Box::new(|view, _, cx| {
-                view.change_settings(
-                    |settings| {
-                        settings.thread_list_order =
-                            ferrite_core::settings::ThreadListOrder::ByProject
-                    },
-                    cx,
-                );
-                view.nav_order_open = true;
-                view.nav_parked_open = true;
-                cx.notify();
+            let setup: Setup = Box::new(|view, window, cx| {
+                view.open_palette(PaletteScope::All, "project", window, cx);
             });
             (scene, setup)
         }
@@ -821,7 +837,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "navrail" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
-                view.nav_parked_open = true;
+                view.set_nav_fold(NavFold::Parked, false, cx);
                 view.set_nav_collapsed(true, cx);
             });
             (scene, setup)
@@ -919,7 +935,6 @@ fn legacy(state: &str) -> (Scene, Setup) {
     let setup: Setup = if state == "expanded" {
         Box::new(|view, _, _| {
             for id in ["read", "ok"] {
-                view.panes[0].toggle_tool(&crate::pane::DisclosureId::Group(id.into()));
                 view.panes[0].toggle_tool(&crate::pane::DisclosureId::Tool(id.into()));
             }
         })
@@ -1189,7 +1204,7 @@ fn nav() -> (Scene, Setup) {
     // Worktree branches and subagent counts beside titles long and short:
     // the title keeps its floor, the branch and then the count give way.
     let setup: Setup = Box::new(move |view, _, cx| {
-        view.nav_parked_open = true;
+        view.set_nav_fold(NavFold::Parked, false, cx);
         let branch = |name: &str| {
             Some(ferrite_core::workspace::BranchStatus {
                 branch: Some(name.into()),
@@ -1612,9 +1627,8 @@ fn notifications() -> (Scene, Setup) {
         });
     }
     ask_feed.approval("close", "gh issue close 212");
-    let setup: Setup = Box::new(|view, _, cx| {
-        view.bell.open = true;
-        cx.notify();
+    let setup: Setup = Box::new(|view, window, cx| {
+        view.toggle_notifications(&super::ToggleNotifications, window, cx);
     });
     (scene, setup)
 }
