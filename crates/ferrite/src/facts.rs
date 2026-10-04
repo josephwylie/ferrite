@@ -52,8 +52,10 @@ pub struct ThreadFacts {
     /// repo leaf — `repo`, never the worktree path, whose leaf is a branch
     /// directory; else nothing at all. Never a placeholder word.
     pub project_label: Option<SharedString>,
-    /// The provider the log declared — a parked row's logomark. An open
-    /// Thread's provider comes live from the Cockpit.
+    /// The provider the log declared — a parked Thread's, peeked. An open
+    /// Thread's provider comes live from the Cockpit. (The nav draws no
+    /// logo and no tooltip now; kept for the surfaces that name it.)
+    #[allow(dead_code)]
     pub provider: Option<Provider>,
     /// When the Thread was last written to (#21) — what the nav orders
     /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
@@ -64,8 +66,9 @@ pub struct ThreadFacts {
     /// read, or for a Thread no Project claims: then `main` and `master`
     /// stand in for it.
     pub default_branch: Option<SharedString>,
-    /// Subagents observed for this Thread. Retained while parked so
-    /// its navigation row keeps the last known count without reopening logs.
+    /// Subagents observed for this Thread, retained while parked without
+    /// reopening logs. (The nav row no longer names the count.)
+    #[allow(dead_code)]
     pub subagents: usize,
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.

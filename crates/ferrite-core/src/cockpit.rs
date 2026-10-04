@@ -3421,14 +3421,31 @@ impl Cockpit {
         if self.roster.index_of(identity).is_none() {
             return false;
         }
-        self.roster.set_view(
-            self.groups
-                .of(thread)
-                .map_or(View::Solo, |group| View::Group(group.id)),
-        );
+        self.roster.set_view(self.view_showing(thread));
         let landed = self.roster.focus(identity);
         self.acknowledge_focus();
         landed
+    }
+
+    /// The view that shows `thread` (R1, Groups are non-exclusive): the
+    /// Group on screen when it holds the Thread, else the Thread's home
+    /// Group, else Solo — a Thread that is only a guest of Groups lives
+    /// loose.
+    fn view_showing(&self, thread: ThreadId) -> View {
+        match self.roster.view() {
+            View::Group(group)
+                if self
+                    .groups
+                    .get(group)
+                    .is_some_and(|group| group.members.contains(&thread)) =>
+            {
+                View::Group(group)
+            }
+            _ => self
+                .groups
+                .home(thread)
+                .map_or(View::Solo, |group| View::Group(group.id)),
+        }
     }
 
     /// Record the Subject the renderer is actually showing. Invalid or stale
@@ -3497,11 +3514,7 @@ impl Cockpit {
     /// second time. The shared tail of cmd-o and a parked nav row's click.
     pub fn reopen(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         self.revive(thread)?;
-        self.roster.set_view(
-            self.groups
-                .of(thread)
-                .map_or(View::Solo, |group| View::Group(group.id)),
-        );
+        self.roster.set_view(self.view_showing(thread));
         self.roster.note_revived(thread);
         self.roster.focus(PaneIdentity::Thread(thread));
         Ok(())
@@ -3630,7 +3643,7 @@ impl Cockpit {
             .expect("draft retained during startup");
         self.roster.draft_became(draft, thread);
         if scope.new_group_with.is_some() {
-            if let Some(group) = self.groups.of(thread).map(|group| group.id) {
+            if let Some(group) = self.groups.home(thread).map(|group| group.id) {
                 self.roster.set_view(View::Group(group));
                 self.roster.focus(PaneIdentity::Thread(thread));
             }
@@ -3715,8 +3728,17 @@ impl Cockpit {
     /// in a pair), then parks: it lands in the parked rows at once, never
     /// as a loose open Thread that needs a second park.
     pub fn park_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
-        if let Some(group) = self.groups.of(thread).map(|group| group.id) {
-            if self.roster.view() == View::Group(group) {
+        if self.groups.of(thread).is_some() {
+            // Leave takes the Thread out of every Group; when the Group on
+            // screen held it, its ordinal survivor takes focus.
+            let on_screen = matches!(
+                self.roster.view(),
+                View::Group(group) if self
+                    .groups
+                    .get(group)
+                    .is_some_and(|group| group.members.contains(&thread))
+            );
+            if on_screen {
                 self.close_thread(thread)?;
             } else {
                 self.apply_group(GroupChange::Leave { thread })

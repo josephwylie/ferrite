@@ -750,8 +750,15 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
     for thread in &threads {
         let id = thread.get();
         let row = view.read_with(cx, |view, _| view.thread_row(*thread));
-        assert_eq!(row.subagents, 5);
-        assert_eq!(row.branch.as_deref(), Some(long_branch));
+        let (subagents, branch) = view.read_with(cx, |view, _| {
+            let facts = view.facts.get(*thread);
+            (
+                facts.map_or(0, |facts| facts.subagents),
+                facts.and_then(|facts| facts.off_default_branch()),
+            )
+        });
+        assert_eq!(subagents, 5);
+        assert_eq!(branch.as_deref(), Some(long_branch));
         let title = bounds(cx, format!("nav-title-{id}"));
         let word = bounds(cx, format!("nav-since-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));

@@ -786,32 +786,24 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-F)
 
         // ---- WP-G scene arms (append above the end line)
-        // The nav scene with the Project filter's menu down, and the
-        // focused Thread's row renaming (the editor must not move the row).
+        // The nav scene with the focused Thread's row renaming (the editor
+        // must not move the row) and the Parked fold open.
         "navfilter" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
                 if let Some(thread) = view.cockpit.roster().focused_thread() {
                     view.start_rename(super::RenameTarget::Thread(thread), cx);
                 }
-                view.nav_filter_open = true;
                 view.nav_parked_open = true;
                 cx.notify();
             });
             (scene, setup)
         }
-        // Project order, with the order menu down and the Parked fold open.
+        // `sort: recent`, with the Parked fold open.
         "navprojects" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
-                view.change_settings(
-                    |settings| {
-                        settings.thread_list_order =
-                            ferrite_core::settings::ThreadListOrder::ByProject
-                    },
-                    cx,
-                );
-                view.nav_order_open = true;
+                view.set_thread_order(ferrite_core::settings::ThreadListOrder::Recent, cx);
                 view.nav_parked_open = true;
                 cx.notify();
             });
