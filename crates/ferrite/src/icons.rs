@@ -122,6 +122,8 @@ icons![
 
     // ---- WP-G icons (append names above the end line)
     "arrow-up-down",
+    "disclosure-right",
+    "disclosure-down",
     // (end WP-G)
     "update",
 ];
@@ -156,7 +158,9 @@ pub const PLUS: &str = "icons/plus.svg";
 pub const GEAR: &str = "icons/gear.svg";
 /// Four Panes held together as one durable Group.
 pub const GROUP: &str = "icons/group.svg";
-/// A parent Agent branching to two children.
+/// A parent Agent branching to two children. (The nav no longer draws it:
+/// a row's subagents are its tooltip.)
+#[allow(dead_code)]
 pub const SUBAGENTS: &str = "icons/subagents.svg";
 /// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
 /// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's 1.5
@@ -284,6 +288,13 @@ pub const DIAMOND: &str = "icons/diamond.svg";
 // ---- WP-G icon names (append consts above the end line)
 /// Lucide's `arrow-up-down`: the order the Thread list is shown in.
 pub const SORT: &str = "icons/arrow-up-down.svg";
+/// `▸` and `▾`, drawn (Geist Mono has neither small triangle): the nav's
+/// disclosure marks — a Group's and a Project heading's `▾`, the Parked
+/// fold's `▸` (turned a quarter when open). Fill marks in a 12-unit box;
+/// `▾` is `▸` turned a quarter about the box's centre, so a turning `▸`
+/// lands exactly on it.
+pub const DISCLOSURE_RIGHT: &str = "icons/disclosure-right.svg";
+pub const DISCLOSURE_DOWN: &str = "icons/disclosure-down.svg";
 // (end WP-G)
 /// A newer provider CLI is ready to install.
 pub const UPDATE: &str = "icons/update.svg";
@@ -523,10 +534,11 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            57,
+            59,
             "the prototype and app controls, including close, the four Windows caption glyphs, \
              the option and control key glyphs, the Settings sheet's five marks, the CLI \
-             update mark, and the sixteen spinner frames (ten braille, six working glyphs)"
+             update mark, the sixteen spinner frames (ten braille, six working glyphs) and \
+             the nav's two disclosure triangles"
         );
     }
 

@@ -2094,157 +2094,130 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // Owner: WP-G (nav.rs and its cockpit wiring.)
 // Edit values and append tokens only inside this section.
 //
-// **The nav is one column grid on `GROUND`, in Geist.** Every row — a
-// Thread, a Group, a Project heading, the Parked header, and the filter
-// trigger in the head — lays out `ROW_PAD_X | lead slot NAV_LEAD_W |
-// NAV_LEAD_GAP | text … | tail | mark`. The 16px lead slot holds the row's
-// one glyph (status dot, Group glyph, folder, fold chevron), so every title
-// and label starts on one x (`NAV_TEXT_X` 22), and the head's folder sits
-// on the same axis as the rows' dots (head inset 8 + trigger inset 8 =
-// tree inset 8 + row inset 8).
+// **The nav is a terminal list on the chrome.** The column paints
+// `paint::CHROME` once (thin glass on macOS) and draws no hairline to the
+// content: its only edge is `paint::CHROME_SEAM`, the 1px dark seam glass
+// leaves between the sidebar and the board (nothing on opaque platforms).
+// Inside, nothing paints a region of its own: rows wear `paint::HOVER`
+// under the pointer and `paint::SELECTION` when selected, edge to edge.
 //
-// **One 28px line per row** (`NAV_ROW_H`, C9): the dot, the title at
-// `FS_UI` `W_BODY` (`TEXT`; `TEXT_STRONG` when selected or unread, ink
-// only), the branch inline in `TEXT_MUTED` only when it is not the
-// Project's default, then the tail, then the provider mark in its brand
-// colour. There is no `project · branch` line.
+// **Every item is one 20px line** (`NAV_LINE`, one `ROW` at the grid
+// size): Geist Mono `FS_UI`, no subtitle line, no logo. A row is laid out
+// in character cells from its 1ch inline padding (`NAV_PAD_X`), the
+// prototype's `.nrow` grammar:
 //
-// **The title comes first** (`nav::title_fit`). It keeps a floor of
-// `min(its whole text, NAV_TITLE_FLOOR)`; the branch gives way first — it
-// truncates, and below `NAV_BRANCH_MIN_W` it leaves the row whole — then
-// the subagent count drops out whole; the tail's word or age and the
-// provider mark never give way. The same order holds in a Group's member
-// rows, the Needs-you strip and the rail's tooltip; the row's tooltip
-// always names the whole title and the count.
+//   filter    All projects ▾ ……………… ✎ ⇅ +
+//   strip     needs you 2 ………………………… ⌘D
+//             ● title………………………… approval
+//   Thread    ❯ ● title……………………………… word
+//   Group     ❯ ▾ title……………………………… 4
+//   member      ├ ● title…………………………… word
+//   Project   ▾ ferrite……………………………… dev
+//   Parked    ▸ parked 3
 //
-// **The tail is one word or an age** (C10, `nav::NavTail`): `needs you`
-// (`ATTENTION`), `failing N`/`failed` (`BLOCKED`), `done` (`TEXT_MUTED`,
-// unread only), otherwise the age once it reaches a minute (`FS_SM`
-// `TEXT_MUTED`, tabular). A working row says nothing there; the tail never
-// reads `now`. Its box keeps `NAV_TAIL_MIN_W`, so a word arriving moves
-// nothing.
+// The filter line is the one the prototype does not draw: the Project
+// filter's name, dim, a faint `▾`, and its icon doors (edit, order, new
+// thread) at the right, 3ch × one line each (`NAV_DOOR_W`).
 //
-// **Dots are still; only unread breathes** (C11). Working is a static
-// `RUNNING` dot, failing a static `BLOCKED` one, a Decision a static
-// `ATTENTION` one, parked a hollow ring. Unread is an `ACCENT` dot whose
-// opacity alone breathes on the shared clock at `MOTION_BREATH_MS`, held
-// at full ink under reduced motion. Selection is one `FILL` on the focused
-// Thread's row, with no ring; nothing else fills.
+// The first 2ch cell is the cursor (`❯` in `ACCENT` on the selected row,
+// else blank), then a 2ch mark cell (the status dot, the braille spinner
+// of a working Thread, a faint disclosure triangle), then the title, then
+// one right-aligned dim word 1ch after it. A Group's members hang under
+// it with faint tree glyphs (`├ ` / `└ `) in place of an indent rail; a
+// Project heading has no cursor cell, so its triangle sits where the
+// cursor does. Every mark centres on the first character of its cell, as
+// a typed glyph would. Hierarchy is ink and weight, never size: a Project
+// is `W_STRONG` `TEXT_STRONG`; titles are `TEXT` (`TEXT_STRONG` when
+// selected or unread, `TEXT_MUTED` when parked); every right-hand word —
+// a working Thread's elapsed time, `done`, `failing 2`, `needs you`, an
+// age, a count, a branch — is `TEXT_MUTED`: the dot carries the colour.
+//
+// **Titles truncate against a definite width.** gpui only measures an
+// ellipsis against a width it knows on the line's first measure, so every
+// title box is pinned: the row's text width less its cells and its word,
+// all whole cells of the one monospace face (`nav::title_w`).
+//
+// **One thing moves.** A working Thread's dot is the shared braille
+// spinner (`components::braille_spinner`, 80ms); nothing pulses: an unread
+// Thread is a `TEXT_STRONG` title and a still `ACCENT` dot. A parked
+// Thread is a faint ring.
+//
+// **Folding (cmd-B).** The column rides its width from `NAV_WIDTH` to
+// nothing over `motion::RESIZE` (200ms), its content fading; the titlebar
+// cell over it rides with it to `nav::chrome_width`, keeping the traffic
+// lights, the sidebar toggle, the bell and the gear — the prototype's
+// collapsed titlebar. Over the folded column the cell is the reading
+// plane (`paint::PLANE`), as the titlebar over the board is.
 //
 // **Needs you** (C8): while any Thread waits, a strip under the head lists
 // every one in answer order — its first row is what ⌘D and the wall's
 // `y`/`n`/`a` act on — and the tree below never re-sorts under the pointer.
 
-/// 42px — the nav head band, which holds the Project filter.
-pub const NAV_HEAD_H: f32 = 42.0;
-/// 6px between the head's controls.
-pub const NAV_HEAD_GAP: f32 = SPACE_1_5;
-/// The nav tree's padding: 8px top and inline, 16px bottom.
-pub const NAV_TREE_PAD: f32 = SPACE_2;
-pub const NAV_TREE_PAD_B: f32 = SPACE_4;
-/// 28px — the Project filter trigger.
-pub const FILTER_TRIGGER_H: f32 = ICON_BUTTON;
-/// Where the filter and order menus hang: under the trigger, which is
-/// centred in the head, plus the float offset every popup keeps from its
-/// opener.
-pub const MENU_TOP: f32 = (NAV_HEAD_H + FILTER_TRIGGER_H) / 2.0 + FLOAT_OFFSET;
-/// 224px — the order menu, anchored to its button at the head's right.
+/// 20px — one nav line, the pitch of every item in the column: a Thread, a
+/// Group, a member, a Project heading, the head and section headers.
+pub const NAV_LINE: f32 = ROW;
+/// 1ch — a row's inline padding: fills reach the column's edges, text
+/// starts one cell in.
+pub const NAV_PAD_X: f32 = CH;
+/// A half row above the column's first line and under its last.
+pub const NAV_PAD_Y: f32 = HALF_ROW;
+/// 2ch — one mark cell: the cursor, a status dot or spinner, a disclosure
+/// triangle, a tree glyph.
+pub const NAV_CELL: f32 = 2.0 * CH;
+/// 1ch — between a title and the word at the row's right.
+pub const NAV_WORD_GAP: f32 = CH;
+/// The text box of every row: the column less its inline padding.
+pub const NAV_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_PAD_X;
+/// The glyph box a cell's mark is drawn in (the dot, the spinner, `❯`).
+pub const NAV_GLYPH: f32 = GLYPH_BOX;
+/// A half row — between the head, the Needs-you strip and the tree, and
+/// above every Project heading but the first (the prototype's `.half`).
+pub const NAV_SECTION_GAP: f32 = HALF_ROW;
+/// The head: one line holding the Project filter and its doors.
+pub const NAV_HEAD_H: f32 = NAV_LINE;
+/// 3ch × one line — an icon door in the head and on a Project heading
+/// (edit, order, new thread), its glyph the titlebar doors' 16px.
+pub const NAV_DOOR_W: f32 = 3.0 * CH;
+pub const NAV_DOOR_GLYPH: f32 = ICON_BUTTON_GLYPH;
+/// Where the filter and order menus hang: under the head line, plus the
+/// float offset every popup keeps from its opener.
+pub const MENU_TOP: f32 = NAV_HEAD_H + FLOAT_OFFSET;
+/// 224px — the order menu, anchored to its door at the head's right.
 pub const NAV_ORDER_MENU_W: f32 = 224.0;
-/// 16px — a row's lead slot: the status dot, the Group glyph, the folder in
-/// the filter trigger and a Project heading, the Parked chevron.
-pub const NAV_LEAD_W: f32 = SPACE_4;
-/// 6px — from the lead slot to the row's text.
-pub const NAV_LEAD_GAP: f32 = SPACE_1_5;
-/// 22px — where a row's text starts inside its own padding: the title, a
-/// heading's label.
-pub const NAV_TEXT_X: f32 = NAV_LEAD_W + NAV_LEAD_GAP;
-/// 8px — from the tail to the provider mark at the row's right.
-pub const NAV_MARK_GAP: f32 = SPACE_2;
-/// 4px — between a title and its inline branch, between the subagent count
-/// and the tail, and between a fact and its `·` seam.
-pub const NAV_TAIL_GAP: f32 = SPACE_1;
-/// 120px — the floor a nav title keeps before the subagent count gives way
-/// (about nineteen characters at `FS_UI`): off the space scale because it
-/// is a reading measure, not a gap. A shorter title keeps its own width.
-pub const NAV_TITLE_FLOOR: f32 = 120.0;
-/// 40px — the narrowest an inline branch is drawn (`·` and a few letters);
-/// with less room it leaves the row whole rather than show a sliver. A
-/// reading measure, off the space scale like `NAV_TITLE_FLOOR`.
-pub const NAV_BRANCH_MIN_W: f32 = 40.0;
-/// 55px — the tail's box: `needs you` at `FS_SM` in Geist (54.7px, ceiled),
-/// the longest word the tail says, so no word arriving moves the title.
-pub const NAV_TAIL_MIN_W: f32 = 55.0;
-/// 254px — the content box of a root-level nav row: the column less the
-/// tree's inline padding, less the row's own. A truncating title has to be
-/// pinned to it, because gpui only measures an ellipsis against a width it
-/// knows on the line's very first measure (see `nav::group_row`).
-pub const ROW_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_TREE_PAD - 2.0 * ROW_PAD_X;
-/// 28px — a section heading's row (a Project heading, the Parked header):
-/// one metadata line in the rows' own padding.
-pub const NAV_SECTION_H: f32 = 2.0 * ROW_PAD_Y + LH_META;
-/// 12px (`GAP_BLOCK`) — every block boundary in the tree: between two
-/// Group blocks (a drop band as well as air), above a run of solos after a
-/// Group, above a section heading. Rows inside a block sit flush: the 28px
-/// row carries its own air.
-pub const GROUP_GAP: f32 = GAP_BLOCK;
-pub const SOLOS_TOP: f32 = GROUP_GAP;
-/// A Group row's members hang flush under it and flush with each other.
+/// The most cells a Project heading's branch takes before it truncates.
+pub const NAV_BRANCH_MAX_CH: usize = 16;
+/// Rows sit flush in every block: Groups, solo runs and members follow one
+/// another line by line, the tree glyphs drawing the structure.
+pub const SOLOS_TOP: f32 = 0.0;
 pub const MEMBERS_TOP: f32 = 0.0;
 pub const MEMBER_GAP: f32 = 0.0;
-/// 4px — a drop target that takes no layout of its own ("insert above the
-/// first Group", "append after the last member"): an absolute hit band
-/// over the edge of the row it borders.
+/// 4px — a drop target that takes no layout of its own ("insert above this
+/// Group", "append after the last member"): an absolute hit band over the
+/// edge of the row it borders.
 pub const NAV_DROP_BAND: f32 = SPACE_1;
-/// 22px — the member indent: a member's lead slot starts under its Group's
-/// title, the tree grammar of a child's marker under its parent's text.
-pub const MEMBER_INDENT: f32 = NAV_TEXT_X;
-/// The 1px rail hangs from the Group glyph's centre: `RAIL_OFFSET` left of
-/// the members box, inset 3px top and bottom. Translucent — draw it with
-/// `rgba`.
-pub const RAIL_OFFSET: f32 = MEMBER_INDENT - ROW_PAD_X - NAV_LEAD_W / 2.0;
-pub const RAIL_INSET: f32 = 3.0;
-pub const NAV_GROUP_RAIL: u32 = HAIRLINE;
-/// A nav row's radius: a menu row's (`R_MENU_ROW`), since the nav is a list
-/// of the same 28px rows.
-pub const NAV_ROW_R: f32 = R_MENU_ROW;
-/// 12px — above a section heading (a Project, the Parked fold).
-pub const NAV_SECTION_GAP: f32 = GROUP_GAP;
-/// 12px — the provider logomark in a nav row and a rail item, in its own
-/// fixed slot at the row's right.
-pub const PROVIDER_MARK: f32 = GLYPH_BOX;
-/// How far a rail item's status dot sits in from its box's corner, and its
-/// ordinal (1–9, the ⌘1…9 it answers to) from the opposite one.
-pub const NAV_RAIL_DOT_INSET: f32 = SPACE_1;
-/// The collapsed rail. On macOS its controls are 36px — the rail owns the
-/// traffic lights' 77px reserve, and a 28px control would float in it —
-/// and its first control starts below the native lights' band. Elsewhere
-/// the rail keeps the compact `ICON_BUTTON` and an 8px inset.
-pub const NAV_RAIL_CONTROL: f32 = if cfg!(target_os = "macos") {
-    36.0
-} else {
-    ICON_BUTTON
-};
-pub const NAV_RAIL_CHROME_PAD_T: f32 = if cfg!(target_os = "macos") {
-    WIN_CHROME_H
-} else {
-    SPACE_2
-};
-pub const NAV_RAIL_CHROME_PAD_B: f32 = SPACE_1;
-/// The rail's own block padding, the gap between its items, and the gap
-/// above its first item (also the empty-filter message's block margin).
-pub const NAV_RAIL_PAD_Y: f32 = SPACE_2;
-pub const NAV_RAIL_ITEM_GAP: f32 = SPACE_1;
-pub const NAV_RAIL_ITEMS_TOP: f32 = SPACE_3;
 /// The most of the column the open Parked section may take. Its list
 /// scrolls past this, so a hundred parked Threads never push the running
 /// tree out of sight.
 pub const NAV_PARKED_MAX_SHARE: f32 = 0.5;
-/// Narrow windows fold the nav to the rail (rule 2.7.7) — shown, never
-/// saved — once the board beside the full column would be narrower than
-/// this, or a board cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`).
-/// It unfolds only once the window clears the threshold by
-/// `NAV_AUTO_RAIL_HYSTERESIS`, so a resize at the edge never flickers it.
-/// cmd-B still overrides it either way.
+/// The column folded by cmd-B: nothing. The board takes the whole width;
+/// the titlebar cell keeps the window's doors (`nav::chrome_width`).
+pub const NAV_FOLDED_W: f32 = 0.0;
+/// Where the titlebar cell's doors start: after the host traffic lights'
+/// reserve on macOS, one cell in elsewhere.
+pub const NAV_CHROME_LEAD: f32 = if cfg!(target_os = "windows") {
+    NAV_PAD_X
+} else {
+    TRAFFIC_RESERVE
+};
+/// The folded titlebar cell: the lead, the sidebar toggle, the bell and
+/// the gear, and one cell of air (a waiting CLI update adds its door).
+pub const NAV_CHROME_FOLDED_W: f32 = NAV_CHROME_LEAD + 3.0 * ICON_BUTTON + NAV_PAD_X;
+/// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the
+/// board beside the full column would be narrower than this, or a board
+/// cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`). It unfolds only
+/// once the window clears the threshold by `NAV_AUTO_RAIL_HYSTERESIS`, so a
+/// resize at the edge never flickers it. cmd-B still overrides it either
+/// way.
 pub const NAV_AUTO_RAIL_BOARD_W: f32 = 560.0;
 pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 // (end WP-G) — append above this line only

@@ -681,15 +681,15 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
     }
 }
 
-/// The nav title comes first. At the nav's own width, a Group member on a
-/// long worktree branch that runs five subagents keeps its title at its
-/// floor or whole, the branch gives way first, and the count gives way
-/// before the title drops under its floor. A short title keeps its own
-/// width, and then the branch and the count both fit beside it. The word
-/// or age and the provider mark are never squeezed.
+/// A nav title truncates against what its row leaves it. At the nav's own
+/// width, a Group member on a long worktree branch that runs five
+/// subagents is one line: its tree glyph, its dot, its title pinned to the
+/// row's text width less its cells and its word, and the word ending on the
+/// row's text edge. The branch and the count are the tooltip's, never marks
+/// on the line, so a long branch can never squeeze the title.
 #[gpui::test]
-fn a_nav_title_keeps_its_floor_before_the_branch_and_the_count(cx: &mut TestAppContext) {
-    use crate::theme::{NAV_TITLE_FLOOR, PROVIDER_MARK};
+fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
+    use crate::theme::{CH, NAV_CELL, NAV_LINE, NAV_PAD_X, NAV_TEXT_W, NAV_WORD_GAP};
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -731,54 +731,40 @@ fn a_nav_title_keeps_its_floor_before_the_branch_and_the_count(cx: &mut TestAppC
         crate::nav::WIDTH,
         "the nav at its default width"
     );
-    let on_line = |cx: &mut gpui::VisualTestContext, id: String, fit: gpui::Bounds<Pixels>| {
-        debug_bounds(cx, id)
-            .filter(|bounds| bounds.top() < fit.bottom() && bounds.size.width > px(0.))
-    };
-    for (index, thread) in threads.iter().enumerate() {
+    for thread in &threads {
         let id = thread.get();
         let row = view.read_with(cx, |view, _| view.thread_row(*thread));
         assert_eq!(row.subagents, 5);
         assert_eq!(row.branch.as_deref(), Some(long_branch));
-        let fit = bounds(cx, format!("nav-title-fit-{id}"));
         let title = bounds(cx, format!("nav-title-{id}"));
-        let branch = on_line(cx, format!("nav-branch-{id}"), fit);
-        let count = on_line(cx, format!("nav-subagents-{id}"), fit);
-        let mark = bounds(cx, format!("nav-mark-{id}"));
-        let tail = bounds(cx, format!("nav-since-{id}"));
+        let word = bounds(cx, format!("nav-since-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));
-        assert!(title.left() >= fit.left() && title.right() <= fit.right() + px(0.5));
+        assert_eq!(whole_row.size.height, px(NAV_LINE), "one line");
+        // A member: its tree glyph, its dot, then the title.
+        let cells = 3.0;
+        let text = row
+            .tail
+            .text()
+            .map_or(0.0, |text| text.chars().count() as f32 * CH + NAV_WORD_GAP);
+        let expected = NAV_TEXT_W - cells * NAV_CELL - text;
         assert!(
-            tail.left() >= fit.right() && mark.left() >= tail.right(),
-            "the tail and the mark sit after the title's line"
+            (title.size.width - px(expected)).abs() < px(0.5),
+            "the title takes what its cells and word leave: {title:?}, {expected}"
         );
-        assert!(mark.right() <= whole_row.right(), "the mark is whole");
-        assert_eq!(mark.size.width, px(PROVIDER_MARK), "the mark never shrinks");
-        assert!(tail.size.width >= px(crate::theme::NAV_TAIL_MIN_W));
-        if index == 0 {
+        assert!(
+            (title.left() - (whole_row.left() + px(NAV_PAD_X + cells * NAV_CELL))).abs() < px(0.5),
+            "the title starts after the tree glyph and the dot"
+        );
+        assert!(title.right() <= word.left() + px(0.5));
+        assert!(
+            (word.right() - (whole_row.right() - px(NAV_PAD_X))).abs() < px(0.5),
+            "the word ends on the row's text edge"
+        );
+        for gone in ["nav-branch", "nav-subagents", "nav-mark"] {
             assert!(
-                title.size.width >= px(NAV_TITLE_FLOOR),
-                "a long title keeps its floor: {title:?}"
+                debug_bounds(cx, format!("{gone}-{id}")).is_none(),
+                "{gone} is the tooltip's, not the line's"
             );
-            if let Some(branch) = branch {
-                assert!(branch.right() <= fit.right(), "the branch truncates");
-            }
-            if let Some(count) = count {
-                assert!(count.left() >= title.right(), "{count:?} after {title:?}");
-            }
-        } else {
-            assert!(
-                title.size.width < px(NAV_TITLE_FLOOR),
-                "a short title keeps its own width: {title:?}"
-            );
-            let branch = branch.expect("beside a short title the branch fits");
-            assert!(branch.left() >= title.right() && branch.right() <= fit.right());
-            assert!(
-                branch.size.width > px(crate::theme::NAV_BRANCH_MIN_W),
-                "the branch takes what the title leaves: {branch:?}"
-            );
-            let count = count.expect("beside a short title the count fits");
-            assert!(count.left() >= branch.right() && count.right() <= fit.right());
         }
     }
 }
