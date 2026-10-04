@@ -598,13 +598,34 @@ impl Inline {
     /// Ferrite: each underline, one stroke per wrapped line, from its first
     /// glyph to the right edge of its last non-whitespace glyph, on the
     /// baseline offset gpui's own line painter uses.
-    fn paint_underlines(&self, text_layout: &TextLayout, window: &mut Window) {
+    ///
+    /// With `hover_only` (`TextViewStyle::with_link_underline_on_hover`),
+    /// only the link under the pointer is underlined; other underlines
+    /// (`<u>`) always are.
+    fn paint_underlines(&self, text_layout: &TextLayout, hover_only: bool, window: &mut Window) {
         if self.underlines.is_empty() {
             return;
         }
+        let hovered = hover_only
+            .then(|| {
+                let index = text_layout.index_for_position(window.mouse_position()).ok()?;
+                self.links
+                    .iter()
+                    .find(|(range, _)| range.contains(&index))
+                    .map(|(range, _)| range.clone())
+            })
+            .flatten();
+        let overlaps =
+            |a: &Range<usize>, b: &Range<usize>| a.start < b.end && b.start < a.end;
         let line_height = text_layout.line_height();
         let left = text_layout.bounds().left();
         for (range, style) in &self.underlines {
+            if hover_only
+                && self.links.iter().any(|(link, _)| overlaps(link, range))
+                && !hovered.as_ref().is_some_and(|link| overlaps(link, range))
+            {
+                continue;
+            }
             let Some(layout) = text_layout.line_layout_for_index(range.start) else {
                 continue;
             };
@@ -825,7 +846,10 @@ impl Element for Inline {
         }
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
-        self.paint_underlines(&text_layout, window);
+        let hover_only = GlobalState::global(cx)
+            .text_view_state()
+            .is_some_and(|state| state.read(cx).text_view_style.link_underline_on_hover());
+        self.paint_underlines(&text_layout, hover_only, window);
 
         let (document_range, ordinal, source_offset) = GlobalState::global(cx)
             .text_view_state()
@@ -952,20 +976,35 @@ impl Element for Inline {
         }
 
         // mouse move, update hovered link
+        // Ferrite: the hovered link (its ordinal in `links`) is kept in the
+        // inline's state, so the view repaints only when the pointer moves
+        // onto another link or off one — leaving the text included, so a
+        // hover underline goes when the pointer does.
         window.on_mouse_event({
             let hitbox = hitbox.clone();
             let text_layout = text_layout.clone();
+            let links = self.links.clone();
+            let inline_state = self.state.clone();
             let mut hovered_index = hovered_index;
             move |event: &MouseMoveEvent, phase, window, cx| {
-                if !phase.bubble() || !hitbox.is_hovered(window) {
+                if !phase.bubble() {
+                    return;
+                }
+                let inside = hitbox.is_hovered(window);
+                if !inside && hovered_index.is_none() {
                     return;
                 }
 
                 let current = hovered_index;
-                let updated = text_layout.index_for_position(event.position).ok();
-                //  notify update when hovering over different links
+                let updated = inside
+                    .then(|| text_layout.index_for_position(event.position).ok())
+                    .flatten()
+                    .and_then(|index| links.iter().position(|(range, _)| range.contains(&index)));
                 if current != updated {
                     hovered_index = updated;
+                    if let Ok(mut state) = inline_state.lock() {
+                        state.hovered_index = updated;
+                    }
                     cx.notify(current_view);
                 }
             }

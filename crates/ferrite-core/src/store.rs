@@ -62,7 +62,11 @@ mod activity_tests;
 /// - **10** — native progress, identified summary sections, and live tool output
 ///   in both Main and attributed execution records.
 /// - **11** — durable locally observed completion time and elapsed duration.
-const SCHEMA_VERSION: u32 = 11;
+/// - **12** — a prompt's observed send time (`prompt_observation`, right
+///   after its prompt), a turn's token counts on its completion
+///   observation, and a hunk's section. A v1–v11 log loads with none of
+///   them: its prompts draw no time and its stamps no tokens.
+const SCHEMA_VERSION: u32 = 12;
 
 /// How far `peek_first_prompt` reads before giving up: the first prompt
 /// is normally the second line, and a log whose first prompt sits past
@@ -312,6 +316,17 @@ enum Record {
     CompletionObservation {
         elapsed_ms: u64,
         completed_at: String,
+        /// The turn's token counts; absent from older logs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_tokens: Option<u64>,
+    },
+    /// When the prompt before it was sent (`7:31 pm`), recorded right after
+    /// it. A log from before it was kept has none, and its prompts draw no
+    /// time.
+    PromptObservation {
+        sent_at: String,
     },
     Closed {
         reason: String,
@@ -410,6 +425,9 @@ struct PersistedHunk {
     new_start: u32,
     new_lines: u32,
     lines: Vec<String>,
+    /// The section its header named; absent from older logs (none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
 }
 
 impl PersistedToolResult {
@@ -443,6 +461,7 @@ impl PersistedToolResult {
                         new_start: hunk.new_start,
                         new_lines: hunk.new_lines,
                         lines: hunk.lines.clone(),
+                        section: hunk.section.clone(),
                     })
                     .collect(),
             },
@@ -460,6 +479,7 @@ impl PersistedToolResult {
                                 new_start: hunk.new_start,
                                 new_lines: hunk.new_lines,
                                 lines: hunk.lines.clone(),
+                                section: hunk.section.clone(),
                             })
                             .collect(),
                     })
@@ -498,6 +518,7 @@ impl PersistedToolResult {
                         new_start: hunk.new_start,
                         new_lines: hunk.new_lines,
                         lines: hunk.lines.clone(),
+                        section: hunk.section.clone(),
                     })
                     .collect(),
             },
@@ -515,6 +536,7 @@ impl PersistedToolResult {
                                 new_start: hunk.new_start,
                                 new_lines: hunk.new_lines,
                                 lines: hunk.lines.clone(),
+                                section: hunk.section.clone(),
                             })
                             .collect(),
                     })
@@ -872,6 +894,7 @@ impl Record {
                                 new_start: hunk.new_start,
                                 new_lines: hunk.new_lines,
                                 lines: hunk.lines.clone(),
+                                section: hunk.section.clone(),
                             })
                             .collect(),
                     })
@@ -1012,6 +1035,7 @@ impl Record {
                                 new_start: hunk.new_start,
                                 new_lines: hunk.new_lines,
                                 lines: hunk.lines.clone(),
+                                section: hunk.section.clone(),
                             })
                             .collect(),
                     })
@@ -1075,9 +1099,16 @@ impl Record {
             Record::CompletionObservation {
                 elapsed_ms,
                 completed_at,
+                input_tokens,
+                output_tokens,
             } => Input::CompletionObservation {
                 elapsed_ms: *elapsed_ms,
                 completed_at: completed_at.clone(),
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
+            },
+            Record::PromptObservation { sent_at } => Input::PromptObservation {
+                sent_at: sent_at.clone(),
             },
             Record::ReasoningSummary {
                 text,
@@ -2083,6 +2114,16 @@ impl ThreadSnapshot {
     }
 }
 
+/// What a live turn's end observed: its elapsed, the stamp's clock, and its
+/// token counts (`None` where the provider reported none).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionFacts {
+    pub elapsed_ms: u64,
+    pub completed_at: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+}
+
 /// Appends one Thread's records. Buffered: nothing reaches the disk until a
 /// boundary (turn end, close), a timeout, or an explicit `flush`.
 pub struct ThreadWriter {
@@ -2168,20 +2209,23 @@ impl ThreadWriter {
     pub fn record_completion(
         &mut self,
         subject: &crate::activity::Subject,
-        elapsed_ms: u64,
-        completed_at: &str,
+        observed: &CompletionFacts,
     ) -> io::Result<()> {
         let record = match subject {
             crate::activity::Subject::Main => Record::CompletionObservation {
-                elapsed_ms,
-                completed_at: completed_at.into(),
+                elapsed_ms: observed.elapsed_ms,
+                completed_at: observed.completed_at.clone(),
+                input_tokens: observed.input_tokens,
+                output_tokens: observed.output_tokens,
             },
             crate::activity::Subject::Subagent(_) => Record::Activity {
                 observation: PersistedActivity::from_live(
                     &crate::activity::ActivityEvent::CompletionObservation {
                         subject: subject.clone(),
-                        elapsed_ms,
-                        completed_at: completed_at.into(),
+                        elapsed_ms: observed.elapsed_ms,
+                        completed_at: observed.completed_at.clone(),
+                        input_tokens: observed.input_tokens,
+                        output_tokens: observed.output_tokens,
                     },
                     None,
                 )
@@ -2195,6 +2239,14 @@ impl ThreadWriter {
     /// Ferrite's own act, and no provider will ever echo it back.
     pub fn record_prompt(&mut self, text: &str) -> io::Result<()> {
         self.push(Record::Prompt { text: text.into() })
+    }
+
+    /// Buffer when the prompt just recorded was sent (`7:31 pm`), so replay
+    /// draws the time it was sent rather than none.
+    pub fn record_prompt_observation(&mut self, sent_at: &str) -> io::Result<()> {
+        self.push(Record::PromptObservation {
+            sent_at: sent_at.into(),
+        })
     }
 
     /// Record a provider switch after the first prompt: a boundary, so it
@@ -3363,6 +3415,7 @@ mod tests {
                             "+delta".into(),
                             " charlie".into(),
                         ],
+                        section: None,
                     }],
                 },
             },
@@ -3379,6 +3432,62 @@ mod tests {
         let thread = Store::open(&dir).unwrap().load(id).unwrap();
         let restored = restore(&thread);
         assert_eq!(restored.blocks(), live.blocks());
+    }
+
+    /// CT-3/CT-24: a prompt's send time and a turn's token counts are live
+    /// observations kept beside the prompt and the turn's end; reopening
+    /// the store replays them exactly, and a log without them draws none.
+    #[test]
+    fn a_prompts_send_time_and_a_turns_tokens_survive_reopening() {
+        let dir = scratch("prompt-time");
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        writer.record_prompt("apply it").unwrap();
+        writer.record_prompt_observation("7:31 pm").unwrap();
+        writer
+            .record_event(
+                &SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                },
+                None,
+            )
+            .unwrap();
+        writer
+            .record_completion(
+                &crate::activity::Subject::Main,
+                &CompletionFacts {
+                    elapsed_ms: 41_000,
+                    completed_at: "7:32 pm".into(),
+                    input_tokens: Some(3_200),
+                    output_tokens: Some(1_100),
+                },
+            )
+            .unwrap();
+        writer.record_prompt("older log, no time").unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        let restored = restore(&Store::open(&dir).unwrap().load(id).unwrap());
+        let prompts: Vec<_> = restored
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block.body, crate::transcript::Body::Prompt(_)))
+            .map(|block| block.sent_at.clone())
+            .collect();
+        assert_eq!(prompts, [Some("7:31 pm".to_string()), None]);
+        let stamp = restored
+            .blocks()
+            .iter()
+            .find_map(|block| match &block.body {
+                crate::transcript::Body::TurnEnd(end) => Some(end.text()),
+                _ => None,
+            })
+            .expect("the turn's stamp");
+        assert_eq!(
+            stamp,
+            "Worked for 41s \u{b7} 7:32 pm \u{b7} \u{2191} 3.2k \u{2193} 1.1k"
+        );
     }
 
     /// Codex's own concepts survive the round trip: reasoning summaries keep

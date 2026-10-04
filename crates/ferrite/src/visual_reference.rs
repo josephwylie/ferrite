@@ -514,7 +514,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 // The failed group opens itself; its Edit and the second
                 // group's Edit show their hunks once disclosed.
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-1".into()));
-                view.panes[0].toggle_tool(&DisclosureId::Group("edit-2".into()));
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-2".into()));
             });
             (scene, setup)
@@ -919,7 +918,6 @@ fn legacy(state: &str) -> (Scene, Setup) {
     let setup: Setup = if state == "expanded" {
         Box::new(|view, _, _| {
             for id in ["read", "ok"] {
-                view.panes[0].toggle_tool(&crate::pane::DisclosureId::Group(id.into()));
                 view.panes[0].toggle_tool(&crate::pane::DisclosureId::Tool(id.into()));
             }
         })
@@ -1034,6 +1032,7 @@ fn conversation(label: &str) -> Scene {
                 "+        .unwrap_or_else(|| \"waiting for first output\".into());".into(),
                 "+    row = row.child(status_line(summary).h(px(theme::ROW_LINE_H)));".into(),
             ],
+            section: None,
         },
     )
     .bash(
@@ -1058,6 +1057,7 @@ fn conversation(label: &str) -> Scene {
                 "+    let summary = (!row_state.parked).then(|| facts".into(),
                 "+        .summary".into(),
             ],
+            section: None,
         },
     )
     .bash(
@@ -1126,6 +1126,7 @@ fn nav() -> (Scene, Setup) {
                     "-pub const FONT_PROSE: &str = \"JetBrains Mono\";".into(),
                     "+pub const FONT_PROSE: &str = \"Geist\";".into(),
                 ],
+                section: None,
             },
         )
         .text("Swapped the prose face; now checking every hard-coded line height against the new metrics");

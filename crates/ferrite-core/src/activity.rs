@@ -122,6 +122,9 @@ pub enum ActivityEvent {
         subject: Subject,
         elapsed_ms: u64,
         completed_at: String,
+        /// The turn's token counts as observed; `None` in older logs.
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
     },
     /// None retains a visible connection-owned request with unresolved owner.
     Decision {
@@ -256,9 +259,11 @@ pub enum ToolTiming {
     Done(Duration),
 }
 impl ToolTiming {
+    /// How long the call has run (live, off `clock::instant`, so a fixture
+    /// freezes it) or ran.
     pub fn elapsed(&self) -> Duration {
         match self {
-            Self::Running(at) => at.elapsed(),
+            Self::Running(at) => crate::clock::instant().saturating_duration_since(*at),
             Self::Done(total) => *total,
         }
     }
@@ -444,13 +449,20 @@ impl SubjectState {
                     }
                 }
             }
-            Input::Event(SessionEvent::ToolCompleted { id, .. }) => {
+            Input::Event(SessionEvent::ToolCompleted { id, result, .. }) => {
                 if !self.retained {
                     // Completed timings belong to cached transcript history.
                     // An evicted child still publishes durable facts and status.
                     self.timings.remove(id);
                 } else if let Some(duration) = self.completed_tool_duration(input, at) {
                     self.timings.insert(id.clone(), ToolTiming::Done(duration));
+                }
+                // An edit seen landing live keeps its time for the hover
+                // card's age; replay never stamps one.
+                if live && matches!(result, ToolResult::FileEdit { .. } | ToolResult::FileEdits { .. })
+                {
+                    self.transcript
+                        .note_settled_at(id, crate::clock::system_time());
                 }
             }
             Input::Event(SessionEvent::TurnEnded { outcome, .. }) => {
@@ -876,7 +888,7 @@ impl Activity {
                 }
                 self.event(event, at, true)
             }
-            ActivityInput::Replay(input) => self.main_input(input, Instant::now(), false),
+            ActivityInput::Replay(input) => self.main_input(input, crate::clock::instant(), false),
             ActivityInput::ReplayEvent(event) => self.replay_event(event),
             ActivityInput::Connect { generation } => {
                 self.generation = generation;
@@ -961,7 +973,7 @@ impl Activity {
         } else {
             None
         };
-        let update = self.event(event, Instant::now(), false);
+        let update = self.event(event, crate::clock::instant(), false);
         if let (Some(previous), Some(subject)) = (previous, subject) {
             if let Some(state) = self.state_mut(&subject) {
                 previous.restore(state);
@@ -1043,7 +1055,7 @@ impl Activity {
 
     fn invalidate(&mut self) -> ActivityUpdate {
         let mut changed = vec![Subject::Main];
-        let at = Instant::now();
+        let at = crate::clock::instant();
         self.main_operator_turn = false;
         self.main.fresh = false;
         self.main.busy = false;
@@ -1358,6 +1370,8 @@ impl Activity {
                 subject,
                 elapsed_ms,
                 completed_at,
+                input_tokens,
+                output_tokens,
             } => {
                 let subject = self.resolve_subject(subject);
                 if let Subject::Subagent(key) = &subject {
@@ -1373,6 +1387,8 @@ impl Activity {
                     Input::CompletionObservation {
                         elapsed_ms: *elapsed_ms,
                         completed_at: completed_at.clone(),
+                        input_tokens: *input_tokens,
+                        output_tokens: *output_tokens,
                     },
                     None,
                     None,

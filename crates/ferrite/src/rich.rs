@@ -91,6 +91,9 @@ pub struct TextCache(
             Option<crate::attachment_preview::Preview>,
         )>,
     >,
+    /// The transcript (its namespace) that hosts this cache's path targets:
+    /// their hover card and ⌘-click (`file_links::PathTarget::scope`).
+    Rc<RefCell<Option<SharedString>>>,
 );
 
 impl TextCache {
@@ -105,6 +108,19 @@ impl TextCache {
         preview: &crate::attachment_preview::Preview,
     ) {
         *self.1.borrow_mut() = (cwd.map(std::path::Path::to_path_buf), Some(preview.clone()));
+    }
+
+    /// Host this cache's path targets in the transcript `scope` (its
+    /// namespace): the one drawing now, so its card and ⌘-click route there.
+    pub(crate) fn set_path_scope(&self, scope: SharedString) {
+        let mut current = self.2.borrow_mut();
+        if current.as_ref() != Some(&scope) {
+            *current = Some(scope);
+        }
+    }
+
+    fn path_scope(&self) -> Option<SharedString> {
+        self.2.borrow().clone()
     }
 
     pub fn output_focused(&self, namespace: &str, window: &Window, cx: &App) -> bool {
@@ -264,6 +280,11 @@ pub struct Markdown {
     source: String,
     cache: TextCache,
     muted: bool,
+    /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
+    ink: Option<u32>,
+    /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
+    /// in this preview (`pane::prompt_chip`).
+    chips: Option<crate::attachment_preview::Preview>,
     document: Option<gpui::base::TextSelectionDocument>,
 }
 
@@ -280,12 +301,28 @@ impl Markdown {
         self.muted = true;
         self
     }
+
+    /// Set the body in `ink` (headings keep theirs).
+    pub fn ink(mut self, ink: u32) -> Self {
+        self.ink = Some(ink);
+        self
+    }
+
+    /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
+    /// band: its words, then its files), opening in `preview`.
+    pub fn chips(mut self, preview: crate::attachment_preview::Preview) -> Self {
+        self.chips = Some(preview);
+        self
+    }
+
     pub fn new(id: impl Into<SharedString>, source: String, cache: TextCache) -> Self {
         Self {
             id: id.into(),
             source,
             cache,
             muted: false,
+            ink: None,
+            chips: None,
             document: None,
         }
     }
@@ -323,16 +360,39 @@ impl gpui::RenderOnce for Markdown {
         } else {
             text_style
         };
+        let text_style = match self.ink {
+            Some(ink) => text_style.with_foreground(rgb(ink).into()),
+            None => text_style,
+        };
         let actions_namespace = self.id.clone();
         let (cwd, preview) = self.cache.1.borrow().clone();
+        let scope = self.cache.path_scope();
+        let chips = self.chips.clone();
         let link_cwd = cwd.clone();
         TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
+                // A prompt's file, as its band's chip.
+                if let Some(path) = url.strip_prefix(CHIP_SCHEME) {
+                    let chips = chips.as_ref()?;
+                    return Some(crate::pane::prompt_chip(
+                        std::path::PathBuf::from(path),
+                        label,
+                        Some(chips),
+                        window,
+                        cx,
+                    ));
+                }
+                // An issue ref stays a native link (its underline under the
+                // pointer); a click opens it on the checkout's remote.
+                if url.starts_with(ISSUE_SCHEME) {
+                    return None;
+                }
                 let file = crate::file_links::FileLink::resolve(url, cwd.as_deref())?;
                 Some(crate::attachments::inline_file(
                     file,
                     label,
                     preview.as_ref(),
+                    scope.clone(),
                     window,
                     cx,
                 ))
@@ -356,6 +416,15 @@ impl gpui::RenderOnce for Markdown {
                     gpui::ClickEvent::Touch(click) => !click.long_press,
                 };
                 if !activate {
+                    return;
+                }
+                if let Some(number) = url.strip_prefix(ISSUE_SCHEME) {
+                    if let Some(page) = link_cwd
+                        .as_deref()
+                        .and_then(|cwd| crate::file_links::issue_url(cwd, number))
+                    {
+                        cx.open_url(&page);
+                    }
                     return;
                 }
                 if let Some(file) = crate::file_links::FileLink::resolve(url, link_cwd.as_deref()) {
@@ -578,6 +647,11 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
     .tab_stop(true)
 }
 
+/// The scheme of a prompt's inline file chip link (`pane::prompt_text`).
+pub(crate) const CHIP_SCHEME: &str = "ferrite-chip:";
+/// The scheme `file_links::link_targets` gives an issue ref (`#212`).
+pub(crate) const ISSUE_SCHEME: &str = "issue:";
+
 /// Markdown's look at the Standard reading size (see the WP-B section of
 /// `theme.rs` for the rules). Rems convert with the active root font size.
 pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
@@ -595,9 +669,21 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT).into())
         .with_muted_foreground(rgb(theme::TEXT_MUTED).into())
-        // Links and paths read cyan, with no underline at rest.
+        // Links and paths read cyan, with no underline at rest: a link
+        // underlines in its own ink only under the pointer.
         .with_link(rgb(theme::PATH_INK).into())
-        .with_link_underline(Some(gpui::transparent_black()))
+        .with_link_underline(Some(rgb(theme::PATH_INK).into()))
+        .with_link_underline_on_hover(true)
+        // A column of numbers reads right-aligned, as a terminal table does.
+        .with_numeric_columns_right(true)
+        // An image in an answer sits in the prompt image's frame:
+        // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE2` edge.
+        .with_image(
+            gpui::StyleRefinement::default()
+                .w(px(theme::IMAGE_CELLS * cell))
+                .border_1()
+                .border_color(theme::paint::LINE2),
+        )
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
         .with_strong(gpui::HighlightStyle {
             color: Some(rgb(theme::TEXT_STRONG).into()),

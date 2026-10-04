@@ -44,10 +44,7 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
         .unwrap();
     drop(stream);
     tick(cx);
-    for disclosure in [
-        pane::DisclosureId::Group("sweep".into()),
-        pane::DisclosureId::Tool("sweep".into()),
-    ] {
+    for disclosure in [pane::DisclosureId::Tool("sweep".into())] {
         let control = view.read_with(cx, |view, _| {
             view.panes[0]
                 .tool_bounds(disclosure.clone())

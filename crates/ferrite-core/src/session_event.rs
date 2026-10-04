@@ -387,7 +387,7 @@ pub struct FileEdit {
 }
 
 /// One changed region of a file, in the provider's own unified-diff form.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Hunk {
     pub old_start: u32,
     pub old_lines: u32,
@@ -395,6 +395,11 @@ pub struct Hunk {
     pub new_lines: u32,
     /// Each line keeps its marker: ' ' context, '-' removed, '+' added.
     pub lines: Vec<String>,
+    /// The enclosing section a unified-diff header names after its second
+    /// `@@` (`fn thread_row`), or one derived by git's default funcname rule
+    /// from the hunk's leading context (`transcript::hunk_section`). `None`
+    /// draws no header at all.
+    pub section: Option<String>,
 }
 
 /// Provider-normalized delivery, independent of tool names and input schemas.

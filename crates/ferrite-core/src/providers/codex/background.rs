@@ -20,6 +20,7 @@
 //! `processId` — the handle `thread/backgroundTerminals/terminate` wants —
 //! so a chip's `×` needs no translation.
 
+use crate::providers::shell::unwrap_shell;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -136,26 +137,7 @@ fn command_of(item: &Value) -> String {
     if !actions.is_empty() {
         return actions.join(" · ");
     }
-    unwrap_shell(item["command"].as_str().unwrap_or("").trim()).to_string()
-}
-
-fn unwrap_shell(raw: &str) -> &str {
-    for flag in [" -lc '", " -c '"] {
-        if let Some(at) = raw.find(flag) {
-            let shell = &raw[..at];
-            let inner = &raw[at + flag.len()..];
-            if shell
-                .rsplit('/')
-                .next()
-                .is_some_and(|name| matches!(name, "sh" | "bash" | "zsh" | "fish" | "dash"))
-            {
-                if let Some(inner) = inner.strip_suffix('\'') {
-                    return inner;
-                }
-            }
-        }
-    }
-    raw
+    unwrap_shell(item["command"].as_str().unwrap_or("").trim()).into_owned()
 }
 
 #[cfg(test)]

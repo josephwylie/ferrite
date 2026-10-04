@@ -1079,6 +1079,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
                     new_start: 1,
                     new_lines: 2,
                     lines: vec![" alpha".into(), "-bravo".into(), "+delta".into()],
+                    section: None,
                 }],
             },
         })
@@ -1124,7 +1125,10 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     // the arguments carry the code mark, `call_highlights`), the stamp.
     for (what, prefix) in [
         ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
-        ("group summary", format!("literal-{namespace}-{group:?}-0")),
+        (
+            "a command's call line",
+            format!("literal-{namespace}-{group:?}-0"),
+        ),
         ("call line", format!("literal-{namespace}-{edit:?}-0")),
         ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
     ] {
@@ -1132,10 +1136,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     }
     // Code: the diff's lines and the Composer's line.
     // A settled edit's diff shows once it is disclosed.
-    for disclosure in [
-        pane::DisclosureId::Group("edit".into()),
-        pane::DisclosureId::Tool("edit".into()),
-    ] {
+    for disclosure in [pane::DisclosureId::Tool("edit".into())] {
         if let Some(control) =
             view.read_with(cx, |view, _| view.panes[0].tool_bounds(disclosure.clone()))
         {
@@ -1260,53 +1261,6 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
         shown, 1,
         "exactly the focused Pane of the two wears the ring"
     );
-}
-
-/// A group's gutter holds its worst-state dot and the disclosure's named
-/// hit box, the summary starts at C1 after it, and the chevron trails the
-/// summary: nothing at the column's right.
-#[gpui::test]
-fn a_group_chevron_trails_its_summary_and_its_target_leads_in_the_gutter(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("group-chevron-leads", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
-    for (id, name) in [("one", "Bash"), ("two", "Read")] {
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolStarted {
-                id: id.into(),
-                name: name.into(),
-                input: serde_json::json!({ "command": "true" }),
-            })
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolCompleted {
-                id: id.into(),
-                output: "ok".into(),
-                is_error: false,
-                result: ferrite_core::ToolResult::Opaque,
-            })
-            .unwrap();
-    }
-    tick(cx);
-    let row = cx.debug_bounds("tool-group-one").expect("the group");
-    let control = view
-        .read_with(cx, |view, _| {
-            view.panes[0].tool_bounds(pane::DisclosureId::Group("one".into()))
-        })
-        .expect("the group's chevron");
-    assert!(
-        (control.left() - row.left()).abs() <= px(0.5),
-        "the target sits in the gutter: {control:?} / {row:?}"
-    );
-    assert!(control.right() <= row.left() + px(crate::theme::GUTTER_W) + px(0.5));
-    let chevron = cx
-        .debug_bounds("disclosure-chevron")
-        .expect("the chevron's box is always laid out");
-    assert!(
-        chevron.left() > control.right() && chevron.right() < row.left() + row.size.width / 2.,
-        "the chevron trails the summary, not the column's right: {chevron:?} / {row:?}"
-    );
-    assert_eq!(chevron.size.width, px(crate::theme::ICON_CHEVRON));
 }
 
 /// Terminal-native (WP-D): the Composer is one input row on its band — no

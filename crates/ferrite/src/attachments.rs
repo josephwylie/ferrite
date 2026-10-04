@@ -205,16 +205,20 @@ impl RenderOnce for Attachments {
     }
 }
 
-/// A file link in prose (the prototype's `.path`): the name in `PATH_INK`
-/// with no chip, a `:line` suffix in `TEXT_MUTED`, and a cyan underline
-/// only under the pointer. The native Markdown flow reserves the returned
-/// size and wraps the link atomically, so the width is measured in the face
-/// and size it is drawn in (the prose's own): the name and the location
-/// each shaped whole.
+/// A file link in prose (the prototype's `.path`): the path as the prose
+/// wrote it in `PATH_INK` with no chip, a `:line` suffix in `TEXT_MUTED`. It
+/// is a path target (`file_links::wire_inline`): a `PATH_INK` underline only
+/// under the pointer, the hover card while it is there (hosted by `scope`,
+/// the transcript it sits in), ⌘-click to a reader beside the Thread; a
+/// plain click opens it in the Pane's preview. The native Markdown flow
+/// reserves the returned size and wraps the link atomically, so the width is
+/// measured in the face and size it is drawn in (the prose's own): the path
+/// and the location each shaped whole.
 pub fn inline_file(
     file: crate::file_links::FileLink,
     label: &str,
     preview: Option<&Preview>,
+    scope: Option<gpui::SharedString>,
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
@@ -222,7 +226,7 @@ pub fn inline_file(
     use gpui::component::button::ButtonVariants as _;
     use gpui::rgb;
 
-    let name = file
+    let base = file
         .path
         .file_name()
         .unwrap_or_default()
@@ -239,28 +243,49 @@ pub fn inline_file(
         .as_ref()
         .map(|line| format!(":{line}"))
         .unwrap_or_default();
+    // The path as the prose wrote it, its `:line` drawn apart.
+    let label = label.trim();
+    let label = label.strip_suffix(location.as_str()).unwrap_or(label);
+    let name = if label.is_empty() {
+        base.clone()
+    } else {
+        label.to_string()
+    };
     let image = gpui::Img::extensions().contains(&extension.as_str());
     let size_px = window.text_style().font_size.to_pixels(window.rem_size());
     let link_w = inline_file_width(&name, &location, image, size_px, window);
     let line_h = window.line_height();
     let size = gpui::size(link_w, line_h);
     let host = preview.cloned();
-    let name_for_open = name.clone();
-    let tooltip = format!("{label}\n{}", file.path.display());
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
-    let open = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+    let mut target = crate::file_links::PathTarget::new(file.path.clone())
+        .at_line(
+            file.location
+                .as_deref()
+                .and_then(crate::file_links::location_line),
+        )
+        .shown(gpui::SharedString::from(name.clone()));
+    if let Some(scope) = scope {
+        target = target.in_scope(scope);
+    }
+    let reader = target.clone();
+    let open = move |event: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
         gpui::base::TextSelection::end(window, cx);
         cx.stop_propagation();
+        if event.modifiers().secondary() {
+            crate::file_links::open_target(&reader, window, cx);
+            return;
+        }
         if image && file.path.exists() {
             if let Some(host) = &host {
-                host.open(file.path.clone(), name_for_open.clone(), window, cx);
+                host.open(file.path.clone(), base.clone(), window, cx);
                 return;
             }
         }
         if !image && file.path.exists() {
             if let Some(host) = &host {
-                if host.open_text_document(file.path.clone(), name_for_open.clone(), window, cx) {
+                if host.open_text_document(file.path.clone(), base.clone(), window, cx) {
                     return;
                 }
             }
@@ -278,7 +303,7 @@ pub fn inline_file(
         .font_weight(theme::W_BODY)
         .not_italic()
         .child(
-            // The name gives way to an ellipsis; the `:line` never does.
+            // The path gives way to an ellipsis; the `:line` never does.
             gpui::div()
                 .flex()
                 .min_w_0()
@@ -287,11 +312,6 @@ pub fn inline_file(
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(theme::PATH_INK))
-                        .group_hover("inline-file", |style| {
-                            style
-                                .underline()
-                                .text_decoration_color(rgb(theme::PATH_INK))
-                        })
                         .child(name),
                 )
                 .when(!location.is_empty(), |title| {
@@ -306,7 +326,7 @@ pub fn inline_file(
     // The click and keyboard target lies over the link and draws nothing but
     // the focus ring.
     let clear: gpui::Hsla = gpui::transparent_black();
-    let target = crate::components::button("inline-file-action")
+    let button = crate::components::button("inline-file-action")
         .custom(crate::pointer::button_variant(
             clear,
             rgb(theme::PATH_INK).into(),
@@ -323,21 +343,17 @@ pub fn inline_file(
         .p_0()
         .rounded(px(theme::R_CHIP))
         .on_click(open);
+    let element = gpui::div()
+        .id("inline-file")
+        .debug_selector(move || selector.clone())
+        .relative()
+        .w(link_w)
+        .h(size.height)
+        .child(link)
+        .child(button);
     (
         size,
-        gpui::div()
-            .id("inline-file")
-            .debug_selector(move || selector.clone())
-            .group("inline-file")
-            .relative()
-            .w(link_w)
-            .h(size.height)
-            .cursor_pointer()
-            .tooltip(move |window, cx| {
-                gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-            })
-            .child(link)
-            .child(target)
+        crate::file_links::wire_inline(element, target, f32::from(size_px), f32::from(line_h))
             .into_any_element(),
     )
 }

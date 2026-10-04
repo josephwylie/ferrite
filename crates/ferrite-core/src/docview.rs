@@ -285,6 +285,7 @@ mod tests {
                 new_start: 1,
                 new_lines: 1,
                 lines: lines.iter().map(|line| line.to_string()).collect(),
+                section: None,
             }],
         }
     }

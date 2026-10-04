@@ -189,15 +189,6 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     }
     tick(cx);
     click_child(cx, "Atlas");
-    let group = view.read_with(cx, |view, _| {
-        view.panes[0]
-            .tool_bounds(pane::DisclosureId::Group("same-call".into()))
-            .expect("completed tool group")
-            .center()
-    });
-    cx.simulate_click(group, gpui::Modifiers::none());
-    // Opening the retained group changes its measured height and tail offset.
-    // Draw that layout before targeting its newly visible child control.
     tick(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]

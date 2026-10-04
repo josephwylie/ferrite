@@ -15,6 +15,7 @@ mod demo;
 mod facts;
 mod file_links;
 mod fuzzy;
+mod hover_card;
 mod icons;
 mod keymap;
 mod line;

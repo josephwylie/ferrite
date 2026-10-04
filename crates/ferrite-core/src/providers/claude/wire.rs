@@ -746,21 +746,28 @@ fn creation_hunk(value: &Value) -> Option<Hunk> {
         new_start: 1,
         new_lines: lines.len() as u32,
         lines,
+        section: None,
     })
 }
 
+/// A `structuredPatch` hunk. It carries no header text, so its section is
+/// derived by git's default funcname rule from its own leading context
+/// (`transcript::hunk_section`); the app looks further up the post-edit file
+/// when the context holds none.
 fn parse_hunk(value: &Value) -> Option<Hunk> {
+    let lines: Vec<String> = value
+        .get("lines")?
+        .as_array()?
+        .iter()
+        .filter_map(|line| Some(line.as_str()?.to_string()))
+        .collect();
     Some(Hunk {
         old_start: value.get("oldStart")?.as_u64()? as u32,
         old_lines: value.get("oldLines")?.as_u64()? as u32,
         new_start: value.get("newStart")?.as_u64()? as u32,
         new_lines: value.get("newLines")?.as_u64()? as u32,
-        lines: value
-            .get("lines")?
-            .as_array()?
-            .iter()
-            .filter_map(|line| Some(line.as_str()?.to_string()))
-            .collect(),
+        section: crate::transcript::hunk_section(&lines),
+        lines,
     })
 }
 
