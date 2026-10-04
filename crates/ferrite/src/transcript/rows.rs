@@ -66,22 +66,24 @@ impl RowKind {
     }
 }
 
-/// The space above a row, from the row before it (`None`: the first row,
-/// which carries the body's top padding instead), its own kind and the
-/// answer size `reading`. The one table of the transcript's vertical rhythm
-/// (see the transcript grammar in `theme.rs`).
+/// The space above a row, from the row before it (`None`: the first row),
+/// its own kind and the answer size `reading`: the transcript's one table
+/// of vertical rhythm (the transcript grammar in `theme.rs`). Blocks are
+/// one blank line apart, as a terminal prints them: a turn's prompt band,
+/// prose, a run of tool calls, the stamp. The calls of one run sit flush,
+/// and a row that hangs on an elbow under the row it answers (a decision
+/// record, an interrupted or failed turn's end) sits flush under it. The
+/// first row is flush to the top when it is a prompt band and a line down
+/// otherwise.
 pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
-    use crate::theme::{reading_step, BODY_PAD_T, GAP_BLOCK, GAP_ROW, GAP_TURN};
     use RowKind::*;
+    let line = crate::theme::prose_line_height(reading);
     let Some(previous) = previous else {
-        return BODY_PAD_T;
+        return if kind == Prompt { 0. } else { line };
     };
     match (previous, kind) {
-        (_, Prompt) => reading_step(GAP_TURN, reading),
-        (_, TurnEnd { hangs: true } | Meta)
-        | (Activity, Activity)
-        | (Answer { commentary: true }, Activity) => GAP_ROW,
-        _ => reading_step(GAP_BLOCK, reading),
+        (_, TurnEnd { hangs: true } | Meta) | (Activity, Activity) => 0.,
+        _ => line,
     }
 }
 
@@ -125,7 +127,7 @@ impl TranscriptRow {
         self.turn_diff.as_ref()
     }
 
-    #[cfg(test)]
+    /// What the row is, for the gap table and the prompt band.
     pub(crate) fn kind(&self) -> RowKind {
         self.kind
     }
@@ -521,10 +523,11 @@ mod tests {
                 }
             ]
         );
-        // The new head takes the body's top padding in place of its turn
-        // gap: a changed row, re-measured, while the rest keep their Rcs.
+        // The new head is a prompt band flush to the top in place of its
+        // blank line: a changed row, re-measured, while the rest keep their
+        // Rcs.
         assert!(!Rc::ptr_eq(&old[2], rows.get(0).unwrap()));
-        assert_eq!(rows.get(0).unwrap().gap(), crate::theme::BODY_PAD_T);
+        assert_eq!(rows.get(0).unwrap().gap(), 0.);
         assert_eq!(delta.remeasure, vec![0]);
         assert!(Rc::ptr_eq(&old[3], rows.get(1).unwrap()));
     }
@@ -547,9 +550,9 @@ mod tests {
                 new_count: 2
             }]
         );
-        // The old head is now a later turn's prompt: its gap grew from the
-        // body padding to the turn gap, so only it is re-measured.
-        assert_eq!(rows.get(2).unwrap().gap(), crate::theme::GAP_TURN);
+        // The old head is now a later turn's prompt: its gap grew from
+        // flush to one blank line, so only it is re-measured.
+        assert_eq!(rows.get(2).unwrap().gap(), crate::theme::LH_PROSE);
         assert_eq!(delta.remeasure, vec![2]);
         assert!(Rc::ptr_eq(&old[1], rows.get(3).unwrap()));
     }
@@ -576,39 +579,42 @@ mod tests {
         );
     }
 
+    /// Terminal-native rhythm: blocks one blank line apart, the calls of a
+    /// run and the rows hung on an elbow flush, a leading prompt band flush
+    /// to the top.
     #[test]
-    fn the_gap_table_spaces_turns_blocks_rows_and_stamps() {
-        use crate::theme::{BODY_PAD_T, GAP_BLOCK, GAP_ROW, GAP_TURN};
+    fn the_gap_table_spaces_blocks_a_line_apart_and_runs_flush() {
         use RowKind::*;
+        let line = crate::theme::LH_PROSE;
         let prose = Answer { commentary: false };
         let commentary = Answer { commentary: true };
         let stamp = TurnEnd { hangs: false };
         let hung = TurnEnd { hangs: true };
         for (previous, kind, gap) in [
-            (None, Prompt, BODY_PAD_T),
-            (None, Activity, BODY_PAD_T),
-            (Some(stamp), Prompt, GAP_TURN),
-            (Some(hung), Prompt, GAP_TURN),
-            (Some(prose), Prompt, GAP_TURN),
-            (Some(Prompt), prose, GAP_BLOCK),
-            (Some(Prompt), Activity, GAP_BLOCK),
-            (Some(Prompt), Reasoning, GAP_BLOCK),
-            (Some(Activity), Activity, GAP_ROW),
-            (Some(commentary), Activity, GAP_ROW),
-            (Some(prose), Activity, GAP_BLOCK),
-            (Some(Activity), prose, GAP_BLOCK),
-            (Some(Reasoning), Activity, GAP_BLOCK),
-            (Some(Activity), Reasoning, GAP_BLOCK),
+            (None, Prompt, 0.),
+            (None, Activity, line),
+            (Some(stamp), Prompt, line),
+            (Some(hung), Prompt, line),
+            (Some(prose), Prompt, line),
+            (Some(Prompt), prose, line),
+            (Some(Prompt), Activity, line),
+            (Some(Prompt), Reasoning, line),
+            (Some(Activity), Activity, 0.),
+            (Some(commentary), Activity, line),
+            (Some(prose), Activity, line),
+            (Some(Activity), prose, line),
+            (Some(Reasoning), Activity, line),
+            (Some(Activity), Reasoning, line),
             // The stamp is a block of its turn; an elbow note hangs on the
             // row it answers.
-            (Some(prose), stamp, GAP_BLOCK),
-            (Some(Activity), stamp, GAP_BLOCK),
-            (Some(prose), hung, GAP_ROW),
-            (Some(Activity), hung, GAP_ROW),
-            (Some(Activity), Meta, GAP_ROW),
-            (Some(prose), Notice, GAP_BLOCK),
-            (Some(prose), TurnDiff, GAP_BLOCK),
-            (Some(Other), Other, GAP_BLOCK),
+            (Some(prose), stamp, line),
+            (Some(Activity), stamp, line),
+            (Some(prose), hung, 0.),
+            (Some(Activity), hung, 0.),
+            (Some(Activity), Meta, 0.),
+            (Some(prose), Notice, line),
+            (Some(prose), TurnDiff, line),
+            (Some(Other), Other, line),
         ] {
             assert_eq!(
                 gap_before(previous, kind, READING),
@@ -616,40 +622,24 @@ mod tests {
                 "{previous:?} → {kind:?}"
             );
         }
-        // Each step is at least twice the one inside it.
-        assert!(GAP_TURN >= 2. * GAP_BLOCK && GAP_BLOCK >= 2. * GAP_ROW);
     }
 
     #[test]
-    fn the_turn_and_block_steps_scale_with_the_reading_size_and_rows_do_not() {
-        use crate::theme::{
-            answer_text_size, reading_step, GAP_BLOCK, GAP_ROW, GAP_TURN, PROSE_GAP,
-        };
+    fn the_blank_line_scales_with_the_reading_size_and_runs_stay_flush() {
+        use crate::theme::answer_text_size;
         use ferrite_core::settings::ReadingSize;
         use RowKind::*;
         let prose = Answer { commentary: false };
-        let mut previous = None;
-        for (size, turn, block) in [
-            (ReadingSize::STANDARD, 32., 12.),
-            (ReadingSize::nearest(16), 37., 14.),
-            (ReadingSize::nearest(18), 41., 15.),
+        for (size, line) in [
+            (ReadingSize::STANDARD, 21.),
+            (ReadingSize::nearest(16), 24.),
+            (ReadingSize::nearest(18), 27.),
         ] {
             let reading = answer_text_size(size);
-            assert_eq!(gap_before(Some(prose), Prompt, reading), turn, "{size:?}");
-            assert_eq!(gap_before(Some(Prompt), prose, reading), block, "{size:?}");
-            assert_eq!(gap_before(Some(Activity), Activity, reading), GAP_ROW);
-            assert_eq!(reading_step(GAP_TURN, reading), turn);
-            // A paragraph gap inside an answer never outgrows the block
-            // step between it and the next block.
-            assert_eq!(
-                reading_step(PROSE_GAP, reading),
-                reading_step(GAP_BLOCK, reading)
-            );
-            assert!(turn >= 2. * block && block >= 2. * GAP_ROW, "{size:?}");
-            if let Some((turn_before, block_before)) = previous {
-                assert!(turn > turn_before && block > block_before, "{size:?}");
-            }
-            previous = Some((turn, block));
+            assert_eq!(gap_before(Some(prose), Prompt, reading), line, "{size:?}");
+            assert_eq!(gap_before(Some(Prompt), prose, reading), line, "{size:?}");
+            assert_eq!(gap_before(Some(Activity), Activity, reading), 0.);
+            assert_eq!(line, crate::theme::answer_line_height(size), "{size:?}");
         }
     }
 
@@ -670,7 +660,7 @@ mod tests {
             Rc::ptr_eq(&first, rows.get(0).unwrap()),
             "the body padding does not scale"
         );
-        assert_eq!(rows.get(2).unwrap().gap(), 41.);
+        assert_eq!(rows.get(2).unwrap().gap(), 27.);
     }
 
     #[test]
@@ -694,11 +684,7 @@ mod tests {
         let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
         assert_eq!(
             gaps,
-            vec![
-                crate::theme::BODY_PAD_T,
-                crate::theme::GAP_BLOCK,
-                crate::theme::GAP_ROW
-            ]
+            vec![0., crate::theme::LH_PROSE, crate::theme::LH_PROSE]
         );
     }
 

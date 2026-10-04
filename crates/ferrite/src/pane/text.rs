@@ -99,7 +99,13 @@ pub(crate) fn collect_output_text(block: BlockId, part: &str, text: &str, select
     }
 }
 
-pub(crate) fn collect_block_text(block: &Block, expanded: bool, signal: u32, selection: &TextRuns) {
+pub(crate) fn collect_block_text(
+    block: &Block,
+    expanded: bool,
+    signal: u32,
+    wide: bool,
+    selection: &TextRuns,
+) {
     match &block.body {
         Body::Prompt(line) => {
             let (text, _) = ferrite_core::prompt_files::split(line.clone());
@@ -146,7 +152,7 @@ pub(crate) fn collect_block_text(block: &Block, expanded: bool, signal: u32, sel
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
-        Body::Tool(tool) => collect_tool_text(block.id, tool, expanded, false, selection),
+        Body::Tool(tool) => collect_tool_text(block.id, tool, expanded, false, wide, selection),
     }
 }
 
@@ -155,6 +161,7 @@ fn collect_tool_text(
     tool: &ToolBlock,
     expanded: bool,
     in_group: bool,
+    wide: bool,
     selection: &TextRuns,
 ) {
     let _ = selection.line(block, tool_label(tool), Vec::new());
@@ -173,25 +180,42 @@ fn collect_tool_text(
             collect_output_text(block, "details", &output.text, selection);
         }
     } else {
-        if !redundant_test_result(tool)
-            && applied.is_none()
-            && (!in_group || matches!(tool.state, ToolState::Failed(_)))
-        {
+        let failed = matches!(tool.state, ToolState::Failed(_));
+        let quiet = in_group && !failed;
+        if failed {
+            let _ = selection.line(block, failed_head(), Vec::new());
+            if let Some(detail) = tool
+                .result_line
+                .clone()
+                .or_else(|| failed_excerpt(tool).map(str::to_owned))
+            {
+                let _ = selection.line(block, detail, Vec::new());
+            }
+        } else if !redundant_test_result(tool) && applied.is_none() && !quiet {
             if let Some(line) = &tool.result_line {
                 let _ = selection.line(block, line.clone(), Vec::new());
             }
         }
-        if let Some(excerpt) = failed_excerpt(tool) {
-            let _ = selection.line(block, failed_head(), Vec::new());
-            let _ = selection.line(block, excerpt.to_owned(), Vec::new());
+        if !quiet {
+            if let Some((shown, _)) = output_fold(tool) {
+                let _ = selection.line(block, shown, Vec::new());
+            }
         }
     }
     if expanded || !in_group {
         for diff in &tool.diffs {
-            let (cap, _) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
-            for line in diff.hunks.iter().flat_map(|hunk| &hunk.lines).take(cap) {
-                let _ = selection.line(block, diff_body(line).to_owned(), Vec::new());
-            }
+            collect_diff_text(block, diff, wide, selection);
+        }
+    }
+}
+
+/// A diff's selectable code, in the order the rows register it
+/// (`DiffRow::selectable`).
+fn collect_diff_text(block: BlockId, diff: &Diff, wide: bool, selection: &TextRuns) {
+    let (cap, _) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
+    for row in diff_rows(diff, cap, wide) {
+        for side in row.selectable() {
+            let _ = selection.line(block, side.body.clone(), Vec::new());
         }
     }
 }
@@ -200,6 +224,7 @@ pub(crate) fn collect_activity_text(
     activity: ToolActivity<'_>,
     expanded: bool,
     state: impl Fn(&DisclosureId) -> DisclosureState,
+    wide: bool,
     selection: &TextRuns,
 ) {
     let _ = selection.line(activity.blocks[0].id, activity_label(&activity), Vec::new());
@@ -213,6 +238,7 @@ pub(crate) fn collect_activity_text(
                 tool,
                 state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
                 true,
+                wide,
                 selection,
             );
         }

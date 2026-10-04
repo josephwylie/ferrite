@@ -6,13 +6,14 @@
 mod rows;
 mod scroll;
 
-use std::collections::{HashMap, HashSet};
 #[cfg(test)]
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use ferrite_core::{
     cockpit::ToolTiming,
-    transcript::{Block, BlockId, Body, Status, ToolActivity, TurnDiff},
+    store::Provider,
+    transcript::{Block, BlockId, Body, Status, ToolActivity, ToolState, TurnDiff},
     ThreadId,
 };
 use gpui::{
@@ -21,22 +22,22 @@ use gpui::{
 };
 
 use self::{
-    rows::{RowId, TranscriptRow, TranscriptRows},
+    rows::{RowId, RowKind, TranscriptRow, TranscriptRows},
     scroll::TranscriptScroll,
 };
 use crate::{
     attachment_preview::Preview,
-    components, icons,
-    pane::{self, DisclosureId, DisclosureState},
+    pane::{self, DisclosureId, DisclosureState, Grid},
     pointer::Pointer,
     rich::TextCache,
     select::{TextRuns, TranscriptText},
     theme,
 };
+use std::{cell::Cell, rc::Rc};
 
-/// The answer's gutter mark: the monochrome Ferrite mark in structure ink,
-/// a glyph beside the prose, never brighter than a tool's settled dot.
-pub(crate) const ANSWER_MARK_INK: u32 = theme::TEXT_FAINT;
+/// The answer's gutter mark: the typed `●` in the strongest ink, the
+/// prototype's `.g-prose` (the agent spoke).
+pub(crate) const ANSWER_MARK_INK: u32 = theme::TEXT_STRONG;
 
 /// Who a transcript row speaks for, as the answer mark counts speakers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +99,8 @@ pub(crate) struct TranscriptInput {
     pub turn_diff: Option<TurnDiff>,
     pub signal_status: Option<Status>,
     pub timings: HashMap<String, ToolTiming>,
+    /// The Thread's provider: its `✻` at a turn's end wears its colour.
+    pub provider: Option<Provider>,
     pub focused: bool,
     pub reading_size: ferrite_core::settings::ReadingSize,
     pub selection_scope: gpui::base::TextSelectionScopeId,
@@ -166,6 +169,19 @@ pub(crate) struct TranscriptView {
     /// The disclosure the pointer last flipped, and to which state: only
     /// its chevron eases; a keyboard toggle turns it at once.
     eased: Option<(DisclosureId, bool)>,
+    /// The transcript is wide enough for side-by-side diffs
+    /// (`SPLIT_DIFF_MIN_W`), as of the last layout.
+    wide: Rc<Cell<bool>>,
+    /// The pinned prompt band's height, as of the last layout: the next
+    /// turn's band pushes it up by what it overlaps.
+    pinned_h: Rc<Cell<gpui::Pixels>>,
+    /// The pinned band this frame drew, to notice a layout that moves it.
+    pinned_drawn: Rc<Cell<Option<(usize, gpui::Pixels)>>>,
+    /// The position a re-render was last asked for.
+    pinned_asked: Rc<Cell<Option<Option<(usize, gpui::Pixels)>>>>,
+    /// Each row's laid-out height, as the list last measured it: the
+    /// minimap places its ticks and its view band from these.
+    heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
 }
 
 impl EventEmitter<TranscriptEvent> for TranscriptView {}
@@ -188,6 +204,7 @@ impl TranscriptView {
                 turn_diff: None,
                 signal_status: None,
                 timings: HashMap::new(),
+                provider: None,
                 focused: false,
                 reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
@@ -234,6 +251,11 @@ impl TranscriptView {
             document: gpui::base::TextSelectionDocument::new(scope, cx),
             second_tick: None,
             eased: None,
+            wide: Rc::new(Cell::new(false)),
+            pinned_h: Rc::new(Cell::new(gpui::px(0.))),
+            pinned_drawn: Rc::new(Cell::new(None)),
+            pinned_asked: Rc::new(Cell::new(None)),
+            heights: Default::default(),
         };
         view.sync_members(cx);
         view
@@ -471,6 +493,7 @@ impl TranscriptView {
                 activity,
                 expanded,
                 |call| self.tool_state(call),
+                self.wide.get(),
                 selection,
             );
         } else if let Some(block) = row.blocks().first() {
@@ -484,7 +507,7 @@ impl TranscriptView {
             } else {
                 theme::TEXT_MUTED
             };
-            pane::collect_block_text(block, expanded, signal, selection);
+            pane::collect_block_text(block, expanded, signal, self.wide.get(), selection);
         }
     }
 
@@ -531,52 +554,34 @@ impl TranscriptView {
                 .expect("markdown row has a block")
                 .markdown_run
                 .unwrap_or(blocks[0].id);
-            let answer_size = theme::answer_text_size(self.input.reading_size);
-            let line_height = theme::answer_line_height(self.input.reading_size);
-            // The mark centres on the first line box: a leading heading's
-            // own, taller box, or the prose line at this reading size.
-            let first_line = match &blocks[0].body {
-                Body::Heading { level, .. } => {
-                    crate::rich::heading_line_height(*level, answer_size)
-                }
-                _ => line_height,
-            };
+            let grid = Grid::of(self.input.reading_size);
             let marked = row.answer_mark();
+            // The prototype's `.r` with `.g-prose`: the bright `●` in the
+            // gutter on the first prose after a speaker change, the answer on
+            // the content column, every wrapped line hanging under it.
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
                     self.input.namespace
                 )))
                 .debug_selector(|| "transcript-answer".into())
+                .flex()
+                .items_start()
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .relative()
-                // A fixed gutter needs no flex sizing. Giving Markdown the
-                // remaining block width avoids intrinsic-size passes over the
-                // entire growing document before its final wrapped layout.
-                .pl(px(theme::GUTTER_W))
-                .text_size(px(answer_size))
-                .line_height(px(line_height))
-                .when(marked, |answer| {
-                    // The monochrome Ferrite mark, centred on the first line
-                    // box at every reading size, a leading heading included.
-                    answer.child(
-                        components::gutter(
-                            components::glyph_box(icons::icon(
-                                icons::FERRITE_MONO,
-                                theme::GLYPH_BOX,
-                                ANSWER_MARK_INK,
-                            ))
-                            .debug_selector(|| "answer-mark".into()),
-                            first_line,
-                        )
-                        .absolute()
-                        .left_0()
-                        .top_0(),
-                    )
+                .child(if marked {
+                    pane::glyph_gutter(grid, pane::BULLET, ANSWER_MARK_INK)
+                        .debug_selector(|| "answer-mark".into())
+                } else {
+                    div().flex_shrink_0().w(px(grid.gutter()))
                 })
-                .child(selection.answer(first, source.to_owned()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(selection.answer(first, source.to_owned())),
+                )
                 .into_any_element();
         }
         if let Some(activity) = ToolActivity::at_start(blocks) {
@@ -593,6 +598,8 @@ impl TranscriptView {
                     view.as_ref()
                         .map(|view| self.control(call, view.clone(), cx))
                 },
+                self.input.reading_size,
+                self.wide.get(),
             );
         }
         let Some(block) = blocks.first() else {
@@ -634,10 +641,11 @@ impl TranscriptView {
             } else {
                 theme::TEXT_MUTED
             },
-            None,
+            self.input.provider,
             &self.input.preview,
             view.map(|view| self.prompt_actions(block, view)),
             self.input.reading_size,
+            self.wide.get(),
         )
     }
 
@@ -681,8 +689,9 @@ impl TranscriptView {
             Some(parts) => (Some(parts.overlay), Some(parts.chevron)),
             None => (None, None),
         };
-        // The group recipe: a muted line at C1, the chevron trailing it, no
+        // The group recipe: a muted `●` line, the chevron trailing it, no
         // hover ground; the keyboard target alone is grounded.
+        let grid = Grid::of(self.input.reading_size);
         let header = div()
             .id(SharedString::from(format!(
                 "turn-diff-row-{}",
@@ -691,18 +700,15 @@ impl TranscriptView {
             .group(pane::DISCLOSURE_ROW)
             .relative()
             .flex()
-            .items_center()
+            .items_start()
             .min_w_0()
-            .pl(px(theme::GUTTER_W))
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
             .text_color(gpui::rgb(theme::TEXT_MUTED))
             .when(targeted, |header| {
                 header
-                    .bg(gpui::rgb(theme::HOVER))
-                    .rounded(px(theme::R_CHIP))
+                    .bg(theme::paint::HOVER)
                     .debug_selector(|| "tool-disclosure-keyboard-target".into())
             })
+            .child(pane::glyph_gutter(grid, pane::BULLET, theme::TEXT_MUTED))
             .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()))
             .children(chevron)
             .children(overlay);
@@ -719,9 +725,10 @@ impl TranscriptView {
                 false,
                 true,
                 selection,
+                grid,
             ));
             if diff.omitted_bytes > 0 {
-                details = details.child(pane::omitted_line(diff.omitted_bytes));
+                details = details.child(pane::omitted_line(diff.omitted_bytes, grid));
             }
             card = card.content(details);
         }
@@ -744,20 +751,34 @@ impl TranscriptView {
         let clicked = call.clone();
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
         let targeted = self.tool_targeted(&call);
-        let control =
-            pane::tool_disclosure_control(&call, expanded, targeted, &self.input.disclosure_focus)
-                // The disclosure overlay fills the rendered header. Keep the handler
-                // on it so the chevron, label, and trailing row text share one target.
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    cx.stop_propagation();
-                    gpui::base::TextSelection::clear(window, cx);
-                    view.update(cx, |view, cx| {
-                        view.clear_output_selection(cx);
-                        view.eased =
-                            Some((clicked.clone(), !view.input.expanded.contains(&clicked)));
-                        cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
-                    });
-                });
+        let toggle_view = view.downgrade();
+        let toggled = call.clone();
+        let toggle: pane::DisclosureToggle = Rc::new(move |window, cx| {
+            gpui::base::TextSelection::clear(window, cx);
+            let _ = toggle_view.update(cx, |view, cx| {
+                view.clear_output_selection(cx);
+                view.eased = Some((toggled.clone(), !view.input.expanded.contains(&toggled)));
+                cx.emit(TranscriptEvent::ToggleDisclosure(toggled.clone()));
+            });
+        });
+        let control = pane::tool_disclosure_control(
+            &call,
+            expanded,
+            targeted,
+            &self.input.disclosure_focus,
+            Grid::of(self.input.reading_size).gutter(),
+        )
+        // The disclosure overlay fills the rendered header. Keep the handler
+        // on it so the chevron, label, and trailing row text share one target.
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            gpui::base::TextSelection::clear(window, cx);
+            view.update(cx, |view, cx| {
+                view.clear_output_selection(cx);
+                view.eased = Some((clicked.clone(), !view.input.expanded.contains(&clicked)));
+                cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
+            });
+        });
         #[cfg(test)]
         let control = {
             let sink = self.input.disclosure_bounds.clone();
@@ -775,6 +796,7 @@ impl TranscriptView {
             overlay: control.into_any_element(),
             chevron: pane::disclosure_chevron(expanded, targeted, eased),
             targeted,
+            toggle: Some(toggle),
         }
     }
 
@@ -810,6 +832,353 @@ impl TranscriptView {
     }
 }
 
+/// What a minimap tick marks: a prompt, a failure, a Decision, a pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mark {
+    Prompt,
+    Failure,
+    Decision,
+    Pass,
+}
+
+impl Mark {
+    fn ink(self) -> u32 {
+        match self {
+            Self::Prompt => theme::ACCENT,
+            Self::Failure => theme::BLOCKED,
+            Self::Decision => theme::ATTENTION,
+            Self::Pass => theme::RUNNING,
+        }
+    }
+
+    /// What a row is worth a tick for, if anything: a prompt, a failed call
+    /// or turn, a Decision (its record, or the live notice of one waiting),
+    /// a passing check.
+    pub(crate) fn of(row: &TranscriptRow, signal: u32) -> Option<Self> {
+        if row.kind() == RowKind::Prompt {
+            return Some(Self::Prompt);
+        }
+        let mut pass = false;
+        for block in row.blocks() {
+            match &block.body {
+                Body::Tool(tool) => match &tool.state {
+                    ToolState::Failed(_) => return Some(Self::Failure),
+                    ToolState::Ok if ferrite_core::docview::is_test_run(tool) => pass = true,
+                    _ => {}
+                },
+                Body::TurnEnd(end) => {
+                    if matches!(end.outcome, ferrite_core::TurnOutcome::Error(_)) {
+                        return Some(Self::Failure);
+                    }
+                }
+                Body::Meta(_) => return Some(Self::Decision),
+                Body::Notice(_) if row.live_notice() && signal == theme::ATTENTION => {
+                    return Some(Self::Decision)
+                }
+                _ => {}
+            }
+        }
+        pass.then_some(Self::Pass)
+    }
+}
+
+impl TranscriptView {
+    /// The prompt band the top of the viewport reads under, and how far the
+    /// next turn's band pushes it up: `None` while the band is in place (or
+    /// no prompt heads the rows in view).
+    fn pinned_prompt(&self) -> Option<(usize, gpui::Pixels)> {
+        pinned_of(&self.rows, self.scroll.list_state(), self.pinned_h.get())
+    }
+
+    /// The pinned prompt band (the prototype's sticky `.prompt`): a plain
+    /// echo of the turn's band, laid over the top of the list on the plane
+    /// so it hides what scrolls under it. A click scrolls back to the
+    /// prompt itself.
+    fn pinned_band(
+        &self,
+        index: usize,
+        shift: gpui::Pixels,
+        cx: &Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let row = self.rows.get(index)?;
+        let Body::Prompt(line) = &row.blocks().first()?.body else {
+            return None;
+        };
+        let grid = Grid::of(self.input.reading_size);
+        let (text, files) = ferrite_core::prompt_files::split(line.clone());
+        let names = files
+            .iter()
+            .map(|path| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        let state = self.scroll.list_state().clone();
+        let gap = row.gap();
+        let measured = self.pinned_h.clone();
+        let entity = cx.entity().downgrade();
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(shift)
+                .on_children_prepainted(move |bounds, _, _| {
+                    if let Some(bounds) = bounds.first() {
+                        measured.set(bounds.size.height);
+                    }
+                })
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "transcript-pinned-{}",
+                            self.input.namespace
+                        )))
+                        .debug_selector(|| "transcript-pinned-prompt".into())
+                        .occlude()
+                        .cursor_pointer()
+                        .w_full()
+                        // The band over the plane: together they hide the
+                        // rows scrolling under it, glass or not.
+                        .bg(theme::paint::PLANE)
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .w_full()
+                                .min_w_0()
+                                .bg(theme::paint::BAND)
+                                .py(px(grid.half()))
+                                .pl(px(theme::TX_PAD_L))
+                                .pr(px(theme::TX_PAD_R))
+                                .text_color(gpui::rgb(theme::TEXT_STRONG))
+                                .child(pane::mark_gutter(
+                                    grid,
+                                    crate::icons::icon(
+                                        crate::icons::PROMPT,
+                                        grid.mark(),
+                                        theme::ACCENT,
+                                    ),
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .when(!text.is_empty(), |column| {
+                                            column.child(SharedString::from(text))
+                                        })
+                                        .when(!names.is_empty(), |column| {
+                                            column.child(
+                                                div()
+                                                    .truncate()
+                                                    .text_color(gpui::rgb(theme::PATH_INK))
+                                                    .child(SharedString::from(names)),
+                                            )
+                                        }),
+                                ),
+                        )
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                            state.scroll_to(gpui::ListOffset {
+                                item_ix: index,
+                                offset_in_item: px(gap),
+                            });
+                            let _ = entity.update(cx, |_, cx| cx.notify());
+                        }),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Every row's estimated top and the whole transcript's height, from the
+    /// heights the list last measured (an unmeasured row counts as the
+    /// measured average).
+    fn estimated_tops(&self) -> (Vec<f32>, f32) {
+        let heights = self.heights.borrow();
+        let rows = self.rows.rows();
+        let known: Vec<f32> = rows
+            .iter()
+            .filter_map(|row| heights.get(row.id()).copied())
+            .collect();
+        let fallback = if known.is_empty() {
+            3.0 * Grid::of(self.input.reading_size).line
+        } else {
+            known.iter().sum::<f32>() / known.len() as f32
+        };
+        let mut tops = Vec::with_capacity(rows.len());
+        let mut at = 0.0;
+        for row in rows {
+            tops.push(at);
+            at += heights.get(row.id()).copied().unwrap_or(fallback);
+        }
+        (tops, at + theme::BODY_PAD_B)
+    }
+
+    /// The minimap (the WP-A minimap tokens): a tick per prompt, failure,
+    /// Decision and pass, the viewport as a translucent band, shown only
+    /// while the pointer is on the transcript. A click on a tick jumps to its
+    /// row; anywhere else on the rail centres the view on that point.
+    fn minimap(&self, group: SharedString, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+        let rows = self.rows.rows();
+        if rows.is_empty() {
+            return None;
+        }
+        let state = self.scroll.list_state().clone();
+        let viewport = state.viewport_bounds();
+        let view_h = f32::from(viewport.size.height);
+        let (tops, total) = self.estimated_tops();
+        if view_h <= 0. || total <= view_h + 1. {
+            return None;
+        }
+        let signal = pane::signal_color(self.input.signal_status);
+        let top = state.logical_scroll_top();
+        let scrolled = if self.scroll.is_following_tail() {
+            total - view_h
+        } else {
+            tops.get(top.item_ix).copied().unwrap_or(total) + f32::from(top.offset_in_item)
+        };
+        let band_top = (scrolled / total).clamp(0., 1.);
+        let band_h = (view_h / total).clamp(0., 1.);
+        let entity = cx.entity().downgrade();
+        let tops = Rc::new(tops);
+        let ticks = rows.iter().enumerate().filter_map(|(index, row)| {
+            let mark = Mark::of(row, signal)?;
+            let at = tops[index] / total;
+            let state = state.clone();
+            let entity = entity.clone();
+            let gap = row.gap();
+            Some(
+                div()
+                    .id(SharedString::from(format!("minimap-tick-{index}")))
+                    .debug_selector(move || format!("minimap-tick-{mark:?}"))
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(gpui::relative(at))
+                    .h(px(theme::MINIMAP_TICK_H + 2. * theme::MINIMAP_TICK_INSET))
+                    .mt(px(-theme::MINIMAP_TICK_INSET))
+                    .flex()
+                    .items_center()
+                    .px(px(theme::MINIMAP_TICK_INSET))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(theme::MINIMAP_TICK_H))
+                            .bg(gpui::rgb(mark.ink())),
+                    )
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        cx.stop_propagation();
+                        state.scroll_to(gpui::ListOffset {
+                            item_ix: index,
+                            offset_in_item: px(gap),
+                        });
+                        let _ = entity.update(cx, |_, cx| cx.notify());
+                    }),
+            )
+        });
+        let jump_tops = tops.clone();
+        let jump_entity = entity.clone();
+        let rail = SharedString::from(format!("transcript-minimap-{}", self.input.namespace));
+        Some(
+            div()
+                .id(rail.clone())
+                .group(rail.clone())
+                .debug_selector(|| "transcript-minimap".into())
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(theme::MINIMAP_W))
+                .cursor_pointer()
+                .opacity(0.)
+                .group_hover(group, |style| style.opacity(1.))
+                .child(
+                    div()
+                        .id("minimap-view")
+                        .absolute()
+                        .left(px(theme::MINIMAP_BAND_INSET))
+                        .right(px(theme::MINIMAP_BAND_INSET))
+                        .top(gpui::relative(band_top))
+                        .h(gpui::relative(band_h))
+                        .min_h(px(theme::MINIMAP_BAND_MIN_H))
+                        .bg(theme::paint::HOVER)
+                        .group_hover(rail, |style| style.bg(theme::paint::SELECTION)),
+                )
+                .children(ticks)
+                .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                    cx.stop_propagation();
+                    let viewport = state.viewport_bounds();
+                    let height = f32::from(viewport.size.height).max(1.);
+                    let fraction =
+                        (f32::from(event.position.y - viewport.top()) / height).clamp(0., 1.);
+                    let goal = (fraction * total - view_h / 2.).max(0.);
+                    let index = jump_tops.iter().rposition(|top| *top <= goal).unwrap_or(0);
+                    state.scroll_to(gpui::ListOffset {
+                        item_ix: index,
+                        offset_in_item: px(goal - jump_tops[index]),
+                    });
+                    let _ = jump_entity.update(cx, |_, cx| cx.notify());
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// The transcript crossed `SPLIT_DIFF_MIN_W`: diffs lay out again, side
+    /// by side or unified, and their copy order follows.
+    fn width_changed(&mut self, wide: bool, cx: &mut Context<Self>) {
+        if self.wide.get() == wide {
+            return;
+        }
+        self.wide.set(wide);
+        self.sync_members(cx);
+        self.scroll.remeasure_all();
+        cx.notify();
+    }
+}
+
+/// The prompt band the top of the viewport reads under (see
+/// `TranscriptView::pinned_prompt`), from the list's last layout: `None`
+/// before the list has laid out, while the band is in place, or when no
+/// prompt heads the rows in view.
+fn pinned_of(
+    rows: &TranscriptRows,
+    state: &gpui::ListState,
+    pinned_h: gpui::Pixels,
+) -> Option<(usize, gpui::Pixels)> {
+    let rows = rows.rows();
+    let viewport = state.viewport_bounds();
+    if rows.is_empty() || viewport.size.height <= px(0.) {
+        return None;
+    }
+    let top = state.logical_scroll_top();
+    // Past the last row is the tail's sentinel before layout resolves it.
+    if top.item_ix >= rows.len() {
+        return None;
+    }
+    let prompt = rows[..=top.item_ix]
+        .iter()
+        .rposition(|row| row.kind() == RowKind::Prompt)?;
+    if prompt == top.item_ix && top.offset_in_item <= px(rows[prompt].gap()) {
+        return None;
+    }
+    let mut shift = px(0.);
+    if let Some(next) = (top.item_ix + 1..rows.len()).find(|ix| rows[*ix].kind() == RowKind::Prompt)
+    {
+        if let Some(bounds) = state.bounds_for_item(next) {
+            let band_top = bounds.top() + px(rows[next].gap()) - viewport.top();
+            if band_top < pinned_h {
+                shift = band_top - pinned_h;
+            }
+        }
+    }
+    Some((prompt, shift))
+}
+
 impl Render for TranscriptView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arm_second_tick(cx);
@@ -817,9 +1186,14 @@ impl Render for TranscriptView {
         let rows = self.rows.clone();
         let selection = self.text_runs();
         let view = cx.entity();
+        // The pinned band reads the last layout, before a tail follow
+        // resets the list to its end sentinel for the next one.
+        let pinned = self.pinned_prompt();
+        self.pinned_drawn.set(pinned);
         if self.scroll.is_following_tail() {
             self.scroll.scroll_to_bottom();
         }
+        let grid = Grid::of(self.input.reading_size);
         let list = list(
             self.scroll.list_state().clone(),
             move |index, window, cx| {
@@ -835,14 +1209,16 @@ impl Render for TranscriptView {
                 });
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
-                // resolve against and shrinks to its text. The wrapper is
-                // also the reading column — gpui lays list items at the
-                // list's full width, so the column lives in the row — and
-                // carries the row's own gap above it (the first row's is
-                // the body's top padding: the list's own top padding
-                // flickers mid-scroll).
+                // resolve against and shrinks to its text. The wrapper holds
+                // the row's inset (two cells left, three right; a prompt band
+                // runs full width and insets its own text) and the row's own
+                // gap above it (the first row's is the body's top padding:
+                // the list's own top padding flickers mid-scroll).
                 let gap = row.gap();
-                let wrapper = div().w_full().px(px(theme::PANE_PAD_X));
+                let band = row.kind() == RowKind::Prompt;
+                let wrapper = div().w_full().pt(px(gap)).when(!band, |wrapper| {
+                    wrapper.pl(px(theme::TX_PAD_L)).pr(px(theme::TX_PAD_R))
+                });
                 // A row appended live rises into place; its gap does not
                 // move, so the rows above it hold still.
                 let wrapper = match arrival {
@@ -852,11 +1228,7 @@ impl Render for TranscriptView {
                     }
                     None => wrapper,
                 };
-                wrapper
-                    .child(components::reading_column(
-                        div().px(px(theme::BOX_INSET_X)).pt(px(gap)).child(element),
-                    ))
-                    .into_any_element()
+                wrapper.child(element).into_any_element()
             },
         )
         // The bottom padding is the list's own: it counts in the scroll
@@ -866,11 +1238,62 @@ impl Render for TranscriptView {
         .min_h_0();
         let scroll = self.scroll.clone();
         let gaps = self.rows.clone();
+        let heights = self.heights.clone();
+        let wide = self.wide.clone();
+        let weak = cx.entity().downgrade();
+        let pinned_drawn = self.pinned_drawn.clone();
+        let pinned_asked = self.pinned_asked.clone();
+        let pinned_h = self.pinned_h.clone();
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
                 let settled =
                     scroll.settle_top(|index| gaps.get(index).map_or(0., |row| row.gap()));
+                // What the list measured feeds the minimap's estimates.
+                {
+                    let state = scroll.list_state();
+                    let mut heights = heights.borrow_mut();
+                    let start = state.logical_scroll_top().item_ix;
+                    for index in start..gaps.len() {
+                        let Some(bounds) = state.bounds_for_item(index) else {
+                            break;
+                        };
+                        if let Some(row) = gaps.get(index) {
+                            heights.insert(row.id().clone(), f32::from(bounds.size.height));
+                        }
+                    }
+                    if heights.len() > 2 * gaps.len() + 64 {
+                        let live: HashSet<_> = gaps.rows().iter().map(|row| row.id()).collect();
+                        heights.retain(|id, _| live.contains(id));
+                    }
+                }
+                // The band pinned at render came from the previous layout:
+                // when this layout moves it, render again.
+                let now = pinned_of(&gaps, scroll.list_state(), pinned_h.get());
+                let drawn = pinned_drawn.get();
+                let moved = match (now, drawn) {
+                    (Some((a, x)), Some((b, y))) => a != b || (x - y).abs() > px(0.5),
+                    (None, None) => false,
+                    _ => true,
+                };
+                // Ask once per position: a layout that keeps moving the band
+                // (it cannot, but a loop must never be possible) waits for the
+                // next ordinary render.
+                if moved && pinned_asked.get() != Some(now) {
+                    pinned_asked.set(Some(now));
+                    let weak = weak.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = weak.update(cx, |_, cx| cx.notify());
+                    });
+                }
+                let width = scroll.list_state().viewport_bounds().size.width;
+                let is_wide = width >= px(theme::SPLIT_DIFF_MIN_W);
+                if width > px(0.) && is_wide != wide.get() {
+                    let weak = weak.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = weak.update(cx, |view, cx| view.width_changed(is_wide, cx));
+                    });
+                }
                 if anchored || settled {
                     window.defer(cx, |window, _| window.refresh());
                 }
@@ -885,8 +1308,11 @@ impl Render for TranscriptView {
             .min_w_0()
             .w_full()
             .min_h_0()
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
+            // One grid for the whole transcript (theme rule 1): the reading
+            // size on its 1.5x line, every row inheriting it.
+            .font_family(theme::FONT_UI)
+            .text_size(px(grid.size))
+            .line_height(px(grid.line))
             .text_color(gpui::rgb(theme::TEXT))
             .hover_text()
             .track_focus(&self.transcript_focus)
@@ -901,19 +1327,26 @@ impl Render for TranscriptView {
             } else {
                 self.input.selection_scope
             });
+        let group = SharedString::from(format!("transcript-body-{}", self.input.namespace));
+        let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift, cx));
+        let minimap = self.minimap(group.clone(), cx);
         // A Thread with nothing in it yet shows nothing: the Composer's
         // placeholder says what to do, once (rule 2.11.4).
         div()
+            .group(group)
             .relative()
             .flex()
             .flex_col()
             .min_w_0()
             .size_full()
             .min_h_0()
+            .font_family(theme::FONT_UI)
+            .text_size(px(grid.size))
+            .line_height(px(grid.line))
             .child(list)
             // The first visible row is never cut under the head rule: a
-            // cut row's short remnant lies under the Pane's own ground, so
-            // the body reads from its first whole row (`settle_top`).
+            // cut row's short remnant lies under the plane, so the body
+            // reads from its first whole row (`settle_top`).
             .children((self.scroll.top_mask() > px(0.)).then(|| {
                 div()
                     .debug_selector(|| "transcript-top-mask".into())
@@ -922,11 +1355,9 @@ impl Render for TranscriptView {
                     .left_0()
                     .right_0()
                     .h(self.scroll.top_mask())
-                    .bg(gpui::rgb(theme::PANE))
+                    .bg(theme::paint::PLANE)
             }))
-            .child(crate::components::scrollbar(
-                SharedString::from(format!("transcript-scrollbar-{}", self.input.namespace)),
-                self.scroll.list_state(),
-            ))
+            .children(pinned)
+            .children(minimap)
     }
 }

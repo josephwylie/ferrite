@@ -1026,17 +1026,19 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             crate::rich::testing::bounds(&id, 0, cx).unwrap()
         });
         let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
+        let gutter = px(theme::tx_gutter(theme::FS_PROSE));
         for delta in [
-            // Prose starts on C1, the one content edge.
-            text.left() - answer.left() - px(theme::GUTTER_W),
+            // Terminal-native: prose starts on the content column, one
+            // 2-cell gutter in.
+            text.left() - answer.left() - gutter,
             // The row owns no padding: the list's gap table spaces rows.
             text.top() - answer.top(),
             answer.bottom() - text.bottom(),
             answer.right() - text.right(),
-            // The mark's glyph box hangs at the row's left edge, centred on
-            // the first prose line box.
+            // The `●` hangs in the gutter at the row's left edge, on the
+            // first prose line box.
             mark.left() - answer.left(),
-            mark.size.width - px(theme::GLYPH_BOX),
+            mark.size.width - gutter,
             (mark.top() + mark.size.height / 2.) - (text.top() + px(theme::LH_PROSE / 2.)),
         ] {
             assert!(

@@ -369,11 +369,15 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
         })
         .unwrap();
     tick(cx);
-    let mark = cx.debug_bounds("composer-mark").unwrap();
-    let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+    // Terminal-native: the transcript's `❯` sits two chrome cells in from
+    // the body's left edge (`TX_PAD_L`), the axis the Composer's `❯` takes
+    // in the prototype (`.comp{padding-left:2ch}`). The Composer's own half
+    // of this check moves with the Composer's restyle (WP-D).
+    let mark = cx.debug_bounds("prompt-mark").unwrap();
+    let body = cx.debug_bounds("transcript-prompt").unwrap();
     assert!(
-        (mark.left() - prompt.left()).abs() <= px(1.),
-        "L1: {mark:?} / {prompt:?}"
+        (mark.left() - (body.left() + px(crate::theme::TX_PAD_L))).abs() <= px(1.),
+        "L1: {mark:?} / {body:?}"
     );
 
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
@@ -615,7 +619,8 @@ fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
         island.contains(&deny.origin) && island.contains(&deny.bottom_right()),
         "{deny:?} inside {island:?}"
     );
-    assert!(deny.size.height >= px(crate::theme::MENU_ROW_H));
+    // Terminal-native: an option is one grid row.
+    assert!(deny.size.height >= px(crate::theme::LH_UI));
 }
 
 /// Rule 2.8.6: the digit one past a question's options arms its one answer

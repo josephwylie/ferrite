@@ -164,106 +164,112 @@ pub fn split_recommended(label: &str) -> (&str, bool) {
 
 // ------------------------------------------------------------------ frame
 
-/// The block: `RAISED`, resting on the Pane (`Elevation::Raised`), one 1px
-/// `COMPOSER_EDGE`, `R_BLOCK`, capped at the
-/// reading column. Ochre is only on `◆` and the kind word — no wash, no
-/// state edge. `joined` merges it into the live Composer below it: square
-/// bottom corners and no bottom edge — the Composer's own top edge is the
-/// one full-width seam — so the Decision and the Composer's input line
-/// read as one outlined block. Every section keeps its natural height (nothing is
-/// clipped); only the command well gives way. It keeps the
-/// `question-island` selector every kind has always answered to, and its
-/// own cursor: it floats over selectable prose that paints an I-beam.
+/// The block (the prototype's `.dec`, in the provider CLIs' own grammar):
+/// no box, no ground of its own beyond the plane it lies on over the
+/// transcript, a 1px `paint::LINE` above it. The head's `◆` hangs in the
+/// 2-cell gutter; every other section sits on the content column after it.
+/// `joined` merges it into the live Composer below it (the Composer's own
+/// rule closes it). Every section keeps its natural height (nothing is clipped); only
+/// the command band gives way. It keeps the `question-island` selector
+/// every kind has always answered to, and its own cursor: it floats over
+/// selectable prose that paints an I-beam.
 pub fn card(
     serial: u64,
-    joined: bool,
+    _joined: bool,
     children: impl IntoIterator<Item = AnyElement>,
 ) -> Stateful<Div> {
-    let block = div()
+    div()
         .id(("question-island", serial as usize))
         .debug_selector(|| "question-island".into())
         .relative()
         .flex()
         .flex_col()
         .w_full()
-        .max_w(px(theme::READING_MAX_W))
         .min_w_0()
         .min_h_0()
         .cursor_default()
-        .bg(rgb(theme::RAISED))
-        .shadow(components::elevation(components::Elevation::Raised))
-        .border_color(rgba(theme::COMPOSER_EDGE));
-    let block = if joined {
-        block
-            .border_t_1()
-            .border_l_1()
-            .border_r_1()
-            .rounded_t(px(theme::R_BLOCK))
-    } else {
-        block.border_1().rounded(px(theme::R_BLOCK))
-    };
-    block.child(
-        div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .min_w_0()
-            .min_h_0()
-            .gap(px(theme::DECISION_GAP))
-            .px(px(theme::DECISION_PAD_X))
-            .py(px(theme::DECISION_PAD_Y))
-            .font_family(theme::FONT_UI)
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::TEXT))
-            .children(children),
-    )
+        .bg(theme::paint::PLANE)
+        .border_t_1()
+        .border_color(theme::paint::LINE)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w_0()
+                .min_h_0()
+                .gap(px(theme::DECISION_GAP))
+                .pl(px(theme::TX_PAD_L + theme::GLYPH_GUTTER))
+                .pr(px(theme::TX_PAD_R))
+                .py(px(theme::DECISION_PAD_Y))
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
+                .text_color(rgb(theme::TEXT))
+                .children(children),
+        )
 }
 
-/// The head line, `◆ approval · Bash`, at `FS_SM`: the drawn `◆` in the
-/// glyph box (the Composer `❯`'s column), the kind word in `ATTENTION` at
-/// `W_BODY` — the card's only ochre besides the mark — then each detail
-/// after its own `TEXT_FAINT` `·` in `TEXT_MUTED`, and a status on the
-/// right.
+/// The head line (the prototype's `◆ Bash needs approval · codex ·
+/// read-only sandbox`): the drawn `◆` in the gutter, the lead in
+/// `ATTENTION` — `<tool> needs approval` for an approval naming its tool,
+/// otherwise the kind word — then each detail after its own `TEXT_FAINT`
+/// `·` in `TEXT_MUTED`, and a status on the right.
 pub fn head(
     kind: impl Into<SharedString>,
     detail: Option<SharedString>,
     status: Option<AnyElement>,
 ) -> Div {
+    let kind: SharedString = kind.into();
+    let mut parts: Vec<String> = detail
+        .as_ref()
+        .map(|detail| detail.split(" \u{b7} ").map(str::to_owned).collect())
+        .unwrap_or_default();
+    let lead = if kind.as_ref() == theme::words::APPROVAL && !parts.is_empty() {
+        let tool = parts.remove(0);
+        SharedString::from(format!("{tool} needs {kind}"))
+    } else {
+        kind
+    };
     let mut line = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .min_w_0()
-        .h(px(theme::LH_META))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .child(components::gutter(mark(), theme::LH_META))
+        .h(px(theme::LH_UI))
+        .ml(px(-theme::GLYPH_GUTTER))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .w(px(theme::GLYPH_GUTTER))
+                .h(px(theme::LH_UI))
+                .child(mark()),
+        )
         .child(
             div()
                 .flex_shrink_0()
                 .font_weight(theme::W_BODY)
                 .text_color(rgb(theme::ATTENTION))
-                .child(kind.into()),
+                .child(lead),
         );
-    if let Some(detail) = detail {
-        for part in detail.split(" \u{b7} ") {
-            line = line
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .px(px(theme::SPACE_1_5))
-                        .text_color(rgb(theme::TEXT_FAINT))
-                        .child("\u{b7}"),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(theme::TEXT_MUTED))
-                        .child(SharedString::from(part.to_string())),
-                );
-        }
+    for part in parts {
+        line = line
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(theme::CH))
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .child("\u{b7}"),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(SharedString::from(part)),
+            );
     }
     line.child(div().flex_1()).children(status)
 }
@@ -278,60 +284,49 @@ pub fn status(text: impl Into<SharedString>) -> Div {
     div()
         .debug_selector(|| "decision-status".into())
         .flex_shrink_0()
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_MUTED))
         .child(text.into())
 }
 
-/// An answer in flight: a still `RUNNING` dot and `sending`, `FS_SM`
-/// `TEXT_MUTED`. Nothing on it moves — a Decision is static (rule
-/// 2.10.4).
+/// An answer in flight: a still `RUNNING` dot and `sending`, `TEXT_MUTED`.
+/// Nothing on it moves — a Decision is static (rule 2.10.4).
 pub fn sending() -> Div {
     div()
         .debug_selector(|| "decision-status".into())
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(theme::SPACE_1_5))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
+        .gap(px(theme::CH))
         .text_color(rgb(theme::TEXT_MUTED))
         .child(components::status_dot(theme::RUNNING))
         .child(theme::words::SENDING)
 }
 
-/// A question: Geist `FS_PROSE`/`LH_PROSE`, `W_STRONG`, `TEXT_STRONG`, on
-/// the prose measure.
+/// A question: `W_STRONG` `TEXT_STRONG` on the grid, on the prose measure.
 pub fn question_text(text: impl Into<SharedString>) -> Div {
     div()
         .w_full()
         .min_w_0()
-        .max_w(px(theme::PROSE_MEASURE))
+        .max_w(px(theme::MEASURE_CH * theme::CH))
         .flex_shrink_0()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_PROSE))
-        .line_height(px(theme::LH_PROSE))
         .font_weight(theme::W_STRONG)
         .text_color(rgb(theme::TEXT_STRONG))
         .child(text.into())
 }
 
-/// What an approval asks, in prose: Geist `FS_PROSE`, `TEXT`. The first
-/// section to go when the Pane is short.
+/// What an approval asks, in prose: `TEXT` on the grid. The first section
+/// to go when the Pane is short.
 pub fn prose(text: impl Into<SharedString>) -> Div {
     div()
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_PROSE))
-        .line_height(px(theme::LH_PROSE))
+        .max_w(px(theme::MEASURE_CH * theme::CH))
         .text_color(rgb(theme::TEXT))
         .child(text.into())
 }
 
-/// Whether an approval's prose says only what its command well already
+/// Whether an approval's prose says only what its command band already
 /// shows: the description, trimmed, equals or sits inside the command's
 /// first line. Such prose is dropped — the subject is printed once — and a
 /// description that gives a reason stays.
@@ -347,19 +342,17 @@ pub fn prose_repeats_command(description: &str, command: Option<&str>) -> bool {
 pub fn note(text: impl Into<SharedString>) -> Div {
     div()
         .flex_shrink_0()
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_MUTED))
         .child(text.into())
 }
 
-/// The command well: the exact input, mono `TEXT_STRONG`, on `RAISED_2`
-/// (one step up from the card, never darker than the Pane) at
-/// `R_CONTROL`. A shell command reads `$ gh issue close 212`: the `$ ` is
-/// `TEXT_FAINT` and outside the selectable text, so a copy gives the
-/// command alone. The one part of a card that gives way when the Pane is
-/// short: it keeps one line (`LH_CODE` + its padding) and scrolls the rest,
-/// so the rows below it stay whole.
+/// The command band (the prototype's `.dec .cmd`, clean): the exact input,
+/// mono `TEXT_STRONG`, on a full `paint::BAND` with a quarter line above
+/// and below and one cell inside. A shell command reads `$ gh issue close
+/// 212`: the `$ ` is `TEXT_FAINT` and outside the selectable text, so a copy
+/// gives the command alone. The one part of a card that gives way when the
+/// Pane is short: it keeps one line and scrolls the rest, so the rows below
+/// it stay whole.
 pub fn well(prompt: bool, child: impl IntoElement) -> Div {
     div()
         .flex()
@@ -369,13 +362,10 @@ pub fn well(prompt: bool, child: impl IntoElement) -> Div {
         .flex_shrink_1()
         .min_h(px(theme::DECISION_WELL_MIN_H))
         .overflow_hidden()
-        .bg(rgb(theme::RAISED_2))
-        .rounded(px(theme::R_CONTROL))
+        .bg(theme::paint::BAND)
         .px(px(theme::DECISION_WELL_PAD_X))
         .py(px(theme::DECISION_WELL_PAD_Y))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_CODE))
         .text_color(rgb(theme::TEXT_STRONG))
         .when(prompt, |well| {
             well.child(
@@ -402,10 +392,11 @@ pub fn well(prompt: bool, child: impl IntoElement) -> Div {
 
 /// What one option row shows.
 pub struct Row {
-    /// The key that picks it; `None` leaves its keycap slot empty.
+    /// The key that picks it — a digit reads `1.`, a letter `y` — dim
+    /// before the label; `None` leaves its slot empty.
     pub key: Option<SharedString>,
     pub label: SharedString,
-    /// A standing answer's scope (`Bash(gh issue:*)`), mono `TEXT_MUTED`
+    /// A standing answer's scope (`Bash(gh issue:*)`), mono `PATH_INK`
     /// after the label.
     pub scope: Option<SharedString>,
     pub description: Option<SharedString>,
@@ -415,27 +406,37 @@ pub struct Row {
     /// A declining verb (Deny): its title in `TEXT`, never red and never
     /// brighter than the verbs that act.
     pub quiet: bool,
-    /// The row ↵ would choose: a trailing mono `↵`.
+    /// The row ↵ would choose: the accent `❯` in its gutter.
     pub enter: bool,
 }
 
-/// One option row on `gpui_base::Button` (tab stop, Enter/Space, focus
-/// ring). A title-only row is `MENU_ROW_H` (`LH_UI` + `DECISION_ROW_PAD_Y`
-/// above and below); a description adds `LH_PROSE_SM` per line. The keycap
-/// (`KBD_H`) is centred on the glyph column the head's `◆` and the
-/// Composer's `❯` share — the row hangs `DECISION_ROW_PAD_X` left of the
-/// card's content so its hover ground reaches around the key — and the
-/// title starts on the text column. Title `W_BODY` `TEXT_STRONG`
-/// (`TEXT_MUTED` disabled), description `W_BODY` `TEXT_2`, `recommended`
-/// `FS_SM` `TEXT_MUTED` at the right. Selected is `FILL` plus the check;
-/// hover `RAISED_2`; keyboard focus the one `FOCUS_RING` recipe.
+/// How a row's key reads before its label: a digit as an ordinal (`1.`),
+/// a letter as itself.
+pub fn key_label(key: &str) -> String {
+    if !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_digit()) {
+        format!("{key}.")
+    } else {
+        key.to_owned()
+    }
+}
+
+/// One option row (the prototype's `.opt`) on `gpui_base::Button` (tab
+/// stop, Enter/Space, focus ring): `[❯][1. ][label]`, one row high. The
+/// accent `❯` stands in its 2-cell gutter on the row ↵ would choose and on
+/// a picked row; the key is `TEXT_MUTED`; the label `TEXT` (`TEXT_STRONG`
+/// when picked, `TEXT_MUTED` disabled), a scope mono `PATH_INK`, a
+/// description under it `TEXT_MUTED`, `recommended` dim at the right. A
+/// picked row wears `paint::SELECTION` and a trailing accent check; the
+/// pointer lays `paint::HOVER`; keyboard focus the one `FOCUS_RING` recipe.
+/// No keycaps.
 pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
-    let ink = match (row.enabled, row.quiet) {
-        (false, _) => theme::TEXT_MUTED,
-        (true, true) => theme::TEXT,
-        (true, false) => theme::TEXT_STRONG,
+    let ink = match (row.enabled, row.quiet, row.selected) {
+        (false, _, _) => theme::TEXT_MUTED,
+        (true, _, true) => theme::TEXT_STRONG,
+        (true, true, false) => theme::TEXT,
+        (true, false, false) => theme::TEXT,
     };
     let accessibility = SharedString::from(format!(
         "{}{}",
@@ -448,7 +449,9 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
             .flex_shrink_0()
             .items_center()
             .h(px(theme::LH_UI))
+            .pl(px(theme::CH))
     };
+    let cursor = row.enabled && (row.enter || row.selected);
     gpui_base::Button::new(id)
         .tab_stop(row.enabled)
         .disabled(!row.enabled)
@@ -459,8 +462,6 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         .justify_start()
         .items_start()
         .gap(px(theme::DECISION_ROW_INNER_GAP))
-        .ml(px(-theme::DECISION_ROW_PAD_X))
-        .mr(px(-theme::DECISION_ROW_PAD_X))
         .px(px(theme::DECISION_ROW_PAD_X))
         .py(px(theme::DECISION_ROW_PAD_Y))
         .rounded(px(theme::R_CONTROL))
@@ -469,26 +470,28 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(ink))
-        // A selected option takes its FILL at once (a keyboard change);
+        // A picked option takes its ground at once (a keyboard change);
         // only the pointer half of the ladder blends.
         .map(|button| match (row.enabled, row.selected) {
-            (false, true) => button.bg(rgb(theme::FILL)).cursor_default(),
+            (false, true) => button.bg(theme::paint::SELECTION).cursor_default(),
             (false, false) => button.cursor_default(),
-            (true, true) => button.hover_carried(key).press_raised(),
+            (true, true) => button.bg(theme::paint::SELECTION).press_raised(),
             (true, false) => button.hover_raised(key).press_raised(),
         })
         .focus_visible(components::control_focus)
         .child(
-            // The glyph box: the keycap is wider than the box and centred
-            // on it, so it overhangs the box evenly on both sides.
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .justify_center()
-                .w(px(theme::GLYPH_BOX))
+                .w(px(theme::GLYPH_GUTTER))
                 .h(px(theme::LH_UI))
-                .children(row.key.filter(|_| row.enabled).map(components::kbd)),
+                .when(cursor, |gutter| {
+                    gutter.child(
+                        icons::icon(icons::PROMPT, theme::GLYPH_BOX, theme::ACCENT)
+                            .debug_selector(|| "decision-cursor".into()),
+                    )
+                }),
         )
         .child(
             div()
@@ -501,31 +504,33 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                         .flex()
                         .flex_wrap()
                         .items_baseline()
-                        .gap_x(px(theme::SPACE_1_5))
                         .min_w_0()
-                        .child(row.label)
+                        .children(row.key.filter(|_| row.enabled).map(|key| {
+                            div()
+                                .flex_shrink_0()
+                                .pr(px(theme::CH))
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .child(SharedString::from(key_label(&key)))
+                        }))
+                        .child(div().pr(px(theme::CH)).child(row.label))
                         .children(row.scope.map(|scope| {
                             div()
                                 .min_w_0()
                                 .font_family(theme::FONT_CODE)
-                                .text_color(rgb(theme::TEXT_MUTED))
+                                .text_color(rgb(theme::PATH_INK))
                                 .child(scope)
                         })),
                 )
                 .children(row.description.filter(|text| !text.is_empty()).map(|text| {
                     div()
-                        .font_family(theme::FONT_UI)
                         .font_weight(theme::W_BODY)
-                        .text_size(px(theme::FS_PROSE_SM))
-                        .line_height(px(theme::LH_PROSE_SM))
-                        .text_color(rgb(theme::TEXT_2))
+                        .text_color(rgb(theme::TEXT_MUTED))
                         .child(text)
                 })),
         )
         .when(row.recommended, |button| {
             button.child(
                 trailing_line()
-                    .text_size(px(theme::FS_SM))
                     .text_color(rgb(theme::TEXT_MUTED))
                     .child("recommended"),
             )
@@ -534,7 +539,6 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
             button.child(
                 trailing_line()
                     .font_family(theme::FONT_CODE)
-                    .text_size(px(theme::FS_SM))
                     .text_color(rgb(theme::TEXT_MUTED))
                     .child("\u{21b5}"),
             )
@@ -551,22 +555,20 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
 // ---------------------------------------------------------------- footer
 
 /// The one error line: the drawn `✗` and `lead` in `BLOCKED` (only that
-/// phrase carries the hue), then `· detail` in `TEXT_2`.
+/// phrase carries the hue), then `· detail` in `TEXT_MUTED`.
 pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_start()
-        .gap(px(theme::SPACE_1_5))
+        .gap(px(theme::CH))
         .min_w_0()
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(theme::LH_META))
+                .h(px(theme::LH_UI))
                 .child(icons::icon(
                     icons::CLOSE,
                     theme::DECISION_MARK,
@@ -582,13 +584,44 @@ pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
         .child(
             div()
                 .min_w_0()
-                .text_color(rgb(theme::TEXT_2))
-                .child(SharedString::from(format!("· {}", detail.into()))),
+                .text_color(rgb(theme::TEXT_MUTED))
+                .child(SharedString::from(format!("\u{b7} {}", detail.into()))),
         )
 }
 
-/// The answer row: key hints on the left, actions on the right. It keeps
-/// its height whatever the Pane's.
+/// A hint line (the prototype's `↑↓ select · 1–3 pick · esc deny`): every
+/// `key verb` pair dim, `·` seams `TEXT_FAINT`, no keycaps.
+pub fn hint_line(hints: &[(&str, &str)]) -> Div {
+    let mut line = div()
+        .debug_selector(|| "decision-hints".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_color(rgb(theme::TEXT_MUTED));
+    for (at, (key, verb)) in hints.iter().enumerate() {
+        if at > 0 {
+            line = line.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(theme::CH))
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .child("\u{b7}"),
+            );
+        }
+        line = line.child(
+            div()
+                .flex_shrink_0()
+                .child(SharedString::from(format!("{key} {verb}"))),
+        );
+    }
+    line
+}
+
+/// The answer row: the hint line on the left, actions on the right. It
+/// keeps its height whatever the Pane's.
 pub fn footer(hints: &[(&str, &str)], actions: impl IntoIterator<Item = AnyElement>) -> Div {
     div()
         .flex()
@@ -601,13 +634,13 @@ pub fn footer(hints: &[(&str, &str)], actions: impl IntoIterator<Item = AnyEleme
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
-                .children((!hints.is_empty()).then(|| components::key_hints(hints))),
+                .children((!hints.is_empty()).then(|| hint_line(hints))),
         )
         .children(actions)
 }
 
 /// The completing action (`Send`, `Complete`): the steel primary, its label
-/// at `W_BODY`. `enter` adds the key that sends — a mono `FS_SM` `↵` at
+/// at `W_BODY`. `enter` adds the key that sends — a mono `↵` at
 /// `ON_ACCENT` 70% — so the key lives on the button, not in the hints.
 pub fn send_button(
     id: impl Into<ElementId>,
@@ -628,14 +661,13 @@ pub fn send_button(
             components::text_ui()
                 .flex()
                 .items_center()
-                .gap(px(theme::SPACE_1_5))
+                .gap(px(theme::CH))
                 .text_color(rgb(ink))
                 .child(label.into())
                 .when(enter, |label| {
                     label.child(
                         div()
                             .font_family(theme::FONT_CODE)
-                            .text_size(px(theme::FS_SM))
                             .map(|key| {
                                 if disabled {
                                     key.text_color(rgb(theme::TEXT_MUTED))
@@ -660,9 +692,11 @@ pub fn skip_button(
 
 // -------------------------------------------------------------------- L2
 
-/// An L2 keycap pair — `y allow` — pressable, on the cell's `PANE` ground:
-/// the key's cap, then its verb, muted. A narrow cell drops the verb and
-/// keeps the key (`verb` false): pairs go whole, never cut.
+/// An L2 quick answer — `y allow` — pressable (the prototype's `.qa
+/// button`): a 1px `paint::LINE2` edge, one cell inside, the key dim and
+/// the verb in `TEXT`; under the pointer the hover face and `TEXT_STRONG`.
+/// A narrow cell drops the verb and keeps the key (`verb` false): pairs go
+/// whole, never cut. No keycaps.
 pub fn key_action(
     id: &'static str,
     key: &'static str,
@@ -671,24 +705,31 @@ pub fn key_action(
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .group(id)
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(theme::DECISION_KEY_GAP))
-        .rounded(px(theme::R_CHIP))
+        .gap(px(theme::CH))
+        .px(px(theme::CH))
+        .border_1()
+        .border_color(theme::paint::LINE2)
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(theme::TEXT_MUTED))
-        .hover_row(id)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(theme::TEXT))
+        .hover_raised(id)
         .press_row()
-        .child(components::kbd(key))
+        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(key))
         .when(with_verb, |pair| {
-            pair.child(div().pr(px(theme::SPACE_1)).child(verb))
+            pair.child(
+                div()
+                    .group_hover(id, |style| style.text_color(rgb(theme::TEXT_STRONG)))
+                    .child(verb),
+            )
         })
 }
 
-/// The L2 keycaps' cluster.
+/// The L2 quick answers' cluster.
 pub fn key_actions() -> Div {
     div()
         .flex()

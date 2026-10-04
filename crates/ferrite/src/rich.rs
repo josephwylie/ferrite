@@ -312,9 +312,12 @@ impl gpui::RenderOnce for Markdown {
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
-                text_style.with_foreground(rgb(theme::TEXT_2).into()),
+                text_style.with_foreground(rgb(theme::TEXT_MUTED).into()),
                 |style, level| {
-                    style.with_heading(level, heading(level, base).text_color(rgb(theme::TEXT_2)))
+                    style.with_heading(
+                        level,
+                        heading(level, base).text_color(rgb(theme::TEXT_MUTED)),
+                    )
                 },
             )
         } else {
@@ -437,6 +440,9 @@ impl gpui::Render for CodeActions {
         if shown > 0. && shown < 1. {
             cx.notify();
         }
+        // The prototype's `.code .lang` and `.code .copy`: the language tag
+        // always shows, dim, at the block's top right; the actions before it
+        // blend in under the pointer.
         let mut actions = gpui::div()
             .key_context("TranscriptCodeActions")
             .track_focus(&self.focus)
@@ -447,33 +453,22 @@ impl gpui::Render for CodeActions {
             .flex()
             .items_center()
             .justify_end()
-            .min_w(px(theme::CODE_ACTION_MIN_W))
-            .gap(px(theme::SPACE_1))
-            .rounded(px(theme::R_CHIP))
-            .bg(rgb(theme::RAISED))
+            .gap(px(theme::CH))
             .font_family(theme::FONT_UI)
-            .text_size(px(theme::FS_SM))
-            .line_height(px(theme::LH_META))
-            .text_color(rgb(theme::TEXT_MUTED))
-            .opacity(shown)
-            .when_some(
-                code_language(self.language.as_ref()),
-                |actions, language| {
-                    actions.child(
-                        gpui::div()
-                            .flex_shrink_0()
-                            .pl(px(theme::SPACE_1))
-                            .font_family(theme::FONT_CODE)
-                            .child(language),
-                    )
-                },
-            );
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
+            .text_color(rgb(theme::TEXT_MUTED));
+        let mut hovered = gpui::div()
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_1))
+            .opacity(shown);
         if self
             .language
             .as_ref()
             .is_some_and(|lang| lang.eq_ignore_ascii_case("html"))
         {
-            actions = actions.child(code_action("preview-html", cx).label("Preview").on_click(
+            hovered = hovered.child(code_action("preview-html", cx).label("Preview").on_click(
                 move |_, window, cx| {
                     use gpui::component::WindowExt as _;
                     let html = code.clone();
@@ -491,7 +486,7 @@ impl gpui::Render for CodeActions {
                                     .child("HTML preview"),
                             )
                             .width(px(theme::READING_MAX_W))
-                            .bg(rgb(theme::RAISED))
+                            .bg(theme::paint::FLOAT)
                             .rounded(px(theme::R_PANE))
                             .child(
                                 gpui::div()
@@ -513,7 +508,7 @@ impl gpui::Render for CodeActions {
         }
         // `Copy ⌘C`: the key read from the key table, as a mono suffix on a
         // wrapper (a kit button's own tooltip is plain text).
-        actions = actions.child(
+        hovered = hovered.child(
             gpui::div()
                 .id("copy-code-tip")
                 .flex_shrink_0()
@@ -539,6 +534,18 @@ impl gpui::Render for CodeActions {
                         })),
                 ),
         );
+        actions = actions.child(hovered).when_some(
+            code_language(self.language.as_ref()),
+            |actions, language| {
+                actions.child(
+                    gpui::div()
+                        .debug_selector(|| "code-language".into())
+                        .flex_shrink_0()
+                        .font_family(theme::FONT_CODE)
+                        .child(language),
+                )
+            },
+        );
         gpui::div()
             .id(SharedString::from(format!("{}-overlay", self.key)))
             .relative()
@@ -548,26 +555,25 @@ impl gpui::Render for CodeActions {
     }
 }
 
-/// A quiet text action in a fence's overlay: Geist `FS_SM` `TEXT_2` on the
-/// block's own `RAISED`, `HOVER_RAISED` under the pointer (the one 150ms
-/// blend), pressed at once, a stable `CODE_ACTION_H` × `CODE_ACTION_MIN_W`
-/// target.
+/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_MUTED` with no
+/// ground, the hover overlay under the pointer (the one 150ms blend),
+/// pressed at once, a stable `CODE_ACTION_MIN_W` target one row high.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
     crate::components::faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        rgb(theme::HOVER_RAISED).into(),
-        rgb(theme::FILL_HOVER).into(),
-        rgb(theme::TEXT_2).into(),
+        theme::paint::HOVER.into(),
+        theme::paint::PRESS.into(),
+        rgb(theme::TEXT_MUTED).into(),
         cx,
     )
-    .h(px(theme::CODE_ACTION_H))
+    .h(px(theme::LH_UI))
     .min_w(px(theme::CODE_ACTION_MIN_W))
-    .px(px(theme::CODE_ACTION_PAD_X))
+    .px(px(theme::CH))
     .rounded(px(theme::R_CHIP))
     .font_family(theme::FONT_UI)
-    .text_size(px(theme::FS_SM))
-    .line_height(px(theme::LH_META))
+    .text_size(px(theme::FS_UI))
+    .line_height(px(theme::LH_UI))
     .flex_shrink_0()
     .tab_stop(true)
 }
@@ -582,50 +588,52 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
 /// (`theme::heading_scale`), each on its own pixel line height.
 pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
     let rem = |value: f32| rems(value / f32::from(rem_size));
-    let step = |value: f32| theme::reading_step(value, f32::from(base));
-    let reading = reading_size_at(f32::from(base));
+    let size = f32::from(base);
+    let line = theme::prose_line_height(size);
+    let cell = theme::tx_cell(size);
     let mut style = TextViewStyle::default()
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT).into())
-        .with_muted_foreground(rgb(theme::TEXT_2).into())
-        .with_link(rgb(theme::LINK_INK).into())
-        .with_link_underline(Some(rgba(theme::ACCENT_EDGE).into()))
+        .with_muted_foreground(rgb(theme::TEXT_MUTED).into())
+        // Links and paths read cyan, with no underline at rest.
+        .with_link(rgb(theme::PATH_INK).into())
+        .with_link_underline(Some(gpui::transparent_black()))
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
         .with_strong(gpui::HighlightStyle {
+            color: Some(rgb(theme::TEXT_STRONG).into()),
             font_weight: Some(theme::W_STRONG),
             ..Default::default()
         })
-        .with_code_background(rgb(theme::RAISED).into())
+        // A fence has no ground: a 1px `LINE2` rule on its left, the code
+        // two cells in, on the prose's own grid.
+        .with_code_background(gpui::transparent_black())
         .with_code_block(
             gpui::StyleRefinement::default()
-                .px(px(theme::CODE_PAD_X))
-                .py(px(theme::CODE_PAD_Y))
+                .pl(px(2.0 * cell))
+                .pr(px(0.))
+                .py(px(0.))
+                .border_l_1()
+                .border_color(theme::paint::LINE2)
                 .rounded(px(theme::R_BLOCK))
                 .font_family(theme::FONT_CODE)
                 .font_weight(theme::W_BODY)
-                .text_size(px(theme::FS_UI))
-                .line_height(px(theme::LH_CODE))
+                .text_size(px(size))
+                .line_height(px(line))
                 .text_color(rgb(theme::SYN_PLAIN)),
         )
-        // Inline code is body ink at body weight whatever it sits in (a
-        // heading, `**strong**`): the chip, not the weight, sets it apart.
+        // Inline code is cyan ink at body weight whatever it sits in, with
+        // no chip.
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
             font_weight: Some(theme::W_BODY),
             ..Default::default()
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
-        .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
-            color: rgba(theme::INLINE_CODE_WASH).into(),
-            radius: px(theme::R_CHIP),
-            overhang: px(theme::INLINE_CODE_OVERHANG),
-            inset_y: px(theme::inline_code_inset_y(reading)),
-        }))
-        // No row rules: a transparent border draws none (the header keeps
-        // `TABLE_HEAD_RULE` through its own refinement).
-        .with_border(gpui::transparent_black())
+        .with_inline_code_wash(None)
+        // A table's row rules are the one `LINE`; its head's is `LINE2`.
+        .with_border(theme::paint::LINE.into())
         .with_table({
-            // No box and no ground: the header's rule is the table.
+            // No box and no ground.
             let mut table = gpui::StyleRefinement::default()
                 .border_0()
                 .bg(gpui::transparent_black());
@@ -635,38 +643,41 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         .with_table_cell(crate::components::tabular(
             gpui::StyleRefinement::default()
                 .border_r_0()
-                .py(px(theme::TABLE_CELL_PAD_Y))
-                .text_size(px(theme::inline_code_size(reading)))
-                .line_height(px(theme::table_line_height(reading))),
+                .px(px(cell))
+                .py(px(0.))
+                .text_size(px(size))
+                .line_height(px(line)),
         ))
         .with_table_head(
             gpui::StyleRefinement::default()
                 .bg(gpui::transparent_black())
-                .text_color(rgb(theme::TEXT_MUTED))
-                .font_weight(theme::W_BODY)
-                .border_color(rgba(theme::TABLE_HEAD_RULE)),
+                .text_color(rgb(theme::TEXT_STRONG))
+                .font_weight(theme::W_STRONG)
+                .border_color(theme::paint::LINE2),
         )
         .with_blockquote(
             gpui::StyleRefinement::default()
                 .border_l(px(theme::QUOTE_RULE_W))
-                .border_color(rgba(theme::HAIRLINE_STRONG))
-                .text_color(rgb(theme::TEXT_2))
+                .border_color(theme::paint::LINE2)
+                .text_color(rgb(theme::TEXT_MUTED))
                 .not_italic()
-                .pl(px(step(theme::PROSE_HANG) - theme::QUOTE_RULE_W))
+                .pl(px(2.0 * cell - theme::QUOTE_RULE_W))
                 .pr(px(0.)),
         )
         .with_rule(
             gpui::StyleRefinement::default()
                 .h(px(1.))
-                .bg(rgba(theme::HAIRLINE))
+                .bg(theme::paint::LINE)
                 .my(px(theme::RULE_MARGIN_Y)),
         )
-        // Paragraphs and list items hold to the prose measure; code, tables
-        // and rules keep the column.
-        .with_prose_max_width(Some(px(theme::PROSE_MEASURE)))
+        // Prose holds to the measure (`MEASURE_CH` cells), left-aligned;
+        // code, tables and rules keep the column.
+        .with_prose_max_width(Some(px((theme::MEASURE_CH * cell).round())))
+        // A list's `•` hangs in the first of two cells, dim; its text on
+        // the second's far side.
         .with_list_hang(Some(gpui::base::text::ListHang {
-            width: px(step(theme::PROSE_HANG)),
-            gap: px(theme::LIST_MARKER_GAP),
+            width: px(2.0 * cell),
+            gap: px(cell),
         }))
         .with_list_markers(
             gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
@@ -674,24 +685,16 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
             ),
         )
-        // The gaps are em-proportional to the prose size, so a larger
-        // reading size keeps the Standard rhythm.
-        .with_paragraph_gap(rem(step(theme::PROSE_GAP)))
-        .with_heading_spacing(
-            rem(step(theme::HEADING_SPACE_ABOVE)),
-            Some(rem(step(theme::HEADING_SPACE_BELOW))),
-        )
+        // One blank line between blocks, as a terminal prints them; a
+        // heading takes the same.
+        .with_paragraph_gap(rem(line))
+        .with_heading_spacing(rem(0.), None)
         .with_heading_base_font_size(base)
         .with_heading_font_size(|level, base| px(heading_size(level, f32::from(base))));
     for level in 1..=6 {
         style = style.with_heading(level, heading(level, base));
     }
     style
-}
-
-/// The reading size whose answer size is `base`.
-fn reading_size_at(base: f32) -> ferrite_core::settings::ReadingSize {
-    ferrite_core::settings::ReadingSize::nearest(base.round() as u8)
 }
 
 /// A heading's size at prose size `base`: the type table's ratio, rounded
@@ -705,14 +708,9 @@ fn heading_size(level: u8, base: f32) -> f32 {
 /// H4–H6 are set apart by weight alone: 600 is only for H1–H3.
 fn heading(level: u8, base: gpui::Pixels) -> gpui::StyleRefinement {
     let size = heading_size(level, f32::from(base));
-    let (weight, ink) = if level <= 3 {
-        (theme::W_STRONG, theme::TEXT_STRONG)
-    } else {
-        (theme::W_LABEL, theme::TEXT_STRONG)
-    };
     gpui::StyleRefinement::default()
-        .font_weight(weight)
-        .text_color(rgb(ink))
+        .font_weight(theme::W_STRONG)
+        .text_color(rgb(theme::TEXT_STRONG))
         .line_height(px(theme::prose_line_height(size)))
 }
 
@@ -1206,9 +1204,11 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let bounds = state.read(cx).bounds();
-        // A paragraph wraps at the prose measure inside a wider view.
-        let wrap = bounds.size.width.min(px(theme::PROSE_MEASURE));
+        // A paragraph wraps at the prose measure (`MEASURE_CH` cells at its
+        // size) inside a wider view.
         let font_size = style.font_size.to_pixels(window.rem_size());
+        let measure = (theme::MEASURE_CH * theme::tx_cell(f32::from(font_size))).round();
+        let wrap = bounds.size.width.min(px(measure));
         let line_height = style.line_height_in_pixels(window.rem_size());
         let run = gpui::TextRun {
             len: text.len(),
@@ -1377,19 +1377,19 @@ mod file_link_tests {
                 );
                 cx.simulate_resize(gpui::size(px(320.), px(720.)));
             }
-            // One hang for every list and quote: bullet text, ordinal text
-            // (one digit or two) and quoted text all start on the same x,
-            // `PROSE_HANG` in (scaled with the reading size).
+            // Terminal-native: one hang for every list and quote — bullet
+            // text, ordinal text (one digit or two) and quoted text all start
+            // two cells in at the reading size.
             view.update(cx, |view, cx| {
                 view.source = "- [bullet](ul.md)\n\ntext\n\n9. [nine](nine.md)\n10. [ten](ten.md)\n\ntext\n\n> [quoted](quote.md)".into();
                 cx.notify();
             });
             cx.run_until_parked();
             let bullet = card(cx, "ul.md");
-            let hang = px(theme::reading_step(theme::PROSE_HANG, font_size));
+            let hang = px(theme::tx_gutter(font_size));
             assert!(
                 (bullet.left() - hang).abs() < px(0.5),
-                "list text hangs PROSE_HANG in at {font_size}px: {bullet:?}"
+                "list text hangs two cells in at {font_size}px: {bullet:?}"
             );
             let quote = card(cx, "quote.md");
             assert!(
@@ -1413,7 +1413,7 @@ mod file_link_tests {
                     .layout_line("10.", px(font_size), &[run], None)
                     .width
             });
-            let column = hang.max(ten + px(theme::LIST_MARKER_GAP));
+            let column = hang.max(ten + px(theme::tx_cell(font_size)));
             let (nine, ten) = (card(cx, "nine.md"), card(cx, "ten.md"));
             assert!(
                 (nine.left() - ten.left()).abs() < px(0.5),
@@ -1426,9 +1426,10 @@ mod file_link_tests {
         }
     }
 
-    /// A fence is its code and its padding: the actions overlay takes no
-    /// layout, so a one-line block is 10 + 18 + 10, and revealing the
-    /// actions from the keyboard moves nothing.
+    /// A fence is its code on a rule (terminal-native: no padding above or
+    /// below): the actions overlay takes no layout, so a one-line block is
+    /// one prose line, and revealing the actions from the keyboard moves
+    /// nothing.
     #[gpui::test]
     fn a_fence_is_its_code_and_padding_and_its_actions_take_no_room(cx: &mut TestAppContext) {
         let (_, cx) = fixture(cx, "```rust\nfn main() {}\n```");
@@ -1437,8 +1438,8 @@ mod file_link_tests {
         let block = cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap());
         assert_eq!(
             block.size.height,
-            px(2. * theme::CODE_PAD_Y + theme::LH_CODE),
-            "one line of code in its padding"
+            px(theme::prose_line_height(theme::FS_PROSE)),
+            "one line of code, no padding"
         );
         let actions = cx
             .debug_bounds("code-actions")
@@ -1465,7 +1466,7 @@ mod file_link_tests {
         let copy = cx
             .debug_bounds("copy-code")
             .expect("fenced blocks expose Copy");
-        assert!(copy.size.height >= px(theme::CODE_ACTION_H));
+        assert!(copy.size.height >= px(theme::LH_UI));
         assert!(copy.size.width >= px(theme::CODE_ACTION_MIN_W));
         // The padded edge belongs to the action, not text selection behind it.
         cx.simulate_click(
@@ -1680,10 +1681,9 @@ mod file_link_tests {
             wide.left() > px(20.),
             "card follows the leading prose inline: {wide:?}"
         );
-        assert_eq!(
-            wide.size.height,
-            px(theme::INLINE_FILE_H),
-            "the chip fits the prose line"
+        assert!(
+            wide.size.height < px(2. * theme::FS_PROSE),
+            "the link sits on one prose line: {wide:?}"
         );
         assert!(card(cx, "notes.txt").top() > wide.bottom());
         assert!(card(cx, "data.csv").top() > card(cx, "notes.txt").bottom());
@@ -1747,9 +1747,9 @@ mod file_link_tests {
         );
     }
 
-    /// A file chip is measured in the face and size it is drawn in, so a
-    /// name whose measured width and chrome fit `INLINE_FILE_MAX_W` is drawn
-    /// whole: `transcript.rs:405` at the app's width is never ellipsized.
+    /// A file link is measured in the face and size it is drawn in (the
+    /// prose's), so a name that fits `INLINE_FILE_MAX_W` is drawn whole:
+    /// `transcript.rs:405` at the app's width is never ellipsized.
     #[gpui::test]
     fn a_file_chip_that_fits_is_drawn_whole(cx: &mut TestAppContext) {
         let (_, cx) = fixture(cx, "Built in [transcript.rs](transcript.rs:405), then.");
@@ -1757,7 +1757,13 @@ mod file_link_tests {
         cx.run_until_parked();
         let chip = card(cx, "transcript.rs");
         let want = cx.update(|window, _| {
-            crate::attachments::inline_file_width("transcript.rs", ":405", false, window)
+            crate::attachments::inline_file_width(
+                "transcript.rs",
+                ":405",
+                false,
+                px(theme::FS_PROSE),
+                window,
+            )
         });
         assert!(want < px(theme::INLINE_FILE_MAX_W), "{want:?}");
         assert_eq!(chip.size.width, want, "the chip is its measured width");
@@ -1769,16 +1775,13 @@ mod file_link_tests {
                 .text_system()
                 .shape_line(
                     "transcript.rs".into(),
-                    px(theme::FS_UI),
+                    px(theme::FS_PROSE),
                     &[face.to_run("transcript.rs".len())],
                     None,
                 )
                 .width()
         });
-        assert!(
-            chip.size.width >= name + px(2. * theme::INLINE_FILE_PAD_X),
-            "{chip:?} holds {name:?}"
-        );
+        assert!(chip.size.width >= name, "{chip:?} holds {name:?}");
     }
 
     #[gpui::test]
@@ -2002,15 +2005,9 @@ mod spacing_tests {
                 });
                 let mut height = |ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
                 let gap = height(2) - height(0) - height(1);
-                // A heading takes more space above than below; every other
-                // boundary is one prose gap.
-                let heading = "## Heading";
-                let want = match (first == heading, second == heading) {
-                    (true, true) => theme::HEADING_SPACE_BELOW + theme::HEADING_SPACE_ABOVE,
-                    (true, false) => theme::HEADING_SPACE_BELOW,
-                    (false, true) => theme::PROSE_GAP + theme::HEADING_SPACE_ABOVE,
-                    (false, false) => theme::PROSE_GAP,
-                };
+                // Terminal-native: every boundary, a heading's included, is
+                // one blank line.
+                let want = theme::LH_PROSE;
                 assert!(
                     (gap - px(want)).abs() < px(0.5),
                     "{combined:?}: gap {gap:?}, want {want}"
@@ -2167,8 +2164,8 @@ mod spacing_tests {
             let _ = window.draw(cx);
         });
         // Tight unordered, ordered, task and nested lists gain no inter-item
-        // gap. Actual paragraphs and loose lists retain two prose gaps.
-        let g = theme::PROSE_GAP;
+        // gap. Actual paragraphs and loose lists retain two blank lines.
+        let g = theme::LH_PROSE;
         let extra_space = [0., 0., 0., 0., 2. * g, 2. * g, 2. * g, 2. * g, g];
         for (ix, before) in compact.into_iter().enumerate() {
             let after = cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
@@ -2249,12 +2246,12 @@ mod spacing_tests {
         let paragraph_pair = height(2);
         assert_eq!(
             height(0),
-            paragraph_pair - px(theme::PROSE_GAP),
+            paragraph_pair - px(theme::LH_PROSE),
             "two-space hard break must start a line"
         );
         assert_eq!(
             height(1),
-            paragraph_pair - px(theme::PROSE_GAP),
+            paragraph_pair - px(theme::LH_PROSE),
             "backslash hard break must start a line"
         );
         assert_eq!(
@@ -2388,27 +2385,35 @@ mod style_tests {
         rgb(value).into()
     }
 
+    /// Terminal-native: prose `TEXT`, strong `W_STRONG` `TEXT_STRONG`,
+    /// links and paths cyan with no underline at rest, inline code cyan with
+    /// no chip, a fence with no ground.
     #[test]
-    fn prose_is_text_with_semibold_strong_and_accent_links() {
+    fn prose_is_text_with_semibold_strong_and_cyan_links() {
         let style = style(px(theme::FS_UI));
         assert_eq!(style.foreground(), solid(theme::TEXT));
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
-        assert_eq!(style.link(), solid(theme::ACCENT));
-        assert_eq!(
-            style.link_underline(),
-            Some(rgba(theme::ACCENT_EDGE).into())
-        );
+        assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
+        assert_eq!(style.link(), solid(theme::PATH_INK));
+        assert_eq!(style.link_underline(), Some(gpui::transparent_black()));
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
-        let wash = style
-            .inline_code_wash()
-            .expect("inline code sits on a chip");
-        assert_eq!(wash.color, rgba(theme::INLINE_CODE_WASH).into());
-        assert_eq!(wash.radius, px(theme::R_CHIP));
+        assert!(
+            style.inline_code_wash().is_none(),
+            "inline code has no chip"
+        );
         assert_eq!(
             style.inline_code().color,
             Some(solid(theme::INLINE_CODE_INK))
         );
-        assert_eq!(style.code_background(), solid(theme::RAISED));
+        assert!(
+            style.code_background().is_transparent(),
+            "a fence has no ground"
+        );
+        assert_eq!(
+            style.code_block().border_color,
+            Some(theme::paint::LINE2.into()),
+            "a fence is its 1px rule"
+        );
     }
 
     /// Theme rule 1: a heading is the body size, set apart by weight and
@@ -2425,7 +2430,7 @@ mod style_tests {
             assert_eq!(h1.text.line_height, Some(px(h1_line).into()));
             assert_eq!(heading_line_height(1, base), h1_line);
             let h4 = style.heading(4);
-            assert_eq!(h4.text.font_weight, Some(theme::W_LABEL));
+            assert_eq!(h4.text.font_weight, Some(theme::W_STRONG));
             assert_eq!(h4.text.color, Some(solid(theme::TEXT_STRONG)));
             assert_eq!(h4.text.font_style, None, "headings are never italic");
         }
@@ -2451,20 +2456,17 @@ mod style_tests {
                 );
             }
         }
-        // Block gaps are em-proportional: the Standard rhythm at every
-        // reading size, never smaller than 0.75em of the prose.
+        // Terminal-native: blocks sit one blank line apart at every
+        // reading size, a heading too.
         let rem = px(theme::FS_UI);
-        for (base, gap, above, below) in
-            [(14., 12., 8., 8.), (16., 14., 9., 9.), (18., 15., 10., 10.)]
-        {
+        for (base, gap) in [(14., 21.), (16., 24.), (18., 27.)] {
             let style = style_at(rem, px(base));
             let near = |value: gpui::Rems, want: f32| {
                 (f32::from(value.to_pixels(rem)) - want).abs() < 0.01
             };
             assert!(near(style.paragraph_gap(), gap), "{base}");
-            assert!(gap >= 0.75 * base, "{base}");
-            assert!(near(style.heading_space_above(), above), "{base}");
-            assert!(near(style.heading_space_below().unwrap(), below), "{base}");
+            assert!(near(style.heading_space_above(), 0.), "{base}");
+            assert!(style.heading_space_below().is_none(), "{base}");
         }
     }
 
@@ -2473,18 +2475,14 @@ mod style_tests {
     fn inline_code_is_cyan_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
         assert_eq!(theme::INLINE_CODE_INK, theme::INLINE_CODE);
-        assert_eq!(theme::inline_code_size(ReadingSize::STANDARD), theme::FS_UI);
-        // The chip centres in the prose line box (1.5× now) at every
-        // reading size.
-        for (size, chip, inset) in [
-            (ReadingSize::STANDARD, 18., 1.5),
-            (ReadingSize::nearest(16), 20., 2.),
-            (ReadingSize::nearest(18), 22., 2.5),
+        // No chip at any reading size: the ink alone sets code apart.
+        for size in [
+            ReadingSize::STANDARD,
+            ReadingSize::nearest(16),
+            ReadingSize::nearest(18),
         ] {
-            assert_eq!(theme::inline_code_chip_h(size), chip);
-            assert_eq!(theme::inline_code_inset_y(size), inset);
             let style = style_at(px(theme::FS_UI), px(theme::answer_text_size(size)));
-            assert_eq!(style.inline_code_wash().unwrap().inset_y, px(inset));
+            assert!(style.inline_code_wash().is_none());
         }
         // Code inside `# heading` or `**strong**` shapes at 400: the code
         // highlight is merged over the heading's or the strong run's weight.
@@ -2515,23 +2513,26 @@ mod style_tests {
     #[test]
     fn prose_holds_the_measure_and_code_keeps_the_column() {
         let style = style(px(theme::FS_UI));
-        assert_eq!(style.prose_max_width(), Some(px(theme::PROSE_MEASURE)));
+        // `MEASURE_CH` cells at the Standard reading size.
+        assert_eq!(
+            style.prose_max_width(),
+            Some(px(
+                (theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).round()
+            ))
+        );
         assert_eq!(style.code_block().max_size.width, None);
         assert_eq!(style.table().max_size.width, None);
     }
 
+    /// Terminal-native (clean): a `W_STRONG` head over a `LINE2` rule, row
+    /// rules in `LINE`, each row one prose line, no box.
     #[test]
-    fn tables_are_dense_rows_under_one_header_rule() {
+    fn tables_are_rows_on_the_grid_under_a_strong_header_rule() {
         let style = style(px(theme::FS_UI));
-        assert!(style.border().is_transparent(), "no row rules");
+        assert_eq!(style.border(), theme::paint::LINE.into(), "row rules");
         let cell = style.table_cell();
-        assert_eq!(cell.text.font_size, Some(px(theme::FS_UI).into()));
-        assert_eq!(cell.text.line_height, Some(px(theme::LH_UI).into()));
-        assert_eq!(
-            2. * theme::TABLE_CELL_PAD_Y + theme::LH_UI,
-            theme::MENU_ROW_H,
-            "a table row is the list pitch"
-        );
+        assert_eq!(cell.text.font_size, Some(px(theme::FS_PROSE).into()));
+        assert_eq!(cell.text.line_height, Some(px(theme::LH_PROSE).into()));
         assert_eq!(
             cell.text
                 .font_features
@@ -2540,9 +2541,9 @@ mod style_tests {
             Some(vec![("tnum".to_string(), 1)])
         );
         let head = style.table_head();
-        assert_eq!(head.text.font_weight, Some(theme::W_BODY));
-        assert_eq!(head.text.color, Some(solid(theme::TEXT_MUTED)));
-        assert_eq!(head.border_color, Some(rgba(theme::TABLE_HEAD_RULE).into()));
+        assert_eq!(head.text.font_weight, Some(theme::W_STRONG));
+        assert_eq!(head.text.color, Some(solid(theme::TEXT_STRONG)));
+        assert_eq!(head.border_color, Some(theme::paint::LINE2.into()));
     }
 
     #[test]
@@ -2550,12 +2551,15 @@ mod style_tests {
         let style = style(px(theme::FS_UI));
         assert_eq!(
             style.blockquote().border_color,
-            Some(rgba(theme::HAIRLINE_STRONG).into())
+            Some(theme::paint::LINE2.into())
         );
-        assert_eq!(style.rule().background, Some(rgba(theme::HAIRLINE).into()));
+        assert_eq!(
+            style.rule().background,
+            Some(gpui::Fill::from(theme::paint::LINE))
+        );
         assert_eq!(
             style.blockquote().padding.left,
-            Some(px(theme::PROSE_HANG - theme::QUOTE_RULE_W).into()),
+            Some(px(theme::tx_gutter(theme::FS_PROSE) - theme::QUOTE_RULE_W).into()),
             "quoted text starts where list text does"
         );
     }

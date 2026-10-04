@@ -329,14 +329,12 @@ impl RenderOnce for Attachments {
     }
 }
 
-/// A file link in prose, drawn as inline code is: the name in the code face
-/// at `FS_UI` in `TEXT` and a `:line` suffix in `TEXT_MUTED`, on the neutral
-/// `INLINE_CODE_WASH` chip at `R_CHIP` (`FILL` under the pointer). An image
-/// leads with its own thumbnail; any other file has no mark. The native
-/// Markdown flow reserves the returned size — the chip plus
-/// `INLINE_CODE_OVERHANG` after it, so a following `.` or `,` sits 2px off
-/// — and wraps the chip atomically, so the width is measured in the face and
-/// size it is drawn in: the name and the location each shaped whole.
+/// A file link in prose (the prototype's `.path`): the name in `PATH_INK`
+/// with no chip, a `:line` suffix in `TEXT_MUTED`, and a cyan underline
+/// only under the pointer. The native Markdown flow reserves the returned
+/// size and wraps the link atomically, so the width is measured in the face
+/// and size it is drawn in (the prose's own): the name and the location
+/// each shaped whole.
 pub fn inline_file(
     file: crate::file_links::FileLink,
     label: &str,
@@ -344,9 +342,8 @@ pub fn inline_file(
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
-    use crate::pointer::{Pointer as _, PointerPressed as _};
     use crate::theme;
-    use gpui::{rgb, rgba};
+    use gpui::rgb;
 
     let name = file
         .path
@@ -366,19 +363,15 @@ pub fn inline_file(
         .map(|line| format!(":{line}"))
         .unwrap_or_default();
     let image = gpui::Img::extensions().contains(&extension.as_str());
-    let chip_w = inline_file_width(&name, &location, image, window);
-    // The flow reserves the chip and its trailing margin; the chip draws at
-    // its own width inside that.
-    let size = gpui::size(
-        chip_w + px(theme::INLINE_CODE_OVERHANG),
-        px(theme::INLINE_FILE_H),
-    );
+    let size_px = window.text_style().font_size.to_pixels(window.rem_size());
+    let link_w = inline_file_width(&name, &location, image, size_px, window);
+    let line_h = window.line_height();
+    let size = gpui::size(link_w, line_h);
     let host = preview.cloned();
     let name_for_open = name.clone();
     let tooltip = format!("{label}\n{}", file.path.display());
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
-    let thumbnail = file.path.clone();
     let open = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
         gpui::base::TextSelection::end(window, cx);
         cx.stop_propagation();
@@ -397,32 +390,16 @@ pub fn inline_file(
         }
         file.open(window, cx);
     };
-    let chip = gpui::div()
+    let link = gpui::div()
         .id("inline-file-chip")
         .flex()
         .items_center()
-        .w(chip_w)
+        .w(link_w)
         .h_full()
         .min_w_0()
-        .px(px(theme::INLINE_FILE_PAD_X))
-        .gap(px(theme::INLINE_FILE_GAP))
-        .bg(rgba(theme::INLINE_CODE_WASH))
-        .hover_raised(format!("inline-{selector}-{label}"))
-        .press_raised()
-        .rounded(px(theme::R_CHIP))
         .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
         .not_italic()
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .when(image, |chip| {
-            chip.child(
-                gpui::img(thumbnail)
-                    .flex_none()
-                    .size(px(theme::INLINE_FILE_THUMB))
-                    .rounded(px(theme::R_TIGHT)),
-            )
-        })
         .child(
             // The name gives way to an ellipsis; the `:line` never does.
             gpui::div()
@@ -432,7 +409,12 @@ pub fn inline_file(
                     gpui::div()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::PATH_INK))
+                        .group_hover("inline-file", |style| {
+                            style
+                                .underline()
+                                .text_decoration_color(rgb(theme::PATH_INK))
+                        })
                         .child(name),
                 )
                 .when(!location.is_empty(), |title| {
@@ -444,13 +426,13 @@ pub fn inline_file(
                     )
                 }),
         );
-    // The click and keyboard target lies over the chip and draws nothing but
-    // the focus ring: the chip itself wears the hover face.
+    // The click and keyboard target lies over the link and draws nothing but
+    // the focus ring.
     let clear: gpui::Hsla = gpui::transparent_black();
     let target = crate::components::button("inline-file-action")
         .custom(crate::pointer::button_variant(
             clear,
-            rgb(theme::TEXT).into(),
+            rgb(theme::PATH_INK).into(),
             clear,
             cx,
         ))
@@ -469,27 +451,29 @@ pub fn inline_file(
         gpui::div()
             .id("inline-file")
             .debug_selector(move || selector.clone())
+            .group("inline-file")
             .relative()
-            .w(chip_w)
+            .w(link_w)
             .h(size.height)
             .cursor_pointer()
             .tooltip(move |window, cx| {
                 gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
             })
-            .child(chip)
+            .child(link)
             .child(target)
             .into_any_element(),
     )
 }
 
-/// An inline file chip's width: its padding, an image's thumbnail and gap,
-/// and the name and `:line` each shaped whole in the code face at `FS_UI`,
-/// rounded up to whole pixels with 1px to spare, so a name that fits is
-/// never ellipsized. Clamped to `INLINE_FILE_MIN_W`…`INLINE_FILE_MAX_W`.
+/// An inline file link's width: the name and `:line` each shaped whole in
+/// the code face at the prose's own size, rounded up to whole pixels with
+/// 1px to spare, so a name that fits is never ellipsized. Clamped to
+/// `INLINE_FILE_MIN_W`…`INLINE_FILE_MAX_W`.
 pub(crate) fn inline_file_width(
     name: &str,
     location: &str,
-    image: bool,
+    _image: bool,
+    size: gpui::Pixels,
     window: &mut Window,
 ) -> gpui::Pixels {
     use crate::theme;
@@ -505,7 +489,7 @@ pub(crate) fn inline_file_width(
             .text_system()
             .shape_line(
                 gpui::SharedString::from(text.to_owned()),
-                px(theme::FS_UI),
+                size,
                 &[face.to_run(text.len())],
                 None,
             )
@@ -513,13 +497,7 @@ pub(crate) fn inline_file_width(
             .ceil()
     };
     let text_w = width(name) + width(location) + px(1.);
-    let chrome = 2. * theme::INLINE_FILE_PAD_X
-        + if image {
-            theme::INLINE_FILE_THUMB + theme::INLINE_FILE_GAP
-        } else {
-            0.
-        };
-    (text_w + px(chrome)).clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W))
+    text_w.clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W))
 }
 
 /// Concave shoulders turn the kit container's sides into the prompt's top

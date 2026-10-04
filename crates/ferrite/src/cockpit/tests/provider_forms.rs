@@ -464,14 +464,17 @@ fn a_long_question_notice_is_cut_by_width_not_by_characters(cx: &mut TestAppCont
     });
     assert_eq!(notice, format!("asks 1 question · {text}"));
     let row = debug_bounds(cx, format!("notice-{id:?}")).expect("the notice row");
-    let block = cx.debug_bounds("composer-block").unwrap();
-    assert_eq!(row.size.height, px(crate::theme::LH_UI), "one line");
+    // Terminal-native: the notice is one line on the transcript's grid, and
+    // the column's edge is the transcript's right inset.
+    let key = view.read_with(cx, |v, _| v.panes[0].thread().unwrap().get());
+    let body = debug_bounds(cx, format!("pane-body-{key}")).expect("the body");
+    assert_eq!(row.size.height, px(crate::theme::LH_PROSE), "one line");
     assert!(
-        row.right() <= block.right() - px(crate::theme::BOX_INSET_X) + px(0.5),
-        "the row {row:?} ends at the column's edge {block:?}"
+        row.right() <= body.right() - px(crate::theme::TX_PAD_R) + px(0.5),
+        "the row {row:?} ends at the column's edge {body:?}"
     );
     assert!(
-        row.right() >= block.right() - px(crate::theme::BOX_INSET_X) - px(0.5),
+        row.right() >= body.right() - px(crate::theme::TX_PAD_R) - px(0.5),
         "the row {row:?} runs to the column's edge, not a character count short"
     );
 }
