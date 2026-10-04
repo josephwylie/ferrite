@@ -103,7 +103,7 @@ pub(crate) fn register_fonts(cx: &App) {
         .add_fonts(
             FONTS
                 .iter()
-                .map(|face| std::borrow::Cow::Borrowed(*face))
+                .map(|face| std::borrow::Cow::Owned(platform_text::browser_baseline(face)))
                 .collect(),
         )
         .expect("the bundled faces load");

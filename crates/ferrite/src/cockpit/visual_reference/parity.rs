@@ -1578,12 +1578,48 @@ fn parked(s: &mut Script, cast: &Cast) {
 
 // ---------------------------------------------------------------- the copy
 
+/// The changed-token spans the prototype marks by hand where no rule
+/// derives them (`pane::WordMark`): Nav's pure insertion `let live = …`
+/// (the next two insertions stay unmarked), and Perf's `Atlas::build(…)`
+/// line, whose argument (in plain ink) became `cells.entry(cell)` after an
+/// unmarked `self.`. Every other changed line is marked by the renderer's
+/// own `changed_words`, as the prototype marks it.
+pub(crate) fn word_marks() -> Vec<crate::pane::WordMark> {
+    use crate::pane::WordMark;
+    vec![
+        WordMark {
+            path: NAV_PATH,
+            added: true,
+            number: 210,
+            text: "live = t.session.is_some();",
+            plain: false,
+        },
+        WordMark {
+            path: CANVAS_PATH,
+            added: false,
+            number: 91,
+            text: "&self.glyphs",
+            plain: true,
+        },
+        WordMark {
+            path: CANVAS_PATH,
+            added: true,
+            number: 91,
+            text: "cells.entry(cell)",
+            plain: false,
+        },
+    ]
+}
+
 const NAV_PATH: &str = "crates/ferrite/src/nav.rs";
 const CANVAS_PATH: &str = "crates/ferrite/src/canvas.rs";
 const THEME_PATH: &str = "crates/ferrite/src/theme.rs";
 
-/// The prototype's screenshot of the nav, palette-encoded so the file
-/// weighs what its caption says: `580×320 · 41 KB`.
+/// The prototype's screenshot of the nav (`spikes/terminal-native/img/
+/// nav-jitter.png`), re-encoded near-losslessly — every channel of every
+/// pixel within 4 levels of the original, its colours whole (a palette
+/// encoding washed the Codex mark out) — so the file weighs what its
+/// caption says: `580×320 · 41 KB`.
 const NAV_JITTER_PNG: &[u8] = include_bytes!("nav-jitter.png");
 
 const ANSWER_ONE: &str = "The jitter comes from the status line under each Thread row in \

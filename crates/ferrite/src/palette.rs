@@ -343,15 +343,17 @@ impl Render for Palette {
             .px(px(FLOAT_PAD_X))
             .border_b_1()
             .border_color(FLOAT_RULE)
-            .child(
+            // Centred in the 31px over its rule, the line falls half a
+            // pixel off the grid: set where the browser sets it.
+            .child(components::css_line(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
                     .w(px(FLOAT_GUTTER))
                     .child(components::prompt_mark(ACCENT)),
-            )
-            .child(
+            ))
+            .child(components::css_line(
                 div()
                     .flex_1()
                     .min_w_0()
@@ -359,7 +361,7 @@ impl Render for Palette {
                     .line_height(px(LH_UI))
                     .text_color(rgb(TEXT_STRONG))
                     .child(self.input.clone()),
-            );
+            ));
         let mut list = div()
             .id("palette-rows")
             .flex()
@@ -397,7 +399,7 @@ impl Render for Palette {
         };
         crate::menu::float()
             .debug_selector(|| "palette".into())
-            .w(px(PALETTE_W))
+            .w(px(PALETTE_BOX_W))
             // A press inside never reaches the veil or the board under it.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(input)
@@ -428,7 +430,8 @@ fn row_element(
         .items_center()
         .min_w_0()
         .h(px(FLOAT_ROW_H))
-        .px(px(FLOAT_PAD_X))
+        .pl(px(FLOAT_PAD_X))
+        .pr(px(PALETTE_ROW_PAD_R))
         .whitespace_nowrap()
         .text_color(rgb(ink))
         .child(crate::menu::gutter(cursor))

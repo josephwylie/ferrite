@@ -60,6 +60,9 @@ pub fn parity_world() -> Cockpit {
         },
     );
     std::env::set_var("HOME", &world.home);
+    // The changed tokens the prototype marks by hand, on its world's diffs
+    // (the UI thread draws them; this runs on it, before the app starts).
+    crate::pane::set_word_marks(parity::word_marks());
     if let Err(e) = std::env::set_current_dir(&world.launch) {
         eprintln!("ferrite: cannot stand in the parity launch directory: {e}");
     }

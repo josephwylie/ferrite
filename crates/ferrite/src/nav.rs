@@ -691,13 +691,13 @@ pub fn collapse_button() -> Stateful<Div> {
             "Toggle sidebar",
             "cockpit::ToggleNav",
         ))
-        .child(
+        .child(components::css_box(
             icon(icons::SIDEBAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(motion::mix(
                 rgb(TEXT_MUTED).into(),
                 rgb(TEXT).into(),
                 t,
             )),
-        )
+        ))
 }
 
 // ------------------------------------------------------------- the tree

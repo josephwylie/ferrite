@@ -2171,7 +2171,9 @@ fn wall_line(row: SharedString) -> Div {
 /// the lines, the first `WALL_PAD_X` in from the tile's edge and the row
 /// `WALL_PAD_Y` above its foot — each the cockpit's wired button
 /// (`quick_answer`).
-pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
+/// `lead` moves the row off the tile's inset, to where the browser's
+/// whole-pixel rounding of the tile's track puts the first box.
+pub(crate) fn quick_answers(buttons: Vec<AnyElement>, lead: f32) -> Div {
     div()
         .debug_selector(|| "wall-quick-answers".into())
         .flex()
@@ -2179,6 +2181,7 @@ pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
         .flex_wrap()
         .gap(px(theme::QUICK_ANSWER_GAP))
         .mt(px(theme::HALF_ROW))
+        .ml(px(lead))
         .children(buttons)
 }
 
@@ -2198,12 +2201,21 @@ pub(crate) fn quick_answer(
         crate::motion::hover_blend(&hover, rgba(TRANSPARENT).into(), theme::paint::BAND2.hsla());
     let word = crate::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
     let selector = id.clone();
+    // Its cells, a cell of padding each side and its edge, on the whole
+    // pixel as the browser rounds the box (`1 allow` is 72.2px: 72).
+    let key = format!("{key} ");
+    let width = (components::cells_width(&key)
+        + components::cells_width(&label)
+        + 2.0 * theme::QUICK_ANSWER_PAD_X
+        + 2.0)
+        .round();
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
         .flex()
         .flex_shrink_0()
         .items_center()
+        .w(px(width))
         .h(px(theme::QUICK_ANSWER_H))
         .px(px(theme::QUICK_ANSWER_PAD_X))
         .border_1()
@@ -2212,7 +2224,7 @@ pub(crate) fn quick_answer(
         .cursor_pointer()
         .whitespace_nowrap()
         .on_hover(crate::motion::hover_listener(hover))
-        .child(components::cells(format!("{key} ")).text_color(rgb(TEXT_MUTED)))
+        .child(components::cells(key).text_color(rgb(TEXT_MUTED)))
         .child(components::cells(label).text_color(word))
 }
 
@@ -2559,7 +2571,9 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .child(
+        // The head's line sits centred in the 23px over its rule, half a
+        // pixel off the grid: set where the browser sets it.
+        .child(components::css_line(
             div()
                 .flex()
                 .flex_1()
@@ -2592,7 +2606,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                             None => div().min_w_0().truncate().child(name).into_any_element(),
                         }),
                 ),
-        )
+        ))
         .children(provider.map(|provider| {
             let (glyph, ink) = match provider {
                 Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
@@ -3026,7 +3040,9 @@ pub fn model_picker(
             Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
             Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE),
         };
-        icon(glyph, theme::STATUS_LOGO, ink)
+        // Inline in the segment's line, as the prototype's `svg.logo`
+        // (`vertical-align: -1px`): its foot a pixel under the baseline.
+        icon(glyph, theme::STATUS_LOGO, ink).mt(px(-theme::STATUS_LOGO_FOOT))
     });
     let word = status_model_word(&label);
     let text: SharedString = match effort {
@@ -3640,7 +3656,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             // The first segment hangs its padding out (the prototype's
             // `.seg:first-child{margin-left:-1ch}`); the last keeps its own
             // inside the Composer's three cells.
-            .pl(px(theme::COMPOSER_PAD_L - theme::COMPOSER_SEG_PAD_X))
+            .pl(px(theme::STATUS_HANG_PAD))
             .pr(px(theme::COMPOSER_PAD_R))
             .min_w_0()
             .overflow_hidden()
@@ -3736,35 +3752,20 @@ fn status_seg(ink: u32) -> Div {
 
 /// The status line's mode segment: the drawn marker (`⏵⏵` for a mode that
 /// lets edits run, `⏸` for plan, `⏵` for any other) as the fallback face
-/// sets it — its triangles riding the x-height — one space, and the mode
-/// word, both in `MODE_INK`. Hidden at the default: the mode stays
-/// reachable through ⇧⇥ and the palette's `permission mode`.
+/// (STIX Two Math) sets it — its cell of advance one line tall, on the
+/// line's baseline — one space, and the mode word, both in `MODE_INK`.
+/// Hidden at the default: the mode stays reachable through ⇧⇥ and the
+/// palette's `permission mode`.
 pub fn mode_chip(mode: &str, _menu: bool) -> Div {
-    let (mark, width, advance) = match mode {
-        "accept edits" | "bypass permissions" | "auto" => (
-            icons::MODE_ACCEPT,
-            theme::MODE_MARK_W,
-            theme::MODE_MARK_ADVANCE,
-        ),
-        "plan" => (
-            icons::MODE_PLAN,
-            theme::MODE_MARK_ONE_W,
-            theme::MODE_MARK_ONE_W,
-        ),
-        _ => (
-            icons::MODE_ON,
-            theme::MODE_MARK_ONE_W,
-            theme::MODE_MARK_ONE_W,
-        ),
+    let (mark, advance) = match mode {
+        "accept edits" | "bypass permissions" | "auto" => {
+            (icons::MODE_ACCEPT, theme::MODE_MARK_ADVANCE)
+        }
+        "plan" => (icons::MODE_PLAN, theme::MODE_PLAN_ADVANCE),
+        _ => (icons::MODE_ON, theme::MODE_MARK_ONE_ADVANCE),
     };
     status_seg(theme::MODE_INK)
-        .child(
-            div().flex_shrink_0().w(px(advance)).child(
-                icon(mark, width, theme::MODE_INK)
-                    .w(px(width))
-                    .h(px(theme::MODE_MARK_H)),
-            ),
-        )
+        .child(icon(mark, advance, theme::MODE_INK).h(px(theme::LH_UI)))
         .child(components::cells(mode.to_owned()))
 }
 
@@ -5090,15 +5091,21 @@ pub fn ctx_meter_ink(fraction: f32) -> u32 {
 }
 
 /// The 8-cell, 4px ctx meter on its `paint::LINE2` track, filled to
-/// `fraction` in `ctx_meter_ink`.
+/// `fraction` in `ctx_meter_ink`: the prototype's `.meter`, its 1px
+/// radius rounding the track's ends and the fill's start (the track clips
+/// it), set `CTX_METER_DROP` below the row's centre as `vertical-align:
+/// middle` sets it on the text.
 fn ctx_meter(fraction: f32) -> Div {
     let fraction = fraction.clamp(0., 1.);
+    let radius = px(theme::CTX_METER_R);
     div()
         .debug_selector(|| "usage-meter-bar".into())
         .relative()
+        .top(px(theme::CTX_METER_DROP))
         .flex_shrink_0()
         .w(px(theme::CTX_METER_W))
         .h(px(theme::CTX_METER_H))
+        .rounded(radius)
         .bg(theme::paint::LINE2)
         .overflow_hidden()
         .child(
@@ -5108,6 +5115,8 @@ fn ctx_meter(fraction: f32) -> Div {
                 .top_0()
                 .bottom_0()
                 .w(relative(fraction))
+                .rounded_l(radius)
+                .when(fraction >= 1., |fill| fill.rounded(radius))
                 .bg(rgb(ctx_meter_ink(fraction))),
         )
 }
@@ -7595,12 +7604,65 @@ pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyEle
 
 /// One side of a diff row: its line number, its kind, its code and the
 /// changed tokens' range in it (a removed line paired with an added one).
+/// `plain` draws the changed tokens in the row's own ink, their syntax
+/// colours dropped (only a stated mark asks for it, `WordMark`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DiffSide {
     pub kind: DiffKind,
     pub number: u32,
     pub body: String,
     pub words: Option<std::ops::Range<usize>>,
+    pub plain: bool,
+}
+
+/// A changed-token span stated for one diff line instead of the one
+/// `changed_words` derives: the line by its file (a path suffix), its kind
+/// and its number, the span by its text (the first occurrence in the line).
+///
+/// Only the prototype's world states marks (the parity capture and
+/// `--demo parity`). The approved prototype marks its
+/// diffs' changed tokens by hand, and no rule derives every one of them
+/// (it marks one pure insertion but not the next, and wraps a call's
+/// argument where the token diff sees the call), so its world states the
+/// prototype's own spans for the lines it shows; every other diff, and
+/// every other line, is marked by `changed_words`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WordMark {
+    pub path: &'static str,
+    pub added: bool,
+    pub number: u32,
+    pub text: &'static str,
+    pub plain: bool,
+}
+
+thread_local! {
+    /// The marks the prototype's world states (`set_word_marks`).
+    static WORD_MARKS: std::cell::RefCell<Vec<WordMark>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// State `marks` for the diffs drawn from here on (the prototype's world,
+/// captured or live; see `WordMark`).
+pub(crate) fn set_word_marks(marks: Vec<WordMark>) {
+    WORD_MARKS.with(|stated| *stated.borrow_mut() = marks);
+}
+
+/// `side` of the diff of `path` with the span stated for it, if any.
+fn stated_mark(path: &str, side: &mut DiffSide) {
+    WORD_MARKS.with(|stated| {
+        let stated = stated.borrow();
+        let found = stated.iter().find(|mark| {
+            path.ends_with(mark.path)
+                && mark.number == side.number
+                && mark.added == (side.kind == DiffKind::Added)
+                && side.kind != DiffKind::Context
+        });
+        if let Some(mark) = found {
+            if let Some(at) = side.body.find(mark.text) {
+                side.words = Some(at..at + mark.text.len());
+                side.plain = mark.plain;
+            }
+        }
+    });
 }
 
 /// A diff as rows (the prototype's `.diff`). `Unified` rows carry both line
@@ -7886,6 +7948,7 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                         number,
                         body: body.clone(),
                         words: None,
+                        plain: false,
                     };
                     rows.push(if split {
                         DiffRow::Split {
@@ -7927,6 +7990,7 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                             number: old + index as u32,
                             body: (*body).to_owned(),
                             words: None,
+                            plain: false,
                         })
                         .collect();
                     let mut right: Vec<DiffSide> = added
@@ -7937,6 +8001,7 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                             number: new + index as u32,
                             body: (*body).to_owned(),
                             words: None,
+                            plain: false,
                         })
                         .collect();
                     for (i, j) in &pairs {
@@ -7946,6 +8011,9 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                                 right[*j].words = Some(became);
                             }
                         }
+                    }
+                    for side in left.iter_mut().chain(right.iter_mut()) {
+                        stated_mark(&diff.path, side);
                     }
                     old += removed.len() as u32;
                     new += added.len() as u32;
@@ -7979,37 +8047,50 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
     rows
 }
 
-/// A diff line's syntax colours and its changed tokens' wash, as one
-/// highlight list.
-fn diff_highlights(
-    side: &DiffSide,
-    language: Option<&str>,
-) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+/// One styled run of a line.
+type Highlight = (std::ops::Range<usize>, HighlightStyle);
+/// A changed-token span and the deeper hue it is washed in.
+type WordWash = (std::ops::Range<usize>, gpui::Hsla);
+
+/// A diff line's syntax colours, and its changed tokens' wash: the range
+/// and the deeper hue `CellCut` paints under them as the prototype's inline
+/// `.wr` / `.wa` span boxes (the text's own content box, not the row).
+fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, Option<WordWash>) {
     let syntax = language
         .map(|language| {
             let tokens = ferrite_core::transcript::highlight_tokens(Some(language), &side.body);
             code(&side.body, Some(&tokens))
         })
         .unwrap_or_default();
-    let Some(words) = side.words.clone().filter(|words| !words.is_empty()) else {
-        return syntax;
-    };
     let wash = match side.kind {
-        DiffKind::Added => theme::DIFF_ADDED_WORD,
-        DiffKind::Removed => theme::DIFF_REMOVED_WORD,
-        DiffKind::Context => return syntax,
+        DiffKind::Added => Some(theme::DIFF_ADDED_WORD),
+        DiffKind::Removed => Some(theme::DIFF_REMOVED_WORD),
+        DiffKind::Context => None,
     };
-    gpui::combine_highlights(
-        syntax,
-        [(
-            words,
-            HighlightStyle {
-                background_color: Some(rgba(wash).into()),
-                ..Default::default()
-            },
-        )],
-    )
-    .collect()
+    let words = side
+        .words
+        .clone()
+        .filter(|words| !words.is_empty())
+        .zip(wash)
+        .map(|(words, wash)| (words, rgba(wash).into()));
+    let syntax = match (&words, side.plain) {
+        // The changed tokens in the row's own ink: the syntax runs stop at
+        // the span and pick up after it.
+        (Some((words, _)), true) => syntax
+            .into_iter()
+            .flat_map(|(range, style)| {
+                [
+                    range.start..range.end.min(words.start),
+                    range.start.max(words.end)..range.end,
+                ]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .map(move |part| (part, style))
+            })
+            .collect(),
+        _ => syntax,
+    };
+    (syntax, words)
 }
 
 /// A diff under its call (the prototype's `.diff`, clean): no box, half a
@@ -8055,19 +8136,24 @@ fn render_diff(
                 .children(number.map(|number| SharedString::from(number.to_string()))),
         )
     };
-    let cell = |side: &DiffSide, selectable: bool| {
+    // The fixed columns before a row's code (its numbers and sign), as the
+    // browser sizes them: the cut measures the code cell against these, not
+    // the device-snapped widths gpui lays out (`CellCut::lead`).
+    let lead = |numbers: usize| [number_w, if numbers > 1 { number_w } else { 0. }, sign_w];
+    let cell = |side: &DiffSide, selectable: bool, numbers: usize| {
         let DiffPaint {
             sign,
             sign_color,
             code_color,
             wash,
         } = side.kind.paint();
-        let highlights = diff_highlights(side, language);
+        let (highlights, words) = diff_highlights(side, language);
         let cut = CellCut::new(
             side.body.clone(),
-            highlights.clone(),
+            words,
             rgb(code_color).into(),
             grid.cell(),
+            lead(numbers),
         );
         let code = match selection {
             Some((selection, block)) if selectable => selection
@@ -8095,10 +8181,21 @@ fn render_diff(
             wash,
         )
     };
-    let side_view = |side: Option<&DiffSide>, selectable: bool| -> Div {
+    // `right`: the split's right half, whose text keeps the browser's
+    // fraction of a pixel while its wash stays on the half's box
+    // (`SplitRow`).
+    let side_view = |side: Option<&DiffSide>, selectable: bool, right: bool| -> Div {
         match side {
             Some(side) => {
-                let (sign, code, wash) = cell(side, selectable);
+                let (sign, code, wash) = cell(side, selectable, 1);
+                let content = div()
+                    .flex()
+                    .items_start()
+                    .w_full()
+                    .min_w_0()
+                    .child(number(Some(side.number)))
+                    .child(sign)
+                    .child(code);
                 div()
                     .flex()
                     .items_start()
@@ -8107,9 +8204,13 @@ fn render_diff(
                     .h(px(grid.line))
                     .overflow_hidden()
                     .when_some(wash, |row, wash| row.bg(rgba(wash)))
-                    .child(number(Some(side.number)))
-                    .child(sign)
-                    .child(code)
+                    .map(|row| {
+                        if right {
+                            row.child(SplitRow::right(content))
+                        } else {
+                            row.child(content)
+                        }
+                    })
             }
             None => div()
                 .flex_1()
@@ -8141,7 +8242,7 @@ fn render_diff(
                 .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(header.clone())),
             DiffRow::Unified { old, new, side } => {
-                let (sign, code, wash) = cell(side, true);
+                let (sign, code, wash) = cell(side, true, 2);
                 div()
                     .flex()
                     .items_start()
@@ -8162,14 +8263,16 @@ fn render_diff(
                         selectable.iter().any(|picked| std::ptr::eq(*picked, side))
                     })
                 };
-                div()
-                    .flex()
-                    .items_stretch()
-                    .w_full()
-                    .min_w_0()
-                    .child(side_view(left.as_ref(), pick(left)))
-                    .child(div().flex_shrink_0().w(px(1.)).bg(theme::paint::LINE))
-                    .child(side_view(right.as_ref(), pick(right)))
+                div().w_full().min_w_0().child(SplitRow::new(
+                    div()
+                        .flex()
+                        .items_stretch()
+                        .w_full()
+                        .min_w_0()
+                        .child(side_view(left.as_ref(), pick(left), false))
+                        .child(div().flex_shrink_0().w(px(1.)).bg(theme::paint::LINE))
+                        .child(side_view(right.as_ref(), pick(right), true)),
+                ))
             }
         });
     }
@@ -8200,38 +8303,186 @@ fn render_diff(
     }
 }
 
+thread_local! {
+    /// The split rows being prepainted, innermost last (`SplitRow`).
+    static SPLIT_ROWS: std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A split diff row's halves where the browser sets their text. The
+/// prototype's `minmax(0,1fr) 1px minmax(0,1fr)` puts the right half at a
+/// fraction of a pixel (865.3px in Solo); its box rounds to the pixel but
+/// its glyphs keep the fraction. gpui lays the half on the device pixel
+/// (865), so the right half's text stood a device pixel left. The row
+/// records its bounds (`SplitRow::new`); the right half's content
+/// (`SplitRow::right`) paints from the device pixel nearest the browser's
+/// track start, its wash staying on the half's own box.
+enum SplitRow {
+    Row(Option<AnyElement>),
+    Right(Option<AnyElement>),
+}
+
+impl SplitRow {
+    fn new(child: impl IntoElement) -> Self {
+        Self::Row(Some(child.into_any_element()))
+    }
+
+    fn right(child: impl IntoElement) -> Self {
+        Self::Right(Some(child.into_any_element()))
+    }
+
+    fn child(&mut self) -> &mut Option<AnyElement> {
+        match self {
+            Self::Row(child) | Self::Right(child) => child,
+        }
+    }
+}
+
+impl IntoElement for SplitRow {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for SplitRow {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, ()) {
+        let child = self.child().get_or_insert_with(|| div().into_any_element());
+        (child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        match self {
+            Self::Row(child) => {
+                SPLIT_ROWS.with(|rows| rows.borrow_mut().push(bounds));
+                if let Some(child) = child.as_mut() {
+                    child.prepaint(window, cx);
+                }
+                SPLIT_ROWS.with(|rows| rows.borrow_mut().pop());
+            }
+            Self::Right(child) => {
+                let track = SPLIT_ROWS.with(|rows| rows.borrow().last().copied());
+                // gpui moves an element only by whole device pixels: the
+                // nearest one at or past the browser's track.
+                let scale = window.scale_factor();
+                let shift = track.map_or(px(0.), |row| {
+                    let track = f32::from(row.left() + (row.size.width - px(1.)) / 2. + px(1.));
+                    px(((track * scale) + 0.5).floor() / scale) - bounds.left()
+                });
+                if let Some(child) = child.as_mut() {
+                    window.with_element_offset(gpui::point(shift, px(0.)), |window| {
+                        child.prepaint(window, cx)
+                    });
+                }
+            }
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        if let Some(child) = self.child().as_mut() {
+            child.paint(window, cx);
+        }
+    }
+}
+
 /// A one-line code run cut at its column's edge as the prototype's
 /// `text-overflow: ellipsis` cuts it: the whole cells that leave room for
-/// `…`, then `…` in the ink of the first character it hides, and a word
-/// wash that runs past the cut keeps washing to the edge. gpui's own
-/// truncation trims trailing punctuation before its `…` (`clone…` where
-/// the browser draws `clone(…`), so a diff row draws its text whole and
-/// this clips it; the text itself — what a selection copies — is never cut.
-struct CellCut {
+/// `…`, then `…` in the cell's own ink (the browser draws the ellipsis in
+/// the block's colour, whatever token it hides). gpui's own truncation
+/// trims trailing punctuation before its `…` (`clone…` where the browser
+/// draws `clone(…`), so a diff row draws its text whole and this clips it;
+/// the text itself — what a selection copies — is never cut.
+///
+/// It also paints the changed tokens' wash (`words`) the way the browser
+/// paints an inline span's background: over the face's content box —
+/// ascent plus descent, each rounded, a whole-pixel half-leading above —
+/// not the row (17px inside a 20px row at 13px), so washes on adjacent
+/// rows stay apart. A wash that runs past the cut keeps washing, unbroken
+/// under the `…`, to the column's edge.
+pub(crate) struct CellCut {
     text: String,
-    highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+    words: Option<WordWash>,
     ink: gpui::Hsla,
     cell: f32,
+    /// The widths of the fixed columns laid before this cell in its row, as
+    /// authored. gpui rounds each to the device pixel before layout (a
+    /// 2-cell sign column is 15.5px, the browser's 15.6px), handing their
+    /// rounding to this cell; the cut gives it back, so a run that
+    /// overflows the browser's cell by a tenth of a pixel is cut here too.
+    lead: [f32; 3],
     child: Option<AnyElement>,
 }
 
 impl CellCut {
     fn new(
         text: String,
-        highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+        words: Option<WordWash>,
         ink: gpui::Hsla,
         cell: f32,
+        lead: [f32; 3],
     ) -> Self {
         Self {
             text,
-            highlights,
+            words,
             ink,
             cell,
+            lead,
             child: None,
         }
     }
 
-    fn child(mut self, child: AnyElement) -> Self {
+    /// What the device-pixel rounding of the `lead` columns added to this
+    /// cell's width at `scale` (negative when it took some away).
+    fn slack(&self, scale: f32) -> f32 {
+        self.lead
+            .iter()
+            .map(|width| width - (width * scale).round() / scale)
+            .sum()
+    }
+
+    /// A run of one face cut with `…` in `ink` (its line's own colour, as
+    /// the browser draws an ellipsis whatever the run it hides): no wash, no
+    /// columns before it.
+    pub(crate) fn plain(text: String, ink: gpui::Hsla, cell: f32) -> Self {
+        Self::new(text, None, ink, cell, [0.; 3])
+    }
+
+    pub(crate) fn child(mut self, child: AnyElement) -> Self {
         self.child = Some(child);
         self
     }
@@ -8244,22 +8495,33 @@ impl CellCut {
             .then(|| ((width - self.cell) / self.cell + 0.001).floor().max(0.) as usize)
     }
 
-    /// The ink and the wash at byte `at`, as the highlights paint it.
-    fn paint_at(&self, at: usize) -> (gpui::Hsla, Option<gpui::Hsla>) {
-        let mut ink = self.ink;
-        let mut wash = None;
-        for (range, style) in &self.highlights {
-            if range.contains(&at) {
-                if let Some(color) = style.color {
-                    ink = color;
-                }
-                if let Some(color) = style.background_color {
-                    wash = Some(color);
-                }
-            }
+    /// The cells the wash covers, `[from, to)`, and whether it reaches the
+    /// first hidden cell (then it runs on under the `…` to the edge).
+    fn wash_cells(&self, kept: Option<usize>) -> Option<(usize, usize, bool)> {
+        let (range, _) = self.words.as_ref()?;
+        let cell_of = |at: usize| self.text[..at.min(self.text.len())].chars().count();
+        let (from, to) = (cell_of(range.start), cell_of(range.end));
+        match kept {
+            Some(kept) if from > kept => None,
+            Some(kept) => Some((from, to.min(kept), to > kept)),
+            None => Some((from, to, false)),
         }
-        (ink, wash)
     }
+}
+
+/// The browser's inline content box in a line of `line_height`: its top
+/// below the line's and its height — the face's ascent plus descent,
+/// rounded to the pixel (17px at 13px), under a floored half-leading.
+fn inline_content_box(window: &gpui::Window) -> (f32, f32) {
+    let style = window.text_style();
+    let size = style.font_size.to_pixels(window.rem_size());
+    let line_height = f32::from(style.line_height_in_pixels(window.rem_size()));
+    let text_system = window.text_system();
+    let font = text_system.resolve_font(&style.font());
+    let ascent = f32::from(text_system.ascent(font, size)).abs();
+    let descent = f32::from(text_system.descent(font, size)).abs();
+    let height = (ascent + descent).round().min(line_height);
+    (((line_height - height) / 2.).floor().max(0.), height)
 }
 
 impl IntoElement for CellCut {
@@ -8320,31 +8582,42 @@ impl gpui::Element for CellCut {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        let Some(kept) = self.kept(f32::from(bounds.size.width)) else {
+        // On the device pixel: the clip, the wash and the `…` meet without
+        // a column two of them would otherwise both paint.
+        let scale = window.scale_factor();
+        let kept = self.kept(f32::from(bounds.size.width) - self.slack(scale));
+        let snap = |x: f32| px((x * scale).round() / scale);
+        let left = f32::from(bounds.left());
+        let cut = kept.map(|kept| snap(left + kept as f32 * self.cell));
+        if let (Some((from, to, runs_on)), Some((_, wash))) =
+            (self.wash_cells(kept), self.words.as_ref())
+        {
+            let (top, height) = inline_content_box(window);
+            let x0 = snap(left + from as f32 * self.cell);
+            let x1 = match (runs_on, cut) {
+                (true, _) => bounds.right(),
+                (false, Some(cut)) => snap(left + to as f32 * self.cell).min(cut),
+                (false, None) => snap(left + to as f32 * self.cell),
+            };
+            if x1 > x0 {
+                let y0 = bounds.top() + px(top);
+                window.paint_quad(gpui::fill(
+                    gpui::Bounds::from_corners(
+                        gpui::point(x0, y0),
+                        gpui::point(x1, y0 + px(height)),
+                    ),
+                    *wash,
+                ));
+            }
+        }
+        let Some(cut) = cut else {
             child.paint(window, cx);
             return;
         };
-        // On the device pixel: the clip and the wash after it then meet
-        // without the one column both would otherwise paint.
-        let scale = window.scale_factor();
-        let cut =
-            px(((f32::from(bounds.left()) + kept as f32 * self.cell) * scale).round() / scale);
         let shown = gpui::Bounds::from_corners(bounds.origin, gpui::point(cut, bounds.bottom()));
         window.with_content_mask(Some(gpui::ContentMask { bounds: shown }), |window| {
             child.paint(window, cx)
         });
-        let at = self
-            .text
-            .char_indices()
-            .nth(kept)
-            .map_or(self.text.len(), |(at, _)| at);
-        let (ink, wash) = self.paint_at(at);
-        if let Some(wash) = wash {
-            window.paint_quad(gpui::fill(
-                gpui::Bounds::from_corners(gpui::point(cut, bounds.top()), bounds.bottom_right()),
-                wash,
-            ));
-        }
         let style = window.text_style();
         let size = style.font_size.to_pixels(window.rem_size());
         let line_height = style.line_height_in_pixels(window.rem_size());
@@ -8352,7 +8625,7 @@ impl gpui::Element for CellCut {
         let run = gpui::TextRun {
             len: ellipsis.len(),
             font: style.font(),
-            color: ink,
+            color: self.ink,
             background_color: None,
             underline: None,
             strikethrough: None,

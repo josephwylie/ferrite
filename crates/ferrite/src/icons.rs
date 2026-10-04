@@ -177,9 +177,9 @@ pub const COPY: &str = "icons/copy.svg";
 pub const RESEND: &str = "icons/resend.svg";
 /// The prompt mark `❯`, drawn: Geist Mono has no U+276F, so the mark the
 /// transcript, the Composer, the nav cursor and every selection bar share
-/// is the heavy wedge the prototype's fallback face draws at 13px — filled,
-/// 5 × 9.5px with ~2px arms and angled ends, 0.9px into a 12-unit cell box
-/// (`components::prompt_mark` lays it).
+/// is the glyph the prototype's browser falls back to — Menlo Bold's, its
+/// outline at 13px — set in a 12-unit cell box where it lands on the
+/// capture (`components::prompt_mark` lays it).
 pub const PROMPT: &str = "icons/prompt.svg";
 /// Ferrite's mark as one monochrome path, for the answer gutter (the
 /// gradient mark is reserved for the animated working line).
@@ -207,7 +207,9 @@ pub const BRAILLE_FRAMES: [&str; 10] = [
 ];
 /// The working line's glyphs, drawn: `·`, `✢` (four teardrops), `✳` (eight
 /// spokes), `✶` (six-pointed star), `✻` (six teardrops), `✽` (eight heavy
-/// teardrops). Fill marks in a 12-unit box, `✳` a round-capped stroke.
+/// teardrops). Past the `·` each is Menlo's outline at 13px (the face the
+/// prototype's browser falls back to), set in the 12-unit box the frames
+/// share on one pen and baseline — fitted on the capture's `✻`.
 #[allow(dead_code)]
 pub const WORKING_DOT: &str = "icons/working-dot.svg";
 #[allow(dead_code)]
@@ -258,10 +260,12 @@ pub const BELL: &str = "icons/bell.svg";
 // (end WP-C)
 
 /// `⌘` (not in Geist Mono): the command key wherever a key combination is
-/// drawn — menu shortcuts, keycaps. Only `components::key_combo` places it.
+/// drawn — menu shortcuts, keycaps. Menlo's outline at 13px (the browser's
+/// fallback), in a cell its advance wide and a line tall, on the 14px
+/// baseline. Only `components::key_combo` places it.
 pub const COMMAND: &str = "icons/command.svg";
 /// `⌥` and `⌃` (in neither bundled face): the option and control keys,
-/// placed only by `components::key_combo` like `COMMAND`.
+/// Menlo's like `COMMAND`, placed only by `components::key_combo`.
 pub const OPTION: &str = "icons/option.svg";
 pub const CONTROL: &str = "icons/control.svg";
 
@@ -271,7 +275,9 @@ pub const CONTROL: &str = "icons/control.svg";
 pub const IMAGE: &str = "icons/image.svg";
 /// The permission mode's marker in the status line, drawn (Geist Mono has
 /// neither `⏵` nor `⏸`): `⏵⏵` for a mode that lets edits run, `⏸` for
-/// plan, `⏵` for any other. Fill marks in a 12-unit box.
+/// plan, `⏵` for any other. STIX Two Math's outlines at 13px (the one face
+/// on the system with them, so the browser's fallback), each SVG its
+/// marks' advance wide and a line tall, on the 14px baseline.
 pub const MODE_ACCEPT: &str = "icons/mode-accept.svg";
 pub const MODE_ON: &str = "icons/mode-on.svg";
 pub const MODE_PLAN: &str = "icons/mode-plan.svg";
@@ -540,9 +546,10 @@ mod tests {
         );
     }
 
-    /// F-16: the prompt mark is U+276F's heavy wedge — filled, no stroke,
-    /// from x 0.9 to 5.9 and y 1.55 to 11.05 of its 12-unit box (a 5 × 9.5px
-    /// mark at 13px), its arms 2.15 across with parallel, angled ends.
+    /// F-16: the prompt mark is U+276F's heavy wedge as Menlo Bold draws it
+    /// at 13px (the prototype's fallback face) — filled, no stroke, from x
+    /// 1.21 to 6.36 and y 1.56 to 11.05 of its 12-unit box, its arms 2.1
+    /// across with parallel, angled ends.
     #[test]
     fn the_prompt_mark_is_the_heavy_wedge() {
         let bytes = Assets.load(PROMPT).unwrap().unwrap();
@@ -554,12 +561,12 @@ mod tests {
             "a filled wedge, not a stroked chevron"
         );
         for corner in [
-            "M0.9 1.55",
-            "H3.05",
-            "L5.9 6.3",
-            "L3.05 11.05",
-            "H0.9",
-            "L3.75 6.3",
+            "M1.209 11.045",
+            "4.319 6.303",
+            "1.209 1.555",
+            "H3.304",
+            "L6.357 6.303",
+            "L3.304 11.045",
         ] {
             assert!(svg.contains(corner), "{corner}");
         }

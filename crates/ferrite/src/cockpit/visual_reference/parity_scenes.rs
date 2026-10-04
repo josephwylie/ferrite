@@ -113,6 +113,8 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         .expect("a parity state");
     // The prototype's shots are grayscale-antialiased.
     disable_font_smoothing();
+    // The changed tokens the prototype marks by hand, on its world's diffs.
+    crate::pane::set_word_marks(parity::word_marks());
     let root =
         std::env::temp_dir().join(format!("ferrite-reference-{}-{state}", std::process::id()));
     // Only our own disposable directory; never the operator's store.
@@ -232,6 +234,8 @@ fn prepare(
         "0.160.0 \u{b7} /usr/local/bin/codex".into(),
     ));
     view.cli_probing = true;
+    // The prototype's world runs the 0.5.0 release (its banner's version).
+    view.shown_version = "0.5.0".into();
     // ~/ferrite is checked out on `dev`; zeron on its default `main`.
     let branch = |name: &str| {
         Some(BranchStatus {

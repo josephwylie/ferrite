@@ -387,13 +387,17 @@ pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::B
     .h(px(ICON_BUTTON_H))
     .p_0()
     .accessibility_label("Notifications")
-    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
+    .child(components::css_box(
+        icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph),
+    ))
     .when(requests > 0, |door| door.child(badge(requests)))
 }
 
 /// The badge: the prototype's superscript — `BADGE_FS` `W_STRONG` tabular
 /// digits in `ATTENTION` on no ground at the door's top-right, `99+` past
-/// two digits.
+/// two digits. It hangs in the kit button's content box, whose transparent
+/// 1px edge already stands it the prototype's `right:1px` in from the
+/// door's edge.
 fn badge(requests: usize) -> Div {
     let count: SharedString = if requests > 99 {
         "99+".into()
@@ -405,7 +409,7 @@ fn badge(requests: usize) -> Div {
             .debug_selector(|| "notifications-badge".into())
             .absolute()
             .top(px(0.))
-            .right(px(1.))
+            .right(px(0.))
             .font_family(FONT_UI)
             .text_size(px(BADGE_FS))
             .line_height(px(BADGE_LH))
@@ -581,33 +585,46 @@ fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Statefu
                 .text_color(rgb(word_color))
                 .child(row.word()),
         )
-        .child(
+        .child({
+            // The title and its detail are one run, cut as the prototype's
+            // cell cuts it: its `…` in the cell's own `TEXT`, whatever it
+            // hides (the detail's dim, mostly).
+            let title_ink = rgb(if row.read { TEXT } else { TEXT_STRONG });
+            let line = if detail.is_empty() {
+                row.title.to_string()
+            } else {
+                format!("{} \u{b7} {detail}", row.title)
+            };
+            let highlights = vec![
+                (
+                    0..row.title.len(),
+                    gpui::HighlightStyle {
+                        color: Some(title_ink.into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    row.title.len()..line.len(),
+                    gpui::HighlightStyle {
+                        color: Some(rgb(TEXT_MUTED).into()),
+                        ..Default::default()
+                    },
+                ),
+            ];
             div()
-                .flex()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
+                .whitespace_nowrap()
+                .text_color(rgb(TEXT))
                 .child(
-                    // Exactly its cells (a measured run rounds up a pixel and
-                    // would push the detail off the grid).
-                    div()
-                        .flex_shrink_0()
-                        .w(px(components::cells_width(&row.title) + 0.1))
-                        .max_w_full()
-                        .truncate()
-                        .text_color(rgb(if row.read { TEXT } else { TEXT_STRONG }))
-                        .child(row.title.clone()),
+                    crate::pane::CellCut::plain(line.clone(), rgb(TEXT).into(), CH).child(
+                        gpui::StyledText::new(line)
+                            .with_highlights(highlights)
+                            .into_any_element(),
+                    ),
                 )
-                .when(!detail.is_empty(), |line| {
-                    line.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(SharedString::from(format!(" \u{b7} {detail}"))),
-                    )
-                }),
-        )
+        })
         .child(components::tabular(
             div()
                 .flex_shrink_0()
@@ -638,9 +655,12 @@ fn quick_button(
     let id = id.into();
     let blend = crate::pointer::hover_key(&id);
     let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
-    // Exactly its cells, a cell of padding each side and its edge: padded
+    // Its cells, a cell of padding each side and its edge — on the whole
+    // pixel, as the browser rounds each button's box (`3 deny`'s 64.4px
+    // lays out at 64, where the device grid would make it 64.5): padded
     // runs would snap each pad from 7.8 to 8 and drift the row.
-    let width = components::cells_width(key) + components::cells_width(word) + 2.0 * CH + 2.0;
+    let width =
+        (components::cells_width(key) + components::cells_width(word) + 2.0 * CH + 2.0).round();
     div()
         .id(id)
         .flex()
@@ -730,7 +750,7 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
     );
     crate::menu::float()
         .debug_selector(move || format!("toast-{thread}"))
-        .w(px(TOAST_W))
+        .w(px(TOAST_BOX_W))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()

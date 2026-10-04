@@ -1265,7 +1265,18 @@ impl Element for LineElement {
         });
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
-        let cell = font_size * crate::theme::CODE_ADVANCE * crate::theme::CARET_CELLS;
+        // A cell wide, up to the device pixel: the browser antialiases the
+        // block's fractional edges, so it covers whole pixels from the one
+        // its left edge lands in to the one its right edge does — a 7.8px
+        // block reads 16 device pixels wherever it falls. A quad snaps each
+        // edge, so 7.8 would read 15 or 16 by where it stands.
+        let scale = window.scale_factor();
+        let cell = px((f32::from(font_size)
+            * crate::theme::CODE_ADVANCE
+            * crate::theme::CARET_CELLS
+            * scale)
+            .ceil()
+            / scale);
         let caret_ink = alpha.map(|alpha| {
             crate::motion::mix(
                 rgb(crate::theme::TEXT).into(),

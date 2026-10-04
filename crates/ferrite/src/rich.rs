@@ -750,11 +750,19 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             table.overflow.x = Some(gpui::Overflow::Scroll);
             table
         })
+        // A row is a line and its rule, the text a pixel down: the
+        // prototype's `td` is a line tall (`height: lh`) with a line a pixel
+        // shorter (`line-height: lh - 1px`) centred in it, which the browser
+        // sets on the next whole pixel — its baseline 15px into the cell.
+        // The full line, a pixel down inside the cell's own height, puts it
+        // there.
         .with_table_cell(crate::components::tabular(
             gpui::StyleRefinement::default()
                 .border_r_0()
                 .px(px(cell))
-                .py(px(0.))
+                .pt(px(theme::TABLE_TEXT_DROP))
+                .pb(px(0.))
+                .h(px(line))
                 .text_size(px(size))
                 .line_height(px(line)),
         ))

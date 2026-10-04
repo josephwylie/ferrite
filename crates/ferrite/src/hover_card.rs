@@ -160,6 +160,12 @@ pub(crate) struct HoverCard {
     line: u32,
     lines: Vec<(u32, String)>,
     stat: Option<CardStat>,
+    /// Where the card's left edge fell before `hang` set it on the whole
+    /// pixel (its path's, `-0.4` for a path 7 cells into a 13px row). The
+    /// prototype's browser rounds the float's box the same way but sets
+    /// its text from the unrounded edge: the card's lines take the
+    /// difference into their insets.
+    lead: f32,
 }
 
 impl HoverCard {
@@ -184,6 +190,7 @@ impl HoverCard {
             line,
             lines,
             stat,
+            lead: 0.,
         }
     }
 
@@ -249,33 +256,41 @@ pub(crate) fn foot_text(
 impl gpui::Render for HoverCard {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let cell = theme::CH;
+        // The insets each line keeps from the card's edges, carrying the
+        // card's own rounding (`lead`).
+        let (inset_l, inset_r) = (cell + self.lead, cell - self.lead);
         let language = ferrite_core::transcript::language_for_path(&self.target.path);
-        let head_location = format!(":{}", self.line);
+        // The path and its `:211` are one run: two measured runs would each
+        // round up a device pixel and open a gap between them.
+        let path = self.target.display().to_string();
+        let head_text = format!("{path}:{}", self.line);
+        let head_highlights = vec![
+            (
+                0..path.len(),
+                gpui::HighlightStyle {
+                    color: Some(rgb(theme::PATH_INK).into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                path.len()..head_text.len(),
+                gpui::HighlightStyle {
+                    color: Some(rgb(theme::TEXT_MUTED).into()),
+                    ..Default::default()
+                },
+            ),
+        ];
         let head = div()
             .flex()
             .items_center()
             .justify_between()
             .h(px(theme::LH_UI))
-            .px(px(cell))
+            .pl(px(inset_l))
+            .pr(px(inset_r))
             .whitespace_nowrap()
-            .child(
-                div()
-                    .flex()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(theme::PATH_INK))
-                            .child(self.target.display()),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(theme::TEXT_MUTED))
-                            .child(SharedString::from(head_location)),
-                    ),
-            )
+            .child(div().min_w_0().truncate().child(
+                StyledText::new(SharedString::from(head_text)).with_highlights(head_highlights),
+            ))
             .child(
                 div()
                     .flex()
@@ -284,7 +299,10 @@ impl gpui::Render for HoverCard {
                     .pl(px(2.0 * cell))
                     .text_color(rgb(theme::TEXT_MUTED))
                     .child(crate::components::key_combo("cmd", theme::TEXT_MUTED))
-                    .child("-click opens in a reader pane"),
+                    // Exactly its cells: the hint is right-aligned, and a
+                    // measured run rounds up a pixel and would stand it
+                    // that much left.
+                    .child(crate::components::cells("-click opens in a reader pane")),
             );
         let rows = self.lines.iter().map(|(number, code)| {
             let on = *number == self.line;
@@ -298,7 +316,8 @@ impl gpui::Render for HoverCard {
                 .flex()
                 .items_center()
                 .h(px(theme::LH_UI))
-                .px(px(cell))
+                .pl(px(inset_l))
+                .pr(px(inset_r))
                 .when(on, |row| row.bg(theme::paint::SELECTION))
                 .child(crate::components::tabular(
                     div()
@@ -328,7 +347,8 @@ impl gpui::Render for HoverCard {
                 .flex()
                 .items_center()
                 .h(px(theme::LH_UI + 1.))
-                .px(px(cell))
+                .pl(px(inset_l))
+                .pr(px(inset_r))
                 .border_t_1()
                 .border_color(theme::paint::LINE)
                 .whitespace_nowrap()
@@ -403,7 +423,12 @@ pub(crate) fn hang(
         px(card_height(lines, foot)),
     );
     let at = hang_origin(anchor, size, window.viewport_size());
-    gpui::deferred(gpui::anchored().position(at).child(card))
+    // The box on the whole pixel, as the browser sets a float's; its lines
+    // keep the edge it came from (`HoverCard::lead`).
+    let whole = gpui::point(at.x.round(), at.y.round());
+    let lead = f32::from(at.x - whole.x);
+    card.update(cx, |card, _| card.lead = lead);
+    gpui::deferred(gpui::anchored().position(whole).child(card))
         .with_priority(3)
         .into_any_element()
 }

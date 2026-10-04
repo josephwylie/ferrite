@@ -1086,10 +1086,10 @@ impl CockpitView {
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
-                viewport.width - px(crate::theme::TOAST_RIGHT + crate::theme::TOAST_W),
+                viewport.width - px(crate::theme::TOAST_BOX_RIGHT + crate::theme::TOAST_BOX_W),
                 viewport.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM),
             ),
-            gpui::size(px(crate::theme::TOAST_W), px(0.)),
+            gpui::size(px(crate::theme::TOAST_BOX_W), px(0.)),
         );
         let handle = self.notice_handle(cx);
         Some(float::hang_element(

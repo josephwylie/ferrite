@@ -346,6 +346,203 @@ pub fn reading_column(child: impl IntoElement) -> Div {
         .child(child)
 }
 
+// ------------------------------------------------------------- the line
+
+/// A run of lines set where the browser sets them: on a whole CSS pixel.
+///
+/// The prototype's browser lays a line box out at fractions of a pixel but
+/// paints its text with the line's top rounded to the pixel (half up), so a
+/// line centred in a row with an odd room — the Pane head's 23px under its
+/// rule, the bottom bar's 23px over its rule, the palette's 31px input,
+/// a wall cell a third of the board down — draws a device pixel lower than
+/// its box says. gpui paints text at its box, snapped only to the device
+/// pixel. This wrapper lays its child out as given and paints it moved to
+/// the pixel the browser would round its top to — from the board track's
+/// own fraction inside a board cell (`line_bias`) — never more than half a
+/// pixel, and nothing at 1×, where every top is whole already.
+pub fn css_line(child: impl IntoElement) -> CssLine {
+    CssLine {
+        child: Some(child.into_any_element()),
+        across: false,
+    }
+}
+
+/// A drawn mark set where the browser paints an inline `<svg>`: its box's
+/// corner rounded to the whole CSS pixel both ways (`css_line` rounds only
+/// the top: the browser keeps a line's glyphs at their fractions across).
+/// The titlebar's doors centre their 15px glyphs at half pixels, which the
+/// prototype paints half a pixel right and down.
+pub fn css_box(child: impl IntoElement) -> CssLine {
+    CssLine {
+        child: Some(child.into_any_element()),
+        across: true,
+    }
+}
+
+pub struct CssLine {
+    child: Option<AnyElement>,
+    across: bool,
+}
+
+thread_local! {
+    /// The board cells' rounding, innermost last (`line_bias`).
+    static LINE_BIAS: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A board cell laid on whole pixels (`snap_rect`) whose grid track fell
+/// between them: `bias` is where the track was less where the cell is
+/// (`-0.33` for a wall row a third of the board down). The browser rounds
+/// the cell's box the same way but sets the lines inside from the track's
+/// own fraction, so a `css_line` in the cell rounds from there.
+pub fn line_bias(bias: f32, child: impl IntoElement) -> LineBias {
+    LineBias {
+        bias,
+        child: Some(child.into_any_element()),
+    }
+}
+
+pub struct LineBias {
+    bias: f32,
+    child: Option<AnyElement>,
+}
+
+impl IntoElement for LineBias {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for LineBias {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let child = self.child.get_or_insert_with(|| div().into_any_element());
+        (child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        LINE_BIAS.with(|bias| bias.borrow_mut().push(self.bias));
+        if let Some(child) = self.child.as_mut() {
+            child.prepaint(window, cx);
+        }
+        LINE_BIAS.with(|bias| bias.borrow_mut().pop());
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(child) = self.child.as_mut() {
+            child.paint(window, cx);
+        }
+    }
+}
+
+impl IntoElement for CssLine {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for CssLine {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let child = self.child.get_or_insert_with(|| div().into_any_element());
+        (child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let whole = |at: f32| (at + 0.5).floor() - at;
+        // Where the browser had the line before it rounded: the box's top
+        // plus what the board's whole-pixel cell rounding took from it.
+        let bias = LINE_BIAS.with(|bias| bias.borrow().last().copied().unwrap_or(0.));
+        let top = f32::from(bounds.origin.y);
+        let drop = whole(top + bias) + bias;
+        let shift = if self.across {
+            whole(f32::from(bounds.origin.x))
+        } else {
+            0.
+        };
+        if let Some(child) = self.child.as_mut() {
+            window.with_element_offset(point(px(shift), px(drop)), |window| {
+                child.prepaint(window, cx)
+            });
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(child) = self.child.as_mut() {
+            child.paint(window, cx);
+        }
+    }
+}
+
 // ------------------------------------------------------------------ marks
 
 /// A status dot: the `●` glyph's own box at the grid size (`STATUS_DOT`,
@@ -688,8 +885,9 @@ pub fn chord_parts(stroke: &str) -> Vec<&str> {
 /// A key combination as it is drawn, from a key table's spelling, in the
 /// code face (keys are machine text, rule 6). `⌘` (`command.svg`, the
 /// fallback face's glyph), `⌥` (`option.svg`) and `⌃` (`control.svg`) are
-/// in neither face and are drawn: `⌘` at `KEY_GLYPH` (15 × 14 device px),
-/// riding the cap height, `KEY_GLYPH_GAP` before the next letter. `⇧` and
+/// in neither face and are drawn: each is Menlo's glyph (the prototype's
+/// browser falls back to it) in a cell of its advance (`KEY_GLYPH_ADVANCE`)
+/// one line tall, on the line's baseline as the browser sets it. `⇧` and
 /// every key word (`⌫` `⏎` `⇥`, a letter) are Geist Mono's own text. Parts
 /// joined by `-` sit tight, as a menu shortcut or a tooltip reads (`cmd-F`
 /// → `⌘F`); strokes joined by spaces keep one code space apart. The one
@@ -704,17 +902,9 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
     let glyph_box = |selector: &'static str| {
         div()
             .debug_selector(move || selector.into())
-            .flex()
             .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .w(px(theme::KEY_GLYPH))
-            .h(px(theme::KEY_GLYPH_H))
-            // Centred on the line, then lifted onto the cap height: the
-            // glyph's top a hair under the cap, its foot clear of the
-            // baseline, as the fallback face sets it.
-            .mb(px(theme::KEY_GLYPH_LIFT * 2.0))
-            .mr(px(theme::KEY_GLYPH_GAP))
+            .w(px(theme::KEY_GLYPH_ADVANCE))
+            .h(px(theme::LH_UI))
     };
     let strokes = keys.split(' ').map(|stroke| {
         div()
@@ -730,7 +920,7 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
                 };
                 match (svg, part) {
                     (Some((path, selector)), _) => glyph_box(selector)
-                        .child(icons::icon(path, theme::KEY_GLYPH, ink).h(px(theme::KEY_GLYPH_H)))
+                        .child(icons::icon(path, theme::KEY_GLYPH_ADVANCE, ink).h(px(theme::LH_UI)))
                         .into_any_element(),
                     (None, "shift") => div()
                         .debug_selector(|| "shift-key".into())

@@ -443,6 +443,10 @@ pub struct CockpitView {
     cli_versions: Option<(SharedString, SharedString)>,
     /// A CLI version probe is in flight (the empty board asks once).
     cli_probing: bool,
+    /// The version the empty board's banner names: this build's
+    /// (`CARGO_PKG_VERSION`). The parity capture names the release the
+    /// prototype's world runs (`0.5.0`).
+    pub(crate) shown_version: SharedString,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
     group_error: Option<SharedString>,
@@ -1285,6 +1289,7 @@ impl CockpitView {
             maximized: false,
             cli_versions: None,
             cli_probing: false,
+            shown_version: env!("CARGO_PKG_VERSION").into(),
             cli_updates: Default::default(),
             group_error: None,
             bell: Bell::new(),
@@ -3352,7 +3357,8 @@ impl CockpitView {
                     cell
                 }
             };
-            let rect = snap_rect(local(rect));
+            let track = local(rect);
+            let rect = snap_rect(track);
             // The grabbed slot stays put, dimmed as lifted out of its slot,
             // while its ghost travels: the board keeps its shape until the
             // drop changes it.
@@ -3362,13 +3368,25 @@ impl CockpitView {
             } else {
                 cell
             };
-            board = board.child(
+            // Where the browser's track for this cell fell: a third of the
+            // board for a wall row (its `1fr` keeps the fraction), but a
+            // halving's tracks are `50%` and the gap, whole already — the
+            // half pixel `snap_rect` rounds there is this layout's own, not
+            // the browser's.
+            let bias = track.y - rect.y;
+            let bias = if (bias.abs() - 0.5).abs() < 1e-3 {
+                0.
+            } else {
+                bias
+            };
+            board = board.child(crate::components::line_bias(
+                bias,
                 cell.absolute()
                     .left(px(rect.x))
                     .top(px(rect.y))
                     .w(px(rect.w))
                     .h(px(rect.h)),
-            );
+            ));
         }
         // The seams (F-18): one 1px `paint::LINE` line per linked set — a
         // default grid's aligned column seams are one line from the board's
@@ -9553,7 +9571,18 @@ impl CockpitView {
                 .board_is_movable()
                 .then(|| head_drag(pane_leaf(pane.identity), self.pane_ghost(index))),
             quick_answers: (level == Level::Wall)
-                .then(|| self.quick_answers(index, cx))
+                .then(|| {
+                    // The browser rounds each answer's box to the whole
+                    // pixel from where its tile's track fell: the row
+                    // starts that far off the tile's snapped inset.
+                    let lead = rect.map_or(0., |rect| {
+                        let scale = window.scale_factor();
+                        let pad = crate::theme::WALL_PAD_X;
+                        let laid = rect.x.round() + (pad * scale).round() / scale;
+                        (rect.x + pad).round() - laid
+                    });
+                    self.quick_answers(index, lead, cx)
+                })
                 .flatten(),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
@@ -10068,7 +10097,7 @@ impl CockpitView {
     /// boxed word wired to its answer, its digit the key that answers it
     /// from the wall (`cockpit::PickOption1-3`). A question with more than
     /// one part answers in its form: its option lands on the Pane, in full.
-    fn quick_answers(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn quick_answers(&self, index: usize, lead: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index)?.thread()?;
         let open = self.cockpit.thread(thread)?;
         let pending = open.activity().pending_decisions();
@@ -10134,7 +10163,7 @@ impl CockpitView {
             }
             None => return None,
         }
-        (!buttons.is_empty()).then(|| pane::quick_answers(buttons).into_any_element())
+        (!buttons.is_empty()).then(|| pane::quick_answers(buttons, lead).into_any_element())
     }
 
     /// The Thread the wall's digit keys answer (F-7): the focused tile when

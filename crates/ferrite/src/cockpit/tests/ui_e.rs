@@ -43,7 +43,7 @@ fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppC
         "52 cells: {toast:?}"
     );
     assert!(
-        (toast.right() - (window.width - px(crate::theme::TOAST_RIGHT))).abs() <= px(1.),
+        (toast.right() - (window.width - px(2.0 * crate::theme::CH))).abs() <= px(1.),
         "two cells in from the window's edge: {toast:?}"
     );
     assert!(

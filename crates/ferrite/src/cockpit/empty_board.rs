@@ -100,7 +100,7 @@ impl CockpitView {
     /// The board with no Pane on it (see the module doc).
     pub(super) fn empty_board(&self, cx: &mut Context<Self>) -> Div {
         use crate::theme::*;
-        let version = env!("CARGO_PKG_VERSION");
+        let version = self.shown_version.clone();
         let cli = |found: &SharedString| -> Option<SharedString> {
             (!found.starts_with("not found"))
                 .then(|| {

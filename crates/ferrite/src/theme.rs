@@ -815,9 +815,7 @@ pub const ICON_CHEVRON: f32 = 12.0;
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
-/// 7px — the drawn `⌘` in a key combination (`components::key_combo`):
-/// the fallback face's glyph at the grid size, its ink 14 × 14 device
-/// pixels in the prototype's capture.
+/// 7px — a small drawn mark beside a label (a menu section title's).
 pub const KEY_GLYPH: f32 = 7.0;
 /// The drawn `◆` of a request's row and toast (`icons::DIAMOND`, 60% of its
 /// box): a 13.3px box, so the diamond is the prototype glyph's 8px.
@@ -871,8 +869,11 @@ pub const QUEUE_ROW_H: f32 = COMPOSER_ROW_H;
 
 /// 7.5px — the painted status dot (`components::status_dot`): the `●`
 /// glyph's size at `FS_UI`, its centre `STATUS_DOT_LIFT` above the line's.
+/// The prototype's `●` centres 0.89px over its line's centre; the 7.5px
+/// box centred in a 20px row already stands half a pixel high on the
+/// device grid, so the lift that lands it there is 0.4.
 pub const STATUS_DOT: f32 = 7.5;
-pub const STATUS_DOT_LIFT: f32 = 1.0;
+pub const STATUS_DOT_LIFT: f32 = 0.4;
 /// The Ferrite progress mark follows the timing and geometry of the supplied
 /// animated logo. These are artwork tokens rather than general motion tokens:
 /// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
@@ -1469,8 +1470,11 @@ pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
 pub const TITLE_PAD_X: f32 = 2.0 * CH;
 /// The titlebar's one trailing door (`⌘K commands`): dim words on the
 /// plane, no box, a cell between the chord and its word, ending
-/// `TITLE_PAD_X` in from the window's edge.
-pub const TITLE_DOOR_GAP: f32 = CH;
+/// `TITLE_PAD_X` in from the window's edge. Authored at 7.5: the word's
+/// cells and the chord's letter each snap up from 7.8 to 8 on the device
+/// grid, and this space gives the half pixel back, so the chord stands
+/// where the browser's does.
+pub const TITLE_DOOR_GAP: f32 = 7.5;
 /// The smallest window the chrome still lays out in: the nav plus one wall
 /// tile, the title, the door and the Windows caption group.
 pub const WINDOW_MIN_W: f32 = 640.0;
@@ -1499,8 +1503,12 @@ pub const HEAD_PAD_X: f32 = CH;
 pub const HEAD_DOT_W: f32 = 2.0 * CH;
 /// Where a working head's braille spinner box sits in the dot column: its
 /// first dot (3.35 into the `GLYPH_BOX` frame, `braille-*.svg`) lands at
-/// the Pane's left + 9.5, where the prototype's typed `⠋` starts.
-pub const HEAD_SPINNER_LEFT: f32 = 9.5 - HEAD_PAD_X - 3.35;
+/// the Pane's left + 9.5, where the prototype's typed `⠋` starts. The
+/// head's one-cell inset lays out at 8 (not 7.8) and the frame's box snaps
+/// to the device pixel, so the box is set a pixel further in than the
+/// sum: measured on the capture, the dots then start where the browser's
+/// do.
+pub const HEAD_SPINNER_LEFT: f32 = 8.5 - HEAD_PAD_X - 3.35;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
@@ -1592,6 +1600,12 @@ pub const BAR_SEG_PAD_X: f32 = CH;
 /// leading cell snapped to 8 the pair keeps the prototype's two cells, so
 /// the segments packed against the right edge land where the browser's do.
 pub const BAR_SEG_PAD_TAIL: f32 = 7.5;
+/// Above a bottom-bar segment's words, inside its ground: the bar's 23px
+/// under its rule centre a line at 1.5px, which the prototype's browser
+/// paints on the next whole pixel (`components::css_line`); a pixel of
+/// padding sets the line there while the segment's ground still fills the
+/// bar.
+pub const BAR_LINE_DROP: f32 = 1.0;
 /// The provider mark before a usage segment.
 pub const BAR_MARK: f32 = 11.0;
 
@@ -1676,6 +1690,12 @@ pub const COMPOSER_SEG_PAD_X: f32 = CH;
 /// lands where the browser's does.
 pub const COMPOSER_SEG_PAD_TAIL: f32 = 7.5;
 pub const STATUS_SEAM_W: f32 = 7.5;
+/// The status line's own lead before its first segment, which hangs its
+/// padding out (`COMPOSER_PAD_L - COMPOSER_SEG_PAD_X`, one cell): authored
+/// at 7.5 for the same reason, so lead and padding snap to 15.5 — the
+/// Composer's `❯` column — and the first word starts where the browser's
+/// does (at 8 + 8 it stood half a pixel right).
+pub const STATUS_HANG_PAD: f32 = 7.5;
 /// Legacy names other modules still read (the Subagent footer, the send
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
@@ -1687,20 +1707,29 @@ pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H;
 /// The ctx meter: eight cells by 4px on a `paint::LINE2` track, filled
 /// `RUNNING` below `CTX_METER_WARN`, `ATTENTION` below `CTX_METER_FULL`,
 /// then `BLOCKED`.
+/// How far a table cell's text sits under the cell's top (`rich::style`):
+/// the prototype's 19px line centred in its 20px cell, rounded down to the
+/// whole pixel.
+pub const TABLE_TEXT_DROP: f32 = 1.0;
 pub const CTX_METER_W: f32 = 8.0 * CH;
 pub const CTX_METER_H: f32 = 4.0;
+/// The meter's ends, rounded as the prototype's `.meter` rounds them (the
+/// one radius inside a Pane: it is a bar, not a corner).
+pub const CTX_METER_R: f32 = 1.0;
+/// `vertical-align: middle` puts the bar's middle half an x-height over
+/// the baseline: 1px under the row's centre at 13/20.
+pub const CTX_METER_DROP: f32 = 1.0;
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
 /// The mode marker before the mode word (`⏵⏵ accept edits`), drawn (Geist
-/// Mono lacks `⏵` and `⏸`) as the fallback face sets it: each `⏵` a
-/// 6.9px advance with a 5 × 5.5px triangle, centred on the row so it rides
-/// the x-height, then one space before the word. The pair advances
-/// `MODE_MARK_ADVANCE` (13px) in the line, so the word starts 21px after
-/// the marker as the prototype's capture sets it.
-pub const MODE_MARK_W: f32 = 13.8;
-pub const MODE_MARK_ADVANCE: f32 = 13.0;
-pub const MODE_MARK_ONE_W: f32 = 6.9;
-pub const MODE_MARK_H: f32 = 5.5;
+/// Mono lacks `⏵` and `⏸`) as the browser's fallback face, STIX Two Math,
+/// sets it: each `⏵` a 503-unit advance (6.539px) with its 5.4 × 6.4px
+/// triangle on the baseline, `⏸` 630 units. Each SVG is its marks' cell
+/// one line tall, the width its advance takes on the device grid (the
+/// pair's 13.078px lays out at 13), then a space before the word.
+pub const MODE_MARK_ADVANCE: f32 = 2.0 * 503.0 / 1000.0 * FS_UI;
+pub const MODE_MARK_ONE_ADVANCE: f32 = 503.0 / 1000.0 * FS_UI;
+pub const MODE_PLAN_ADVANCE: f32 = 630.0 / 1000.0 * FS_UI;
 /// The Composer's band sits between two 1px rules (the prototype's
 /// `.comp .rule`, transparent on these themes): the room is real, the ink
 /// is none.
@@ -1709,6 +1738,12 @@ pub const COMPOSER_RULE: f32 = 1.0;
 pub const COMPOSER_WORKING_GAP: f32 = 6.0;
 /// The provider's logomark in a status segment or a picker section.
 pub const STATUS_LOGO: f32 = 11.0;
+/// A logomark set inline in a status segment's line (the prototype's
+/// `svg.logo`, `vertical-align: -1px`) has its foot 1px under the
+/// baseline: its top 4px down a 13/20 line, half a pixel over the centre a
+/// flex row gives it. As a negative top margin on the centred mark it
+/// lifts the mark by half its value: onto that top.
+pub const STATUS_LOGO_FOOT: f32 = 1.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
@@ -1859,11 +1894,16 @@ pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + COMPOSER_STATUS_PAD_B
     + HALF_ROW;
 /// **A toast** (the prototype's `.toast`): a float `TOAST_W` wide, its
-/// right edge `TOAST_RIGHT` in from the window's, its foot `TOAST_BOTTOM`
+/// right edge two cells in from the window's (`TOAST_BOX_*` as laid out on
+/// whole pixels), its foot `TOAST_BOTTOM`
 /// over the bottom bar. One row of head (`◆ needs you · <title>`, `⌘D`), one
 /// body line, then the quick answers: `TOAST_BUTTON_H` boxes a cell apart,
 /// `TOAST_QUICK_GAP` under the body and over the float's edge.
-pub const TOAST_RIGHT: f32 = 2.0 * CH;
+/// The toast's box as the prototype's browser lays it: on whole pixels,
+/// each edge rounded — its right edge 2 cells (15.6px) in from the window's
+/// lands 16 in, its left 52 cells (405.6px) further lands 405 from that.
+pub const TOAST_BOX_RIGHT: f32 = 16.0;
+pub const TOAST_BOX_W: f32 = 405.0;
 pub const TOAST_BOTTOM: f32 = ROW + 16.0;
 pub const TOAST_BUTTON_H: f32 = ROW + 2.0;
 pub const TOAST_QUICK_GAP: f32 = HALF_ROW;
@@ -1874,17 +1914,24 @@ pub const TOAST_QUICK_GAP: f32 = HALF_ROW;
 /// name; the list scrolls past `PALETTE_MAX_H`. The shortcuts sheet takes
 /// the same geometry and veil.
 pub const PALETTE_W: f32 = 84.0 * CH;
+/// The palette's box as laid out: 84 cells (655.2px) snap to 655 on the
+/// device grid, but the prototype centres its palette with a transform,
+/// which keeps the fraction — its right edge stands half a pixel past the
+/// snapped one. Half a pixel more puts it there.
+pub const PALETTE_BOX_W: f32 = 655.5;
+/// A palette row's right inset: the key hints at its right end are cells
+/// that each snap from 7.8 to 8, standing the chord left of the browser's;
+/// a 7.5 inset (the cell's 7.8, snapped down) gives that half pixel back.
+pub const PALETTE_ROW_PAD_R: f32 = 7.5;
 pub const PALETTE_TOP: f32 = 56.0;
 pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
 pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
 pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
-/// The drawn `⌘` in a key combination (`KEY_GLYPH` wide): 7px high (14 ×
-/// 14 device px), lifted `KEY_GLYPH_LIFT` off the line's centre onto the
-/// cap height, `KEY_GLYPH_GAP` before the next letter — whose ink then
-/// starts a pixel after the glyph's, as the fallback face spaces them.
-pub const KEY_GLYPH_H: f32 = 7.0;
-pub const KEY_GLYPH_LIFT: f32 = 1.0;
-pub const KEY_GLYPH_GAP: f32 = 0.5;
+/// The drawn `⌘` `⌥` `⌃` in a key combination: Menlo's advance at the grid
+/// size (1233/2048 × 13px), the cell the prototype's browser gives the
+/// fallback glyph before the next letter. Its SVG is that cell one line
+/// tall, the glyph on the 14px baseline (`icons::COMMAND`).
+pub const KEY_GLYPH_ADVANCE: f32 = 1233.0 / 2048.0 * FS_UI;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
