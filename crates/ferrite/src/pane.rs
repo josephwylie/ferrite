@@ -1776,10 +1776,10 @@ pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -
         .child(button)
 }
 
-/// Draft setup controls ride the Composer's meta row. In a narrow Pane
-/// they give way first: their labels truncate before the model and effort
-/// pair or the usage meter loses a pixel. Their focus ring is inset and
-/// takes no layout, so their labels start at C1 as the mode word does.
+/// Draft setup controls ride the status line's first segments. In a narrow
+/// Pane they give way first: their labels truncate before the model and
+/// effort pair or the usage meter loses a pixel. Their focus ring is inset
+/// and takes no layout.
 pub fn draft_band() -> Div {
     div()
         .debug_selector(|| "draft-band".into())
@@ -1787,14 +1787,13 @@ pub fn draft_band() -> Div {
         .flex_shrink(1.)
         .min_w_0()
         .items_center()
-        .gap(px(theme::PICKER_GAP))
         .h(px(theme::COMPOSER_ROW_H))
 }
 
-/// One band chip (project, workspace): the Composer's control chip — the
-/// choice and a chevron that says it opens a menu — ringed by the one
-/// focus recipe (`components::focused`) while tab rests on it, because the
-/// popover opens on ↵ and the chip must say where ↵ will land.
+/// One band chip (project, workspace): a status segment — the choice — ringed
+/// by the one focus recipe (`components::focused`) while tab rests on it,
+/// because the popover opens on ↵ and the segment must say where ↵ will
+/// land.
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
     // The label truncates in a narrow Pane; the tooltip keeps the whole
     // choice reachable and names the keys that change it.
@@ -1807,16 +1806,14 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         .debug_selector(move || format!("band-chip-{slot}"))
         .flex_shrink(1.)
         .min_w_0()
-        .rounded(px(theme::COMPOSER_CHIP_R))
         .map(|chip| components::focused(chip, focused))
         .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
         .child(
-            control_chip(if accent { TEXT } else { TEXT_2 })
+            status_seg(if accent { TEXT } else { TEXT_MUTED })
                 .flex_shrink(1.)
                 .min_w_0()
-                .child(div().min_w_0().truncate().child(label))
-                .child(chip_chevron()),
+                .child(div().min_w_0().truncate().child(label)),
         )
 }
 
@@ -1840,7 +1837,7 @@ pub fn draft_picker(
         .h_auto()
         .flex()
         .flex_shrink_0()
-        .rounded(px(theme::COMPOSER_CHIP_R))
+        .rounded(px(theme::R_CHIP))
         .map(|chip| components::focused(chip, focused))
         .child(control)
 }
@@ -3358,32 +3355,48 @@ pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
-/// The Composer's model picker: a control chip with the provider's 12px
-/// logomark in its brand colour, the bare
-/// model name and a chevron. A busy Session mutes it rather than fading it.
-/// Render-only; the cockpit gives it its id and its click.
-pub fn model_picker(provider: Option<Provider>, label: SharedString, busy: bool) -> Div {
-    let ink = if busy { TEXT_MUTED } else { TEXT_2 };
+/// The status line's model segment: the provider's logomark in its brand
+/// colour, a cell, and the model's name in the status line's own voice —
+/// lowercase, a parenthesised context size kept as written (`opus 5.5
+/// (1M)`, `gpt-6 astra`). Render-only; the cockpit gives it its id and its
+/// click.
+pub fn model_picker(provider: Option<Provider>, label: SharedString, _busy: bool) -> Div {
     let mark = provider.map(|provider| {
         let (glyph, ink) = match provider {
             Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
             Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE),
         };
-        icon(glyph, theme::PROVIDER_MARK_SM, ink)
+        icon(glyph, theme::STATUS_LOGO, ink)
     });
-    control_chip(ink)
+    status_seg(TEXT_MUTED)
         .children(mark)
-        .child(div().flex_shrink_0().child(label))
-        .child(chip_chevron())
+        .child(div().flex_shrink_0().child(status_model_word(&label)))
 }
 
-/// The effort chip beside the model picker: the level in force (lowercase
-/// in the chip; the menu rows keep their titles) and a chevron.
-pub fn effort_picker(label: SharedString, busy: bool) -> Div {
-    let ink = if busy { TEXT_MUTED } else { TEXT_2 };
-    control_chip(ink)
-        .child(div().flex_shrink_0().child(label))
-        .child(chip_chevron())
+/// A model's name as the status line says it: lowercase outside any
+/// parentheses, so `Opus 5.5 (1M)` reads `opus 5.5 (1M)`.
+pub(crate) fn status_model_word(label: &str) -> SharedString {
+    let mut depth = 0usize;
+    let mut word = String::with_capacity(label.len());
+    for ch in label.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 {
+            word.extend(ch.to_lowercase());
+        } else {
+            word.push(ch);
+        }
+    }
+    word.into()
+}
+
+/// The effort segment after the model: the level in force, lowercase (the
+/// menu rows keep their titles).
+pub fn effort_picker(label: SharedString, _busy: bool) -> Div {
+    status_seg(TEXT_MUTED).child(div().flex_shrink_0().child(label))
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -3611,8 +3624,8 @@ fn parked_body() -> Div {
 /// stays readable as the states grow.
 struct ComposerStack<'a> {
     compact: bool,
-    /// A board cell (C4): the Composer is one fixed `COMPOSER_GRID_H` line
-    /// with no status row, flat and quiet until its cell holds focus.
+    /// A board cell (C4): only the focused cell's Composer is live — its
+    /// shelf, queue and status line; the others keep their input band.
     grid: bool,
     decision: Option<&'a Decision>,
     /// Prompts held back while the turn runs, newest first: they pile up
@@ -3624,20 +3637,21 @@ struct ComposerStack<'a> {
     /// the shelf (`attachments`) waits for the live Composer.
     files: usize,
     attachments: Option<AnyElement>,
+    /// The verb hint at the status line's right (`⏎ send`, `esc
+    /// interrupt`): the pointer's way to the keys' acts.
     actions: Option<AnyElement>,
     /// Running background tasks as chips, hung at the right edge of the
     /// same shelf the pending files sit on.
     background: Option<AnyElement>,
-    /// A compact shelf of files touched by this Thread. It belongs inside
-    /// the Composer but above the prompt, separated from typed text.
+    /// The status line's changed-files segment (`1 file +9 −4`).
     changed_files: Option<AnyElement>,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
-    /// The mode chip wired to its menu; `None` draws the plain chip.
+    /// The mode segment wired to its menu; `None` draws the plain segment.
     mode_picker: Option<AnyElement>,
-    /// The Composer's model picker (#25) — drawn in every Pane.
+    /// The Composer's model picker (#25): the model and effort segments.
     model_picker: Option<AnyElement>,
-    /// Live usage sits immediately beside the model picker.
+    /// The `ctx` segment, after the model.
     usage_meter: Option<AnyElement>,
     session_controls: Option<AnyElement>,
     setup_controls: Option<AnyElement>,
@@ -3645,39 +3659,35 @@ struct ComposerStack<'a> {
     /// The follow-up predicted for this Thread's last response, if one has
     /// landed. The idle line shows it verbatim and Tab accepts it.
     suggestion: Option<&'a str>,
-    /// Whether this Pane holds the keyboard: the line's debug name.
+    /// Whether this Pane holds the keyboard: the line's debug name, and on
+    /// a board whether its Composer is live.
     focused: bool,
     /// The Composer itself holds the keyboard in the active window: the
-    /// `❯` lights to `ACCENT` and the caret shows. Otherwise the `❯` is
-    /// `TEXT_MUTED` and there is no caret.
+    /// queue's keys act only then.
     editing: bool,
-    /// Native files hover the Pane: the block's edge is `ACCENT_EDGE`,
+    /// Native files hover the Pane: the band's edge is `ACCENT_EDGE`,
     /// saying where they will land.
     drop_target: bool,
-    /// A docked Decision sits flush on top and ends in the seam: the block
-    /// drops its top edge and top corners, so the two read as one.
+    /// A docked Decision sits flush on top. The band is a band either way
+    /// (no box to join); kept so the levels hand the Composer one shape.
+    #[allow(dead_code)]
     joined: bool,
 }
 
-/// The Composer: a raised block in the reading column. Its outer edges are
-/// the column's edges and its content sits `BOX_INSET_X` inside them, so
-/// its `❯` shares the transcript's glyph box and its text starts at C1.
-/// `RAISED`, `COMPOSER_R`, a 1px edge that is always in layout
-/// (`COMPOSER_EDGE`, `ACCENT_EDGE` while files hover it),
-/// padding `COMPOSER_PAD_T/X/END/B`, rows `COMPOSER_GAP` apart:
+/// The Composer (theme WP-D, the prototype's `.comp`): no box. An input
+/// band across the Pane's width on `paint::INBAND` — queued prompts, then
+/// the `❯` in its 2-cell gutter and the line growing upward to
+/// `composer::MAX_ROWS` rows — and, in the focused Pane, the status line
+/// under it: the mode, the model and effort, `ctx`, the changed files and
+/// the session controls as quiet segments split by a faint `·`, the verb
+/// hint at its right.
 ///
-/// - queued prompts, dim `❯` lines in a bounded scroll viewport;
-/// - the input line, `❯` then the editor, growing upward to
-///   `composer::MAX_ROWS` rows and then scrolling (Send/Stop end it at L1);
-/// - the hint row: setup or mode and the key hints at left, usage, session
-///   controls and the model pair at right (Send/Stop at L2).
-///
-/// The shelf — pending files at left, background tasks at right — floats
-/// above the block, its right edge on the Send column. The Pane lays the
-/// stack out `flex_shrink_0` below the body, so the transcript gives way.
-/// The Decision card is **not** here: it is a sibling of the body. While a
-/// Decision pends the block carries the `Decision` key context, so y/n/a
-/// answer with the keyboard in the Composer (#23).
+/// The shelf — pending files at left, background tasks at right — stands
+/// above the band. The Pane lays the stack out `flex_shrink_0` below the
+/// body, so the transcript gives way. The Decision card is **not** here: it
+/// is a sibling of the body. While a Decision pends the band carries the
+/// `Decision` key context, so y/n/a answer with the keyboard in the
+/// Composer (#23).
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         compact,
@@ -3703,89 +3713,66 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         focused,
         editing,
         drop_target,
-        joined,
+        joined: _,
     } = stack;
-    // On a board only the focused cell's line is live (C4): the others lie
-    // flat on the Pane — no ground, the edge held in layout at zero ink, no
-    // caret or placeholder, their controls held in layout unseen. The
-    // switch is instant: focus moves by keyboard.
+    // On a board only the focused cell's Composer is live (C4): the others
+    // keep their band — `❯`, the hollow caret, a Decision's placeholder —
+    // and say what the shelf and the queue hold in words after the `❯`
+    // (`flat_facts`); focus brings them back as they were. The status line
+    // is the live Composer's (Solo always); an unfocused cell keeps its room
+    // empty, so stepping focus across a board moves no body (C4).
     let live = !grid || focused || drop_target;
-    // The shelf and the queue belong to the live Composer. A flat line
-    // keeps them — the draft is untouched — and says them in words after
-    // its `❯` (`flat_facts`); focus brings them back as they were.
+    let status = live;
     let flat = (!live).then(|| flat_facts(files, queued.len())).flatten();
     let (attachments, queued, changed_files) = if live {
         (attachments, queued, changed_files)
     } else {
         (None, Vec::new(), None)
     };
-    let (pad_t, pad_b) = if grid {
-        (theme::COMPOSER_GRID_PAD_Y, theme::COMPOSER_GRID_PAD_Y)
-    } else {
-        (theme::COMPOSER_PAD_T, theme::COMPOSER_PAD_B)
-    };
-    let block = if live && joined {
-        // The block's own top edge is the seam under the Decision: it stays
-        // in layout, so a Decision arriving never moves the line.
-        composer_box(composer_edge(drop_target))
-            .rounded_t(px(0.))
-            // The seam under the Decision is not a top edge: the joined
-            // block's light is the Decision's own, so the seam casts only.
-            .shadow(
-                components::elevation(components::Elevation::Raised)
-                    .into_iter()
-                    .filter(|layer| !layer.inset)
-                    .collect(),
-            )
-    } else if live {
-        composer_box(composer_edge(drop_target))
-    } else {
-        div()
-            .border(px(theme::COMPOSER_EDGE_W))
-            .border_color(rgba(TRANSPARENT))
-            .rounded(px(theme::COMPOSER_R))
-    };
     let geometry = view.geometry.clone();
-    // The canvas fills the padding box: add back the edge held in layout.
-    let mut block = components::on_bounds(block, move |bounds, _, _| {
-        geometry.set(PaneGeometry {
-            composer: Some(bounds.dilate(px(theme::COMPOSER_EDGE_W))),
-            ..geometry.get()
-        })
-    });
-    block = block
+    let band = div()
         .debug_selector(|| "composer-block".into())
-        .when(drop_target, |block| {
-            block.debug_selector(|| "composer-drop-target".into())
+        .when(drop_target, |band| {
+            band.debug_selector(|| "composer-drop-target".into())
         })
-        .when(!live, |block| {
-            block.debug_selector(|| "composer-flat".into())
-        })
+        .when(!live, |band| band.debug_selector(|| "composer-flat".into()))
         .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .gap(px(theme::COMPOSER_GAP))
         .min_w_0()
-        .pt(px(pad_t))
-        .pl(px(if compact {
-            theme::COMPOSER_PAD_X_L2
-        } else {
-            theme::COMPOSER_PAD_X
-        }))
-        .pr(px(theme::COMPOSER_PAD_END))
-        .pb(px(pad_b))
+        .pl(px(theme::COMPOSER_PAD_L))
+        .pr(px(theme::COMPOSER_PAD_R))
+        .py(px(theme::COMPOSER_PAD_Y))
+        .bg(theme::paint::INBAND)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_2))
-        .when(decision.is_some(), |block| block.key_context("Decision"));
+        .text_color(rgb(TEXT))
+        .when(decision.is_some(), |band| band.key_context("Decision"));
+    let mut band = components::on_bounds(band, move |bounds, _, _| {
+        geometry.set(PaneGeometry {
+            composer: Some(bounds),
+            ..geometry.get()
+        })
+    });
+    // Files hovering the Pane: the band's edge in `ACCENT_EDGE`, laid over
+    // it so nothing reflows.
+    if drop_target {
+        band = band.child(
+            div()
+                .absolute()
+                .inset_0()
+                .border_1()
+                .border_color(rgba(theme::ACCENT_EDGE)),
+        );
+    }
     if let Some(error) = draft_error {
-        block = block.child(
+        band = band.child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .text_size(px(theme::FS_SM))
+                .pl(px(theme::COMPOSER_GUTTER))
                 .text_color(rgb(BLOCKED))
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
@@ -3797,8 +3784,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if !queued.is_empty() {
         let count = queued.len();
         let namespace = view.text_namespace();
-        block =
-            block.child(
+        band =
+            band.child(
                 div()
                     .debug_selector({
                         let namespace = namespace.clone();
@@ -3829,10 +3816,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             );
     }
     // The one line that grows: the Composer's element is `COMPOSER_ROW_H`
-    // per visual row, so the line height here IS the row pitch. The idle
-    // placeholder overlays its first row in every Pane whose line is empty,
-    // focused or not: it carries a follow-up read off the last response,
-    // and that is worth reading with the cursor already in the box.
+    // per visual row, so the line height here IS the row pitch. The
+    // placeholder overlays its first row while the line is empty — on the
+    // live line, and on a flat one only while a Decision waits (it says
+    // where the answer goes).
     let mut line = div()
         .debug_selector(move || {
             if focused {
@@ -3845,20 +3832,12 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .relative()
         .flex_1()
         .min_w_0()
-        // The input is a terminal line: the code face, placeholder too.
         .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
         .line_height(px(theme::COMPOSER_ROW_H))
         .text_color(rgb(TEXT))
         .child(view.composer.clone());
-    if empty && live {
-        // The Composer paints its own caret at the line origin, so the
-        // ghost reserves the same caret inset in either focus state.
-        // The hint is never cut: an accept key stays whole and the ghost
-        // gives way to it; a pointer to the `/` menu wraps onto the
-        // clipped second line — gone — when the row has no room for it.
-        // A compact (L2) line has no room for a hint beside its ghost; the
-        // `/` menu is one key away all the same.
+    if empty && (live || decision.is_some()) {
         let ghost = placeholder(
             decision.is_some(),
             setup_controls.is_some(),
@@ -3868,161 +3847,129 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         line = line.child(ghost_row(ghost, compact));
     }
 
-    // The `❯` is always in layout, so the text origin never moves with
-    // focus. It hangs centred on the first row while the line grows.
+    // The `❯` is always in layout and always the accent (the prompt's own
+    // colour), hanging in its 2-cell gutter on the first row.
     let line_selector = format!(
         "composer-{}-{}",
         if live { "live" } else { "flat" },
         view.text_namespace()
     );
-    let mut input = div()
+    let input = div()
         .debug_selector(move || line_selector.clone())
         .flex()
         .items_start()
         .min_h(px(theme::COMPOSER_ROW_H))
         .min_w_0()
         .child(
-            components::gutter(
-                components::prompt_mark(prompt_ink(editing)),
-                theme::COMPOSER_ROW_H,
-            )
-            .debug_selector(|| "composer-mark".into()),
+            div()
+                .debug_selector(|| "composer-mark".into())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .w(px(theme::COMPOSER_GUTTER))
+                .h(px(theme::COMPOSER_ROW_H))
+                .child(components::prompt_mark(ACCENT)),
         )
         // A flat line's facts come straight after its `❯`, before any
         // draft text it holds.
-        .children(flat.map(|facts| facts.pl(px(theme::CARET_W)).mr(px(theme::SPACE_2))))
+        .children(flat.map(|facts| facts.mr(px(theme::CH))))
         .child(line);
-    // The box's one row: `❯` and the line at left; the model pair and the
-    // send control at right, on the first line's box however the line
-    // grows (L2 has no model pair, only the send control).
-    // On a board the status row does not exist: a draft's setup chips and
-    // the session controls ride this row beside the model pair.
-    let (row_setup, setup_controls) = if grid {
-        (setup_controls, None)
-    } else {
-        (None, setup_controls)
-    };
-    let (row_session, session_controls) = if grid {
-        (session_controls, None)
-    } else {
-        (None, session_controls)
-    };
-    input = input.child(
-        div()
-            .debug_selector(|| "composer-controls".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(theme::PICKER_GAP))
-            .h(px(theme::COMPOSER_ROW_H))
-            .ml(px(theme::SPACE_2))
-            // An unfocused cell's controls keep their boxes, unseen and
-            // unpressable: nothing reflows when focus arrives.
-            .when(!live, |controls| controls.opacity(0.))
-            .children(row_setup)
-            .children(row_session.map(|controls| div().flex_shrink_0().child(controls)))
-            .children(model_picker.map(|picker| div().flex_shrink_0().child(picker)))
-            .children(actions.map(|actions| div().flex_shrink_0().child(actions))),
-    );
-    block = block.child(input);
+    band = band.child(input);
     // The popover paints above the stack — deferred, so it escapes the
-    // Pane's clip and draws over the transcript (#24).
+    // Pane's clip and draws over the transcript (#24) — hung from the `❯`
+    // column, at most `SLASH_MENU_W` wide.
     if let Some(menu) = menu {
-        block = block.child(deferred(
+        band = band.child(deferred(
             div()
                 .absolute()
                 .bottom(relative(1.))
-                .left_0()
-                .right_0()
+                .left(px(theme::COMPOSER_PAD_L))
+                .right(px(theme::COMPOSER_PAD_R))
                 .mb(px(theme::FLOAT_OFFSET))
-                .child(menu),
+                .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
         ));
     }
 
-    // The status line (rule 2.6.6), under the box and outside it, quiet
-    // `FS_SM` `TEXT_MUTED`: a draft's setup chips and the Session's mode
-    // word at left, the session controls and `ctx 32%` at right. It is
-    // present in every state — a Decision included — at a fixed `LH_META`,
-    // reserved when empty, so the Composer never moves. Its chips are
-    // `CHIP_H`: they hang 2px into the air above and below the line, inside
-    // a clip that is theirs. No key hints: the placeholder carries one, the
-    // controls' tooltips name their keys, and every binding works whether
-    // or not it is written down.
-    let mut meta = div()
-        .flex()
-        .items_center()
-        .gap(px(theme::SPACE_2))
-        .h(px(theme::CHIP_H))
-        .mt(px(-(theme::CHIP_H - theme::COMPOSER_META_H) / 2.))
-        .pl(px(theme::COMPOSER_META_START))
-        .pr(px(theme::COMPOSER_META_END))
-        .min_w_0()
-        .overflow_hidden()
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(TEXT_MUTED));
-    if let Some(setup) = setup_controls {
-        meta = meta.child(setup);
-    }
-    // The word is the live Session's permission mode, so it rides every
-    // Pane whose Session has announced one other than the default — a
-    // pending Decision too: the mode is what the answer will run under. A
-    // closed Session has no mode to be in (its word is None). L2 draws it
-    // plain (no menu).
-    if let Some(mode) = mode.filter(|_| !grid) {
-        let key = view.thread().map_or(0, ThreadId::get);
-        meta = meta.child(
-            div()
-                .debug_selector(move || format!("composer-mode-{key}"))
-                .flex_shrink_0()
-                .child(match mode_picker {
-                    Some(picker) => picker,
-                    None => mode_chip(mode, false).into_any_element(),
-                }),
-        );
-    }
-    meta = meta.child(div().flex_1());
-    // What the Thread has already done sits with the other readings, not
-    // in the box that holds what is about to be sent: `3 files`, a word
-    // that opens the changed-files card.
-    if let Some(changed_files) = changed_files {
-        meta = meta.child(div().flex_shrink_0().child(changed_files));
-    }
-    if let Some(session_controls) = session_controls {
-        meta = meta.child(div().flex_shrink_0().child(session_controls));
-    }
-    if let Some(meter) = usage_meter {
-        meta = meta.child(div().flex_shrink_0().child(meter));
-    }
-    // A board has no status row (C4): ctx and a non-default mode are its
-    // head's word.
-    let meta = (!grid).then(|| {
-        div()
+    // The status line (the prototype's `.status`), the live Composer's
+    // only: segments split by a faint `·`, the verb hint at the right. Its
+    // first segment hangs its padding out, so its text starts on the `❯`
+    // column.
+    let status_line = status.then(|| {
+        let mut segments: Vec<AnyElement> = Vec::new();
+        if let Some(setup) = setup_controls {
+            segments.push(
+                div()
+                    .flex_shrink(1.)
+                    .min_w_0()
+                    .child(setup)
+                    .into_any_element(),
+            );
+        }
+        // The word is the live Session's permission mode, so it rides every
+        // Pane whose Session has announced one other than the default — a
+        // pending Decision too: the mode is what the answer will run under.
+        if let Some(mode) = mode {
+            let key = view.thread().map_or(0, ThreadId::get);
+            segments.push(
+                div()
+                    .debug_selector(move || format!("composer-mode-{key}"))
+                    .flex_shrink_0()
+                    .child(match mode_picker {
+                        Some(picker) => picker,
+                        None => mode_chip(mode, false).into_any_element(),
+                    })
+                    .into_any_element(),
+            );
+        }
+        for segment in [model_picker, usage_meter, changed_files, session_controls]
+            .into_iter()
+            .flatten()
+        {
+            segments.push(div().flex_shrink_0().child(segment).into_any_element());
+        }
+        let mut line = div()
             .debug_selector(|| "composer-meta".into())
+            .flex()
             .flex_shrink_0()
-            .h(px(theme::COMPOSER_META_H))
-            .mt(px(theme::COMPOSER_META_GAP))
+            .items_center()
+            .h(px(theme::COMPOSER_STATUS_H))
+            .mt(px(theme::COMPOSER_STATUS_GAP))
+            .pl(px(theme::COMPOSER_PAD_L - theme::COMPOSER_SEG_PAD_X))
+            .pr(px(theme::COMPOSER_PAD_R - theme::COMPOSER_SEG_PAD_X))
             .min_w_0()
-            .child(meta)
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
+            .text_color(rgb(TEXT_MUTED));
+        for (index, segment) in segments.into_iter().enumerate() {
+            if index > 0 {
+                line = line.child(status_seam());
+            }
+            line = line.child(segment);
+        }
+        line.child(div().flex_1().min_w(px(theme::CH)))
+            .children(actions.map(|actions| div().flex_shrink_0().child(actions)))
     });
-    let stack = div()
+    div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .min_w_0()
+        .pb(px(theme::COMPOSER_STATUS_PAD_B))
         .when(attachments.is_some() || background.is_some(), |stack| {
-            // The shelf floats `SHELF_GAP` clear of the block: pending
-            // files from its outer left edge, the background chips at right
-            // on the Send column. The chips give way first — they cut
-            // their labels, the files do not.
+            // The shelf stands over the band: pending files from the `❯`
+            // column, the background chips at right. The chips give way
+            // first — they cut their labels, the files do not.
             stack.child(
                 div()
                     .debug_selector(|| "composer-shelf".into())
                     .flex()
                     .items_end()
-                    .gap(px(theme::SPACE_2))
+                    .gap(px(theme::CH))
                     .min_w_0()
-                    .pl(px(0.))
-                    .pr(px(theme::COMPOSER_CONTROL_INSET))
+                    .pl(px(theme::COMPOSER_PAD_L))
+                    .pr(px(theme::COMPOSER_PAD_R))
                     .pb(px(theme::SHELF_GAP))
                     .when_some(attachments, |shelf, attachments| {
                         shelf.child(div().flex_1().min_w_0().child(attachments))
@@ -4032,106 +3979,68 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     }),
             )
         })
-        .child(block)
-        .children(meta);
-    if compact {
-        div()
-            .flex_shrink_0()
-            .min_w_0()
-            .px(px(theme::COMPOSER_INSET_L2))
-            .pb(px(theme::COMPOSER_INSET_L2))
-            .child(stack)
-    } else {
-        div()
-            .flex_shrink_0()
-            .min_w_0()
-            .px(px(theme::PANE_PAD_X))
-            .pb(px(theme::COMPOSER_INSET_B))
-            .child(components::reading_column(stack))
-    }
-}
-
-/// The input line's `❯`: `ACCENT` while the keyboard is in the line and
-/// `TEXT_MUTED` whenever keys would land elsewhere. A Decision's reply line
-/// lights the same accent: the accent is the prompt's, never a state's.
-fn prompt_ink(editing: bool) -> u32 {
-    if editing {
-        ACCENT
-    } else {
-        TEXT_MUTED
-    }
-}
-
-/// The block's edge (as `0xRRGGBBAA`): `ACCENT_EDGE` while native files
-/// hover it, saying where they will land, and the resting `COMPOSER_EDGE`
-/// otherwise. Focus is the Pane ring, the accent `❯` and the caret; state
-/// never recolours the block.
-fn composer_edge(drop_target: bool) -> u32 {
-    if drop_target {
-        theme::ACCENT_EDGE
-    } else {
-        theme::COMPOSER_EDGE
-    }
-}
-
-/// The Composer's box: the raised block with its always-in-layout edge,
-/// resting on the Pane (`Elevation::Raised`), cornered `COMPOSER_R` — concentric with the pill controls it holds
-/// (§ theme "Concentric radii"). The Subagent footer draws the same box.
-pub fn composer_box(edge: u32) -> Div {
-    components::raised_edged(edge)
-        .rounded(px(theme::COMPOSER_R))
-        .shadow(components::elevation(components::Elevation::Raised))
-}
-
-/// A Composer control on the hint row (§ theme "Composer controls"): the
-/// model, effort and mode pickers and the session `•••` share it. No ground
-/// at rest; the button it rides in (`composer_control`, `draft_picker`) or
-/// its own id'd wrapper wears the one hover blend. Label in `ink`, an
-/// optional chevron. Render-only; the cockpit wires it.
-fn control_chip(ink: u32) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::PICKER_GAP))
-        .h(px(theme::CHIP_H))
-        .px(px(theme::PICKER_PAD_X))
-        .rounded(px(theme::COMPOSER_CHIP_R))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(ink))
-}
-
-/// A control chip's menu chevron.
-fn chip_chevron() -> gpui::Svg {
-    icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON_SM, TEXT_MUTED)
-}
-
-/// The status line's mode word (C17): Geist `FS_SM` `W_BODY` `TEXT_MUTED`
-/// on the control-chip recipe, a value word like `ctx 32%`. When it opens a
-/// menu its chevron shows only under the pointer or keyboard focus, so at
-/// rest the line reads as words, not controls. Hidden at the default: the
-/// mode stays reachable in the session controls card (`•••`).
-pub fn mode_chip(mode: &str, menu: bool) -> Div {
-    control_chip(TEXT_MUTED)
-        .group("mode-chip")
-        .font_family(theme::FONT_UI)
-        .font_weight(theme::W_BODY)
-        .child(mode.to_owned())
-        .when(menu, |chip| {
-            chip.child(
+        .child(band)
+        .children(status_line)
+        // A quiet cell's status line is hidden, its room held.
+        .when(!status, |stack| {
+            stack.child(
                 div()
-                    .flex()
-                    .opacity(0.)
-                    .group_hover("mode-chip", |chevron| chevron.opacity(1.))
-                    .child(chip_chevron()),
+                    .debug_selector(|| "composer-meta-room".into())
+                    .flex_shrink_0()
+                    .h(px(theme::COMPOSER_STATUS_H))
+                    .mt(px(theme::COMPOSER_STATUS_GAP)),
             )
         })
 }
 
-/// The button a Composer chip rides in (model, effort, mode, session
-/// `•••`): no padding of its own and the chip's pill radius, so the kit's
-/// hover, pressed and focus faces fill exactly the chip's shape.
+/// The faint `·` between two status segments.
+pub(crate) fn status_seam() -> Div {
+    div()
+        .flex_shrink_0()
+        .text_color(rgb(TEXT_FAINT))
+        .child("\u{b7}")
+}
+
+/// A status segment (the prototype's `.status .seg`): one row, a cell of
+/// padding each side, its words in `ink`, a mark a cell before them. No
+/// ground at rest and no chevron: the button it rides in
+/// (`composer_control`, `draft_picker`) or its own id'd wrapper wears
+/// `paint::HOVER` under the pointer. Render-only; the cockpit wires it.
+fn status_seg(ink: u32) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::CH))
+        .h(px(theme::COMPOSER_STATUS_H))
+        .px(px(theme::COMPOSER_SEG_PAD_X))
+        .whitespace_nowrap()
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(ink))
+}
+
+/// The status line's mode segment: the drawn marker (`⏵⏵` for a mode that
+/// lets edits run, `⏸` for plan, `⏵` for any other) and the mode word, both
+/// in `MODE_INK`. Hidden at the default: the mode stays reachable in the
+/// session controls card (`•••`).
+pub fn mode_chip(mode: &str, _menu: bool) -> Div {
+    let mark = match mode {
+        "accept edits" | "bypass permissions" | "auto" => icons::MODE_ACCEPT,
+        "plan" => icons::MODE_PLAN,
+        _ => icons::MODE_ON,
+    };
+    status_seg(theme::MODE_INK)
+        .gap(px(theme::SPACE_1))
+        .child(icon(mark, theme::MODE_MARK, theme::MODE_INK))
+        .child(mode.to_owned())
+}
+
+/// The button a status segment rides in (model, effort, mode, files, the
+/// session `•••`): no padding of its own and square, so the hover
+/// (`paint::HOVER`) and press faces fill exactly the segment.
 pub fn composer_control(
     id: impl Into<gpui::ElementId>,
     cx: &gpui::App,
@@ -4139,37 +4048,36 @@ pub fn composer_control(
     chip_button(id, cx)
         .p_0()
         .h_auto()
-        .rounded(px(theme::COMPOSER_CHIP_R))
+        .rounded(px(theme::R_CHIP))
 }
 
-/// A Composer chip's button: no ground at rest, `HOVER_RAISED` under the
-/// pointer over the one 150ms blend, `FILL_HOVER` pressed at once.
+/// A segment's button: no ground at rest, `paint::HOVER` under the pointer
+/// over the one 150ms blend, `paint::PRESS` pressed at once.
 fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::component::button::Button {
     components::faded_button(
         id,
         gpui::rgba(theme::TRANSPARENT).into(),
-        rgb(theme::HOVER_RAISED).into(),
-        rgb(theme::FILL_HOVER).into(),
-        rgb(TEXT_2).into(),
+        theme::paint::HOVER.into(),
+        theme::paint::PRESS.into(),
+        rgb(TEXT_MUTED).into(),
         cx,
     )
 }
 
-/// The status line's changed-files word: `3 files` (`1 file`) on the
-/// control-chip recipe, Geist `FS_SM` `W_BODY` `TEXT_MUTED` in tabular
-/// figures — a reading like `ctx 32%` that opens the changed-files card.
-pub fn files_chip(count: usize) -> Div {
+/// The status line's changed-files segment: `3 files` (`1 file`) and the
+/// Thread's whole `+N −N`, the signs in the diff hues — a reading that
+/// opens the changed-files card.
+pub fn files_chip(count: usize, added: usize, removed: usize) -> Div {
     let word = if count == 1 { "file" } else { "files" };
-    control_chip(TEXT_MUTED)
+    status_seg(TEXT_MUTED)
         .debug_selector(move || format!("changed-files-{count}"))
-        .font_family(theme::FONT_UI)
-        .font_weight(theme::W_BODY)
         .child(components::tabular(div().child(format!("{count} {word}"))))
+        .child(diff_stat(added, removed))
 }
 
-/// One row of the changed-files card, on the menu row recipe: the file's
-/// name in the code face, its directory muted after it, and its `+N −N`
-/// hard right. The whole row opens the file in the reader.
+/// One row of the changed-files card, in the float grammar: the file's
+/// name, its directory muted two cells after it, and its `+N −N` hard
+/// right. The whole row opens the file in the reader.
 pub fn changed_file_row(
     index: usize,
     name: SharedString,
@@ -4184,78 +4092,82 @@ pub fn changed_file_row(
         .debug_selector(move || format!("changed-file-{index}"))
         .flex()
         .items_center()
-        .gap(px(theme::MENU_ROW_GAP))
         .min_w_0()
-        .h(px(theme::MENU_ROW_H))
-        .px(px(theme::MENU_ROW_PAD_X))
-        .rounded(px(theme::R_MENU_ROW))
+        .h(px(theme::FLOAT_ROW_H))
+        .px(px(theme::FLOAT_PAD_X))
+        .whitespace_nowrap()
         .cursor_pointer()
         .hover_raised(key)
         .press_raised()
+        .child(crate::menu::gutter(false))
         .child(
             div()
                 .flex_shrink(1.)
                 .min_w_0()
                 .truncate()
-                .font_family(theme::FONT_CODE)
-                .text_color(rgb(TEXT))
+                .text_color(rgb(theme::PATH_INK))
                 .child(name),
         )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
+                .ml(px(theme::FLOAT_DETAIL_GAP))
                 .truncate()
-                .font_family(theme::FONT_CODE)
-                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .children(dir),
         )
         .child(
             div()
                 .flex_shrink_0()
-                .font_family(theme::FONT_CODE)
-                .text_size(px(theme::FS_SM))
+                .ml(px(theme::FLOAT_DETAIL_GAP))
                 .child(diff_stat(added, removed)),
         )
 }
 
-/// The session-controls trigger: `•••` on the control-chip recipe.
+/// The session-controls trigger: `•••` as a status segment.
 pub fn session_chip() -> Div {
-    control_chip(TEXT_MUTED).child("•••")
+    status_seg(TEXT_MUTED).child("•••")
 }
 
-/// The idle line's ghost (§D.7): a ladder of rungs, longest first, of
-/// which the line shows the first that fits — never a word cut in half.
-/// The fullest rung carries the one key hint the Composer writes down
-/// (its controls' tooltips name theirs) after a `TEXT_FAINT` `·`.
+/// The verb hint at the status line's right (`⏎ send`, `esc interrupt`):
+/// the key and its verb as one quiet segment, the pointer's way to what the
+/// key does.
+pub fn verb_hint(words: &'static str) -> Div {
+    status_seg(TEXT_MUTED).child(words)
+}
+
+/// The idle line's placeholder: words in `TEXT_MUTED` after the caret cell
+/// and a space — a head that always shows, then pieces after a faint `·`
+/// that drop out whole from the right where the line is narrow, never a
+/// word cut in half.
 ///
 /// A predicted follow-up is already in the operator's voice and already
 /// filtered, so it is shown verbatim — a draft of their next prompt, not a
 /// description of one — with `⇥ accept`, which is always kept whole: an
 /// accept key nobody knows about is the same as no accept key, so the
-/// prediction's own words give way to it. The resting line points at the
-/// `/` menu, where everything else lives, and that pointer drops out whole
-/// first where the row cannot hold it.
+/// prediction's own words give way to it.
 #[derive(Clone, Debug, PartialEq)]
 struct Ghost {
-    /// The shortest rung's words, before its ellipsis.
+    /// The words that always show (cut at their end only when even they do
+    /// not fit).
     head: SharedString,
-    /// The words a fuller rung adds after `head`; they drop out whole.
-    more: Option<&'static str>,
-    /// A verbatim prediction: no ellipsis, and its words give way to the
-    /// accept hint rather than the other way round.
+    /// The pieces after it, each after a faint `·`; they drop out whole.
+    more: Vec<SharedString>,
+    /// A verbatim prediction: its words give way to the accept hint (the
+    /// one piece in `more`), which never goes.
     verbatim: bool,
-    hint: Option<(&'static str, &'static str)>,
 }
 
 impl Ghost {
-    fn ladder(head: &'static str, more: Option<&'static str>, hint: bool) -> Self {
+    fn pieces(head: &'static str, more: &[&'static str]) -> Self {
         Self {
             head: head.into(),
-            more,
+            more: more
+                .iter()
+                .map(|piece| SharedString::from(*piece))
+                .collect(),
             verbatim: false,
-            hint: hint.then_some(("/", "for commands")),
         }
     }
 
@@ -4264,36 +4176,31 @@ impl Ghost {
         self.verbatim
     }
 
-    /// Every rung the line can show, longest first: the texts `ghost_row`'s
-    /// row-fit check picks from, spelled out for the tests.
+    /// Every rung the line can show, longest first: what `ghost_row`'s
+    /// row-fit picks from, spelled out for the tests.
     #[cfg(test)]
     fn rungs(&self) -> Vec<String> {
-        let hint = |text: &str| match self.hint {
-            Some((key, verb)) => format!("{text} \u{b7} {key} {verb}"),
-            None => text.to_owned(),
-        };
         if self.verbatim {
-            return vec![hint(&self.head)];
+            return vec![std::iter::once(self.head.to_string())
+                .chain(self.more.iter().map(|piece| piece.to_string()))
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ")];
         }
-        let short = format!("{}\u{2026}", self.head);
-        let full = match self.more {
-            Some(more) => format!("{}{more}\u{2026}", self.head),
-            None => short.clone(),
-        };
-        let mut rungs = Vec::new();
-        if self.hint.is_some() {
-            rungs.push(hint(&full));
-        }
-        rungs.push(full);
-        if self.more.is_some() {
-            rungs.push(short);
-        }
-        rungs
+        (0..=self.more.len())
+            .rev()
+            .map(|kept| {
+                std::iter::once(self.head.to_string())
+                    .chain(self.more[..kept].iter().map(|piece| piece.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(" \u{b7} ")
+            })
+            .collect()
     }
 }
 
-/// The ghost for this line: a Decision's reply, a dead Session's revival,
-/// a landed prediction, a draft's first prompt, or steering a live Thread.
+/// The placeholder for this line: a draft's first prompt, a Decision's
+/// reply, a dead Session's revival, a landed prediction, a follow-up queued
+/// behind a running turn, or steering a live Thread.
 fn placeholder(
     pending: bool,
     draft: bool,
@@ -4301,28 +4208,37 @@ fn placeholder(
     suggestion: Option<&str>,
 ) -> Ghost {
     if draft {
-        return Ghost::ladder("Start a thread", None, true);
+        return Ghost::pieces(
+            "Start a thread",
+            &["/ for commands", "drop or paste images"],
+        );
     }
+    let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);
     match followup::suggest(pending, transcript, suggestion) {
         // A docked Decision owns the block above this line; the line itself
         // still steers, so it says so (rule 2.8.1: one input line).
-        Followup::Decision => Ghost::ladder("Steer", Some(" this thread"), false),
-        Followup::Revive => Ghost::ladder("Revive", Some(" and continue"), false),
+        Followup::Decision => Ghost::pieces("answer above, or steer", &[]),
+        Followup::Revive => Ghost::pieces("Revive and continue", &["/ for commands"]),
         Followup::Suggested(text) => Ghost {
             head: SharedString::from(text),
-            more: None,
+            more: vec![SharedString::from("\u{21e5} accept")],
             verbatim: true,
-            hint: Some(("\u{21e5}", "accept")),
         },
-        Followup::Steer => Ghost::ladder("Steer", Some(" this thread"), true),
+        Followup::Steer if busy => {
+            Ghost::pieces("queue a follow-up", &["\u{23ce} sends when the turn ends"])
+        }
+        Followup::Steer => Ghost::pieces(
+            "Steer this thread",
+            &["/ for commands", "drop or paste images"],
+        ),
     }
 }
 
 /// What an unfocused board cell's flat line says in place of the shelf and
 /// the queue it keeps for the live Composer: `1 attachment`, `3
-/// attachments`, `2 queued`, joined by a faint `·`, in Geist `FS_SM`
-/// `TEXT_MUTED` with tabular digits — words, no chip and no ×. Nothing
-/// when the draft holds neither.
+/// attachments`, `2 queued`, joined by a faint `·`, in `TEXT_MUTED` with
+/// tabular digits — words, no chip and no ×. Nothing when the draft holds
+/// neither.
 fn flat_facts(files: usize, queued: usize) -> Option<Div> {
     let text = flat_facts_text(files, queued);
     (!text.is_empty()).then(|| {
@@ -4336,7 +4252,7 @@ fn flat_facts(files: usize, queued: usize) -> Option<Div> {
                 .h(px(theme::COMPOSER_ROW_H))
                 .whitespace_nowrap()
                 .font_family(theme::FONT_UI)
-                .text_size(px(theme::FS_SM))
+                .text_size(px(theme::FS_UI))
                 .text_color(rgb(TEXT_MUTED))
                 .child(StyledText::new(text).with_highlights(seams)),
         )
@@ -4358,31 +4274,41 @@ pub(crate) fn flat_facts_text(files: usize, queued: usize) -> String {
     facts.join(" \u{b7} ")
 }
 
-/// The ghost drawn: rungs as whole pieces on a clipped, wrapping 20px row,
-/// so a piece that does not fit falls to the hidden second line whole and
-/// the row shows the longest rung that fits. `head` comes first with its
-/// ellipsis hung just past it; `more…` follows on the block's own ground,
-/// covering that ellipsis, so the pair reads `head more…`; the hint (`·` in
-/// `TEXT_FAINT`, `SPACE_1_5` either side) last. A prediction instead lets
-/// its own words wrap away whole before the accept hint, which never goes.
+/// The placeholder drawn on a clipped, wrapping row one line high, starting
+/// two cells in (after the caret's cell and a space): the head first, then
+/// each further piece after its faint `·` as one whole, so a piece that does
+/// not fit falls to the hidden second line and the row shows the longest
+/// rung that fits. A prediction instead lets its own words truncate before
+/// the accept hint, which never goes. A compact (L2) line shows the head
+/// only.
 fn ghost_row(ghost: Ghost, compact: bool) -> Div {
-    let hint = ghost.hint.filter(|_| !compact).map(|(key, verb)| {
+    let seam = || {
         div()
-            .debug_selector(|| "prompt-placeholder-hint".into())
+            .flex_shrink_0()
+            .px(px(theme::CH))
+            .text_color(rgb(TEXT_FAINT))
+            .child("\u{b7}")
+    };
+    let more: Vec<SharedString> = if compact && !ghost.verbatim {
+        Vec::new()
+    } else {
+        ghost.more.clone()
+    };
+    let pieces = more.into_iter().enumerate().map(move |(index, piece)| {
+        div()
             .flex()
             .flex_shrink_0()
-            .child(
-                div()
-                    .px(px(theme::SPACE_1_5))
-                    .text_color(rgb(TEXT_FAINT))
-                    .child("\u{b7}"),
-            )
-            .child(format!("{key} {verb}"))
+            .h(px(theme::COMPOSER_ROW_H))
+            .when(index == 0, |piece| {
+                piece.debug_selector(|| "prompt-placeholder-hint".into())
+            })
+            .child(seam())
+            .child(piece)
     });
     let row = div()
         .debug_selector(|| "prompt-placeholder".into())
         .absolute()
-        .left(px(theme::CARET_W))
+        .left(px(2.0 * theme::FS_UI * theme::CODE_ADVANCE))
         .right_0()
         .top_0()
         .h(px(theme::COMPOSER_ROW_H))
@@ -4397,36 +4323,21 @@ fn ghost_row(ghost: Ghost, compact: bool) -> Div {
                     .flex_1()
                     .min_w_0()
                     .h(px(theme::COMPOSER_ROW_H))
-                    .overflow_hidden()
-                    .whitespace_normal()
+                    .truncate()
                     .child(ghost.head),
             )
-            .children(hint);
+            .children(pieces);
     }
-    let head = match ghost.more {
-        // The short rung's ellipsis hangs just past `head`, where `more`
-        // (opaque on the block's ground) covers it whenever it fits.
-        Some(_) => div().relative().flex_shrink_0().child(ghost.head).child(
-            div()
-                .absolute()
-                .top_0()
-                .left(relative(1.))
-                .child("\u{2026}"),
-        ),
-        None => div()
-            .flex_shrink_0()
-            .child(format!("{}\u{2026}", ghost.head)),
-    };
     row.flex_wrap()
-        .child(head)
-        .children(ghost.more.map(|more| {
+        .child(
             div()
-                .flex_shrink_0()
+                .flex_shrink(1.)
+                .min_w_0()
                 .h(px(theme::COMPOSER_ROW_H))
-                .bg(rgb(RAISED))
-                .child(format!("{more}\u{2026}"))
-        }))
-        .children(hint)
+                .truncate()
+                .child(ghost.head),
+        )
+        .children(pieces)
 }
 
 /// #11: whether this Thread still offers adopting a CLI session — no
@@ -4473,26 +4384,26 @@ pub struct MenuRow {
     /// The dimmer text after it: a command's description, or the file's
     /// directory. Empty draws nothing.
     pub detail: SharedString,
-    /// Whether `detail` is Ferrite's description (Geist, cut at its end) or
-    /// machine text such as a path (Geist Mono, cut at its head so the
-    /// useful tail survives).
+    /// Whether `detail` is Ferrite's description (cut at its end) or
+    /// machine text such as a path (cut at its head so the useful tail
+    /// survives).
     pub prose_detail: bool,
     /// A row kept visible but dead (#25's locked provider door): muted ink,
     /// no match highlights, and its pick does nothing but dismiss.
     pub inert: bool,
 }
 
-/// The Composer menus' popover: the one floating surface at the Composer's
-/// own width, capped at `MENU_MAX_H` (its row list scrolls past that).
+/// The Composer menus' popover: the float, as wide as its slot (at most
+/// `SLASH_MENU_W`), capped at `MENU_MAX_H` (its row list scrolls past
+/// that).
 pub fn menu_popover() -> Div {
-    components::floating_surface()
-        .w_full()
-        .max_h(px(theme::MENU_MAX_H))
+    crate::menu::float().w_full().max_h(px(theme::MENU_MAX_H))
 }
 
-/// A `/` or `@` row in the shared menu grammar: the name with its matches
-/// in the accent, the detail muted in its own column (`label_w` aligns the
-/// slash commands' descriptions), `↵` on the cursor row.
+/// A `/` or `@` row in the float grammar: the cursor's `❯`, the name with
+/// its matches in the accent, the detail muted in its own column
+/// (`label_w` aligns the slash commands' descriptions), `↵` on the cursor
+/// row.
 pub fn menu_row(
     id: impl Into<gpui::ElementId>,
     row: &MenuRow,
@@ -4502,7 +4413,7 @@ pub fn menu_row(
     // A description or a path cut at the popover's width keeps its whole
     // text one hover away.
     let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
-    components::menu_row(id, &menu_item(row, cursor, label_w), cursor, false)
+    crate::menu::item_row(id, &menu_item(row, cursor, label_w), cursor, false)
         .when_some(detail, |row, detail| {
             row.tooltip(crate::menu::tooltip(detail))
         })
@@ -4558,26 +4469,15 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, grid: bool, coun
     rows as f32 * theme::QUEUE_ROW_H
 }
 
-/// The Composer's height less its editor rows and queue: the inset below
-/// it, the block's two edges and padding, and — in Solo — the status row
-/// under the block with its gap. A board cell's line is `COMPOSER_GRID_H`
-/// with its one row, and has no status row. The shelf floats above and is
-/// not part of the budget.
-fn composer_fixed_height(compact: bool, grid: bool) -> f32 {
-    let inset = if compact {
-        theme::COMPOSER_INSET_L2
-    } else {
-        theme::COMPOSER_INSET_B
-    };
-    if grid {
-        return inset + theme::COMPOSER_GRID_H - theme::COMPOSER_ROW_H;
-    }
-    inset
-        + 2. * theme::COMPOSER_EDGE_W
-        + theme::COMPOSER_PAD_T
-        + theme::COMPOSER_PAD_B
-        + theme::COMPOSER_META_GAP
-        + theme::COMPOSER_META_H
+/// The Composer's height less its editor rows and queue: the band's padding,
+/// the status line with its gap (drawn in the live Composer, its room held
+/// in a quiet cell's), and the air under the stack — the same at every
+/// level. The shelf stands above and is not part of the budget.
+fn composer_fixed_height(_compact: bool, _grid: bool) -> f32 {
+    2. * theme::COMPOSER_PAD_Y
+        + theme::COMPOSER_STATUS_GAP
+        + theme::COMPOSER_STATUS_H
+        + theme::COMPOSER_STATUS_PAD_B
 }
 
 /// Leave the majority of a Pane available for its Thread context. Only the
@@ -4585,8 +4485,7 @@ fn composer_fixed_height(compact: bool, grid: bool) -> f32 {
 /// caret, then reveals more rows again when the Pane grows.
 pub(crate) fn composer_row_limit(height: f32, compact: bool, grid: bool, queued: usize) -> usize {
     let fixed = composer_fixed_height(compact, grid);
-    let queue = composer_queue_height(height, compact, grid, queued)
-        + if queued > 0 { theme::COMPOSER_GAP } else { 0. };
+    let queue = composer_queue_height(height, compact, grid, queued);
     ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue) / theme::COMPOSER_ROW_H)
         .floor()
         .max(1.)
@@ -4601,6 +4500,17 @@ pub(crate) fn composer_row_limit(height: f32, compact: bool, grid: bool, queued:
 /// line, ⌫ drops it.
 fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoElement {
     let latest = index == 0;
+    let hints = if count > 1 {
+        format!("{count} queued")
+    } else {
+        "queued".to_owned()
+    };
+    let hints = if keys {
+        format!("{hints} \u{b7} \u{2191} edit \u{b7} \u{232b} drop")
+    } else {
+        hints
+    };
+    let seams = separators(&hints);
     div()
         .debug_selector(move || format!("queued-{index}"))
         .flex()
@@ -4608,10 +4518,15 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
         .items_center()
         .h(px(theme::QUEUE_ROW_H))
         .min_w_0()
-        .child(components::gutter(
-            components::prompt_mark(TEXT_FAINT),
-            theme::QUEUE_ROW_H,
-        ))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .w(px(theme::COMPOSER_GUTTER))
+                .h(px(theme::QUEUE_ROW_H))
+                .child(components::prompt_mark(TEXT_FAINT)),
+        )
         .child(
             div()
                 .flex_1()
@@ -4621,24 +4536,14 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
                 .child(SharedString::from(held.to_owned())),
         )
         .when(latest, |row| {
-            row.child(
+            row.child(components::tabular(
                 div()
-                    .flex()
                     .flex_shrink_0()
-                    .items_center()
-                    .gap(px(theme::SPACE_3))
-                    .ml(px(theme::SPACE_2))
-                    .child(components::tabular(components::text_meta().child(
-                        SharedString::from(if count > 1 {
-                            format!("{count} queued")
-                        } else {
-                            "queued".to_owned()
-                        }),
-                    )))
-                    .when(keys, |row| {
-                        row.child(components::key_hints(&[("↑", "edit"), ("⌫", "drop")]))
-                    }),
-            )
+                    .ml(px(theme::FLOAT_DETAIL_GAP))
+                    .whitespace_nowrap()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(StyledText::new(hints).with_highlights(seams)),
+            ))
         })
 }
 
@@ -5029,15 +4934,8 @@ pub fn context_usage(
         div()
             .w_full()
             .h(px(theme::USAGE_CARD_BAR_H))
-            .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
-            .bg(rgba(METER_OFF))
-            .child(
-                div()
-                    .h_full()
-                    .w(relative(used))
-                    .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
-                    .bg(rgb(usage_ink(used))),
-            )
+            .bg(theme::paint::LINE2)
+            .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used))))
     };
     // A window's heading: its name at the left, what it reads at the
     // right — the one line that answers the question at a glance. The
@@ -5082,7 +4980,7 @@ pub fn context_usage(
             .flex_col()
             .flex_shrink_0()
             .gap(px(theme::USAGE_CARD_ROW_GAP))
-            .px(px(theme::MENU_ROW_PAD_X))
+            .px(px(theme::FLOAT_PAD_X))
     };
     let window =
         |label: &'static str, key: &'static str, fraction: f32, detail: Option<AnyElement>| {
@@ -5165,9 +5063,8 @@ pub fn context_usage(
                 .flex()
                 .w_full()
                 .h(px(theme::USAGE_CARD_BAR_H))
-                .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
                 .overflow_hidden()
-                .bg(rgba(METER_OFF))
+                .bg(theme::paint::LINE2)
                 .children(in_window.into_iter().map(|(ink, share)| {
                     div()
                         .flex_shrink_0()
@@ -5199,7 +5096,7 @@ pub fn context_usage(
                     expanded,
                     crate::motion::CHEVRON,
                     |turn| {
-                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON_SM, TEXT_MUTED)
+                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_MUTED)
                             .with_transformation(gpui::Transformation::rotate(gpui::radians(
                                 std::f32::consts::FRAC_PI_2 * turn,
                             )))
@@ -5214,9 +5111,8 @@ pub fn context_usage(
         div()
             .id(id)
             .debug_selector(|| "context-window-toggle".into())
-            .mx(px(-theme::MENU_ROW_PAD_X))
-            .px(px(theme::MENU_ROW_PAD_X))
-            .rounded(px(theme::R_CONTROL))
+            .mx(px(-theme::FLOAT_PAD_X))
+            .px(px(theme::FLOAT_PAD_X))
             .cursor_pointer()
             .hover_raised(key)
             .press_raised()
@@ -5258,7 +5154,7 @@ pub fn context_usage(
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(TEXT_2))
+                        .text_color(rgb(TEXT))
                         .child(label),
                 )
                 .child(
@@ -5338,7 +5234,7 @@ pub fn context_usage(
         .child(context);
     if limits.five_hour.is_none() && limits.weekly.is_none() {
         card = card.child(
-            components::menu_note("Limits not reported by this provider")
+            crate::menu::note("limits not reported by this provider")
                 .id("context-usage-limits-unknown")
                 .debug_selector(|| "context-usage-limits-unknown".into()),
         );
@@ -5368,7 +5264,7 @@ pub fn context_usage(
             .flex_shrink_0()
             .justify_between()
             .gap(px(theme::SPACE_3))
-            .px(px(theme::MENU_ROW_PAD_X))
+            .px(px(theme::FLOAT_PAD_X))
             .child(
                 div()
                     .min_w_0()
@@ -5390,7 +5286,7 @@ pub fn context_usage(
             .flex_shrink_0()
             .gap(px(theme::SPACE_0_5))
             .child(
-                components::menu_section(scope.1, None, None)
+                crate::menu::section(scope.1, None, None)
                     .debug_selector(move || format!("usage-scope-{}", scope.0)),
             );
         for (key, label, count) in [
@@ -5499,10 +5395,47 @@ fn usage_tokens(
         .collect()
 }
 
-/// The status line's usage readout (rule 2.6.6): text, not a meter — `ctx
-/// 32%` in `FS_SM` tabular `TEXT_MUTED`, plus a tight account window
-/// (`5h 91%`), inside the control chip that opens the usage card. `None`
-/// when there is nothing to read: no reading is ever invented (no `ctx —`).
+/// The ctx meter's fill: `RUNNING` while the window has room, `ATTENTION`
+/// from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL` — the prototype's
+/// green, yellow and red by fill.
+pub fn ctx_meter_ink(fraction: f32) -> u32 {
+    if fraction >= theme::CTX_METER_FULL {
+        BLOCKED
+    } else if fraction >= theme::CTX_METER_WARN {
+        ATTENTION
+    } else {
+        RUNNING
+    }
+}
+
+/// The 8-cell, 4px ctx meter on its `paint::LINE2` track, filled to
+/// `fraction` in `ctx_meter_ink`.
+fn ctx_meter(fraction: f32) -> Div {
+    let fraction = fraction.clamp(0., 1.);
+    div()
+        .debug_selector(|| "usage-meter-bar".into())
+        .relative()
+        .flex_shrink_0()
+        .w(px(theme::CTX_METER_W))
+        .h(px(theme::CTX_METER_H))
+        .bg(theme::paint::LINE2)
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(relative(fraction))
+                .bg(rgb(ctx_meter_ink(fraction))),
+        )
+}
+
+/// The status line's usage segment (the prototype's `ctx ▬▬▭▭ 32%`): `ctx`,
+/// the 8-cell meter and the percentage, tabular `TEXT_MUTED`, then a tight
+/// account window (`5h 91%`, `ATTENTION`) — inside the segment that opens
+/// the usage card. `None` when there is nothing to read: no reading is ever
+/// invented (no `ctx —`).
 pub fn usage_meter_body(
     context: Option<f32>,
     limits: ferrite_core::transcript::RateLimits,
@@ -5516,22 +5449,32 @@ pub fn usage_meter_body(
         |used| ((used.clamp(0., 1.) * 100.).round() as u32).to_string(),
     );
     Some(
-        control_chip(TEXT_MUTED).child(components::tabular(
+        status_seg(TEXT_MUTED).child(components::tabular(
             div()
                 .debug_selector(move || format!("usage-readout-{key}"))
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(theme::SPACE_2))
+                .gap(px(theme::CH))
                 .whitespace_nowrap()
                 .children(tokens.into_iter().map(|(token, used)| {
-                    div()
-                        .debug_selector({
-                            let token = token.clone();
-                            move || format!("usage-token-{token}")
-                        })
-                        .text_color(rgb(readout_ink(used)))
-                        .child(SharedString::from(token))
+                    let selector = token.clone();
+                    let reading = div()
+                        .debug_selector(move || format!("usage-token-{selector}"))
+                        .flex()
+                        .items_center()
+                        .gap(px(theme::CH));
+                    // The context window reads as a meter between its name
+                    // and its share; an account window as plain words.
+                    match token.strip_prefix("ctx ") {
+                        Some(share) => reading
+                            .child("ctx")
+                            .child(ctx_meter(used))
+                            .child(SharedString::from(share.to_owned())),
+                        None => reading
+                            .text_color(rgb(readout_ink(used)))
+                            .child(SharedString::from(token)),
+                    }
                 })),
         )),
     )
@@ -5577,23 +5520,24 @@ pub fn picker_row(
     if !detail.is_empty() {
         item = item.detail(detail);
     }
-    components::menu_row(id, &item, cursor, false)
+    crate::menu::item_row(id, &item, cursor, false)
 }
 
-/// A picker's section title: the Provider's logomark in its brand colour
-/// (the one place brand colour is allowed) and its name, with an optional
-/// note after it. Non-interactive — the arrows skip it.
+/// A picker's section row: the Provider's logomark in its brand colour (the
+/// one place brand colour is allowed) and its name, lowercase, with an
+/// optional note after a `·` (`codex · handover`). Non-interactive — the
+/// arrows skip it.
 pub fn picker_section(provider: Provider, note: SharedString) -> Div {
     let (mark, ink, title) = match provider {
-        Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX, "Codex"),
-        Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE, "Claude"),
+        Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX, "codex"),
+        Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE, "claude"),
     };
-    components::menu_section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
+    crate::menu::section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
 }
 
 /// The popover's key-hint footer, each menu supplying its own verbs.
 pub fn popover_footer(hints: &[(&str, &str)]) -> Div {
-    components::menu_footer(hints)
+    crate::menu::footer(hints)
 }
 
 // ----------------------------------------------------------- Block render
@@ -7274,18 +7218,19 @@ mod tests {
         assert_eq!(tokens_label(8_040), "8.0k");
         assert_eq!(tokens_label(12_400), "12k");
     }
-    /// The Composer writes down one key hint, in its placeholder: a
-    /// prediction's accept key (the one thing about it the box cannot
-    /// show), or at rest the `/` menu where everything else lives. A
-    /// Decision's line and a dead Session's carry none.
+    /// The placeholder's pieces after its head (terminal-native, WP-D): at
+    /// rest the `/` menu and the drop hint; a prediction's accept key (the
+    /// one thing about it the line cannot show). A Decision's line carries
+    /// none.
     #[test]
     fn the_placeholder_carries_the_one_key_hint() {
         let live = Transcript::default();
+        let hint = |ghost: Ghost| ghost.more.first().map(|piece| piece.to_string());
         assert_eq!(
-            placeholder(false, false, Some(&live), None).hint,
-            Some(("/", "for commands"))
+            hint(placeholder(false, false, Some(&live), None)).as_deref(),
+            Some("/ for commands")
         );
-        assert_eq!(placeholder(true, false, Some(&live), None).hint, None);
+        assert_eq!(hint(placeholder(true, false, Some(&live), None)), None);
         let mut answered = Transcript::default();
         answered.apply(Input::Prompt("fix the decoder".into()));
         answered.apply(Input::Event(SessionEvent::TextDelta {
@@ -7296,12 +7241,18 @@ mod tests {
             cost_usd: None,
         }));
         assert_eq!(
-            placeholder(false, false, Some(&answered), Some("Run the tests")).hint,
-            Some(("\u{21e5}", "accept"))
+            hint(placeholder(
+                false,
+                false,
+                Some(&answered),
+                Some("Run the tests")
+            ))
+            .as_deref(),
+            Some("\u{21e5} accept")
         );
         assert_eq!(
-            placeholder(false, true, None, Some("Run the tests")).hint,
-            Some(("/", "for commands")),
+            hint(placeholder(false, true, None, Some("Run the tests"))).as_deref(),
+            Some("/ for commands"),
             "a draft has no conversation to predict from"
         );
         // The accept key is never cut; the menu pointer may drop out whole.
@@ -8873,24 +8824,37 @@ mod tests {
         assert!(!offers_import(Some(&streaming)), "not at rest");
     }
 
-    /// §D.7: the idle line says what the Pane is waiting on — a Decision, a
-    /// live Thread, or a closed Session — and, once a prediction lands, shows
-    /// it verbatim as the operator's own next line. It never names the Thread
-    /// and never repeats the hints beside it.
+    /// §D.7 (terminal-native, WP-D): the idle line says what the Pane is
+    /// waiting on — a Decision, a live Thread, a running turn or a closed
+    /// Session — and, once a prediction lands, shows it verbatim as the
+    /// operator's own next line. Its pieces drop out whole, from the right;
+    /// none ends in an ellipsis, a terminal placeholder's own grammar.
     #[test]
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
         assert_eq!(
             placeholder(false, false, Some(&live), None).rungs(),
             [
-                "Steer this thread\u{2026} \u{b7} / for commands",
-                "Steer this thread\u{2026}",
-                "Steer\u{2026}",
+                "Steer this thread \u{b7} / for commands \u{b7} drop or paste images",
+                "Steer this thread \u{b7} / for commands",
+                "Steer this thread",
             ]
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).rungs(),
-            ["Steer this thread\u{2026}", "Steer\u{2026}"]
+            ["answer above, or steer"]
+        );
+        let mut running = Transcript::default();
+        running.apply(Input::Prompt("fix the decoder".into()));
+        running.apply(Input::Event(SessionEvent::TextDelta {
+            text: "Looking".into(),
+        }));
+        assert_eq!(
+            placeholder(false, false, Some(&running), None).rungs(),
+            [
+                "queue a follow-up \u{b7} \u{23ce} sends when the turn ends",
+                "queue a follow-up",
+            ]
         );
 
         let mut closed = Transcript::default();
@@ -8899,14 +8863,18 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&closed), None).rungs(),
-            ["Revive and continue\u{2026}", "Revive\u{2026}"]
+            [
+                "Revive and continue \u{b7} / for commands",
+                "Revive and continue"
+            ]
         );
         // A draft: what the first prompt does, then the menu pointer.
         assert_eq!(
             placeholder(false, true, None, None).rungs(),
             [
-                "Start a thread\u{2026} \u{b7} / for commands",
-                "Start a thread\u{2026}",
+                "Start a thread \u{b7} / for commands \u{b7} drop or paste images",
+                "Start a thread \u{b7} / for commands",
+                "Start a thread",
             ]
         );
 
@@ -8925,33 +8893,30 @@ mod tests {
             placeholder(false, false, Some(&answered), Some("Run the tests")).head,
             "Run the tests"
         );
-        // A Decision and a dead Session both outrank it: with a Decision
-        // docked the line keeps steering, never the prediction.
+        // A Decision and a dead Session both outrank it.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).rungs(),
-            ["Steer this thread\u{2026}", "Steer\u{2026}"]
+            ["answer above, or steer"]
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).rungs(),
-            ["Revive and continue\u{2026}", "Revive\u{2026}"]
+            [
+                "Revive and continue \u{b7} / for commands",
+                "Revive and continue"
+            ]
         );
 
-        // No rung is ever a cut word, names a message, or points at the
-        // menu anywhere but the fullest rung.
+        // No rung names a message or ends in an ellipsis.
         for ghost in [
             placeholder(false, false, Some(&live), None),
             placeholder(true, false, Some(&live), None),
+            placeholder(false, false, Some(&running), None),
             placeholder(false, false, Some(&closed), None),
             placeholder(false, true, None, None),
         ] {
-            for (index, rung) in ghost.rungs().iter().enumerate() {
+            for rung in ghost.rungs() {
                 assert!(!rung.contains("message"), "{rung}");
-                assert_eq!(
-                    rung.contains("commands"),
-                    index == 0 && ghost.hint.is_some(),
-                    "{rung}"
-                );
-                assert!(!rung.contains("this\u{2026}"), "{rung}");
+                assert!(!rung.ends_with('\u{2026}'), "{rung}");
             }
         }
     }
@@ -8966,67 +8931,29 @@ mod tests {
     // (end WP-C)
 
     // ---- WP-D tests (append above the end line)
-    /// The `❯` says where keys land: accent only while the line holds the
-    /// keyboard — a Decision's reply line included — muted otherwise.
-    #[test]
-    fn the_prompt_mark_lights_only_while_the_line_holds_the_keyboard() {
-        assert_eq!(prompt_ink(true), ACCENT);
-        assert_eq!(prompt_ink(false), TEXT_MUTED);
-    }
-
-    /// The block's edge answers a file drop and nothing else: `ACCENT_EDGE`
-    /// while files hover it, the resting edge otherwise — always 1px,
-    /// always in layout.
-    #[test]
-    fn the_composer_edge_answers_only_a_file_drop() {
-        assert_eq!(composer_edge(true), theme::ACCENT_EDGE);
-        assert_eq!(composer_edge(false), theme::COMPOSER_EDGE);
-    }
-
-    /// The height budget counts exactly what the block draws around its
-    /// editor rows: inset, two edges, padding, the gap and the status line
-    /// (one `LH_META` line, rule 2.6.6) — and on a board, the grid's one
-    /// fixed 32px line with no status row (C4).
+    /// The height budget counts exactly what the Composer draws around its
+    /// editor rows (terminal-native, WP-D): the band's padding, the status
+    /// line and its gap, and the air under the stack — at every level, since
+    /// a quiet cell holds the status line's room.
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
-        assert_eq!(theme::COMPOSER_META_H, theme::LH_META);
-        let block = 2. * theme::COMPOSER_EDGE_W
-            + theme::COMPOSER_PAD_T
-            + theme::COMPOSER_PAD_B
-            + theme::COMPOSER_META_GAP
-            + theme::LH_META;
-        assert_eq!(
-            composer_fixed_height(false, false),
-            theme::COMPOSER_INSET_B + block
-        );
-        assert_eq!(
-            composer_fixed_height(true, false),
-            theme::COMPOSER_INSET_L2 + block
-        );
-        // The grid line: 5 + 20 + 5 inside two 1px edges is 32, and its one
-        // row is the editor's own.
+        assert_eq!(theme::COMPOSER_STATUS_H, theme::LH_UI);
+        let band = 2. * theme::COMPOSER_PAD_Y + theme::COMPOSER_STATUS_PAD_B;
+        let status = theme::COMPOSER_STATUS_GAP + theme::COMPOSER_STATUS_H;
+        for grid in [false, true] {
+            for compact in [false, true] {
+                assert_eq!(composer_fixed_height(compact, grid), band + status);
+            }
+        }
+        // One band row is the old grid line's 32px: 6 + 20 + 6.
         assert_eq!(theme::COMPOSER_GRID_H, 32.);
         assert_eq!(
             theme::COMPOSER_GRID_H,
-            2. * theme::COMPOSER_EDGE_W + 2. * theme::COMPOSER_GRID_PAD_Y + theme::COMPOSER_ROW_H
+            2. * theme::COMPOSER_PAD_Y + theme::COMPOSER_ROW_H
         );
-        assert_eq!(
-            composer_fixed_height(false, true),
-            theme::COMPOSER_INSET_B + theme::COMPOSER_GRID_H - theme::COMPOSER_ROW_H
-        );
-        assert_eq!(
-            composer_fixed_height(true, true),
-            theme::COMPOSER_INSET_L2 + theme::COMPOSER_GRID_H - theme::COMPOSER_ROW_H
-        );
-        assert_eq!(
-            theme::BOX_INSET_X,
-            theme::COMPOSER_EDGE_W + theme::COMPOSER_PAD_X
-        );
-        // The L2 box's `❯` lands on the glyph column at x = 16.
-        assert_eq!(
-            theme::COMPOSER_INSET_L2 + theme::COMPOSER_EDGE_W + theme::COMPOSER_PAD_X_L2,
-            theme::PANE_PAD_X
-        );
+        // The `❯` hangs in the transcript's 2-cell gutter, two cells in.
+        assert_eq!(theme::COMPOSER_PAD_L, theme::GLYPH_GUTTER);
+        assert_eq!(theme::COMPOSER_GUTTER, theme::GLYPH_GUTTER);
         // A tall Pane shows every editor row; a short one keeps its majority.
         for grid in [false, true] {
             assert_eq!(
@@ -9050,6 +8977,17 @@ mod tests {
                 theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * theme::COMPOSER_ROW_H
             );
         }
+    }
+
+    /// The ctx meter fills green, then yellow, then red (the prototype's
+    /// status line); the model reads lowercase but for its context size.
+    #[test]
+    fn the_status_line_reads_like_a_terminal() {
+        assert_eq!(ctx_meter_ink(0.32), RUNNING);
+        assert_eq!(ctx_meter_ink(0.61), ATTENTION);
+        assert_eq!(ctx_meter_ink(0.90), BLOCKED);
+        assert_eq!(status_model_word("Opus 5.5 (1M)").as_ref(), "opus 5.5 (1M)");
+        assert_eq!(status_model_word("GPT-6 Astra").as_ref(), "gpt-6 astra");
     }
 
     /// Usage is neutral until it runs tight: colour is state.

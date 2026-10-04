@@ -1,8 +1,10 @@
-//! Explicit Project editing modal, on the sheet recipe (`prefs::sheet`).
+//! Explicit Project editing modal, on the sheet recipe (`prefs::sheet`), in
+//! the float grammar (theme WP-E): one face on the grid, section labels in
+//! `TEXT_MUTED`, a field as a 1px box, words for buttons.
 
 use gpui::component::{button::Button, Disableable};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, Div, SharedString};
+use gpui::{div, px, rgb, App, Div, SharedString};
 
 use crate::pointer::Pointer;
 
@@ -36,7 +38,7 @@ pub fn close_button(cx: &App) -> Button {
 /// The card's form fields scroll between its fixed head and action footer.
 /// The body takes its content's height and gives way (`flex_shrink`,
 /// `min_h_0`) only when the sheet reaches its cap, so a short list draws a
-/// short sheet and a long one scrolls. `MODAL_PAD` under the last field.
+/// short sheet and a long one scrolls. A row of air under the last field.
 pub fn body() -> gpui::Stateful<Div> {
     div()
         .id("project-editor-body")
@@ -46,39 +48,37 @@ pub fn body() -> gpui::Stateful<Div> {
         .min_h_0()
         .overflow_y_scroll()
         .px(px(MODAL_PAD))
-        .pt(px(MODAL_GAP))
-        .pb(px(MODAL_PAD))
-        .gap(px(SPACE_2))
+        .pt(px(HALF_ROW))
+        .pb(px(ROW))
+        .gap(px(HALF_ROW))
 }
 
-/// A section header: the UI section label, and its hint in prose.
+/// A section header: its title as a `TEXT_MUTED` row, its hint under it in
+/// the same ink.
 pub fn section_label(title: &'static str, hint: &'static str) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .pt(px(SPACE_2))
-        .child(components::section_label(title).pb(px(SPACE_0_5)))
+        .pt(px(HALF_ROW))
+        .child(components::section_label(title).pb(px(0.)))
         .child(
-            div()
-                .font_family(FONT_UI)
-                .text_size(px(FS_PROSE_SM))
-                .line_height(px(LH_PROSE_SM))
+            components::text_ui()
                 .text_color(rgb(TEXT_MUTED))
                 .child(hint),
         )
 }
 
-/// The Project name row: a section label over a field one step up from the
-/// sheet (`RAISED_2`, like every control on it), recognizable before the
-/// live editor holds any text. While the keyboard is in it, it wears the
-/// one focus ring (`components::control_focus`), which takes no layout.
+/// The Project name row: its label as a `TEXT_MUTED` row over a field — a
+/// 1px `paint::LINE2` box a cell in, one row high, the accent edge while
+/// the keyboard is in it — recognizable before the live editor holds any
+/// text.
 pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .child(components::section_label("Name"))
+        .child(components::section_label("Name").pb(px(0.)))
         .child(
             div()
                 .flex()
@@ -86,15 +86,16 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
                 .h(px(FORM_CONTROL_H))
                 .flex_shrink_0()
                 .px(px(FORM_FIELD_PAD_X))
-                .rounded(px(R_CONTROL))
-                // A field is a well: shaded at its lip, the focus ring
-                // replacing the shade while it holds the caret.
-                .shadow(components::well_shade())
-                .map(|field| components::focused(field, focused))
-                .when(focused, |field| {
-                    field.debug_selector(|| "project-name-focused".into())
+                .border_1()
+                .map(|field| {
+                    if focused {
+                        field
+                            .border_color(rgb(ACCENT))
+                            .debug_selector(|| "project-name-focused".into())
+                    } else {
+                        field.border_color(paint::LINE2)
+                    }
                 })
-                .bg(rgb(RAISED_2))
                 .child(div().min_w_0().flex_1().child(editor)),
         )
 }
@@ -102,53 +103,40 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
 /// A refusal from the registry, shown on the card that caused it rather
 /// than on the nav behind it: the one blocked line.
 pub fn error_line(message: SharedString) -> Div {
-    components::text_meta()
+    components::text_ui()
         .flex_shrink_0()
-        .pt(px(SPACE_1))
         .text_color(rgb(BLOCKED))
         .child(message)
 }
 
-/// The directory list: no frame and no rules, the rows `GAP_ROW` apart.
+/// The directory list: no frame, the rows flush on the grid.
 pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
-    div()
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .gap(px(GAP_ROW))
-        .children(rows)
+    div().flex_shrink_0().flex().flex_col().children(rows)
 }
 
 /// The quiet text control under the list that adds a directory (`+ Add
 /// directory`, or `+ Add main directory` while there is none): `TEXT_MUTED`,
-/// brightening to `TEXT` under the pointer, on the text's own edge.
+/// `TEXT` on `paint::HOVER` under the pointer, on the text's own edge.
 pub fn add_directory(label: &'static str, cx: &App) -> Button {
-    components::faded_button(
-        "add-project-directory",
-        rgba(TRANSPARENT).into(),
-        rgb(HOVER_RAISED).into(),
-        rgb(FILL_HOVER).into(),
-        rgb(TEXT_MUTED).into(),
-        cx,
-    )
-    .tab_stop(true)
-    .debug_selector(|| "project-add-directory".into())
-    .group(ADD_GROUP)
-    .h(px(FORM_CONTROL_H))
-    .ml(px(-SPACE_2))
-    .px(px(SPACE_2))
-    .child(
-        components::text_ui()
-            .text_color(rgb(TEXT_MUTED))
-            .group_hover(ADD_GROUP, |style| style.text_color(rgb(TEXT)))
-            .child(label),
-    )
+    components::form_button("add-project-directory", cx)
+        .debug_selector(|| "project-add-directory".into())
+        .group(ADD_GROUP)
+        .h(px(ROW))
+        .ml(px(-CH))
+        .px(px(CH))
+        .child(
+            components::text_ui()
+                .text_color(rgb(TEXT_MUTED))
+                .group_hover(ADD_GROUP, |style| style.text_color(rgb(TEXT)))
+                .child(label),
+        )
 }
 
 const ADD_GROUP: &str = "project-add-directory";
 const DESTRUCTIVE_GROUP: &str = "project-destructive";
 
-/// The confirming button: the one filled control on the card.
+/// The confirming button: the one filled control on the card, the accent
+/// with dark ink.
 pub fn primary_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
@@ -166,10 +154,10 @@ pub fn primary_button(
 }
 
 /// One directory: its name, `main` beside the first, and its full path
-/// under it in the code face, wrapping anywhere rather than cut — a path is
+/// under it in `TEXT_MUTED`, wrapping anywhere rather than cut — a path is
 /// machine text. The row's height is its content's. Under the pointer it
-/// takes a `FILL` ground hung `SPACE_2` outside the text's edge, so the
-/// text stays on the sheet's column.
+/// takes `paint::HOVER`, hung a cell outside the text's edge, so the text
+/// stays on the sheet's column.
 pub fn directory_row(
     index: usize,
     path: SharedString,
@@ -192,11 +180,10 @@ pub fn directory_row(
         .flex()
         .items_center()
         .flex_shrink_0()
-        .ml(px(-SPACE_2))
-        .px(px(SPACE_2))
+        .ml(px(-CH))
+        .px(px(CH))
         .py(px(SPACE_1))
-        .gap(px(SPACE_3))
-        .rounded(px(R_CONTROL))
+        .gap(px(2.0 * CH))
         .hover_raised(format!("project-directory-row-{index}"))
         .cursor_default()
         .child(
@@ -211,23 +198,27 @@ pub fn directory_row(
                     div()
                         .flex()
                         .items_baseline()
-                        .gap(px(SPACE_2))
-                        .child(components::text_ui().min_w_0().truncate().child(name))
+                        .gap(px(2.0 * CH))
+                        .child(
+                            components::text_ui()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(rgb(TEXT))
+                                .child(name),
+                        )
                         .when(main, |line| {
                             line.child(
-                                components::text_meta()
+                                components::text_ui()
                                     .flex_shrink_0()
+                                    .text_color(rgb(TEXT_MUTED))
                                     .debug_selector(|| "project-directory-main".into())
                                     .child("main"),
                             )
                         }),
                 )
                 .child(
-                    div()
-                        .font_family(FONT_CODE)
-                        .text_size(px(FS_SM))
-                        .line_height(px(LH_META))
-                        .text_color(rgb(TEXT_MUTED))
+                    components::text_ui()
+                        .text_color(rgb(PATH_INK))
                         .whitespace_normal()
                         .child(path),
                 ),
@@ -235,44 +226,40 @@ pub fn directory_row(
         .child(div().flex_shrink_0().child(actions))
 }
 
-/// A destructive action: quiet like any sheet control — `TEXT_MUTED` at
-/// rest, `TEXT` on a `FILL` ground under the pointer, `FILL_HOVER` pressed.
-/// No red and no wash: colour is state, and a verb is not one. Disabled, it
-/// stays `TEXT_MUTED` and takes no face.
+/// A destructive action: a word in a 1px `paint::LINE2` box (the
+/// prototype's quick buttons) — `TEXT_MUTED` at rest, `TEXT` on
+/// `paint::HOVER` under the pointer. No red and no wash: colour is state,
+/// and a verb is not one. Disabled, it stays `TEXT_MUTED` and takes no face.
 pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     disabled: bool,
     cx: &App,
 ) -> Button {
-    let (hover, press) = if disabled {
-        (rgba(TRANSPARENT).into(), rgba(TRANSPARENT).into())
+    let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
+    let (hover, press): (gpui::Hsla, gpui::Hsla) = if disabled {
+        (none, none)
     } else {
-        (rgb(HOVER_RAISED).into(), rgb(FILL_HOVER).into())
+        (paint::HOVER.into(), paint::PRESS.into())
     };
-    components::faded_button(
-        id,
-        rgba(TRANSPARENT).into(),
-        hover,
-        press,
-        rgb(TEXT_MUTED).into(),
-        cx,
-    )
-    .tab_stop(true)
-    .group(DESTRUCTIVE_GROUP)
-    .disabled(disabled)
-    .when(disabled, |button| button.cursor_default())
-    .h(px(FORM_CONTROL_H))
-    .px(px(FORM_BUTTON_PAD_X))
-    .child(
-        components::text_ui()
-            .font_weight(W_BODY)
-            .text_color(rgb(TEXT_MUTED))
-            .when(!disabled, |text| {
-                text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(TEXT)))
-            })
-            .child(label),
-    )
+    components::faded_button(id, none, hover, press, rgb(TEXT_MUTED).into(), cx)
+        .tab_stop(true)
+        .group(DESTRUCTIVE_GROUP)
+        .disabled(disabled)
+        .when(disabled, |button| button.cursor_default())
+        .h(px(FORM_CONTROL_H))
+        .px(px(FORM_BUTTON_PAD_X))
+        .border_1()
+        .border_color(paint::LINE2)
+        .child(
+            components::text_ui()
+                .font_weight(W_BODY)
+                .text_color(rgb(TEXT_MUTED))
+                .when(!disabled, |text| {
+                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(TEXT)))
+                })
+                .child(label),
+        )
 }
 
 /// Completion actions remain visible while the directory list scrolls.

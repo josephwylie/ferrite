@@ -1649,139 +1649,92 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 // Owner: WP-D (the Composer, its pickers and usage meter, attachments, background chips, the draft.)
 // Edit values and append tokens only inside this section.
 
-/// **The Composer is a raised block in the reading column.** Its outer edges
-/// are the column's edges (`reading_column`), its content inset is
-/// `BOX_INSET_X` (1px edge + `COMPOSER_PAD_X`), so its `❯` hangs in the same
-/// glyph box as the transcript's and its text starts at the same C1. It is
-/// `RAISED` with a 1px `COMPOSER_EDGE` that is always in layout; the edge
-/// turns `ACCENT_EDGE` only while native files hover it. State never
-/// recolours it: the Pane ring, the accent `❯` and the caret carry focus.
-/// Typed input is mono `TEXT` at 400; a selected run takes `TEXT_STRONG` on
-/// `COMPOSER_SELECTION`. Rows are `COMPOSER_ROW_H`, `COMPOSER_GAP`
-/// apart: queued prompts (dim `❯` lines), then the one input row — `❯` and
-/// the line at left, the model pair and the round send control at right.
-/// Under the box, outside it, the status line (`COMPOSER_META_H`, one
-/// `LH_META` line, `COMPOSER_META_GAP` below the box), present in every
-/// Solo state and reserved when empty: the mode word (`mode_word`, hidden
-/// at the default) and a draft's setup chips at left, session controls and
-/// `ctx 32%` as text at right, `FS_SM` `TEXT_MUTED`. The meta row's ink shares the box's text edges: its first
-/// label starts at C1 (`COMPOSER_META_START`), its last mark ends on the
-/// send control's trailing edge (`COMPOSER_META_END`); the chips' own
-/// padding hangs outside those edges. The placeholder is a ladder of
-/// rungs (`Steer this thread… · / for commands`, `Steer this thread…`,
-/// `Steer…`): the line shows the longest that fits and never cuts a word;
-/// its one key hint follows a `TEXT_FAINT` `·`. The controls' tooltips name
-/// their keys (`Send ↵`, `Interrupt esc`). Any pad, gap, edge or inset
-/// change here must update `pane::composer_fixed_height` in the same commit.
-pub const COMPOSER_PAD_X: f32 = BOX_INSET_X - 1.0;
-pub const COMPOSER_PAD_T: f32 = SPACE_2;
-pub const COMPOSER_PAD_B: f32 = SPACE_2;
-/// The trailing padding equals the vertical one, so the send control sits
-/// `COMPOSER_CONTROL_INSET` from the box's top, bottom and trailing edges —
-/// the even inset concentric corners need. The leading side keeps
-/// `COMPOSER_PAD_X`, which puts the `❯` on the transcript's glyph axis.
-pub const COMPOSER_PAD_END: f32 = COMPOSER_PAD_T;
-pub const COMPOSER_ROW_H: f32 = 20.0;
-pub const COMPOSER_GAP: f32 = SPACE_1;
-pub const COMPOSER_META_H: f32 = LH_META;
-pub const COMPOSER_META_GAP: f32 = SPACE_1;
-/// The send control: a `COMPOSER_ROW_H` square on `R_CHIP` corners, its
-/// glyph 10px. At rest it
-/// sends (↑); while a turn runs it stops (■), whatever is in the line —
-/// Enter is the key that queues a line behind the turn.
-pub const SEND_BUTTON: f32 = COMPOSER_ROW_H;
-pub const SEND_GLYPH: f32 = 10.0;
-/// **Only an armed Send is bright** (C27, rule 2.2.7). A draft that can go
-/// makes it the one bright square in the Pane: `TEXT_STRONG` with the glyph
-/// in the Pane's ground, stepping down to `TEXT` under the pointer and
-/// `TEXT_2` pressed. It switches on, unblended, on the keystroke that makes
-/// the line sendable. Idle (an empty line at rest) it keeps its shape,
-/// legible but plainly off: a `FILL_HOVER` square with a `TEXT_MUTED` glyph.
-/// Stop is always present while a turn runs, so it never takes the bright
-/// ground: `SEND_STOP_GROUND` (`FILL`) with a `TEXT_2` `■`, stepping to
-/// `FILL_HOVER` and a `TEXT_STRONG` glyph through the pointer blend
-/// (150ms); press is instant.
-pub const SEND_GROUND: u32 = TEXT_STRONG;
-pub const SEND_INK: u32 = PANE;
-pub const SEND_HOVER: u32 = TEXT;
-pub const SEND_PRESSED: u32 = TEXT_2;
-pub const SEND_IDLE_GROUND: u32 = FILL_HOVER;
-pub const SEND_IDLE_INK: u32 = TEXT_MUTED;
-pub const SEND_STOP_GROUND: u32 = FILL;
-// Rule 2.2.7 / C27: an always-present control is never the brightest ground.
-const _: () = assert!(SEND_STOP_GROUND != TEXT_STRONG);
-pub const SEND_STOP_HOVER: u32 = FILL_HOVER;
-pub const SEND_STOP_INK: u32 = TEXT_2;
-pub const SEND_STOP_INK_HOVER: u32 = TEXT_STRONG;
-/// The block's 1px edge, top and bottom: part of its fixed height.
-pub const COMPOSER_EDGE_W: f32 = 1.0;
-/// **A block, not a pill.** The box is a terminal line on `R_BLOCK`, like
-/// every raised block, and its controls (chips, the send square) sit on
-/// `R_CHIP`. The inset between them (`COMPOSER_CONTROL_INSET`: the edge and
-/// the vertical padding) is wider than the box's corner, so by the radius
-/// rule the controls take their own role radius. A setup chip's focus is
-/// the one inset ring (`components::control_focus`), inside its corner. The
-/// Subagent footer, the Composer's own block, shares the corner.
-pub const COMPOSER_CHIP_R: f32 = R_CHIP;
-pub const COMPOSER_CONTROL_INSET: f32 = COMPOSER_EDGE_W + COMPOSER_PAD_T;
-pub const COMPOSER_R: f32 = R_BLOCK;
-/// Where the meta row's ink starts and ends, as padding on the row: C1 and
-/// the send control's trailing edge, less the `PICKER_PAD_X` each chip
-/// hangs outside its label.
-pub const COMPOSER_META_START: f32 = BOX_INSET_X + GUTTER_W - PICKER_PAD_X;
-pub const COMPOSER_META_END: f32 = COMPOSER_CONTROL_INSET - PICKER_PAD_X;
-/// 8px — from the block to the Pane's bottom edge at L1 (the transcript's
-/// own bottom padding supplies the air above it), and the L2 cell's inset
-/// around its compact Composer on three sides. The block's 6px vertical
-/// padding keeps a one-line Composer at 58px + this inset.
+/// **The Composer is an input band, not a box** (the prototype's `.comp`).
+/// No card, no radius, no shadow, no send button: `⏎` sends and `esc`
+/// interrupts, as in a terminal.
+///
+/// - **The input band** spans the Pane's width on `paint::INBAND`, padded
+///   `COMPOSER_PAD_Y` above and below and `COMPOSER_PAD_L` / `COMPOSER_PAD_R`
+///   at its sides, so its `❯` (accent, the prompt mark) hangs in the 2-cell
+///   gutter at the transcript's own glyph column and the text starts two
+///   cells further in. Typed input is mono `TEXT`; a selected run takes
+///   `TEXT_STRONG` on `COMPOSER_SELECTION`. Queued prompts (dim `❯` lines)
+///   stand inside the band above the line.
+/// - **The caret is a block** one cell wide and one row high in `CARET`. In
+///   the Composer that holds the keyboard it blinks softly
+///   (`MOTION_CARET_BLINK_MS`, `components::caret_blink`) and the character
+///   under it takes `ON_ACCENT`; everywhere else it is a still, hollow 1px
+///   box in `CARET_HOLLOW`. Typing restarts the blink solid.
+/// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`,
+///   its pieces joined by a `TEXT_FAINT` `·` and dropping out whole from the
+///   right where the band is narrow: `Steer this thread · / for commands ·
+///   drop or paste images`; while a turn runs `queue a follow-up · ⏎ sends
+///   when the turn ends`; under a Decision `answer above, or steer`.
+/// - **The status line** sits under the band (`COMPOSER_STATUS_GAP` above,
+///   `COMPOSER_STATUS_PAD_B` below), drawn in the focused Pane only (Solo
+///   always; an unfocused board cell holds its room empty, so stepping
+///   focus moves no body):
+///   `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's logomark and
+///   `opus 5.5 (1M)` · `medium` · `ctx`, an 8-cell meter and `32%` ·
+///   `1 file +9 −4`; at its right the verb hint (`⏎ send`, `esc interrupt`).
+///   Every segment is a quiet control (`COMPOSER_SEG_PAD_X` padding,
+///   `paint::HOVER` under the pointer, no chevron) that opens what it always
+///   opened; segments are split by a `TEXT_FAINT` `·`.
+///
+/// Any pad or line change here must update `pane::composer_fixed_height` in
+/// the same commit.
+pub const COMPOSER_PAD_L: f32 = GLYPH_GUTTER;
+pub const COMPOSER_PAD_R: f32 = 3.0 * CH;
+pub const COMPOSER_PAD_Y: f32 = 6.0;
+/// The `❯` cell: two cells, the transcript's glyph gutter.
+pub const COMPOSER_GUTTER: f32 = GLYPH_GUTTER;
+pub const COMPOSER_ROW_H: f32 = LH_UI;
+pub const COMPOSER_STATUS_H: f32 = LH_UI;
+pub const COMPOSER_STATUS_GAP: f32 = 2.0;
+pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
+/// A status segment's inline padding: one cell each side, so the first
+/// segment's text (hung one cell out) starts on the `❯` column.
+pub const COMPOSER_SEG_PAD_X: f32 = CH;
+/// Legacy names other modules still read (the Subagent footer, the send
+/// controls' corner).
+pub const COMPOSER_PAD_END: f32 = SPACE_2;
 pub const COMPOSER_INSET_B: f32 = SPACE_2;
-pub const COMPOSER_INSET_L2: f32 = SPACE_2;
-/// 7px — the L2 box's inline padding: `PANE_PAD_X` less the inset and the
-/// edge (16 − 8 − 1), so the compact Composer's `❯` sits on the glyph
-/// column at x = 16, over the tail's marks.
-pub const COMPOSER_PAD_X_L2: f32 = PANE_PAD_X - COMPOSER_INSET_L2 - COMPOSER_EDGE_W;
-/// **The grid Composer line** (C4): every board cell's Composer is one
-/// fixed 32px line — `COMPOSER_GRID_PAD_Y` above and below one
-/// `COMPOSER_ROW_H` row, inside the 1px edge — with no status row, so
-/// cmd-] across a board moves no tail. Only the focused cell's line is
-/// raised, edged and carries a caret; the others lie flat.
-pub const COMPOSER_GRID_PAD_Y: f32 = 5.0;
-pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_EDGE_W + 2.0 * COMPOSER_GRID_PAD_Y + COMPOSER_ROW_H;
+pub const COMPOSER_CHIP_R: f32 = R_CHIP;
+/// One band row: what an unfocused board cell's Composer measures, and the
+/// Subagent footer's row.
+pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H;
+/// The ctx meter: eight cells by 4px on a `paint::LINE2` track, filled
+/// `RUNNING` below `CTX_METER_WARN`, `ATTENTION` below `CTX_METER_FULL`,
+/// then `BLOCKED`.
+pub const CTX_METER_W: f32 = 8.0 * CH;
+pub const CTX_METER_H: f32 = 4.0;
+pub const CTX_METER_WARN: f32 = 0.60;
+pub const CTX_METER_FULL: f32 = 0.85;
+/// The mode marker before the mode word (`⏵⏵ accept edits`): a glyph box,
+/// drawn (Geist Mono lacks `⏵` and `⏸`).
+pub const MODE_MARK: f32 = GLYPH_BOX;
+/// The provider's logomark in a status segment or a picker section.
+pub const STATUS_LOGO: f32 = 11.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
 /// The queued-prompt viewport scrolls beyond these visible row budgets.
 pub const COMPOSER_QUEUE_ROWS: usize = 3;
 pub const COMPOSER_COMPACT_QUEUE_ROWS: usize = 1;
-/// 8px — between the shelf (pending files, background chips) and the
-/// block. The shelf's first chip sits on the block's outer left edge.
-pub const SHELF_GAP: f32 = SPACE_2;
-/// The caret: 2 × 16 in `CARET` (the accent), square, centred on integer
-/// pixels in the 20px row (16 covers Geist Mono's ascender and descender at
-/// `FS_UI`).
-pub const CARET_W: f32 = 2.0;
-pub const CARET_H: f32 = 16.0;
+/// Between the shelf (pending files, background chips) and the band.
+pub const SHELF_GAP: f32 = SPACE_1;
+/// The caret's block: one cell (`CODE_ADVANCE` of the line's size) wide and
+/// the row high. The hollow caret's edge is 1px.
+pub const CARET_CELLS: f32 = 1.0;
+pub const CARET_HOLLOW: u32 = TEXT_FAINT;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
-/// An `@`-mention the operator picked: `TEXT` on the neutral inline-code
-/// wash — the accent is only for the prompt mark, caret, links, focus,
-/// selection and the primary button (rule 2.2.6).
-pub const MENTION_INK: u32 = TEXT;
-pub const MENTION_WASH: u32 = INLINE_CODE_WASH;
-/// **Composer controls are quiet chips** (model, effort, mode, session
-/// `•••`, the `ctx` readout): `CHIP_H`, `PICKER_PAD_X` both sides,
-/// `COMPOSER_CHIP_R`, no ground at rest, `FILL` under the pointer (the hover face on `RAISED`),
-/// label `FS_SM` `TEXT_2`, a `ICON_CHEVRON_SM` chevron in `TEXT_MUTED`. A
-/// busy control reads `TEXT_MUTED`, never faded. The model and effort pair
-/// sits `PICKER_GAP` apart and reads as one unit.
-pub const PICKER_PAD_X: f32 = SPACE_1_5;
-pub const PICKER_GAP: f32 = SPACE_1;
-pub const ICON_CHEVRON_SM: f32 = 10.0;
+/// An `@`-mention the operator picked: a path, so `PATH_INK` (cyan) on no
+/// ground — the terminal's own colour for a path.
+pub const MENTION_INK: u32 = PATH_INK;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
-/// Each block insets its text by `MENU_ROW_PAD_X`, so it sits on a menu
-/// row's edge inside the floating surface's `FLOAT_PAD`.
 pub const USAGE_CARD_W: f32 = 288.0;
 /// Between one window's block and the next, and inside one block: the
 /// blocks stand twice as far apart as their own lines.
@@ -1789,10 +1742,8 @@ pub const USAGE_CARD_GAP: f32 = SPACE_3;
 pub const USAGE_CARD_ROW_GAP: f32 = SPACE_1_5;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage reading turns from neutral to ATTENTION (80%, rule
-/// 2.6.6) — a fraction of the window, not a count — on the status line and
-/// the card alike. There is no BLOCKED step: a full window stops nothing
-/// until the provider says so. Below tight the status line's `ctx 32%` is
-/// `TEXT_MUTED`: colour is state, and a context half full is not a state.
+/// 2.6.6) — a fraction of the window, not a count — on the status line's
+/// account windows and the card alike.
 pub const USAGE_TIGHT: f32 = 0.80;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
@@ -1807,36 +1758,29 @@ pub const USAGE_LEGEND_ROW_H: f32 = 20.0;
 pub const USAGE_SWATCH: f32 = 8.0;
 pub const USAGE_SHARE_W: f32 = 44.0;
 /// What fills the context window, one ink per category in the stacked bar
-/// and its legend. The inks are the palette's own quiet hues, not new ones:
-/// the breakdown has to tell categories apart, not shout. What the operator
-/// wrote leads (accent), the machine's work follows in the muted state hues,
-/// and the fixed overheads fade through grey to the free space. Anything
-/// else a provider reports takes `CTX_CYCLE`.
+/// and its legend: the terminal palette, the operator's own words first.
 pub const CTX_MESSAGES: u32 = ACCENT;
-pub const CTX_TOOLS: u32 = 0xc4a58e;
-pub const CTX_MCP: u32 = RUNNING;
-pub const CTX_SKILLS: u32 = ATTENTION;
-pub const CTX_PROMPT: u32 = 0x9aa0a8;
-pub const CTX_MEMORY: u32 = 0x7c828b;
-pub const CTX_BUFFER: u32 = 0x5c6168;
-pub const CTX_FREE: u32 = 0x33373d;
-pub const CTX_DEFERRED: u32 = 0x464a51;
-pub const CTX_CYCLE: [u32; 4] = [0xa79fc4, 0xc39cab, 0x8fb2b8, 0xb5b48e];
+pub const CTX_TOOLS: u32 = ORANGE;
+pub const CTX_MCP: u32 = GREEN;
+pub const CTX_SKILLS: u32 = YELLOW;
+pub const CTX_PROMPT: u32 = MAGENTA;
+pub const CTX_MEMORY: u32 = CYAN;
+pub const CTX_BUFFER: u32 = TEXT_MUTED;
+pub const CTX_FREE: u32 = LINE2;
+pub const CTX_DEFERRED: u32 = TEXT_FAINT;
+pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
 /// 768px — the image preview sheet's widest reading; it otherwise takes
 /// 90% × 85% of its Pane.
 pub const PREVIEW_MAX_W: f32 = 768.0;
-/// Background task chips on the shelf above the Composer: `FILL` (not
-/// `HOVER`, which vanishes on `RAISED`), `R_CHIP`, `CHIP_H`, mono `FS_SM`
-/// `TEXT_2`, the shared pulsing `RUNNING` dot, labels cut at 240px, and a
-/// quiet `×` stop control (`BG_CHIP_STOP` square, glyph `TEXT_MUTED`).
-pub const BG_CHIP_MAX_W: f32 = 240.0;
-pub const BG_CHIP_STOP: f32 = 16.0;
-pub const BG_CHIP_STOP_GLYPH: f32 = 10.0;
-/// A pending file on the shelf: a `CHIP_H` chip with a fixed 12px slot for
-/// its thumbnail (`R_TIGHT` corners) or the `FILE` mark, the name mono
-/// `FS_SM` `TEXT_2` cut at 200px.
-pub const ATTACH_CHIP_H: f32 = CHIP_H;
-pub const ATTACH_CHIP_MAX_W: f32 = 200.0;
+/// A background task on the shelf above the Composer: one row on
+/// `paint::BAND2`, a cell of padding each side, the still `RUNNING` dot, the
+/// task cut at 32 cells, and a quiet `×` that stops it.
+pub const BG_CHIP_MAX_W: f32 = 32.0 * CH;
+/// A pending file on the shelf: the prototype's `.att` — one row on
+/// `paint::BAND2`, a cell of padding each side, the image mark (or a 12px
+/// thumbnail) and the name in `PATH_INK`, cut at 32 cells, then `×`.
+pub const ATTACH_CHIP_H: f32 = ROW;
+pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;
 // (end WP-D) — append above this line only
 
@@ -1844,73 +1788,88 @@ pub const ATTACH_THUMB: f32 = 12.0;
 // Owner: WP-E (menus, popovers, Settings, the Project editor, notifications.)
 // Edit values and append tokens only inside this section.
 
-/// Form fields and segmented choices share a 32px row. Compact pane and
-/// navigation controls keep their own smaller chrome metrics.
-pub const FORM_CONTROL_H: f32 = 32.0;
-/// Inset around the chips of a segmented choice control, and the gap
-/// between them: 2px, so the chips nest concentrically (`R_CHIP` inside the
-/// tray's `R_CONTROL`) and the tray reads as one control.
-pub const FORM_CHOICE_PAD: f32 = SPACE_0_5;
-/// A choice chip's and a chooser's inline padding inside the 32px row.
-pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
-pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
-/// The Settings switch: a 32×18 pill (2px inset), a 14px thumb travelling
-/// the pill's inner width — a macOS-sized switch in a 36px setting row.
-pub const SWITCH_W: f32 = 32.0;
-pub const SWITCH_H: f32 = 18.0;
-pub const SWITCH_INSET: f32 = SPACE_0_5;
-pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
-pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
-/// A sheet text button's inline padding (Add Directory, Remove, Done).
-pub const FORM_BUTTON_PAD_X: f32 = SPACE_3;
-/// A tooltip: UI `FS_SM`, 8px × 4px, `R_CONTROL`, at most 280px before it
-/// wraps. It is how a truncated label keeps its full value reachable.
-pub const TOOLTIP_PAD_X: f32 = SPACE_2;
-pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
-pub const TOOLTIP_MAX_W: f32 = 280.0;
-/// The notifications panel: 340px holds a title, a detail line and an age
-/// without wrapping; a row is two lines in 6px of air each side. No rules
-/// and no head row inside it: each section (`Needs you N`, `Earlier`) is a
-/// `MENU_ROW_H` label sitting directly on its rows, and the sections stand
-/// `GAP_BLOCK` apart.
-pub const NOTICE_PANEL_W: f32 = 340.0;
-pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
-/// 30px — a notification row's age slot: `12mo` at tabular `FS_SM`, kept
-/// even while a fresh request's age says nothing (`facts::since_label`).
-pub const NOTICE_AGE_W: f32 = 30.0;
-/// The bell's unread count (rule 2.2.9, colour on the word, never the
-/// ground): one `FS_SM` line high and at least as wide, tabular `W_BODY`
-/// figures on `FILL_HOVER`, flush with the button's top and starting 2px
-/// right of its centre, so the glyph stays readable beside it.
-pub const BADGE_H: f32 = LH_META;
-pub const BADGE_LEFT: f32 = ICON_BUTTON / 2.0 + SPACE_0_5;
-/// 2px — the badge's knockout: a ring of the nav's ground cut around the
-/// pill, so the bell's stroke stops short of the count instead of running
-/// under it.
-pub const BADGE_KNOCKOUT: f32 = SPACE_0_5;
+/// **One float grammar** (the prototype's `.float`; `menu.rs` draws it):
+/// every menu, picker, popover, card, toast and sheet is
+/// `components::floating_surface` — `paint::FLOAT`, a 1px `paint::LINE2`
+/// edge, square, the one float shadow — with no inset of its own: its rows
+/// carry a cell of padding each side and sit on the 20px grid.
+///
+/// - **A head** (`menu::head`): one row, the surface's title in
+///   `TEXT_STRONG` at `W_STRONG` at the left, its command or verb in
+///   `TEXT_MUTED` at the right (`model  /model`, `notifications  clear`).
+/// - **A section** (`menu::section`): one row in `TEXT_MUTED`,
+///   `FLOAT_SECTION_GAP` above it, a provider's logomark leading in its
+///   brand colour.
+/// - **A row** (`menu::row`): one row; a 2-cell gutter that holds the accent
+///   `❯` (`W_STRONG`) on the cursor row; the name in `TEXT` (`TEXT_STRONG` on
+///   the cursor); its description `TEXT_MUTED` two cells after it; a key in
+///   `TEXT_MUTED` hard right; a `RUNNING` `✓` on the standing choice. The
+///   cursor row is `paint::SELECTION`, a row under the pointer
+///   `paint::HOVER`.
+/// - **A footer** (`menu::footer`): a `paint::LINE` rule, then one row of key
+///   hints in `TEXT_MUTED` split by a `TEXT_FAINT` `·`: `↑↓ select · ⏎ pick ·
+///   esc`.
+/// - **An inverse token** (`menu::token`): the chosen one of a short ladder
+///   (an effort, a two-way setting) on `ACCENT_STRONG` in `ON_ACCENT` at
+///   `W_STRONG`; the rest `TEXT_MUTED`, `paint::HOVER` under the pointer.
+pub const FLOAT_ROW_H: f32 = ROW;
+pub const FLOAT_PAD_X: f32 = CH;
+pub const FLOAT_GUTTER: f32 = GLYPH_GUTTER;
+pub const FLOAT_DETAIL_GAP: f32 = 2.0 * CH;
+pub const FLOAT_SECTION_GAP: f32 = HALF_ROW;
+pub const FLOAT_FOOT_H: f32 = ROW + 1.0;
+pub const TOKEN_PAD_X: f32 = CH;
+/// The `/` and `@` menus: at most 84 cells (the palette's width), hung over
+/// the Composer from the `❯` column.
+pub const SLASH_MENU_W: f32 = 84.0 * CH;
+/// The model picker (the prototype's `#picker`): 66 cells — a model's name,
+/// its description and the `✓` on one row.
+pub const MODEL_PICKER_W: f32 = 66.0 * CH;
+/// A form field or a sheet's text button: one row in a cell of padding,
+/// inside a 1px `paint::LINE2` box (the accent while a field holds the
+/// caret).
+pub const FORM_CONTROL_H: f32 = ROW + 2.0 * SPACE_1 + 2.0;
+pub const FORM_FIELD_PAD_X: f32 = CH;
+pub const FORM_BUTTON_PAD_X: f32 = CH;
+/// A tooltip: a float row in a cell of padding, wrapping past 40 cells. It
+/// is how a truncated label keeps its full value reachable.
+pub const TOOLTIP_PAD_X: f32 = CH;
+pub const TOOLTIP_PAD_Y: f32 = 0.0;
+pub const TOOLTIP_MAX_W: f32 = 40.0 * CH;
+/// The notifications list (the prototype's `#notes`): 76 cells; a row is
+/// one line in four columns — the mark (2 cells), the state word (10), the
+/// title and its detail, the age (5, right).
+pub const NOTICE_PANEL_W: f32 = 76.0 * CH;
+pub const NOTICE_MARK_W: f32 = 2.0 * CH;
+pub const NOTICE_STATE_W: f32 = 10.0 * CH;
+pub const NOTICE_AGE_W: f32 = 5.0 * CH;
+/// The bell's unread count: the prototype's superscript — 10px `W_STRONG`
+/// digits on no ground at the button's top-right corner, coloured by what
+/// waits (`ATTENTION`, `BLOCKED`, else `TEXT_STRONG`).
+pub const BADGE_FS: f32 = 10.0;
+pub const BADGE_LH: f32 = 12.0;
 /// With the nav collapsed, toasts stack BottomRight this far up: the
-/// board's padding, the Pane's edge, a one-line Composer and its inset,
-/// then 8px of air, so the stack clears the Composer.
+/// board's padding, the Pane's edge, the band and the status line, then
+/// half a row of air, so the stack clears the Composer.
 pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
     + 1.0
-    + COMPOSER_INSET_B
-    + 2.0 * COMPOSER_EDGE_W
-    + COMPOSER_PAD_T
-    + COMPOSER_PAD_B
+    + 2.0 * COMPOSER_PAD_Y
     + COMPOSER_ROW_H
-    + COMPOSER_META_GAP
-    + COMPOSER_META_H
-    + SPACE_2;
-/// Settings and Project editors share the same header and content insets.
-pub const MODAL_HEAD_H: f32 = 48.0;
-pub const MODAL_PAD: f32 = 16.0;
-pub const MODAL_GAP: f32 = 12.0;
+    + COMPOSER_STATUS_GAP
+    + COMPOSER_STATUS_H
+    + COMPOSER_STATUS_PAD_B
+    + HALF_ROW;
+/// A sheet (Settings, the Project editor, the image preview) is a float at
+/// sheet size: its head two rows (the title and the one close control over
+/// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.
+pub const MODAL_HEAD_H: f32 = 2.0 * ROW;
+pub const MODAL_PAD: f32 = 2.0 * CH;
+pub const MODAL_GAP: f32 = HALF_ROW;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
-/// A kit-hosted choice menu (model, effort, mode, subagent overflow): wide
-/// enough for a model name beside its check, capped before it crowds the
-/// Composer it opens from.
+/// A kit-hosted choice menu (`components::ChoiceMenu`: model, effort, mode,
+/// subagent overflow): wide enough for a model name beside its check.
 pub const CHOICE_MENU_MIN_W: f32 = 240.0;
 pub const CHOICE_MENU_MAX_W: f32 = 320.0;
 /// About 48 characters — how much of a long directory a menu row keeps,
@@ -1918,83 +1877,49 @@ pub const CHOICE_MENU_MAX_W: f32 = 320.0;
 pub const MENU_PATH_TAIL: usize = 48;
 // ---------------------------------------------------------- Settings sheet
 //
-// **The Settings sheet** (`prefs.rs`) is Ferrite's own, in the manner of
-// macOS System Settings, Zed and Linear, sized to its content
-// (`SETTINGS_W` × `SETTINGS_H`, capped to `MODAL_VIEWPORT_FRACTION` of the
-// window). The sheet itself is `PANE`, one step under the cards it holds,
-// with the sheet recipe's strong edge, `R_PANE` and float shadow over the
-// veil. Its head is the title and the one close control, set apart by
-// space alone: no rule.
+// **The Settings sheet** (`prefs.rs`) is a float at sheet size, in the
+// terminal's grammar: one face on the grid, square, rows and rules, no
+// cards and no iOS controls.
 //
-// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search field on top, then one
-//   plain row per page — a 16px line mark, then the label — at the one
-//   list pitch (`SETTINGS_NAV_ROW_H` = `NAV_ROW_H`, 28). No chevrons: a
-//   row is a place, not a disclosure. The selected row is a `FILL` ground
-//   with `TEXT_STRONG`; the rest `TEXT_2` with their marks in `TEXT_MUTED`,
-//   hovering to `HOVER`. `About` is pinned to the sidebar's foot, apart
-//   from the settings. ↑/↓ step pages while the sheet holds focus.
-// - **Content:** the page title (`FS_PROSE` `W_LABEL` `TEXT_STRONG`), then
-//   groups `SETTINGS_GROUP_GAP` apart. A group is a quiet sentence-case
-//   section label (`FS_SM` `W_LABEL` `TEXT_MUTED`, on the rows' text edge,
-//   a provider group led by its logomark in brand colour) above one card:
-//   `RAISED`, `R_BLOCK`, a `HAIRLINE` edge. Rows inside the card sit flush,
-//   split by `HAIRLINE`s, so the gap between groups is far more than twice
-//   the gap between rows.
-// - **Row:** the label (`FS_UI` `TEXT`) over an optional one-line hint
-//   (`FS_SM` `TEXT_MUTED`, under 60 characters, saying what the setting
-//   does) at the left; the control right-aligned and vertically centred.
-//   `SETTINGS_ROW_H` (36) without a hint, `SETTINGS_ROW_HINT_H` (44) with.
-// - **Controls** are `SETTINGS_CONTROL_H` (28) and hug their content: a
-//   switch for on/off; a menu button (the value, then a chevron, on
-//   `RAISED_2`, never a full-width field, at most `SETTINGS_MENU_MAX_W`)
-//   for a choice from a list; a segmented tray for two options. Each has
-//   the one hover blend, an instant press and the focus outline. Inside a
-//   card the inset exceeds every control's radius, so each keeps its own
-//   role radius (`R_CONTROL`, and `R_CHIP` for a tray's chips, concentric
-//   with the tray).
-// - **About** is one card of facts: the key at the left, the value at the
-//   right in Geist Mono `TEXT_2` (versions and paths are machine text).
-//   A path copies on click; its row shows the copy mark on hover and a
-//   check once copied.
-// - **Search** filters every page at once: matching rows keep their cards,
-//   each labelled `Page · Group`; pages with no match fade to
-//   `TEXT_MUTED` in the sidebar, and choosing a page clears the search.
-
-/// The sheet: wide enough for a sidebar and a 500px card column, tall
-/// enough for the longest page (Behaviour: a card of one row and a card
-/// of four) without a scroll, and no taller. Search results may scroll.
+// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (`❯` in the
+//   accent, then the field), a `paint::LINE` under it, then one row per page
+//   — the accent `❯` and `paint::SELECTION` on the page shown, `TEXT` on the
+//   rest — and `About` at the foot. ↑/↓ step pages while the sheet holds
+//   focus.
+// - **Content:** the page title in `TEXT_STRONG` `W_STRONG`, then groups a
+//   row apart: a group's label is a `TEXT_MUTED` row (a provider's led by
+//   its logomark), its rows split by `paint::LINE` rules.
+// - **Row:** the label (`TEXT`) over an optional hint (`TEXT_MUTED`) at the
+//   left; the control right and centred.
+// - **Controls** are words on the row: an on/off setting is `on` in the
+//   accent at `W_STRONG` or `off` in `TEXT_MUTED`; a two-way choice is a
+//   pair of tokens, the chosen one inverse; a longer list is the value and
+//   a chevron that opens a menu; a size is `‹ 14px ›`. Each is a tab stop
+//   with the one focus outline, `paint::HOVER` under the pointer.
+// - **About** is a list of facts: the key at the left, the value at the
+//   right in `TEXT_MUTED`. A path copies on click.
+// - **Search** filters every page at once: matching rows keep their groups,
+//   each labelled `Page · Group`; pages with no match read `TEXT_MUTED`.
 pub const SETTINGS_W: f32 = 760.0;
 pub const SETTINGS_H: f32 = 448.0;
-/// The sidebar column, the search field included.
-pub const SETTINGS_SIDEBAR_W: f32 = 196.0;
-/// A sidebar row and the search field: the one list pitch.
-pub const SETTINGS_NAV_ROW_H: f32 = NAV_ROW_H;
-/// The search field's magnifier: a step under a row's mark, as the
-/// field's placeholder is a step under a label.
-pub const SETTINGS_SEARCH_ICON: f32 = 14.0;
-/// A sidebar row's mark and the gap to its label.
-pub const SETTINGS_NAV_ICON: f32 = ICON_BUTTON_GLYPH;
-pub const SETTINGS_NAV_ICON_GAP: f32 = SPACE_2;
-/// A setting row: one `LH_UI` line in 8px of air each side, or the line
-/// and its `LH_META` hint in 4px.
-pub const SETTINGS_ROW_H: f32 = LH_UI + 2.0 * SPACE_2;
-pub const SETTINGS_ROW_HINT_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1;
-/// A row's inline padding inside its card; group labels sit on the same
-/// edge.
-pub const SETTINGS_ROW_PAD_X: f32 = SPACE_3;
-/// Between groups, and between a group's label and its card.
-pub const SETTINGS_GROUP_GAP: f32 = SPACE_6;
-pub const SETTINGS_LABEL_GAP: f32 = SPACE_2;
-/// Between the page title and its first group.
-pub const SETTINGS_TITLE_GAP: f32 = SPACE_4;
-/// Every control in a row: the chrome control height.
-pub const SETTINGS_CONTROL_H: f32 = CONTROL_H;
-/// The text-size stepper's value slot: `24px` never moves the `+`.
-pub const SETTINGS_STEPPER_VALUE_W: f32 = 44.0;
-/// A menu button's widest value before it truncates (a model's name).
-pub const SETTINGS_MENU_MAX_W: f32 = 220.0;
+pub const SETTINGS_SIDEBAR_W: f32 = 24.0 * CH;
+pub const SETTINGS_NAV_ROW_H: f32 = ROW;
+/// A setting row: one row in a quarter row of air each side, or the label
+/// and its hint (two rows) in the same.
+pub const SETTINGS_ROW_H: f32 = ROW + HALF_ROW;
+pub const SETTINGS_ROW_HINT_H: f32 = 2.0 * ROW + HALF_ROW;
+pub const SETTINGS_ROW_PAD_X: f32 = CH;
+/// Between groups; a group's label sits directly on its rows.
+pub const SETTINGS_GROUP_GAP: f32 = ROW;
+pub const SETTINGS_TITLE_GAP: f32 = HALF_ROW;
+/// Every control in a row is one row high.
+pub const SETTINGS_CONTROL_H: f32 = ROW;
+/// The text-size stepper's value slot: `24px` never moves the `›`.
+pub const SETTINGS_STEPPER_VALUE_W: f32 = 6.0 * CH;
+/// A chooser's widest value before it truncates (a model's name).
+pub const SETTINGS_MENU_MAX_W: f32 = 28.0 * CH;
 /// An About key's column, so every value starts on one edge.
-pub const SETTINGS_FACT_KEY_W: f32 = 104.0;
+pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents

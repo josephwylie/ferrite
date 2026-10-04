@@ -24,12 +24,10 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
     tick(cx);
     let ghost = cx.debug_bounds("prompt-placeholder").unwrap();
     let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
-    );
+    // Terminal-native (WP-D): no send control shares the row; the ghost
+    // stays inside the editor, its accept hint whole.
     assert!(ghost.right() <= editor.right());
-    assert!(ghost.right() < send.left());
+    assert!(cx.debug_bounds("prompt-placeholder-hint").is_some());
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
@@ -39,6 +37,10 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
     assert!(cx.debug_bounds("prompt-placeholder").is_none());
 }
 
+/// Terminal-native (WP-D): the verb hint rides the focused Pane's status
+/// line, so the pointer's send and stop act on that Pane only; an unfocused
+/// cell draws no status line and keeps its draft. Focus never moves the
+/// editor's text origin.
 #[gpui::test]
 fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-pointer-panes", 2);
@@ -66,6 +68,21 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let origin = cx.debug_bounds("prompt-editor").unwrap().left();
+    assert!(
+        cx.debug_bounds(format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])).leak())
+            .is_none(),
+        "an unfocused cell has no status line"
+    );
+    view.update(cx, |view, cx| {
+        view.focus_pane(1);
+        cx.notify();
+    });
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("focused-prompt-editor").unwrap().left(),
+        origin,
+        "gaining focus must keep the editor's text origin fixed"
+    );
     let send = bounds(
         cx,
         format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])),
@@ -78,17 +95,7 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
         assert!(view.panes[1].composer.read(cx).is_empty());
     });
-    assert_eq!(
-        cx.debug_bounds("focused-prompt-editor").unwrap().left(),
-        origin,
-        "gaining focus must keep the editor's text origin fixed"
-    );
 
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        cx.notify();
-    });
-    tick(cx);
     let stop = bounds(
         cx,
         format!("composer-stop-{:?}", PaneIdentity::Thread(threads[1])),
@@ -101,9 +108,9 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
     });
 
-    // At instrument size the Composer keeps its shape: the one control
-    // (Stop now, over an empty line while the turn runs) rides the input
-    // row at its right, after the line.
+    // At instrument size the Composer keeps its shape: the verb hint (Stop
+    // now, over an empty line while the turn runs) rides the status line
+    // under the input row.
     cx.simulate_resize(gpui::size(px(860.), px(500.)));
     tick(cx);
     let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
@@ -111,8 +118,7 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         cx,
         format!("composer-stop-{:?}", PaneIdentity::Thread(threads[1])),
     );
-    assert!(editor.right() <= control.left());
-    assert!(control.top() >= editor.top() && control.bottom() <= editor.top() + px(20.5));
+    assert!(editor.bottom() <= control.top());
 }
 
 /// While a turn runs the one control is Stop, whatever is in the line: the
@@ -315,17 +321,19 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         });
         if level != Level::Wall {
             let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-            let send = bounds(
-                cx,
-                format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
-            );
             assert!(
                 editor.top()
                     >= px(rect.y + rect.h * (1. - crate::theme::COMPOSER_MAX_PANE_FRACTION)),
                 "typing preserves the majority of the Pane for context: {editor:?} / {rect:?}"
             );
             assert!(editor.bottom() <= px(rect.y + rect.h));
-            assert!(send.top() >= px(rect.y) && send.bottom() <= px(rect.y + rect.h));
+            // The verb hint rides the status line, which an L2 cell does not
+            // draw (terminal-native, WP-D); where it shows, it is in the Pane.
+            if let Some(send) =
+                cx.debug_bounds(format!("composer-send-{:?}", PaneIdentity::Thread(thread)).leak())
+            {
+                assert!(send.top() >= px(rect.y) && send.bottom() <= px(rect.y + rect.h));
+            }
         }
         view.read_with(cx, |view, cx| {
             assert_eq!(view.panes[0].composer.read(cx).text(), draft)
@@ -454,7 +462,7 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
                 .debug_bounds("progress-caption-Checking the remaining interactions")
                 .unwrap();
             assert!(
-                progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_T + 1.),
+                progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_Y),
                 "the complete live status stays above the Composer rule: {progress:?} / {queue:?}"
             );
             assert!(progress.size.height <= px(crate::theme::COMPOSER_ROW_H));

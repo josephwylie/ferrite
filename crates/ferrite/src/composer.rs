@@ -1,25 +1,30 @@
-//! The Composer: the shell-style prompt box. This is the window half —
+//! The Composer: the shell-style prompt line. This is the window half —
 //! focus, key actions, and painting; the editing state lives in `Line`.
 //!
-//! The text soft-wraps at the box's width and the box grows a row per
+//! The text soft-wraps at the line's width and the line grows a row per
 //! visual line, up to `MAX_ROWS`; past that it scrolls to keep the caret
 //! in view. Every pointer and caret question goes through one `Layout`
 //! table of visual rows, so wrapped and hard-broken lines read alike.
+//!
+//! The caret is a terminal's block (theme WP-D): one cell wide, one row
+//! high, in the accent, blinking softly while this line holds the keyboard
+//! (the character under it turns `ON_ACCENT`), a still hollow box when it
+//! does not.
 
 use std::ops::Range;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrite_core::prompt_files;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, point, px, relative, rgb, rgba, size, App, AvailableSpace, Bounds,
-    ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PaintQuad, Pixels, SharedString, Style, Task, TextAlign, TextRun, TextStyle, UTF16Selection,
-    UnderlineStyle, Window, WrappedLine,
+    actions, div, fill, outline, point, px, relative, rgb, rgba, size, App, AvailableSpace,
+    BorderStyle, Bounds, ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase,
+    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, GlobalElementId, Hsla, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, SharedString, Style, TextAlign, TextRun, TextStyle,
+    UTF16Selection, UnderlineStyle, Window, WrappedLine,
 };
 
 use crate::line::Line;
@@ -66,9 +71,23 @@ actions!(
     ]
 );
 
-/// Half a blink cycle: the caret is solid this long, then hidden this long,
-/// the rate every platform's native text field uses.
-const BLINK: Duration = Duration::from_millis(500);
+/// How the caret was last drawn: the soft block at an opacity (this line
+/// holds the keyboard), or the still hollow box (it does not). `None` while
+/// a selection stands in its place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Caret {
+    Block(f32),
+    Hollow,
+}
+
+/// The block caret's opacity `since` its blink last restarted (a focus or
+/// an edit): the soft cycle of `MOTION_CARET_BLINK_MS` from its solid
+/// start (`components::caret_blink`).
+pub(crate) fn caret_alpha(since: Duration) -> f32 {
+    let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS).as_nanos();
+    let phase = (since.as_nanos() % turn) as f32 / turn as f32;
+    crate::components::caret_blink(phase)
+}
 
 /// The most visual rows the box grows to before it scrolls: the prompt
 /// grows with its text, but the transcript above keeps most of the Pane.
@@ -115,15 +134,16 @@ pub struct Composer {
     /// A press landed in the line and has not been released: moves extend
     /// the selection from where it landed.
     dragging: bool,
-    /// The caret's current blink phase. Solid whenever the line is unfocused,
-    /// so focusing always lands on a visible caret.
-    caret_visible: bool,
-    /// The running blink cycle — `None` while the line does not hold focus.
-    caret_blink: Option<Task<()>>,
-    /// Bumped whenever the cycle is restarted or stopped, so a timer from a
-    /// superseded cycle retires instead of toggling the caret behind the
-    /// current one.
-    caret_epoch: usize,
+    /// When the block caret's blink last restarted from solid: the moment
+    /// the line took the keyboard, or its last edit. Focusing or typing
+    /// always lands on a visible caret.
+    blink_from: Option<Instant>,
+    /// Whether the line held the keyboard on the last drawn frame, so the
+    /// frame that gains it restarts the blink.
+    had_focus: bool,
+    /// How the caret was last drawn, for the tests.
+    #[cfg(test)]
+    last_caret: Option<Caret>,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -145,9 +165,10 @@ impl Composer {
             scroll: 0,
             goal_x: None,
             dragging: false,
-            caret_visible: true,
-            caret_blink: None,
-            caret_epoch: 0,
+            blink_from: None,
+            had_focus: false,
+            #[cfg(test)]
+            last_caret: None,
         }
     }
 
@@ -377,55 +398,21 @@ impl Composer {
 
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.goal_x = None;
-        // The caret just moved: show it solid again and restart the cycle, so
-        // it is never invisible at the moment the operator is looking for it.
-        if self.caret_blink.is_some() {
-            self.start_caret_blink(cx);
-        }
+        // The caret just moved: show it solid again and restart the blink,
+        // so it is never faint at the moment the operator is looking for it.
+        self.blink_from = Some(cx.background_executor().now());
         cx.emit(Edited);
         cx.notify();
     }
 
-    /// Match the blink cycle to whether this line holds focus. Called from
-    /// the element's prepaint, which sees the window's focus each frame.
-    fn sync_caret_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
-        match (focused, self.caret_blink.is_some()) {
-            (true, false) => self.start_caret_blink(cx),
-            (false, true) => self.stop_caret_blink(),
-            _ => {}
+    /// Note whether this line holds the keyboard on this frame. Called from
+    /// the element's prepaint, which sees the window's focus each frame: the
+    /// frame that gains it restarts the blink solid.
+    fn sync_focus(&mut self, focused: bool, now: Instant) {
+        if focused && !self.had_focus {
+            self.blink_from = Some(now);
         }
-    }
-
-    /// Restart the cycle from the solid phase.
-    fn start_caret_blink(&mut self, cx: &mut Context<Self>) {
-        self.caret_visible = true;
-        self.caret_epoch = self.caret_epoch.wrapping_add(1);
-        let epoch = self.caret_epoch;
-        self.caret_blink = Some(cx.spawn(async move |composer, cx| loop {
-            cx.background_executor().timer(BLINK).await;
-            let Some(composer) = composer.upgrade() else {
-                return;
-            };
-            let current = composer.update(cx, |composer, cx| {
-                if composer.caret_epoch != epoch {
-                    return false;
-                }
-                composer.caret_visible = !composer.caret_visible;
-                cx.notify();
-                true
-            });
-            if !current {
-                return;
-            }
-        }));
-        cx.notify();
-    }
-
-    /// Drop the cycle and leave the caret solid for the next focus.
-    fn stop_caret_blink(&mut self) {
-        self.caret_epoch = self.caret_epoch.wrapping_add(1);
-        self.caret_blink = None;
-        self.caret_visible = true;
+        self.had_focus = focused;
     }
 
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
@@ -845,19 +832,20 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
     ranges
 }
 
-/// The line's text runs: the base style, the @-pill (`MENTION_INK` on the
-/// `MENTION_WASH` ground) over `pills`, the selection's own `TEXT_STRONG`
-/// ink over `selected` — the selection quad is the app's one translucent
-/// selection wash, painted under the shaped line — and the IME underline
-/// (`TEXT_MUTED`, 1px) over `marked`. Split at every boundary so each run
-/// wears exactly its styles. A selected pill keeps its wash and takes the
-/// strong ink, so the two grounds stack and stay distinct.
+/// The line's text runs: the base style, a picked mention in `MENTION_INK`
+/// (a path's cyan, no ground) over `pills`, the selection's own
+/// `TEXT_STRONG` ink over `selected` — the selection quad is the app's one
+/// translucent selection wash, painted under the shaped line — the IME
+/// underline (`TEXT_MUTED`, 1px) over `marked`, and the character under the
+/// block caret in the caret's own `ink` (toward `ON_ACCENT` as the block
+/// comes up). Split at every boundary so each run wears exactly its styles.
 fn runs_for(
     base: &TextRun,
     len: usize,
     marked: Option<Range<usize>>,
     pills: &[Range<usize>],
     selected: Option<Range<usize>>,
+    caret: Option<(Range<usize>, Hsla)>,
 ) -> Vec<TextRun> {
     let mut cuts = vec![0, len];
     if let Some(marked) = &marked {
@@ -865,6 +853,9 @@ fn runs_for(
     }
     if let Some(selected) = &selected {
         cuts.extend([selected.start, selected.end]);
+    }
+    if let Some((under, _)) = &caret {
+        cuts.extend([under.start, under.end]);
     }
     for pill in pills {
         cuts.extend([pill.start, pill.end]);
@@ -886,13 +877,18 @@ fn runs_for(
             .any(|pill| pill.start <= from && to <= pill.end)
         {
             run.color = rgb(crate::theme::MENTION_INK).into();
-            run.background_color = Some(rgba(crate::theme::MENTION_WASH).into());
         }
         if selected
             .as_ref()
             .is_some_and(|selected| selected.start <= from && to <= selected.end)
         {
             run.color = rgb(crate::theme::TEXT_STRONG).into();
+        }
+        if let Some((_, ink)) = caret
+            .as_ref()
+            .filter(|(under, _)| under.start <= from && to <= under.end)
+        {
+            run.color = *ink;
         }
         if marked
             .as_ref()
@@ -944,6 +940,7 @@ impl Layout {
         style: &TextStyle,
         line_height: Pixels,
         wrap_width: Option<Pixels>,
+        caret_ink: Option<Hsla>,
         window: &Window,
     ) -> Self {
         let content = SharedString::from(composer.line.text().to_string());
@@ -957,12 +954,20 @@ impl Layout {
             underline: None,
             strikethrough: None,
         };
+        // The character the block caret stands on, if it stands on one (not
+        // past the end, not on a line break).
+        let cursor = composer.line.cursor();
+        let caret = caret_ink.and_then(|ink| {
+            let next = content[cursor..].chars().next().filter(|c| *c != '\n')?;
+            Some((cursor..cursor + next.len_utf8(), ink))
+        });
         let runs = runs_for(
             &run,
             content.len(),
             composer.line.marked(),
             &pills,
             (!selected.is_empty()).then(|| selected.clone()),
+            caret,
         );
         let font_size = style.font_size.to_pixels(window.rem_size());
         let lines: Vec<WrappedLine> = window
@@ -1143,8 +1148,14 @@ impl Element for LineElement {
                     AvailableSpace::Definite(width) => Some(width),
                     _ => None,
                 });
-                let layout =
-                    Layout::shape(composer.read(cx), &text_style, line_height, width, window);
+                let layout = Layout::shape(
+                    composer.read(cx),
+                    &text_style,
+                    line_height,
+                    width,
+                    None,
+                    window,
+                );
                 size(
                     width.unwrap_or_else(|| layout.width()),
                     line_height * layout.rows().min(composer.read(cx).visible_row_limit),
@@ -1163,25 +1174,52 @@ impl Element for LineElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let line_height = window.line_height();
-        // The blink cycle runs only while this line holds focus *and* the
-        // window is active. Prepaint is the seam that sees both every drawn
-        // frame, so a click that lands anywhere else — or on another app —
-        // retires the cycle on that same frame. A background window shows no
-        // caret: nothing typed would land here until it comes forward.
+        // The block blinks only while this line holds focus *and* the window
+        // is active. Prepaint is the seam that sees both every drawn frame,
+        // so a click that lands anywhere else — or on another app — turns
+        // the caret hollow on that same frame: nothing typed would land here
+        // until it comes back.
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
-        let caret_visible = self.composer.update(cx, |composer, cx| {
-            composer.sync_caret_blink(focused, cx);
-            composer.caret_visible
+        let now = cx.background_executor().now();
+        let blink_from = self.composer.update(cx, |composer, _| {
+            composer.sync_focus(focused, now);
+            composer.blink_from
+        });
+        let selected = self.composer.read(cx).line.selection();
+        // The soft blink rides the shared pulse clock (theme rule 8): leasing
+        // it keeps the frames coming while this line holds the keyboard; the
+        // phase is the line's own, from its last focus or edit. Still and
+        // solid under reduced motion.
+        let alpha = (focused && selected.is_empty()).then(|| {
+            if crate::motion::reduced_motion(cx) {
+                return 1.0;
+            }
+            let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
+            let shared = crate::motion::pulse_phase(turn, window.current_view(), cx);
+            match blink_from {
+                Some(from) => caret_alpha(now.saturating_duration_since(from)),
+                None => crate::components::caret_blink(shared),
+            }
+        });
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let cell = font_size * crate::theme::CODE_ADVANCE * crate::theme::CARET_CELLS;
+        let caret_ink = alpha.map(|alpha| {
+            crate::motion::mix(
+                rgb(crate::theme::TEXT).into(),
+                rgb(crate::theme::ON_ACCENT).into(),
+                alpha,
+            )
         });
         let composer = self.composer.read(cx);
-        let selected = composer.line.selection();
         let cursor = composer.line.cursor();
         let layout = Layout::shape(
             composer,
-            &window.text_style(),
+            &text_style,
             line_height,
             Some(bounds.size.width),
+            caret_ink,
             window,
         );
 
@@ -1197,22 +1235,34 @@ impl Element for LineElement {
         }
         let row_top = |row: usize| bounds.top() + line_height * row - line_height * scroll;
 
-        let (selection, cursor) = if selected.is_empty() && focused && caret_visible {
+        let (selection, cursor, caret) = if selected.is_empty() {
             let at = layout.position(cursor);
-            // The caret: a 2 × 16 `CARET` (accent) bar, square, no radius,
-            // centred in its row (y = row top + 2 in the 20px row). It blinks
-            // on the standard 500ms cycle while the line holds focus.
-            let inset = (line_height - px(crate::theme::CARET_H)) / 2.;
-            (
-                Vec::new(),
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + at.x, row_top(caret_row) + inset),
-                        size(px(crate::theme::CARET_W), px(crate::theme::CARET_H)),
-                    ),
-                    rgb(crate::theme::CARET),
-                )),
-            )
+            // The caret: a block one cell wide and one row high, square. The
+            // line that holds the keyboard paints it in `CARET` at the blink's
+            // opacity; any other paints a still 1px hollow box.
+            let block = Bounds::new(
+                point(bounds.left() + at.x, row_top(caret_row)),
+                size(cell, line_height),
+            );
+            match alpha {
+                Some(alpha) => (
+                    Vec::new(),
+                    Some(fill(
+                        block,
+                        Hsla::from(rgb(crate::theme::CARET)).opacity(alpha),
+                    )),
+                    Some(Caret::Block(alpha)),
+                ),
+                None => (
+                    Vec::new(),
+                    Some(outline(
+                        block,
+                        rgb(crate::theme::CARET_HOLLOW),
+                        BorderStyle::Solid,
+                    )),
+                    Some(Caret::Hollow),
+                ),
+            }
         } else {
             // One quad per row the selection crosses, from where it enters
             // the row to where it leaves.
@@ -1235,8 +1285,13 @@ impl Element for LineElement {
                     )
                 })
                 .collect();
-            (quads, None)
+            (quads, None, None)
         };
+        #[cfg(test)]
+        self.composer
+            .update(cx, |composer, _| composer.last_caret = caret);
+        #[cfg(not(test))]
+        let _ = caret;
 
         PrepaintState {
             layout: Some(layout),
@@ -1300,6 +1355,11 @@ impl Element for LineElement {
             for quad in prepaint.selection.drain(..) {
                 window.paint_quad(quad);
             }
+            // The block goes under the glyphs, so the character it stands on
+            // reads in its own (`ON_ACCENT`) ink over it, as a terminal's does.
+            if let Some(cursor) = prepaint.cursor.take() {
+                window.paint_quad(cursor);
+            }
             for (index, line) in layout.lines.iter().enumerate() {
                 let first_row = layout.first_row_of_line(index);
                 let top = bounds.top() + line_height * first_row - line_height * scroll;
@@ -1316,11 +1376,6 @@ impl Element for LineElement {
                     cx,
                 )
                 .unwrap();
-            }
-            if focus_handle.is_focused(window) && window.is_window_active() {
-                if let Some(cursor) = prepaint.cursor.take() {
-                    window.paint_quad(cursor);
-                }
             }
         });
         self.composer.update(cx, |composer, _cx| {
@@ -1426,31 +1481,60 @@ mod tests {
             strikethrough: None,
         };
         let text = "read @a now";
-        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], None);
+        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], None, None);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
-        assert_eq!(
-            runs[1].background_color,
-            Some(rgba(crate::theme::MENTION_WASH).into()),
-            "the pill wears the mention wash"
-        );
+        // A picked mention is a path: the terminal's cyan, on no ground —
+        // never the accent, never a chip (theme WP-D).
         assert_eq!(runs[1].color, rgb(crate::theme::MENTION_INK).into());
-        // A mention is neutral: body ink on the inline-code wash, never the
-        // accent (rule 2.2.6).
-        assert_eq!(crate::theme::MENTION_INK, crate::theme::TEXT);
-        assert_eq!(crate::theme::MENTION_WASH, crate::theme::INLINE_CODE_WASH);
-        assert_ne!(
-            crate::theme::MENTION_WASH,
-            crate::theme::COMPOSER_SELECTION,
-            "a pill never reads as a selection"
-        );
+        assert_eq!(crate::theme::MENTION_INK, crate::theme::PATH_INK);
+        assert!(runs[1].background_color.is_none());
         assert!(runs[0].background_color.is_none());
         assert!(runs[3].underline.is_some(), "the mark wears the underline");
         assert!(runs[2].underline.is_none());
 
         // An empty line still hands the shaper one (empty) run.
-        assert_eq!(runs_for(&base, 0, None, &[], None).len(), 1);
+        assert_eq!(runs_for(&base, 0, None, &[], None, None).len(), 1);
+    }
+
+    /// The character under the block caret takes the caret's ink, and only
+    /// that character.
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn the_character_under_the_block_takes_the_caret_ink() {
+        let base = TextRun {
+            len: 0,
+            font: gpui::font(crate::theme::FONT_CODE),
+            color: rgb(crate::theme::TEXT).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let ink: Hsla = rgb(crate::theme::ON_ACCENT).into();
+        let runs = runs_for(&base, 5, None, &[], None, Some((2..3, ink)));
+        let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
+        assert_eq!(lens, [2, 1, 2]);
+        assert_eq!(runs[1].color, ink);
+        assert_eq!(runs[0].color, base.color);
+        assert_eq!(runs[2].color, base.color);
+    }
+
+    /// The block's soft blink (the prototype's keyframes): solid from its
+    /// start for 45% of the turn, eased down to `CARET_BLINK_MIN`, held,
+    /// and back up — so a fresh focus or edit always shows it solid.
+    #[test]
+    fn the_block_blinks_softly_from_a_solid_start() {
+        let turn = crate::theme::MOTION_CARET_BLINK_MS;
+        let at = |ms: u64| caret_alpha(Duration::from_millis(ms));
+        assert_eq!(at(0), 1.0, "a restart is solid");
+        assert_eq!(at(turn * 4 / 10), 1.0);
+        assert_eq!(at(turn * 7 / 10), crate::theme::CARET_BLINK_MIN);
+        assert_eq!(at(turn), 1.0, "and round again");
+        assert!(
+            crate::theme::CARET_BLINK_MIN > 0.0,
+            "soft: it never vanishes"
+        );
     }
 
     /// The selection wash is painted under the shaped line, so every covered
@@ -1465,7 +1549,7 @@ mod tests {
             underline: None,
             strikethrough: None,
         };
-        let runs = runs_for(&base, 11, None, &[], Some(5..7));
+        let runs = runs_for(&base, 11, None, &[], Some(5..7), None);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [5, 2, 4]);
         assert_eq!(runs[1].color, rgb(crate::theme::TEXT_STRONG).into());
@@ -1651,61 +1735,54 @@ mod tests {
 
     /// The box is one row tall while the text fits and grows a row per
     /// wrapped line, to `MAX_ROWS`; past that it scrolls to the caret.
+    /// The caret is a block in the line that holds the keyboard and a still
+    /// hollow box anywhere else; a selection stands in its place. (The motion
+    /// kit rests in unit tests, so the block reads solid: its blink is
+    /// `the_block_blinks_softly_from_a_solid_start`.)
     #[gpui::test]
-    fn the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it(cx: &mut TestAppContext) {
+    fn the_caret_is_a_block_in_the_focused_line_and_hollow_elsewhere(cx: &mut TestAppContext) {
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);
         cx.run_until_parked();
+        let caret = |cx: &mut VisualTestContext| composer.read_with(cx, |c, _| c.last_caret);
 
-        let visible = |cx: &mut VisualTestContext| composer.read_with(cx, |c, _| c.caret_visible);
-
-        // A background window shows no caret and runs no cycle: nothing typed
-        // would land here until it comes forward. Test windows open inactive.
-        cx.executor()
-            .advance_clock(BLINK + Duration::from_millis(10));
-        cx.run_until_parked();
-        composer.read_with(cx, |composer, _| {
-            assert!(composer.caret_blink.is_none(), "no cycle while inactive");
-        });
+        // A background window holds no keyboard: nothing typed would land
+        // here until it comes forward. Test windows open inactive.
+        assert_eq!(caret(cx), Some(Caret::Hollow));
 
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
-        assert!(visible(cx), "focusing the line must show the caret at once");
-        composer.read_with(cx, |composer, _| assert!(composer.caret_blink.is_some()));
+        assert_eq!(caret(cx), Some(Caret::Block(1.0)), "focus shows the block");
+        let restarted = composer.read_with(cx, |c, _| c.blink_from);
+        assert!(
+            restarted.is_some(),
+            "gaining the keyboard restarts the blink"
+        );
 
-        cx.executor()
-            .advance_clock(BLINK + Duration::from_millis(10));
-        cx.run_until_parked();
-        assert!(!visible(cx), "the caret must blink off after half a cycle");
-
-        cx.executor()
-            .advance_clock(BLINK + Duration::from_millis(10));
-        cx.run_until_parked();
-        assert!(visible(cx), "the caret must blink back on");
-
-        // Typing while the caret is hidden must bring it straight back.
-        cx.executor()
-            .advance_clock(BLINK + Duration::from_millis(10));
-        cx.run_until_parked();
-        assert!(!visible(cx));
+        // Typing restarts it solid again.
+        cx.executor().advance_clock(Duration::from_millis(700));
         composer.update(cx, |composer, cx| composer.insert("a", cx));
-        assert!(visible(cx), "typing must restart the cycle solid");
+        cx.run_until_parked();
+        let typed = composer.read_with(cx, |c, _| c.blink_from);
+        assert!(typed > restarted, "an edit restarts the blink");
+        assert_eq!(caret(cx), Some(Caret::Block(1.0)));
 
-        // Losing focus leaves the caret solid and retires the cycle.
+        // A selection takes the caret's place.
+        composer.update(cx, |composer, cx| {
+            composer.line.select_all();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(caret(cx), None);
+
+        // Losing focus leaves a still hollow box.
+        composer.update(cx, |composer, cx| {
+            composer.line.move_end();
+            cx.notify();
+        });
         cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
         cx.run_until_parked();
-        composer.read_with(cx, |composer, _| {
-            assert!(composer.caret_blink.is_none(), "the cycle must retire");
-            assert!(composer.caret_visible);
-        });
-
-        // And it stays solid: an unfocused line has no caret to blink.
-        cx.executor().advance_clock(BLINK * 4);
-        cx.run_until_parked();
-        composer.read_with(cx, |composer, _| {
-            assert!(composer.caret_blink.is_none());
-            assert!(composer.caret_visible);
-        });
+        assert_eq!(caret(cx), Some(Caret::Hollow));
     }
 
     #[gpui::test]

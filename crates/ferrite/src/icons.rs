@@ -105,15 +105,15 @@ icons![
     "arrow-up",
     "stop",
     "file",
+    "image",
+    "mode-accept",
+    "mode-on",
+    "mode-plan",
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
     "command",
-    "search",
-    "new-thread",
-    "shield",
-    "sliders",
-    "info",
+    "cross",
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
@@ -262,17 +262,21 @@ pub const OPTION: &str = "icons/option.svg";
 pub const CONTROL: &str = "icons/control.svg";
 
 // ---- WP-D icon names (append consts above the end line)
+/// An image attachment's mark (the prototype's `#image` symbol): a frame,
+/// a ridge and a sun, in the 16-unit line family.
+pub const IMAGE: &str = "icons/image.svg";
+/// The permission mode's marker in the status line, drawn (Geist Mono has
+/// neither `⏵` nor `⏸`): `⏵⏵` for a mode that lets edits run, `⏸` for
+/// plan, `⏵` for any other. Fill marks in a 12-unit box.
+pub const MODE_ACCEPT: &str = "icons/mode-accept.svg";
+pub const MODE_ON: &str = "icons/mode-on.svg";
+pub const MODE_PLAN: &str = "icons/mode-plan.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
-/// The Settings sheet's line family (`prefs.rs`): the search field's
-/// magnifier, and one mark per sidebar page — a new thread, permissions,
-/// behaviour, about.
-pub const SEARCH: &str = "icons/search.svg";
-pub const NEW_THREAD: &str = "icons/new-thread.svg";
-pub const SHIELD: &str = "icons/shield.svg";
-pub const SLIDERS: &str = "icons/sliders.svg";
-pub const INFO: &str = "icons/info.svg";
+/// `✗`, drawn (Geist Mono lacks it): a failed turn's mark in the
+/// notifications list, the line family's cross.
+pub const CROSS: &str = "icons/cross.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
@@ -498,11 +502,11 @@ mod tests {
             REASONING,
             OPTION,
             CONTROL,
-            SEARCH,
-            NEW_THREAD,
-            SHIELD,
-            SLIDERS,
-            INFO,
+            IMAGE,
+            MODE_ACCEPT,
+            MODE_ON,
+            MODE_PLAN,
+            CROSS,
             WORKING_DOT,
             WORKING_FOUR,
             WORKING_EIGHT,
@@ -525,8 +529,9 @@ mod tests {
             ICONS.len(),
             57,
             "the prototype and app controls, including close, the four Windows caption glyphs, \
-             the option and control key glyphs, the Settings sheet's five marks, the CLI \
-             update mark, and the sixteen spinner frames (ten braille, six working glyphs)"
+             the option and control key glyphs, the image mark, the three mode markers, the \
+             failed cross, the CLI update mark, and the sixteen spinner frames (ten braille, \
+             six working glyphs)"
         );
     }
 
@@ -551,11 +556,8 @@ mod tests {
             COPY,
             RESEND,
             ARROW_UP,
-            SEARCH,
-            NEW_THREAD,
-            SHIELD,
-            SLIDERS,
-            INFO,
+            IMAGE,
+            CROSS,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
