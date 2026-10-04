@@ -551,9 +551,12 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
             )
             .width
     });
+    // The label's box is rounded to the pixel where it lands, its run is
+    // not (the browser's model, vendor/gpui-pre "Pixel snapping"): the two
+    // agree to within a pixel.
     assert!(
-        main_label.size.width >= expected_main_width,
-        "the Main label fits its shaped text width"
+        main_label.size.width + px(1.) >= expected_main_width,
+        "the Main label fits its shaped text width: {main_label:?} {expected_main_width:?}"
     );
     assert!(main_label.left() >= main.left() && main_label.right() <= main.right());
     let selected = bounds(cx, format!("subject-agent-1-{}", key("Rowan").as_str()));

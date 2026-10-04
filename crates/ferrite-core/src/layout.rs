@@ -852,9 +852,21 @@ pub fn grid_cell(bounds: Rect, columns: usize, rows: usize) -> Cell {
 /// Right-nested equal cells along `length`, `GRID_GAP` apart: every node
 /// gets `(length - (k - 1) * gap) / k`, so the head's ratio of what its split
 /// shares (`length - gap`) is that cell over it — not `1 / k`, which would
-/// hand the head the gaps the chain after it still has to give up.
+/// hand the head the gaps the chain after it still has to give up. A pair
+/// is the prototype's halving instead (`--c1:50%`, `--r1:50%`): the first
+/// track half the length, the gap and the rest after it.
 fn even_chain(mut nodes: Vec<Node>, axis: Axis, length: f32) -> Node {
     let count = nodes.len();
+    if count == 2 && length > GRID_GAP {
+        let second = nodes.pop().expect("a pair");
+        let first = nodes.pop().expect("a pair");
+        return Node::Split {
+            axis,
+            ratio: (length / 2.0) / (length - GRID_GAP),
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+    }
     let cell = (length - (count.saturating_sub(1)) as f32 * GRID_GAP) / count.max(1) as f32;
     let mut node = nodes.pop().expect("a chain has at least one node");
     let mut tail = 1;
@@ -1142,9 +1154,14 @@ mod tests {
     fn grid_rows_align_their_seams_and_a_short_last_row_takes_full_cells() {
         let rects = Tree::grid(&ids(1..7), LAPTOP).rects(LAPTOP, GRID_GAP);
         let cell = grid_cell(LAPTOP, 3, 2);
-        for (_, found) in &rects {
+        // Three equal columns; the two rows halve the height as the
+        // prototype's grid does (`--r1:50%`): the first half of it, the
+        // gap, the rest.
+        let (first, second) = (LAPTOP.h / 2.0, LAPTOP.h / 2.0 - GRID_GAP);
+        for (at, (_, found)) in rects.iter().enumerate() {
+            let height = if at < 3 { first } else { second };
             assert!(
-                close(found.w, cell.width) && close(found.h, cell.height),
+                close(found.w, cell.width) && close(found.h, height),
                 "{found:?}"
             );
         }
@@ -1152,21 +1169,22 @@ mod tests {
         for column in 0..3 {
             assert!(close(rects[column].1.x, rects[column + 3].1.x));
         }
-        assert!(same(rects[0].1, rect(0.0, 0.0, cell.width, cell.height)));
+        assert!(same(rects[0].1, rect(0.0, 0.0, cell.width, first)));
         assert!(same(
             rects[5].1,
             rect(
                 2.0 * (cell.width + GRID_GAP),
-                cell.height + GRID_GAP,
+                first + GRID_GAP,
                 cell.width,
-                cell.height
+                second
             )
         ));
-        // A short last row stretches across: 5 in 3 + 2, the two sharing the
-        // full width at equal shares.
+        // A short last row stretches across: 5 in 3 + 2, the pair halving
+        // the full width as the prototype's grid does (`--c1:50%`): the
+        // first half the width, the gap, the rest.
         let five = Tree::grid(&ids(1..6), LAPTOP).rects(LAPTOP, GRID_GAP);
-        let half = (LAPTOP.w - GRID_GAP) / 2.0;
-        assert!(close(five[3].1.w, half) && close(five[4].1.w, half));
+        let half = LAPTOP.w / 2.0;
+        assert!(close(five[3].1.w, half) && close(five[4].1.w, half - GRID_GAP));
         assert!(close(five[3].1.x, 0.0));
         assert!(close(five[4].1.x + five[4].1.w, LAPTOP.w));
         // Every row of a full grid is an equal chain: 12 is never 5 over 7.
@@ -1395,7 +1413,7 @@ mod tests {
         assert_eq!(rects.len(), 6);
         for (_, cell) in &rects {
             assert!(inside(*cell, bounds), "{cell:?}");
-            assert!(close(cell.h, 98.0), "{cell:?}");
+            assert!((97.0..=100.5).contains(&cell.h), "{cell:?}");
         }
         // A row's widths plus its two gaps span the bounds exactly.
         let top: Vec<Rect> = rects[..3].iter().map(|(_, cell)| *cell).collect();
@@ -1404,7 +1422,7 @@ mod tests {
         assert!(close(top[2].x, top[1].x + top[1].w + 4.0));
         assert!(close(top[2].x + top[2].w, 310.0));
         // The second row sits past the horizontal gap and ends at the bottom.
-        assert!(close(rects[3].1.y, 20.0 + 98.0 + 4.0));
+        assert!(close(rects[3].1.y, rects[0].1.y + rects[0].1.h + 4.0));
         assert!(close(rects[3].1.y + rects[3].1.h, 220.0));
         assert_eq!(
             of(leaf(1)).rects(bounds, 4.0),

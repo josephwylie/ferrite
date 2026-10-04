@@ -51,8 +51,8 @@ use ferrite_core::ThreadId;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, radians, relative, rgb, rgba, AnyElement, Div, FontWeight, Hsla, ScrollHandle,
-    SharedString, Stateful, Transformation,
+    div, px, relative, rgb, rgba, AnyElement, Div, FontWeight, Hsla, ScrollHandle, SharedString,
+    Stateful,
 };
 
 use crate::cockpit::thread_status;
@@ -388,8 +388,8 @@ fn fitted(width: f32, ink: u32, weight: FontWeight, title: impl IntoElement) -> 
         )
 }
 
-/// A 2ch mark cell, its mark centred on the cell's first character — where
-/// a typed glyph would sit, the second cell being its space.
+/// A 2ch mark cell, its glyph typed at its start (the prototype's `.dot`,
+/// `.cur`), the second cell being its space.
 fn cell(mark: impl IntoElement) -> Div {
     div()
         .flex()
@@ -397,16 +397,7 @@ fn cell(mark: impl IntoElement) -> Div {
         .items_center()
         .w(px(NAV_CELL))
         .h(px(NAV_LINE))
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .w(px(CH))
-                .h(px(NAV_LINE))
-                .child(mark),
-        )
+        .child(mark)
 }
 
 /// An empty 2ch cell: the cursor cell of a row that is not selected.
@@ -434,18 +425,29 @@ fn tree_cell(last: bool) -> Div {
         .child(if last { "\u{2514}" } else { "\u{251c}" })
 }
 
-/// The disclosure triangle, drawn (Geist Mono has no small triangles): `▾`
-/// open, `▸` shut, in the faint structure ink.
-fn disclosure(open: bool) -> gpui::Svg {
-    icon(
-        if open {
-            icons::DISCLOSURE_DOWN
+/// A member's tree lead as the prototype types it, one run: `  ├ `, or
+/// `  └ ` closing the Group, in the faint structure ink.
+fn tree_lead(last: bool) -> Div {
+    components::glyph(
+        if last {
+            "  \u{2514} "
         } else {
-            icons::DISCLOSURE_RIGHT
+            "  \u{251c} "
         },
-        NAV_GLYPH,
         TEXT_FAINT,
     )
+    .whitespace_nowrap()
+    .h(px(NAV_LINE))
+}
+
+/// The disclosure triangle and its space, typed as the prototype's `.tr`
+/// types them — `▾ ` open, `▸ ` shut, in the faint structure ink, the
+/// triangle in the face the platform falls back to — the run's own width
+/// before the title.
+fn disclosure(open: bool) -> Div {
+    components::glyph(if open { "\u{25be} " } else { "\u{25b8} " }, TEXT_FAINT)
+        .whitespace_nowrap()
+        .h(px(NAV_LINE))
 }
 
 /// The word at a row's right, 1ch after its title, in the metadata ink. It
@@ -522,7 +524,7 @@ fn row_frame(id: (&'static str, usize), key: SharedString, selected: bool) -> St
 /// metadata ink (read or not), and a parked Thread a faint ring.
 fn status_mark(row: &ThreadRow) -> AnyElement {
     match row.status {
-        RowStatus::Working => components::braille_spinner(RUNNING, NAV_GLYPH),
+        RowStatus::Working => components::braille_spinner(RUNNING),
         RowStatus::Parked => components::status_ring(TEXT_FAINT).into_any_element(),
         _ => dot_face(row).into_any_element(),
     }
@@ -691,13 +693,13 @@ pub fn collapse_button() -> Stateful<Div> {
             "Toggle sidebar",
             "cockpit::ToggleNav",
         ))
-        .child(components::css_box(
+        .child(
             icon(icons::SIDEBAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(motion::mix(
                 rgb(TEXT_MUTED).into(),
                 rgb(TEXT).into(),
                 t,
             )),
-        ))
+        )
 }
 
 // ------------------------------------------------------------- the tree
@@ -817,7 +819,7 @@ pub fn group_row_with_title(
 /// stops there, so the rest of the row still opens the Group.
 pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
     let id = row.id;
-    cell(disclosure(!row.folded))
+    disclosure(!row.folded)
         .id(("nav-group-fold", id.get() as usize))
         .debug_selector(move || format!("nav-group-fold-{}", id.get()))
 }
@@ -860,11 +862,15 @@ pub fn thread_row_with_title(
         thread.get()
     ));
     let frame = row_frame(("nav-thread", thread.get() as usize), key, row.selected)
-        .debug_selector(move || format!("nav-thread-{}", thread.get()))
-        .child(cursor_cell(row.selected));
+        .debug_selector(move || format!("nav-thread-{}", thread.get()));
+    // A member's lead is the prototype's typed `  ├ ` (one run); the
+    // cursor takes its first two cells when the row is selected.
     let frame = match place {
-        RowPlace::Root => frame,
-        RowPlace::Member { last } => frame.child(tree_cell(last)),
+        RowPlace::Root => frame.child(cursor_cell(row.selected)),
+        RowPlace::Member { last } if row.selected => frame
+            .child(cursor_cell(true))
+            .child(tree_cell(last)),
+        RowPlace::Member { last } => frame.child(tree_lead(last)),
     };
     frame
         .child(cell(status_mark(row)))
@@ -961,7 +967,7 @@ pub fn project_section(
     let key = SharedString::from(format!("nav-project-section-{index}"));
     row_frame(("nav-project-section", index), key, false)
         .debug_selector(move || format!("nav-project-section-{index}"))
-        .child(cell(disclosure(!folded)))
+        .child(disclosure(!folded))
         .child(fitted(
             title_w(1.0, branch.as_deref()),
             TEXT_STRONG,
@@ -1100,20 +1106,10 @@ pub fn parked_section() -> Div {
 /// section's own menu (the cockpit wires both). Under the pointer only its
 /// ground changes.
 pub fn parked_header(count: usize, open: bool, eased: bool) -> Stateful<Div> {
-    // `▸` at rest shut, `▾` at rest open; a pointer toggle turns the `▸` a
-    // quarter over 150ms in between, a keyboard or menu toggle lands at
-    // once (rule 2.10.5).
-    let triangle = |turn: f32| {
-        if turn <= 0.0 {
-            disclosure(false)
-        } else if turn >= 1.0 {
-            disclosure(true)
-        } else {
-            disclosure(false).with_transformation(Transformation::rotate(radians(
-                std::f32::consts::FRAC_PI_2 * turn,
-            )))
-        }
-    };
+    // `▸ ` shut, `▾ ` open: typed, as the prototype's `.tr` types it. A
+    // pointer toggle turns it over the quarter turn's 150ms (the triangle
+    // changes halfway), a keyboard or menu toggle at once (rule 2.10.5).
+    let triangle = |turn: f32| disclosure(turn >= 0.5);
     let mark = if eased {
         crate::motion::settled("nav-parked-chevron", open, crate::motion::TURN, triangle)
             .into_any_element()
@@ -1123,7 +1119,7 @@ pub fn parked_header(count: usize, open: bool, eased: bool) -> Stateful<Div> {
     row_frame(("nav-parked", 0), "nav-parked".into(), false)
         .debug_selector(|| "nav-parked".into())
         .text_color(rgb(TEXT_MUTED))
-        .child(cell(mark))
+        .child(mark)
         .child(
             div()
                 .min_w_0()
@@ -1329,8 +1325,9 @@ mod tests {
             let mut row = group_row(&block);
             assert_eq!(row.style().size.height, Some(px(NAV_LINE).into()));
         }
+        // The triangle and its space are typed: the run's own width.
         let mut fold = group_fold(&group(false, true));
-        assert_eq!(fold.style().size.width, Some(px(NAV_CELL).into()));
+        assert_eq!(fold.style().text.color, Some(rgb(TEXT_FAINT).into()));
     }
 
     /// A row whose Project or checkout has not resolved keeps its line: the
@@ -1558,14 +1555,14 @@ mod tests {
                 ..thread()
             })
         };
-        let fill = |status| face(status, false).style().background.clone();
+        let fill = |status| face(status, false).style().text.color;
         assert_eq!(fill(RowStatus::Working), Some(rgb(RUNNING).into()));
         assert_eq!(fill(RowStatus::Failing), Some(rgb(BLOCKED).into()));
         assert_eq!(fill(RowStatus::Failed), Some(rgb(BLOCKED).into()));
         assert_eq!(fill(RowStatus::NeedsYou), Some(rgb(ATTENTION).into()));
         assert_eq!(fill(RowStatus::Idle), Some(rgb(IDLE).into()));
         assert_eq!(
-            face(RowStatus::Idle, true).style().background,
+            face(RowStatus::Idle, true).style().text.color,
             Some(rgb(IDLE).into()),
             "an unread quiet row keeps its dot"
         );
@@ -1576,7 +1573,7 @@ mod tests {
             RowStatus::Failed,
         ] {
             assert_eq!(
-                face(status, true).style().background,
+                face(status, true).style().text.color,
                 fill(status),
                 "{status:?}: a live state is the louder truth"
             );
@@ -1586,14 +1583,11 @@ mod tests {
     /// One status truth: for every Pane state but parked, and either side of
     /// unread, the nav row's still dot is the Pane's own dot. A parked
     /// Thread is the one step the nav takes: its ring is faint (the
-    /// prototype's `○`), the dot's own diameter and lift.
+    /// prototype's `○`), typed like the dot.
     #[test]
     fn the_nav_dot_is_the_panes_dot() {
         use WallState::*;
-        let paint = |mut dot: Div| {
-            let style = dot.style();
-            (style.background.clone(), style.border_color)
-        };
+        let paint = |mut dot: Div| dot.style().text.color;
         for state in [Working, Failing, Decision, Blocked, Done, Idle, Parked] {
             for unread in [false, true] {
                 let row = ThreadRow {
@@ -1610,10 +1604,7 @@ mod tests {
             }
         }
         let mut ring = components::status_ring(TEXT_FAINT);
-        let style = ring.style();
-        assert_eq!(style.border_color, Some(rgb(TEXT_FAINT).into()));
-        assert_eq!(style.size.width, Some(px(STATUS_DOT).into()));
-        assert_eq!(style.inset.top, Some(px(-STATUS_DOT_LIFT).into()));
+        assert_eq!(ring.style().text.color, Some(rgb(TEXT_FAINT).into()));
     }
 
     /// N-8: the column paints no ground over the titlebar band — its chrome

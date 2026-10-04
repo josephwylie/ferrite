@@ -17,6 +17,7 @@ use gpui::{Context, Window};
 
 use super::{CockpitView, Scene, Setup};
 use crate::demo::parity::{self, Cast, Clock, Fixture, Look, World, CAPTURE};
+use crate::motion;
 use crate::nav::NavFold;
 use crate::palette::PaletteScope;
 use crate::platform_text::disable_font_smoothing;
@@ -74,6 +75,32 @@ pub(super) fn handles(state: &str) -> bool {
 }
 
 impl Shot {
+    /// Where the prototype's shot caught its loops: the caret's blink and
+    /// the shimmer on the browser's CSS clock, the spinners' frames on its
+    /// timers' — read off each shot (the caret's ink, the braille frame).
+    /// Two instants recur: the caret at 0.557 of its ink (550ms into its
+    /// blink) or at 0.775 (533ms), the braille spinner on `⠧` (575ms) or
+    /// `⠦` (520ms); the star spinner is on `✻` in both.
+    fn held(self) -> motion::HeldLoops {
+        use std::time::Duration;
+        let (css, script) = match self {
+            Shot::Solo | Shot::SoloTop | Shot::Wall => (550, 575),
+            Shot::Group => (550, 520),
+            Shot::SoloHover
+            | Shot::SoloPicker
+            | Shot::Toast
+            | Shot::Notes
+            | Shot::Palette
+            | Shot::Empty
+            | Shot::Collapsed
+            | Shot::Ride => (533, 520),
+        };
+        motion::HeldLoops {
+            css: Duration::from_millis(css),
+            script: Duration::from_millis(script),
+        }
+    }
+
     fn look(self) -> Look {
         match self {
             Shot::Group | Shot::Palette => Look::Group,
@@ -88,6 +115,16 @@ impl Shot {
             | Shot::Collapsed
             | Shot::Ride => Look::Solo,
         }
+    }
+}
+
+/// The loops held for the capture (`Shot::held`), let run again when the
+/// scene is dropped.
+struct Held;
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        motion::hold_loops(None);
     }
 }
 
@@ -113,6 +150,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         .expect("a parity state");
     // The prototype's shots are grayscale-antialiased.
     disable_font_smoothing();
+    motion::hold_loops(Some(shot.held()));
     // The changed tokens the prototype marks by hand, on its world's diffs.
     crate::pane::set_word_marks(parity::word_marks());
     let root =
@@ -157,6 +195,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         hold: vec![
             Box::new(fixture) as Box<dyn std::any::Any>,
             Box::new(home) as Box<dyn std::any::Any>,
+            Box::new(Held) as Box<dyn std::any::Any>,
         ],
     };
     let setup: Setup = Box::new(move |view, window, cx| {

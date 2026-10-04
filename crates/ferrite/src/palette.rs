@@ -331,7 +331,7 @@ pub(crate) const GROUPS_FOOTER: &str = "\u{2191}\u{2193} select \u{b7} \u{23ce} 
 
 impl Render for Palette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The input row: `❯` in its 2-cell gutter (the accent, the drawn
+        // The input row: `❯` in its 2-cell gutter (the accent, the typed
         // prompt mark), the query in `TEXT_STRONG` with the block caret,
         // a row and 12px tall over the float's rule.
         let input = div()
@@ -345,15 +345,15 @@ impl Render for Palette {
             .border_color(FLOAT_RULE)
             // Centred in the 31px over its rule, the line falls half a
             // pixel off the grid: set where the browser sets it.
-            .child(components::css_line(
+            .child(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
                     .w(px(FLOAT_GUTTER))
                     .child(components::prompt_mark(ACCENT)),
-            ))
-            .child(components::css_line(
+            )
+            .child(
                 div()
                     .flex_1()
                     .min_w_0()
@@ -361,7 +361,7 @@ impl Render for Palette {
                     .line_height(px(LH_UI))
                     .text_color(rgb(TEXT_STRONG))
                     .child(self.input.clone()),
-            ));
+            );
         let mut list = div()
             .id("palette-rows")
             .flex()

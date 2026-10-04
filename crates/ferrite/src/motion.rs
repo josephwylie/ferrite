@@ -623,6 +623,58 @@ pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
     (elapsed.as_nanos() % period) as f32 / period as f32
 }
 
+/// The two clocks a browser runs its loops on, held at a fixed time: a
+/// capture reproducing one instant of the prototype holds every loop where
+/// the prototype's shot caught it. Its CSS animations (the caret's blink,
+/// the working caption's shimmer) and its scripted ones (the spinners'
+/// frames, stepped by timers) start a few milliseconds apart, so each runs
+/// on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldLoops {
+    /// Elapsed on the CSS loops' clock: the caret's blink, the shimmer.
+    pub css: Duration,
+    /// Elapsed on the scripted loops' clock: the spinners.
+    pub script: Duration,
+}
+
+thread_local! {
+    static HELD_LOOPS: std::cell::Cell<Option<HeldLoops>> = const { std::cell::Cell::new(None) };
+}
+
+/// Hold every loop at `held` (a capture), or let them run (`None`).
+#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+pub fn hold_loops(held: Option<HeldLoops>) {
+    HELD_LOOPS.with(|cell| cell.set(held));
+}
+
+/// The loops' held time, if a capture holds them.
+pub fn held_loops() -> Option<HeldLoops> {
+    HELD_LOOPS.with(std::cell::Cell::get)
+}
+
+fn phase_at(elapsed: Duration, period: Duration) -> f32 {
+    let period = period.as_nanos().max(1);
+    (elapsed.as_nanos() % period) as f32 / period as f32
+}
+
+/// A CSS loop's phase (the caret's blink, the shimmer): the held capture
+/// time's, else the pulse clock's (`pulse_phase`).
+pub fn css_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+    match held_loops() {
+        Some(held) if !reduced_motion(cx) => phase_at(held.css, period),
+        _ => pulse_phase(period, view, cx),
+    }
+}
+
+/// A scripted loop's phase (the spinners' frames): the held capture time's,
+/// else the pulse clock's (`pulse_phase`).
+pub fn script_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+    match held_loops() {
+        Some(held) if !reduced_motion(cx) => phase_at(held.script, period),
+        _ => pulse_phase(period, view, cx),
+    }
+}
+
 /// The clock is parked: no view holds a lease and no timer is armed.
 #[cfg(test)]
 pub fn pulse_parked(cx: &App) -> bool {

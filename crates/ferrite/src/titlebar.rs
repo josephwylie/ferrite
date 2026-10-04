@@ -354,7 +354,7 @@ fn title_region(title: &Title) -> Div {
                     .id(("titlebar-title", at))
                     .debug_selector(|| "titlebar-title".into())
                     .min_w_0()
-                    .w(px(components::cells_width(&word) + 0.1))
+                    .w(px(components::run_width(&word)))
                     .flex_shrink(1.)
                     .truncate()
                     .tooltip(crate::menu::tooltip(word.clone()))
@@ -402,12 +402,7 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedSt
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .pt(px(BAR_LINE_DROP))
-                .pl(px(BAR_SEG_PAD_X))
-                // The trailing cell at 7.5 (`BAR_SEG_PAD_TAIL`): with the
-                // leading one snapped to 8 the segment keeps the browser's
-                // 70px, so the tabs after it stand where the prototype's do.
-                .pr(px(BAR_SEG_PAD_TAIL))
+                .px(px(BAR_SEG_PAD_X))
                 .font_weight(W_STRONG)
                 .text_color(rgb(ACCENT))
                 .child(components::cells("ferrite")),
@@ -422,7 +417,6 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedSt
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .pt(px(BAR_LINE_DROP))
                     .pl(px(BAR_SEG_PAD_X))
                     .pr(px(BAR_SEG_PAD_TAIL))
                     .text_color(rgb(TEXT)),
@@ -444,11 +438,9 @@ pub fn bar_tab(
     let selector = id.clone();
     let key = id.clone();
     let words = format!("{ordinal} {label}");
-    // Its cells and two each side, on the whole pixel as the browser lays
-    // the tab's box (` 2 perf sweep ` is 124.8px: 125): the tabs after it
-    // then start where the prototype's do, and a current tab's band spans
-    // what the prototype's does.
-    let width = (components::cells_width(&words) + 4.0 * BAR_SEG_PAD_X).round();
+    // The prototype's ` 2 perf sweep `, one run, in a cell of padding
+    // each side.
+    let width = components::run_width(&format!(" {words} ")) + 2.0 * BAR_SEG_PAD_X;
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
@@ -456,7 +448,6 @@ pub fn bar_tab(
         .flex_shrink_0()
         .items_center()
         .w(px(width))
-        .pt(px(BAR_LINE_DROP))
         .pl(px(2.0 * BAR_SEG_PAD_X))
         .map(|tab| {
             if current {
@@ -521,14 +512,12 @@ pub fn bar_usage(
             .pl(px(BAR_SEG_PAD_X))
             .pr(px(BAR_SEG_PAD_TAIL))
             .hover_row(key.clone())
-            // The mark stays where its box falls; only the words take the
-            // browser's whole-pixel line (`BAR_LINE_DROP`).
             .child(icon(glyph, BAR_MARK, ink))
-            .child(components::css_line(components::tabular(
+            .child(components::tabular(
                 components::cells(format!("{window} {}%", (used * 100.).round() as u32))
                     .text_color(rgb(TEXT_MUTED))
                     .group_hover(key, |style| style.text_color(rgb(TEXT))),
-            ))),
+            )),
     )
 }
 

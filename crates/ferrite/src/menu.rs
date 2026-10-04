@@ -188,10 +188,8 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             )
         })
         .child({
-            // The label holds exactly its cells (a measured run rounds up
-            // a pixel and would push the detail off the prototype's grid);
-            // the tenth keeps a whole label from truncating on the snap.
-            let cells = components::cells_width(&label) + 0.1;
+            // The label holds its run's width, as the browser measures it.
+            let cells = components::run_width(&label);
             div()
                 .min_w_0()
                 .truncate()
@@ -228,15 +226,13 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         })
         .when(item.checked, |row| {
             row.child(
-                // The `✓` is a glyph of the row's type: one cell, the drawn
-                // mark's box hanging from the cell's text origin.
+                // The `✓` typed at the row's end, as the prototype's `.ok`
+                // follows its description.
                 div()
                     .flex()
                     .flex_shrink_0()
-                    .w(px(CH))
-                    .ml(px(CH))
                     .debug_selector(|| "float-check".into())
-                    .child(icons::icon(icons::CHECK, ROW_ICON, RUNNING).flex_shrink_0()),
+                    .child(components::glyph("\u{2713}", RUNNING)),
             )
         })
 }
@@ -297,8 +293,8 @@ pub fn footer_line(text: impl Into<SharedString>) -> Div {
 }
 
 /// The footer's row with nothing in it yet: the `FLOAT_RULE` rule, half a
-/// row above it, one row of `TEXT_MUTED`. For a footer whose keys must be
-/// drawn (`⌘`, `components::key_combo`).
+/// row above it, one row of `TEXT_MUTED`. For a footer whose keys are set
+/// as key combinations (`⌘`, `components::key_combo`).
 pub fn footer_shell() -> Div {
     components::text_ui()
         .flex()
@@ -334,7 +330,7 @@ pub fn token(
         .items_center()
         .justify_center()
         .h(px(FLOAT_ROW_H))
-        .w(px(components::cells_width(&label) + 2.0 * TOKEN_PAD_X))
+        .w(px(components::run_width(&label) + 2.0 * TOKEN_PAD_X))
         .whitespace_nowrap()
         .child(components::cells(label));
     if chosen {
@@ -731,7 +727,7 @@ impl ChoiceContent {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .w(px(components::cells_width(&ladder.label) + TOKEN_PAD_X))
+                        .w(px(components::run_width(&ladder.label) + TOKEN_PAD_X))
                         .whitespace_nowrap()
                         .text_color(rgb(TEXT_MUTED))
                         .child(ladder.label.clone()),

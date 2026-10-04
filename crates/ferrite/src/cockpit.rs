@@ -2650,7 +2650,7 @@ impl CockpitView {
             let working = !done && !marked && current == Some(step.text.as_str());
             marked |= working;
             let mark = if done {
-                crate::icons::icon(crate::icons::CHECK, GLYPH_BOX, TEXT_MUTED).into_any_element()
+                crate::components::glyph("\u{2713}", TEXT_MUTED).into_any_element()
             } else if working {
                 crate::components::prompt_mark(ACCENT)
             } else {
@@ -3357,8 +3357,10 @@ impl CockpitView {
                     cell
                 }
             };
-            let track = local(rect);
-            let rect = snap_rect(track);
+            // The cell lies on its track as laid out; gpui rounds its edges
+            // to the pixel where it lands, and its lines from the track's
+            // own fraction, as the prototype's browser lays a grid's cells.
+            let rect = local(rect);
             // The grabbed slot stays put, dimmed as lifted out of its slot,
             // while its ghost travels: the board keeps its shape until the
             // drop changes it.
@@ -3368,25 +3370,13 @@ impl CockpitView {
             } else {
                 cell
             };
-            // Where the browser's track for this cell fell: a third of the
-            // board for a wall row (its `1fr` keeps the fraction), but a
-            // halving's tracks are `50%` and the gap, whole already — the
-            // half pixel `snap_rect` rounds there is this layout's own, not
-            // the browser's.
-            let bias = track.y - rect.y;
-            let bias = if (bias.abs() - 0.5).abs() < 1e-3 {
-                0.
-            } else {
-                bias
-            };
-            board = board.child(crate::components::line_bias(
-                bias,
+            board = board.child(
                 cell.absolute()
                     .left(px(rect.x))
                     .top(px(rect.y))
                     .w(px(rect.w))
                     .h(px(rect.h)),
-            ));
+            );
         }
         // The seams (F-18): one 1px `paint::LINE` line per linked set — a
         // default grid's aligned column seams are one line from the board's
@@ -3453,7 +3443,6 @@ impl CockpitView {
                     }
                 }
             };
-            let line = snap_rect(line);
             let accent = if dragging {
                 rgb(crate::theme::ACCENT).into()
             } else {
@@ -8794,6 +8783,7 @@ impl CockpitView {
         let pane_rects = self.pane_rects(window);
         let grid = self.grid_board();
         let focused_index = self.focused();
+        let float_open = self.overlay_open();
         for (index, pane) in self.panes.iter().enumerate() {
             let row_limit = pane_rects
                 .iter()
@@ -8836,10 +8826,12 @@ impl CockpitView {
             pane.composer
                 .update(cx, |composer, cx| composer.set_menu_open(open, cx));
             // Solo's caret and the focused board Pane's are always the block
-            // (FL-12); an unfocused board Pane's is the hollow box.
+            // (FL-12), blinking under an open float; an unfocused board
+            // Pane's is the hollow box.
             let lit = index == focused_index;
-            pane.composer
-                .update(cx, |composer, cx| composer.set_caret_lit(lit, cx));
+            pane.composer.update(cx, |composer, cx| {
+                composer.set_caret_lit(lit, float_open, cx)
+            });
         }
         let history_available: Vec<bool> = (0..self.panes.len())
             .map(|index| self.history_available(index, level))
@@ -9571,18 +9563,7 @@ impl CockpitView {
                 .board_is_movable()
                 .then(|| head_drag(pane_leaf(pane.identity), self.pane_ghost(index))),
             quick_answers: (level == Level::Wall)
-                .then(|| {
-                    // The browser rounds each answer's box to the whole
-                    // pixel from where its tile's track fell: the row
-                    // starts that far off the tile's snapped inset.
-                    let lead = rect.map_or(0., |rect| {
-                        let scale = window.scale_factor();
-                        let pad = crate::theme::WALL_PAD_X;
-                        let laid = rect.x.round() + (pad * scale).round() / scale;
-                        (rect.x + pad).round() - laid
-                    });
-                    self.quick_answers(index, lead, cx)
-                })
+                .then(|| self.quick_answers(index, cx))
                 .flatten(),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
@@ -10097,7 +10078,7 @@ impl CockpitView {
     /// boxed word wired to its answer, its digit the key that answers it
     /// from the wall (`cockpit::PickOption1-3`). A question with more than
     /// one part answers in its form: its option lands on the Pane, in full.
-    fn quick_answers(&self, index: usize, lead: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn quick_answers(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index)?.thread()?;
         let open = self.cockpit.thread(thread)?;
         let pending = open.activity().pending_decisions();
@@ -10163,7 +10144,7 @@ impl CockpitView {
             }
             None => return None,
         }
-        (!buttons.is_empty()).then(|| pane::quick_answers(buttons, lead).into_any_element())
+        (!buttons.is_empty()).then(|| pane::quick_answers(buttons).into_any_element())
     }
 
     /// The Thread the wall's digit keys answer (F-7): the focused tile when
@@ -10652,11 +10633,7 @@ impl CockpitView {
                                     .child(mode.label),
                             )
                             .children(checked.then(|| {
-                                crate::icons::icon(
-                                    crate::icons::CHECK,
-                                    crate::theme::ROW_ICON,
-                                    crate::theme::RUNNING,
-                                )
+                                crate::components::glyph("\u{2713}", crate::theme::RUNNING)
                             })),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -12382,21 +12359,6 @@ fn reader_leaf(owner: PaneIdentity) -> ThreadId {
         PaneIdentity::Thread(thread) => READER_LEAF | thread.get(),
         PaneIdentity::Draft(draft) => READER_LEAF | READER_DRAFT | draft.get(),
     })
-}
-
-/// A board rect on whole logical pixels, as the prototype's grid lays its
-/// tracks out (`--c1:50%` of the board, then the 1px gap, then the rest):
-/// each edge rounds half up, so a split's first side takes the odd pixel
-/// and its seam line lands on a whole pixel after it.
-fn snap_rect(rect: layout::Rect) -> layout::Rect {
-    let edge = |at: f32| (at + 1e-3).round();
-    let (x, y) = (edge(rect.x), edge(rect.y));
-    layout::Rect {
-        x,
-        y,
-        w: edge(rect.x + rect.w) - x,
-        h: edge(rect.y + rect.h) - y,
-    }
 }
 
 fn leaf_slot(leaf: ThreadId) -> Slot {
@@ -17285,13 +17247,16 @@ mod tests {
             let answer_start = caret(&view, cx, 3, 0).x;
             assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
             assert_eq!(tools_start, prompt_start, "the call line sits on C1");
+            // The row's box is rounded to the pixel and its text keeps its
+            // fraction (the browser's model, vendor/gpui-pre "Pixel
+            // snapping"): the two agree to within a pixel.
             assert!(
                 (prompt_start
                     - tools.left()
                     - px(crate::theme::tx_gutter(crate::theme::FS_PROSE) + 0.5))
                 .abs()
-                    <= px(0.5),
-                "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset"
+                    <= px(1.0),
+                "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset: {prompt_start:?} {tools:?}"
             );
         }
     }
@@ -22070,9 +22035,11 @@ mod tests {
                 .collect()
         });
         assert_eq!(rects.len(), 2, "both members have a rect");
+        // The prototype's halving: the first Pane half the board, the gap,
+        // the second the rest.
         assert!(
-            (rects[0].w - rects[1].w).abs() < 1.0,
-            "an even split: {rects:?}"
+            (rects[0].w - rects[1].w - crate::theme::BOARD_SEAM).abs() < 0.01,
+            "a halving: {rects:?}"
         );
         assert!(
             rects[1].x > rects[0].x + rects[0].w,

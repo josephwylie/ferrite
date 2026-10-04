@@ -181,6 +181,9 @@ pub struct Composer {
     /// (Solo's line, the focused board Pane's): it blinks softly over the
     /// transcript, an open float, an inactive window.
     caret_lit: bool,
+    /// A float holds the keyboard over this lit line: its block keeps
+    /// blinking, as the prototype's caret blinks under an open float.
+    caret_under_float: bool,
     /// A Pane's prompt or a float's one-line field (`Role`).
     role: Role,
     /// How the caret was last drawn, for the tests.
@@ -210,6 +213,7 @@ impl Composer {
             blink_from: None,
             had_focus: false,
             caret_lit: false,
+            caret_under_float: false,
             role: Role::Prompt,
             #[cfg(test)]
             last_caret: None,
@@ -225,10 +229,13 @@ impl Composer {
     }
 
     /// Keep the block caret lit while another node holds the keyboard
-    /// (theme WP-D): Solo's line and the focused board Pane's.
-    pub fn set_caret_lit(&mut self, lit: bool, cx: &mut Context<Self>) {
-        if self.caret_lit != lit {
+    /// (theme WP-D): Solo's line and the focused board Pane's. `under_float`:
+    /// that node is an open float, and the lit block blinks under it.
+    pub fn set_caret_lit(&mut self, lit: bool, under_float: bool, cx: &mut Context<Self>) {
+        let under_float = lit && under_float;
+        if self.caret_lit != lit || self.caret_under_float != under_float {
             self.caret_lit = lit;
+            self.caret_under_float = under_float;
             cx.notify();
         }
     }
@@ -1238,27 +1245,37 @@ impl Element for LineElement {
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
         let now = cx.background_executor().now();
-        let (blink_from, lit) = self.composer.update(cx, |composer, _| {
+        let (blink_from, lit, under_float) = self.composer.update(cx, |composer, _| {
             composer.sync_focus(focused, now);
-            (composer.blink_from, composer.caret_lit)
+            (
+                composer.blink_from,
+                composer.caret_lit,
+                composer.caret_under_float,
+            )
         });
         // A lit line (Solo's, the focused board Pane's) draws its block
-        // whoever holds the keyboard — solid, still, until the keyboard is
-        // here; only the line holding it blinks (and leases the clock).
+        // whoever holds the keyboard — solid and still, but blinking under
+        // an open float, as the prototype's caret does; the line holding
+        // the keyboard blinks from its own last focus or edit.
         let holds = focused;
+        let blinks = holds || under_float;
         let focused = focused || lit;
         let selected = self.composer.read(cx).line.selection();
-        // The soft blink rides the shared pulse clock (theme rule 8): leasing
-        // it keeps the frames coming while this line holds the keyboard; the
-        // phase is the line's own, from its last focus or edit. Still and
-        // solid under reduced motion.
+        // The soft blink rides the shared pulse clock (theme rule 8),
+        // leasing it to keep the frames coming; while this line holds the
+        // keyboard the phase is the line's own, from its last focus or
+        // edit. Still and solid under reduced motion.
         let alpha = (focused && selected.is_empty()).then(|| {
-            if crate::motion::reduced_motion(cx) || !holds {
+            if crate::motion::reduced_motion(cx) || !blinks {
                 return 1.0;
+            }
+            // A capture holds the blink where the prototype's shot caught it.
+            if let Some(held) = crate::motion::held_loops() {
+                return caret_alpha(held.css);
             }
             let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
             let shared = crate::motion::pulse_phase(turn, window.current_view(), cx);
-            match blink_from {
+            match blink_from.filter(|_| holds) {
                 Some(from) => caret_alpha(now.saturating_duration_since(from)),
                 None => crate::components::caret_blink(shared),
             }

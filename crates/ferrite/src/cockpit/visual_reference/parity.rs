@@ -439,6 +439,14 @@ pub(crate) fn build(root: &Path, look: Look, clock: Clock) -> World {
     lay_out_plain(&lumen, &home, "lumen");
     let screenshot = home.join("Desktop").join("nav-jitter.png");
     std::fs::write(&screenshot, NAV_JITTER_PNG).expect("write the attached screenshot");
+    crate::pane::state_image_facts(
+        &screenshot,
+        crate::pane::ImageFacts {
+            width: 580,
+            height: 320,
+            bytes: NAV_JITTER_BYTES,
+        },
+    );
 
     let feeds = Feeds::default();
     let mut core = Cockpit::new(
@@ -1615,12 +1623,12 @@ const NAV_PATH: &str = "crates/ferrite/src/nav.rs";
 const CANVAS_PATH: &str = "crates/ferrite/src/canvas.rs";
 const THEME_PATH: &str = "crates/ferrite/src/theme.rs";
 
-/// The prototype's screenshot of the nav (`spikes/terminal-native/img/
-/// nav-jitter.png`), re-encoded near-losslessly — every channel of every
-/// pixel within 4 levels of the original, its colours whole (a palette
-/// encoding washed the Codex mark out) — so the file weighs what its
-/// caption says: `580×320 · 41 KB`.
+/// The prototype's screenshot of the nav, its own bytes
+/// (`spikes/terminal-native/img/nav-jitter.png`). The prototype captions it
+/// `580×320 · 41 KB`; the world states that weight (`NAV_JITTER_BYTES`).
 const NAV_JITTER_PNG: &[u8] = include_bytes!("nav-jitter.png");
+/// The screenshot's weight as the prototype's caption gives it.
+const NAV_JITTER_BYTES: u64 = 41 * 1024;
 
 const ANSWER_ONE: &str = "The jitter comes from the status line under each Thread row in \
 `nav.rs`. It only exists once a Session reports its first fact, so a row grows from `44px` to \

@@ -160,12 +160,6 @@ pub(crate) struct HoverCard {
     line: u32,
     lines: Vec<(u32, String)>,
     stat: Option<CardStat>,
-    /// Where the card's left edge fell before `hang` set it on the whole
-    /// pixel (its path's, `-0.4` for a path 7 cells into a 13px row). The
-    /// prototype's browser rounds the float's box the same way but sets
-    /// its text from the unrounded edge: the card's lines take the
-    /// difference into their insets.
-    lead: f32,
 }
 
 impl HoverCard {
@@ -190,7 +184,6 @@ impl HoverCard {
             line,
             lines,
             stat,
-            lead: 0.,
         }
     }
 
@@ -256,9 +249,8 @@ pub(crate) fn foot_text(
 impl gpui::Render for HoverCard {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let cell = theme::CH;
-        // The insets each line keeps from the card's edges, carrying the
-        // card's own rounding (`lead`).
-        let (inset_l, inset_r) = (cell + self.lead, cell - self.lead);
+        // The insets each line keeps from the card's edges.
+        let (inset_l, inset_r) = (cell, cell);
         let language = ferrite_core::transcript::language_for_path(&self.target.path);
         // The path and its `:211` are one run: two measured runs would each
         // round up a device pixel and open a gap between them.
@@ -423,12 +415,9 @@ pub(crate) fn hang(
         px(card_height(lines, foot)),
     );
     let at = hang_origin(anchor, size, window.viewport_size());
-    // The box on the whole pixel, as the browser sets a float's; its lines
-    // keep the edge it came from (`HoverCard::lead`).
-    let whole = gpui::point(at.x.round(), at.y.round());
-    let lead = f32::from(at.x - whole.x);
-    card.update(cx, |card, _| card.lead = lead);
-    gpui::deferred(gpui::anchored().position(whole).child(card))
+    // gpui rounds the box's edges to the pixel and keeps its lines' left
+    // edge, as the browser sets a float.
+    gpui::deferred(gpui::anchored().position(at).child(card))
         .with_priority(3)
         .into_any_element()
 }

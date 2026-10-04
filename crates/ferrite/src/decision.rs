@@ -27,7 +27,6 @@ use gpui::{
 };
 
 use crate::components;
-use crate::icons;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme;
 
@@ -673,7 +672,7 @@ enum Mark {
 }
 
 /// The approval head (`◆ Bash needs approval · codex · read-only
-/// sandbox`): the drawn `◆` at the gutter's text origin, the lead in
+/// sandbox`): the typed `◆` at the gutter's start, the lead in
 /// `ATTENTION`, every detail and its `·` in `TEXT_MUTED`, a status on the
 /// right. One line; a long detail ends in an ellipsis.
 pub fn head(
@@ -719,15 +718,12 @@ fn head_line(
         font_weight: question.then_some(theme::W_STRONG),
         ..Default::default()
     };
+    // The gutter's glyph, typed at its start as the prototype's `.g-attn`.
     let glyph = match mark {
-        Mark::Diamond => icons::icon(icons::DIAMOND, theme::DECISION_MARK, theme::ATTENTION)
-            .ml(px(-theme::DECISION_MARK_LEAD))
+        Mark::Diamond => components::glyph("\u{25c6}", theme::ATTENTION)
             .debug_selector(|| "decision-mark".into())
             .into_any_element(),
-        Mark::Question => div()
-            .text_color(rgb(theme::ATTENTION))
-            .child("?")
-            .into_any_element(),
+        Mark::Question => components::glyph("?", theme::ATTENTION).into_any_element(),
     };
     div()
         .debug_selector(|| "decision-head".into())
@@ -1001,11 +997,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
             )
         })
         .when(row.picked, |button| {
-            button.child(trailing().child(icons::icon(
-                icons::CHECK,
-                theme::DECISION_CHECK,
-                theme::ACCENT,
-            )))
+            button.child(trailing().child(components::glyph("\u{2713}", theme::ACCENT)))
         })
 }
 
@@ -1040,7 +1032,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
 
 // ---------------------------------------------------------------- footer
 
-/// The one error line: the drawn `✗` and `lead` in `BLOCKED` (only that
+/// The one error line: the typed `✗` and `lead` in `BLOCKED` (only that
 /// phrase carries the hue), then `· detail` in `TEXT_MUTED`.
 pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
     div()
@@ -1055,7 +1047,7 @@ pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
                 .flex_shrink_0()
                 .items_center()
                 .h(px(theme::LH_UI))
-                .child(icons::icon(icons::CLOSE, 8.0, theme::BLOCKED)),
+                .child(components::glyph("\u{2717}", theme::BLOCKED)),
         )
         .child(
             div()

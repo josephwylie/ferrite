@@ -387,17 +387,16 @@ pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::B
     .h(px(ICON_BUTTON_H))
     .p_0()
     .accessibility_label("Notifications")
-    .child(components::css_box(
+    .child(
         icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph),
-    ))
+    )
     .when(requests > 0, |door| door.child(badge(requests)))
 }
 
 /// The badge: the prototype's superscript — `BADGE_FS` `W_STRONG` tabular
 /// digits in `ATTENTION` on no ground at the door's top-right, `99+` past
-/// two digits. It hangs in the kit button's content box, whose transparent
-/// 1px edge already stands it the prototype's `right:1px` in from the
-/// door's edge.
+/// two digits, its right edge 1px in from the door's (the prototype's
+/// `right:1px`).
 fn badge(requests: usize) -> Div {
     let count: SharedString = if requests > 99 {
         "99+".into()
@@ -409,7 +408,7 @@ fn badge(requests: usize) -> Div {
             .debug_selector(|| "notifications-badge".into())
             .absolute()
             .top(px(0.))
-            .right(px(0.))
+            .right(px(1.))
             .font_family(FONT_UI)
             .text_size(px(BADGE_FS))
             .line_height(px(BADGE_LH))
@@ -424,41 +423,31 @@ pub const BADGE_INK: u32 = ATTENTION;
 
 // ---------------------------------------------------------- marks, words
 
-/// A row's or toast's mark, in its 2-cell column: `◆` (drawn) for an
-/// approval and `?` for a question, both `ATTENTION`; `✗` (drawn) `BLOCKED`
-/// for a failure; `✓` (drawn) `TEXT_MUTED` for a turn that finished.
+/// A row's or toast's mark, typed in its 2-cell column: `◆` for an
+/// approval and `?` for a question, both `ATTENTION`; `✗` `BLOCKED` for a
+/// failure; `✓` `TEXT_MUTED` for a turn that finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mark {
-    Drawn(&'static str, u32),
-    Typed(&'static str, u32),
-}
+struct Mark(&'static str, u32);
 
 fn mark(state: State) -> Mark {
     match state {
-        State::NeedsYou(RequestKind::Permission) => Mark::Drawn(icons::DIAMOND, ATTENTION),
-        State::NeedsYou(RequestKind::Question) => Mark::Typed("?", ATTENTION),
-        State::Failed => Mark::Drawn(icons::CROSS, BLOCKED),
-        State::Done => Mark::Drawn(icons::CHECK, TEXT_MUTED),
+        State::NeedsYou(RequestKind::Permission) => Mark("\u{25c6}", ATTENTION),
+        State::NeedsYou(RequestKind::Question) => Mark("?", ATTENTION),
+        State::Failed => Mark("\u{2717}", BLOCKED),
+        State::Done => Mark("\u{2713}", TEXT_MUTED),
     }
 }
 
-/// The mark drawn in its 2-cell column, one row high.
+/// The mark typed at the start of its 2-cell column, one row high.
 fn mark_cell(state: State) -> Div {
-    let cell = div()
+    let Mark(glyph, ink) = mark(state);
+    div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .w(px(NOTICE_MARK_W))
-        .h(px(LH_UI));
-    match mark(state) {
-        // The `◆` as the fallback face sets it: 8px wide, its ink starting
-        // where the cell's text would (the drawn shape is 60% of its box).
-        Mark::Drawn(path, ink) if path == icons::DIAMOND => {
-            cell.child(icons::icon(path, NOTICE_DIAMOND, ink).ml(px(-NOTICE_DIAMOND * 0.2 + 0.25)))
-        }
-        Mark::Drawn(path, ink) => cell.child(icons::icon(path, GLYPH_BOX, ink)),
-        Mark::Typed(glyph, ink) => cell.text_color(rgb(ink)).child(glyph),
-    }
+        .h(px(LH_UI))
+        .child(components::glyph(glyph, ink))
 }
 
 /// Folds each Thread's completions into its newest (`rows` are newest
@@ -655,12 +644,8 @@ fn quick_button(
     let id = id.into();
     let blend = crate::pointer::hover_key(&id);
     let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
-    // Its cells, a cell of padding each side and its edge — on the whole
-    // pixel, as the browser rounds each button's box (`3 deny`'s 64.4px
-    // lays out at 64, where the device grid would make it 64.5): padded
-    // runs would snap each pad from 7.8 to 8 and drift the row.
-    let width =
-        (components::cells_width(key) + components::cells_width(word) + 2.0 * CH + 2.0).round();
+    // Its cells, a cell of padding each side and its edge.
+    let width = components::run_width(key) + components::run_width(word) + 2.0 * CH + 2.0;
     div()
         .id(id)
         .flex()
@@ -766,8 +751,12 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
                         .flex_1()
                         .min_w_0()
                         .items_center()
-                        .child(mark_cell(row.state))
-                        .child(components::cells(word).text_color(rgb(word_ink(word))))
+                        // `◆ needs you` is one run, as the prototype types
+                        // it: the mark, a space, the word, in the word's ink.
+                        .child(components::glyph(
+                            format!("{} {word}", mark(row.state).0),
+                            word_ink(word),
+                        ))
                         .child(
                             div()
                                 .min_w_0()
@@ -907,23 +896,23 @@ mod tests {
         let waiting = row(State::NeedsYou(RequestKind::Permission), Detail::None);
         assert_eq!(waiting.word(), words::NEEDS_YOU);
         assert_eq!(word_ink(waiting.word()), ATTENTION);
-        assert_eq!(mark(waiting.state), Mark::Drawn(icons::DIAMOND, ATTENTION));
+        assert_eq!(mark(waiting.state), Mark("\u{25c6}", ATTENTION));
         assert_eq!(
             mark(State::NeedsYou(RequestKind::Question)),
-            Mark::Typed("?", ATTENTION)
+            Mark("?", ATTENTION)
         );
         let failed = row(State::Failed, Detail::Words("357 passed; 2 failed".into()));
         assert_eq!(
             (failed.word(), word_ink(failed.word())),
             (words::FAILED, BLOCKED)
         );
-        assert_eq!(mark(State::Failed), Mark::Drawn(icons::CROSS, BLOCKED));
+        assert_eq!(mark(State::Failed), Mark("\u{2717}", BLOCKED));
         let done = row(State::Done, Detail::None);
         assert_eq!(
             (done.word(), word_ink(done.word())),
             (words::DONE, TEXT_MUTED)
         );
-        assert_eq!(mark(State::Done), Mark::Drawn(icons::CHECK, TEXT_MUTED));
+        assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_MUTED));
         assert_eq!(BADGE_INK, ATTENTION);
         const { assert!(ROW_TEXT_CELLS >= 40) };
     }

@@ -133,7 +133,7 @@ impl CockpitView {
         };
         // `claude 2.1.289 · codex 0.160.0 · 3 projects · 9 open threads`:
         // one dim run of words, each logo half a cell before its name.
-        let seam = || crate::components::cells("\u{b7}").w(px(STATUS_SEAM_W));
+        let seam = || crate::components::cells("\u{b7}");
         let mut facts = div()
             .debug_selector(|| "empty-board-facts".into())
             .flex()
@@ -153,7 +153,12 @@ impl CockpitView {
                         .flex_shrink_0()
                         .items_center()
                         .gap(px(CH / 2.0))
-                        .child(crate::icons::icon(glyph, BAR_MARK, ink))
+                        // Inline in the line, `vertical-align: -1px`, as the
+                        // status line's logos sit (`STATUS_LOGO_FOOT`).
+                        .child(
+                            crate::icons::icon(glyph, BAR_MARK, ink)
+                                .mt(px(-crate::theme::STATUS_LOGO_FOOT)),
+                        )
                         .child(crate::components::cells(format!("{name} {version}"))),
                 )
                 .child(seam());
@@ -313,17 +318,15 @@ impl CockpitView {
                     .hover_row(format!("empty-board-recent-{}", thread.get()))
                     .press_row()
                     .child(div().flex_shrink_0().w(px(GLYPH_GUTTER)))
-                    // The dot the size of the face's `●`, where it would sit.
+                    // The face's `●`, typed at its column's start.
                     .child(
-                        div().flex().flex_shrink_0().w(px(GLYPH_GUTTER)).child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .w(px(CH))
-                                .h(px(ROW))
-                                .child(face.dot()),
-                        ),
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_shrink_0()
+                            .w(px(GLYPH_GUTTER))
+                            .h(px(ROW))
+                            .child(face.dot()),
                     )
                     .child(
                         div()

@@ -2171,9 +2171,7 @@ fn wall_line(row: SharedString) -> Div {
 /// the lines, the first `WALL_PAD_X` in from the tile's edge and the row
 /// `WALL_PAD_Y` above its foot — each the cockpit's wired button
 /// (`quick_answer`).
-/// `lead` moves the row off the tile's inset, to where the browser's
-/// whole-pixel rounding of the tile's track puts the first box.
-pub(crate) fn quick_answers(buttons: Vec<AnyElement>, lead: f32) -> Div {
+pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
     div()
         .debug_selector(|| "wall-quick-answers".into())
         .flex()
@@ -2181,7 +2179,6 @@ pub(crate) fn quick_answers(buttons: Vec<AnyElement>, lead: f32) -> Div {
         .flex_wrap()
         .gap(px(theme::QUICK_ANSWER_GAP))
         .mt(px(theme::HALF_ROW))
-        .ml(px(lead))
         .children(buttons)
 }
 
@@ -2201,14 +2198,12 @@ pub(crate) fn quick_answer(
         crate::motion::hover_blend(&hover, rgba(TRANSPARENT).into(), theme::paint::BAND2.hsla());
     let word = crate::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
     let selector = id.clone();
-    // Its cells, a cell of padding each side and its edge, on the whole
-    // pixel as the browser rounds the box (`1 allow` is 72.2px: 72).
+    // Its two runs, a cell of padding each side and its edge.
     let key = format!("{key} ");
-    let width = (components::cells_width(&key)
-        + components::cells_width(&label)
+    let width = components::run_width(&key)
+        + components::run_width(&label)
         + 2.0 * theme::QUICK_ANSWER_PAD_X
-        + 2.0)
-        .round();
+        + 2.0;
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
@@ -2421,7 +2416,7 @@ fn question_door(key: u64) -> AnyElement {
                 .flex_shrink_0()
                 .items_center()
                 .w(px(theme::GLYPH_GUTTER - theme::CH))
-                .child(icon(icons::DIAMOND, theme::GLYPH_BOX, ATTENTION)),
+                .child(components::glyph("\u{25c6}", ATTENTION)),
         )
         .child(
             div()
@@ -2497,9 +2492,8 @@ pub(crate) fn tail_text(body: &Body, docked: bool) -> Option<String> {
 /// The one Group head (theme WP-C, the prototype's `.ph`), for a
 /// transcript Pane and a wall tile alike: one `PANE_HEAD_H` row (24px, its
 /// `paint::LINE` rule inside it) 1ch in from each side. In order: the state
-/// mark in a 2ch column — the dot the size of the face's `●`, centred in
-/// the column's first cell; a working Thread's braille spinner where a
-/// typed `⠋` would sit (`HEAD_SPINNER_LEFT`) — the title at `W_LABEL`,
+/// mark in a 2ch column — the face's `●`, or a working Thread's braille
+/// spinner, set as text at the column's start — the title at `W_LABEL`,
 /// `TEXT` on every Pane and `TEXT_STRONG` only on the focused one (unread
 /// does not lift it), and the provider's 11px mark 1ch after it, its right
 /// edge 1ch in from the Pane's. The focused Pane's head lays the
@@ -2533,25 +2527,11 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         action,
     } = head;
     let floor = title_floor(&name);
+    // The column's glyph at its start, as the prototype's `.dot` sets it: a
+    // working Thread's braille spinner, else the face's `●`.
     let mark = match dot {
-        // The spinner's frames are drawn in a `GLYPH_BOX` square; laid at
-        // `HEAD_SPINNER_LEFT` its dots start where the prototype's typed
-        // braille does.
-        Some(dot) if working => div()
-            .absolute()
-            .left(px(theme::HEAD_SPINNER_LEFT))
-            .top(px((theme::LH_UI - theme::GLYPH_BOX) / 2.0))
-            .child(components::braille_spinner(dot.ink, theme::GLYPH_BOX))
-            .into_any_element(),
-        // The dot is the face's `●`: centred in the column's first cell.
-        Some(dot) => div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .w(px(theme::CH))
-            .h(px(theme::LH_UI))
-            .child(dot.dot())
-            .into_any_element(),
+        Some(dot) if working => components::braille_spinner(dot.ink),
+        Some(dot) => dot.dot().into_any_element(),
         None => div().into_any_element(),
     };
     let title_ink = if focused { TEXT_STRONG } else { TEXT };
@@ -2571,9 +2551,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        // The head's line sits centred in the 23px over its rule, half a
-        // pixel off the grid: set where the browser sets it.
-        .child(components::css_line(
+        .child(
             div()
                 .flex()
                 .flex_1()
@@ -2606,7 +2584,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                             None => div().min_w_0().truncate().child(name).into_any_element(),
                         }),
                 ),
-        ))
+        )
         .children(provider.map(|provider| {
             let (glyph, ink) = match provider {
                 Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
@@ -3119,27 +3097,18 @@ pub fn rendered_disclosures(_view: &PaneView, blocks: &[Block], level: Level) ->
 }
 
 /// The working line's mark (the prototype's `.spin`): the star spinner
-/// cycling `· ✢ ✳ ✶ ✻ ✽` in the provider's colour on the focused Pane
-/// (`live`), the still `✻` everywhere else and under reduced motion. Its
-/// selector says which.
+/// cycling `· ✢ ✳ ✶ ✻ ✽` in the provider's colour (`live`), the still `✻`
+/// under reduced motion. Its selector says which.
 fn working_mark(ink: u32, live: bool) -> AnyElement {
-    // Centred on the gutter's first cell, as the prototype's glyph sits.
-    let lead = px((theme::CH - theme::STAR_MARK) / 2.0);
+    // At the gutter's start, as the prototype's `.spin` sets its glyph.
     if live {
         div()
             .debug_selector(|| "progress-mark-live".into())
-            .ml(lead)
-            .child(components::working_spinner(ink, theme::STAR_MARK))
+            .child(components::working_spinner(ink))
             .into_any_element()
     } else {
-        div()
+        components::glyph(components::WORKED.to_string(), ink)
             .debug_selector(|| "progress-mark-still".into())
-            .ml(lead)
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(theme::STAR_MARK))
-            .child(icon(icons::WORKED, theme::STAR_MARK, ink))
             .into_any_element()
     }
 }
@@ -3170,9 +3139,9 @@ fn working_row(
 /// colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
 /// has something better to say (R16) — and then `(1m04s · ↑ 4.1k tokens ·
-/// esc to interrupt)` in `TEXT_MUTED`. Only the
-/// focused Pane animates it: the spinner cycles and the caption's shimmer
-/// sweeps there; elsewhere the `✻` and the caption hold still. The seconds
+/// esc to interrupt)` in `TEXT_MUTED`. Every working line's spinner cycles,
+/// on the one shared clock, so all of them show the same frame (the
+/// prototype's `.spin`); only the focused Pane's caption shimmers. The seconds
 /// are whole (`progress::live_seconds`), tabular, so the text changes once a
 /// second. Every line names `esc to interrupt`, focused or not, as the
 /// prototype's do (the key acts only where the keyboard is). The caption is
@@ -3189,6 +3158,7 @@ fn working_line_for(
 ) -> Div {
     let ink = provider_ink(provider);
     let live = focused && !reduce_motion;
+    let spinning = !reduce_motion;
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
         facts.push(ferrite_core::progress::live_seconds(elapsed));
@@ -3244,10 +3214,9 @@ fn working_line_for(
         .line_height(px(theme::LH_UI));
     if let Some((selector, caption)) = caption {
         let caption = SharedString::from(caption);
-        // The caption and the facts hold exactly their cells, the facts'
-        // leading space inside their run: measured runs round up a pixel
-        // and a 7.8 pad snaps to 8, drifting the facts off the grid.
-        let caption_w = components::cells_width(&caption) + 0.1;
+        // The caption and the facts hold their runs' widths, the facts'
+        // leading space inside their run.
+        let caption_w = components::run_width(&caption);
         let text = if live {
             components::shimmer(caption, ink)
         } else {
@@ -3260,7 +3229,7 @@ fn working_line_for(
         };
         let metadata = SharedString::from(format!(" ({})", facts.join(" \u{b7} ")));
         let highlights = separators(&metadata);
-        let metadata_w = components::cells_width(&metadata);
+        let metadata_w = components::run_width(&metadata);
         row = row
             .debug_selector(move || selector.clone())
             .child(
@@ -3270,7 +3239,7 @@ fn working_line_for(
                     .items_center()
                     .w(px(theme::GLYPH_GUTTER))
                     .h(px(theme::LH_UI))
-                    .child(working_mark(ink, live)),
+                    .child(working_mark(ink, spinning)),
             )
             .child(
                 div()
@@ -3723,9 +3692,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
 
 /// The faint `·` between two status segments.
 pub(crate) fn status_seam() -> Div {
-    components::cells("\u{b7}")
-        .w(px(theme::STATUS_SEAM_W))
-        .text_color(rgb(TEXT_FAINT))
+    components::cells("\u{b7}").text_color(rgb(TEXT_FAINT))
 }
 
 /// A status segment (the prototype's `.status .seg`): one row, a cell of
@@ -3750,23 +3717,18 @@ fn status_seg(ink: u32) -> Div {
         .text_color(rgb(ink))
 }
 
-/// The status line's mode segment: the drawn marker (`⏵⏵` for a mode that
-/// lets edits run, `⏸` for plan, `⏵` for any other) as the fallback face
-/// (STIX Two Math) sets it — its cell of advance one line tall, on the
-/// line's baseline — one space, and the mode word, both in `MODE_INK`.
+/// The status line's mode segment, one run of text in `MODE_INK`: the
+/// marker (`⏵⏵` for a mode that lets edits run, `⏸` for plan, `⏵` for any
+/// other, in the face the platform falls back to), a space, the mode word.
 /// Hidden at the default: the mode stays reachable through ⇧⇥ and the
 /// palette's `permission mode`.
 pub fn mode_chip(mode: &str, _menu: bool) -> Div {
-    let (mark, advance) = match mode {
-        "accept edits" | "bypass permissions" | "auto" => {
-            (icons::MODE_ACCEPT, theme::MODE_MARK_ADVANCE)
-        }
-        "plan" => (icons::MODE_PLAN, theme::MODE_PLAN_ADVANCE),
-        _ => (icons::MODE_ON, theme::MODE_MARK_ONE_ADVANCE),
+    let mark = match mode {
+        "accept edits" | "bypass permissions" | "auto" => "\u{23f5}\u{23f5}",
+        "plan" => "\u{23f8}",
+        _ => "\u{23f5}",
     };
-    status_seg(theme::MODE_INK)
-        .child(icon(mark, advance, theme::MODE_INK).h(px(theme::LH_UI)))
-        .child(components::cells(mode.to_owned()))
+    status_seg(theme::MODE_INK).child(components::glyph(format!("{mark} {mode}"), theme::MODE_INK))
 }
 
 /// The button a status segment rides in (model, effort, mode, files, the
@@ -4074,8 +4036,7 @@ fn ghost_row(ghost: Ghost, compact: bool) -> Div {
             )
             .children(pieces);
     }
-    // A hair over its cells, so the shaped run never reads as cut.
-    let head_w = components::cells_width(&ghost.head) + 0.1;
+    let head_w = components::run_width(&ghost.head);
     row.flex_wrap()
         .child(
             div()
@@ -4457,7 +4418,7 @@ pub(crate) fn diff_stat(added: usize, removed: usize) -> Div {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .w(px(components::cells_width(&text)))
+            .w(px(components::run_width(&text)))
             .text_size(px(theme::FS_UI))
             .text_color(rgb(TEXT_MUTED))
             .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
@@ -5321,15 +5282,11 @@ impl Grid {
         theme::tx_gutter(self.size)
     }
 
-    /// A drawn mark's box (`❯ ✻ ◆ ∴`).
+    /// A drawn mark's box (`∴`).
     pub(crate) fn mark(self) -> f32 {
         theme::tx_mark(self.size)
     }
 
-    /// A drawn star's box (`✻`), whole pixels.
-    pub(crate) fn star(self) -> f32 {
-        theme::tx_star(self.size)
-    }
 
     /// Half a line, whole pixels.
     pub(crate) fn half(self) -> f32 {
@@ -5369,8 +5326,8 @@ pub(crate) fn glyph_gutter(grid: Grid, glyph: &'static str, ink: u32) -> Div {
         .child(glyph)
 }
 
-/// A drawn gutter mark (`❯ ✻ ◆ ∴`): centred on the row's first line, at the
-/// gutter's left edge.
+/// A gutter mark (`❯ ✻ ◆`, typed; `∴`, drawn): centred on the row's first
+/// line, at the gutter's left edge.
 pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
     div()
         .flex()
@@ -5825,17 +5782,15 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool
         .text_color(rgb(TEXT_STRONG))
         .child(mark_gutter(
             grid,
-            icon(icons::PROMPT, grid.mark(), ACCENT).debug_selector(|| "prompt-mark".into()),
+            div()
+                .debug_selector(|| "prompt-mark".into())
+                .child(components::prompt_mark(ACCENT)),
         ))
         .child(div().flex().flex_col().flex_1().min_w_0().children(words))
         .children(time.map(|time| {
-            // Exactly its cells after its pad: right-aligned, a measured
-            // run's rounding would stand it a pixel left.
-            let cells = time.chars().count() as f32 + theme::PROMPT_TIME_PAD_CELLS;
             div()
                 .debug_selector(|| "prompt-time".into())
                 .flex_shrink_0()
-                .w(px(cells * grid.cell()))
                 .pl(px(theme::PROMPT_TIME_PAD_CELLS * grid.cell()))
                 .whitespace_nowrap()
                 .text_color(rgb(TEXT_MUTED))
@@ -6084,6 +6039,15 @@ pub(crate) fn image_facts(path: &std::path::Path) -> Option<ImageFacts> {
     })
 }
 
+/// States what a world says about an image it attached, as if read from
+/// the file: the parity world's screenshot weighs what its caption in the
+/// prototype says.
+pub(crate) fn state_image_facts(path: &std::path::Path, facts: ImageFacts) {
+    IMAGE_FACTS.with(|cache| {
+        cache.borrow_mut().insert(path.to_path_buf(), Some(facts));
+    });
+}
+
 fn read_image_facts(path: &std::path::Path) -> Option<ImageFacts> {
     use std::io::Read as _;
     let bytes = std::fs::metadata(path).ok()?.len();
@@ -6175,7 +6139,7 @@ pub(crate) fn omitted_line(bytes: usize, grid: Grid) -> Div {
 }
 
 /// How a turn ended. A completed turn is `✻ Worked for 41s · 7:32 pm · ↑
-/// 3.2k ↓ 1.1k`: the drawn `✻` in the provider's colour in the gutter, the
+/// 3.2k ↓ 1.1k`: the typed `✻` in the provider's colour in the gutter, the
 /// words and their `·` seams `TEXT_MUTED`. An interrupted or failed one
 /// hangs under the turn's last row in the failure-line grammar
 /// (`failure_line`): `└ failed · 0.1s · API Error: 529 overloaded`, its lead
@@ -6195,8 +6159,7 @@ fn turn_end(
             return components::tabular(
                 grid_row(mark_gutter(
                     grid,
-                    icon(icons::WORKED, grid.star(), provider_ink(provider))
-                        .ml(px((grid.cell() - grid.star()) / 2.0))
+                    components::glyph(components::WORKED.to_string(), provider_ink(provider))
                         .debug_selector(|| "turn-stamp-mark".into()),
                 ))
                 .debug_selector(|| "turn-stamp".into())
@@ -8063,8 +8026,8 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
         })
         .unwrap_or_default();
     let wash = match side.kind {
-        DiffKind::Added => Some(theme::DIFF_ADDED_WORD),
-        DiffKind::Removed => Some(theme::DIFF_REMOVED_WORD),
+        DiffKind::Added => Some((theme::DIFF_ADDED_WORD, theme::DIFF_ADDED_WORD_ALPHA)),
+        DiffKind::Removed => Some((theme::DIFF_REMOVED_WORD, theme::DIFF_REMOVED_WORD_ALPHA)),
         DiffKind::Context => None,
     };
     let words = side
@@ -8072,7 +8035,10 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
         .clone()
         .filter(|words| !words.is_empty())
         .zip(wash)
-        .map(|(words, wash)| (words, rgba(wash).into()));
+        .map(|(words, (wash, alpha))| {
+            let wash: gpui::Hsla = rgb(wash >> 8).into();
+            (words, wash.opacity(alpha))
+        });
     let syntax = match (&words, side.plain) {
         // The changed tokens in the row's own ink: the syntax runs stop at
         // the span and pick up after it.
@@ -8086,6 +8052,23 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
                 .into_iter()
                 .filter(|part| !part.is_empty())
                 .map(move |part| (part, style))
+            })
+            .collect(),
+        // The changed tokens are a span of their own: the runs break at
+        // its edges, as the prototype's `.wa` / `.wr` breaks its line.
+        (Some((words, _)), false) => syntax
+            .into_iter()
+            .flat_map(|(range, style)| {
+                let mut cuts = vec![range.start];
+                cuts.extend(
+                    [words.start, words.end]
+                        .into_iter()
+                        .filter(|cut| range.start < *cut && *cut < range.end),
+                );
+                cuts.push(range.end);
+                cuts.windows(2)
+                    .map(|cut| (cut[0]..cut[1], style))
+                    .collect::<Vec<_>>()
             })
             .collect(),
         _ => syntax,
@@ -8136,11 +8119,7 @@ fn render_diff(
                 .children(number.map(|number| SharedString::from(number.to_string()))),
         )
     };
-    // The fixed columns before a row's code (its numbers and sign), as the
-    // browser sizes them: the cut measures the code cell against these, not
-    // the device-snapped widths gpui lays out (`CellCut::lead`).
-    let lead = |numbers: usize| [number_w, if numbers > 1 { number_w } else { 0. }, sign_w];
-    let cell = |side: &DiffSide, selectable: bool, numbers: usize| {
+    let cell = |side: &DiffSide, selectable: bool| {
         let DiffPaint {
             sign,
             sign_color,
@@ -8148,13 +8127,9 @@ fn render_diff(
             wash,
         } = side.kind.paint();
         let (highlights, words) = diff_highlights(side, language);
-        let cut = CellCut::new(
-            side.body.clone(),
-            words,
-            rgb(code_color).into(),
-            grid.cell(),
-            lead(numbers),
-        );
+        let runs = highlights.iter().map(|(range, _)| range.clone()).collect();
+        let cut = CellCut::new(side.body.clone(), words, rgb(code_color).into(), grid.cell())
+            .runs(runs);
         let code = match selection {
             Some((selection, block)) if selectable => selection
                 .line(block, side.body.clone(), highlights)
@@ -8181,13 +8156,10 @@ fn render_diff(
             wash,
         )
     };
-    // `right`: the split's right half, whose text keeps the browser's
-    // fraction of a pixel while its wash stays on the half's box
-    // (`SplitRow`).
-    let side_view = |side: Option<&DiffSide>, selectable: bool, right: bool| -> Div {
+    let side_view = |side: Option<&DiffSide>, selectable: bool| -> Div {
         match side {
             Some(side) => {
-                let (sign, code, wash) = cell(side, selectable, 1);
+                let (sign, code, wash) = cell(side, selectable);
                 let content = div()
                     .flex()
                     .items_start()
@@ -8204,13 +8176,7 @@ fn render_diff(
                     .h(px(grid.line))
                     .overflow_hidden()
                     .when_some(wash, |row, wash| row.bg(rgba(wash)))
-                    .map(|row| {
-                        if right {
-                            row.child(SplitRow::right(content))
-                        } else {
-                            row.child(content)
-                        }
-                    })
+                    .child(content)
             }
             None => div()
                 .flex_1()
@@ -8242,7 +8208,7 @@ fn render_diff(
                 .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(header.clone())),
             DiffRow::Unified { old, new, side } => {
-                let (sign, code, wash) = cell(side, true, 2);
+                let (sign, code, wash) = cell(side, true);
                 div()
                     .flex()
                     .items_start()
@@ -8263,16 +8229,14 @@ fn render_diff(
                         selectable.iter().any(|picked| std::ptr::eq(*picked, side))
                     })
                 };
-                div().w_full().min_w_0().child(SplitRow::new(
-                    div()
-                        .flex()
-                        .items_stretch()
-                        .w_full()
-                        .min_w_0()
-                        .child(side_view(left.as_ref(), pick(left), false))
-                        .child(div().flex_shrink_0().w(px(1.)).bg(theme::paint::LINE))
-                        .child(side_view(right.as_ref(), pick(right), true)),
-                ))
+                div()
+                    .flex()
+                    .items_stretch()
+                    .w_full()
+                    .min_w_0()
+                    .child(side_view(left.as_ref(), pick(left)))
+                    .child(div().flex_shrink_0().w(px(1.)).bg(theme::paint::LINE))
+                    .child(side_view(right.as_ref(), pick(right)))
             }
         });
     }
@@ -8303,123 +8267,6 @@ fn render_diff(
     }
 }
 
-thread_local! {
-    /// The split rows being prepainted, innermost last (`SplitRow`).
-    static SPLIT_ROWS: std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// A split diff row's halves where the browser sets their text. The
-/// prototype's `minmax(0,1fr) 1px minmax(0,1fr)` puts the right half at a
-/// fraction of a pixel (865.3px in Solo); its box rounds to the pixel but
-/// its glyphs keep the fraction. gpui lays the half on the device pixel
-/// (865), so the right half's text stood a device pixel left. The row
-/// records its bounds (`SplitRow::new`); the right half's content
-/// (`SplitRow::right`) paints from the device pixel nearest the browser's
-/// track start, its wash staying on the half's own box.
-enum SplitRow {
-    Row(Option<AnyElement>),
-    Right(Option<AnyElement>),
-}
-
-impl SplitRow {
-    fn new(child: impl IntoElement) -> Self {
-        Self::Row(Some(child.into_any_element()))
-    }
-
-    fn right(child: impl IntoElement) -> Self {
-        Self::Right(Some(child.into_any_element()))
-    }
-
-    fn child(&mut self) -> &mut Option<AnyElement> {
-        match self {
-            Self::Row(child) | Self::Right(child) => child,
-        }
-    }
-}
-
-impl IntoElement for SplitRow {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl gpui::Element for SplitRow {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<gpui::ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) -> (gpui::LayoutId, ()) {
-        let child = self.child().get_or_insert_with(|| div().into_any_element());
-        (child.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        bounds: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) {
-        match self {
-            Self::Row(child) => {
-                SPLIT_ROWS.with(|rows| rows.borrow_mut().push(bounds));
-                if let Some(child) = child.as_mut() {
-                    child.prepaint(window, cx);
-                }
-                SPLIT_ROWS.with(|rows| rows.borrow_mut().pop());
-            }
-            Self::Right(child) => {
-                let track = SPLIT_ROWS.with(|rows| rows.borrow().last().copied());
-                // gpui moves an element only by whole device pixels: the
-                // nearest one at or past the browser's track.
-                let scale = window.scale_factor();
-                let shift = track.map_or(px(0.), |row| {
-                    let track = f32::from(row.left() + (row.size.width - px(1.)) / 2. + px(1.));
-                    px(((track * scale) + 0.5).floor() / scale) - bounds.left()
-                });
-                if let Some(child) = child.as_mut() {
-                    window.with_element_offset(gpui::point(shift, px(0.)), |window| {
-                        child.prepaint(window, cx)
-                    });
-                }
-            }
-        }
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        _: &mut (),
-        window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) {
-        if let Some(child) = self.child().as_mut() {
-            child.paint(window, cx);
-        }
-    }
-}
-
 /// A one-line code run cut at its column's edge as the prototype's
 /// `text-overflow: ellipsis` cuts it: the whole cells that leave room for
 /// `…`, then `…` in the cell's own ink (the browser draws the ellipsis in
@@ -8439,47 +8286,57 @@ pub(crate) struct CellCut {
     words: Option<WordWash>,
     ink: gpui::Hsla,
     cell: f32,
-    /// The widths of the fixed columns laid before this cell in its row, as
-    /// authored. gpui rounds each to the device pixel before layout (a
-    /// 2-cell sign column is 15.5px, the browser's 15.6px), handing their
-    /// rounding to this cell; the cut gives it back, so a run that
-    /// overflows the browser's cell by a tenth of a pixel is cut here too.
-    lead: [f32; 3],
+    /// Where the run's styled runs break, in cells: each run is laid out
+    /// from the last one's width rounded up to the layout unit (gpui's
+    /// text paint, vendor/gpui-pre), so a cell's x counts them.
+    breaks: Vec<usize>,
     child: Option<AnyElement>,
 }
 
 impl CellCut {
-    fn new(
-        text: String,
-        words: Option<WordWash>,
-        ink: gpui::Hsla,
-        cell: f32,
-        lead: [f32; 3],
-    ) -> Self {
+    fn new(text: String, words: Option<WordWash>, ink: gpui::Hsla, cell: f32) -> Self {
         Self {
             text,
             words,
             ink,
             cell,
-            lead,
+            breaks: Vec::new(),
             child: None,
         }
     }
 
-    /// What the device-pixel rounding of the `lead` columns added to this
-    /// cell's width at `scale` (negative when it took some away).
-    fn slack(&self, scale: f32) -> f32 {
-        self.lead
+    /// The styled runs the cell's text is painted in (byte ranges).
+    fn runs(mut self, runs: Vec<std::ops::Range<usize>>) -> Self {
+        let cell_of = |at: usize| self.text[..at.min(self.text.len())].chars().count();
+        let total = self.text.chars().count();
+        let mut breaks: Vec<usize> = runs
             .iter()
-            .map(|width| width - (width * scale).round() / scale)
-            .sum()
+            .flat_map(|run| [cell_of(run.start), cell_of(run.end)])
+            .filter(|at| *at > 0 && *at < total)
+            .collect();
+        breaks.sort_unstable();
+        breaks.dedup();
+        self.breaks = breaks;
+        self
+    }
+
+    /// The x of cell `at` from the run's start: its cells, each run before
+    /// it rounded up to the layout unit.
+    fn x_at(&self, at: usize) -> f32 {
+        let unit = |width: f32| (width * 64.0).ceil() / 64.0;
+        let mut x = 0.0;
+        let mut from = 0;
+        for &cut in self.breaks.iter().filter(|cut| **cut <= at) {
+            x += unit((cut - from) as f32 * self.cell);
+            from = cut;
+        }
+        x + (at - from) as f32 * self.cell
     }
 
     /// A run of one face cut with `…` in `ink` (its line's own colour, as
-    /// the browser draws an ellipsis whatever the run it hides): no wash, no
-    /// columns before it.
+    /// the browser draws an ellipsis whatever the run it hides): no wash.
     pub(crate) fn plain(text: String, ink: gpui::Hsla, cell: f32) -> Self {
-        Self::new(text, None, ink, cell, [0.; 3])
+        Self::new(text, None, ink, cell)
     }
 
     pub(crate) fn child(mut self, child: AnyElement) -> Self {
@@ -8533,8 +8390,10 @@ impl IntoElement for CellCut {
 }
 
 impl gpui::Element for CellCut {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
+    /// The child's layout node: the cut and the wash measure from its
+    /// unrounded box, where the run's glyphs stand.
+    type RequestLayoutState = gpui::LayoutId;
+    type PrepaintState = gpui::Bounds<gpui::Pixels>;
 
     fn id(&self) -> Option<gpui::ElementId> {
         None
@@ -8550,9 +8409,10 @@ impl gpui::Element for CellCut {
         _: Option<&gpui::InspectorElementId>,
         window: &mut gpui::Window,
         cx: &mut gpui::App,
-    ) -> (gpui::LayoutId, ()) {
+    ) -> (gpui::LayoutId, gpui::LayoutId) {
         let child = self.child.get_or_insert_with(|| div().into_any_element());
-        (child.request_layout(window, cx), ())
+        let layout_id = child.request_layout(window, cx);
+        (layout_id, layout_id)
     }
 
     fn prepaint(
@@ -8560,44 +8420,47 @@ impl gpui::Element for CellCut {
         _: Option<&gpui::GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
         _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
+        layout_id: &mut gpui::LayoutId,
         window: &mut gpui::Window,
         cx: &mut gpui::App,
-    ) {
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let bounds = window.unsnapped_layout_bounds(*layout_id);
         if let Some(child) = self.child.as_mut() {
             child.prepaint(window, cx);
         }
+        bounds
     }
 
     fn paint(
         &mut self,
         _: Option<&gpui::GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
-        bounds: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        _: &mut (),
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut gpui::LayoutId,
+        bounds: &mut gpui::Bounds<gpui::Pixels>,
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) {
+        let bounds = *bounds;
         let Some(mut child) = self.child.take() else {
             return;
         };
-        // On the device pixel: the clip, the wash and the `…` meet without
-        // a column two of them would otherwise both paint.
-        let scale = window.scale_factor();
-        let kept = self.kept(f32::from(bounds.size.width) - self.slack(scale));
-        let snap = |x: f32| px((x * scale).round() / scale);
+        // The run keeps its glyphs where they fall; the wash is a box, its
+        // edges on the whole pixel the browser rounds a span's background
+        // to (`components::css_px`).
+        let kept = self.kept(f32::from(bounds.size.width));
         let left = f32::from(bounds.left());
-        let cut = kept.map(|kept| snap(left + kept as f32 * self.cell));
+        let cut = kept.map(|kept| px(left + self.x_at(kept)));
         if let (Some((from, to, runs_on)), Some((_, wash))) =
             (self.wash_cells(kept), self.words.as_ref())
         {
             let (top, height) = inline_content_box(window);
-            let x0 = snap(left + from as f32 * self.cell);
+            let edge = |x: f32| px(crate::components::css_px(x));
+            let x0 = edge(left + self.x_at(from));
             let x1 = match (runs_on, cut) {
-                (true, _) => bounds.right(),
-                (false, Some(cut)) => snap(left + to as f32 * self.cell).min(cut),
-                (false, None) => snap(left + to as f32 * self.cell),
+                (true, _) => edge(f32::from(bounds.right())),
+                (false, Some(cut)) => edge(left + self.x_at(to)).min(edge(f32::from(cut))),
+                (false, None) => edge(left + self.x_at(to)),
             };
             if x1 > x0 {
                 let y0 = bounds.top() + px(top);
@@ -8880,7 +8743,42 @@ pub(crate) fn code(
         highlights.push((at..end, crate::rich::syntax_style(token.class)));
         at = end;
     }
-    highlights
+    joined_runs(source, highlights)
+}
+
+/// Runs joined as a page's markup joins them: neighbours of one style are
+/// one run, and so are two of one style with only blanks between them
+/// (`pub const`, `let mut`). A browser lays each run out as its own inline
+/// box, so where the runs break decides where the glyphs after them fall.
+fn joined_runs(
+    source: &str,
+    highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    let blank = |range: &std::ops::Range<usize>| source[range.clone()].trim().is_empty();
+    let mut joined: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    let mut at = 0;
+    while at < highlights.len() {
+        let (range, style) = highlights[at].clone();
+        match joined.last_mut() {
+            Some((last, last_style)) if *last_style == style && last.end == range.start => {
+                last.end = range.end;
+            }
+            // `a␠b`: a blank run between two of one style.
+            Some((last, last_style))
+                if blank(&range)
+                    && last.end == range.start
+                    && highlights.get(at + 1).is_some_and(|(next, next_style)| {
+                        next_style == last_style && next.start == range.end
+                    }) =>
+            {
+                last.end = highlights[at + 1].0.end;
+                at += 1;
+            }
+            _ => joined.push((range, style)),
+        }
+        at += 1;
+    }
+    joined
 }
 
 #[cfg(test)]

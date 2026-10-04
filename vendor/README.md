@@ -121,6 +121,66 @@ an upstream release includes equivalent behavior. Registry cache markers and
 the dependency's own lockfile are omitted. Source fixtures and the small test
 and benchmark targets named by its unchanged manifest are retained.
 
+`InlineFlow` advances each fragment of a line (a text run, an inline element)
+by its width rounded up to the layout unit, 1/64px, as a browser lays out an
+inline box, so the fragment after a link card starts where the browser's
+would (`layout_unit`).
+
+## GPUI
+
+`gpui-pre/` is the crates.io `gpui-pre` **0.3.3** source (Zed's GPUI,
+snapshot of zed@`5b055fa789a8b8d38ac951a6e0cde272f66b4495`); `gpui-pre-macos/`
+is the crates.io `gpui-pre-macos` **0.3.3** source, its macOS platform. Their
+Apache-2.0 licenses and upstream READMEs are retained. The manifests are
+unchanged except that `gpui-pre`'s example targets are dropped with the
+`examples/` tree (4.9MB of fixtures); registry cache markers and lockfiles are
+omitted.
+
+Ferrite renders to the approved prototype's pixels, which a browser lays out
+and paints. The patches make gpui place and round what it paints the way a
+browser does, so the same CSS geometry lands on the same device pixels:
+
+- **Layout units** (`taffy.rs`, `elements/text.rs`). Authored lengths are held
+  to 1/64 of a logical pixel (truncated, as a `LayoutUnit` holds a CSS length)
+  instead of being rounded to the device pixel before layout, and measured
+  sizes (a text run's width) are rounded up to the next 1/64 instead of the
+  next whole pixel. A text measure wraps and truncates with a layout unit of
+  slack, so a run laid out at the width it measured never wraps on float error.
+- **Pixel snapping** (`taffy.rs`, `window.rs`). Snapping moved from the layout
+  engine to `Window::layout_bounds`, on each node's absolute position after
+  any element offset: a box's edges round to the whole *logical* pixel, half
+  up (a browser's pixel-snapped rect); a run of text (`request_text_layout`,
+  used by every text element) and any other measured leaf keeps its left
+  edge's fraction and rounds only its top. Children are placed from their
+  parents' unrounded origins. `Window::unsnapped_layout_bounds` exposes the
+  unrounded box; a cached view, a `List` and `Anchored` lay out and place
+  their separately laid-out children from it, and `Anchored` no longer rounds
+  its offset.
+- **Glyph quantization** (`window.rs`). A glyph's subpixel position rounds
+  half up, as a browser's does (upstream rounds half toward zero).
+- **Spans** (`text_system/line.rs`). A run of a line in a new style (ink,
+  decorations, face) starts where the previous run's width, rounded up to the
+  layout unit, ends — a browser lays each span out as its own inline box —
+  and glyphs past a span's first lean a hair left, so a glyph exactly between
+  two subpixel positions takes the lower, as a browser's summed advances do.
+- **Transforms** (`window.rs`). `Window::with_transform_offset` moves what it
+  lays out after its boxes are rounded, a box's edges then rounded again to
+  the device pixel and a run of text moved exactly: a CSS `translate(..)`.
+- **SVG supersampling** (`svg_renderer.rs`). `SMOOTH_SVG_SCALE_FACTOR` is 1:
+  icons rasterize at their device size, as a browser rasterizes inline SVG,
+  rather than at twice it and filtered down.
+- **Synthetic bold** (`gpui-pre-macos`, `text_system.rs`). A face the
+  platform falls back to for a run asking for semibold or more, when the face
+  is lighter than that, is drawn stroked and filled (Skia's fake bold: the
+  size times 1/24 at 9px easing to 1/32 at 36px), as a browser draws it.
+- **Fallback by PostScript name** (`gpui-pre-macos`, `open_type.rs`). A font
+  fallback written `postscript:<name>` names one face exactly (the braille
+  spinner's `AppleBraille-Outline6Dot`, whose family's faces share one
+  weight).
+
+Cargo applies both through the root `[patch.crates-io]`. Remove a patch when
+an upstream release offers equivalent behaviour.
+
 ## Taffy
 
 `taffy/` is the crates.io `taffy` **0.13.0** source from

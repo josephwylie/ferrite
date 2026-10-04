@@ -57,7 +57,6 @@ icons![
     "claude",
     "ferrite-upper",
     "ferrite-lower",
-    "ferrite-steel",
     "gear",
     "subagents",
     "window-minimize",
@@ -66,29 +65,7 @@ icons![
     "window-close",
     "copy",
     "resend",
-    "prompt",
     "ferrite-mono",
-    "option",
-    "control",
-    // ---- foundation: the spinner frames (theme rule 8; Geist Mono has
-    // neither braille nor the dingbat stars, so every frame is drawn)
-    "braille-0",
-    "braille-1",
-    "braille-2",
-    "braille-3",
-    "braille-4",
-    "braille-5",
-    "braille-6",
-    "braille-7",
-    "braille-8",
-    "braille-9",
-    "working-dot",
-    "working-four",
-    "working-eight",
-    "working-star",
-    "working-six",
-    "working-heavy",
-    // (end foundation)
     // ---- WP-A icons (append names above the end line)
     "reasoning",
     // (end WP-A)
@@ -104,23 +81,15 @@ icons![
     "stop",
     "file",
     "image",
-    "mode-accept",
-    "mode-on",
-    "mode-plan",
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
-    "command",
-    "cross",
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
-    "diamond",
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
-    "disclosure-right",
-    "disclosure-down",
     // (end WP-G)
     "update",
 ];
@@ -149,10 +118,6 @@ pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
 const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
 const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
-/// The mark whole, in its steel gradient, cropped to the shards (the
-/// prototype's banner `viewBox="280 30 700 1130"`): drawn as an image, so
-/// the gradient paints (an `svg()` element is a one-ink mask).
-pub const FERRITE_STEEL: &str = "icons/ferrite-steel.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
 /// A parent Agent branching to two children. (The nav no longer draws it:
@@ -175,74 +140,10 @@ pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
 #[cfg_attr(not(test), allow(dead_code))]
 pub const RESEND: &str = "icons/resend.svg";
-/// The prompt mark `❯`, drawn: Geist Mono has no U+276F, so the mark the
-/// transcript, the Composer, the nav cursor and every selection bar share
-/// is the glyph the prototype's browser falls back to — Menlo Bold's, its
-/// outline at 13px — set in a 12-unit cell box where it lands on the
-/// capture (`components::prompt_mark` lays it).
-pub const PROMPT: &str = "icons/prompt.svg";
 /// Ferrite's mark as one monochrome path, for the answer gutter (the
 /// gradient mark is reserved for the animated working line).
 #[allow(dead_code)]
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
-
-// ---- foundation: spinner frames (theme rule 8)
-/// The braille spinner's ten frames in order, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`: every frame
-/// draws the whole 2×3 cell, its raised dots filled and the rest as thin
-/// rings (as the prototype's braille face draws them), the cell's centre
-/// ~1px above the line's in a 12-unit box: `components::braille_spinner`
-/// draws them at `MOTION_BRAILLE_FRAME_MS`.
-#[allow(dead_code)]
-pub const BRAILLE_FRAMES: [&str; 10] = [
-    "icons/braille-0.svg",
-    "icons/braille-1.svg",
-    "icons/braille-2.svg",
-    "icons/braille-3.svg",
-    "icons/braille-4.svg",
-    "icons/braille-5.svg",
-    "icons/braille-6.svg",
-    "icons/braille-7.svg",
-    "icons/braille-8.svg",
-    "icons/braille-9.svg",
-];
-/// The working line's glyphs, drawn: `·`, `✢` (four teardrops), `✳` (eight
-/// spokes), `✶` (six-pointed star), `✻` (six teardrops), `✽` (eight heavy
-/// teardrops). Past the `·` each is Menlo's outline at 13px (the face the
-/// prototype's browser falls back to), set in the 12-unit box the frames
-/// share on one pen and baseline — fitted on the capture's `✻`.
-#[allow(dead_code)]
-pub const WORKING_DOT: &str = "icons/working-dot.svg";
-#[allow(dead_code)]
-pub const WORKING_FOUR: &str = "icons/working-four.svg";
-#[allow(dead_code)]
-pub const WORKING_EIGHT: &str = "icons/working-eight.svg";
-#[allow(dead_code)]
-pub const WORKING_STAR: &str = "icons/working-star.svg";
-#[allow(dead_code)]
-pub const WORKING_SIX: &str = "icons/working-six.svg";
-#[allow(dead_code)]
-pub const WORKING_HEAVY: &str = "icons/working-heavy.svg";
-/// The working spinner's ten frames, Claude Code's cycle out and back:
-/// `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢` at `MOTION_WORKING_FRAME_MS`
-/// (`components::working_spinner`). Frame 4, `✻`, is its still state.
-#[allow(dead_code)]
-pub const WORKING_FRAMES: [&str; 10] = [
-    WORKING_DOT,
-    WORKING_FOUR,
-    WORKING_EIGHT,
-    WORKING_STAR,
-    WORKING_SIX,
-    WORKING_HEAVY,
-    WORKING_SIX,
-    WORKING_STAR,
-    WORKING_EIGHT,
-    WORKING_FOUR,
-];
-/// `✻`, still: a finished turn's mark (`✻ Worked for 41s`) and the working
-/// spinner under reduced motion.
-#[allow(dead_code)]
-pub const WORKED: &str = WORKING_SIX;
-// (end foundation)
 
 // ---- WP-A icon names (append consts above the end line)
 /// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
@@ -259,50 +160,19 @@ pub const REASONING: &str = "icons/reasoning.svg";
 pub const BELL: &str = "icons/bell.svg";
 // (end WP-C)
 
-/// `⌘` (not in Geist Mono): the command key wherever a key combination is
-/// drawn — menu shortcuts, keycaps. Menlo's outline at 13px (the browser's
-/// fallback), in a cell its advance wide and a line tall, on the 14px
-/// baseline. Only `components::key_combo` places it.
-pub const COMMAND: &str = "icons/command.svg";
-/// `⌥` and `⌃` (in neither bundled face): the option and control keys,
-/// Menlo's like `COMMAND`, placed only by `components::key_combo`.
-pub const OPTION: &str = "icons/option.svg";
-pub const CONTROL: &str = "icons/control.svg";
-
 // ---- WP-D icon names (append consts above the end line)
 /// An image attachment's mark (the prototype's `#image` symbol): a frame,
 /// a ridge and a sun, in the 16-unit line family.
 pub const IMAGE: &str = "icons/image.svg";
-/// The permission mode's marker in the status line, drawn (Geist Mono has
-/// neither `⏵` nor `⏸`): `⏵⏵` for a mode that lets edits run, `⏸` for
-/// plan, `⏵` for any other. STIX Two Math's outlines at 13px (the one face
-/// on the system with them, so the browser's fallback), each SVG its
-/// marks' advance wide and a line tall, on the 14px baseline.
-pub const MODE_ACCEPT: &str = "icons/mode-accept.svg";
-pub const MODE_ON: &str = "icons/mode-on.svg";
-pub const MODE_PLAN: &str = "icons/mode-plan.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
-/// `✗`, drawn (Geist Mono lacks it): a failed turn's mark in the
-/// notifications list, the line family's cross.
-pub const CROSS: &str = "icons/cross.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
-/// `◆`, drawn (Geist Mono lacks it): a Decision's mark — the card's head and
-/// the L2 cell's. A fill glyph, like the logomarks.
-pub const DIAMOND: &str = "icons/diamond.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
-/// `▸` and `▾`, drawn (Geist Mono has neither small triangle): the nav's
-/// disclosure marks — open and folded Projects and Groups, and the Parked
-/// fold's `▸` (turned a quarter when open). Fill marks in a 12-unit box
-/// centred on their character cell, each fitted to the prototype's glyph at
-/// 2× (about 4.9 × 4.95 px, a hair below the line's centre).
-pub const DISCLOSURE_RIGHT: &str = "icons/disclosure-right.svg";
-pub const DISCLOSURE_DOWN: &str = "icons/disclosure-down.svg";
 // (end WP-G)
 
 pub struct Assets;
@@ -507,27 +377,10 @@ mod tests {
             WINDOW_CLOSE,
             COPY,
             RESEND,
-            PROMPT,
             FERRITE_MONO,
-            DIAMOND,
             REASONING,
-            OPTION,
-            CONTROL,
             IMAGE,
-            MODE_ACCEPT,
-            MODE_ON,
-            MODE_PLAN,
-            CROSS,
-            WORKING_DOT,
-            WORKING_FOUR,
-            WORKING_EIGHT,
-            WORKING_STAR,
-            WORKING_SIX,
-            WORKING_HEAVY,
-        ]
-        .into_iter()
-        .chain(BRAILLE_FRAMES)
-        {
+        ] {
             let bytes = Assets
                 .load(key)
                 .expect("the asset source never errors")
@@ -538,38 +391,11 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            56,
-            "the prototype and app controls, the steel banner mark, including close, the four Windows caption glyphs, \
-             the option and control key glyphs, the image mark, the three mode markers, the \
-             failed cross, the CLI update mark, the sixteen spinner frames (ten braille, six \
-             working glyphs) and the nav's two disclosure triangles"
+            28,
+            "the prototype and app controls, including close, the four \
+             Windows caption glyphs, the image mark and the CLI update mark; every glyph \
+             Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"
         );
-    }
-
-    /// F-16: the prompt mark is U+276F's heavy wedge as Menlo Bold draws it
-    /// at 13px (the prototype's fallback face) — filled, no stroke, from x
-    /// 1.21 to 6.36 and y 1.56 to 11.05 of its 12-unit box, its arms 2.1
-    /// across with parallel, angled ends.
-    #[test]
-    fn the_prompt_mark_is_the_heavy_wedge() {
-        let bytes = Assets.load(PROMPT).unwrap().unwrap();
-        let svg = std::str::from_utf8(&bytes).unwrap();
-        assert!(svg.contains(r#"viewBox="0 0 12 12""#));
-        assert!(svg.contains(r#"fill="currentColor""#));
-        assert!(
-            !svg.contains("stroke"),
-            "a filled wedge, not a stroked chevron"
-        );
-        for corner in [
-            "M1.209 11.045",
-            "4.319 6.303",
-            "1.209 1.555",
-            "H3.304",
-            "L6.357 6.303",
-            "L3.304 11.045",
-        ] {
-            assert!(svg.contains(corner), "{corner}");
-        }
     }
 
     /// The line icons must carry the `.stroke` class's attributes on the
@@ -598,12 +424,6 @@ mod tests {
         let check = std::str::from_utf8(&check).unwrap();
         assert!(check.contains(r#"viewBox="0 0 12 12""#));
         assert!(check.contains(r#"stroke-width="1.15""#));
-        // The failed cross is the prototype's `✗` glyph, drawn the same way:
-        // a 12-unit box stroked 1.2.
-        let cross = Assets.load(CROSS).unwrap().unwrap();
-        let cross = std::str::from_utf8(&cross).unwrap();
-        assert!(cross.contains(r#"viewBox="0 0 12 12""#));
-        assert!(cross.contains(r#"stroke-width="1.2""#));
 
         for key in [
             CHEVRON_DOWN,
@@ -616,7 +436,6 @@ mod tests {
             SUBAGENTS,
             COPY,
             RESEND,
-            IMAGE,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -629,6 +448,14 @@ mod tests {
                 effective_stroke(svg)
             );
         }
+
+        // The image mark is the prototype's `#image` symbol as written: a
+        // 16-unit box stroked 1.3, square-ended, its sun filled.
+        let image = Assets.load(IMAGE).unwrap().unwrap();
+        let image = std::str::from_utf8(&image).unwrap();
+        assert!(image.contains(r#"viewBox="0 0 16 16""#));
+        assert!(image.contains(r#"stroke-width="1.3""#));
+        assert!(!image.contains("stroke-linecap"));
 
         let branch = Assets.load(BRANCH).unwrap().unwrap();
         let branch = std::str::from_utf8(&branch).unwrap();

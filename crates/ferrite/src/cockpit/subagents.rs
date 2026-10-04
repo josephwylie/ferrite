@@ -2572,17 +2572,20 @@ mod status_word_tests {
     /// starting, finishing or waiting never moves the tabs beside it.
     #[test]
     fn a_tab_keeps_its_width_whatever_its_state() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
         for label in [0., 24., 80., 400.] {
-            assert_eq!(
+            assert!(near(
                 tab_width(label),
                 2. * theme::SUBJECT_TAB_PAD_X
                     + f32::min(label, theme::SUBJECT_LABEL_MAX_W)
                     + theme::SUBJECT_TAB_INNER_GAP
                     + theme::STATUS_DOT
-            );
-            assert_eq!(
-                tab_width(label) - main_tab_width(label),
-                theme::SUBJECT_TAB_INNER_GAP + theme::STATUS_DOT,
+            ));
+            assert!(
+                near(
+                    tab_width(label) - main_tab_width(label),
+                    theme::SUBJECT_TAB_INNER_GAP + theme::STATUS_DOT,
+                ),
                 "Main carries no slot"
             );
         }

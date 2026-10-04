@@ -120,12 +120,15 @@
 //!    those pairs, never hand-summed literals. Space: 2 · 4 · 6 · 8 · 12 ·
 //!    16 · 24 · 32 (`SPACE_*`, named in gpui's 4px units) and, on the grid,
 //!    `ROW` · `HALF_ROW` · `CH`. A metric off them says why in its doc.
-//! 10. **Glyph coverage.** A glyph outside Geist Mono's cmap is never text
-//!     on any surface; it is an SVG in a glyph box (`icons.rs`,
-//!     `components::glyph_box`). `CHROME_GLYPHS` lists the non-ASCII glyphs
-//!     text may use (`● ○ └ ├ │ ─ · ↑ ↓ ⇧ ⇥ ⏎ …`), and a test checks each
-//!     against the face; `DRAWN_GLYPHS` pins the ones that must stay drawn
-//!     (`❯ ✻ ◆ ⏵ ✓ ✗ ▾ ▸ ⌘ ⎿ ∴`, the spinner frames).
+//! 10. **Glyph coverage.** Every glyph is text, as the prototype's browser
+//!     sets it: Geist Mono's own, and the ones its cmap lacks in the face
+//!     the platform falls back to — on macOS Menlo for `❯ ◆ ✓ ✗ ▾ ▸ ⌘ ⌥ ⌃`
+//!     and the working spinner's stars, STIX Two Math for `⏵ ⏸`, Apple
+//!     Braille for the braille spinner (`components::glyph`) — on the
+//!     line's baseline, at the face's advance. `CHROME_GLYPHS` lists the
+//!     non-ASCII glyphs Geist Mono sets (`● ○ └ ├ │ ─ · ↑ ↓ ⇧ ⇥ ⏎ …`) and
+//!     `FALLBACK_GLYPHS` the ones it lacks; a test checks each against the
+//!     face.
 //! 11. **Words.** Ferrite's own copy speaks one shared word list
 //!     (`theme::words`, beside the state inks and tested against the
 //!     notifications, the Decision card and the transcript): `needs you`,
@@ -557,6 +560,12 @@ pub const DROP_WASH: u32 = ACCENT_WASH;
 pub const DIFF_ADDED_WORD: u32 = 0x93cf8c3d;
 #[allow(dead_code)]
 pub const DIFF_REMOVED_WORD: u32 = 0xef8a8047;
+/// The alphas the changed words' washes paint with: the prototype's 24% and
+/// 28%, as gpui's blend must take them to land on the browser's 8-bit ink
+/// over the row's wash (`#41533f` added, `#664240` removed, sampled from
+/// its shots) — the two compositors round the same fraction differently.
+pub const DIFF_ADDED_WORD_ALPHA: f32 = 0.237;
+pub const DIFF_REMOVED_WORD_ALPHA: f32 = 0.2765;
 /// A diff row's sign: the only hued glyph on the row.
 #[allow(dead_code)]
 pub const DIFF_ADDED_SIGN: u32 = GREEN;
@@ -566,6 +575,8 @@ pub const DIFF_REMOVED_SIGN: u32 = RED;
 /// the crest (`components::shimmer`): Claude's clay crests near `#ffe1d3`.
 #[allow(dead_code)]
 pub const SHIMMER_LIFT: f32 = 0.75;
+/// Claude's shimmer crest: the prototype's gradient's middle stop.
+pub const SHIMMER_CREST_CLAUDE: u32 = 0xffe1d3;
 
 // ------------------------------------------------------------- the float
 //
@@ -671,20 +682,19 @@ pub const MEASURE_CH: f32 = 108.0;
 /// `CODE_ADVANCE`; this stays a floor so a short label is never padded.
 pub const UI_ADVANCE_FLOOR: f32 = 0.5;
 
-/// The non-ASCII glyphs text may use: every one is in Geist Mono's cmap
-/// (asserted by `theme::tests`). Anything else is an SVG in a glyph box,
-/// never text (`DRAWN_GLYPHS`). A rule the tests enforce, so it compiles
-/// only with them.
+/// The non-ASCII glyphs Geist Mono sets: every one is in its cmap (asserted
+/// by `theme::tests`). A rule the tests enforce, so it compiles only with
+/// them.
 #[cfg(test)]
 pub const CHROME_GLYPHS: &[char] = &[
     '●', '○', '└', '├', '│', '─', '·', '•', '…', '↑', '↓', '←', '→', '↳', '↩', '⇧', '⇥', '⏎', '↵',
     '⌫', '±', '−', '—', '×', '›', '‹', '▲', '▼', '▶', '◀',
 ];
-/// The glyphs the design uses that Geist Mono lacks: each is drawn (an SVG
-/// in a glyph box, `icons.rs`), never typed. Asserted *absent* from the
-/// face, so a face update that adds one is noticed.
+/// The glyphs the design uses that Geist Mono lacks: each is typed all the
+/// same, and the platform's fallback face sets it (rule 10). Asserted
+/// *absent* from the face, so a face update that adds one is noticed.
 #[cfg(test)]
-pub const DRAWN_GLYPHS: &[char] = &[
+pub const FALLBACK_GLYPHS: &[char] = &[
     '❯', '✻', '◆', '⏵', '✓', '✗', '▾', '▸', '⌘', '⌥', '⌃', '⎿', '∴', '☐', '⎇', '■', '✢', '✳', '✶',
     '✽', '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',
 ];
@@ -817,9 +827,6 @@ pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
 /// 7px — a small drawn mark beside a label (a menu section title's).
 pub const KEY_GLYPH: f32 = 7.0;
-/// The drawn `◆` of a request's row and toast (`icons::DIAMOND`, 60% of its
-/// box): a 13.3px box, so the diamond is the prototype glyph's 8px.
-pub const NOTICE_DIAMOND: f32 = 13.3;
 /// A keycap: 18px high (it fits inside a 20px row), 5px inline padding.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const KBD_H: f32 = 18.0;
@@ -867,13 +874,9 @@ pub const QUEUE_ROW_H: f32 = COMPOSER_ROW_H;
 
 // ------------------------------------------------------- status and motion
 
-/// 7.5px — the painted status dot (`components::status_dot`): the `●`
-/// glyph's size at `FS_UI`, its centre `STATUS_DOT_LIFT` above the line's.
-/// The prototype's `●` centres 0.89px over its line's centre; the 7.5px
-/// box centred in a 20px row already stands half a pixel high on the
-/// device grid, so the lift that lands it there is 0.4.
-pub const STATUS_DOT: f32 = 7.5;
-pub const STATUS_DOT_LIFT: f32 = 0.4;
+/// The room a typed status dot (`components::status_dot`) takes in a row:
+/// its one cell.
+pub const STATUS_DOT: f32 = CH;
 /// The Ferrite progress mark follows the timing and geometry of the supplied
 /// animated logo. These are artwork tokens rather than general motion tokens:
 /// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
@@ -1088,12 +1091,12 @@ pub fn init_components(cx: &mut gpui::App) {
 //   column after it, and wrapped lines hang under the content column, never
 //   under the mark. Rows sit `TX_PAD_L` (two chrome cells) from the Pane's
 //   left edge and `TX_PAD_R` from its right; there is no centred column.
-// - **Marks.** `❯` (accent, drawn: `icons::PROMPT`) heads the operator's
-//   prompt; a typed `●` heads agent prose (`TEXT_STRONG`, once per speaker
-//   change: `transcript::AnswerMarks`) and every tool call (`TEXT_MUTED`
-//   done, `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (drawn,
-//   `icons::WORKED`, in the provider's colour) the turn's end; `◆` (drawn,
-//   `ATTENTION`) a Decision. `∴` (drawn) heads reasoning.
+// - **Marks.** `❯` (accent, semibold) heads the operator's prompt; `●`
+//   heads agent prose (`TEXT_STRONG`, once per speaker change:
+//   `transcript::AnswerMarks`) and every tool call (`TEXT_MUTED` done,
+//   `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (in the
+//   provider's colour) the turn's end; `◆` (`ATTENTION`) a Decision — all
+//   typed (rule 10). `∴` (drawn) heads reasoning.
 // - **The banner.** Every transcript opens on the Thread's banner: the
 //   steel mark three rows tall, then three lines — the title (`W_STRONG`
 //   `TEXT_STRONG`), `claude · opus 5.5 (1M) · medium · ~/ferrite on dev`
@@ -1190,21 +1193,10 @@ pub fn tx_gutter(size: f32) -> f32 {
     2.0 * tx_cell(size)
 }
 
-/// A drawn transcript mark (`❯ ✻ ◆ ∴`) at reading size `size`: sized like
-/// a glyph of the face, 12px at Standard — the Composer's `❯` (`GLYPH_BOX`).
+/// A drawn transcript mark (`∴`) at reading size `size`: sized like a glyph
+/// of the face, 12px at Standard (`GLYPH_BOX`).
 pub fn tx_mark(size: f32) -> f32 {
     (size * GLYPH_BOX / FS_PROSE).round()
-}
-
-/// The drawn star family (`✻` and the working spinner's frames): the
-/// prototype sets them as the face's glyphs, whose ink is about 7.5px at
-/// Standard — the drawn star's ink in a 10px box — centred on the gutter's
-/// first cell rather than hung from its left edge.
-pub const STAR_MARK: f32 = 10.0;
-
-/// The drawn star's box at reading size `size` (`STAR_MARK` at Standard).
-pub fn tx_star(size: f32) -> f32 {
-    (size * STAR_MARK / FS_PROSE).round()
 }
 
 /// Half a transcript line, whole pixels: the prompt band's padding above
@@ -1411,7 +1403,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // **The Group head is one row** (`PANE_HEAD_H`, a row and 4px, its rule
 // inside it) at every size: the state dot the size of the face's `●` in
 // the first cell of a 2-cell column (`HEAD_DOT_W`; a working Thread's is
-// the braille spinner, `HEAD_SPINNER_LEFT`), the title at `W_LABEL` —
+// the braille spinner), the title at `W_LABEL` —
 // `TEXT`, `TEXT_STRONG` on the focused Pane only — and the provider's
 // `PROVIDER_MARK_SM` mark a cell after it, a cell in from the edge. **No
 // state word and no number rides a head** (rule 7): state reads at the
@@ -1470,11 +1462,8 @@ pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
 pub const TITLE_PAD_X: f32 = 2.0 * CH;
 /// The titlebar's one trailing door (`⌘K commands`): dim words on the
 /// plane, no box, a cell between the chord and its word, ending
-/// `TITLE_PAD_X` in from the window's edge. Authored at 7.5: the word's
-/// cells and the chord's letter each snap up from 7.8 to 8 on the device
-/// grid, and this space gives the half pixel back, so the chord stands
-/// where the browser's does.
-pub const TITLE_DOOR_GAP: f32 = 7.5;
+/// `TITLE_PAD_X` in from the window's edge.
+pub const TITLE_DOOR_GAP: f32 = CH;
 /// The smallest window the chrome still lays out in: the nav plus one wall
 /// tile, the title, the door and the Windows caption group.
 pub const WINDOW_MIN_W: f32 = 640.0;
@@ -1501,14 +1490,6 @@ pub const HEAD_PAD_X: f32 = CH;
 /// The head's dot column: two cells, the dot centred in the first (where
 /// the face's `●` would sit).
 pub const HEAD_DOT_W: f32 = 2.0 * CH;
-/// Where a working head's braille spinner box sits in the dot column: its
-/// first dot (3.35 into the `GLYPH_BOX` frame, `braille-*.svg`) lands at
-/// the Pane's left + 9.5, where the prototype's typed `⠋` starts. The
-/// head's one-cell inset lays out at 8 (not 7.8) and the frame's box snaps
-/// to the device pixel, so the box is set a pixel further in than the
-/// sum: measured on the capture, the dots then start where the browser's
-/// do.
-pub const HEAD_SPINNER_LEFT: f32 = 8.5 - HEAD_PAD_X - 3.35;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
@@ -1595,17 +1576,8 @@ pub const EMPTY_RECENT_MAX: usize = 4;
 /// The bottom bar's segments (session, tabs, usage, clock): a cell of
 /// padding each side, the full bar's height.
 pub const BAR_SEG_PAD_X: f32 = CH;
-/// The trailing cell of a right-hand bottom-bar segment (usage, clock),
-/// authored at 7.5 for the reason `COMPOSER_SEG_PAD_TAIL` gives: with its
-/// leading cell snapped to 8 the pair keeps the prototype's two cells, so
-/// the segments packed against the right edge land where the browser's do.
-pub const BAR_SEG_PAD_TAIL: f32 = 7.5;
-/// Above a bottom-bar segment's words, inside its ground: the bar's 23px
-/// under its rule centre a line at 1.5px, which the prototype's browser
-/// paints on the next whole pixel (`components::css_line`); a pixel of
-/// padding sets the line there while the segment's ground still fills the
-/// bar.
-pub const BAR_LINE_DROP: f32 = 1.0;
+/// The trailing cell of a right-hand bottom-bar segment (usage, clock).
+pub const BAR_SEG_PAD_TAIL: f32 = CH;
 /// The provider mark before a usage segment.
 pub const BAR_MARK: f32 = 11.0;
 
@@ -1682,20 +1654,11 @@ pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
 /// A status segment's inline padding: one cell each side, so the first
 /// segment's text (hung one cell out) starts on the `❯` column.
 pub const COMPOSER_SEG_PAD_X: f32 = CH;
-/// GPUI snaps every authored length to the device grid before layout (a
-/// 7.8px cell lays out at 8 on a 2× screen), so a row of padded segments
-/// drifts right half a pixel a segment where the prototype's browser keeps
-/// fractions. A segment's trailing pad and the seam after it are authored
-/// at 7.5 (`COMPOSER_SEG_PAD_TAIL`, `STATUS_SEAM_W`) so the snapped row
-/// lands where the browser's does.
-pub const COMPOSER_SEG_PAD_TAIL: f32 = 7.5;
-pub const STATUS_SEAM_W: f32 = 7.5;
+/// A segment's trailing cell.
+pub const COMPOSER_SEG_PAD_TAIL: f32 = CH;
 /// The status line's own lead before its first segment, which hangs its
-/// padding out (`COMPOSER_PAD_L - COMPOSER_SEG_PAD_X`, one cell): authored
-/// at 7.5 for the same reason, so lead and padding snap to 15.5 — the
-/// Composer's `❯` column — and the first word starts where the browser's
-/// does (at 8 + 8 it stood half a pixel right).
-pub const STATUS_HANG_PAD: f32 = 7.5;
+/// padding out (`COMPOSER_PAD_L - COMPOSER_SEG_PAD_X`, one cell).
+pub const STATUS_HANG_PAD: f32 = CH;
 /// Legacy names other modules still read (the Subagent footer, the send
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
@@ -1721,15 +1684,6 @@ pub const CTX_METER_R: f32 = 1.0;
 pub const CTX_METER_DROP: f32 = 1.0;
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
-/// The mode marker before the mode word (`⏵⏵ accept edits`), drawn (Geist
-/// Mono lacks `⏵` and `⏸`) as the browser's fallback face, STIX Two Math,
-/// sets it: each `⏵` a 503-unit advance (6.539px) with its 5.4 × 6.4px
-/// triangle on the baseline, `⏸` 630 units. Each SVG is its marks' cell
-/// one line tall, the width its advance takes on the device grid (the
-/// pair's 13.078px lays out at 13), then a space before the word.
-pub const MODE_MARK_ADVANCE: f32 = 2.0 * 503.0 / 1000.0 * FS_UI;
-pub const MODE_MARK_ONE_ADVANCE: f32 = 503.0 / 1000.0 * FS_UI;
-pub const MODE_PLAN_ADVANCE: f32 = 630.0 / 1000.0 * FS_UI;
 /// The Composer's band sits between two 1px rules (the prototype's
 /// `.comp .rule`, transparent on these themes): the room is real, the ink
 /// is none.
@@ -1899,11 +1853,10 @@ pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
 /// over the bottom bar. One row of head (`◆ needs you · <title>`, `⌘D`), one
 /// body line, then the quick answers: `TOAST_BUTTON_H` boxes a cell apart,
 /// `TOAST_QUICK_GAP` under the body and over the float's edge.
-/// The toast's box as the prototype's browser lays it: on whole pixels,
-/// each edge rounded — its right edge 2 cells (15.6px) in from the window's
-/// lands 16 in, its left 52 cells (405.6px) further lands 405 from that.
-pub const TOAST_BOX_RIGHT: f32 = 16.0;
-pub const TOAST_BOX_W: f32 = 405.0;
+/// The toast's box: its right edge 2 cells in from the window's, 52 cells
+/// wide (gpui rounds its edges to the pixel, as the browser does).
+pub const TOAST_BOX_RIGHT: f32 = 2.0 * CH;
+pub const TOAST_BOX_W: f32 = 52.0 * CH;
 pub const TOAST_BOTTOM: f32 = ROW + 16.0;
 pub const TOAST_BUTTON_H: f32 = ROW + 2.0;
 pub const TOAST_QUICK_GAP: f32 = HALF_ROW;
@@ -1914,24 +1867,14 @@ pub const TOAST_QUICK_GAP: f32 = HALF_ROW;
 /// name; the list scrolls past `PALETTE_MAX_H`. The shortcuts sheet takes
 /// the same geometry and veil.
 pub const PALETTE_W: f32 = 84.0 * CH;
-/// The palette's box as laid out: 84 cells (655.2px) snap to 655 on the
-/// device grid, but the prototype centres its palette with a transform,
-/// which keeps the fraction — its right edge stands half a pixel past the
-/// snapped one. Half a pixel more puts it there.
-pub const PALETTE_BOX_W: f32 = 655.5;
-/// A palette row's right inset: the key hints at its right end are cells
-/// that each snap from 7.8 to 8, standing the chord left of the browser's;
-/// a 7.5 inset (the cell's 7.8, snapped down) gives that half pixel back.
-pub const PALETTE_ROW_PAD_R: f32 = 7.5;
+/// The palette's box: its 84 cells.
+pub const PALETTE_BOX_W: f32 = PALETTE_W;
+/// A palette row's right inset: one cell.
+pub const PALETTE_ROW_PAD_R: f32 = CH;
 pub const PALETTE_TOP: f32 = 56.0;
 pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
 pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
 pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
-/// The drawn `⌘` `⌥` `⌃` in a key combination: Menlo's advance at the grid
-/// size (1233/2048 × 13px), the cell the prototype's browser gives the
-/// fallback glyph before the next letter. Its SVG is that cell one line
-/// tall, the glyph on the 14px baseline (`icons::COMMAND`).
-pub const KEY_GLYPH_ADVANCE: f32 = 1233.0 / 2048.0 * FS_UI;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
@@ -2061,7 +2004,7 @@ pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 /// Subagent's alike, rule 2.8) is a transcript row in the provider CLIs'
 /// own grammar (the prototype's `.r` holding a `.dec`, clean): no box, no
 /// ground, no rule. `◆ Bash needs approval · codex · read-only sandbox`
-/// heads it — the drawn `◆` (`DECISION_MARK`) at the gutter's text origin,
+/// heads it — the typed `◆` at the gutter's start,
 /// the lead in `ATTENTION`, every detail and its `·` in `TEXT_MUTED` — and
 /// every other section sits on the content column after the 2-cell gutter,
 /// `DECISION_GAP` (half a row) below the one above: the command on a
@@ -2078,17 +2021,9 @@ pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 /// overlay) it lies on the plane, `DECISION_PAD_Y` inside.
 pub const DECISION_PAD_Y: f32 = HALF_ROW;
 pub const DECISION_GAP: f32 = HALF_ROW;
-/// The head's drawn diamond (`icons::DIAMOND`, its shape 60% of its box):
-/// a 12.5px box, so the `◆` reads 7.5px wide like the prototype's glyph,
-/// centred where an 8px box at the gutter's text origin centres it
-/// (`DECISION_MARK_LEAD` back from the origin).
-pub const DECISION_MARK: f32 = 12.5;
-pub const DECISION_MARK_LEAD: f32 = (DECISION_MARK - 8.0) / 2.0;
 /// Option rows sit flush, one `LH_UI` row each; a description adds a line
 /// under the label.
 pub const DECISION_ROW_GAP: f32 = 0.0;
-/// The picked row's trailing check.
-pub const DECISION_CHECK: f32 = SPACE_3;
 /// A question's text to its rows, and one question to the next.
 pub const DECISION_QUESTION_GAP: f32 = HALF_ROW;
 pub const DECISION_QUESTIONS_GAP: f32 = ROW;
@@ -2124,7 +2059,7 @@ pub const SEND_KEY_INK: u32 = 0x111214b3;
 /// and centred in the row, 8px inline padding, no edge; the active tab a
 /// `paint::SELECTION` pill in `TEXT_STRONG` (stepping up under the pointer), the
 /// others `TEXT_MUTED` blending to `TEXT` with no ground. Main's label sits
-/// on the text column. Labels truncate at 112px. A still `STATUS_DOT`
+/// on the text column. Labels truncate at 112px. A still status dot
 /// leads a subagent's label 6px before it, in a slot every tab reserves —
 /// waiting `ATTENTION` > failed `BLOCKED` > working `RUNNING` — so a tab
 /// never changes width with its state; the `+N` overflow uses the same
@@ -2219,8 +2154,6 @@ pub const NAV_CELL: f32 = 2.0 * CH;
 pub const NAV_WORD_GAP: f32 = CH;
 /// 34ch — the text box of every row: the column less its inline padding.
 pub const NAV_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_PAD_X;
-/// The glyph box a cell's mark is drawn in (the spinner, a triangle, `❯`).
-pub const NAV_GLYPH: f32 = GLYPH_BOX;
 /// A half row — under the Needs-you strip and between two Project
 /// sections (the prototype's `.half`).
 pub const NAV_SECTION_GAP: f32 = HALF_ROW;
@@ -2971,32 +2904,33 @@ mod tests {
         assert_eq!(family(GEIST_MONO), FONT_UI);
     }
 
-    /// Rule 10: what text may use is in the face; what the design draws is
-    /// not, and stays an SVG.
+    /// Rule 10: what Geist Mono sets is in the face; what the platform's
+    /// fallback sets is not.
     #[test]
-    fn chrome_glyphs_are_in_the_face_and_drawn_glyphs_are_not() {
+    fn chrome_glyphs_are_in_the_face_and_fallback_glyphs_are_not() {
         assert!(covers(GEIST_MONO, 'a') && covers(GEIST_MONO, '$'));
         for glyph in CHROME_GLYPHS {
             assert!(covers(GEIST_MONO, *glyph), "{glyph} is not in Geist Mono");
         }
-        for glyph in DRAWN_GLYPHS {
+        for glyph in FALLBACK_GLYPHS {
             assert!(
                 !covers(GEIST_MONO, *glyph),
-                "{glyph} is in Geist Mono now: it may be text (move it to CHROME_GLYPHS)"
+                "{glyph} is in Geist Mono now (move it to CHROME_GLYPHS)"
             );
         }
-        // The spinner frames the design animates are all drawn.
-        for frame in [
-            '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '✢', '✳', '✶', '✻', '✽',
-        ] {
-            assert!(DRAWN_GLYPHS.contains(&frame), "{frame}");
+        // The spinner frames the design animates are the fallback's.
+        for frame in crate::components::BRAILLE_FRAMES
+            .iter()
+            .chain(&crate::components::WORKING_FRAMES)
+            .filter(|frame| **frame != '\u{b7}')
+        {
+            assert!(FALLBACK_GLYPHS.contains(frame), "{frame}");
         }
     }
 
-    /// Every non-ASCII glyph render code puts in a literal must be one the
-    /// face draws: `❯ ⎿ ∴ ✻ ✓ ✗ ☐ ◆ ⌘` and friends are SVG glyph boxes or
-    /// painted marks. Scans the render modules' non-test source,
-    /// skipping comments.
+    /// Every non-ASCII glyph render code puts in a literal is one rule 10
+    /// knows: Geist Mono's own, or one the fallback face sets. Scans the
+    /// render modules' non-test source, skipping comments.
     #[test]
     fn render_code_draws_only_covered_glyphs() {
         let sources: &[(&str, &str)] = &[
@@ -3044,7 +2978,7 @@ mod tests {
                 }
                 let code = code.split(" // ").next().unwrap_or(code);
                 for c in code.chars().filter(|c| !c.is_ascii()) {
-                    if !covers(GEIST_MONO, c) {
+                    if !covers(GEIST_MONO, c) && !FALLBACK_GLYPHS.contains(&c) {
                         missing.push(format!(
                             "{file}:{} {c} (U+{:04X}) not in Geist Mono",
                             at + 1,

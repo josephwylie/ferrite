@@ -673,7 +673,7 @@ fn layout_flow(
                             code_font,
                         );
                         let shaped_line = shape_line(subtext.clone(), font_size, &runs, window);
-                        let width = shaped_line.width();
+                        let width = layout_unit(shaped_line.width());
                         line_width += width;
                         line_fragments.push(LineFragmentLayout {
                             item_ix,
@@ -689,8 +689,9 @@ fn layout_flow(
                 }
                 MeasureItem::Image { .. } | MeasureItem::Element { .. } => {
                     if line_range.start <= item_start && item_end <= line_range.end {
-                        let size = image_sizes[item_ix]
+                        let mut size = image_sizes[item_ix]
                             .expect("image size should be measured before layout");
+                        size.width = layout_unit(size.width);
                         line_width += size.width;
                         actual_line_height = actual_line_height.max(size.height);
                         line_fragments.push(LineFragmentLayout {
@@ -741,6 +742,13 @@ fn layout_flow(
         fragments,
         size: size(max_width, y),
     }
+}
+
+/// A fragment's advance as a browser lays an inline box out: its width
+/// rounded up to the layout unit, 1/64px (Ferrite: the next fragment
+/// starts where the browser's would).
+fn layout_unit(width: Pixels) -> Pixels {
+    px((f32::from(width) * 64.0).ceil() / 64.0)
 }
 
 fn line_ranges(

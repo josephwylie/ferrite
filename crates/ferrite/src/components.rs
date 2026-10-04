@@ -215,15 +215,13 @@ pub fn section_label(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// Mono words in exactly their cells (`chars × CH` at the UI size). GPUI
-/// rounds a measured run's width up to the next whole pixel, so a row of
-/// separate runs drifts right by up to a pixel a run; boxed in its cells,
-/// each run stays on the grid the prototype's one browser line keeps.
+/// Mono words in exactly their run's width (`run_width`: `chars × CH` at
+/// the UI size, to the layout unit), as the browser lays a span of them.
 pub fn cells(text: impl Into<SharedString>) -> Div {
     let text: SharedString = text.into();
     div()
         .flex_shrink_0()
-        .w(px(cells_width(&text)))
+        .w(px(run_width(&text)))
         .whitespace_nowrap()
         .child(text)
 }
@@ -231,6 +229,12 @@ pub fn cells(text: impl Into<SharedString>) -> Div {
 /// `text`'s width on the UI grid: one `CH` a character.
 pub fn cells_width(text: &str) -> f32 {
     text.chars().count() as f32 * theme::CH
+}
+
+/// `text`'s width as one run, as the browser holds it: its cells, rounded
+/// up to the layout unit (1/64px) a measured run takes.
+pub fn run_width(text: &str) -> f32 {
+    (cells_width(text) * 64.0).ceil() / 64.0
 }
 
 /// Tabular figures, so a ticking count or a column of numbers never shifts.
@@ -348,229 +352,38 @@ pub fn reading_column(child: impl IntoElement) -> Div {
 
 // ------------------------------------------------------------- the line
 
-/// A run of lines set where the browser sets them: on a whole CSS pixel.
-///
-/// The prototype's browser lays a line box out at fractions of a pixel but
-/// paints its text with the line's top rounded to the pixel (half up), so a
-/// line centred in a row with an odd room — the Pane head's 23px under its
-/// rule, the bottom bar's 23px over its rule, the palette's 31px input,
-/// a wall cell a third of the board down — draws a device pixel lower than
-/// its box says. gpui paints text at its box, snapped only to the device
-/// pixel. This wrapper lays its child out as given and paints it moved to
-/// the pixel the browser would round its top to — from the board track's
-/// own fraction inside a board cell (`line_bias`) — never more than half a
-/// pixel, and nothing at 1×, where every top is whole already.
-pub fn css_line(child: impl IntoElement) -> CssLine {
-    CssLine {
-        child: Some(child.into_any_element()),
-        across: false,
-    }
-}
-
-/// A drawn mark set where the browser paints an inline `<svg>`: its box's
-/// corner rounded to the whole CSS pixel both ways (`css_line` rounds only
-/// the top: the browser keeps a line's glyphs at their fractions across).
-/// The titlebar's doors centre their 15px glyphs at half pixels, which the
-/// prototype paints half a pixel right and down.
-pub fn css_box(child: impl IntoElement) -> CssLine {
-    CssLine {
-        child: Some(child.into_any_element()),
-        across: true,
-    }
-}
-
-pub struct CssLine {
-    child: Option<AnyElement>,
-    across: bool,
-}
-
-thread_local! {
-    /// The board cells' rounding, innermost last (`line_bias`).
-    static LINE_BIAS: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// A board cell laid on whole pixels (`snap_rect`) whose grid track fell
-/// between them: `bias` is where the track was less where the cell is
-/// (`-0.33` for a wall row a third of the board down). The browser rounds
-/// the cell's box the same way but sets the lines inside from the track's
-/// own fraction, so a `css_line` in the cell rounds from there.
-pub fn line_bias(bias: f32, child: impl IntoElement) -> LineBias {
-    LineBias {
-        bias,
-        child: Some(child.into_any_element()),
-    }
-}
-
-pub struct LineBias {
-    bias: f32,
-    child: Option<AnyElement>,
-}
-
-impl IntoElement for LineBias {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl gpui::Element for LineBias {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (gpui::LayoutId, ()) {
-        let child = self.child.get_or_insert_with(|| div().into_any_element());
-        (child.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        LINE_BIAS.with(|bias| bias.borrow_mut().push(self.bias));
-        if let Some(child) = self.child.as_mut() {
-            child.prepaint(window, cx);
-        }
-        LINE_BIAS.with(|bias| bias.borrow_mut().pop());
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if let Some(child) = self.child.as_mut() {
-            child.paint(window, cx);
-        }
-    }
-}
-
-impl IntoElement for CssLine {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl gpui::Element for CssLine {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (gpui::LayoutId, ()) {
-        let child = self.child.get_or_insert_with(|| div().into_any_element());
-        (child.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        bounds: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let whole = |at: f32| (at + 0.5).floor() - at;
-        // Where the browser had the line before it rounded: the box's top
-        // plus what the board's whole-pixel cell rounding took from it.
-        let bias = LINE_BIAS.with(|bias| bias.borrow().last().copied().unwrap_or(0.));
-        let top = f32::from(bounds.origin.y);
-        let drop = whole(top + bias) + bias;
-        let shift = if self.across {
-            whole(f32::from(bounds.origin.x))
-        } else {
-            0.
-        };
-        if let Some(child) = self.child.as_mut() {
-            window.with_element_offset(point(px(shift), px(drop)), |window| {
-                child.prepaint(window, cx)
-            });
-        }
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if let Some(child) = self.child.as_mut() {
-            child.paint(window, cx);
-        }
-    }
+/// Where the browser paints a box edge at `x` (a layout position in
+/// logical pixels): on the whole pixel, half up — what Ferrite's gpui does
+/// with every laid-out box (vendor/gpui-pre, "Pixel snapping"), for edges a
+/// custom element paints itself.
+pub fn css_px(x: f32) -> f32 {
+    (x + 0.5).floor()
 }
 
 // ------------------------------------------------------------------ marks
 
-/// A status dot: the `●` glyph's own box at the grid size (`STATUS_DOT`,
-/// 7.5px), its centre `STATUS_DOT_LIFT` above the centre of the line it is
-/// laid in — where Geist Mono's `●` sits — as a relative inset, so the line
-/// never moves. Its left edge is wherever the caller starts its cell. Chain
-/// `.size(..)` for another size.
-pub fn status_dot(ink: u32) -> Div {
+/// A glyph set as the prototype's browser sets it: text, in the line's
+/// face, size and weight, on the line's baseline, the platform's font
+/// fallback supplying what Geist Mono lacks — on macOS Menlo for
+/// `❯ ◆ ✓ ✗ ▾ ▸ ⌘ ⌥ ⌃ ✢ ✳ ✶ ✻ ✽`, STIX Two Math for `⏵ ⏸`, Apple Braille
+/// for the spinner's dots (theme rule 10). It starts where its cell does;
+/// its advance is its face's.
+pub fn glyph(text: impl Into<SharedString>, ink: u32) -> Div {
     div()
         .flex_shrink_0()
-        .relative()
-        .top(px(-theme::STATUS_DOT_LIFT))
-        .size(px(theme::STATUS_DOT))
-        .rounded_full()
-        .bg(rgb(ink))
+        .whitespace_nowrap()
+        .text_color(rgb(ink))
+        .child(text.into())
 }
 
-/// A hollow status dot (parked, the prototype's `○`): the ring without the
-/// fill, the dot's diameter and lift.
+/// A status dot: Geist Mono's `●` (the prototype's `.dot`), set as text.
+pub fn status_dot(ink: u32) -> Div {
+    glyph("\u{25cf}", ink)
+}
+
+/// A hollow status dot (parked, the prototype's `○`), set as text.
 pub fn status_ring(ink: u32) -> Div {
-    div()
-        .flex_shrink_0()
-        .relative()
-        .top(px(-theme::STATUS_DOT_LIFT))
-        .size(px(theme::STATUS_DOT))
-        .rounded_full()
-        .border_1()
-        .border_color(rgb(ink))
+    glyph("\u{25cb}", ink)
 }
 
 // ------------------------------------------------------------------ loops
@@ -589,20 +402,22 @@ pub use loops::*;
 mod loops {
     use super::*;
 
-    /// The braille spinner's frames as characters, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, for copy and
-    /// tests: what `icons::BRAILLE_FRAMES` draws (Geist Mono has no braille, so
-    /// they are never text, rule 10).
+    /// The braille spinner's frames, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`.
     pub const BRAILLE_FRAMES: [char; 10] = [
         '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}',
         '\u{2827}', '\u{2807}', '\u{280f}',
     ];
 
-    /// The working spinner's frames as characters, `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`: what
-    /// `icons::WORKING_FRAMES` draws.
+    /// The working spinner's frames, Claude Code's cycle out and back:
+    /// `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`. Frame 4, `✻` (`WORKED`), is its still state.
     pub const WORKING_FRAMES: [char; 10] = [
         '\u{b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273b}',
         '\u{2736}', '\u{2733}', '\u{2722}',
     ];
+
+    /// `✻`: a finished turn's mark (`✻ Worked for 41s`) and the working
+    /// spinner under reduced motion.
+    pub const WORKED: char = '\u{273b}';
 
     /// Which of `frames` a loop shows at `phase` [0, 1) of its turn.
     pub fn frame_at(phase: f32, frames: usize) -> usize {
@@ -610,130 +425,105 @@ mod loops {
     }
 
     /// The braille spinner (theme rule 8): `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, one frame per
-    /// `MOTION_BRAILLE_FRAME_MS`, in `ink` (`RUNNING`), drawn as an SVG in a
-    /// `size` glyph box. It stands in place of a *working* Thread's status dot,
-    /// in the sidebar and in Pane heads, so a board of them shares one tick.
-    /// Under reduced motion it is the still dot (`status_dot(ink)`), centred in
-    /// the same box.
-    pub fn braille_spinner(ink: u32, size: f32) -> AnyElement {
-        Spinner {
-            frames: &icons::BRAILLE_FRAMES,
+    /// `MOTION_BRAILLE_FRAME_MS`, in `ink` (`RUNNING`), set as text at the
+    /// semibold weight (the prototype's `.dot.d-run`). At that weight the
+    /// prototype's browser falls back to Apple Braille's outline face, which
+    /// rings the dots it does not raise; its faces share one weight, so the
+    /// fallback names it (`BRAILLE_FACE`). It stands in place of a *working*
+    /// Thread's status dot, in the sidebar and in Pane heads, so a board of
+    /// them shares one tick. Under reduced motion it is the still dot.
+    pub fn braille_spinner(ink: u32) -> AnyElement {
+        let mut spinner = div().child(Spinner {
+            frames: &BRAILLE_FRAMES,
             frame_ms: theme::MOTION_BRAILLE_FRAME_MS,
-            still: Still::Dot,
+            still: '\u{25cf}',
             ink,
-            size,
+            weight: theme::W_STRONG,
             selector: "braille-spinner",
-        }
-        .into_any_element()
+        });
+        spinner.text_style().font_fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![
+            BRAILLE_FACE.to_string(),
+        ]));
+        spinner.into_any_element()
     }
+
+    /// The face the braille spinner falls back to, by PostScript name
+    /// (vendor/gpui-pre-macos's `postscript:` fallback).
+    pub const BRAILLE_FACE: &str = "postscript:AppleBraille-Outline6Dot";
 
     /// The working line's spinner (theme rule 8): `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`, one
     /// frame per `MOTION_WORKING_FRAME_MS`, in `ink` (the provider's brand
-    /// colour: `PROVIDER_CLAUDE`, `PROVIDER_CODEX`), drawn as an SVG in a
-    /// `size` glyph box — the focused Pane's gutter mark while a turn runs.
-    /// Under reduced motion it holds `✻` (`icons::WORKED`), the mark a finished
-    /// turn wears.
-    pub fn working_spinner(ink: u32, size: f32) -> AnyElement {
+    /// colour: `PROVIDER_CLAUDE`, `PROVIDER_CODEX`), set as text — every
+    /// working line's gutter mark while a turn runs, on the one shared
+    /// clock. Under reduced motion it holds `✻` (`WORKED`), the mark a
+    /// finished turn wears.
+    pub fn working_spinner(ink: u32) -> AnyElement {
         Spinner {
-            frames: &icons::WORKING_FRAMES,
+            frames: &WORKING_FRAMES,
             frame_ms: theme::MOTION_WORKING_FRAME_MS,
-            still: Still::Frame(icons::WORKED),
+            still: WORKED,
             ink,
-            size,
+            weight: theme::W_BODY,
             selector: "working-spinner",
         }
         .into_any_element()
     }
 
-    #[derive(Clone, Copy)]
-    enum Still {
-        /// The status dot.
-        Dot,
-        /// One drawn frame.
-        Frame(&'static str),
-    }
-
     #[derive(IntoElement)]
     struct Spinner {
-        frames: &'static [&'static str],
+        frames: &'static [char],
         frame_ms: u64,
-        still: Still,
+        still: char,
         ink: u32,
-        size: f32,
+        weight: gpui::FontWeight,
         selector: &'static str,
     }
 
     impl RenderOnce for Spinner {
         fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-            let mark = if motion::reduced_motion(cx) {
-                match self.still {
-                    Still::Dot => status_dot(self.ink).into_any_element(),
-                    Still::Frame(path) => icons::icon(path, self.size, self.ink).into_any_element(),
-                }
+            let frame = if motion::reduced_motion(cx) {
+                self.still
             } else {
                 let turn = Duration::from_millis(self.frame_ms * self.frames.len() as u64);
-                let phase = motion::pulse_phase(turn, window.current_view(), cx);
-                let frame = self.frames[frame_at(phase, self.frames.len())];
-                icons::icon(frame, self.size, self.ink).into_any_element()
+                let phase = motion::script_phase(turn, window.current_view(), cx);
+                self.frames[frame_at(phase, self.frames.len())]
             };
             let selector = self.selector;
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .size(px(self.size))
+            glyph(SharedString::from(frame.to_string()), self.ink)
+                .font_weight(self.weight)
                 .debug_selector(move || selector.into())
-                .child(mark)
         }
     }
 
-    /// The colour the shimmer crests at over `base`: `base` lifted toward white
-    /// by `SHIMMER_LIFT` (Claude's clay crests near `#ffe1d3`).
+    /// The colour the shimmer crests at over `base`: Claude's clay crests at
+    /// the prototype's `#ffe1d3`; another ink lifted toward white by
+    /// `SHIMMER_LIFT`.
     pub fn shimmer_crest(base: u32) -> Hsla {
-        motion::mix(rgb(base).into(), rgb(0xffffff).into(), theme::SHIMMER_LIFT)
+        if base == theme::PROVIDER_CLAUDE {
+            rgb(theme::SHIMMER_CREST_CLAUDE).into()
+        } else {
+            motion::mix(rgb(base).into(), rgb(0xffffff).into(), theme::SHIMMER_LIFT)
+        }
     }
 
-    /// The per-character colours of the shimmer at `phase` [0, 1): a soft crest
-    /// `2 × SHIMMER_HALF_WIDTH` of the run wide, linear on each side, travelling
-    /// left to right from half a run before the text to half a run past it (the
-    /// prototype's 300% gradient). Characters off the crest carry no highlight
-    /// (they take the run's own `base` colour). Byte ranges, sorted, disjoint.
-    pub fn shimmer_highlights(
-        text: &str,
-        base: Hsla,
-        crest: Hsla,
-        phase: f32,
-    ) -> Vec<(Range<usize>, HighlightStyle)> {
-        let count = text.chars().count();
-        if count == 0 {
-            return Vec::new();
-        }
+    /// How far toward its crest the shimmer lifts the ink at `x` (a
+    /// fraction of the run's width) at `phase` [0, 1): the prototype's 300%
+    /// linear gradient — a crest `2 × SHIMMER_HALF_WIDTH` of the run wide,
+    /// linear on each side, travelling left to right from half a run
+    /// before the text to half a run past it. 0 off the crest.
+    pub fn shimmer_lift(x: f32, phase: f32) -> f32 {
         let centre = -0.5 + 2.0 * phase.rem_euclid(1.0);
-        text.char_indices()
-            .enumerate()
-            .filter_map(|(index, (at, ch))| {
-                let x = (index as f32 + 0.5) / count as f32;
-                let k = 1.0 - (x - centre).abs() / theme::SHIMMER_HALF_WIDTH;
-                (k > 0.0).then(|| {
-                    (
-                        at..at + ch.len_utf8(),
-                        HighlightStyle {
-                            color: Some(motion::mix(base, crest, k)),
-                            ..Default::default()
-                        },
-                    )
-                })
-            })
-            .collect()
+        (1.0 - (x - centre).abs() / theme::SHIMMER_HALF_WIDTH).max(0.0)
     }
 
     /// The working caption's shimmer (theme rule 8): `text` in `base` (the
     /// provider's colour) under a crest of `shimmer_crest(base)` sweeping left
-    /// to right every `MOTION_SHIMMER_MS`. One `StyledText`, recoloured per
-    /// character, so nothing reflows; one line that truncates at its end. Only
-    /// the focused Pane's working line wears it; under reduced motion it is
-    /// plain `base`. The caller sets the face, size and line height.
+    /// to right every `MOTION_SHIMMER_MS`, its ink graded across the run as
+    /// the prototype's text-clipped gradient grades it: per device column,
+    /// not per character (`ShimmerText`). One run, so nothing reflows; one
+    /// line that truncates at its end. Only the focused Pane's working line
+    /// wears it; under reduced motion it is plain `base`. The caller sets
+    /// the face, size and line height.
     pub fn shimmer(text: impl Into<SharedString>, base: u32) -> AnyElement {
         Shimmer {
             text: text.into(),
@@ -751,21 +541,158 @@ mod loops {
     impl RenderOnce for Shimmer {
         fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
             let base: Hsla = rgb(self.base).into();
-            let text = if motion::reduced_motion(cx) {
-                gpui::StyledText::new(self.text)
-            } else {
+            let lit = (!motion::reduced_motion(cx)).then(|| {
                 let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
-                let phase = motion::pulse_phase(turn, window.current_view(), cx);
-                let highlights =
-                    shimmer_highlights(&self.text, base, shimmer_crest(self.base), phase);
-                gpui::StyledText::new(self.text).with_highlights(highlights)
-            };
+                (
+                    motion::css_phase(turn, window.current_view(), cx),
+                    shimmer_crest(self.base),
+                )
+            });
             div()
                 .min_w_0()
                 .truncate()
                 .text_color(base)
                 .debug_selector(|| "shimmer".into())
-                .child(text)
+                .child(ShimmerText {
+                    text: self.text,
+                    base,
+                    lit,
+                    child: None,
+                })
+        }
+    }
+
+    /// A run in `base`, or, while it shimmers, its glyphs painted a device
+    /// column at a time in the gradient's ink there (a glyph's columns
+    /// each take their own ink, as the browser's clipped gradient does).
+    struct ShimmerText {
+        text: SharedString,
+        base: Hsla,
+        /// The crest's phase and colour; `None` holds the run still.
+        lit: Option<(f32, Hsla)>,
+        child: Option<AnyElement>,
+    }
+
+    impl IntoElement for ShimmerText {
+        type Element = Self;
+
+        fn into_element(self) -> Self::Element {
+            self
+        }
+    }
+
+    impl gpui::Element for ShimmerText {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _: Option<&gpui::GlobalElementId>,
+            _: Option<&gpui::InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (gpui::LayoutId, ()) {
+            let child = self
+                .child
+                .get_or_insert_with(|| gpui::StyledText::new(self.text.clone()).into_any_element());
+            (child.request_layout(window, cx), ())
+        }
+
+        fn prepaint(
+            &mut self,
+            _: Option<&gpui::GlobalElementId>,
+            _: Option<&gpui::InspectorElementId>,
+            _: gpui::Bounds<gpui::Pixels>,
+            _: &mut (),
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            if let Some(child) = self.child.as_mut() {
+                child.prepaint(window, cx);
+            }
+        }
+
+        fn paint(
+            &mut self,
+            _: Option<&gpui::GlobalElementId>,
+            _: Option<&gpui::InspectorElementId>,
+            bounds: gpui::Bounds<gpui::Pixels>,
+            _: &mut (),
+            _: &mut (),
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            let Some((phase, crest)) = self.lit else {
+                if let Some(child) = self.child.as_mut() {
+                    child.paint(window, cx);
+                }
+                return;
+            };
+            let style = window.text_style();
+            let size = style.font_size.to_pixels(window.rem_size());
+            let line_height = style.line_height_in_pixels(window.rem_size());
+            let run = gpui::TextRun {
+                len: self.text.len(),
+                font: style.font(),
+                color: self.base,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let line = window
+                .text_system()
+                .shape_line(self.text.clone(), size, &[run], None);
+            let width = f32::from(line.width);
+            if width <= 0.0 {
+                return;
+            }
+            let scale = window.scale_factor();
+            let left = f32::from(bounds.left());
+            let right = f32::from(bounds.right()).min(left + width);
+            let baseline = bounds.top()
+                + (line_height - line.ascent - line.descent) / 2.
+                + line.ascent;
+            let glyphs: Vec<_> = line
+                .runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter().map(move |glyph| (run.font_id, glyph)))
+                .collect();
+            let advance = f32::from(size);
+            let first = (left * scale).floor() as i32;
+            let last = (right * scale).ceil() as i32;
+            for column in first..last {
+                let x0 = column as f32 / scale;
+                let x1 = (column + 1) as f32 / scale;
+                let lift = shimmer_lift(((x0 + x1) / 2.0 - left) / width, phase);
+                let ink = motion::mix(self.base, crest, lift);
+                let mask = gpui::Bounds::from_corners(
+                    gpui::point(px(x0), bounds.top()),
+                    gpui::point(px(x1), bounds.bottom()),
+                );
+                window.with_content_mask(Some(gpui::ContentMask { bounds: mask }), |window| {
+                    for (font_id, glyph) in &glyphs {
+                        let at = left + f32::from(glyph.position.x);
+                        if at > x1 || at + advance < x0 {
+                            continue;
+                        }
+                        let _ = window.paint_glyph(
+                            gpui::point(px(at), baseline),
+                            *font_id,
+                            glyph.id,
+                            size,
+                            ink,
+                        );
+                    }
+                });
+            }
         }
     }
 
@@ -795,7 +722,7 @@ mod loops {
             return 1.0;
         }
         let turn = Duration::from_millis(theme::MOTION_CARET_BLINK_MS);
-        caret_blink(motion::pulse_phase(turn, window.current_view(), cx))
+        caret_blink(motion::css_phase(turn, window.current_view(), cx))
     }
 }
 
@@ -840,7 +767,6 @@ fn kbd_face() -> Div {
 
 /// A modifier's glyph as a key combination spells it: `cmd` ⌘, `shift` ⇧,
 /// `alt` ⌥, `ctrl` ⌃. `None` for a key that is its own word.
-#[cfg(test)]
 pub fn key_glyph(part: &str) -> Option<char> {
     match part {
         "cmd" => Some('\u{2318}'),
@@ -882,87 +808,53 @@ pub fn chord_parts(stroke: &str) -> Vec<&str> {
     parts
 }
 
-/// A key combination as it is drawn, from a key table's spelling, in the
-/// code face (keys are machine text, rule 6). `⌘` (`command.svg`, the
-/// fallback face's glyph), `⌥` (`option.svg`) and `⌃` (`control.svg`) are
-/// in neither face and are drawn: each is Menlo's glyph (the prototype's
-/// browser falls back to it) in a cell of its advance (`KEY_GLYPH_ADVANCE`)
-/// one line tall, on the line's baseline as the browser sets it. `⇧` and
-/// every key word (`⌫` `⏎` `⇥`, a letter) are Geist Mono's own text. Parts
-/// joined by `-` sit tight, as a menu shortcut or a tooltip reads (`cmd-F`
-/// → `⌘F`); strokes joined by spaces keep one code space apart. The one
-/// place a modifier glyph is drawn.
+/// A key combination as it is set, from a key table's spelling, in the
+/// code face (keys are machine text, rule 6): one run of text, as the
+/// prototype types it (`⌘⇧N`, `⌘D`) — `⌘` `⌥` `⌃` in the face the platform
+/// falls back to (`glyph`), `⇧` and every key word (`⌫` `⏎` `⇥`, a letter)
+/// Geist Mono's own. Parts joined by `-` sit tight, as a menu shortcut or a
+/// tooltip reads (`cmd-F` → `⌘F`); strokes joined by spaces keep one code
+/// space apart. The run names its modifier for the tests
+/// (`command-key`, …).
 pub fn key_combo(keys: &str, ink: u32) -> Div {
-    let spaced = keys.contains(' ');
-    let gap = if spaced {
-        theme::FS_UI * theme::CODE_ADVANCE
+    let text = keys
+        .split(' ')
+        .map(|stroke| {
+            chord_parts(stroke)
+                .into_iter()
+                .map(|part| key_glyph(part).map_or_else(|| part.to_string(), String::from))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let selector = if text.contains('\u{2318}') {
+        "command-key"
+    } else if text.contains('\u{2325}') {
+        "option-key"
+    } else if text.contains('\u{2303}') {
+        "control-key"
+    } else if text.contains('\u{21e7}') {
+        "shift-key"
     } else {
-        0.
+        "key-combo"
     };
-    let glyph_box = |selector: &'static str| {
-        div()
-            .debug_selector(move || selector.into())
-            .flex_shrink_0()
-            .w(px(theme::KEY_GLYPH_ADVANCE))
-            .h(px(theme::LH_UI))
-    };
-    let strokes = keys.split(' ').map(|stroke| {
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .children(chord_parts(stroke).into_iter().map(|part| {
-                let svg = match part {
-                    "cmd" => Some((icons::COMMAND, "command-key")),
-                    "alt" => Some((icons::OPTION, "option-key")),
-                    "ctrl" => Some((icons::CONTROL, "control-key")),
-                    _ => None,
-                };
-                match (svg, part) {
-                    (Some((path, selector)), _) => glyph_box(selector)
-                        .child(icons::icon(path, theme::KEY_GLYPH_ADVANCE, ink).h(px(theme::LH_UI)))
-                        .into_any_element(),
-                    (None, "shift") => div()
-                        .debug_selector(|| "shift-key".into())
-                        .flex_shrink_0()
-                        .child("\u{21e7}")
-                        .into_any_element(),
-                    // A key's letter holds exactly its cell: hints sit
-                    // right-aligned, and a measured run rounds up a pixel.
-                    (None, key) => cells(key.to_string()).into_any_element(),
-                }
-            }))
-    });
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
+    glyph(SharedString::from(text), ink)
         .font_family(theme::FONT_CODE)
-        .gap(px(gap))
-        .text_color(rgb(ink))
-        .children(strokes)
+        .debug_selector(move || selector.into())
 }
 
-/// The prompt mark `❯`, drawn (Geist Mono lacks U+276F): the heavy wedge of
-/// `prompt.svg`, laid in one character cell exactly as the prototype's
-/// fallback face sets the glyph — a 5 × 9.5px wedge 0.9px into the cell,
-/// centred on the line a hair low. Placed at a gutter's start its left edge
-/// is `TX_PAD_L + 0.9` (pane.left + 16.5); centred in the nav's cursor cell
-/// it spans the cell's ink box. The transcript prompt, the Composer, the
-/// nav cursor and every selection bar share it; `ink` is `ACCENT` where it
-/// marks the live input or the selected row, `TEXT_MUTED` where it does not.
+/// The prompt mark `❯` (Geist Mono lacks U+276F), set as text at the
+/// semibold weight in one character cell, as the prototype's `.g` sets it:
+/// the face the platform falls back to draws it (`glyph`). The transcript
+/// prompt, the Composer, the nav cursor and every selection bar share it;
+/// `ink` is `ACCENT` where it marks the live input or the selected row,
+/// `TEXT_MUTED` where it does not.
 pub fn prompt_mark(ink: u32) -> AnyElement {
     div()
-        .relative()
         .flex_shrink_0()
         .w(px(theme::CH))
-        .h(px(theme::GLYPH_BOX))
-        .child(
-            icons::icon(icons::PROMPT, theme::GLYPH_BOX, ink)
-                .absolute()
-                .left_0()
-                .top_0(),
-        )
+        .font_weight(theme::W_STRONG)
+        .child(glyph("\u{276f}", ink))
         .into_any_element()
 }
 
@@ -972,6 +864,11 @@ pub fn prompt_mark(ink: u32) -> AnyElement {
 /// stroke with round joins) — so what follows it starts the gap after the
 /// mark, not after its box. The empty board's banner and every transcript's
 /// banner draw it three rows tall.
+///
+/// The browser draws an inline `<svg>` at its own size from its box's
+/// rounded corner; an image at the mark's own 700 × 1130 would be shrunk by
+/// the GPU without filtering and lose its antialiasing. So the mark is
+/// rasterized at its device size, once per size (`SteelMark`).
 pub fn steel_mark(height: f32) -> Div {
     // The shards span x 280..980 and y 30..1160 of the mark's 1254 box; the
     // image is cropped to them and paints their steel gradient.
@@ -980,7 +877,129 @@ pub fn steel_mark(height: f32) -> Div {
         .flex_shrink_0()
         .w(px(width))
         .h(px(height))
-        .child(gpui::img(icons::FERRITE_STEEL).w(px(width)).h(px(height)))
+        .child(SteelMark {
+            width,
+            height,
+            child: None,
+        })
+}
+
+/// The steel mark at `width` × `height` from its box's rounded corner.
+struct SteelMark {
+    width: f32,
+    height: f32,
+    child: Option<AnyElement>,
+}
+
+impl IntoElement for SteelMark {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for SteelMark {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let mut style = gpui::Style::default();
+        style.size.width = gpui::relative(1.).into();
+        style.size.height = gpui::relative(1.).into();
+        (window.request_layout(style, None, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // On a canvas of whole pixels (its box then rounds to itself), the
+        // drawing at its own scale, the canvas's spare width blank.
+        let scale = window.scale_factor();
+        let canvas = gpui::size(px(self.width.ceil()), px(self.height.ceil()));
+        let image = steel_image(
+            (f32::from(canvas.width) * scale).round().max(1.) as u32,
+            (f32::from(canvas.height) * scale).round().max(1.) as u32,
+            f32::from(canvas.width) / self.width,
+            f32::from(canvas.height) / self.height,
+        );
+        let mut child = gpui::img(gpui::ImageSource::Image(image))
+            .w(canvas.width)
+            .h(canvas.height)
+            .into_any_element();
+        child.layout_as_root(canvas.into(), window, cx);
+        child.prepaint_at(bounds.origin, window, cx);
+        self.child = Some(child);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(child) = self.child.as_mut() {
+            child.paint(window, cx);
+        }
+    }
+}
+
+/// The steel mark's drawing on a `width` × `height` device-pixel canvas
+/// `spare` times the drawing's own width and height (the rest blank, right
+/// and below); one image per size.
+fn steel_image(width: u32, height: u32, spare_w: f32, spare_h: f32) -> std::sync::Arc<gpui::Image> {
+    type Key = (u32, u32, u32, u32);
+    thread_local! {
+        static STEEL: std::cell::RefCell<std::collections::HashMap<Key, std::sync::Arc<gpui::Image>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    const DRAWING: &str = include_str!("../assets/icons/ferrite-steel.svg");
+    let key = (width, height, spare_w.to_bits(), spare_h.to_bits());
+    STEEL.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| {
+                let svg = DRAWING.replacen(
+                    r#"viewBox="280 30 700 1130" width="700" height="1130""#,
+                    &format!(
+                        r#"viewBox="280 30 {} {}" width="{width}" height="{height}""#,
+                        700.0 * spare_w,
+                        1130.0 * spare_h
+                    ),
+                    1,
+                );
+                std::sync::Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Svg,
+                    svg.into_bytes(),
+                ))
+            })
+            .clone()
+    })
 }
 
 /// A `GLYPH_BOX` square that centres its mark.
@@ -1344,9 +1363,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                     .child(key),
             )
         })
-        .when(item.checked, |row| {
-            row.child(icons::icon(icons::CHECK, theme::ROW_ICON, theme::ACCENT))
-        })
+        .when(item.checked, |row| row.child(glyph("\u{2713}", theme::ACCENT)))
 }
 
 /// A menu row. The only place a menu row takes its pointer role: the raised
@@ -1406,22 +1423,93 @@ pub fn menu_section(
         )
 }
 
-/// Reports `element`'s laid-out bounds to `record` in prepaint, through an
-/// absolute canvas pinned to all four edges of its padding box, so padding
-/// never offsets it. A border is outside that box: an edged caller adds it
-/// back. What a summoned surface measures its trigger and limits by.
+/// Reports `element`'s laid-out bounds, unrounded, to `record` in
+/// prepaint, through an absolute box pinned to all four edges of its
+/// padding box, so padding never offsets it. A border is outside that box:
+/// an edged caller adds it back. What a summoned surface measures its
+/// trigger and limits by.
 pub fn on_bounds<E: ParentElement>(
     element: E,
     record: impl FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App) + 'static,
 ) -> E {
-    element.child(
-        gpui::canvas(
-            move |bounds, window, cx| record(bounds, window, cx),
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .inset_0(),
-    )
+    element.child(Measured {
+        record: Some(Box::new(record)),
+    })
+}
+
+type Record = Box<dyn FnOnce(gpui::Bounds<gpui::Pixels>, &mut Window, &mut App)>;
+
+/// An absolute box pinned to its parent's padding box that reports the
+/// box's unrounded bounds in prepaint: where the browser's
+/// `getBoundingClientRect` would put it, before the pixel rounding of what
+/// is painted (vendor/gpui-pre, "Pixel snapping").
+struct Measured {
+    record: Option<Record>,
+}
+
+impl IntoElement for Measured {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for Measured {
+    type RequestLayoutState = gpui::LayoutId;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, gpui::LayoutId) {
+        let mut style = gpui::Style::default();
+        style.position = gpui::Position::Absolute;
+        style.inset.top = px(0.).into();
+        style.inset.right = px(0.).into();
+        style.inset.bottom = px(0.).into();
+        style.inset.left = px(0.).into();
+        let layout_id = window.request_layout(style, None, cx);
+        (layout_id, layout_id)
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        layout_id: &mut gpui::LayoutId,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(record) = self.record.take() {
+            let bounds = window.unsnapped_layout_bounds(*layout_id);
+            record(bounds, window, cx);
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut gpui::LayoutId,
+        _: &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
 }
 
 /// An inert status line (loading, empty, error) in a menu.
@@ -1875,25 +1963,16 @@ mod tests {
 
     #[test]
     fn marks_and_keycaps_hold_their_boxes() {
+        // The dots are the face's own glyphs, typed in their ink.
         let mut dot = status_dot(theme::RUNNING);
-        assert_eq!(dot.style().size.width, Some(px(theme::STATUS_DOT).into()));
         assert_eq!(
-            theme::STATUS_DOT,
-            7.5,
-            "the ● glyph's size at the grid size"
+            dot.style().text.color,
+            Some(rgb(theme::RUNNING).into()),
+            "● in its ink"
         );
-        assert_eq!(
-            dot.style().inset.top,
-            Some(px(-theme::STATUS_DOT_LIFT).into()),
-            "the dot's centre sits 1px above the line's, as the glyph's does"
-        );
-        assert_eq!(
-            dot.style().background,
-            Some(Fill::from(rgb(theme::RUNNING)))
-        );
+        assert_eq!(dot.style().background, None, "typed, not painted");
         let mut ring = status_ring(theme::TEXT_FAINT);
-        assert_eq!(ring.style().background, None);
-        assert_eq!(ring.style().border_color, Some(solid(theme::TEXT_FAINT)));
+        assert_eq!(ring.style().text.color, Some(rgb(theme::TEXT_FAINT).into()));
         let mut key = kbd("y");
         assert_eq!(key.style().size.height, Some(px(theme::KBD_H).into()));
         assert_eq!(
@@ -2022,14 +2101,10 @@ mod tests {
         assert_eq!(frame_at(0.95, 10), 9);
         assert_eq!(frame_at(1.0, 10), 0, "a turn wraps");
         assert_eq!(frame_at(0.9999999, 10), 9);
-        assert_eq!(icons::BRAILLE_FRAMES.len(), BRAILLE_FRAMES.len());
-        assert_eq!(icons::WORKING_FRAMES.len(), WORKING_FRAMES.len());
         // The working cycle goes out and back, and holds ✻ when still.
-        assert_eq!(WORKING_FRAMES[4], '\u{273b}');
-        assert_eq!(icons::WORKING_FRAMES[4], icons::WORKED);
+        assert_eq!(WORKING_FRAMES[4], WORKED);
         for (out, back) in [(1, 9), (2, 8), (3, 7), (4, 6)] {
             assert_eq!(WORKING_FRAMES[out], WORKING_FRAMES[back]);
-            assert_eq!(icons::WORKING_FRAMES[out], icons::WORKING_FRAMES[back]);
         }
         // 80ms and 120ms frames, as the prototype ticks them.
         assert_eq!(theme::MOTION_BRAILLE_FRAME_MS * 10, 800);
@@ -2040,36 +2115,21 @@ mod tests {
     /// the crest colour, and leaves the rest of the run in its base colour.
     #[test]
     fn the_shimmer_crest_sweeps_left_to_right() {
+        // Before and after the sweep: nothing is lit.
+        for x in [0.0, 0.5, 1.0] {
+            assert_eq!(shimmer_lift(x, 0.0), 0.0);
+        }
+        // Mid-sweep the crest sits at the run's middle, symmetric.
+        assert_eq!(shimmer_lift(0.5, 0.5), 1.0);
+        assert!((shimmer_lift(0.3, 0.5) - shimmer_lift(0.7, 0.5)).abs() < 1e-5);
+        // It travels left to right.
+        assert!(shimmer_lift(0.2, 0.35) > shimmer_lift(0.2, 0.65));
+        assert!(shimmer_lift(0.8, 0.35) < shimmer_lift(0.8, 0.65));
+        // Claude's clay crests at the prototype's `#ffe1d3`, lighter than it.
         let base: Hsla = rgb(theme::PROVIDER_CLAUDE).into();
         let crest = shimmer_crest(theme::PROVIDER_CLAUDE);
-        let text = "Reticulating\u{2026}";
-        // Before and after the sweep: nothing is lit.
-        assert!(shimmer_highlights(text, base, crest, 0.0).is_empty());
-        assert!(shimmer_highlights(text, base, crest, 0.999).len() <= 1);
-        // Mid-sweep: the crest sits at the run's middle, symmetric.
-        let mid = shimmer_highlights(text, base, crest, 0.5);
-        assert!(!mid.is_empty());
-        let lit = |phase: f32| -> Vec<usize> {
-            shimmer_highlights(text, base, crest, phase)
-                .iter()
-                .map(|(range, _)| range.start)
-                .collect()
-        };
-        let early = lit(0.35);
-        let late = lit(0.65);
-        assert!(early.first() < late.first(), "{early:?} then {late:?}");
-        // Ranges are byte ranges over whole characters, in order.
-        for pair in mid.windows(2) {
-            assert!(pair[0].0.end <= pair[1].0.start);
-        }
-        let last = mid.last().unwrap().0.clone();
-        assert!(text.is_char_boundary(last.start) && text.is_char_boundary(last.end));
-        // The crest is lighter than the base, and no highlight is brighter.
+        assert_eq!(crest, rgb(theme::SHIMMER_CREST_CLAUDE).into());
         assert!(crest.l > base.l);
-        for (_, style) in &mid {
-            assert!(style.color.unwrap().l <= crest.l + 1e-4);
-        }
-        assert!(shimmer_highlights("", base, crest, 0.5).is_empty());
     }
 
     /// The caret's soft blink: full, eased down, held low, eased back.
@@ -2093,8 +2153,8 @@ mod tests {
         impl gpui::Render for Board {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div()
-                    .child(braille_spinner(theme::RUNNING, theme::GLYPH_BOX))
-                    .child(working_spinner(theme::PROVIDER_CLAUDE, theme::GLYPH_BOX))
+                    .child(braille_spinner(theme::RUNNING))
+                    .child(working_spinner(theme::PROVIDER_CLAUDE))
                     .child(shimmer("Working", theme::PROVIDER_CLAUDE))
             }
         }
