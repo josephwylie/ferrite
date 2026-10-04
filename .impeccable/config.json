@@ -1,0 +1,35 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "spikes/terminal-native/index.html"
+        ],
+        "createdAt": "2026-10-04T02:48:38.418Z",
+        "reason": "Claude: terminal-native prototype the user asked for; full-bleed row grounds on a character grid (diff rows, word marks, selected rows, pane heads, prompt band) are the direction under review"
+      },
+      {
+        "rule": "gradient-text",
+        "value": "*",
+        "files": [
+          "spikes/terminal-native/index.html"
+        ],
+        "createdAt": "2026-10-04T02:49:12.275Z",
+        "reason": "Claude: the working-line shimmer reproduces Claude Code's animated spinner text, literal domain motion in a prototype"
+      },
+      {
+        "rule": "monotonous-spacing",
+        "value": "*",
+        "files": [
+          "spikes/terminal-native/index.html"
+        ],
+        "createdAt": "2026-10-04T03:25:48.435Z",
+        "reason": "Claude: terminal-native prototype the user asked for; the repeated ~8px is one character cell (1ch) of horizontal inset on a monospace grid, vertical rhythm runs in rows and half rows"
+      }
+    ]
+  }
+}
