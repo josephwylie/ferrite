@@ -17,7 +17,6 @@ use gpui::{
     div, prelude::*, px, rgb, App, ClickEvent, ElementId, IntoElement, SharedString, Window,
 };
 
-use crate::icons::{self, icon};
 use crate::pointer::Pointer;
 use crate::theme;
 
@@ -67,7 +66,7 @@ impl RenderOnce for BackgroundChips {
             .flex_wrap()
             .justify_end()
             .items_center()
-            .gap(px(theme::SPACE_1_5))
+            .gap(px(theme::CH))
             .min_w_0()
             .max_w_full();
         for (index, task) in self.tasks.into_iter().enumerate() {
@@ -77,8 +76,9 @@ impl RenderOnce for BackgroundChips {
     }
 }
 
-/// One chip: a static `RUNNING` dot, the task's own description
-/// cut to the chip's width, and the `×` where stopping is wired. The whole
+/// One chip (theme WP-D): one row on `paint::BAND2`, a cell of padding each
+/// side — a still `RUNNING` dot, the task's own description cut to the
+/// chip's width, and a quiet `×` where stopping is wired. The whole
 /// description and the task's kind wait in the tooltip.
 fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoElement {
     let kind = kind_label(&task.detail);
@@ -97,24 +97,20 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
         .debug_selector(move || format!("background-chip-{index}"))
         .flex()
         .items_center()
-        .gap(px(theme::SPACE_1_5))
+        .gap(px(theme::CH))
         .min_w_0()
         .max_w(px(theme::BG_CHIP_MAX_W))
-        .h(px(theme::CHIP_H))
-        .px(px(theme::CHIP_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .bg(rgb(theme::FILL))
-        .shadow(crate::components::elevation(
-            crate::components::Elevation::Control,
-        ))
+        .h(px(theme::ROW))
+        .px(px(theme::CH))
+        .bg(theme::paint::BAND2)
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(theme::TEXT_2))
-        .tooltip(move |window, cx| {
-            gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-        })
-        // Working is the normal state: a static dot (rule 2.10.3).
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .whitespace_nowrap()
+        .text_color(rgb(theme::TEXT))
+        .tooltip(crate::menu::tooltip(tooltip))
+        // Working is the normal state: a still dot (theme rule 8 — one
+        // thing moves, and it is the working line).
         .child(crate::components::status_dot(theme::RUNNING))
         .child(div().min_w_0().truncate().child(label));
     if let Some(stop) = on_stop {
@@ -127,14 +123,11 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
                 .flex_shrink_0()
                 .items_center()
                 .justify_center()
-                .size(px(theme::BG_CHIP_STOP))
-                .rounded(px(theme::R_TIGHT))
+                .h(px(theme::ROW))
+                .px(px(theme::SPACE_0_5))
+                .text_color(rgb(theme::TEXT_MUTED))
                 .hover_carried(format!("background-chip-stop-{index}"))
-                .child(icon(
-                    icons::CLOSE,
-                    theme::BG_CHIP_STOP_GLYPH,
-                    theme::TEXT_MUTED,
-                ))
+                .child("\u{d7}")
                 .on_click(move |_: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     stop(&id, window, cx);

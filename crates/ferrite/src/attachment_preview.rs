@@ -12,8 +12,8 @@ use std::{
 
 use gpui::component::scroll::ScrollableElement;
 use gpui::{
-    canvas, div, prelude::*, px, rems, rgb, rgba, AnyElement, App, Bounds, Div, FocusHandle,
-    IntoElement, Pixels, Window,
+    canvas, div, prelude::*, px, rems, rgb, AnyElement, App, Bounds, Div, FocusHandle, IntoElement,
+    Pixels, Window,
 };
 
 use crate::theme;
@@ -222,7 +222,7 @@ impl Preview {
             .pl(px(theme::PANE_PAD_X))
             .pr(px(theme::SPACE_1_5))
             .border_b_1()
-            .border_color(rgba(theme::HAIRLINE))
+            .border_color(theme::paint::LINE)
             .child(crate::icons::icon(
                 crate::icons::FILE,
                 theme::ROW_ICON,
@@ -284,11 +284,8 @@ impl Preview {
                 .overflow_hidden()
                 .rounded(px(theme::R_PANE))
                 .border_1()
-                .border_color(rgba(theme::HAIRLINE))
-                .bg(rgb(theme::PANE))
-                .shadow(crate::components::elevation(
-                    crate::components::Elevation::Pane,
-                ))
+                .border_color(theme::paint::LINE)
+                .bg(theme::paint::PLANE)
                 .font_family(theme::FONT_UI)
                 .child(head(head_band))
                 .child(document_content),
@@ -382,13 +379,14 @@ impl RenderOnce for PreviewLayer {
         // one close control over a hairline; then the image itself on the
         // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
         // sheet is darker than the sheet.
+        // A word on the head, `paint::HOVER` under the pointer.
         let open = crate::components::form_button("open-original-attachment", cx)
             .flex_shrink_0()
-            .h(px(crate::theme::CONTROL_H))
-            .px(px(crate::theme::CONTROL_PAD_X))
+            .h(px(crate::theme::ROW))
+            .px(px(crate::theme::CH))
             .child(crate::components::form_label(
-                "Open original",
-                crate::theme::TEXT_2,
+                "open original",
+                crate::theme::TEXT_MUTED,
             ))
             .accessibility_label("Open original image in the default app")
             .tip("Open full-size image in the default app")

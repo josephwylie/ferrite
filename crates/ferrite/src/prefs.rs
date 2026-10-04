@@ -2,25 +2,23 @@
 //! persistence remain owned by the cockpit (`CockpitView::change_settings`);
 //! this module only lays settings out, searches them and draws their
 //! controls. The Settings sheet's rules live in `theme.rs` (`Settings
-//! sheet`).
+//! sheet`, WP-E).
 //!
-//! **The sheet recipe** (the Project editor, the image preview): a `VEIL`
-//! over the Cockpit; the sheet `RAISED` with a `HAIRLINE_STRONG` edge,
-//! `R_PANE` and the float shadow; a `MODAL_HEAD_H` head (the one `W_LABEL`
-//! title and the one close control, `×` with the tooltip `Close esc`) over
-//! a hairline; a scrolling body; a footer pinned under a hairline. Those
-//! two rules mark where the body scrolls. Settings is the recipe's quieter
-//! variant: a `PANE` sheet whose head needs no rule, because its cards are
-//! what is raised.
+//! **The sheet recipe** (Settings, the Project editor, the image preview):
+//! a `VEIL` over the Cockpit; the sheet is the float at sheet size —
+//! `paint::FLOAT`, a 1px `paint::LINE2` edge, square, the float shadow; a
+//! `MODAL_HEAD_H` head (the title in `TEXT_STRONG` at `W_STRONG` and the one
+//! close control, `×` with the tooltip `Close esc`) over a `paint::LINE`; a
+//! scrolling body; a footer pinned under a `paint::LINE`. Inside: one face
+//! on the grid, rows and rules, words for controls.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, App, Div, Entity, SharedString, Window};
+use gpui::{div, px, rgb, AnyElement, App, Div, Entity, SharedString, Window};
 
 use gpui::component::button::Button;
 use gpui::component::input::{Input, InputState};
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui::component::{Disableable, Selectable, Sizable};
-use gpui_base::{Switch, SwitchThumb, SwitchTrack};
 
 use crate::pointer::Pointer;
 use std::rc::Rc;
@@ -39,8 +37,8 @@ pub fn veil() -> Div {
 }
 
 /// A modal sheet, `width` × `height` at most `MODAL_VIEWPORT_FRACTION` of
-/// the window: `RAISED`, the strong hairline edge, `R_PANE`, the sheet
-/// elevation, UI type. Its definite height is what lets the body scroll.
+/// the window: the float at sheet size. Its definite height is what lets
+/// the body scroll.
 pub fn sheet(width: f32, height: f32) -> Div {
     sheet_frame(width)
         .h(px(height))
@@ -61,31 +59,29 @@ fn sheet_frame(width: f32) -> Div {
         .max_w(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .overflow_hidden()
         .rounded(px(R_PANE))
-        .bg(rgb(RAISED))
+        .bg(paint::FLOAT)
         .border_1()
-        .border_color(rgba(HAIRLINE_STRONG))
+        .border_color(paint::LINE2)
         .shadow(components::elevation(components::Elevation::Sheet))
 }
 
-/// The Settings sheet: `sheet` on `PANE`, one step under its `RAISED`
-/// cards, at `SETTINGS_W` × `SETTINGS_H` (capped to the window).
+/// The Settings sheet: the sheet recipe at `SETTINGS_W` × `SETTINGS_H`
+/// (capped to the window).
 pub fn settings_sheet() -> Div {
-    sheet(SETTINGS_W, SETTINGS_H).bg(rgb(PANE))
+    sheet(SETTINGS_W, SETTINGS_H)
 }
 
-/// A sheet's head: its title (the sheet's one `W_LABEL` line), then the
-/// close button, over a hairline. The close button's tooltip names `esc`;
-/// no keycap repeats it.
+/// A sheet's head: its title, then the close button, over a `paint::LINE`.
+/// The close button's tooltip names `esc`; no keycap repeats it.
 pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
     head_row(title, close)
         .border_b_1()
-        .border_color(rgba(HAIRLINE))
+        .border_color(paint::LINE)
 }
 
-/// `sheet_head` without its rule: the Settings head, set apart from the
-/// sidebar and the page by space alone.
+/// The Settings head: `settings`, its close control, the same rule.
 pub fn settings_head(close: impl IntoElement) -> Div {
-    head_row("Settings", close)
+    sheet_head("settings", close)
 }
 
 fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
@@ -96,13 +92,13 @@ fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
         .gap(px(MODAL_GAP))
         .h(px(MODAL_HEAD_H))
         .pl(px(MODAL_PAD))
-        .pr(px(SPACE_2))
+        .pr(px(SPACE_1))
         .child(
             div()
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .font_weight(W_LABEL)
+                .font_weight(W_STRONG)
                 .text_color(rgb(TEXT_STRONG))
                 .child(title.into()),
         )
@@ -117,10 +113,10 @@ fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
         )
 }
 
-/// A sheet's close button, the one close control on every sheet: the
-/// close glyph in a 28px square that lifts to `FILL` on the raised sheet.
-/// `sheet_head` gives it its tooltip, `Close` with `esc` as a mono suffix
-/// (esc closes it too); `label` is the longer name a screen reader hears.
+/// A sheet's close button, the one close control on every sheet: the close
+/// glyph in a 28px square, `paint::HOVER` under the pointer. `sheet_head`
+/// gives it its tooltip, `Close` with `esc` (esc closes it too); `label` is
+/// the longer name a screen reader hears.
 pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
     components::form_button(id, cx)
         .debug_selector(move || id.into())
@@ -131,7 +127,7 @@ pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
         .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
-/// The pinned footer under a hairline: secondary actions left, the
+/// The pinned footer under a `paint::LINE`: secondary actions left, the
 /// completing action right. It never scrolls with the body.
 pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
     div()
@@ -143,7 +139,7 @@ pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
         .px(px(MODAL_PAD))
         .py(px(MODAL_GAP))
         .border_t_1()
-        .border_color(rgba(HAIRLINE))
+        .border_color(paint::LINE)
         .child(left)
         .child(right)
 }
@@ -175,15 +171,6 @@ impl PageKey {
             PageKey::Permissions => "Permissions",
             PageKey::Behaviour => "Behaviour",
             PageKey::About => "About",
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            PageKey::NewThreads => icons::NEW_THREAD,
-            PageKey::Permissions => icons::SHIELD,
-            PageKey::Behaviour => icons::SLIDERS,
-            PageKey::About => icons::INFO,
         }
     }
 
@@ -256,7 +243,7 @@ impl Row {
     }
 }
 
-/// A card of rows under a quiet label; a provider group's label leads
+/// A group of rows under a quiet label; a provider group's label leads
 /// with its logomark in brand colour.
 #[derive(Clone)]
 pub struct Group {
@@ -295,7 +282,7 @@ pub fn page(key: PageKey, groups: Vec<Group>) -> Page {
 }
 
 /// What the content column shows: the selected page, or, while the search
-/// holds a query, every matching row of every page, each card labelled
+/// holds a query, every matching row of every page, each group labelled
 /// `Page · Group`.
 struct Shown {
     title: SharedString,
@@ -356,8 +343,9 @@ fn shown(pages: &[Page], selected: PageKey, query: &str) -> Shown {
     }
 }
 
-/// The Settings body under its head: the sidebar (search, pages, `About`
-/// at the foot) and the selected page, or the search's results.
+/// The Settings body under its head: the sidebar (the search line, the
+/// pages, `About` at the foot) beside the selected page, or the search's
+/// results, split by a `paint::LINE`.
 pub fn body(
     pages: Vec<Page>,
     selected: PageKey,
@@ -389,16 +377,12 @@ pub fn body(
         .flex_shrink_0()
         .w(px(SETTINGS_SIDEBAR_W))
         .min_h_0()
-        .pl(px(MODAL_PAD - SPACE_1))
-        .pr(px(SPACE_2))
-        .pb(px(MODAL_PAD - SPACE_1))
+        .border_r_1()
+        .border_color(paint::LINE)
+        .pb(px(HALF_ROW))
+        .child(search_field(search, window, cx))
         .child(
-            div()
-                .px(px(SPACE_1))
-                .child(search_field(search, window, cx)),
-        )
-        .child(
-            div().flex().flex_col().pt(px(SPACE_3)).children(
+            div().flex().flex_col().pt(px(HALF_ROW)).children(
                 [
                     PageKey::NewThreads,
                     PageKey::Permissions,
@@ -418,19 +402,16 @@ pub fn body(
         .min_w_0()
         .min_h_0()
         .overflow_y_scroll()
-        .pl(px(SPACE_4))
-        .pr(px(SPACE_6))
-        .pb(px(SPACE_6))
+        .px(px(MODAL_PAD))
+        .pt(px(HALF_ROW))
+        .pb(px(ROW))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(SETTINGS_NAV_ROW_H))
-                .pl(px(SETTINGS_ROW_PAD_X))
-                .text_size(px(FS_PROSE))
-                .line_height(px(LH_PROSE))
-                .font_weight(W_LABEL)
+                .h(px(ROW))
+                .font_weight(W_STRONG)
                 .text_color(rgb(TEXT_STRONG))
                 .child(shown.title.clone()),
         )
@@ -444,16 +425,15 @@ pub fn body(
                 .when(searching && shown.groups.is_empty(), |list| {
                     list.child(
                         components::text_ui()
-                            .pl(px(SETTINGS_ROW_PAD_X))
                             .text_color(rgb(TEXT_MUTED))
-                            .child("No matching settings"),
+                            .child("no matching settings"),
                     )
                 })
                 .children(
                     shown
                         .groups
                         .iter()
-                        .map(|(label, group)| group_card(label.clone(), group, window, cx)),
+                        .map(|(label, group)| group_rows(label.clone(), group, window, cx)),
                 ),
         );
 
@@ -465,26 +445,21 @@ pub fn body(
         .child(content)
 }
 
-/// The search field atop the sidebar: a row's height, `RAISED` with a
-/// `HAIRLINE` edge (a field one step up off the sheet), the magnifier in
-/// `TEXT_MUTED`, and the focus outline while it holds the caret.
+/// The search line atop the sidebar: the accent `❯` in its gutter, then the
+/// field, over a `paint::LINE` — the palette's own input line.
 fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     let focused = gpui::Focusable::focus_handle(search.read(cx), cx).is_focused(window);
     components::focused(
         div()
             .debug_selector(|| "settings-search".into())
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(px(SPACE_1_5))
-            .h(px(SETTINGS_NAV_ROW_H))
-            .pl(px(SPACE_2))
-            .pr(px(SPACE_1))
-            .rounded(px(R_CONTROL))
-            .bg(rgb(RAISED))
-            .shadow(components::well_shade())
-            .border_1()
-            .border_color(rgba(HAIRLINE))
-            .child(icon(icons::SEARCH, SETTINGS_SEARCH_ICON, TEXT_MUTED).flex_shrink_0())
+            .h(px(ROW + 2.0 * SPACE_1))
+            .px(px(CH))
+            .border_b_1()
+            .border_color(paint::LINE)
+            .child(crate::menu::gutter(true))
             .child(
                 div()
                     .flex_1()
@@ -495,58 +470,48 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     )
 }
 
-/// A sidebar row: the page's mark and label at the one list pitch. The
-/// selected row is `FILL` with `TEXT_STRONG`; the rest hover to `HOVER`.
-/// While a search runs, a page with no match reads `TEXT_MUTED`.
+/// A sidebar row: the page's name on the grid. The page shown is
+/// `paint::SELECTION` with the accent `❯` and `TEXT_STRONG`; the rest `TEXT`,
+/// `paint::HOVER` under the pointer. While a search runs, a page with no
+/// match reads `TEXT_MUTED`.
 fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
-    let (rest, hover) = if selected {
-        (FILL, FILL_HOVER)
+    let (rest, hover): (gpui::Hsla, gpui::Hsla) = if selected {
+        (paint::SELECTION.into(), paint::SELECTION_HOVER.into())
     } else {
-        (TRANSPARENT, HOVER)
+        (gpui::rgba(TRANSPARENT).into(), paint::HOVER.into())
     };
-    let rest = if selected {
-        rgb(rest).into()
-    } else {
-        rgba(rest).into()
-    };
-    let (ink, mark) = match (selected, hit) {
-        (true, _) => (TEXT_STRONG, TEXT),
-        (false, true) => (TEXT_2, TEXT_MUTED),
-        (false, false) => (TEXT_MUTED, TEXT_MUTED),
+    let ink = match (selected, hit) {
+        (true, _) => TEXT_STRONG,
+        (false, true) => TEXT,
+        (false, false) => TEXT_MUTED,
     };
     components::faded_button(
         key.selector(),
         rest,
-        rgb(hover).into(),
-        rgb(PRESSED).into(),
+        hover,
+        paint::PRESS.into(),
         rgb(ink).into(),
         cx,
     )
     .selected(selected)
-    // The carried row is lit like the nav's (rule 4); its face is a kit
-    // button's, so light only.
-    .when(selected, |row| {
-        row.shadow(components::elevation(components::Elevation::Control))
-    })
     .debug_selector(move || key.selector().into())
     .accessibility_label(key.title())
     .w_full()
     .h(px(SETTINGS_NAV_ROW_H))
-    .px(px(SPACE_2))
+    .px(px(CH))
     .child(
         div()
             .flex()
             .flex_1()
             .items_center()
-            .gap(px(SETTINGS_NAV_ICON_GAP))
-            .child(icon(key.icon(), SETTINGS_NAV_ICON, mark))
+            .child(crate::menu::gutter(selected))
             .child(components::form_label(key.title(), ink)),
     )
 }
 
-/// A group: its label (and a provider's mark) above one card of rows split
-/// by hairlines.
-fn group_card(
+/// A group: its label (and a provider's mark) as a `TEXT_MUTED` row, then
+/// its rows, each over a `paint::LINE` rule.
+fn group_rows(
     label: Option<SharedString>,
     group: &Group,
     window: &mut Window,
@@ -555,47 +520,32 @@ fn group_card(
     let rows: Vec<AnyElement> = group
         .rows
         .iter()
-        .enumerate()
-        .map(|(at, row)| {
+        .map(|row| {
             setting_row(row, window, cx)
-                .when(at > 0, |row| row.border_t_1().border_color(rgba(HAIRLINE)))
+                .border_t_1()
+                .border_color(paint::LINE)
                 .into_any_element()
         })
         .collect();
     div()
         .flex()
         .flex_col()
-        .gap(px(SETTINGS_LABEL_GAP))
         .children(label.map(|label| {
-            components::text_meta()
+            components::text_ui()
                 .flex()
                 .items_center()
-                .gap(px(SPACE_1_5))
-                .pl(px(SETTINGS_ROW_PAD_X))
-                .font_weight(W_LABEL)
-                .children(
-                    group
-                        .mark
-                        .map(|(path, ink)| icon(path, MENU_SECTION_ICON, ink)),
-                )
+                .gap(px(CH))
+                .h(px(ROW))
+                .text_color(rgb(TEXT_MUTED))
+                .children(group.mark.map(|(path, ink)| icon(path, STATUS_LOGO, ink)))
                 .child(section_words(&label))
         }))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .bg(rgb(RAISED))
-                .shadow(components::elevation(components::Elevation::Raised))
-                .rounded(px(R_BLOCK))
-                .border_1()
-                .border_color(rgba(HAIRLINE))
-                .children(rows),
-        )
+        .children(rows)
 }
 
 /// `Page · Group`, the `·` in structure ink.
 fn section_words(label: &str) -> Div {
-    let mut line = div().flex().items_center().gap(px(SPACE_1));
+    let mut line = div().flex().items_center().gap(px(CH));
     for (at, part) in label.split(" · ").enumerate() {
         if at > 0 {
             line = line.child(div().text_color(rgb(TEXT_FAINT)).child("·"));
@@ -606,21 +556,21 @@ fn section_words(label: &str) -> Div {
 }
 
 /// One setting row: label over hint at the left, the control right and
-/// centred; 36px, or 44px with a hint.
+/// centred; one row in a quarter row of air each side, or two with a hint.
 fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
     let hinted = !row.hint.is_empty();
     div()
         .flex()
         .items_center()
         .justify_between()
-        .gap(px(SPACE_4))
+        .gap(px(2.0 * CH))
         .min_h(px(if hinted {
             SETTINGS_ROW_HINT_H
         } else {
             SETTINGS_ROW_H
         }))
         .px(px(SETTINGS_ROW_PAD_X))
-        .py(px(SPACE_1))
+        .py(px(HALF_ROW / 2.0))
         .child(
             div()
                 .flex()
@@ -633,7 +583,12 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
                         text.flex_1()
                     }
                 })
-                .child(components::text_ui().truncate().child(row.title.clone()))
+                .child(
+                    components::text_ui()
+                        .truncate()
+                        .text_color(rgb(TEXT))
+                        .child(row.title.clone()),
+                )
                 .when(hinted, |text| text.child(hint(row.hint.clone()))),
         )
         .child(
@@ -651,23 +606,27 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
         )
 }
 
-/// A row's hint: `FS_SM` `TEXT_MUTED`, one line. One that opens with a key
-/// table's chord (`cmd-B toggles it any time`) draws the chord as keys
-/// (`⌘B`, `components::key_combo`): neither face has the command glyph.
+/// A row's hint: `TEXT_MUTED`, one line. One that opens with a key table's
+/// chord (`cmd-B toggles it any time`) draws the chord as keys (`⌘B`,
+/// `components::key_combo`): the face has no command glyph.
 fn hint(detail: SharedString) -> Div {
-    let line = components::text_meta().min_w_0().truncate();
+    let line = components::text_ui()
+        .min_w_0()
+        .truncate()
+        .text_color(rgb(TEXT_MUTED));
     match detail.split_once(' ') {
         Some((chord, rest)) if chord.starts_with("cmd-") => line
             .flex()
             .items_center()
-            .gap(px(SPACE_1))
+            .gap(px(CH))
             .child(components::key_combo(chord, TEXT_MUTED))
             .child(SharedString::from(rest.to_string())),
         _ => line.child(detail),
     }
 }
 
-/// Two options are a segmented tray; more are a menu button (`chooser`).
+/// Two options are a pair of tokens, the chosen one inverse; more are a
+/// chooser (the value and a chevron that opens a menu).
 pub fn choices<T: Clone + 'static>(
     id: &'static str,
     title: &'static str,
@@ -684,11 +643,7 @@ pub fn choices<T: Clone + 'static>(
     Row::new(title, detail, keywords, move |_, cx| {
         div()
             .flex()
-            .gap(px(FORM_CHOICE_PAD))
-            .p(px(FORM_CHOICE_PAD))
-            .rounded(px(R_CONTROL))
-            .bg(rgb(RAISED_2))
-            .shadow(components::well_shade())
+            .items_center()
             .children(
                 options
                     .iter()
@@ -706,8 +661,8 @@ pub fn choices<T: Clone + 'static>(
     })
 }
 
-/// A choice from a list: a compact menu button showing the current value
-/// and a chevron, as wide as its value (at most `SETTINGS_MENU_MAX_W`).
+/// A choice from a list: the current value and a chevron, as wide as its
+/// value (at most `SETTINGS_MENU_MAX_W`), `paint::HOVER` under the pointer.
 /// The menu keeps every value, the standing one checked; search also
 /// indexes the hidden labels.
 pub fn chooser<T: Clone + 'static>(
@@ -723,69 +678,57 @@ pub fn chooser<T: Clone + 'static>(
         .iter()
         .find(|(_, selected, _)| *selected)
         .map(|(label, _, _)| label.clone())
-        .unwrap_or_else(|| "Choose an option".into());
+        .unwrap_or_else(|| "choose".into());
     Row::new(title, detail, keywords, move |_, cx| {
         let options = options.clone();
         let change = change.clone();
-        // A control on the raised card: `RAISED_2`, lifting to `FILL`
-        // under the pointer over the one blend.
-        components::faded_button(
-            id,
-            rgb(RAISED_2).into(),
-            rgb(FILL).into(),
-            rgb(FILL_HOVER).into(),
-            rgb(TEXT).into(),
-            cx,
-        )
-        .tab_stop(true)
-        .shadow(components::elevation(components::Elevation::Control))
-        .debug_selector(move || id.into())
-        .accessibility_label(format!("{title}: {selected}"))
-        .h(px(SETTINGS_CONTROL_H))
-        .max_w(px(SETTINGS_MENU_MAX_W))
-        .pl(px(FORM_FIELD_PAD_X))
-        .pr(px(SPACE_2))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .min_w_0()
-                .gap(px(SPACE_1_5))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(components::form_label(selected.clone(), TEXT)),
-                )
-                .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_MUTED).flex_shrink_0()),
-        )
-        .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
-            options.iter().fold(
-                menu.min_w(px(CHOICE_MENU_MIN_W))
-                    .max_w(px(CHOICE_MENU_MAX_W))
-                    .max_h(px(MENU_MAX_H))
-                    .scrollable(true),
-                |menu, (label, selected, value)| {
-                    let value = value.clone();
-                    let change = change.clone();
-                    // The CLI's own default says whose choice it is.
-                    let mut item = MenuItem::new(label.clone()).checked(*selected);
-                    if label.as_ref() == CLI_DEFAULT {
-                        item = item.detail(CLI_DEFAULT_NOTE);
-                    }
-                    menu.item(
-                        PopupMenuItem::element(move |_, _| {
-                            components::kit_row(components::menu_row_content(&item, false, false))
-                        })
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            change(value.clone(), cx);
-                        }),
+        components::form_button(id, cx)
+            .debug_selector(move || id.into())
+            .accessibility_label(format!("{title}: {selected}"))
+            .h(px(SETTINGS_CONTROL_H))
+            .max_w(px(SETTINGS_MENU_MAX_W))
+            .px(px(CH))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .gap(px(CH))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(components::form_label(selected.clone(), TEXT)),
                     )
-                },
+                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_MUTED).flex_shrink_0()),
             )
-        })
-        .into_any_element()
+            .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
+                options.iter().fold(
+                    menu.min_w(px(CHOICE_MENU_MIN_W))
+                        .max_w(px(CHOICE_MENU_MAX_W))
+                        .max_h(px(MENU_MAX_H))
+                        .scrollable(true),
+                    |menu, (label, selected, value)| {
+                        let value = value.clone();
+                        let change = change.clone();
+                        // The CLI's own default says whose choice it is.
+                        let mut item = MenuItem::new(label.clone()).checked(*selected);
+                        if label.as_ref() == CLI_DEFAULT {
+                            item = item.detail(CLI_DEFAULT_NOTE);
+                        }
+                        menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                components::kit_row(crate::menu::row_face(&item, false, false))
+                            })
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                change(value.clone(), cx);
+                            }),
+                        )
+                    },
+                )
+            })
+            .into_any_element()
     })
 }
 
@@ -815,10 +758,19 @@ pub fn model_options(
     options
 }
 
-/// An on/off setting: a switch. Custom rather than the kit's (whose tokens
-/// do not reach it): the track `ACCENT_STRONG` when on and `FILL_HOVER`
-/// when off, so both read on the raised card; the thumb `TEXT_STRONG`,
-/// sprung.
+/// The on/off token's word and ink: `on` in the accent at `W_STRONG`, `off`
+/// in `TEXT_MUTED`.
+fn toggle_face(checked: bool) -> (&'static str, u32) {
+    if checked {
+        ("on", ACCENT)
+    } else {
+        ("off", TEXT_MUTED)
+    }
+}
+
+/// An on/off setting: one word on the row — `on` in the accent, `off` dim —
+/// that flips the setting on a click, Enter or Space (a tab stop with the
+/// focus outline), `paint::HOVER` under the pointer. No iOS switch.
 pub fn toggle(
     id: &'static str,
     title: &'static str,
@@ -827,135 +779,66 @@ pub fn toggle(
     change: impl Fn(bool, &mut App) + 'static,
 ) -> Row {
     let change = Rc::new(change);
-    Row::new(title, detail, Vec::new(), move |window, cx| {
+    Row::new(title, detail, Vec::new(), move |_, cx| {
         let change = change.clone();
-        // The thumb moves over 150ms on the standard curve when the pointer
-        // flipped it, and lands at once on a keyboard toggle (no spring).
-        let now = cx.background_executor().now();
-        let spec = if pointer_pressed(id, now) {
-            crate::motion::TURN
-        } else {
-            crate::motion::MotionSpec::new(0, crate::motion::EASE_STANDARD)
-        };
-        let travel = crate::motion::settle(
-            (gpui::ElementId::from(id), "thumb"),
-            if checked { 1. } else { 0. },
-            spec,
-            window,
-            cx,
-        );
-        let thumb_x = px(SWITCH_TRAVEL * travel);
-        div()
-            .id(id)
+        let (word, ink) = toggle_face(checked);
+        components::form_button(id, cx)
+            .selected(checked)
             .debug_selector(move || id.into())
-            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                note_pointer_press(id, cx.background_executor().now());
-            })
+            .accessibility_label(format!("{title}: {word}"))
+            .h(px(SETTINGS_CONTROL_H))
+            .px(px(CH))
             .child(
-                Switch::new(id)
-                    .checked(checked)
-                    .accessibility_label(title)
-                    .p(px(SPACE_1))
-                    .rounded(px(R_CONTROL))
-                    .hover_raised(format!("switch-{id}"))
-                    .focus_visible(components::control_focus)
-                    .on_change(move |value, _, _, cx| {
-                        cx.stop_propagation();
-                        change(value, cx);
-                    })
-                    .child(
-                        SwitchTrack::new((gpui::ElementId::from(id), "track"))
-                            .checked(checked)
-                            .w(px(SWITCH_W))
-                            .h(px(SWITCH_H))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .border(px(SWITCH_INSET))
-                            .border_color(rgba(TRANSPARENT))
-                            .bg(rgb(switch_track(checked)))
-                            .shadow(components::well_shade())
-                            .child(
-                                SwitchThumb::new(checked)
-                                    .rounded_full()
-                                    .size(px(SWITCH_THUMB))
-                                    .left(thumb_x)
-                                    .bg(rgb(TEXT_STRONG))
-                                    // The thumb is opaque: it rests on
-                                    // its track and casts a contact line.
-                                    .shadow(components::contact_line()),
-                            ),
-                    ),
+                components::text_ui()
+                    .font_weight(if checked { W_STRONG } else { W_BODY })
+                    .text_color(rgb(ink))
+                    .child(word),
             )
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                change(!checked, cx);
+            })
             .into_any_element()
     })
 }
 
-thread_local! {
-    /// The switches the pointer pressed last, and when: a flip that follows
-    /// one within `POINTER_FLIP` is a pointer toggle, anything else is the
-    /// keyboard's.
-    static POINTER_PRESSES: std::cell::RefCell<std::collections::HashMap<&'static str, std::time::Instant>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-/// How long after a press its switch still counts as flipped by the pointer.
-const POINTER_FLIP: std::time::Duration = std::time::Duration::from_millis(1_000);
-
-fn note_pointer_press(id: &'static str, now: std::time::Instant) {
-    POINTER_PRESSES.with(|presses| presses.borrow_mut().insert(id, now));
-}
-
-fn pointer_pressed(id: &'static str, now: std::time::Instant) -> bool {
-    POINTER_PRESSES.with(|presses| {
-        presses
-            .borrow()
-            .get(id)
-            .is_some_and(|at| now.saturating_duration_since(*at) < POINTER_FLIP)
-    })
-}
-
-/// The switch track: steel when on, two steps above the card when off.
-fn switch_track(checked: bool) -> u32 {
-    if checked {
-        ACCENT_STRONG
-    } else {
-        FILL_HOVER
-    }
-}
-
-/// One option of a segmented choice, inside the tray. Its 1px edge is always
-/// in layout, so selection never moves a neighbour: selected is a neutral
-/// `FILL` chip with a `HAIRLINE_STRONG` edge and `TEXT_STRONG`, the rest
-/// `TEXT_2` on the tray, lifting to `FILL` under the pointer. `R_CHIP` is
-/// the tray's `R_CONTROL` less its `FORM_CHOICE_PAD`: concentric.
+/// One option of a short ladder (a two-way choice, a stepper's ends): a
+/// token one row high with a cell of padding. Chosen, it is inverse —
+/// `ACCENT_STRONG` with `ON_ACCENT` at `W_STRONG`; the rest `TEXT_MUTED`,
+/// `paint::HOVER` under the pointer. A tab stop.
 pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
-    let (ink, ground, edge) = components::choice_inks(selected);
-    let hover = rgb(if selected { FILL_HOVER } else { FILL }).into();
-    let rest = match ground {
-        Some(ground) => rgb(ground).into(),
-        None => rgba(TRANSPARENT).into(),
+    let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
+        (
+            rgb(ACCENT_STRONG).into(),
+            rgb(PRIMARY_HOVER).into(),
+            ON_ACCENT,
+        )
+    } else {
+        (
+            gpui::rgba(TRANSPARENT).into(),
+            paint::HOVER.into(),
+            TEXT_MUTED,
+        )
     };
-    components::faded_button(id, rest, hover, rgb(FILL_HOVER).into(), rgb(ink).into(), cx)
+    components::faded_button(id, rest, hover, paint::PRESS.into(), rgb(ink).into(), cx)
         .tab_stop(true)
         .selected(selected)
         .toggled(selected)
         .debug_selector(move || format!("{}-{}", id.0, id.1))
-        .h(px(SETTINGS_CONTROL_H - 2. * FORM_CHOICE_PAD))
-        .px(px(FORM_CHIP_PAD_X + SPACE_0_5))
-        .rounded(px(R_CHIP))
-        .border_1()
-        .border_color(rgba(edge))
-        // The chosen chip stands proud of its tray (rule 4).
-        .when(selected, |chip| {
-            chip.shadow(components::elevation(components::Elevation::Control))
-        })
-        .child(components::form_label(label, ink))
+        .h(px(SETTINGS_CONTROL_H))
+        .px(px(TOKEN_PAD_X))
+        .child(
+            components::text_ui()
+                .font_weight(if selected { W_STRONG } else { W_BODY })
+                .text_color(rgb(ink))
+                .child(label),
+        )
 }
 
-/// A size stepper: `−`, the current value in tabular figures, `+`, on the
-/// segmented control's `RAISED_2` well. An end with nowhere to go is
-/// disabled. The keys that do the same ride the hint.
+/// A size stepper: `‹ 14px ›` — the ends are tokens (a tab stop each), the
+/// value tabular between them in its fixed slot. An end with nowhere to go
+/// is `TEXT_FAINT` and takes no press. The keys that do the same ride the
+/// hint.
 pub fn stepper(
     id: &'static str,
     title: &'static str,
@@ -969,9 +852,21 @@ pub fn stepper(
     Row::new(title, detail, vec![value.clone()], move |_, cx| {
         let button = |at: usize, label: &'static str, delta: i32, live: bool| {
             let step = step.clone();
-            chip((id, at), label.into(), false, cx)
+            let ink = if live { TEXT } else { TEXT_FAINT };
+            let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
+            let (hover, press): (gpui::Hsla, gpui::Hsla) = if live {
+                (paint::HOVER.into(), paint::PRESS.into())
+            } else {
+                (none, none)
+            };
+            components::faded_button((id, at), none, hover, press, rgb(ink).into(), cx)
+                .tab_stop(live)
                 .disabled(!live)
-                .when(!live, |button| button.cursor_default().opacity(0.4))
+                .when(!live, |button| button.cursor_default())
+                .debug_selector(move || format!("{id}-{at}"))
+                .h(px(SETTINGS_CONTROL_H))
+                .px(px(TOKEN_PAD_X))
+                .child(components::text_ui().text_color(rgb(ink)).child(label))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     step(delta, cx);
@@ -980,12 +875,7 @@ pub fn stepper(
         div()
             .flex()
             .items_center()
-            .gap(px(FORM_CHOICE_PAD))
-            .p(px(FORM_CHOICE_PAD))
-            .rounded(px(R_CONTROL))
-            .bg(rgb(RAISED_2))
-            .shadow(components::well_shade())
-            .child(button(0, "\u{2212}", -1, can_down))
+            .child(button(0, "\u{2039}", -1, can_down))
             .child(components::tabular(
                 div()
                     .debug_selector(move || format!("{id}-value"))
@@ -994,14 +884,14 @@ pub fn stepper(
                     .justify_center()
                     .child(components::form_label(value.clone(), TEXT)),
             ))
-            .child(button(1, "+", 1, can_up))
+            .child(button(1, "\u{203a}", 1, can_up))
             .into_any_element()
     })
 }
 
 /// A read-only fact (About): its key at the left, its value at the right
-/// in Geist Mono `TEXT_2` (versions are machine text), wrapping anywhere
-/// rather than cut. Searchable by both.
+/// in `TEXT_MUTED` (versions are machine text), wrapping anywhere rather
+/// than cut. Searchable by both.
 pub fn fact(title: &'static str, value: SharedString) -> Row {
     let words = vec![value.clone()];
     Row::new(title, "", words, move |_, _| {
@@ -1012,8 +902,8 @@ pub fn fact(title: &'static str, value: SharedString) -> Row {
 
 /// A row that says where something stands (its hint) and, when there is
 /// something to do about it, offers the one button that does it: the
-/// primary face at `SETTINGS_CONTROL_H`, hugging its label. With nothing to
-/// do, the row reads its `value` as a fact does.
+/// primary face, one row high, hugging its label. With nothing to do, the
+/// row reads its `value` as a fact does.
 pub fn action(
     id: &'static str,
     title: &'static str,
@@ -1032,7 +922,7 @@ pub fn action(
             components::primary_button(id, false, cx)
                 .debug_selector(move || id.into())
                 .h(px(SETTINGS_CONTROL_H))
-                .px(px(FORM_FIELD_PAD_X))
+                .px(px(CH))
                 .child(components::form_label(label, ON_ACCENT))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
@@ -1066,10 +956,9 @@ pub fn path_fact(
             .flex()
             .items_center()
             .min_w_0()
-            .gap(px(SPACE_1_5))
-            .px(px(SPACE_1_5))
-            .mr(px(-SPACE_1_5))
-            .rounded(px(R_CONTROL))
+            .gap(px(CH))
+            .px(px(CH))
+            .mr(px(-CH))
             .group(COPY_GROUP)
             .hover_raised(key)
             .tooltip(crate::menu::tooltip(if copied {
@@ -1087,7 +976,7 @@ pub fn path_fact(
                 icon(
                     if copied { icons::CHECK } else { icons::COPY },
                     ICON_CHEVRON,
-                    if copied { TEXT_MUTED } else { TEXT_FAINT },
+                    if copied { RUNNING } else { TEXT_FAINT },
                 )
                 .flex_shrink_0()
                 .group_hover(COPY_GROUP, |style| style.text_color(rgb(TEXT_MUTED))),
@@ -1107,7 +996,7 @@ fn fact_value(title: &'static str, value: SharedString) -> Div {
         .text_right()
         .font_family(FONT_CODE)
         .font_weight(W_BODY)
-        .text_color(rgb(TEXT_2))
+        .text_color(rgb(TEXT_MUTED))
         .child(value)
 }
 
@@ -1131,9 +1020,9 @@ pub fn gear_button(cx: &App) -> Button {
     let glyph = crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
     components::faded_button(
         id,
-        rgba(TRANSPARENT).into(),
-        rgb(HOVER).into(),
-        rgb(PRESSED).into(),
+        gpui::rgba(TRANSPARENT).into(),
+        paint::HOVER.into(),
+        paint::PRESS.into(),
         rgb(TEXT_MUTED).into(),
         cx,
     )
@@ -1157,7 +1046,6 @@ pub fn gear(button: Button, id: &'static str) -> gpui::Stateful<Div> {
         ))
         .child(button)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1182,60 +1070,45 @@ mod tests {
         assert_eq!(options.iter().filter(|(_, on, _)| *on).count(), 1);
     }
 
+    /// Terminal-native (WP-E): a sheet is the float at sheet size — the
+    /// float ground, the `LINE2` edge, square, the one float shadow — over
+    /// the veil.
     #[test]
-    fn the_sheet_is_raised_edged_and_rounded_over_the_veil() {
+    fn the_sheet_is_the_float_over_the_veil() {
         let mut drawn = sheet(SETTINGS_W, SETTINGS_H);
         let style = drawn.style();
-        assert_eq!(style.background, Some(rgb(RAISED).into()));
-        assert_eq!(style.border_color, Some(rgba(HAIRLINE_STRONG).into()));
-        assert_eq!(
-            style.box_shadow,
-            Some(components::elevation(components::Elevation::Sheet))
-        );
-        assert_eq!(
-            style.corner_radii.top_left,
-            Some(px(R_PANE).into()),
-            "a sheet is a Pane-sized surface"
-        );
-        assert_eq!(veil().style().background, Some(rgba(VEIL).into()));
+        assert_eq!(style.background, Some(paint::FLOAT.into()));
+        assert_eq!(style.border_color, Some(paint::LINE2.into()));
+        assert_eq!(style.box_shadow, Some(components::float_shadow()));
+        assert_eq!(style.corner_radii.top_left, Some(px(0.).into()), "square");
+        assert_eq!(veil().style().background, Some(gpui::rgba(VEIL).into()));
     }
 
-    /// Settings is the recipe's quieter variant: a `PANE` sheet under its
-    /// `RAISED` cards, with the recipe's edge, radius and shadow.
+    /// Settings is the same recipe, and every sheet's head stands over a
+    /// rule.
     #[test]
-    fn the_settings_sheet_sits_one_step_under_its_cards() {
+    fn the_settings_sheet_is_the_sheet_recipe() {
         let mut drawn = settings_sheet();
         let style = drawn.style();
-        assert_eq!(style.background, Some(rgb(PANE).into()));
-        assert_eq!(style.border_color, Some(rgba(HAIRLINE_STRONG).into()));
-        assert_eq!(
-            style.box_shadow,
-            Some(components::elevation(components::Elevation::Sheet))
-        );
-        assert_eq!(style.corner_radii.top_left, Some(px(R_PANE).into()));
-        const _: () = assert!(PANE < RAISED, "the cards are raised off the sheet");
-        assert_eq!(
-            head_row("Settings", div()).style().border_widths.bottom,
-            None,
-            "the Settings head has no rule"
-        );
-        assert_eq!(
-            sheet_head("Project", div()).style().border_widths.bottom,
-            Some(px(1.).into()),
-            "the scrolling sheets keep theirs"
-        );
+        assert_eq!(style.background, Some(paint::FLOAT.into()));
+        assert_eq!(style.border_color, Some(paint::LINE2.into()));
+        assert_eq!(style.box_shadow, Some(components::float_shadow()));
+        for head in [settings_head(div()), sheet_head("Project", div())] {
+            let mut head = head;
+            assert_eq!(head.style().border_widths.bottom, Some(px(1.).into()));
+        }
     }
 
     #[test]
-    fn rows_keep_the_one_list_pitch_and_the_sheet_fits_its_pages() {
-        assert_eq!(SETTINGS_NAV_ROW_H, NAV_ROW_H);
-        assert_eq!(SETTINGS_ROW_H, 36.0);
-        // One line height on the grid: a label and its hint are two rows.
-        assert_eq!(SETTINGS_ROW_HINT_H, 48.0);
+    fn rows_sit_on_the_grid_and_the_sheet_fits_its_pages() {
+        assert_eq!(SETTINGS_NAV_ROW_H, ROW);
+        assert_eq!(SETTINGS_CONTROL_H, ROW);
+        // A label and its hint are two rows; each row keeps a quarter row
+        // of air above and below.
+        assert_eq!(SETTINGS_ROW_H, ROW + HALF_ROW);
+        assert_eq!(SETTINGS_ROW_HINT_H, 2.0 * ROW + HALF_ROW);
         // Checked at compile time: the rhythm and the size can never drift.
-        const _: () = assert!(SETTINGS_GROUP_GAP >= 2.0 * SETTINGS_LABEL_GAP);
         const _: () = assert!(SETTINGS_CONTROL_H <= SETTINGS_ROW_H - 2.0 * SPACE_1);
-        const _: () = assert!(SWITCH_H + 2.0 * SPACE_1 <= SETTINGS_ROW_H);
         const _: () = assert!(
             SETTINGS_W <= 800.0 && SETTINGS_H <= 600.0,
             "sized to content"
@@ -1318,34 +1191,24 @@ mod tests {
         assert_eq!(home_relative("/x", Some("/")), "/x");
     }
 
+    /// Terminal-native (WP-E): an on/off setting is a word, `on` in the
+    /// accent and `off` dim — no iOS switch.
     #[test]
-    fn the_switch_is_steel_when_on_and_reads_on_the_sheet_when_off() {
-        assert_eq!(switch_track(true), ACCENT_STRONG);
-        assert_eq!(switch_track(false), FILL_HOVER);
-        assert_ne!(
-            switch_track(false),
-            RAISED,
-            "off must not vanish on the card"
-        );
-        assert_ne!(switch_track(false), RAISED_2, "nor on a hovered row");
+    fn a_toggle_reads_on_in_the_accent_and_off_dim() {
+        assert_eq!(toggle_face(true), ("on", ACCENT));
+        assert_eq!(toggle_face(false), ("off", TEXT_MUTED));
     }
 
+    /// The chosen token of a short ladder is inverse — the accent ground
+    /// with dark ink — and the rest lie on no ground at all.
     #[gpui::test]
-    fn a_selected_choice_is_a_neutral_chip_and_every_choice_keeps_its_edge(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn a_chosen_token_is_inverse_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
             let mut on = chip(("c", 0), "Claude".into(), true, cx);
             let mut off = chip(("c", 1), "Codex".into(), false, cx);
-            assert_eq!(on.style().background, Some(rgb(FILL).into()));
-            assert_eq!(on.style().border_color, Some(rgba(HAIRLINE_STRONG).into()));
+            assert_eq!(on.style().background, Some(rgb(ACCENT_STRONG).into()));
             assert_eq!(off.style().background, None);
-            assert_eq!(off.style().border_color, Some(rgba(TRANSPARENT).into()));
-            for chip in [&mut on, &mut off] {
-                let widths = chip.style().border_widths.clone();
-                assert_eq!(widths.left, Some(px(1.).into()));
-            }
         });
     }
 }

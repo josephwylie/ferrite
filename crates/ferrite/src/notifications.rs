@@ -121,7 +121,7 @@ impl Row {
 
     /// The detail split for drawing: its lexicon lead word, that word's ink
     /// (only a failure or a waiting Decision is coloured), and the rest,
-    /// which starts at its first ` · ` seam. `detail_line` draws it so.
+    /// which starts at its first ` · ` seam. `row_element` draws it so.
     #[cfg(test)]
     fn detail_parts(&self) -> (SharedString, u32, SharedString) {
         let lead = self.lead();
@@ -349,20 +349,20 @@ fn badge_tone(rows: &[Row]) -> BadgeTone {
     }
 }
 
-/// The 28×28 bell button in the nav's chrome band, with the unread count
-/// riding its top edge, hidden at zero. The glyph is `TEXT_MUTED` at rest
-/// and `TEXT` while the panel is down, when the `FILL` ground alone says it
-/// is open: the bell never borrows the accent. Ground and glyph blend to
-/// their hover faces over the one 150ms blend (`TEXT_MUTED` → `TEXT`, as
-/// the collapse button does); the tooltip (`Notifications ⌘I`) rides the
-/// wrapper in `Bell::element`, since a kit button's own tooltip is text.
+/// The bell button in the nav's chrome band (the prototype's `.ib`), with
+/// the unread count riding its top-right corner, hidden at zero. The glyph
+/// is `TEXT_MUTED` at rest and `TEXT` while the panel is down, when the
+/// `paint::HOVER` ground alone says it is open: the bell never borrows the
+/// accent. Ground and glyph blend to their hover faces over the one 150ms
+/// blend; the tooltip (`Notifications ⌘I`) rides the wrapper in
+/// `Bell::element`, since a kit button's own tooltip is text.
 fn trigger(unread: usize, tone: BadgeTone, open: bool, cx: &App) -> Button {
     let id = gpui::ElementId::from("notifications-bell");
     let key = crate::pointer::hover_key(&id);
-    let (rest, hover) = if open {
-        (FILL, FILL_HOVER)
+    let rest: gpui::Hsla = if open {
+        paint::HOVER.into()
     } else {
-        (TRANSPARENT, HOVER)
+        gpui::rgba(TRANSPARENT).into()
     };
     let glyph = if open {
         rgb(TEXT).into()
@@ -371,9 +371,9 @@ fn trigger(unread: usize, tone: BadgeTone, open: bool, cx: &App) -> Button {
     };
     components::faded_button(
         id,
-        gpui::rgba(rest).into(),
-        gpui::rgba(hover).into(),
-        rgb(PRESSED).into(),
+        rest,
+        paint::HOVER.into(),
+        paint::PRESS.into(),
         rgb(TEXT_MUTED).into(),
         cx,
     )
@@ -387,11 +387,10 @@ fn trigger(unread: usize, tone: BadgeTone, open: bool, cx: &App) -> Button {
     .when(unread > 0, |bell| bell.child(badge(unread, tone)))
 }
 
-/// The unread count: UI `FS_SM` `W_BODY`, tabular, `99+` past two digits,
-/// on the neutral `FILL_HOVER` ground — the colour, when there is one, is
-/// on the digits, never the ground.
+/// The unread count: the prototype's superscript — `BADGE_FS` `W_STRONG`
+/// tabular digits on no ground at the button's top-right corner, `99+` past
+/// two digits, coloured by what waits (`badge_ink`).
 fn badge(unread: usize, tone: BadgeTone) -> Div {
-    let (ground, ink) = badge_inks(tone);
     let count: SharedString = if unread > 99 {
         "99+".into()
     } else {
@@ -402,98 +401,71 @@ fn badge(unread: usize, tone: BadgeTone) -> Div {
             .debug_selector(|| "notifications-badge".into())
             .absolute()
             .top(px(0.))
-            .left(px(BADGE_LEFT))
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(BADGE_H))
-            .min_w(px(BADGE_H))
-            .px(px(SPACE_1))
-            .rounded_full()
-            .bg(rgb(ground))
-            // The knockout: the nav's ground cut around the pill.
-            .shadow(vec![gpui::BoxShadow {
-                inset: false,
-                color: rgb(NAV).into(),
-                offset: gpui::point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(BADGE_KNOCKOUT),
-            }])
+            .right(px(1.))
             .font_family(FONT_UI)
-            .text_size(px(FS_SM))
-            .line_height(px(BADGE_H))
-            .font_weight(W_BODY)
-            .text_color(rgb(ink))
+            .text_size(px(BADGE_FS))
+            .line_height(px(BADGE_LH))
+            .font_weight(W_STRONG)
+            .text_color(rgb(badge_ink(tone)))
             .child(count),
     )
 }
 
-/// The badge's ground and ink: always the neutral `FILL_HOVER` ground;
-/// `TEXT_STRONG` digits, `ATTENTION` while a request waits unread, or
-/// `BLOCKED` for an unread failure when nothing waits.
-fn badge_inks(tone: BadgeTone) -> (u32, u32) {
-    let ink = match tone {
+/// The badge's ink: `ATTENTION` while a request waits unread, `BLOCKED` for
+/// an unread failure when nothing waits, else `TEXT_STRONG`.
+fn badge_ink(tone: BadgeTone) -> u32 {
+    match tone {
         BadgeTone::Plain => TEXT_STRONG,
         BadgeTone::NeedsYou => ATTENTION,
         BadgeTone::Failed => BLOCKED,
-    };
-    (FILL_HOVER, ink)
+    }
 }
 
-/// An unread row's or toast's status mark, static: attention while a
-/// Decision waits, blocked for a failure, the accent for a turn that
-/// finished well (unread, like the nav's unread dot — green never means
-/// finished), and a quiet mark for one that was interrupted. A read row
-/// draws none.
-fn mark_ink(row: &Row) -> u32 {
+/// A row's or toast's mark, in its 2-cell column: `◆` (drawn) for a request
+/// that needs an approval, `?` for a question, both `ATTENTION`; `✗` (drawn)
+/// `BLOCKED` for a failure; `✓` (drawn) `TEXT_MUTED` for a turn that
+/// finished; `■` (drawn) `TEXT_MUTED` for one that was interrupted. Static.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    Drawn(&'static str, u32),
+    Typed(&'static str, u32),
+}
+
+fn mark(row: &Row) -> Mark {
     match &row.kind {
-        RowKind::Request(_) => ATTENTION,
-        RowKind::Completion(TurnOutcome::Error(_)) => BLOCKED,
-        RowKind::Completion(TurnOutcome::Completed) => ACCENT,
-        RowKind::Completion(TurnOutcome::Interrupted) => TEXT_MUTED,
+        RowKind::Request(RequestKind::Permission) => Mark::Drawn(icons::DIAMOND, ATTENTION),
+        RowKind::Request(RequestKind::Question) => Mark::Typed("?", ATTENTION),
+        RowKind::Completion(TurnOutcome::Error(_)) => Mark::Drawn(icons::CROSS, BLOCKED),
+        RowKind::Completion(TurnOutcome::Completed) => Mark::Drawn(icons::CHECK, TEXT_MUTED),
+        RowKind::Completion(TurnOutcome::Interrupted) => Mark::Drawn(icons::STOP, TEXT_MUTED),
     }
 }
 
-/// The detail line: `<state> · <what> · <project>`, only the state word
-/// coloured. What a turn failed with is machine text — Geist Mono, and the
-/// run that gives way — so the project after it never truncates.
-fn detail_line(row: &Row) -> Div {
-    let (lead, ink) = (row.lead(), word_ink(row.lead()));
-    let seam = || {
-        div()
-            .flex_shrink_0()
-            .text_color(rgb(TEXT_FAINT))
-            .child(" \u{b7} ")
-    };
-    let middle = match &row.kind {
-        RowKind::Completion(TurnOutcome::Error(error)) => Some(
-            div()
-                .min_w_0()
-                .truncate()
-                .font_family(FONT_CODE)
-                .text_size(px(FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(error.clone())),
-        ),
-        RowKind::Completion(_) => None,
-        RowKind::Request(kind) => Some(div().min_w_0().truncate().child(match kind {
-            RequestKind::Question => words::QUESTION,
-            RequestKind::Permission => words::APPROVAL,
-        })),
-    };
-    let mut line = components::text_meta()
+/// The mark drawn in its 2-cell column, one row high.
+fn mark_cell(row: &Row) -> Div {
+    let cell = div()
         .flex()
-        .min_w_0()
-        .child(div().flex_shrink_0().text_color(rgb(ink)).child(lead));
-    if let Some(middle) = middle {
-        line = line.child(seam()).child(middle);
+        .flex_shrink_0()
+        .items_center()
+        .w(px(NOTICE_MARK_W))
+        .h(px(LH_UI));
+    match mark(row) {
+        Mark::Drawn(path, ink) => cell.child(icons::icon(path, GLYPH_BOX, ink)),
+        Mark::Typed(glyph, ink) => cell.text_color(rgb(ink)).child(glyph),
     }
-    if let Some(project) = row.project.clone() {
-        line = line
-            .child(seam())
-            .child(div().flex_shrink_0().child(project));
-    }
-    line
+}
+
+/// What follows the title: ` · <what> · <project>` — what a request needs
+/// or the error a turn failed with, then the project. Empty when there is
+/// nothing to add.
+fn detail_tail(row: &Row) -> SharedString {
+    let lead = row.lead();
+    let detail = row.detail();
+    detail
+        .strip_prefix(lead)
+        .unwrap_or(&detail)
+        .to_string()
+        .into()
 }
 
 /// Folds each Thread's completions into its newest (`rows` are newest
@@ -524,38 +496,122 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
     kept
 }
 
-/// A toast's body in the UI voice: the status mark, the Thread's
-/// name, the detail with its state word coloured.
-fn toast_body(row: &Row) -> Div {
-    let ink = mark_ink(row);
-    let title = row.title.clone();
+/// A quick text button in a toast (the prototype's `.qa button`): its word
+/// in a 1px `paint::LINE2` box, a cell of padding, `paint::BAND2` and
+/// `TEXT_STRONG` under the pointer.
+fn quick_button(id: impl Into<gpui::ElementId>, word: &'static str) -> Stateful<Div> {
+    let id = id.into();
+    let key = crate::pointer::hover_key(&id);
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(LH_UI + 2.0))
+        .px(px(CH))
+        .border_1()
+        .border_color(paint::LINE2)
+        .text_color(rgb(TEXT))
+        .cursor_pointer()
+        .hover_raised(key)
+        .press_raised()
+        .child(word)
+}
+
+/// A toast's body in the float grammar (the prototype's `.toast`): the head
+/// row — the mark, the state word in its colour, ` · ` and the Thread's
+/// name — with `⌘D` at its right while a request waits; one body line (what
+/// it needs or what became of it, and the project); then the quick buttons.
+fn toast_body(row: &Row, handle: Handle) -> Div {
     let thread = row.thread.get();
+    let lead = row.lead();
+    let tail = detail_tail(row);
+    let request = matches!(row.kind, RowKind::Request(_));
+    let target = row.target.clone();
+    let open = handle.clone();
+    let dismiss = row.target.clone();
+    let folded = row.folded.clone();
+    let body = tail
+        .strip_prefix(" \u{b7} ")
+        .map(str::to_owned)
+        .unwrap_or_default();
     div()
         .debug_selector(move || format!("toast-{thread}"))
         .flex()
-        .items_start()
-        .gap(px(SPACE_2))
+        .flex_col()
+        .w_full()
         .min_w_0()
+        .font_family(FONT_UI)
+        .text_size(px(FS_UI))
+        .line_height(px(LH_UI))
         .child(
             div()
                 .flex()
                 .items_center()
-                .h(px(LH_UI))
-                .child(components::status_dot(ink)),
+                .h(px(FLOAT_ROW_H))
+                .px(px(FLOAT_PAD_X))
+                .whitespace_nowrap()
+                .child(mark_cell(row))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(word_ink(lead)))
+                        .child(lead),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(format!(" \u{b7} {}", row.title))),
+                )
+                .when(request, |head| {
+                    head.children(
+                        components::bound_chord("cockpit::NextDecision").map(|keys| {
+                            components::key_combo(&keys, TEXT_MUTED)
+                                .flex_shrink_0()
+                                .ml(px(FLOAT_DETAIL_GAP))
+                        }),
+                    )
+                }),
         )
+        .when(!body.is_empty(), |toast| {
+            toast.child(
+                div()
+                    .px(px(FLOAT_PAD_X))
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT))
+                    .child(SharedString::from(body)),
+            )
+        })
         .child(
             div()
                 .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
+                .gap(px(CH))
+                .px(px(FLOAT_PAD_X))
+                .pt(px(HALF_ROW / 2.0))
+                .pb(px(HALF_ROW))
                 .child(
-                    components::text_ui()
-                        .text_color(rgb(TEXT_STRONG))
-                        .truncate()
-                        .child(title),
+                    quick_button(("toast-open", thread as usize), "open").on_click(
+                        move |_, window, cx| {
+                            cx.stop_propagation();
+                            open(target_verb(&target), window, cx)
+                        },
+                    ),
                 )
-                .child(detail_line(row)),
+                .child(
+                    quick_button(("toast-dismiss", thread as usize), "dismiss").on_click(
+                        move |_, window, cx| {
+                            cx.stop_propagation();
+                            handle(dismiss_verb(&dismiss), window, cx);
+                            for id in &folded {
+                                handle(Verb::Dismiss(*id), window, cx);
+                            }
+                        },
+                    ),
+                ),
         )
 }
 
@@ -566,11 +622,11 @@ fn toast(row: &Row, handle: Handle) -> Notification {
         unreachable!("completion toast has a completion target")
     };
     let body = row.clone();
+    let verbs = handle.clone();
     Notification::new()
         .id1::<Finished>(row.thread.get() as usize)
-        .content(move |_, _, _| toast_body(&body).into_any_element())
-        .px(px(SPACE_3))
-        .py(px(SPACE_3))
+        .content(move |_, _, _| toast_body(&body, verbs.clone()).into_any_element())
+        .p(px(0.))
         .autohide(true)
         .on_click(move |_, window, cx| handle(Verb::Open(id), window, cx))
 }
@@ -591,121 +647,110 @@ fn request_toast(row: &Row, handle: Handle) -> Notification {
     };
     let id = id.clone();
     let body = row.clone();
+    let verbs = handle.clone();
     Notification::new()
         .id1::<Request>(request_key(&id))
-        .content(move |_, _, _| toast_body(&body).into_any_element())
-        .px(px(SPACE_3))
-        .py(px(SPACE_3))
+        .content(move |_, _, _| toast_body(&body, verbs.clone()).into_any_element())
+        .p(px(0.))
         .autohide(true)
         .on_click(move |_, window, cx| handle(Verb::OpenDecision(id.clone()), window, cx))
 }
 
-/// The panel under the bell, on the one floating surface: `Needs you N`
-/// first (the live requests, in the order the answer keys take them),
-/// then `Earlier` (finished turns, each Thread folded to its newest), a
-/// block's gap between. No head row and no rules.
+/// The list under the bell (the prototype's `#notes`): the float, its head
+/// `notifications` with `clear` at its right while a finished turn stands,
+/// then one row per notice — the live requests first, in the order the
+/// answer keys take them, then finished turns, each Thread folded to its
+/// newest — and a footer of the keys that act on them.
 fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
-    let panel = components::floating_surface()
+    let finished = rows
+        .iter()
+        .any(|row| matches!(row.kind, RowKind::Completion(_)));
+    let clear = handle.clone();
+    let head = crate::menu::head("notifications").when(finished, |head| {
+        head.child(
+            div()
+                .id("notifications-clear")
+                .debug_selector(|| "notifications-clear".into())
+                .flex_shrink_0()
+                .px(px(CH))
+                .mr(px(-CH))
+                .cursor_pointer()
+                .hover_raised("notifications-clear")
+                .press_raised()
+                .child("clear")
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    clear(Verb::Clear, window, cx)
+                }),
+        )
+    });
+    let panel = crate::menu::float()
+        .debug_selector(|| "notifications-panel".into())
         .w(px(NOTICE_PANEL_W))
-        .max_h(px(MENU_MAX_H));
+        .max_h(px(MENU_MAX_H))
+        .child(head);
     if rows.is_empty() {
-        return panel.child(div().py(px(SPACE_6)).child(components::empty_state(
-            "No notifications",
-            Some("Finished turns and requests land here".into()),
+        return panel.child(div().py(px(ROW)).child(components::empty_state(
+            "no notifications",
+            Some("finished turns and requests land here".into()),
         )));
     }
-    let requests: Vec<(usize, &Row)> = rows
+    let ordered = rows
         .iter()
         .enumerate()
         .filter(|(_, row)| matches!(row.kind, RowKind::Request(_)))
-        .collect();
-    let earlier: Vec<(usize, &Row)> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| matches!(row.kind, RowKind::Completion(_)))
-        .collect();
-    let mut list = div()
+        .chain(
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| matches!(row.kind, RowKind::Completion(_))),
+        );
+    let list = div()
         .id("notifications-list")
         .flex()
         .flex_col()
         .min_h_0()
-        .overflow_y_scroll();
-    if !requests.is_empty() {
-        list = list.child(needs_you_label(requests.len())).children(
-            requests
-                .iter()
-                .map(|(index, row)| row_element(*index, row, handle.clone())),
-        );
-    }
-    if !earlier.is_empty() {
-        list = list
-            .child(
-                earlier_label(handle.clone())
-                    .when(!requests.is_empty(), |label| label.mt(px(GAP_BLOCK))),
-            )
-            .children(
-                earlier
-                    .iter()
-                    .map(|(index, row)| row_element(*index, row, handle.clone())),
-            );
-    }
-    panel.child(list)
-}
-
-/// A section's label row: `MENU_ROW_H`, on the rows' edge, UI `FS_SM`
-/// `W_LABEL` `TEXT_MUTED`, with a trailing slot at the right.
-fn section_label(id: &'static str) -> Div {
-    components::text_meta()
-        .debug_selector(move || id.into())
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(SPACE_2))
-        .h(px(MENU_ROW_H))
-        .flex_shrink_0()
-        .px(px(MENU_ROW_PAD_X))
-}
-
-/// `Needs you N`: the count in `ATTENTION`, tabular, and the key that
-/// takes the first of them at the right (`⌘D`), in mono `TEXT_MUTED`.
-fn needs_you_label(count: usize) -> Div {
-    let title = div()
-        .flex()
-        .gap(px(SPACE_1))
-        .font_weight(W_LABEL)
-        .child("Needs you")
-        .child(components::tabular(
+        .overflow_y_scroll()
+        .children(ordered.map(|(index, row)| row_element(index, row, handle.clone())));
+    // The footer names only keys the key table binds: the next request and
+    // the bell's own toggle.
+    let hint = |action: &str, verb: &'static str| {
+        components::bound_chord(action).map(|keys| {
             div()
-                .debug_selector(|| "notifications-needs-you-count".into())
-                .text_color(rgb(ATTENTION))
-                .child(count.to_string()),
-        ));
-    section_label("notifications-needs-you")
-        .child(title)
-        .children(
-            components::bound_chord("cockpit::NextDecision")
-                .map(|keys| components::key_combo(&keys, TEXT_MUTED)),
-        )
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(CH))
+                .child(components::key_combo(&keys, TEXT_MUTED))
+                .child(verb)
+        })
+    };
+    let hints: Vec<Div> = [
+        hint("cockpit::NextDecision", "next request"),
+        hint("cockpit::ToggleNotifications", "close"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut footer = crate::menu::footer_shell();
+    for (at, hint) in hints.into_iter().enumerate() {
+        if at > 0 {
+            footer = footer.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(CH))
+                    .text_color(rgb(TEXT_FAINT))
+                    .child("\u{b7}"),
+            );
+        }
+        footer = footer.child(hint);
+    }
+    panel.child(list).child(footer)
 }
 
-/// `Earlier`, with `Clear all` at its right: it clears the finished turns
-/// only — a live request is cleared by answering it.
-fn earlier_label(handle: Handle) -> Div {
-    section_label("notifications-earlier")
-        .child(div().font_weight(W_LABEL).child("Earlier"))
-        .child(
-            components::button("notifications-clear")
-                .debug_selector(|| "notifications-clear".into())
-                .px(px(SPACE_1_5))
-                .mr(px(-SPACE_1_5))
-                .child(components::text_meta().child("Clear all"))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    handle(Verb::Clear, window, cx)
-                }),
-        )
-}
-
+/// One notice (the prototype's `.nt`): one row in four columns — the mark,
+/// the state word in its colour, the title (`TEXT_STRONG` while unread)
+/// with ` · <what> · <project>` muted after it, and the age at the right,
+/// where the dismiss `×` fades in under the pointer.
 fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
     let target = row.target.clone();
     let open = handle.clone();
@@ -715,22 +760,22 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
     // The dismiss control fades in with the row's hover (the one 150ms
     // blend); its box is always in layout, so nothing moves.
     let shown = crate::motion::hover_t(&key);
+    let lead = row.lead();
+    let tail = detail_tail(row);
     div()
         .id(("notice-row", index))
         .debug_selector(move || format!("notice-row-{index}"))
         .flex()
-        .items_start()
+        .items_center()
         .w_full()
         .flex_shrink_0()
-        .min_h(px(NOTICE_ROW_H))
-        .px(px(MENU_ROW_PAD_X))
-        .py(px(SPACE_1_5))
-        .gap(px(SPACE_2))
-        .rounded(px(R_MENU_ROW))
+        .h(px(FLOAT_ROW_H))
+        .px(px(FLOAT_PAD_X))
+        .whitespace_nowrap()
         .hover_raised(key)
         .press_raised()
-        // Title and detail truncate at the panel's width; the whole of both
-        // stays one hover away.
+        // The title and its detail truncate at the list's width; the whole
+        // of both stays one hover away.
         .tooltip(crate::menu::tooltip(format!(
             "{}\n{}",
             row.title,
@@ -740,53 +785,50 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
             cx.stop_propagation();
             open(target_verb(&target), window, cx)
         })
-        // The mark's column stays when the row is read, so titles align;
-        // it is one title line high, the mark centred on it.
+        .child(mark_cell(row))
         .child(
             div()
-                .flex()
                 .flex_shrink_0()
-                .items_center()
-                .w(px(STATUS_DOT))
-                .h(px(LH_UI))
-                .when(!row.read, |slot| {
-                    slot.child(components::status_dot(mark_ink(row)))
-                }),
+                .w(px(NOTICE_STATE_W))
+                .text_color(rgb(word_ink(lead)))
+                .child(lead),
         )
         .child(
             div()
                 .flex()
-                .flex_col()
                 .flex_1()
                 .min_w_0()
+                .overflow_hidden()
                 .child(
                     div()
-                        .flex()
-                        .items_baseline()
-                        .min_w_0()
-                        .child(
-                            components::text_ui()
-                                .min_w_0()
-                                .text_color(rgb(if row.read { TEXT_2 } else { TEXT_STRONG }))
-                                .truncate()
-                                .child(row.title.clone()),
-                        )
-                        .when(row.repeat > 1, |title| {
-                            let repeat = row.repeat;
-                            title.child(components::tabular(
-                                components::text_meta()
-                                    .flex_shrink_0()
-                                    .debug_selector(move || format!("notice-repeat-{repeat}"))
-                                    .child(format!(" \u{d7}{repeat}")),
-                            ))
-                        }),
+                        .flex_shrink_0()
+                        .max_w_full()
+                        .truncate()
+                        .text_color(rgb(if row.read { TEXT } else { TEXT_STRONG }))
+                        .child(row.title.clone()),
                 )
-                .child(detail_line(row)),
+                .when(row.repeat > 1, |title| {
+                    let repeat = row.repeat;
+                    title.child(components::tabular(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(TEXT_MUTED))
+                            .debug_selector(move || format!("notice-repeat-{repeat}"))
+                            .child(format!(" \u{d7}{repeat}")),
+                    ))
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(tail),
+                ),
         )
-        // The age and the dismiss share one right slot, one title line
-        // high: the age at rest, the × under the pointer or keyboard focus.
-        // The age's slot keeps its width in a request's first minute, when
-        // it says nothing, so the rows' ages align.
+        // The age and the dismiss share one right slot: the age at rest,
+        // the × under the pointer or keyboard focus. The slot keeps its
+        // width in a request's first minute, when the age says nothing, so
+        // the rows' ages align.
         .child(
             div()
                 .relative()
@@ -794,10 +836,11 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 .flex_shrink_0()
                 .items_center()
                 .justify_end()
-                .min_w(px(NOTICE_AGE_W))
+                .w(px(NOTICE_AGE_W))
                 .h(px(LH_UI))
                 .child(components::tabular(
-                    components::text_meta()
+                    div()
+                        .text_color(rgb(TEXT_MUTED))
                         .opacity(1. - shown)
                         .child(row.when.clone()),
                 ))
@@ -807,16 +850,15 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                         .absolute()
                         .right(px(0.))
                         .p_0()
-                        .size(px(CHIP_H))
+                        .h(px(LH_UI))
+                        .px(px(SPACE_1))
                         .rounded(px(R_CHIP))
                         .tab_stop(true)
-                        // The ghost button's own faces: `FILL` under the
-                        // pointer, `FILL_HOVER` pressed.
                         .opacity(shown)
                         .focus_visible(|style| components::control_focus(style).opacity(1.))
                         .tooltip("Dismiss")
                         .accessibility_label("Dismiss")
-                        .child(icons::icon(icons::CLOSE, ROW_ICON, TEXT_MUTED))
+                        .child(div().text_color(rgb(TEXT_MUTED)).child("\u{d7}"))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             handle(dismiss_verb(&dismiss), window, cx);
@@ -873,13 +915,15 @@ mod tests {
         );
         let done = row(TurnOutcome::Completed, None);
         assert_eq!(done.detail_parts(), ("done".into(), TEXT_MUTED, "".into()));
+        // Terminal-native (WP-E): a finished turn's mark is a dim `✓` —
+        // green never means finished — a failure's a red `✗`, a request's a
+        // yellow `◆`, a question's a yellow `?`.
+        assert_eq!(mark(&done), Mark::Drawn(icons::CHECK, TEXT_MUTED));
         assert_eq!(
-            mark_ink(&done),
-            ACCENT,
-            "an unread good finish is the accent — green never means finished"
+            mark(&row(TurnOutcome::Interrupted, None)),
+            Mark::Drawn(icons::STOP, TEXT_MUTED)
         );
-        assert_eq!(mark_ink(&row(TurnOutcome::Interrupted, None)), TEXT_MUTED);
-        assert_eq!(mark_ink(&failed), BLOCKED);
+        assert_eq!(mark(&failed), Mark::Drawn(icons::CROSS, BLOCKED));
         let waiting = Row {
             kind: RowKind::Request(RequestKind::Permission),
             ..done
@@ -888,10 +932,16 @@ mod tests {
             waiting.detail_parts(),
             ("needs you".into(), ATTENTION, " \u{b7} approval".into())
         );
-        assert_eq!(mark_ink(&waiting), ATTENTION);
-        assert_eq!(badge_inks(BadgeTone::Plain), (FILL_HOVER, TEXT_STRONG));
-        assert_eq!(badge_inks(BadgeTone::NeedsYou), (FILL_HOVER, ATTENTION));
-        assert_eq!(badge_inks(BadgeTone::Failed), (FILL_HOVER, BLOCKED));
+        assert_eq!(mark(&waiting), Mark::Drawn(icons::DIAMOND, ATTENTION));
+        let asking = Row {
+            kind: RowKind::Request(RequestKind::Question),
+            ..waiting
+        };
+        assert_eq!(mark(&asking), Mark::Typed("?", ATTENTION));
+        // The badge is digits on no ground, coloured by what waits.
+        assert_eq!(badge_ink(BadgeTone::Plain), TEXT_STRONG);
+        assert_eq!(badge_ink(BadgeTone::NeedsYou), ATTENTION);
+        assert_eq!(badge_ink(BadgeTone::Failed), BLOCKED);
     }
 
     /// Any unread request tones the badge; failing that, an unread failure;

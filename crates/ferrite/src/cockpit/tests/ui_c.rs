@@ -352,9 +352,10 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     }
 }
 
-/// The Composer's `❯` sits on the transcript's mark column: at L1 over the
-/// prompt row's `❯`, at L2 over the tail's (±1px) — whose text starts at C1,
-/// one gutter past it, in the prose face's small size.
+/// Terminal-native (WP-D): the Composer's `❯` hangs in the prototype's
+/// 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's edge, at L1 and L2
+/// alike (the transcript's rows take the same gutter in WP-A; the two axes
+/// meet at integration). The L2 tail's own marks and text keep theirs.
 #[gpui::test]
 fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
@@ -370,10 +371,10 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
         .unwrap();
     tick(cx);
     let mark = cx.debug_bounds("composer-mark").unwrap();
-    let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        (mark.left() - prompt.left()).abs() <= px(1.),
-        "L1: {mark:?} / {prompt:?}"
+        (mark.left() - px(rect.x + 1. + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
+        "L1: {mark:?} / {rect:?}"
     );
 
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
@@ -388,9 +389,10 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
     });
     let mark = cx.debug_bounds("composer-mark").unwrap();
     let row = bounds(cx, format!("l2-tail-row-{namespace}-{prompt_id:?}"));
+    let cell = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        (mark.left() - row.left()).abs() <= px(1.),
-        "L2: {mark:?} / {row:?}"
+        (mark.left() - px(cell.x + 1. + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
+        "L2: {mark:?} / {cell:?}"
     );
     let text = bounds(cx, format!("l2-tail-text-{namespace}-{answer_id:?}"));
     assert!(
