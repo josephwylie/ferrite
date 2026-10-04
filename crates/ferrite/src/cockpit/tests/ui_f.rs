@@ -80,9 +80,12 @@ fn an_approval_answers_y_a_and_n_in_one_key(cx: &mut TestAppContext) {
     }
 }
 
-/// A native choice's row shows its digit, and the digit sends that choice.
+/// Every approval offers exactly three options and a digit picks one of
+/// them: a native choice outside the three (`Block example.com`) has no
+/// row, so `2` is option 2 — allow for this thread (Ferrite keeps the rule
+/// when the provider offered no standing answer).
 #[gpui::test]
-fn an_approval_digit_picks_its_native_choice(cx: &mut TestAppContext) {
+fn an_approval_digit_picks_one_of_its_three_options(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("one-key-digit", 1);
     bind_production_keys(cx);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -99,12 +102,12 @@ fn an_approval_digit_picks_its_native_choice(cx: &mut TestAppContext) {
         .send(SessionEvent::DecisionRequested { decision })
         .unwrap();
     tick(cx);
-    // Rows: [y] Allow, [2] Block example.com, [n] Deny.
+    // Rows: 1. Allow, 2. Allow `Write` for this thread, 3. Deny, and tell
+    // Claude what to do instead.
     cx.simulate_keystrokes("2");
     tick(cx);
     assert!(
-        matches!(answered(&fake).as_slice(), [(_, DecisionAnswer::Choose { value })]
-            if *value == serde_json::json!({ "opaque": "block" })),
+        matches!(answered(&fake).as_slice(), [(id, DecisionAnswer::Allow { .. })] if id == "digit"),
         "{:?}",
         answered(&fake)
     );

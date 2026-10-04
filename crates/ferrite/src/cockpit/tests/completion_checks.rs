@@ -662,7 +662,12 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
                 id: "long-approval".into(),
                 tool_use_id: "long-approval".into(),
                 tool_name: "commandExecution".into(),
-                description: command.into(),
+                // A reason, not the command again: prose that only repeats
+                // the band's command is never printed (D-7).
+                description: "Remove the shared pane-browser skill and the Claude link to it, \
+                    then verify that neither path remains and that no Codex-specific copy \
+                    exists anywhere under the operator's home directory before reporting back."
+                    .into(),
                 suggestions: vec![],
                 input: serde_json::json!({"command":command}),
             },
@@ -719,10 +724,11 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             allow.size.height <= px(row_h + 1.),
             "an approval row is one line: {allow:?}"
         );
+        // Three options, flush: option 2 is the one row between them.
         let step = deny.top() - allow.bottom();
         assert!(
-            step >= px(0.) && step <= px(crate::theme::DECISION_ROW_GAP + 1.),
-            "Deny sits directly under Allow: {step:?}"
+            step >= px(crate::theme::LH_UI - 1.) && step <= px(crate::theme::LH_UI + 1.),
+            "Deny sits one option under Allow: {step:?}"
         );
         if let Some((previous_width, previous_island)) = previous {
             let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;

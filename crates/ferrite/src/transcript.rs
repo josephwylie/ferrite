@@ -140,6 +140,16 @@ impl TranscriptInput {
     }
 }
 
+/// A row the transcript draws after its last row (the Phase-0 interface:
+/// the Decision row, `CockpitView::decision_tail`). `key` changes whenever
+/// what `render` draws does, so the cached transcript draws it again.
+#[derive(Clone)]
+#[allow(dead_code)] // core-transcript places it (`TranscriptInput.tail`).
+pub(crate) struct TranscriptTail {
+    pub key: u64,
+    pub render: Rc<dyn Fn(&mut Window, &mut App) -> gpui::AnyElement>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum TranscriptEvent {
     ToggleDisclosure(DisclosureId),

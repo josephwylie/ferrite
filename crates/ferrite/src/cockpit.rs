@@ -3,6 +3,7 @@
 //! Rendering and keys only. What each Pane shows — the Blocks, the pending
 //! Decision, the held prompt — is folded in core and read from there.
 
+pub(crate) mod decisions;
 pub(crate) mod subagents;
 
 /// Card triggers' bounds by key, recorded in prepaint.
@@ -459,6 +460,9 @@ pub struct CockpitView {
     /// Transcript events are detached subscriptions, registered once per
     /// retained Subject entity rather than once per render.
     transcript_entities: std::collections::HashSet<gpui::EntityId>,
+    /// WP-F: the Decision cards' way back to this view, and the thread
+    /// rules option 2 made (`cockpit::decisions`).
+    decisions: decisions::DecisionState,
 }
 
 /// What an inline rename is aimed at. Both are titles the operator owns:
@@ -1306,6 +1310,7 @@ impl CockpitView {
             group_error: None,
             bell: Bell::new(),
             transcript_entities: Default::default(),
+            decisions: decisions::DecisionState::new(cx.weak_entity()),
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -1668,6 +1673,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.apply_thread_rules(&frame, cx);
         for pane in &self.panes {
             if let Some(thread) = pane.thread() {
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
@@ -5012,10 +5018,13 @@ impl CockpitView {
                 }
             }
         }
-        self.answer(answer, cx);
+        self.answer(answer, window, cx);
     }
 
-    fn answer(&mut self, answer: Answer, cx: &mut Context<Self>) {
+    /// `y` `n` `a` — listed in the shortcuts sheet, not on the row: an
+    /// approval takes option 1, 3 or 2 through the one answer path; a
+    /// question, form or link takes only the deny.
+    fn answer(&mut self, answer: Answer, window: &mut Window, cx: &mut Context<Self>) {
         // The focused Thread if it is the one waiting; otherwise whichever
         // Thread the wall is flagging. Answering from across the room is the
         // point of the badge.
@@ -5034,66 +5043,40 @@ impl CockpitView {
         let Some(thread) = thread else {
             return;
         };
-        let Some(decision) = self
-            .cockpit
-            .thread(thread)
-            .and_then(|open| open.pending())
-            .cloned()
-        else {
-            return;
-        };
-        if matches!(answer, Answer::Allow | Answer::Always) && !decision.policy.allow {
-            return;
-        }
-        if answer == Answer::Deny && !decision.policy.deny {
-            return;
-        }
-        if decision.policy.interaction_required && answer != Answer::Deny {
-            return;
-        }
-        // A question is answered by its form, never by a bare "allow" —
-        // allowing an unanswered question would send the model nothing.
-        if (pane::question_of(&decision).is_some()
-            || matches!(
-                decision.kind,
-                ferrite_core::DecisionKind::Form { .. }
-                    | ferrite_core::DecisionKind::External { .. }
-                    | ferrite_core::DecisionKind::Unsupported { .. }
-            ))
-            && answer != Answer::Deny
-        {
-            cx.notify();
-            return;
-        }
-        let response = match answer {
-            Answer::Allow => DecisionAnswer::Allow {
-                input: decision.input.clone(),
-            },
-            Answer::Deny => DecisionAnswer::Deny {
-                message: "The operator denied this tool.".into(),
-            },
-            // Only where the request itself offered a standing answer; where
-            // it did not, the key does nothing rather than quietly allowing.
-            Answer::Always => match decision.standing_answer() {
-                Some(standing) => DecisionAnswer::AllowAlways {
-                    input: decision.input.clone(),
-                    suggestion: standing.clone(),
-                },
-                None => return,
-            },
-        };
-        if let Some(handle) = self
-            .cockpit
-            .thread(thread)
-            .and_then(|open| {
-                open.activity().pending_decisions().iter().find(|request| {
-                    request.decision == decision
+        let Some(request) = self.cockpit.thread(thread).and_then(|open| {
+            let pending = open.pending()?;
+            open.activity()
+                .pending_decisions()
+                .iter()
+                .find(|request| {
+                    &request.decision == pending
                         && request.subject == Some(ferrite_core::activity::Subject::Main)
                 })
-            })
-            .map(|request| request.handle.clone())
-        {
-            self.respond_exact(thread, &handle, response, cx);
+                .cloned()
+        }) else {
+            return;
+        };
+        if matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) {
+            let choice = match answer {
+                Answer::Allow => decision::ApprovalChoice::Allow,
+                Answer::Always => decision::ApprovalChoice::AllowForThread,
+                Answer::Deny => decision::ApprovalChoice::DenyAndSteer,
+            };
+            // A denial steers from the Pane the operator is in; one sent
+            // across the room leaves the keyboard where it is.
+            let steer = self.focused_thread() == Some(thread);
+            self.answer_approval_request(
+                thread,
+                &request,
+                choice,
+                None,
+                steer.then_some(window),
+                cx,
+            );
+        } else {
+            // A question is answered by its form, never by a bare "allow" —
+            // allowing an unanswered question would send the model nothing.
+            self.answer_request(thread, request, answer, cx);
         }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
@@ -8520,6 +8503,8 @@ impl CockpitView {
             .rename
             .as_ref()
             .map(|(_, editor)| editor.focus_handle(cx))
+            // An open Decision note (⇥) holds the keyboard until it closes.
+            .or_else(|| self.decision_note_focus(cx))
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
                     _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
@@ -8748,6 +8733,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::history_newer))
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
+            .map(|root| self.register_decision_actions(root, cx))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves
             // ride the root too (#27): a sweep keeps extending after the
@@ -10212,8 +10198,13 @@ impl CockpitView {
                     )
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |view, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
+                            // A lone single-select question answers here;
+                            // anything more opens its Pane in full.
+                            if view.answer_question_option(thread, at, window, cx) {
+                                return;
+                            }
                             if let Some(index) = view.pane_for(thread) {
                                 view.focus_pane(index);
                                 if view.cockpit.roster().fullscreen().is_none() {
@@ -10227,30 +10218,35 @@ impl CockpitView {
                 }
             }
             None if matches!(request.decision.kind, ferrite_core::DecisionKind::Approval) => {
-                for row in decision::approval_rows(&request.decision) {
+                let workspace = open
+                    .workspace()
+                    .map(|workspace| workspace.cwd().to_path_buf());
+                // The same three options as the row: `1 allow` `2 always`
+                // `3 deny`.
+                for row in decision::approval_rows(
+                    &request.decision,
+                    Some(open.provider()),
+                    workspace.as_deref(),
+                ) {
                     if !row.enabled {
                         continue;
                     }
-                    let (answer, word) = match row.verb {
-                        decision::Verb::Allow => (Answer::Allow, "allow"),
-                        decision::Verb::Always(_) => (Answer::Always, "always"),
-                        decision::Verb::Deny => (Answer::Deny, "deny"),
-                        decision::Verb::Choose(_) => continue,
-                    };
-                    let request = request.clone();
+                    let word = row.word();
+                    let choice = row.choice;
                     let button = pane::quick_answer(
                         SharedString::from(format!("wall-answer-{key}-{word}")),
-                        row.key.clone().filter(|_| target),
+                        Some(row.key.clone()).filter(|_| target),
                         word.into(),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |view, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
                             if let Some(index) = view.pane_for(thread) {
                                 view.focus_pane(index);
                             }
-                            view.answer_request(thread, request.clone(), answer, cx);
+                            // The one answer path the row and a toast share.
+                            view.answer_approval(thread, choice, None, window, cx);
                             cx.notify();
                         }),
                     );
@@ -12706,6 +12702,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 mod tests {
     mod completion_checks;
     mod composer_controls;
+    mod decisions_parity;
     mod layout_polish;
     mod provider_controls;
     mod provider_forms;
@@ -15684,10 +15681,11 @@ mod tests {
         });
     }
 
-    /// The standing-answer rule holds at wall range too: a request that
-    /// offered none is not quietly allowed by the key that means "always".
+    /// `a` is option 2 at wall range too (`2 always`): a request that
+    /// offered no standing answer is allowed for this thread out loud — the
+    /// answer goes, and Ferrite keeps the thread rule it names.
     #[gpui::test]
-    fn always_does_nothing_at_the_wall_when_nothing_was_offered(cx: &mut TestAppContext) {
+    fn always_at_the_wall_keeps_a_thread_rule_when_nothing_was_offered(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("wall-always", 24);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("a", Always, Some("Wall"))]);
@@ -15701,15 +15699,23 @@ mod tests {
         let flagged = view.read_with(cx, |view, _| view.panes[3].thread().unwrap());
 
         cx.simulate_keystrokes("a");
+        tick(cx);
 
+        assert!(
+            matches!(
+                fake.answered.borrow().as_slice(),
+                [(id, DecisionAnswer::Allow { .. })] if id == "perm_04"
+            ),
+            "{:?}",
+            fake.answered.borrow()
+        );
         view.read_with(cx, |view, _| {
-            assert!(
-                view.cockpit
-                    .thread(flagged)
-                    .and_then(|open| open.pending())
-                    .is_some(),
-                "a Decision with nothing to adopt must still be waiting"
+            assert_eq!(
+                view.decisions.rules().len(),
+                1,
+                "the thread rule option 2 names is kept"
             );
+            assert_eq!(view.decisions.rules()[0].thread, flagged);
         });
     }
 
