@@ -539,8 +539,8 @@ fn line() -> Div {
 /// The status mark in a Thread row's mark cell (`thread_status`, the one
 /// truth the Panes share): a working Thread's braille spinner in `RUNNING`
 /// — the one thing in the column that moves, still under reduced motion —
-/// a failing or failed Thread's red dot, a Decision's yellow, unread the
-/// accent, idle the metadata ink, and a parked Thread a faint ring.
+/// a failing or failed Thread's red dot, a Decision's yellow, idle the
+/// metadata ink (read or not), and a parked Thread a faint ring.
 fn status_mark(row: &ThreadRow) -> AnyElement {
     match row.status {
         RowStatus::Working => components::braille_spinner(RUNNING, NAV_GLYPH),
@@ -1836,8 +1836,9 @@ mod tests {
     }
 
     /// The dots are the Pane's own colours: green only for live work, a
-    /// failing Thread in the failure's red, a Decision yellow, unread the
-    /// accent, idle the metadata ink. Nothing pulses.
+    /// failing Thread in the failure's red, a Decision yellow, idle the
+    /// metadata ink whether read or not (unread is the title's ink, never
+    /// the dot's; before the redesign it was the accent). Nothing pulses.
     #[test]
     fn status_dots_say_state_and_green_only_means_live() {
         let face = |status, unread| {
@@ -1855,8 +1856,8 @@ mod tests {
         assert_eq!(fill(RowStatus::Idle), Some(rgb(IDLE).into()));
         assert_eq!(
             face(RowStatus::Idle, true).style().background,
-            Some(rgb(ACCENT).into()),
-            "an unread quiet row is the accent, never yellow"
+            Some(rgb(IDLE).into()),
+            "an unread quiet row keeps its dot: the title carries unread"
         );
         for status in [
             RowStatus::Working,
@@ -1922,7 +1923,8 @@ mod tests {
     }
 
     /// The titlebar cell rides with the column: the column's own width when
-    /// open, the folded cell — lights, toggle, bell, gear — when folded, and
+    /// open, the folded cell — lights, toggle, bell (and the gear off
+    /// macOS) — when folded, and
     /// in between as the column moves. Over the folded column it paints the
     /// reading plane; over the open column, nothing.
     #[test]
@@ -1938,7 +1940,7 @@ mod tests {
         assert!(mid > NAV_CHROME_FOLDED_W && mid < WIDTH);
         assert_eq!(
             NAV_CHROME_FOLDED_W,
-            NAV_CHROME_LEAD + 3.0 * ICON_BUTTON + NAV_PAD_X
+            NAV_CHROME_LEAD + NAV_CHROME_DOORS * ICON_BUTTON + NAV_PAD_X
         );
         let mut open = chrome_band(WIDTH, WIDTH);
         assert_eq!(open.style().background, None, "the column's chrome shows");

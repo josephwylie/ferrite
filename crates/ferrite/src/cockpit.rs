@@ -125,12 +125,14 @@ impl ThreadStatus {
 /// wall cell (and, later, the rail and the titlebar) all read a Thread's
 /// face from here, so no two surfaces can disagree about a Thread.
 ///
-/// Unread is its own axis, never a state: a quiet Thread that finished
-/// while the operator looked elsewhere wears `ACCENT`, never the ochre that
-/// means an agent is stopped until the operator acts. A live state (work,
-/// a failure, a Decision) is the louder truth and ignores unread.
+/// Unread is its own axis, never a state, and never the dot's: a quiet
+/// Thread that finished while the operator looked elsewhere keeps its
+/// state's dot and reads as unread by its `TEXT_STRONG` title (theme rule
+/// 6: one place per fact; the accent is for focus, the prompt and links).
+/// The `unread` argument stays so callers keep naming the axis.
 pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatus {
-    use crate::theme::{words, ACCENT, ATTENTION, BLOCKED, IDLE, RUNNING, TEXT_MUTED};
+    use crate::theme::{words, ATTENTION, BLOCKED, IDLE, RUNNING, TEXT_MUTED};
+    let _ = unread;
     use pane::WallState;
     let solid = |ink, word| ThreadStatus {
         shape: DotShape::Solid,
@@ -142,8 +144,8 @@ pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatu
         WallState::Failing => solid(BLOCKED, Some(words::FAILING)),
         WallState::Decision => solid(ATTENTION, Some(words::NEEDS_YOU)),
         WallState::Blocked => solid(BLOCKED, Some(words::FAILED)),
-        WallState::Done => solid(if unread { ACCENT } else { IDLE }, Some(words::DONE)),
-        WallState::Idle => solid(if unread { ACCENT } else { IDLE }, None),
+        WallState::Done => solid(IDLE, Some(words::DONE)),
+        WallState::Idle => solid(IDLE, None),
         WallState::Parked => ThreadStatus {
             shape: DotShape::Ring,
             ink: TEXT_MUTED,
@@ -11462,13 +11464,10 @@ impl CockpitView {
             width: (!effort).then_some(crate::theme::MODEL_PICKER_W),
             // Rebuild the retained menu when availability changes.
             id: format!("choice-{identity:?}-{effort}-{busy}").into(),
-            // The model and effort chips end the Composer's row; a draft's
-            // band starts its own.
-            anchor: if band {
-                gpui::Anchor::BottomLeft
-            } else {
-                gpui::Anchor::BottomRight
-            },
+            // The model and effort chips lead the status line (and a
+            // draft's band starts its own): the picker hangs right from the
+            // chip and the measured shift keeps it inside the Pane.
+            anchor: gpui::Anchor::BottomLeft,
             trigger,
             choices,
             open: open.is_some(),
@@ -11944,8 +11943,8 @@ impl CockpitView {
             .child(self.bell_element(cx))
             // Settings keeps its gear only where it has no other visible
             // door: macOS lists it in the app menu (and ⌘,), so there the
-            // gear shows only in the folded cell (theme WP-C).
-            .children((!cfg!(target_os = "macos") || self.nav_railed()).then_some(gear))
+            // cell carries none, folded or not (theme WP-C, the prototype).
+            .children((!cfg!(target_os = "macos")).then_some(gear))
             .into_any_element()
     }
 
@@ -19640,7 +19639,13 @@ mod tests {
         let cell = cx
             .debug_bounds("nav-chrome")
             .expect("the folded titlebar cell");
-        for door in ["settings-gear", "notifications-bell"] {
+        // Settings has its gear only off macOS (the app menu lists it).
+        let doors: &[&'static str] = if cfg!(target_os = "macos") {
+            &["notifications-bell"]
+        } else {
+            &["settings-gear", "notifications-bell"]
+        };
+        for &door in doors {
             let bounds = cx
                 .debug_bounds(door)
                 .unwrap_or_else(|| panic!("folded, {door} stays in reach"));
@@ -22161,22 +22166,23 @@ mod tests {
         cx.simulate_click(close, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(!view.settings_open));
-        // The expanded sidebar's titlebar cell carries the gear only where
-        // Settings has no other visible door: macOS lists it in the app
-        // menu, so there the gear is the rail's.
+        // The titlebar cell carries the gear only where Settings has no
+        // other visible door: macOS lists it in the app menu (and ⌘,), so
+        // there the cell has none, open or folded (the prototype).
         if cfg!(target_os = "macos") {
             assert!(cx.debug_bounds("settings-gear").is_none());
             cx.simulate_keystrokes("cmd-b");
             tick(cx);
-        }
-        let gear = cx.debug_bounds("settings-gear").unwrap().center();
-        cx.simulate_click(gear, gpui::Modifiers::none());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(view.settings_open));
-        if cfg!(target_os = "macos") {
+            assert!(cx.debug_bounds("settings-gear").is_none());
             cx.simulate_keystrokes("cmd-b");
             tick(cx);
+            cx.simulate_keystrokes("cmd-,");
+        } else {
+            let gear = cx.debug_bounds("settings-gear").unwrap().center();
+            cx.simulate_click(gear, gpui::Modifiers::none());
         }
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.settings_open));
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
@@ -23404,9 +23410,10 @@ mod tests {
     }
 
     /// The tree names the Thread the toast was about: an unread finish
-    /// marks its nav row unread (its own axis — the state stays Idle, the
-    /// dot wears `ACCENT`, never a Decision's ochre), and landing on the
-    /// Pane — which reads the Notice — clears it.
+    /// marks its nav row unread (its own axis — the state stays Idle and
+    /// the dot keeps its idle ink, never a Decision's ochre; terminal-native,
+    /// the title's ink carries unread where the accent dot used to), and
+    /// landing on the Pane — which reads the Notice — clears it.
     #[gpui::test]
     fn a_finished_thread_marks_its_nav_row_until_it_is_read(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("finished-nav-row", 2);
@@ -23435,8 +23442,8 @@ mod tests {
             );
             assert_eq!(
                 thread_status(finished.status.wall(), finished.unread).ink,
-                crate::theme::ACCENT,
-                "the mark is the unread accent, never ochre"
+                crate::theme::IDLE,
+                "the dot keeps its state, never ochre: the title says unread"
             );
             let other = view.thread_row(threads[0]);
             assert_eq!(other.status, nav::RowStatus::Idle);

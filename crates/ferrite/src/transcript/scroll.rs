@@ -110,18 +110,35 @@ impl TranscriptScroll {
         adjusted
     }
 
-    /// The first visible row is never cut under the head rule while the
-    /// tail is followed: after layout, the top row's remnant — when its
-    /// content, not just its gap, is cut — is measured for the mask the
-    /// view paints over it (`cut_row_mask`). `gap_of` is a row's space
-    /// above its content. Whether the mask changed, so the caller repaints
-    /// once; an unchanged frame schedules nothing.
-    pub(crate) fn settle_top(&self, gap_of: impl Fn(usize) -> f32) -> bool {
+    /// The first visible row is never cut under the head rule — or under
+    /// the pinned prompt band, `inset` below the viewport's top — while the
+    /// tail is followed: after layout, the remnant of the row that edge
+    /// cuts — when its content, not just its gap, is cut — is measured for
+    /// the mask the view paints over it (`cut_row_mask`), reaching from the
+    /// viewport's top. `gap_of` is a row's space above its content. Whether
+    /// the mask changed, so the caller repaints once; an unchanged frame
+    /// schedules nothing.
+    pub(crate) fn settle_top(&self, gap_of: impl Fn(usize) -> f32, inset: Pixels) -> bool {
         let mask = if self.list.is_following_tail() {
             let viewport = self.list.viewport_bounds();
-            let top = self.list.logical_scroll_top().item_ix;
-            self.list.bounds_for_item(top).map_or(px(0.), |row| {
-                cut_row_mask(viewport.top(), row.top(), row.bottom(), px(gap_of(top)))
+            let edge = viewport.top() + inset.max(px(0.));
+            let mut index = self.list.logical_scroll_top().item_ix;
+            // The row the edge falls in: under a pinned band that is a row
+            // or two below the list's own first.
+            while self
+                .list
+                .bounds_for_item(index)
+                .is_some_and(|row| row.bottom() <= edge)
+            {
+                index += 1;
+            }
+            self.list.bounds_for_item(index).map_or(px(0.), |row| {
+                let remnant = cut_row_mask(edge, row.top(), row.bottom(), px(gap_of(index)));
+                if remnant > px(0.) {
+                    edge - viewport.top() + remnant
+                } else {
+                    px(0.)
+                }
             })
         } else {
             px(0.)

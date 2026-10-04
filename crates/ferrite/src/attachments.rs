@@ -219,6 +219,7 @@ pub fn inline_file(
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
     use crate::theme;
+    use gpui::component::button::ButtonVariants as _;
     use gpui::rgb;
 
     let name = file

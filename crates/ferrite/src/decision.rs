@@ -198,6 +198,10 @@ pub fn card(
                 .w_full()
                 .min_w_0()
                 .min_h_0()
+                // A second plane under the card's own: in a short Pane the
+                // card docks over the transcript's tail, and on glass one
+                // 94% plane lets those rows ghost through (theme rule 4).
+                .bg(theme::paint::PLANE)
                 .gap(px(theme::DECISION_GAP))
                 .pl(px(theme::TX_PAD_L + theme::GLYPH_GUTTER))
                 .pr(px(theme::TX_PAD_R))

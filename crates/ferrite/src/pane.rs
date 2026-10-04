@@ -9786,15 +9786,12 @@ mod tests {
     #[test]
     fn the_l2_tail_sets_prose_at_the_small_prose_size() {
         let mut prose = tail_prose("Fixed it.".into(), false);
-        assert_eq!(
-            prose.style().text.font_size,
-            Some(px(theme::FS_PROSE_SM).into())
-        );
+        assert_eq!(prose.style().text.font_size, Some(px(theme::FS_UI).into()));
         assert_eq!(
             prose.style().text.line_height,
-            Some(px(theme::LH_PROSE_SM).into())
+            Some(px(theme::LH_UI).into())
         );
-        assert!(theme::FS_PROSE_SM >= 12.5);
+        assert!(theme::FS_UI >= 12.5);
         let mut heading = tail_prose("Result".into(), true);
         assert_eq!(heading.style().text.font_weight, Some(theme::W_LABEL));
     }

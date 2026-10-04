@@ -16,8 +16,8 @@ use gpui::component::button::{Button, ButtonVariants};
 use gpui::component::{FocusableExt, Sizable};
 use gpui::prelude::*;
 use gpui::{
-    div, point, pulsating_between, px, rgb, rgba, AnyElement, App, BoxShadow, Div, ElementId,
-    FontFeatures, HighlightStyle, Hsla, SharedString, Stateful, StyleRefinement, Window,
+    div, point, px, rgb, rgba, AnyElement, App, BoxShadow, Div, ElementId, FontFeatures,
+    HighlightStyle, Hsla, SharedString, Stateful, StyleRefinement, Window,
 };
 
 use crate::icons;
@@ -225,19 +225,6 @@ pub fn tabular<E: Styled>(mut element: E) -> E {
 
 // ------------------------------------------------- planes and elevation
 
-/// A legacy in-flow block (`RAISED`, square, no edge, no shadow). New
-/// surfaces paint a band (`paint::BAND`) or nothing: code blocks and cards
-/// have no ground in the terminal grammar.
-pub fn raised() -> Div {
-    div().bg(rgb(theme::RAISED)).rounded(px(theme::R_BLOCK))
-}
-
-/// A raised block with a 1px edge that is always in layout, so a state change
-/// recolours the edge and never shifts what is inside.
-pub fn raised_edged(edge: u32) -> Div {
-    raised().border_1().border_color(rgba(edge))
-}
-
 /// The old elevation ladder's rungs, kept as names (theme rule 2: square
 /// and flat inside). Only a floating surface casts; nothing is lit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,8 +233,6 @@ pub enum Elevation {
     Pane,
     /// The focused Pane of a board: flat (its border says focus).
     Lifted,
-    /// The Composer, a Decision block, a Settings card: flat.
-    Raised,
     /// A control's face: flat.
     Control,
     /// Menus, pickers, the palette, popovers, tooltips, a dragged ghost:
@@ -272,51 +257,9 @@ fn layer(color: u32, y: f32, blur: f32, spread: f32) -> BoxShadow {
 /// (`float_shadow`).
 pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
     match rung {
-        Elevation::Pane | Elevation::Lifted | Elevation::Raised | Elevation::Control => Vec::new(),
+        Elevation::Pane | Elevation::Lifted | Elevation::Control => Vec::new(),
         Elevation::Float | Elevation::Sheet => float_shadow(),
     }
-}
-
-/// Legacy: a knob resting on its track. Nothing casts inside (rule 2).
-pub fn contact_line() -> Vec<BoxShadow> {
-    Vec::new()
-}
-
-/// Legacy: a keycap's light. Keycaps are flat (rule 2).
-#[allow(dead_code)]
-pub fn key_light() -> Vec<BoxShadow> {
-    Vec::new()
-}
-
-/// Legacy: a well's lip. Nothing is recessed (rule 2).
-pub fn well_shade() -> Vec<BoxShadow> {
-    Vec::new()
-}
-
-/// A scroll fade: `SCROLL_FADE_H` of `ground` from clear to solid toward a
-/// fixed edge (`top` or bottom), laid absolutely over the edge of a scrolled
-/// body. It has no hitbox, so the pointer reaches the rows beneath it.
-pub fn scroll_fade(ground: u32, top: bool) -> Div {
-    let fade = fade_band(ground, top);
-    if top {
-        fade.top_0()
-    } else {
-        fade.bottom_0()
-    }
-}
-
-/// A scroll fade not yet placed: solid toward its edge (`top` or bottom).
-pub fn fade_band(ground: u32, top: bool) -> Div {
-    let solid = gpui::linear_color_stop(rgb(ground), 1.);
-    let clear = gpui::linear_color_stop(rgba(ground << 8), 0.);
-    // gpui's angle is the direction the gradient runs: 0 toward the top.
-    let angle = if top { 0. } else { 180. };
-    div()
-        .absolute()
-        .left_0()
-        .right_0()
-        .h(px(theme::SCROLL_FADE_H))
-        .bg(gpui::linear_gradient(angle, clear, solid))
 }
 
 /// `float_shadow` with its ink scaled by `k` (0..1): a floating surface's
@@ -403,35 +346,6 @@ pub fn status_ring(ink: u32) -> Div {
         .rounded_full()
         .border_1()
         .border_color(rgb(ink))
-}
-
-/// Legacy: a status dot whose opacity breathes (`MOTION_BREATH_MS`). The
-/// terminal grammar pulses no dot (theme rule 8): unread is ink, and a
-/// working Thread's dot is the `braille_spinner`. Kept until the nav and
-/// Pane heads stop calling it.
-pub fn breathing_dot(ink: u32, reduce_motion: bool) -> AnyElement {
-    BreathingDot { ink, reduce_motion }.into_any_element()
-}
-
-#[derive(IntoElement)]
-struct BreathingDot {
-    ink: u32,
-    reduce_motion: bool,
-}
-
-impl RenderOnce for BreathingDot {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let breath = pulsating_between(theme::PULSE_MIN, 1.0);
-        let phase = if self.reduce_motion {
-            0.0
-        } else {
-            let period = Duration::from_millis(theme::MOTION_BREATH_MS);
-            motion::pulse_phase(period, window.current_view(), cx)
-        };
-        status_dot(self.ink)
-            .debug_selector(|| "breathing-dot".into())
-            .opacity(breath(phase))
-    }
 }
 
 // ------------------------------------------------------------------ loops
@@ -680,12 +594,6 @@ pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
 }
 
-/// A keycap holding a key table's combination, the modifiers drawn as
-/// glyphs: `cmd-shift-N` reads `⌘⇧N`.
-pub fn kbd_keys(keys: &str) -> Div {
-    kbd_face().child(key_combo(keys, theme::TEXT_2))
-}
-
 fn kbd_face() -> Div {
     div()
         .flex()
@@ -776,31 +684,6 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
                     .into_any_element(),
                 (None, key) => SharedString::from(key.to_string()).into_any_element(),
             }
-        }))
-}
-
-/// Key hints as `key verb   key verb`: keys `TEXT_2`, verbs `TEXT_MUTED`,
-/// `SPACE_3` between pairs and no separator glyph.
-pub fn key_hints(hints: &[(&str, &str)]) -> Div {
-    text_meta()
-        .flex()
-        .items_center()
-        .gap(px(theme::SPACE_3))
-        .children(hints.iter().map(|(key, verb)| {
-            // A pair never shrinks: a narrow row drops whole hints rather
-            // than cutting one mid-word.
-            div()
-                .flex()
-                .flex_shrink_0()
-                .gap(px(theme::SPACE_1))
-                // The key is code text (rule 6); its verb is UI.
-                .child(
-                    div()
-                        .font_family(theme::FONT_CODE)
-                        .text_color(rgb(theme::TEXT_2))
-                        .child(SharedString::from(key.to_string())),
-                )
-                .child(SharedString::from(verb.to_string()))
         }))
 }
 
@@ -960,22 +843,6 @@ pub fn quiet_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
 
 /// `quiet_button`'s hover reaches its label through this group.
 const QUIET_BUTTON_GROUP: &str = "quiet-button";
-
-/// A choice chip's ink, ground (`0xRRGGBB`) and edge (`0xRRGGBBAA`). The
-/// selection is neutral — a `FILL` chip with the strong hairline — because
-/// the accent is only for focus, links, the caret and the primary button
-/// (rule 2.2.6). An unselected chip's edge is held in layout, transparent.
-pub fn choice_inks(selected: bool) -> (u32, Option<u32>, u32) {
-    if selected {
-        (
-            theme::TEXT_STRONG,
-            Some(theme::FILL),
-            theme::HAIRLINE_STRONG,
-        )
-    } else {
-        (theme::TEXT_2, None, theme::TRANSPARENT)
-    }
-}
 
 // ------------------------------------------------------------------ menus
 
@@ -1298,15 +1165,6 @@ pub fn menu_note(text: impl Into<SharedString>) -> Div {
         .px(px(theme::MENU_ROW_PAD_X))
         .cursor_default()
         .child(text.into())
-}
-
-/// A menu's footer: a group gap, then its key hints on the rows' edge.
-pub fn menu_footer(hints: &[(&str, &str)]) -> Div {
-    div().flex().flex_col().child(menu_separator()).child(
-        key_hints(hints)
-            .h(px(theme::MENU_SECTION_H))
-            .px(px(theme::MENU_ROW_PAD_X)),
-    )
 }
 
 /// The same menu is opened by a chip or a slash command. PopupMenu owns
@@ -1681,13 +1539,12 @@ mod tests {
     #[test]
     fn only_a_float_casts_and_nothing_is_lit() {
         use Elevation::*;
-        for rung in [Pane, Lifted, Raised, Control] {
+        for rung in [Pane, Lifted, Control] {
             assert!(elevation(rung).is_empty(), "{rung:?} is flat");
         }
         for rung in [Float, Sheet] {
             assert_eq!(elevation(rung), float_shadow(), "{rung:?} floats");
         }
-        assert!(key_light().is_empty() && well_shade().is_empty() && contact_line().is_empty());
         assert!(float_shadow_faded(0.5)[0].color.a < float_shadow()[0].color.a);
     }
 
@@ -1766,22 +1623,6 @@ mod tests {
         assert_eq!(key.style().box_shadow, None, "a keycap is flat");
         let mut gutter = gutter(div(), theme::LH_UI);
         assert_eq!(gutter.style().size.width, Some(px(theme::GUTTER_W).into()));
-    }
-
-    #[test]
-    fn a_selected_choice_is_neutral_and_the_rest_hold_a_clear_edge() {
-        assert_eq!(
-            choice_inks(true),
-            (
-                theme::TEXT_STRONG,
-                Some(theme::FILL),
-                theme::HAIRLINE_STRONG
-            )
-        );
-        assert_eq!(
-            choice_inks(false),
-            (theme::TEXT_2, None, theme::TRANSPARENT)
-        );
     }
 
     #[test]

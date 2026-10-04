@@ -102,7 +102,6 @@ icons![
     // (end WP-C)
 
     // ---- WP-D icons (append names above the end line)
-    "arrow-up",
     "stop",
     "file",
     "image",
@@ -252,8 +251,7 @@ pub const REASONING: &str = "icons/reasoning.svg";
 /// Lucide bell, whose 24-box stroke read heavier than the gear beside it).
 #[allow(dead_code)]
 pub const BELL: &str = "icons/bell.svg";
-/// The Composer's round send control: ↑ sends, ■ stops the running turn.
-pub const ARROW_UP: &str = "icons/arrow-up.svg";
+/// ■: the stop mark (the turn's interrupt).
 pub const STOP: &str = "icons/stop.svg";
 // (end WP-C)
 
@@ -538,7 +536,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            59,
+            58,
             "the prototype and app controls, including close, the four Windows caption glyphs, \
              the option and control key glyphs, the image mark, the three mode markers, the \
              failed cross, the CLI update mark, the sixteen spinner frames (ten braille, six \
@@ -566,7 +564,6 @@ mod tests {
             SUBAGENTS,
             COPY,
             RESEND,
-            ARROW_UP,
             IMAGE,
             CROSS,
         ] {

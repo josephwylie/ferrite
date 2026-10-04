@@ -2345,7 +2345,7 @@ mod vendor_knob_tests {
             style
                 .with_inline_code_font(Some(theme::FONT_CODE.into()))
                 .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
-                    color: rgba(theme::INLINE_CODE_WASH).into(),
+                    color: rgba(0xffffff0f).into(),
                     radius: px(theme::R_CHIP),
                     overhang: px(2.),
                     inset_y: px(1.),

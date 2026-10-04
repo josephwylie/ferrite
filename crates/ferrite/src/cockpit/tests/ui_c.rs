@@ -420,7 +420,7 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
     // Whole lines only, never half a line under the rule.
     let prose = bounds(cx, format!("l2-tail-row-{namespace}-{answer_id:?}"));
     assert_eq!(
-        (f32::from(prose.size.height) / crate::theme::LH_PROSE_SM).fract(),
+        (f32::from(prose.size.height) / crate::theme::LH_UI).fract(),
         0.,
         "{prose:?}"
     );
@@ -460,11 +460,13 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
     assert_eq!(fake.answered.borrow().len(), 1, "y answered the approval");
 }
 
-/// Unread breathes on the head dot, on the shared pulse clock: N unread
-/// Panes cost one ~30fps tick (never a display frame each), and under
-/// reduced motion they hold still and lease nothing.
+/// Terminal-native (theme rule 6: no pulsing dots): unread reads as a
+/// bright title on a still dot, never a breath, so N unread Panes ask the
+/// display for no frames once the toasts rest, and under reduced motion
+/// nothing leases the shared pulse clock. (Before the redesign this pinned
+/// the unread breath; the assertion on the breathing dot now inverts.)
 #[gpui::test]
-fn unread_breathing_rides_the_pulse_clock_and_rests_under_reduced_motion(cx: &mut TestAppContext) {
+fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (view, fake, cx, _group) = board("board-unread", 3, cx);
     for stream in 1..3 {
@@ -489,7 +491,10 @@ fn unread_breathing_rides_the_pulse_clock_and_rests_under_reduced_motion(cx: &mu
             .count()
     });
     assert!(unread >= 2, "two Threads finished out of sight");
-    assert!(cx.debug_bounds("breathing-dot").is_some());
+    assert!(
+        cx.debug_bounds("breathing-dot").is_none(),
+        "unread never breathes"
+    );
     // The completion toasts arrive on their own springs; let them rest.
     let mut settled = false;
     for _ in 0..64 {
@@ -504,18 +509,10 @@ fn unread_breathing_rides_the_pulse_clock_and_rests_under_reduced_motion(cx: &mu
     assert!(settled, "the window stops asking for display frames");
     cx.executor().advance_clock(Duration::from_millis(100));
     cx.run_until_parked();
-    assert!(
-        !cx.update(|_, cx| crate::motion::pulse_parked(cx)),
-        "the breath leases the shared clock"
-    );
-    assert!(
-        crate::theme::MOTION_PULSE_TICK_MS >= 33,
-        "the clock ticks at most 1000/33 times a second"
-    );
     assert_eq!(
         cx.update(|window, cx| window.simulate_next_frame(cx)),
         0,
-        "breathing never asks the display for every frame"
+        "unread Panes never ask the display for a frame"
     );
 
     cx.update(|_, cx| cx.set_reduce_motion(true));
@@ -526,7 +523,7 @@ fn unread_breathing_rides_the_pulse_clock_and_rests_under_reduced_motion(cx: &mu
     cx.run_until_parked();
     assert!(
         cx.update(|_, cx| crate::motion::pulse_parked(cx)),
-        "reduced motion holds the breath still and leases nothing"
+        "reduced motion holds every loop still and leases nothing"
     );
     assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
 }

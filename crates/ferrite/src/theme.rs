@@ -60,10 +60,12 @@
 //!    94% (a hint of the desktop, never a busy picture under text, the way
 //!    Ghostty and iTerm do background opacity), the head and input bands,
 //!    hover and selection as white overlays (5 / 6 / 11%), lines as white at
-//!    8 / 14%. gpui blurs no single element, so a float paints near-opaque
-//!    (`paint::FLOAT`, 96%) to stay legible on its own, and a band that must
-//!    occlude what scrolls under it (the sticky prompt) is painted over its
-//!    plane, never over the bare window. Every other platform paints the
+//!    8 / 14%. gpui blurs no single element, so a float paints opaque
+//!    (`paint::FLOAT`; the prototype's 96% leans on a backdrop blur gpui
+//!    cannot do, and without it the text under a menu ghosts through), and
+//!    a surface that must occlude what scrolls under it (the sticky prompt,
+//!    a Decision docked over the tail) stacks over its plane, never over
+//!    the bare window. Every other platform paints the
 //!    opaque greys of rule 3. Fills and lines go through `theme::paint`
 //!    (typed `Paint`, so `rgb()` cannot swallow one by mistake); the bare
 //!    `PLANE`, `CHROME`, … consts are the opaque values, for contrast math and
@@ -269,9 +271,11 @@ pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
 /// `#2a2a2c` — the floating ground: menus, pickers, the palette, popovers,
 /// tooltips, toasts, sheets.
 pub const FLOAT: u32 = 0x2a2a2c;
-/// A float as glass: near-opaque (96%). gpui blurs no single element, so a
-/// float must stay legible on its own over a busy board.
-pub const FLOAT_GLASS: u32 = 0x2c2c2ff5;
+/// A float as glass: opaque. gpui blurs no single element, so the
+/// prototype's 96% (which a backdrop blur softens) let the rows under a
+/// menu, a picker or a sheet ghost through as sharp text; a float must stay
+/// legible on its own over a busy board.
+pub const FLOAT_GLASS: u32 = 0x2c2c2fff;
 /// `#202022` — a diff's hunk header row.
 #[allow(dead_code)]
 pub const HUNK: u32 = 0x202022;
@@ -574,9 +578,6 @@ pub const SHIMMER_LIFT: f32 = 0.75;
 pub const SHADOW_FLOAT: u32 = 0x00000080;
 pub const SHADOW_FLOAT_Y: f32 = 6.0;
 pub const SHADOW_FLOAT_BLUR: f32 = 7.0;
-/// 16px — a scroll fade: where a scrolled list meets a fixed edge, its
-/// content dissolves into the ground over this run instead of being cut.
-pub const SCROLL_FADE_H: f32 = SPACE_4;
 
 // ------------------------------------------------------------------- type
 //
@@ -670,8 +671,6 @@ pub const MEASURE_CH: f32 = 108.0;
 /// estimates (a title's floor). With one monospace face every advance is
 /// `CODE_ADVANCE`; this stays a floor so a short label is never padded.
 pub const UI_ADVANCE_FLOOR: f32 = 0.5;
-/// 4px — one word space between runs laid side by side.
-pub const WORD_GAP: f32 = SPACE_1;
 
 /// The non-ASCII glyphs text may use: every one is in Geist Mono's cmap
 /// (asserted by `theme::tests`). Anything else is an SVG in a glyph box,
@@ -705,7 +704,6 @@ pub const SPACE_2: f32 = 8.0;
 pub const SPACE_3: f32 = 12.0;
 pub const SPACE_4: f32 = 16.0;
 pub const SPACE_6: f32 = 24.0;
-pub const SPACE_8: f32 = 32.0;
 
 // ------------------------------------------------------------------ radii
 //
@@ -734,11 +732,6 @@ pub const R_TIGHT: f32 = 0.0;
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
 /// of the semantic-zoom input.
 pub const NAV_WIDTH: f32 = 286.0;
-pub const NAV_RAIL_WIDTH: f32 = if cfg!(target_os = "macos") {
-    TRAFFIC_RESERVE
-} else {
-    56.0
-};
 /// 32px — the window-chrome band across the top of the window, the
 /// prototype's titlebar (`TITLEBAR_H`). Over the nav it is the column's own
 /// chrome row (the traffic-light reserve and the collapse button,
@@ -799,8 +792,6 @@ pub const GUTTER_GAP: f32 = 8.0;
 /// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
 /// (On the grid the gutter is two cells, `GLYPH_GUTTER`.)
 pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
-/// C2 − C1: an elbow row indents by one gutter.
-pub const ELBOW_INDENT: f32 = GUTTER_W;
 /// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
 /// rows sit the same distance inside the reading column, so the transcript `❯`
 /// and the Composer `❯` share one axis.
@@ -862,20 +853,6 @@ pub const MENU_GROUP_GAP: f32 = SPACE_2;
 /// An aligned name column (slash commands): clamped between these.
 pub const MENU_NAME_MIN_W: f32 = 96.0;
 pub const MENU_NAME_MAX_W: f32 = 220.0;
-/// A list row's padding — 8px inline, 6px block (the nav's section
-/// headings, its empty state and its refusal notice).
-pub const ROW_PAD_X: f32 = 8.0;
-pub const ROW_PAD_Y: f32 = 6.0;
-/// 4px — a nav row's block padding around its one `LH_UI` line.
-pub const NAV_ROW_PAD_Y: f32 = SPACE_1;
-/// 28px — **the** list pitch (C9): one `FS_UI`/`LH_UI` line with 4px above
-/// and below, the same box as a menu row (`MENU_ROW_H`). Derived from the
-/// type, never summed by hand.
-pub const NAV_ROW_H: f32 = 2.0 * NAV_ROW_PAD_Y + LH_UI;
-/// A Thread row: the one 28px line.
-pub const THREAD_ROW_H: f32 = NAV_ROW_H;
-/// A Group parent row: the same 28px line.
-pub const GROUP_ROW_H: f32 = NAV_ROW_H;
 /// The folder and branch marks on the Project and checkout lines (12px), and
 /// the 5px gap to their labels.
 pub const ROW_ICON: f32 = 12.0;
@@ -1098,82 +1075,20 @@ pub use legacy::*;
 mod legacy {
     use super::*;
 
-    /// → `CHROME` (the sidebar) / `paint::WINDOW` (the window root). The old
-    /// window ground.
-    pub const GROUND: u32 = CHROME;
-    /// → `CHROME` / `paint::CHROME`.
-    pub const NAV: u32 = CHROME;
-    /// → `PLANE` / `paint::PLANE`.
-    pub const PANE: u32 = PLANE;
     /// → `BAND` / `paint::BAND` (a band) or nothing (code blocks and cards
     /// have no ground now).
     pub const RAISED: u32 = BAND;
-    /// → `FLOAT` / `paint::FLOAT`.
-    pub const MENU: u32 = FLOAT;
-    /// → `BAND2` / `paint::BAND2`.
-    pub const RAISED_2: u32 = BAND2;
-    /// → `HOVER` / `paint::HOVER`: one hover face on every ground.
-    pub const HOVER_RAISED: u32 = HOVER;
     /// → `SELECTION` / `paint::SELECTION`.
     pub const FILL: u32 = SELECTION;
-    /// → `SELECTION_HOVER` / `paint::SELECTION_HOVER`.
-    pub const FILL_HOVER: u32 = SELECTION_HOVER;
-    /// → `paint::PRESS`.
-    pub const PRESSED: u32 = SELECTION_HOVER;
-    /// → `paint::LINE` (already the platform's `0xRRGGBBAA`).
-    pub const HAIRLINE: u32 = paint::LINE.0;
     /// → `paint::LINE2`.
     pub const HAIRLINE_STRONG: u32 = paint::LINE2.0;
-    /// → `paint::LINE2` (the Composer has no box now; its input is a band).
-    pub const COMPOSER_EDGE: u32 = HAIRLINE_STRONG;
     /// → `TEXT` or `TEXT_MUTED`: the ladder has four inks now. Held between
     /// them so nothing collapses before its surface is restyled.
     pub const TEXT_2: u32 = 0xb4b4b8;
     /// → `FS_UI`: one size per surface.
     pub const FS_SM: f32 = FS_UI;
-    /// → `FS_UI`.
-    pub const FS_PROSE_SM: f32 = FS_UI;
     /// → `LH_UI`.
     pub const LH_META: f32 = LH_UI;
-    /// → `LH_UI`.
-    pub const LH_PROSE_SM: f32 = LH_UI;
-    /// → `LH_UI` (code sits on the same grid).
-    pub const LH_CODE: f32 = LH_UI;
-    /// Nothing is lit (rule 2): the old top lights, a keycap's foot and a
-    /// well's lip paint nothing.
-    pub const LIGHT_LOW: u32 = TRANSPARENT;
-    pub const LIGHT_HIGH: u32 = TRANSPARENT;
-    pub const KEY_FOOT: u32 = TRANSPARENT;
-    pub const WELL_SHADE: u32 = TRANSPARENT;
-    /// Nothing casts but a float (rule 2): the old ladder's layers, kept as
-    /// names only. `components::elevation` no longer reads them.
-    pub const SHADOW_CONTACT: u32 = TRANSPARENT;
-    pub const SHADOW_CONTACT_Y: f32 = 0.0;
-    pub const SHADOW_CONTACT_BLUR: f32 = 0.0;
-    pub const SHADOW_RAISED: u32 = TRANSPARENT;
-    pub const SHADOW_RAISED_Y: f32 = 0.0;
-    pub const SHADOW_RAISED_BLUR: f32 = 0.0;
-    pub const SHADOW_RAISED_SPREAD: f32 = 0.0;
-    pub const SHADOW_PANE: u32 = TRANSPARENT;
-    pub const SHADOW_PANE_Y: f32 = 0.0;
-    pub const SHADOW_PANE_BLUR: f32 = 0.0;
-    pub const SHADOW_PANE_SPREAD: f32 = 0.0;
-    pub const SHADOW_LIFTED: u32 = TRANSPARENT;
-    pub const SHADOW_LIFTED_Y: f32 = 0.0;
-    pub const SHADOW_LIFTED_BLUR: f32 = 0.0;
-    pub const SHADOW_LIFTED_SPREAD: f32 = 0.0;
-    pub const SHADOW_NEAR: u32 = SHADOW_FLOAT;
-    pub const SHADOW_NEAR_Y: f32 = SHADOW_FLOAT_Y;
-    pub const SHADOW_NEAR_BLUR: f32 = SHADOW_FLOAT_BLUR;
-    pub const SHADOW_NEAR_SPREAD: f32 = 0.0;
-    pub const SHADOW_FAR: u32 = TRANSPARENT;
-    pub const SHADOW_FAR_Y: f32 = 0.0;
-    pub const SHADOW_FAR_BLUR: f32 = 0.0;
-    pub const SHADOW_FAR_SPREAD: f32 = 0.0;
-    pub const SHADOW_SHEET: u32 = TRANSPARENT;
-    pub const SHADOW_SHEET_Y: f32 = 0.0;
-    pub const SHADOW_SHEET_BLUR: f32 = 0.0;
-    pub const SHADOW_SHEET_SPREAD: f32 = 0.0;
 }
 // (end legacy aliases)
 
@@ -1237,11 +1152,6 @@ mod legacy {
 /// body reads from a whole row; a long block read mid-way stays, since
 /// hiding more would open a void (rule 2.3.4).
 pub const TRANSCRIPT_TOP_SNAP_MAX: f32 = 3.0 * LH_PROSE;
-/// 32px — above every prompt but the first: the turn boundary. No rule is
-/// drawn between turns; this space, the prompt's weight and the stamp do the
-/// job.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const GAP_TURN: f32 = SPACE_8;
 /// 12px — the block step: between the blocks of one turn (prompt → the
 /// agent's first row, prose ↔ tools, anything ↔ reasoning, notices, the
 /// turn's changes, the last block → its stamp).
@@ -1253,7 +1163,7 @@ pub const GAP_ROW: f32 = SPACE_1;
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
 /// Markdown gaps go through it; UI-row steps do not.
-#[allow(dead_code)] // the previous grammar; remove after integration
+#[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
 pub fn reading_step(step: f32, size: f32) -> f32 {
     (step * size / FS_PROSE).round()
 }
@@ -1288,21 +1198,6 @@ pub const DIFF_REMOVED_INK: u32 = TEXT;
 /// (`BLOCKED_WASH` is for one-line uses only.)
 pub const DIFF_ADDED_WASH: u32 = 0x93cf8c1a;
 pub const DIFF_REMOVED_WASH: u32 = 0xef8a801c;
-/// The previous grammar's diff card (`RAISED`, padded, rounded): unused by
-/// the terminal grammar, whose diff has no box and measures in cells
-/// (`DIFF_NUMBER_CELLS`, `DIFF_SIGN_CELLS`).
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const HUNK_PAD_X: f32 = CODE_PAD_X;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const HUNK_PAD_Y: f32 = SPACE_1;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const HUNK_MARGIN_T: f32 = SPACE_1;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const DIFF_SIGN_W: f32 = SPACE_2;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const DIFF_GAP: f32 = SPACE_2;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const DIFF_SIGN_GAP: f32 = SPACE_1;
 /// How many rows one hunk card draws before it stops and says how many it
 /// did not. An edit's patch is a handful of lines; a written file's is
 /// however long the file is, and a card that redrew a 900-line file would
@@ -1394,98 +1289,23 @@ pub const MINIMAP_BAND_MIN_H: f32 = 12.0;
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
 /// sizes scale them with `reading_step`.
-#[allow(dead_code)] // the previous grammar; remove after integration
+#[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
 pub const PROSE_GAP: f32 = SPACE_3;
-/// 8px — added above a heading that follows a sibling, on top of
-/// `PROSE_GAP`, so a heading opens a section rather than closing one.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const HEADING_SPACE_ABOVE: f32 = SPACE_2;
-/// 8px — below a heading, in place of `PROSE_GAP`.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const HEADING_SPACE_BELOW: f32 = SPACE_2;
 /// Inline code's ink: cyan (`INLINE_CODE`, rule 6). The Markdown path
 /// paints it; the plain-text fallback carries the ink alone.
 pub const INLINE_CODE_INK: u32 = INLINE_CODE;
-/// `#ffffff0f` (6%) — inline code's chip: a neutral ground that shows the
-/// copy boundary (`None`, `nav.rs`) without tinting the line.
-pub const INLINE_CODE_WASH: u32 = 0xffffff0f;
 /// The inline-code chip reaches 2px past its glyphs. Painted, never laid
 /// out; its height is `inline_code_chip_h`, centred in the prose line box.
-#[allow(dead_code)] // the previous grammar; remove after integration
+#[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
 pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
 
-/// Inline code's size at each reading size: the UI size at 14 (`FS_UI`, so
-/// a code cell is `CODE_CELL`), 1.5 under the prose up to 15 and 2 under it
-/// above. Tables set their cells at the same size.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub fn inline_code_size(size: ferrite_core::settings::ReadingSize) -> f32 {
-    let px = f32::from(size.px());
-    if px <= 15. {
-        px - (FS_PROSE - FS_UI)
-    } else {
-        px - 2.
-    }
-}
-
-/// The inline-code chip's height: 4px over the prose size (18 at 14).
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub fn inline_code_chip_h(size: ferrite_core::settings::ReadingSize) -> f32 {
-    f32::from(size.px()) + 4.
-}
-
-/// How far the chip stays inside the prose line box, top and bottom:
-/// `(answer_line_height − inline_code_chip_h) / 2`.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub fn inline_code_inset_y(size: ferrite_core::settings::ReadingSize) -> f32 {
-    (answer_line_height(size) - inline_code_chip_h(size)) / 2.
-}
-
-/// A table row's line box: 6px over the prose size, so at 14 it is `LH_UI`
-/// 20 and a row is 4 + 20 + 4 = 28, the list pitch.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub fn table_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
-    f32::from(size.px()) + 6.
-}
-
-/// 570px — the prose measure (~88 characters of Geist at 14px): the most a
-/// paragraph, a list item or a quote runs before it wraps. Fixed, not scaled
-/// by the reading size. Code, tables, diffs, tool rows and the Composer keep
-/// the whole `READING_MAX_W` column.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const PROSE_MEASURE: f32 = 570.0;
-/// 28px — the one hang lists and quotes share at Standard: bullet and
-/// ordered text start this far in, their markers right-aligned inside it
-/// `LIST_MARKER_GAP` from the text (only a list whose ordinals reach 100
-/// widens), and a quote's text lands on the same x past its rule. Each
-/// nesting level adds another. Scales with the reading size (`reading_step`:
-/// 28 · 32 · 36).
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const PROSE_HANG: f32 = 28.0;
-/// 6px — between a list marker and its text.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const LIST_MARKER_GAP: f32 = SPACE_1_5;
 /// A quote's rule. Its text inset is the hang less the rule
 /// (`PROSE_HANG − QUOTE_RULE_W`, 26 at Standard), so quoted text starts
 /// where list text does.
 pub const QUOTE_RULE_W: f32 = 2.0;
-/// 4px — a table cell's block padding, so a Standard row is 28px (its
-/// inline padding is the vendor's 8px, which its column measurement
-/// assumes).
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const TABLE_CELL_PAD_Y: f32 = SPACE_1;
-/// The rule under a table's header row: one step stronger than the rows'.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const TABLE_HEAD_RULE: u32 = HAIRLINE_STRONG;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;
-/// A fenced code block: 12px inline, 10px block padding (Zeron's code body;
-/// 10 is off the scale so a one-line block is 10 + 18 + 10 = 38, and the
-/// hover overlay's 24px actions centre on its first line).
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const CODE_PAD_X: f32 = SPACE_3;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const CODE_PAD_Y: f32 = 10.0;
 /// A fence's actions overlay: the language id, html `Preview`,
 /// `Copy`/`Copied`, top-right over the block. It is always laid out (so it
 /// never moves the block) and only shown under the pointer (the 150ms
@@ -1494,25 +1314,10 @@ pub const CODE_PAD_Y: f32 = 10.0;
 pub const CODE_ACTIONS_TOP: f32 = 0.0;
 pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const CODE_ACTION_H: f32 = 24.;
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const CODE_ACTION_PAD_X: f32 = SPACE_2;
 /// The html preview dialog: the reading column's width, and a height cap
 /// before its body scrolls.
 pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
-/// An inline file chip: `CHIP_H` tall so it fits a 22px prose line without
-/// moving it; 6px inline padding; no file mark (an image leads with its
-/// 14px thumbnail, 6px from the name); clamped between 64 and 280px wide.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const INLINE_FILE_H: f32 = CHIP_H;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const INLINE_FILE_PAD_X: f32 = SPACE_1_5;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const INLINE_FILE_GAP: f32 = SPACE_1_5;
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const INLINE_FILE_THUMB: f32 = 14.0;
 pub const INLINE_FILE_MIN_W: f32 = CH;
 pub const INLINE_FILE_MAX_W: f32 = 280.0;
 /// **Scrollbars** are a thin overlay with no track, never in layout: a
@@ -2028,8 +1833,6 @@ pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
 /// No keycaps, no pills. Deny is not red. Every section keeps its natural
 /// height — nothing clips; when the Pane runs short the prose goes first,
 /// then the command band gives way down to one line.
-#[allow(dead_code)] // the previous grammar; remove after integration
-pub const DECISION_PAD_X: f32 = CH;
 pub const DECISION_PAD_Y: f32 = HALF_ROW;
 pub const DECISION_GAP: f32 = HALF_ROW;
 /// The head's drawn diamond: 10px in the gutter of an `LH_UI` line.
@@ -2214,9 +2017,13 @@ pub const NAV_CHROME_LEAD: f32 = if cfg!(target_os = "windows") {
 } else {
     TRAFFIC_RESERVE
 };
-/// The folded titlebar cell: the lead, the sidebar toggle, the bell and
-/// the gear, and one cell of air (a waiting CLI update adds its door).
-pub const NAV_CHROME_FOLDED_W: f32 = NAV_CHROME_LEAD + 3.0 * ICON_BUTTON + NAV_PAD_X;
+/// The titlebar cell's own doors: the sidebar toggle and the bell, and the
+/// Settings gear where Settings has no other visible door (not macOS,
+/// whose app menu lists it).
+pub const NAV_CHROME_DOORS: f32 = if cfg!(target_os = "macos") { 2.0 } else { 3.0 };
+/// The folded titlebar cell: the lead, its doors and one cell of air (a
+/// waiting CLI update adds its door).
+pub const NAV_CHROME_FOLDED_W: f32 = NAV_CHROME_LEAD + NAV_CHROME_DOORS * ICON_BUTTON + NAV_PAD_X;
 /// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the
 /// board beside the full column would be narrower than this, or a board
 /// cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`). It unfolds only
@@ -2271,8 +2078,6 @@ pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 /// CSS `ease-out`: the sidebar's width and the Parked fold.
 pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
-/// A contextual icon swap's curve (a spring with no bounce, approximated).
-pub const MOTION_EASE_ICON: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
@@ -2309,10 +2114,6 @@ pub const MOTION_HOVER_FADE_MS: u64 = 150;
 /// reads `motion::pulse_phase` on this period, so every breathing dot on
 /// screen shares one ~30fps tick. Held at its start under reduced motion.
 pub const MOTION_BREATH_MS: u64 = 2_400;
-/// A contextual icon swap (send ⇄ stop): 300ms, the leaving glyph shrinking
-/// to a quarter as the arriving one grows from it.
-pub const MOTION_ICON_SWAP_MS: u64 = 300;
-pub const MOTION_ICON_SWAP_SCALE: f32 = 0.25;
 /// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
 pub const MOTION_TOAST_IN_MS: u64 = 180;
 pub const MOTION_TOAST_OUT_MS: u64 = 100;
@@ -2625,12 +2426,8 @@ mod tests {
         for (_, face) in ladder {
             assert!(face <= 0xffffff, "{face:x} carries alpha");
         }
-        // The legacy names land on the new ladder.
-        assert_eq!((GROUND, NAV, PANE), (CHROME, CHROME, PLANE));
-        assert_eq!(
-            (FILL, FILL_HOVER, HOVER_RAISED),
-            (SELECTION, SELECTION_HOVER, HOVER)
-        );
+        // The legacy names still in use land on the new ladder.
+        assert_eq!((FILL, RAISED), (SELECTION, BAND));
     }
 
     /// Rule 4: glass on macOS — the window paints nothing, chrome and the
@@ -2643,7 +2440,7 @@ mod tests {
         assert!(near(alpha(PLANE_GLASS), 0.94));
         assert!(near(alpha(CHROME_GLASS), 0.72));
         assert!(near(alpha(BAND_GLASS), 0.80));
-        assert!(near(alpha(FLOAT_GLASS), 0.96));
+        assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");
         for (overlay, opacity) in [
             (HEAD_GLASS, 0.05),
             (INBAND_GLASS, 0.05),
@@ -2675,7 +2472,6 @@ mod tests {
                 SELECTION_HOVER_GLASS,
                 SELECTION_HOVER,
             ),
-            (paint::FLOAT, FLOAT_GLASS, FLOAT),
             (paint::HUNK, HUNK_GLASS, HUNK),
             (paint::NODIFF, NODIFF_GLASS, NODIFF),
             (paint::LINE, LINE_GLASS, LINE),
@@ -2691,6 +2487,12 @@ mod tests {
             }
         }
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
+        // A float is opaque on every platform: glass picks its own grey.
+        assert!(paint::FLOAT.is_opaque());
+        assert_eq!(
+            paint::FLOAT.rgba(),
+            if GLASS { FLOAT_GLASS } else { solid(FLOAT) }
+        );
         if GLASS {
             assert_eq!(paint::WINDOW.rgba(), TRANSPARENT, "the root paints nothing");
             assert_eq!(paint::CHROME_SEAM.rgba(), CHROME_SEAM_GLASS);
@@ -2707,7 +2509,7 @@ mod tests {
             );
         }
         // The legacy line names follow the platform's lines.
-        assert_eq!((HAIRLINE, HAIRLINE_STRONG), (paint::LINE.0, paint::LINE2.0));
+        assert_eq!(HAIRLINE_STRONG, paint::LINE2.0);
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
         let fill: gpui::Fill = paint::PLANE.into();
         assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::PLANE.0)));
@@ -2721,19 +2523,7 @@ mod tests {
         for radius in [R_PANE, R_BLOCK, R_CONTROL, R_CHIP, R_TIGHT, R_MENU_ROW] {
             assert_eq!(radius, 0.0);
         }
-        for light in [LIGHT_LOW, LIGHT_HIGH, KEY_FOOT, WELL_SHADE] {
-            assert_eq!(light, TRANSPARENT);
-        }
         assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0);
-    }
-
-    #[test]
-    fn nav_row_heights_are_derived() {
-        assert_eq!(NAV_ROW_H, 2.0 * SPACE_1 + LH_UI);
-        assert_eq!(THREAD_ROW_H, NAV_ROW_H);
-        assert_eq!(GROUP_ROW_H, NAV_ROW_H);
-        assert_eq!(THREAD_ROW_H, MENU_ROW_H, "a nav row is a menu row's box");
-        assert_eq!(THREAD_ROW_H, 28.0, "one list pitch across the app (C9)");
     }
 
     /// Rule 1: one size per surface on a whole-pixel line, a 1.5× terminal
@@ -2748,8 +2538,7 @@ mod tests {
             assert!(line >= size * 1.5, "{size}px on a {line}px line box");
         }
         // The legacy roles are the one size now.
-        assert_eq!((FS_SM, FS_PROSE_SM), (FS_UI, FS_UI));
-        assert_eq!((LH_META, LH_PROSE_SM, LH_CODE), (LH_UI, LH_UI, LH_UI));
+        assert_eq!((FS_SM, LH_META), (FS_UI, LH_UI));
         for reading in ReadingSize::STEPS.map(ReadingSize::nearest) {
             let (size, line) = (answer_text_size(reading), answer_line_height(reading));
             assert_eq!(line, line.round());

@@ -941,9 +941,10 @@ impl TranscriptView {
                         .occlude()
                         .cursor_pointer()
                         .w_full()
-                        // The band over the plane: together they hide the
-                        // rows scrolling under it, glass or not.
-                        .bg(theme::paint::PLANE)
+                        // The band over an opaque plane: together they hide
+                        // the rows scrolling under it, glass or not (a 94%
+                        // glass plane under the 80% band let 1% through).
+                        .bg(gpui::rgb(theme::PLANE))
                         .child(
                             div()
                                 .flex()
@@ -1247,8 +1248,12 @@ impl Render for TranscriptView {
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
+                // A pinned band hides the list's top: a row it cuts is
+                // masked from the band's foot, not the head rule's.
+                let now = pinned_of(&gaps, scroll.list_state(), pinned_h.get());
+                let inset = now.map_or(px(0.), |(_, shift)| pinned_h.get() + shift);
                 let settled =
-                    scroll.settle_top(|index| gaps.get(index).map_or(0., |row| row.gap()));
+                    scroll.settle_top(|index| gaps.get(index).map_or(0., |row| row.gap()), inset);
                 // What the list measured feeds the minimap's estimates.
                 {
                     let state = scroll.list_state();
@@ -1269,7 +1274,6 @@ impl Render for TranscriptView {
                 }
                 // The band pinned at render came from the previous layout:
                 // when this layout moves it, render again.
-                let now = pinned_of(&gaps, scroll.list_state(), pinned_h.get());
                 let drawn = pinned_drawn.get();
                 let moved = match (now, drawn) {
                     (Some((a, x)), Some((b, y))) => a != b || (x - y).abs() > px(0.5),
@@ -1344,9 +1348,10 @@ impl Render for TranscriptView {
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)
-            // The first visible row is never cut under the head rule: a
-            // cut row's short remnant lies under the plane, so the body
-            // reads from its first whole row (`settle_top`).
+            // The first visible row is never cut under the head rule or
+            // the pinned band: a cut row's short remnant lies under an
+            // opaque plane (a 94% glass plane would let it ghost), so the
+            // body reads from its first whole row (`settle_top`).
             .children((self.scroll.top_mask() > px(0.)).then(|| {
                 div()
                     .debug_selector(|| "transcript-top-mask".into())
@@ -1355,7 +1360,7 @@ impl Render for TranscriptView {
                     .left_0()
                     .right_0()
                     .h(self.scroll.top_mask())
-                    .bg(theme::paint::PLANE)
+                    .bg(gpui::rgb(theme::PLANE))
             }))
             .children(pinned)
             .children(minimap)

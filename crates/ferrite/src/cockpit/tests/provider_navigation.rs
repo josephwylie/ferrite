@@ -166,8 +166,9 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
 
 /// Folded (cmd-B), the column draws nothing and the board takes the width;
 /// the titlebar cell keeps the traffic lights' reserve, then the sidebar
-/// toggle, the bell and Settings in that order, and the toggle opens the
-/// column again (the prototype's collapsed titlebar).
+/// toggle, the bell and (off macOS, whose app menu lists it) Settings in
+/// that order, and the toggle opens the column again (the prototype's
+/// collapsed titlebar).
 #[gpui::test]
 fn a_folded_nav_keeps_its_doors_in_the_titlebar_cell(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
@@ -190,17 +191,28 @@ fn a_folded_nav_keeps_its_doors_in_the_titlebar_cell(cx: &mut TestAppContext) {
     assert!((cell.size.width - px(crate::theme::NAV_CHROME_FOLDED_W)).abs() < px(1.));
     let toggle = bounds(cx, "nav-collapse".to_string());
     let bell = cx.debug_bounds("notifications-bell").unwrap();
-    let settings = cx.debug_bounds("settings-gear").unwrap();
     assert!(
         toggle.left() >= px(crate::theme::NAV_CHROME_LEAD),
         "clear of the traffic lights"
     );
     assert!(
-        toggle.right() <= bell.left() + px(0.5) && bell.right() <= settings.left() + px(0.5),
-        "toggle, bell, Settings: {toggle:?} {bell:?} {settings:?}"
+        toggle.right() <= bell.left() + px(0.5),
+        "toggle, bell: {toggle:?} {bell:?}"
     );
-    assert!(settings.right() <= cell.right());
-    for door in [toggle, bell, settings] {
+    let mut doors = vec![toggle, bell];
+    if cfg!(target_os = "macos") {
+        assert!(cx.debug_bounds("settings-gear").is_none());
+        assert!(bell.right() <= cell.right());
+    } else {
+        let settings = cx.debug_bounds("settings-gear").unwrap();
+        assert!(
+            bell.right() <= settings.left() + px(0.5),
+            "bell, Settings: {bell:?} {settings:?}"
+        );
+        assert!(settings.right() <= cell.right());
+        doors.push(settings);
+    }
+    for door in doors {
         assert!(door.bottom() <= px(crate::theme::WIN_CHROME_H));
     }
 

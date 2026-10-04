@@ -13,14 +13,13 @@
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one `FILL` moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
-//! | working indicator | pulse clock | the working line's Ferrite mark and the one breath (unread, `MOTION_BREATH_MS`) ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat |
+//! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse ⇄ rail (cmd-B): an interruptible [`Tween`] on the column's width, the content fading up from `MOTION_NAV_CONTENT_FROM` |
+//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing, the content fading out, and up from `MOTION_NAV_CONTENT_FROM` on opening |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
-//! | icon swap | [`ICON_SWAP`] 300ms | the Composer's send ⇄ stop: both glyphs stay mounted and cross-fade, opacity with `svg` scale 0.25 → 1 |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
@@ -157,7 +156,6 @@ pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EA
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
 pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
-pub const EASE_ICON: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_ICON);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -216,7 +214,6 @@ pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
-pub const ICON_SWAP: MotionSpec = MotionSpec::new(theme::MOTION_ICON_SWAP_MS, EASE_ICON);
 /// A two-state control the pointer flipped (the Parked chevron, a switch
 /// thumb): 150ms on the standard curve. A keyboard flip lands at once.
 pub const TURN: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
@@ -446,18 +443,6 @@ impl Tween {
 struct SettleState {
     target: f32,
     tween: Option<Tween>,
-}
-
-/// The value this element draws at, easing toward `target` whenever it
-/// changes. Asks the painting view for another frame while it moves.
-pub fn settle(
-    id: impl Into<ElementId>,
-    target: f32,
-    spec: MotionSpec,
-    window: &mut Window,
-    cx: &mut App,
-) -> f32 {
-    settle_with(id, target, spec, false, window, cx)
 }
 
 /// `settle`, where `reveal_only` snaps any move toward 0 (a fold that
@@ -925,12 +910,11 @@ mod tests {
         );
     }
 
-    const CURVES: [CubicBezier; 5] = [
+    const CURVES: [CubicBezier; 4] = [
         EASE_OUT_EXPO,
         CubicBezier::new(0.0, 0.0, 0.58, 1.0),
         EASE,
         EASE_STANDARD,
-        EASE_ICON,
     ];
 
     #[test]
@@ -1009,8 +993,6 @@ mod tests {
         assert_eq!(theme::MOTION_SCROLLBAR_LINGER_MS, 1_400);
         assert_eq!(HOVER_FADE.duration_ms, 150);
         assert_eq!(HOVER_FADE.curve, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
-        assert_eq!(ICON_SWAP.curve, CubicBezier::new(0.2, 0.0, 0.0, 1.0));
-        assert_eq!(theme::MOTION_ICON_SWAP_SCALE, 0.25);
     }
 
     #[test]
@@ -1112,7 +1094,7 @@ mod tests {
 
     #[test]
     fn mix_blends_in_premultiplied_srgb() {
-        let rest: Hsla = gpui::rgb(theme::GROUND).into();
+        let rest: Hsla = gpui::rgb(theme::CHROME).into();
         let hover: Hsla = gpui::rgb(theme::HOVER).into();
         assert_eq!(mix(rest, hover, 0.0), rest);
         assert_eq!(mix(rest, hover, 1.0), hover);
