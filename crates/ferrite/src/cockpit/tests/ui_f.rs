@@ -2,11 +2,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// An L2 cell swaps its body for the Decision card and keeps its Composer
-/// under it, which holds the keyboard with the `Decision` context: `y` on
-/// its empty line answers the cell, as the card's keycap says.
+/// A wall tile's Decision answers from the keyboard: `y` at the wall
+/// allows the waiting tile without focusing it (the L2 cell it once
+/// answered in is gone, R12).
 #[gpui::test]
-fn an_l2_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
+fn a_wall_tile_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-decision-keys", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -15,8 +15,8 @@ fn an_l2_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments,
-        "the premise: the cell is at L2"
+        Level::Wall,
+        "the premise: the cell is a wall tile"
     );
     fake.streams.borrow()[0].send(decision("l2-perm")).unwrap();
     tick(cx);
@@ -27,7 +27,7 @@ fn an_l2_decision_answers_from_the_keyboard(cx: &mut TestAppContext) {
             fake.answered.borrow().last(),
             Some((id, DecisionAnswer::Allow { .. })) if id == "l2-perm"
         ),
-        "y answers the L2 Decision: {:?}",
+        "y answers the tile's Decision: {:?}",
         fake.answered.borrow()
     );
 }

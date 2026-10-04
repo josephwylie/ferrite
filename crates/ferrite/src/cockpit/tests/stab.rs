@@ -3,10 +3,10 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Reduced motion holds the working line's Ferrite mark still, at L1 and in
-/// an L2 cell alike; otherwise its shards snap on their timeline.
+/// Reduced motion holds the working line's mark still; otherwise it moves.
+/// A wall tile draws no working line at all: its state word says it.
 #[gpui::test]
-fn the_working_mark_rests_under_reduced_motion_at_l1_and_l2(cx: &mut TestAppContext) {
+fn the_working_mark_rests_under_reduced_motion(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("working-mark-motion", 1);
     let thread = core.threads()[0];
     core.send(thread, "Inspect progress".into());
@@ -32,11 +32,12 @@ fn the_working_mark_rests_under_reduced_motion_at_l1_and_l2(cx: &mut TestAppCont
     tick(cx);
     assert_eq!(
         cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments,
-        "the premise: the cell is at L2"
+        Level::Wall,
+        "the premise: the cell is a wall tile"
     );
-    assert!(cx.debug_bounds("progress-mark-still").is_some(), "L2");
-    assert!(cx.debug_bounds("progress-mark-live").is_none(), "L2");
+    assert!(cx.debug_bounds("progress-mark-still").is_none(), "a tile");
+    assert!(cx.debug_bounds("progress-mark-live").is_none(), "a tile");
+    assert!(cx.debug_bounds("wall-tile").is_some());
 }
 
 /// While a Pane is dragged by its title its own cell dims in its slot, and
@@ -187,10 +188,10 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
-    // At rest the only key on screen is the titlebar's trailing door
-    // (`⌘T new thread`, the prototype's `⌘K commands` slot).
+    // At rest the only key on screen is the titlebar's trailing door,
+    // `⌘K commands` (F-11).
     let door = cx
-        .debug_bounds("titlebar-add-thread")
+        .debug_bounds("titlebar-commands")
         .expect("the titlebar door");
     let glyph = cx.debug_bounds("command-key").expect("the door's key");
     assert!(
@@ -478,7 +479,7 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
     // Solo has no head (C2): the tabs keep a strip of their own and the
     // title rides the titlebar, where it keeps its floor and, with room,
     // shows whole — there is no cap.
-    let title = "thread-titlebar-name";
+    let title = "titlebar-title";
     let mut widths = Vec::new();
     for width in [900., 1800., 2400.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
@@ -508,9 +509,10 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
 
 /// A Group head names the Thread and nothing else (theme WP-C, rule 7):
 /// no branch — default or not — and no state word, even while a question
-/// pends; the title keeps its floor beside the provider's mark.
+/// pends; the title keeps its floor beside the provider's mark. A wall
+/// tile's head is the same head.
 #[gpui::test]
-fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContext) {
+fn a_tile_head_names_no_branch_and_no_state(cx: &mut TestAppContext) {
     use ferrite_core::workspace::BranchStatus;
     let (mut core, fake) = cockpit("l2-no-branch-twice", 2);
     let thread = core.threads()[0];
@@ -524,7 +526,7 @@ fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContex
     tick(cx);
     assert_eq!(
         cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
+        Level::Wall
     );
     assert!(cx.debug_bounds("pane-head-title-1").is_some());
     let branch = |name: &str, cx: &mut gpui::VisualTestContext| {
@@ -569,11 +571,11 @@ fn an_l2_head_names_only_a_branch_that_is_not_the_default(cx: &mut TestAppContex
     assert!(title.right() <= mark.left(), "{title:?} / {mark:?}");
 }
 
-/// An L2 tail's tool row reads as L1 spells it, `● Name(args)`, and a long
-/// unbroken argument wraps inside the cell — machine text is never cut —
-/// rather than running out through its edge.
+/// A wall tile's call line reads as the transcript spells it, `● Name(args)`,
+/// on one row that truncates at the tile's edge (F-6): a long command never
+/// runs out through it, and never wraps.
 #[gpui::test]
-fn l2_tail_tool_rows_stay_inside_the_cell(cx: &mut TestAppContext) {
+fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-tail-inside", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
@@ -588,31 +590,17 @@ fn l2_tail_tool_rows_stay_inside_the_cell(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let (namespace, id, rect) = cx.update(|window, cx| {
-        let view = view.read(cx);
-        let pane = &view.panes[0];
-        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
-        let id = thread.transcript().blocks().last().unwrap().id;
-        (pane.text_namespace(), id, view.pane_rects(window)[0].1)
-    });
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert_eq!(
         cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
+        Level::Wall
     );
-    let row = cx
-        .debug_bounds(Box::leak(
-            format!("l2-tail-row-{namespace}-{id:?}").into_boxed_str(),
-        ))
-        .expect("the tool row");
+    let row = cx.debug_bounds("wall-line").expect("the call's line");
     assert!(
-        row.right() <= px(rect.x + rect.w - crate::theme::PANE_PAD_X) + px(0.5),
-        "the row {row:?} ends inside the cell {rect:?}"
+        row.right() <= px(rect.x + rect.w - crate::theme::WALL_PAD_X) + px(0.5),
+        "the row {row:?} ends inside the tile {rect:?}"
     );
-    let lines = f32::from(row.size.height) / crate::theme::LH_UI;
-    assert!(
-        lines >= 2. && lines.fract() == 0.,
-        "the call wraps onto whole lines, never cut: {row:?}"
-    );
+    assert_eq!(row.size.height, px(crate::theme::LH_UI), "one row: {row:?}");
 }
 
 /// A draft in a narrow Pane keeps its whole controls row inside the
@@ -710,54 +698,6 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
         px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W),
         "the text starts at C1"
     );
-}
-
-/// An L2 cell with an approval keeps its Composer under the card: `y`
-/// still answers from the card, and a press in the Composer takes typing.
-#[gpui::test]
-fn an_l2_approval_cell_keeps_its_composer(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("l2-approval-composer", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
-    tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
-    );
-    fake.streams.borrow()[0].send(decision("l2-keep")).unwrap();
-    tick(cx);
-    let block = cx
-        .debug_bounds("composer-block")
-        .expect("the approval cell keeps its Composer");
-    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!(
-        block.bottom() <= px(pane.y + pane.h),
-        "{block:?} / {pane:?}"
-    );
-
-    // The card answers from the keyboard.
-    cx.simulate_keystrokes("y");
-    tick(cx);
-    assert!(
-        matches!(
-            fake.answered.borrow().last(),
-            Some((id, DecisionAnswer::Allow { .. })) if id == "l2-keep"
-        ),
-        "y answers: {:?}",
-        fake.answered.borrow()
-    );
-
-    // A second request, then a press in the Composer: typing lands there.
-    fake.streams.borrow()[0].send(decision("l2-type")).unwrap();
-    tick(cx);
-    let block = cx.debug_bounds("composer-block").unwrap();
-    cx.simulate_click(block.center(), gpui::Modifiers::none());
-    tick(cx);
-    cx.simulate_input("hold on");
-    tick(cx);
-    assert_eq!(composer_text(&view, cx), "hold on");
 }
 
 /// A question's own answer is not a second field (rule 2.8.6): one bare
@@ -861,12 +801,10 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
 }
 
 /// On the empty board the titlebar has no location: it reads `Ferrite`
-/// at the right cell's inset (theme WP-C), and the `dev` tag follows it.
+/// at the right cell's inset (theme WP-C), and no build badge follows it
+/// (F-10: Settings › About keeps that).
 #[gpui::test]
-fn the_empty_board_titlebar_keeps_the_dev_tag_on_the_inset(cx: &mut TestAppContext) {
-    if !crate::titlebar::DEV {
-        return;
-    }
+fn the_empty_board_titlebar_reads_ferrite_on_the_inset(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("empty-titlebar", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -875,15 +813,17 @@ fn the_empty_board_titlebar_keeps_the_dev_tag_on_the_inset(cx: &mut TestAppConte
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(cx.debug_bounds("empty-board").is_some());
-    let name = cx.debug_bounds("titlebar-ferrite").expect("the app's name");
+    let name = cx.debug_bounds("titlebar-word-0").expect("the app's name");
     let inset =
         px(crate::theme::NAV_WIDTH + crate::theme::CHROME_SEAM_W + crate::theme::TITLE_PAD_X);
     assert!(
         (name.left() - inset).abs() <= px(0.5),
         "{name:?} at {inset:?}"
     );
-    let tag = cx.debug_bounds("titlebar-dev-badge").expect("the dev tag");
-    assert!(tag.left() > name.right(), "{tag:?} after {name:?}");
+    assert!(
+        cx.debug_bounds("titlebar-dev-badge").is_none(),
+        "no build badge on the band"
+    );
 }
 
 /// The checks card grows to its own tally: the counts line is never cut
@@ -912,9 +852,8 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
         cx.notify();
     });
     tick(cx);
-    let mark = cx.debug_bounds("ci-mark-1").expect("the ci mark");
-    cx.simulate_mouse_down(mark.center(), MouseButton::Left, gpui::Modifiers::none());
-    cx.run_until_parked();
+    cx.update(|window, cx| view.update(cx, |view, cx| view.open_checks(window, cx)));
+    tick(cx);
     let card = cx.debug_bounds("context-checks-card").expect("the card");
     assert!(card.size.width >= px(crate::theme::CHECKS_CARD_W));
     assert!(card.size.width <= px(crate::theme::CHECKS_CARD_MAX_W));
@@ -924,7 +863,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
             .text_system()
             .shape_line(
                 text.clone().into(),
-                px(crate::theme::FS_SM),
+                px(crate::theme::FS_UI),
                 &[gpui::TextRun {
                     len: text.len(),
                     font: gpui::font(crate::theme::FONT_UI),
@@ -961,53 +900,6 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
         assert!(view.cockpit.registry().project(project).is_some());
         assert!(view.project_editor.is_some(), "the sheet stays up");
     });
-}
-
-/// With an approval pending in an L2 cell, `y` allows whether the keyboard
-/// is in the Composer or on the card — the L1 rule. The cockpit's focus
-/// rule puts the keyboard in the Composer on every frame, so the card case
-/// focuses the card and presses `y` in the same turn, before any frame can
-/// move it.
-#[gpui::test]
-fn an_l2_approval_allows_on_y_with_the_card_or_the_composer_focused(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("l2-approval-focus", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
-    tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
-    );
-    for (n, holder) in ["composer", "card"].into_iter().enumerate() {
-        let id = format!("l2-focus-{n}");
-        fake.streams.borrow()[0].send(decision(&id)).unwrap();
-        tick(cx);
-        assert!(
-            cx.debug_bounds("composer-block").is_some(),
-            "the cell keeps its Composer"
-        );
-        let on_card = cx.update(|window, cx| {
-            let card = view.read(cx).panes[0].decision_focus.clone();
-            if holder == "card" {
-                window.focus(&card, cx);
-            }
-            let on_card = card.is_focused(window);
-            window.dispatch_keystroke(gpui::Keystroke::parse("y").unwrap(), cx);
-            on_card
-        });
-        assert_eq!(on_card, holder == "card", "the premise: {holder} holds it");
-        tick(cx);
-        assert!(
-            matches!(
-                fake.answered.borrow().last(),
-                Some((answered, DecisionAnswer::Allow { .. })) if *answered == id
-            ),
-            "y allows with the {holder} holding the keyboard: {:?}",
-            fake.answered.borrow()
-        );
-    }
 }
 
 /// Theme rule 6, sampled where each face is set: the app's own copy is in
@@ -1213,8 +1105,8 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
 }
 
 /// Focus is drawn only when it tells the operator something: a lone Pane
-/// rests on its hairline with no head rule, and the focus ink appears once a
-/// second Pane shares the board.
+/// rests on its transparent edge with no head rule, and the focus ink
+/// appears once a second Pane shares the board.
 #[gpui::test]
 fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("focus-only-when-shared", 2);
@@ -1449,32 +1341,6 @@ fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
     );
 }
 
-/// A compact (L2) Composer's placeholder carries no hint: a narrow cell has
-/// no room for one beside the ghost, and a clipped hint reads as noise.
-#[gpui::test]
-fn a_compact_placeholder_carries_no_hint(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("compact-placeholder", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
-    tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
-    );
-    assert!(cx.debug_bounds("prompt-placeholder").is_some(), "the ghost");
-    assert!(
-        cx.debug_bounds("prompt-placeholder-hint").is_none(),
-        "no hint at L2"
-    );
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    tick(cx);
-    assert!(
-        cx.debug_bounds("prompt-placeholder-hint").is_some(),
-        "L1 carries its one hint"
-    );
-}
-
 /// The Group head sits on the grid at every width (theme WP-C): its dot
 /// column a cell in from the Pane's inner edge (`HEAD_PAD_X`), two cells
 /// wide (`HEAD_DOT_W`), its title right after it — so every head on a
@@ -1505,7 +1371,9 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
             let dot = cx
                 .debug_bounds(Box::leak(format!("pane-head-dot-{key}").into_boxed_str()))
                 .unwrap();
-            let inner = px(rect.x + 1.);
+            // The edge is an overlay (F-1): the head starts at the Pane's
+            // own left edge.
+            let inner = px(rect.x);
             let c1 = inner + px(crate::theme::HEAD_PAD_X + crate::theme::HEAD_DOT_W);
             assert!(
                 (title.left() - c1).abs() <= px(0.5),
@@ -1522,17 +1390,16 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
 }
 
 /// A cell with an approval keeps its mode where every cell of its kind has
-/// it: in Solo (at L2 too) the status line under the Composer, holding its
-/// place when the card arrives; on a board, the head slot's word, since a
-/// grid Composer has no status line (C4). L1 still keeps the mode while a
-/// Decision owns the keyboard. The raw id never renders.
+/// it: on a board the grid Composer has no status line (C4) and the head
+/// carries no word (rule 7); one Pane filling the board keeps the status
+/// line under a Decision — the mode is what the answer will run under. The
+/// raw id never renders.
 #[gpui::test]
-fn an_l2_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
+fn an_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("l2-approval-facts", 2);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
     for event in [
         SessionEvent::Init {
             session_id: "facts".into(),
@@ -1545,22 +1412,12 @@ fn an_l2_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
-    );
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
     let mode: &'static str = Box::leak(format!("composer-mode-{thread}").into_boxed_str());
     let slot: &'static str = Box::leak(format!("head-slot-{thread}").into_boxed_str());
-    let quiet = cx.debug_bounds(mode).expect("a quiet cell's mode");
-
     fake.streams.borrow()[0].send(decision("l2-facts")).unwrap();
     tick(cx);
-    let asked = cx.debug_bounds(mode).expect("the approval cell's mode");
-    assert_eq!(asked, quiet, "the status line holds its place");
 
-    // On a board the grid Composer has no status line: the mode is the
-    // head's word once nothing louder needs saying.
     view.update(cx, |view, cx| view.enter_group(group, cx));
     cx.simulate_resize(gpui::size(px(860.), px(480.)));
     tick(cx);
@@ -1570,8 +1427,6 @@ fn an_l2_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
         "the head carries no word (theme rule 7)"
     );
 
-    // At L1 the status line stays under a Decision (rule 2.6.6): the mode
-    // is what the answer will run under. One Pane filling the board is Solo.
     view.update(cx, |view, cx| {
         view.focus_pane(0);
         view.cockpit.toggle_fullscreen();
@@ -1581,7 +1436,7 @@ fn an_l2_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
     tick(cx);
     assert!(
         cx.debug_bounds(mode).is_some(),
-        "L1 keeps the mode under a Decision"
+        "one Pane filling the board keeps the mode under a Decision"
     );
 }
 

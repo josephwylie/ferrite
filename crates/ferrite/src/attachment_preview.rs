@@ -1,8 +1,10 @@
 //! Pane-owned file previews: images use a focused overlay while text files
-//! open in a reader that takes its own slot on the board, beside its Pane.
-//! The kit owns dialog focus and dismissal; this module supplies the owning
-//! Pane's bounds, which place and size the image sheet, while the scrim
-//! covers the window like every modal's.
+//! open in a reader that takes its own slot on the board, beside its Pane
+//! (`cockpit/beside.rs` draws it: numbered lines, the target line marked).
+//! A compare of the branch against its base rides the same slot. The kit
+//! owns dialog focus and dismissal; this module supplies the owning Pane's
+//! bounds, which place and size the image sheet, while the scrim covers the
+//! window like every modal's.
 
 use crate::components::Tip as _;
 use std::{
@@ -10,19 +12,30 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use gpui::component::scroll::ScrollableElement;
 use gpui::{
-    canvas, div, prelude::*, px, rems, rgb, AnyElement, App, Bounds, Div, FocusHandle, IntoElement,
+    canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Div, FocusHandle, IntoElement,
     Pixels, Window,
 };
-
-use crate::theme;
 
 #[derive(Clone)]
 pub struct Document {
     pub path: PathBuf,
     pub title: String,
     pub source: String,
+    /// The line the reader opened at (1-based): marked and scrolled into
+    /// view (F-14). `None` opens at the top.
+    pub line: Option<u32>,
+    /// A compare (F-15): the branch's diff against its base, drawn in the
+    /// reader's slot in place of a file. `source` is empty then.
+    pub compare: Option<Compare>,
+}
+
+/// A branch against its base, parsed from `git diff <base>...HEAD`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Compare {
+    /// `dev ↔ main · 3 files +40 −12`: the slot's head.
+    pub head: String,
+    pub edits: Vec<ferrite_core::FileEdit>,
 }
 
 #[derive(Default)]
@@ -108,9 +121,59 @@ impl Preview {
             path,
             title,
             source,
+            line: None,
+            compare: None,
         });
         window.refresh();
         true
+    }
+
+    /// Open a UTF-8 text file in the reader at `line` (F-14): the line is
+    /// marked and the cockpit scrolls it into view. `false` for a binary
+    /// file or one that cannot be read.
+    pub fn open_text_at(&self, path: PathBuf, title: String, line: Option<u32>) -> bool {
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        let Ok(source) = String::from_utf8(bytes) else {
+            return false;
+        };
+        self.state.lock().unwrap().document = Some(Document {
+            path,
+            title,
+            source,
+            line,
+            compare: None,
+        });
+        true
+    }
+
+    /// Show a compare in the reader's slot (F-15).
+    pub fn open_compare(&self, workspace: PathBuf, compare: Compare) {
+        self.state.lock().unwrap().document = Some(Document {
+            path: workspace,
+            title: compare.head.clone(),
+            source: String::new(),
+            line: None,
+            compare: Some(compare),
+        });
+    }
+
+    /// Close the reader with no window in hand (a test, the cockpit's own
+    /// key handler).
+    pub fn close_reader(&self) {
+        self.state.lock().unwrap().document = None;
+    }
+
+    /// Whether the reader slot (or anything in it) holds focus — what lets
+    /// ⌘W close the reader rather than its Pane.
+    pub fn reader_focused(&self, window: &Window, cx: &App) -> bool {
+        self.reader_focus.contains_focused(window, cx)
+    }
+
+    /// The reader slot's focus handle, for the slot the cockpit draws.
+    pub fn reader_focus(&self) -> FocusHandle {
+        self.reader_focus.clone()
     }
 
     pub fn open_document(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
@@ -148,7 +211,7 @@ impl Preview {
 
     /// The Pane with its image layer: the overlay covers exactly the Pane's
     /// own bounds. The text reader is not mounted here — it is a slot of
-    /// its own on the board (`reader`), laid out like any other Pane.
+    /// its own on the board (`cockpit/beside.rs`), laid out like a Pane.
     pub fn mount(&self, pane: Div) -> Div {
         let preview = self.clone();
         pane.child(
@@ -174,102 +237,81 @@ impl Preview {
         .child(PreviewLayer(self.clone()))
     }
 
-    /// The open document as a board slot: a Pane-shaped shell whose head
-    /// is handed to `head` (the cockpit wires the drag that moves the slot)
-    /// and whose body is the rendered `body`. None while no document is open.
+    /// The open document as a board slot (F-14): a Pane-shaped shell on the
+    /// plane whose head row is handed to `head` (the cockpit wires the drag
+    /// that moves the slot) and whose body is the rendered `body`. The head
+    /// is the Group head's twin — `PANE_HEAD_H`, its `paint::LINE` rule, a
+    /// cell in from each side — reading the file's path (its `title`) in
+    /// `PATH_INK` and its `:line` in `TEXT_MUTED`, or a compare's own head
+    /// line, with a dim × at the right. None while no document is open.
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
+        use crate::theme::*;
         let document = self.document()?;
-        let markdown = document.is_markdown();
-        let kind = document.kind();
-        let document_content = if markdown {
-            div()
-                .id("markdown-reader-scroll")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
+        let label = match &document.compare {
+            Some(compare) => div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(compare.head.clone()),
+            None => div()
+                .flex()
+                .min_w_0()
+                .overflow_hidden()
                 .child(
                     div()
-                        .w_full()
-                        .max_w(rems(52.))
-                        .mx_auto()
-                        .px(px(theme::PANE_PAD_X))
-                        .pt(px(theme::BODY_PAD_T))
-                        .pb(px(theme::BODY_PAD_B))
-                        .child(body),
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(PATH_INK))
+                        .child(document.title.clone()),
                 )
-                .into_any_element()
-        } else {
-            div()
-                .id("markdown-reader-scroll")
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .p(px(theme::PANE_PAD_X))
-                .child(div().size_full().child(body))
-                .into_any_element()
+                .children(document.line.map(|line| {
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(format!(":{line}"))
+                })),
         };
         let close = self.clone();
-        // The reader's head is a Group head's twin (rule 2.4.6): one
-        // `PANE_HEAD_H` line on the Pane's own ground, closed by a
-        // `HAIRLINE` rule — a file mark in the glyph column, the title in
-        // `FS_UI` `W_LABEL` `TEXT_STRONG`, its kind as a quiet meta word.
         let head_band = div()
+            .debug_selector(|| "reader-head".into())
             .flex()
-            .items_center()
-            .h(px(theme::PANE_HEAD_H))
             .flex_shrink_0()
-            .gap(px(theme::SPACE_2))
-            .pl(px(theme::PANE_PAD_X))
-            .pr(px(theme::SPACE_1_5))
+            .items_center()
+            .h(px(PANE_HEAD_H))
+            .px(px(HEAD_PAD_X))
             .border_b_1()
-            .border_color(theme::paint::LINE)
-            .child(crate::icons::icon(
-                crate::icons::FILE,
-                theme::ROW_ICON,
-                theme::TEXT_MUTED,
-            ))
+            .border_color(paint::LINE)
+            .whitespace_nowrap()
+            .child(label)
+            .child(div().flex_1())
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(theme::FONT_UI)
-                    .text_size(px(theme::FS_UI))
-                    .line_height(px(theme::LH_UI))
-                    .font_weight(theme::W_LABEL)
-                    .text_color(rgb(theme::TEXT_STRONG))
-                    .child(document.title),
-            )
-            .child(
-                crate::components::text_meta()
-                    .flex_shrink_0()
-                    .child(kind.to_lowercase()),
-            )
-            .child(
-                div()
+                    .id("close-markdown-reader")
                     .debug_selector(|| "close-markdown-reader".into())
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .w(px(ICON_BUTTON))
+                    .h(px(PANE_HEAD_H))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(paint::HOVER))
                     // A press here closes; it must not also pick the slot
                     // up as a drag.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        crate::components::button("close-markdown-reader")
-                            // Reachable from the keyboard like the file
-                            // card that opened it.
-                            .tab_stop(true)
-                            .w(px(theme::ICON_BUTTON))
-                            .h(px(theme::ICON_BUTTON))
-                            .p_0()
-                            .tooltip("Close document reader")
-                            .child(crate::icons::icon(
-                                crate::icons::CLOSE,
-                                theme::ICON_BUTTON_GLYPH,
-                                theme::TEXT_MUTED,
-                            ))
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                close.close_document(window);
-                            }),
-                    ),
+                    .tooltip(|window, cx| {
+                        gpui::component::tooltip::Tooltip::new("Close the reader \u{b7} esc")
+                            .build(window, cx)
+                    })
+                    .child(crate::icons::icon(
+                        crate::icons::CLOSE,
+                        GLYPH_BOX,
+                        TEXT_MUTED,
+                    ))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        close.close_document(window);
+                    }),
             );
         Some(
             div()
@@ -282,13 +324,12 @@ impl Preview {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .rounded(px(theme::R_PANE))
-                .border_1()
-                .border_color(theme::paint::LINE)
-                .bg(theme::paint::PLANE)
-                .font_family(theme::FONT_UI)
+                .bg(paint::PLANE)
+                .font_family(FONT_UI)
+                .text_size(px(FS_UI))
+                .line_height(px(LH_UI))
                 .child(head(head_band))
-                .child(document_content),
+                .child(body),
         )
     }
 }
@@ -374,8 +415,8 @@ impl RenderOnce for PreviewLayer {
             f32::from(bounds.size.width),
             f32::from(bounds.size.height),
         );
-        // The sheet recipe (`prefs::sheet`): `RAISED`, the strong hairline,
-        // `R_PANE`, the sheet elevation; the 48px head with its title and the
+        // The sheet recipe (`prefs::sheet`): `paint::BAND`, a `paint::LINE2`
+        // edge, square, the float's one shadow; the 48px head with its title and the
         // one close control over a hairline; then the image itself on the
         // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
         // sheet is darker than the sheet.

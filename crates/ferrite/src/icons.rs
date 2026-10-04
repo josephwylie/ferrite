@@ -176,8 +176,11 @@ pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
 pub const RESEND: &str = "icons/resend.svg";
-/// The prompt chevron `❯`, drawn: Geist Mono has no such glyph, so the mark
-/// the transcript and the Composer share is an SVG in a `GLYPH_BOX`.
+/// The prompt mark `❯`, drawn: Geist Mono has no U+276F, so the mark the
+/// transcript, the Composer, the nav cursor and every selection bar share
+/// is the heavy wedge the prototype's fallback face draws at 13px — filled,
+/// 5 × 9.5px with ~2px arms and angled ends, 0.9px into a 12-unit cell box
+/// (`components::prompt_mark` lays it).
 pub const PROMPT: &str = "icons/prompt.svg";
 /// Ferrite's mark as one monochrome path, for the answer gutter (the
 /// gradient mark is reserved for the animated working line).
@@ -542,6 +545,31 @@ mod tests {
              failed cross, the CLI update mark, the sixteen spinner frames (ten braille, six \
              working glyphs) and the nav's two disclosure triangles"
         );
+    }
+
+    /// F-16: the prompt mark is U+276F's heavy wedge — filled, no stroke,
+    /// from x 0.9 to 5.9 and y 1.55 to 11.05 of its 12-unit box (a 5 × 9.5px
+    /// mark at 13px), its arms 2.15 across with parallel, angled ends.
+    #[test]
+    fn the_prompt_mark_is_the_heavy_wedge() {
+        let bytes = Assets.load(PROMPT).unwrap().unwrap();
+        let svg = std::str::from_utf8(&bytes).unwrap();
+        assert!(svg.contains(r#"viewBox="0 0 12 12""#));
+        assert!(svg.contains(r#"fill="currentColor""#));
+        assert!(
+            !svg.contains("stroke"),
+            "a filled wedge, not a stroked chevron"
+        );
+        for corner in [
+            "M0.9 1.55",
+            "H3.05",
+            "L5.9 6.3",
+            "L3.05 11.05",
+            "H0.9",
+            "L3.75 6.3",
+        ] {
+            assert!(svg.contains(corner), "{corner}");
+        }
     }
 
     /// The line icons must carry the `.stroke` class's attributes on the

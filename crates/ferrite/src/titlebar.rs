@@ -27,22 +27,23 @@
 //! The band itself is two cells (theme WP-C): over the sidebar, the
 //! sidebar's own chrome row (the traffic lights, the sidebar toggle and the
 //! bell, `cockpit::nav`); over the board, the right cell this module draws
-//! on the reading plane — the location as a terminal prints a path,
-//! `ferrite / title · state · branch`, the title the one strong word and
-//! the rest dim, and the trailing door (`⌘T new thread`) dim at the right.
-//! No hairline closes the band. The window's foot is the bottom bar
-//! (`bottom_bar`): the session, a tab per view, usage and the clock, tmux's
+//! on the reading plane — the location as a terminal prints a path (F-10):
+//! `ferrite / Nav rows jitter on stream start · done · dev` in Solo,
+//! `ferrite / Perf sweep · 4 · 1 needs you · dev` for a Group, `all projects
+//! / Everything · 9 · 2 need you · 1 failing` for one that spans Projects,
+//! `Ferrite` on the empty board. The title is the one strong word; every
+//! other word, `/` and `·` is `TEXT_MUTED`. Its one trailing door is
+//! `⌘K commands` (F-11), the chord read from the keymap. No hairline
+//! closes the band and no build badge rides it (Settings › About keeps
+//! that). The window's foot is the bottom bar (`bottom_bar`, F-9): the
+//! session, `1 solo` and a tab per Group, usage and the clock — tmux's
 //! grammar on the chrome.
 //!
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
 //! they read.
 
-use gpui::component::button::{Button, ButtonVariants};
 use gpui::prelude::*;
-use gpui::{
-    div, px, rgb, rgba, AnyElement, App, Div, MouseButton, SharedString, Stateful,
-    WindowControlArea,
-};
+use gpui::{div, px, rgb, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
 use crate::theme::paint;
 
@@ -51,55 +52,125 @@ use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
 
-/// The active location named in the window chrome. A Group may span
-/// Projects, so the Project follows the focused Pane rather than trying to
-/// summarize the whole Group.
-#[derive(Default)]
+/// Where the board is, as the titlebar names it (F-10).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Location {
+    /// Nowhere yet — the empty board: the app's own name.
+    #[default]
+    Nowhere,
+    /// One Thread fills the board (Solo, or one Pane fullscreen): `project /
+    /// title · state · branch`.
+    Thread {
+        project: Option<SharedString>,
+        title: SharedString,
+        /// The state word (`done`, `working 12s`, `needs you · approval`);
+        /// nothing while idle.
+        state: Option<SharedString>,
+        branch: Option<SharedString>,
+    },
+    /// A Group's board: `project / name · members · N need you`, then the
+    /// branch when every member shares one Project, else `N failing`.
+    Group {
+        /// The one Project every member shares; `None` reads `all projects`.
+        project: Option<SharedString>,
+        name: SharedString,
+        members: usize,
+        /// Threads on this board waiting on the operator.
+        need_you: usize,
+        /// The shared Project's branch (always named, the default included).
+        branch: Option<SharedString>,
+        /// Members whose suite or Session failed — said only for a board
+        /// that spans Projects, where no branch applies.
+        failing: usize,
+    },
+}
+
+/// The active location named in the window chrome.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Title {
-    pub project: Option<SharedString>,
-    pub group: Option<SharedString>,
-    /// The Thread the board shows alone — Solo, or one Pane fullscreen:
-    /// the Solo Pane has no head (C2), so its identity rides here.
-    pub thread: Option<ThreadCrumb>,
+    pub location: Location,
 }
 
-/// One Thread's identity in the titlebar: `title · state · branch`, then the
-/// plan's meter and the PR with its CI, fed from the one status truth
-/// (`cockpit::thread_status`). The title is the band's one strong word.
-pub struct ThreadCrumb {
-    pub title: SharedString,
-    /// The checkout, only when it says something: a single branch that is
-    /// not the default, or every directory's branch of a multi-directory
-    /// Project (`frontend:feat/header  api:main`).
-    pub branches: Vec<(Option<SharedString>, SharedString)>,
-    /// The plan's meter, while the Thread works to one.
-    pub tasks: Option<AnyElement>,
-    /// The PR and its CI, wired to open the checks card.
-    pub ci: Option<AnyElement>,
-    /// The state word (`needs you · approval`, `failed`, `working 12s`);
-    /// nothing when idle.
-    pub state: Option<crate::pane::HeadSlot>,
+impl Title {
+    /// The words the location reads, in order, each with whether it is the
+    /// band's one strong word: what the cell draws and what a test reads.
+    pub fn words(&self) -> Vec<(SharedString, bool)> {
+        let plain = |text: SharedString| (text, false);
+        match &self.location {
+            Location::Nowhere => vec![plain("Ferrite".into())],
+            Location::Thread {
+                project,
+                title,
+                state,
+                branch,
+            } => {
+                let mut words = Vec::new();
+                if let Some(project) = project {
+                    words.push(plain(project.clone()));
+                    words.push(plain("/".into()));
+                }
+                words.push((title.clone(), true));
+                for fact in [state, branch].into_iter().flatten() {
+                    words.push(plain("\u{b7}".into()));
+                    words.push(plain(fact.clone()));
+                }
+                words
+            }
+            Location::Group {
+                project,
+                name,
+                members,
+                need_you,
+                branch,
+                failing,
+            } => {
+                let mut words = vec![
+                    plain(
+                        project
+                            .clone()
+                            .unwrap_or_else(|| SharedString::from("all projects")),
+                    ),
+                    plain("/".into()),
+                    (name.clone(), true),
+                    plain("\u{b7}".into()),
+                    plain(members.to_string().into()),
+                ];
+                if *need_you > 0 {
+                    words.push(plain("\u{b7}".into()));
+                    words.push(plain(need_you_label(*need_you)));
+                }
+                match (project, branch) {
+                    (Some(_), Some(branch)) => {
+                        words.push(plain("\u{b7}".into()));
+                        words.push(plain(branch.clone()));
+                    }
+                    (None, _) if *failing > 0 => {
+                        words.push(plain("\u{b7}".into()));
+                        words.push(plain(format!("{failing} failing").into()));
+                    }
+                    _ => {}
+                }
+                words
+            }
+        }
+    }
 }
 
-/// What the location adds about the board, beside its name.
-#[derive(Clone, Copy, Default)]
-pub struct Board {
-    /// How many Panes the Group shows: cheap orientation beside its name.
-    pub count: Option<usize>,
-    /// One Pane fills the board: the only on-screen cue that its siblings
-    /// are hidden, not gone.
-    pub fullscreen: bool,
-    /// How many Threads wait on the operator anywhere (the nav's Needs-you
-    /// strip): `· N need you` after the location, a door to ⌘D.
-    pub need_you: usize,
+/// `1 needs you`, `2 need you`.
+pub fn need_you_label(count: usize) -> SharedString {
+    if count == 1 {
+        "1 needs you".into()
+    } else {
+        format!("{count} need you").into()
+    }
 }
 
 /// Whether this build is an unreleased one. `--release` is not the
 /// question — a locally built release binary is still a dev build, and
 /// wants the `dev` mark. Only the release pipeline ships without it, which it
 /// says by setting `FERRITE_RELEASE` for the compile (`build.rs` tracks
-/// the variable so a cached build cannot keep a stale answer). Settings
-/// reports the same fact under About.
+/// the variable so a cached build cannot keep a stale answer). Settings ›
+/// About reports it; the titlebar carries no badge.
 pub const DEV: bool = option_env!("FERRITE_RELEASE").is_none();
 
 /// Whether this build draws its own titlebar. macOS keeps the host's, and
@@ -111,23 +182,20 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 /// draws its own chrome row inside the column, so this adds no layout — it
 /// claims what the window already left empty.
 ///
-/// The nav's width (and the 1px seam beside it) is skipped rather than
-/// covered: the toggle and the bell live under it, and a drag region over
-/// them would make both unclickable. What it draws is the right cell, on
-/// the reading plane (`paint::PLANE`, the same glass as the board under it):
-/// the location, the empty stretch the window drags by, and the trailing
+/// The nav's titlebar cell (`nav_width`) is skipped rather than covered:
+/// the toggle and the bell live under it, and a drag region over them would
+/// make both unclickable. What it draws is the right cell, on the reading
+/// plane (`paint::PLANE`, the same glass as the board under it): the
+/// location, the empty stretch the window drags by, and the `⌘K commands`
 /// door, then the Windows caption buttons.
 ///
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
-#[allow(clippy::too_many_arguments)]
 pub fn strip(
     nav_width: f32,
     title: Title,
-    board: Board,
-    trailing: Option<AnyElement>,
-    add_thread: AnyElement,
+    door: AnyElement,
     draggable: bool,
     maximized: bool,
 ) -> Div {
@@ -157,81 +225,45 @@ pub fn strip(
                 .bg(paint::PLANE)
                 // The location stays anchored to the content edge. The empty
                 // stretch absorbs spare width and remains the Windows drag
-                // target; the trailing door sits at the right, before the
-                // caption controls. The need-you count and `dev` are the
-                // location's last segments, siblings of the drag region,
-                // never inside it.
-                .child(title_region(title, board, true))
+                // target; the door sits at the right, before the caption
+                // controls, a sibling of the drag region, never inside it.
+                .child(title_region(&title))
                 .child(trailing_drag)
-                .children(trailing)
-                .child(add_thread)
+                .child(door)
                 .children(CUSTOM.then(|| caption_buttons(maximized))),
         )
 }
 
-/// The hover blend's key and the group name the add control's words ride.
-const ADD_GROUP: &str = "titlebar-add-thread";
+/// The hover blend's key and the group name the door's words ride.
+const DOOR_GROUP: &str = "titlebar-commands";
 
-/// The titlebar's trailing door (UI-13), the right cell's last words: the
-/// chord and what it makes, `⌘T new thread`, dim on the plane with no box
-/// (the prototype's `⌘K commands` slot, holding the most useful real key).
-/// The words rest at `TEXT_MUTED` and blend to `TEXT` under the pointer
-/// over the one 150ms hover blend; a press turns them `TEXT_STRONG` at
-/// once. It is a sibling of the Windows drag region, never a child, so its
-/// click reaches the app instead of the non-client frame. The cockpit wires
-/// the click and hangs the tooltip (`add_thread`).
-pub fn add_thread_button(label: &'static str, chord: Option<&str>, cx: &App) -> Button {
-    let ink = crate::motion::hover_blend(ADD_GROUP, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
-    let ink_u32 = TEXT_MUTED;
-    components::button("titlebar-add-thread")
-        .custom(crate::pointer::button_variant(
-            rgba(TRANSPARENT).into(),
-            rgb(TEXT_MUTED).into(),
-            rgba(TRANSPARENT).into(),
-            cx,
-        ))
-        .debug_selector(|| "titlebar-add-thread".into())
-        .group(ADD_GROUP)
-        .flex_shrink_0()
-        .h(px(ROW + SPACE_1))
-        .px(px(TITLE_ADD_PAD_X))
-        // Windows follows this control with its caption buttons. macOS has
-        // no trailing sibling, so its words end two cells in from the
-        // window's edge, the right cell's own inset.
-        .when(cfg!(target_os = "macos"), |button| {
-            button.mr(px(TITLE_PAD_X - TITLE_ADD_PAD_X))
-        })
-        .on_hover(crate::motion::hover_listener(ADD_GROUP.into()))
-        .accessibility_label(label)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(TITLE_ADD_GAP))
-                .font_family(FONT_UI)
-                .text_size(px(FS_UI))
-                .line_height(px(LH_UI))
-                .text_color(ink)
-                .children(chord.map(|chord| components::key_combo(chord, ink_u32).text_color(ink)))
-                .child(
-                    div()
-                        .id("titlebar-add-thread-label")
-                        .group_active(ADD_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
-                        .child(SharedString::from(label.to_lowercase())),
-                ),
-        )
-}
-
-/// The add control with its tooltip: what the click makes, and the chord
-/// after it only where the click is exactly that key's action
-/// (`menu::tooltip_with_key`).
-pub fn add_thread(button: Button, tooltip: &'static str, chord: Option<String>) -> AnyElement {
+/// The titlebar's one trailing door (F-11): `⌘K commands`, dim on the plane
+/// with no box, `TITLE_PAD_X` in from the window's edge on macOS (Windows
+/// follows it with its caption buttons). The chord is the keymap's binding
+/// of `palette::Toggle` (`components::bound_chord`); the words blend to
+/// `TEXT` under the pointer and a press opens the palette. The cockpit wires
+/// the click.
+pub fn commands_door(chord: Option<&str>) -> Stateful<Div> {
+    let ink = crate::motion::hover_blend(DOOR_GROUP, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
     div()
-        .id("titlebar-add-thread-tip")
+        .id(DOOR_GROUP)
+        .debug_selector(|| "titlebar-commands".into())
+        .group(DOOR_GROUP)
+        .flex()
         .flex_shrink_0()
-        .tooltip(crate::menu::tooltip_with_key(tooltip, chord))
-        .child(button)
-        .into_any_element()
+        .items_center()
+        .h_full()
+        .gap(px(TITLE_DOOR_GAP))
+        .when(!CUSTOM, |door| door.mr(px(TITLE_PAD_X)))
+        .cursor_pointer()
+        .font_family(FONT_UI)
+        .text_size(px(FS_UI))
+        .line_height(px(LH_UI))
+        .text_color(ink)
+        .on_hover(crate::motion::hover_listener(DOOR_GROUP.into()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .children(chord.map(|chord| components::key_combo(chord, TEXT_MUTED).text_color(ink)))
+        .child("commands")
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -239,6 +271,7 @@ pub fn add_thread(button: Button, tooltip: &'static str, chord: Option<String>) 
 /// resizes; maximized, there is no border to preserve and it runs flush.
 pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
     let inset = if maximized { 0.0 } else { CAPTION_RESIZE_EDGE };
+    let located = title.location != Location::Nowhere;
     div()
         .flex_1()
         .h_full()
@@ -250,7 +283,7 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
                 .id(id)
                 .flex_1()
                 .w_full()
-                .child(title_region(title, Board::default(), false))
+                .children(located.then(|| title_region(&title)))
                 // See `button`: the root's focus hitbox must not count as
                 // hovered under a caption region, or the press is marked
                 // handled and Windows never starts the move.
@@ -266,106 +299,15 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
         )
 }
 
-/// The dev-build mark, the location's last segment: plain `dev` in `FS_SM`
-/// `W_BODY` `TEXT_MUTED` after a faint `·` (`seam`, false when nothing
-/// precedes it), with no box. Not a state — `ATTENTION` would say
-/// "something needs you" to every operator of a local build. It rides the
-/// location region, a sibling of the drag region rather than a child:
-/// anything inside one is non-client to Windows.
-fn dev_badge(seam: bool) -> Div {
+/// The location (F-10), on one UI baseline, its words one cell apart: the
+/// title `TEXT_STRONG` at `W_LABEL`, the one strong word, and everything
+/// else — the Project, `/`, `·`, the counts, the state, the branch —
+/// `TEXT_MUTED`. Only the title truncates (with the whole of it one hover
+/// away); every other word keeps its width.
+fn title_region(title: &Title) -> Div {
+    let words = title.words();
     div()
-        .debug_selector(|| "titlebar-dev-badge".into())
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .gap(px(TITLE_GAP))
-        .children(seam.then(|| div().text_color(rgb(TEXT_FAINT)).child("·")))
-        .child(
-            div()
-                .font_weight(W_BODY)
-                .text_color(rgb(TEXT_MUTED))
-                .child("dev"),
-        )
-}
-
-/// `· N need you` (rule 2.7.6): how many Threads wait on the operator,
-/// dim and tabular like every fact on the band (no coloured counts, theme
-/// WP-C), never shrinking. A press runs the ⌘D jump from wherever the
-/// keyboard is; the tooltip names the key.
-fn need_you(count: usize) -> Div {
-    let label = div()
-        .id("titlebar-need-you")
-        .debug_selector(|| "titlebar-need-you".into())
-        .flex_shrink_0()
-        .cursor_pointer()
-        .font_weight(W_BODY)
-        .text_color(rgb(TEXT_MUTED))
-        .child(SharedString::from(format!("{count} need you")))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(|_, window, cx| {
-            window.dispatch_action(Box::new(crate::cockpit::NextDecision), cx)
-        });
-    let label = label.tooltip(crate::menu::action_tooltip(
-        "Next needs you",
-        "cockpit::NextDecision",
-    ));
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(TITLE_GAP))
-        .child(div().text_color(rgb(TEXT_FAINT)).child("·"))
-        .child(components::tabular(label))
-}
-
-/// The location, on one UI baseline, segments `TITLE_GAP` apart. In Solo:
-/// the Project in `TEXT_MUTED`, a faint `/`, then the Thread
-/// (`thread_crumb`). In a Group: the Project, `/`, the Group's name as the
-/// band's one title and how many Panes it shows; while one Pane fills the
-/// board the Thread follows the Group in place of the count, and how many
-/// Threads that hides is the Group name's tooltip. Truncation order: the
-/// branch first, then the Project, then the title. The band's own copy
-/// (`chrome`, never inside a drag region) closes it: `· N need you` —
-/// unless the Solo Thread's state word already says `needs you`, which is
-/// said once — then `· dev` in a development build.
-fn title_region(title: Title, board: Board, chrome: bool) -> Div {
-    let Title {
-        project,
-        group,
-        thread,
-    } = title;
-    let Board {
-        count,
-        fullscreen,
-        need_you: waiting,
-    } = board;
-    let located = project.is_some() || group.is_some() || thread.is_some();
-    let separator = |glyph: &'static str| {
-        div()
-            .flex_shrink_0()
-            .text_color(rgb(TEXT_FAINT))
-            .child(glyph)
-    };
-    let fact = |text: SharedString| {
-        div()
-            .flex_shrink_0()
-            .text_color(rgb(TEXT_MUTED))
-            .child(text)
-    };
-    let has_project = project.is_some();
-    let has_group = group.is_some();
-    let has_thread = thread.is_some();
-    // `needs you` is said once on the band: while the Solo Thread's own
-    // state word says it (and is the same ⌘D door), the count is not
-    // repeated after it — the nav's Needs-you strip holds the queue.
-    let said = thread
-        .as_ref()
-        .is_some_and(|thread| matches!(thread.state, Some(crate::pane::HeadSlot::NeedsYou(_))));
-    let waiting = if said { 0 } else { waiting };
-    let hidden = count
-        .filter(|_| fullscreen)
-        .map(|count| count.saturating_sub(1));
-    div()
+        .debug_selector(|| "titlebar-location".into())
         .h_full()
         .flex()
         .items_center()
@@ -373,180 +315,44 @@ fn title_region(title: Title, board: Board, chrome: bool) -> Div {
         .min_w_0()
         .px(px(TITLE_PAD_X))
         .gap(px(TITLE_GAP))
+        .whitespace_nowrap()
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(LH_UI))
         .text_color(rgb(TEXT_MUTED))
-        // Nowhere yet (the empty board): the app's own name, dim.
-        .when(chrome && !located, |title| {
-            title.child(
+        .children(words.into_iter().enumerate().map(|(at, (word, strong))| {
+            if strong {
                 div()
-                    .debug_selector(|| "titlebar-ferrite".into())
-                    .flex_shrink_0()
-                    .child("Ferrite"),
-            )
-        })
-        // Either name may truncate when the band is narrow; the whole of it
-        // is one hover away.
-        .children(project.map(|project| {
-            div()
-                .id("project-titlebar-name")
-                .debug_selector(|| "project-titlebar-name".into())
-                .min_w(px(TITLE_PROJECT_MIN_W))
-                .flex_shrink(2.)
-                .truncate()
-                .tooltip(crate::menu::tooltip(project.clone()))
-                .font_weight(W_BODY)
-                .text_color(rgb(TEXT_MUTED))
-                .child(project)
-        }))
-        .when(has_group || (has_thread && has_project), |title| {
-            title.child(separator("/"))
-        })
-        .children(group.map(|group| {
-            let tip = match hidden {
-                Some(hidden) => SharedString::from(format!(
-                    "{group} \u{b7} {hidden} thread{} hidden",
-                    if hidden == 1 { "" } else { "s" }
-                )),
-                None => group.clone(),
-            };
-            div()
-                .id("group-titlebar-name")
-                .debug_selector(|| "group-titlebar-name".into())
-                .min_w_0()
-                .flex_shrink(1.)
-                .truncate()
-                .tooltip(crate::menu::tooltip(tip))
-                .font_weight(W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
-                .child(group)
-        }))
-        .children(count.filter(|_| !fullscreen).map(|count| {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .gap(px(TITLE_GAP))
-                .child(separator("·"))
-                .child(crate::components::tabular(fact(SharedString::from(
-                    count.to_string(),
-                ))))
-        }))
-        .when(has_group && has_thread, |title| title.child(separator("/")))
-        .children(thread.map(thread_crumb))
-        .when(chrome && waiting > 0, |title| {
-            title.child(need_you(waiting))
-        })
-        .when(chrome && DEV, |title| title.child(dev_badge(true)))
-}
-
-/// The Thread in the titlebar (theme WP-C): the title, the band's one
-/// strong word (`W_LABEL` `TEXT_STRONG`, truncating, the whole of it one
-/// hover away), then `· state` and `· branch` dim, the plan's meter, and the
-/// PR with its CI. The state word never shrinks; `needs you` is a door to
-/// ⌘D. A draft is `New thread` alone.
-fn thread_crumb(thread: ThreadCrumb) -> Div {
-    let ThreadCrumb {
-        title,
-        branches,
-        tasks,
-        ci,
-        state,
-    } = thread;
-    let separator = || {
-        div()
-            .flex_shrink_0()
-            .text_color(rgb(TEXT_FAINT))
-            .child("\u{b7}")
-    };
-    let branch = (!branches.is_empty()).then(|| {
-        div()
-            .debug_selector(|| "titlebar-thread-branch".into())
-            .flex()
-            .flex_shrink(4.)
-            .min_w_0()
-            .overflow_hidden()
-            .items_center()
-            .gap(px(TITLE_GAP))
-            .text_color(rgb(TEXT_MUTED))
-            .child(separator())
-            .children(
-                branches
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (directory, branch))| {
-                        div()
-                            .debug_selector(move || format!("project-branch-{index}"))
-                            .flex()
-                            .min_w_0()
-                            .items_center()
-                            .when(index > 0, |item| item.ml(px(TITLE_GAP)))
-                            .when_some(directory, |item, directory| {
-                                item.child(div().flex_shrink_0().child(directory)).child(
-                                    div().flex_shrink_0().text_color(rgb(TEXT_FAINT)).child(":"),
-                                )
-                            })
-                            .child(div().min_w_0().truncate().child(branch))
-                    }),
-            )
-    });
-    div()
-        .debug_selector(|| "titlebar-thread".into())
-        .flex()
-        .flex_shrink(1.)
-        .min_w_0()
-        .items_center()
-        .gap(px(TITLE_GAP))
-        .child(
-            div()
-                .id("thread-titlebar-name")
-                .debug_selector(|| "thread-titlebar-name".into())
-                .min_w_0()
-                .flex_shrink(1.)
-                .truncate()
-                .tooltip(crate::menu::tooltip(title.clone()))
-                .font_weight(W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
-                .child(title),
-        )
-        .children(state.map(|state| {
-            div()
-                .debug_selector(|| "titlebar-thread-state".into())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(TITLE_GAP))
-                .child(separator())
-                .child(match state {
-                    crate::pane::HeadSlot::NeedsYou(_) => crate::pane::needs_you_door(
-                        "titlebar-needs-you".into(),
-                        "titlebar-needs-you".into(),
-                        crate::pane::head_slot_face(&state),
-                    ),
-                    _ => crate::pane::head_slot_face(&state).into_any_element(),
-                })
-        }))
-        .children(branch)
-        .children(tasks.map(|tasks| div().flex_shrink_0().child(tasks)))
-        .children(ci.map(|ci| {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(TITLE_GAP))
-                .text_color(rgb(TEXT_MUTED))
-                .child(separator())
-                .child(ci)
+                    .id(("titlebar-title", at))
+                    .debug_selector(|| "titlebar-title".into())
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .truncate()
+                    .tooltip(crate::menu::tooltip(word.clone()))
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(TEXT_STRONG))
+                    .child(word)
+                    .into_any_element()
+            } else {
+                components::tabular(
+                    div()
+                        .debug_selector(move || format!("titlebar-word-{at}"))
+                        .flex_shrink_0(),
+                )
+                .child(word)
+                .into_any_element()
+            }
         }))
 }
 
 // ------------------------------------------------------------- bottom bar
 
-/// The bottom bar (theme WP-C): one row on the chrome (`paint::CHROME`),
+/// The bottom bar (theme WP-C, F-9): one row on the chrome (`paint::CHROME`),
 /// closed above by a `paint::LINE` rule, tmux's grammar in the one face —
-/// the session name, then a tab per view (the current one bright on a
-/// band), the empty stretch, the provider usage segments and the clock. No
-/// state counts: the sidebar and the bell hold those.
+/// `ferrite` in `ACCENT` at the strong weight, `1 solo` and a tab per Group
+/// (the current view's bright on a band), the empty stretch, a usage
+/// segment per provider and the clock in `TEXT`. No state counts: the
+/// sidebar and the bell hold those.
 pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedString) -> Div {
     div()
         .debug_selector(|| "bottom-bar".into())
@@ -592,9 +398,10 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedSt
         )
 }
 
-/// One view's tab: `1 solo`, `2 perf sweep`. The current view's is
-/// `TEXT_STRONG` on `paint::BAND2`; the rest are dim and lift to `TEXT` on
-/// `paint::HOVER` under the pointer. The cockpit wires the press.
+/// One view's tab: ` 1 solo `, ` 2 perf sweep ` — the words a cell in from
+/// the tab's own cell of padding. The current view's is `TEXT_STRONG` on
+/// `paint::BAND2`; the rest are dim and lift to `TEXT` on `paint::HOVER`
+/// under the pointer. The cockpit wires the press.
 pub fn bar_tab(
     id: SharedString,
     ordinal: usize,
@@ -628,41 +435,62 @@ pub fn bar_tab(
         )
 }
 
-/// One provider's usage segment: its mark, then `5h 41%` and `wk 12%` for
-/// the windows it has reported, each dim until it runs tight
-/// (`pane::readout_ink`). `None` when the provider has reported neither.
+/// The window a provider's usage segment reads: its more used one, the 5h
+/// window on a tie (`5h 41%`, `wk 12%`). `None` when it has reported
+/// neither.
+pub fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'static str, f32)> {
+    let five = limits
+        .five_hour
+        .map(|window| window.used_fraction.clamp(0.0, 1.0));
+    let week = limits
+        .weekly
+        .map(|window| window.used_fraction.clamp(0.0, 1.0));
+    match (five, week) {
+        (Some(five), Some(week)) if week > five => Some(("wk", week)),
+        (Some(five), _) => Some(("5h", five)),
+        (None, Some(week)) => Some(("wk", week)),
+        (None, None) => None,
+    }
+}
+
+/// One provider's usage segment (F-9): its 11px mark, a cell, and its more
+/// used window (`5h 41%`), a cell of padding each side, `TEXT_MUTED` —
+/// `TEXT` on `paint::HOVER` under the pointer. `None` when the provider has
+/// reported no window.
 pub fn bar_usage(
     provider: ferrite_core::store::Provider,
     limits: &ferrite_core::transcript::RateLimits,
-) -> Option<Div> {
-    let windows: Vec<(&str, f32)> = [
-        ("5h", limits.five_hour.map(|window| window.used_fraction)),
-        ("wk", limits.weekly.map(|window| window.used_fraction)),
-    ]
-    .into_iter()
-    .filter_map(|(name, used)| used.map(|used| (name, used.clamp(0.0, 1.0))))
-    .collect();
-    if windows.is_empty() {
-        return None;
-    }
+) -> Option<Stateful<Div>> {
+    let (window, used) = usage_window(limits)?;
     let (glyph, ink, name) = match provider {
         ferrite_core::store::Provider::Claude => (icons::CLAUDE, PROVIDER_CLAUDE, "claude"),
         ferrite_core::store::Provider::Codex => (icons::CODEX, PROVIDER_CODEX, "codex"),
     };
+    let key = SharedString::from(format!("bottom-bar-usage-{name}"));
+    let selector = key.clone();
     Some(
         div()
-            .debug_selector(move || format!("bottom-bar-usage-{name}"))
+            .id(gpui::ElementId::Name(key.clone()))
+            .debug_selector(move || selector.to_string())
+            .group(key.clone())
             .flex()
             .flex_shrink_0()
             .items_center()
             .gap(px(BAR_SEG_PAD_X))
             .px(px(BAR_SEG_PAD_X))
+            .hover(|style| style.bg(paint::HOVER))
             .child(icon(glyph, BAR_MARK, ink))
-            .children(windows.into_iter().map(|(name, used)| {
-                components::tabular(div().text_color(rgb(crate::pane::readout_ink(used)))).child(
-                    SharedString::from(format!("{name} {}%", (used * 100.).round() as u32)),
+            .child(
+                components::tabular(
+                    div()
+                        .text_color(rgb(TEXT_MUTED))
+                        .group_hover(key, |style| style.text_color(rgb(TEXT))),
                 )
-            })),
+                .child(SharedString::from(format!(
+                    "{window} {}%",
+                    (used * 100.).round() as u32
+                ))),
+            ),
     )
 }
 
@@ -700,8 +528,8 @@ fn caption_buttons(maximized: bool) -> Div {
 /// control, because the pointer stops at the window's corner and the hover
 /// face has to be there when it does. Full height — the buttons win the top
 /// edge from the resize border, as Windows' own do. The mark rests at
-/// `TEXT_2` (a 1px stroke at `TEXT_MUTED` is too faint on the ground) and
-/// brightens under the pointer; `close` lays the platform red under it.
+/// `TEXT_MUTED` and brightens under the pointer; `close` lays the platform
+/// red under it.
 fn button(
     id: &'static str,
     area: WindowControlArea,
@@ -753,7 +581,7 @@ fn button(
             )
         })
         .child(
-            icon(glyph, CAPTION_GLYPH, TEXT_2)
+            icon(glyph, CAPTION_GLYPH, TEXT_MUTED)
                 .group_hover(id, move |style| style.text_color(rgb(hover_ink))),
         )
 }
@@ -790,27 +618,117 @@ mod tests {
             let mut strip = strip(
                 crate::nav::WIDTH,
                 Title {
-                    project: Some("Ferrite".into()),
-                    group: Some("Group Alpha".into()),
-                    thread: None,
+                    location: Location::Group {
+                        project: Some("ferrite".into()),
+                        name: "Perf sweep".into(),
+                        members: 4,
+                        need_you: 1,
+                        branch: Some("dev".into()),
+                        failing: 0,
+                    },
                 },
-                Board {
-                    count: Some(4),
-                    fullscreen: false,
-                    need_you: 2,
-                },
-                None,
-                add_thread(
-                    add_thread_button("Add thread", Some("cmd-T"), cx),
-                    "New thread in this group",
-                    Some("cmd-T".into()),
-                ),
+                commands_door(Some("cmd-K")).into_any_element(),
                 true,
                 false,
             );
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });
+    }
+
+    /// F-10: the location reads as the prototype prints it, the title the
+    /// one strong word; `1 needs you` is singular, `2 need you` plural; a
+    /// board spanning Projects says how many fail instead of a branch.
+    #[test]
+    fn the_location_reads_as_a_terminal_prints_a_path() {
+        let text = |title: Title| {
+            title
+                .words()
+                .into_iter()
+                .map(|(word, _)| word.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let strong = |title: Title| {
+            title
+                .words()
+                .into_iter()
+                .filter(|(_, strong)| *strong)
+                .map(|(word, _)| word.to_string())
+                .collect::<Vec<_>>()
+        };
+        let solo = Title {
+            location: Location::Thread {
+                project: Some("ferrite".into()),
+                title: "Nav rows jitter on stream start".into(),
+                state: Some("done".into()),
+                branch: Some("dev".into()),
+            },
+        };
+        assert_eq!(
+            text(solo.clone()),
+            "ferrite / Nav rows jitter on stream start \u{b7} done \u{b7} dev"
+        );
+        assert_eq!(strong(solo), ["Nav rows jitter on stream start"]);
+        let group = Title {
+            location: Location::Group {
+                project: Some("ferrite".into()),
+                name: "Perf sweep".into(),
+                members: 4,
+                need_you: 1,
+                branch: Some("dev".into()),
+                failing: 1,
+            },
+        };
+        assert_eq!(
+            text(group),
+            "ferrite / Perf sweep \u{b7} 4 \u{b7} 1 needs you \u{b7} dev"
+        );
+        let wall = Title {
+            location: Location::Group {
+                project: None,
+                name: "Everything".into(),
+                members: 9,
+                need_you: 2,
+                branch: Some("dev".into()),
+                failing: 1,
+            },
+        };
+        assert_eq!(
+            text(wall),
+            "all projects / Everything \u{b7} 9 \u{b7} 2 need you \u{b7} 1 failing"
+        );
+        assert_eq!(text(Title::default()), "Ferrite");
+        assert_eq!(need_you_label(1), "1 needs you");
+        assert_eq!(need_you_label(3), "3 need you");
+    }
+
+    /// F-9: a usage segment reads the provider's more used window, the 5h
+    /// one on a tie.
+    #[test]
+    fn a_usage_segment_reads_the_more_used_window() {
+        use ferrite_core::transcript::RateLimits;
+        use ferrite_core::RateLimitWindow;
+        let window = |used: f32| {
+            Some(RateLimitWindow {
+                used_fraction: used,
+                resets_at: None,
+            })
+        };
+        let limits = |five_hour, weekly| RateLimits { five_hour, weekly };
+        assert_eq!(
+            usage_window(&limits(window(0.41), window(0.12))),
+            Some(("5h", 0.41))
+        );
+        assert_eq!(
+            usage_window(&limits(window(0.10), window(0.12))),
+            Some(("wk", 0.12))
+        );
+        assert_eq!(
+            usage_window(&limits(window(0.3), window(0.3))),
+            Some(("5h", 0.3))
+        );
+        assert_eq!(usage_window(&limits(None, None)), None);
     }
 
     /// A restored window keeps its top resize edge, which is an inset the

@@ -169,6 +169,12 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("y".into(), "cockpit::Allow", Some("Wall")),
         ("n".into(), "cockpit::Deny", Some("Wall")),
         ("a".into(), "cockpit::Always", Some("Wall")),
+        // A tile's quick answers by their digits (F-7): `1` allow, `2`
+        // allow for this thread, `3` deny — the focused waiting tile, else
+        // the one that has waited longest.
+        ("1".into(), "cockpit::PickOption1", Some("Wall")),
+        ("2".into(), "cockpit::PickOption2", Some("Wall")),
+        ("3".into(), "cockpit::PickOption3", Some("Wall")),
         // The cockpit: walk the grid, and jump to whoever needs answering.
         (with_primary("]"), "cockpit::NextPane", None),
         (with_primary("["), "cockpit::PreviousPane", None),

@@ -2,9 +2,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Solo has no head (C2): the titlebar carries the Thread on one line — the
-/// checkout, the tasks meter and the PR/CI chip ride it left to right, inside
-/// the band, and nothing spills past the window.
+/// Solo has no head (C2): the titlebar carries the Thread on one line —
+/// `project / title · state · branch` (F-10) — inside the band; the plan's
+/// meter and the PR/CI chip are palette commands now (F-11), not chrome.
 #[gpui::test]
 fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
@@ -34,24 +34,30 @@ fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
     let band = cx
-        .debug_bounds("titlebar-thread")
-        .expect("the titlebar Thread");
-    assert!(band.bottom() <= px(crate::theme::WIN_CHROME_H));
-    let branch = cx.debug_bounds("project-branch-0").expect("the checkout");
-    let meter = cx.debug_bounds("tasks-meter-1").expect("the tasks meter");
-    let ci = cx.debug_bounds("ci-mark-1").expect("the PR/CI chip");
+        .debug_bounds("titlebar-location")
+        .expect("the titlebar's location");
+    let title = cx.debug_bounds("titlebar-title").expect("the title");
     let window = cx.update(|window, _| window.viewport_size().width);
-    for (name, part) in [("checkout", branch), ("meter", meter), ("ci", ci)] {
+    for (name, part) in [("location", band), ("title", title)] {
         assert!(
             part.top() >= px(0.) && part.bottom() <= px(crate::theme::WIN_CHROME_H),
-            "the {name} rides the titlebar row: {part:?} / {band:?}"
+            "the {name} rides the titlebar row: {part:?}"
         );
-        assert!(
-            part.right() <= window,
-            "the {name} stays inside the window: {part:?}"
-        );
+        assert!(part.right() <= window, "the {name} stays inside the window");
     }
-    assert!(branch.right() < meter.left() && meter.right() < ci.left());
+    assert!(
+        cx.debug_bounds("tasks-meter-1").is_none(),
+        "no meter in the chrome"
+    );
+    assert!(
+        cx.debug_bounds("ci-mark-1").is_none(),
+        "no PR/CI chip in the chrome"
+    );
+    let location = view.read_with(cx, |view, _| view.titlebar_location(None));
+    let crate::titlebar::Location::Thread { branch, .. } = location else {
+        panic!("a Solo Thread's location");
+    };
+    assert_eq!(branch.as_deref(), Some("feat/thread-pane-header"));
 }
 
 /// Closing the last Pane leaves a board that says how to start, and the
@@ -78,7 +84,7 @@ fn the_empty_cockpit_says_how_to_start(cx: &mut TestAppContext) {
 }
 
 /// The empty board's keys come from the platform's own key table and read
-/// as glyphs: `⌘N`, `⌘⇧N`, `⌘O` (rule 2.11.4).
+/// as glyphs: `⌘N`, `⌘⇧N`, `⌘O`, `⌘G`, `⌘K` (rule 2.11.4, F-13).
 #[test]
 fn the_empty_board_spells_keys_from_the_key_table() {
     let (primary, glyph) = match crate::keymap::PLATFORM {
@@ -102,6 +108,8 @@ fn the_empty_board_spells_keys_from_the_key_table() {
         Some(format!("{glyph}\u{21e7}N"))
     );
     assert_eq!(spelled("cockpit::ReopenThread"), Some(format!("{glyph}O")));
+    assert_eq!(spelled("palette::OpenGroups"), Some(format!("{glyph}G")));
+    assert_eq!(spelled("palette::Toggle"), Some(format!("{glyph}K")));
 }
 
 // ---------------------------------------------------------------- P4 board
@@ -353,11 +361,11 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
 }
 
 /// Terminal-native (WP-A, WP-D): the Composer's `❯` hangs in the
-/// prototype's 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's edge, at
-/// L1 and L2 alike, on the same axis as the transcript's prompt `❯`. The L2
-/// tail's own marks and text keep theirs.
+/// prototype's 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's own edge
+/// (the edge is an overlay, F-1), on the same axis as the transcript's
+/// prompt `❯`.
 #[gpui::test]
-fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestAppContext) {
+fn the_composer_mark_shares_the_transcript_mark_axis(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
     let thread = core.threads()[0];
     core.send(thread, "Line the marks up".into());
@@ -376,7 +384,7 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
     let composer = cx.debug_bounds("composer-mark").unwrap();
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert!(
-        (composer.left() - px(rect.x + 1. + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
+        (composer.left() - px(rect.x + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
         "L1: {composer:?} / {rect:?}"
     );
     let mark = cx.debug_bounds("prompt-mark").unwrap();
@@ -389,41 +397,7 @@ fn the_composer_mark_shares_the_transcript_mark_axis_at_l1_and_l2(cx: &mut TestA
         (mark.left() - composer.left()).abs() <= px(1.),
         "the transcript's ❯ {mark:?} and the Composer's {composer:?} share an axis"
     );
-
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
-    tick(cx);
-    assert_eq!(
-        cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
-    );
-    let (namespace, prompt_id, answer_id) = view.read_with(cx, |view, _| {
-        let blocks = view.cockpit.thread(thread).unwrap().transcript().blocks();
-        (view.panes[0].text_namespace(), blocks[0].id, blocks[1].id)
-    });
-    let mark = cx.debug_bounds("composer-mark").unwrap();
-    let row = bounds(cx, format!("l2-tail-row-{namespace}-{prompt_id:?}"));
-    let cell = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!(
-        (mark.left() - px(cell.x + 1. + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
-        "L2: {mark:?} / {cell:?}"
-    );
-    let text = bounds(cx, format!("l2-tail-text-{namespace}-{answer_id:?}"));
-    assert!(
-        (text.left() - (row.left() + px(crate::theme::GUTTER_W))).abs() <= px(0.5),
-        "tail text at C1: {text:?} / {row:?}"
-    );
-    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!(
-        (row.left() - px(rect.x + 1. + crate::theme::PANE_PAD_X)).abs() <= px(0.5),
-        "the tail's marks sit at PANE_PAD_X: {row:?} / {rect:?}"
-    );
-    // Whole lines only, never half a line under the rule.
-    let prose = bounds(cx, format!("l2-tail-row-{namespace}-{answer_id:?}"));
-    assert_eq!(
-        (f32::from(prose.size.height) / crate::theme::LH_UI).fract(),
-        0.,
-        "{prose:?}"
-    );
+    let _ = thread;
 }
 
 /// The expand and approve keys still reach a board cell once the head's
@@ -528,18 +502,21 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
     assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
 }
 
-/// C6: with two cells waiting on a board, only the cell `y` would answer
-/// shows the keys, and `y` answers exactly that cell.
+/// F-7: at the wall every waiting tile shows its quick answers, the digit
+/// dim on each (`1 allow` `2 always` `3 deny`); with the focused tile not
+/// waiting, `1` answers the tile that has waited longest, and focus stays
+/// where the operator left it.
 #[gpui::test]
-fn only_the_answer_target_cell_shows_its_keys_and_y_answers_it(cx: &mut TestAppContext) {
+fn the_wall_digits_answer_the_oldest_waiting_tile(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board("board-answer-target", 12, cx);
     assert_eq!(
         cx.update(|window, cx| view.read(cx).level_now(window)),
-        Level::Instruments
+        Level::Wall
     );
     fake.streams.borrow()[1]
         .send(decision("first-wait"))
         .unwrap();
+    tick(cx);
     fake.streams.borrow()[2]
         .send(decision("second-wait"))
         .unwrap();
@@ -548,74 +525,42 @@ fn only_the_answer_target_cell_shows_its_keys_and_y_answers_it(cx: &mut TestAppC
         cx.notify();
     });
     tick(cx);
-    let (target, keyed) = view.update_in(cx, |view, window, cx| {
-        let target = view.key_target().expect("a Thread waits");
-        let keyed: Vec<_> = (0..view.panes.len())
-            .filter(|index| {
-                view.decide_keycaps(*index, Level::Instruments, window, cx)
-                    .is_some()
-            })
-            .filter_map(|index| view.panes[index].thread())
-            .collect();
-        (target, keyed)
+    let waiting = view.read_with(cx, |view, _| {
+        [
+            view.panes[1].thread().unwrap(),
+            view.panes[2].thread().unwrap(),
+        ]
     });
-    assert_eq!(keyed, [target], "the keys show on the target's cell alone");
-    let target_rect = view.update_in(cx, |view, window, _| {
-        let index = view.pane_for(target).unwrap();
-        view.pane_rects(window)
-            .into_iter()
-            .find(|(at, _)| *at == index)
-            .unwrap()
-            .1
-    });
-    let deny = cx.debug_bounds("decision-deny").expect("the target's n");
-    assert!(
-        deny.left() >= px(target_rect.x)
-            && deny.right() <= px(target_rect.x + target_rect.w)
-            && deny.top() >= px(target_rect.y)
-            && deny.bottom() <= px(target_rect.y + target_rect.h),
-        "{deny:?} sits in the target cell {target_rect:?}"
-    );
-    let expected = view.read_with(cx, |view, _| {
-        view.cockpit
-            .thread(target)
-            .unwrap()
-            .pending()
-            .unwrap()
-            .id
-            .clone()
-    });
-    // ⌘D lands on the answer target; its keys stay on that one cell.
-    cx.simulate_keystrokes("cmd-d");
-    tick(cx);
-    let keyed = view.update_in(cx, |view, window, cx| {
-        (0..view.panes.len())
-            .filter(|index| {
-                view.decide_keycaps(*index, Level::Instruments, window, cx)
-                    .is_some()
-            })
-            .filter_map(|index| view.panes[index].thread())
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(keyed, [target], "focus on the target keeps one keyed cell");
-    cx.simulate_keystrokes("y");
+    for thread in waiting {
+        for word in ["allow", "always", "deny"] {
+            let id: &'static str = format!("wall-answer-{}-{word}", thread.get()).leak();
+            assert!(
+                cx.debug_bounds(id).is_some(),
+                "every waiting tile offers {word}"
+            );
+        }
+    }
+    cx.simulate_keystrokes("1");
     tick(cx);
     assert!(
         matches!(
             fake.answered.borrow().last(),
-            Some((id, DecisionAnswer::Allow { .. })) if *id == expected
+            Some((id, DecisionAnswer::Allow { .. })) if id == "first-wait"
         ),
-        "y answered the cell that showed it: {:?}",
+        "1 allowed the tile that waited longest: {:?}",
         fake.answered.borrow()
     );
-    assert_eq!(fake.answered.borrow().len(), 1);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.focused(), 0, "and answering did not move the operator")
+    });
 }
 
 /// Rule 2.8.7: at the group9 geometry a waiting L1 cell's Decision claims
 /// its natural height — `n Deny` sits whole inside the block.
 #[gpui::test]
 fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
-    let (view, fake, cx, _group) = board("board-deny-whole", 9, cx);
+    // 4 on the board: 9 are wall tiles since R12.
+    let (view, fake, cx, _group) = board("board-deny-whole", 4, cx);
     assert_eq!(
         cx.update(|window, cx| view.read(cx).level_now(window)),
         Level::Transcript
@@ -820,71 +765,98 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
     });
 }
 
-/// Fix 3: the Solo titlebar says `needs you` once. The Thread's own state
-/// word (`needs you · question`, the ⌘D door) stands, and the band's
-/// `· N need you` count does not repeat it; on a board, where no Thread
-/// rides the band, the count is still there.
+/// F-10: the Solo titlebar says `needs you` once — the Thread's own state
+/// word — and counts nobody (the count is a board's); a board's titlebar
+/// counts who on it needs you: `1 needs you`, `2 need you`.
 #[gpui::test]
 fn the_solo_titlebar_says_needs_you_once(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("needs-you-once", 1);
     bind_production_keys(cx);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     fake.streams.borrow()[0].send(question("once")).unwrap();
     tick(cx);
+    let words: Vec<String> = view.read_with(cx, |view, _| {
+        crate::titlebar::Title {
+            location: view.titlebar_location(None),
+        }
+        .words()
+        .into_iter()
+        .map(|(word, _)| word.to_string())
+        .collect()
+    });
     assert!(
-        cx.debug_bounds("titlebar-needs-you").is_some(),
-        "the Thread's state word says needs you"
+        words.iter().any(|word| word.starts_with("needs you")),
+        "the Thread's state word says needs you: {words:?}"
     );
     assert!(
-        cx.debug_bounds("titlebar-need-you").is_none(),
-        "and the count does not say it again"
+        !words.iter().any(|word| word.ends_with("need you")),
+        "and no count says it again: {words:?}"
     );
 }
 
 #[gpui::test]
 fn a_board_titlebar_keeps_its_need_you_count(cx: &mut TestAppContext) {
-    let (_view, fake, cx, _group) = board("need-you-count", 2, cx);
+    let (view, fake, cx, _group) = board("need-you-count", 2, cx);
     fake.streams.borrow()[1].send(decision("count")).unwrap();
     tick(cx);
-    assert!(cx.debug_bounds("titlebar-need-you").is_some());
-    assert!(cx.debug_bounds("titlebar-needs-you").is_none());
+    let words = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            crate::titlebar::Title {
+                location: view.titlebar_location(None),
+            }
+            .words()
+            .into_iter()
+            .map(|(word, _)| word.to_string())
+            .collect::<Vec<_>>()
+        })
+    };
+    assert!(
+        words(&view, cx).contains(&"1 needs you".to_string()),
+        "one waiting reads singular: {:?}",
+        words(&view, cx)
+    );
+    fake.streams.borrow()[0].send(decision("count-2")).unwrap();
+    tick(cx);
+    assert!(
+        words(&view, cx).contains(&"2 need you".to_string()),
+        "two read plural: {:?}",
+        words(&view, cx)
+    );
 }
 
-/// Q6 (the operator's ruling): on a board a waiting cell's edge is
-/// `ATTENTION_EDGE`, ochre at 35%, and the single answer-target cell alone
-/// wears full `ATTENTION`; in Solo no state recolours the edge — the docked
-/// Decision carries it.
+/// F-2: one attention edge. On a board every waiting cell draws
+/// `ATTENTION_EDGE` (ochre at 75%) on all four sides — the one it would
+/// answer included, so no cell wears full ink — and in Solo no state
+/// recolours the edge.
 #[gpui::test]
-fn one_answer_target_wears_full_ink_and_solo_wears_no_state_edge(cx: &mut TestAppContext) {
+fn every_waiting_cell_wears_one_attention_edge_and_solo_none(cx: &mut TestAppContext) {
     assert_eq!(
         crate::theme::ATTENTION_EDGE,
-        (crate::theme::ATTENTION << 8) | 0x59,
-        "the waiting edge is ATTENTION itself"
+        (crate::theme::ATTENTION << 8) | 0xbf,
+        "the waiting edge is ATTENTION itself, at 75%"
     );
-    assert_eq!((0.35_f32 * 255.).round() as u32, 0x59, "at 35% alpha");
     let (view, fake, cx, _group) = board("edge-answer-target", 4, cx);
     fake.streams.borrow()[1].send(decision("edge-1")).unwrap();
     fake.streams.borrow()[2].send(decision("edge-2")).unwrap();
     tick(cx);
-    let (target, waiting) = view.read_with(cx, |view, _| {
-        (
-            view.key_target().expect("a Thread waits"),
-            [
-                view.panes[1].thread().unwrap(),
-                view.panes[2].thread().unwrap(),
-            ],
-        )
+    let waiting = view.read_with(cx, |view, _| {
+        [
+            view.panes[1].thread().unwrap(),
+            view.panes[2].thread().unwrap(),
+        ]
     });
     for thread in waiting {
-        let full = cx
-            .debug_bounds(format!("pane-answer-edge-{}", thread.get()).leak())
-            .is_some();
-        let alpha = cx
-            .debug_bounds(format!("pane-waiting-edge-{}", thread.get()).leak())
-            .is_some();
-        assert_eq!(full, thread == target, "only the answer target is full ink");
-        assert_eq!(alpha, thread != target, "every other waiting cell is alpha");
+        assert!(
+            cx.debug_bounds(format!("pane-waiting-edge-{}", thread.get()).leak())
+                .is_some(),
+            "every waiting cell wears the edge"
+        );
+        assert!(
+            cx.debug_bounds(format!("pane-answer-edge-{}", thread.get()).leak())
+                .is_none(),
+            "and none wears full ink"
+        );
     }
 
     let (core, fake) = cockpit("edge-solo", 1);
@@ -895,13 +867,11 @@ fn one_answer_target_wears_full_ink_and_solo_wears_no_state_edge(cx: &mut TestAp
         .unwrap();
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
-    for edge in ["pane-answer-edge", "pane-waiting-edge"] {
-        assert!(
-            cx.debug_bounds(format!("{edge}-{}", thread.get()).leak())
-                .is_none(),
-            "Solo draws no {edge}"
-        );
-    }
+    assert!(
+        cx.debug_bounds(format!("pane-waiting-edge-{}", thread.get()).leak())
+            .is_none(),
+        "Solo draws no waiting edge"
+    );
 }
 
 /// Fix 5: the attachment shelf belongs to the live Composer. A file

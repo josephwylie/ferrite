@@ -1335,53 +1335,68 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // (end WP-B) — append above this line only
 
 // ======================================== WP-C · pane frame, levels, board, titlebar
-// Owner: WP-C (the pane shell, head, L2/wall cells, board, seams, titlebar.)
+// Owner: WP-C (the pane shell, head, wall tiles, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
 // **The board is a terminal multiplexer's** (theme rules 2, 3, 7). The window
 // is three rows: the titlebar band (`WIN_CHROME_H`), the board beside the
 // sidebar, the bottom bar (`STATUS_BAR_H`). Panes sit flush, square and
 // flat on the reading plane (`paint::PLANE`), split by `BOARD_SEAM` 1px
-// `paint::LINE` seams; there is no gutter and no card. The sidebar column
-// is separated from the board by one `CHROME_SEAM_W` column
-// (`paint::CHROME_SEAM`). A seam is also the grab band that resizes its two
-// sides; under the pointer and while held its line takes the accent.
+// `paint::LINE` seams; there is no gutter and no card. The sidebar owns the
+// one `CHROME_SEAM_W` column between it and the board, and the board's left
+// edge rides the sidebar's width every frame while cmd-B folds it
+// (`motion::RESIZE`). A seam is also the 9px grab band (`SEAM_GRAB` in the
+// cockpit) that resizes its two sides, clamped to 22–78% of the board; a
+// default grid's aligned seams are one line that drags as one, and under
+// the pointer and while held the whole line takes the accent, fading in
+// over `MOTION_SEAM_FADE_MS`.
 //
-// **The Pane frame.** Every Pane keeps a 1px edge inside its own box that is
-// always in layout and only changes colour, so a state change reflows
-// nothing. By precedence (`pane::PaneEdge`): blocked `BLOCKED_EDGE` > a
-// Decision `ATTENTION_EDGE` (the one answer target full `ATTENTION`) >
-// focused `FOCUS_RING` > at rest `TRANSPARENT` — the seams separate Panes, an
-// edge only ever says something. Focus is drawn only while more than one
-// Pane is on the board; a focused alert Pane also draws the `FOCUS_RING`
-// inset 2px inside its state edge. Nothing breathes: an unread Thread's
-// title is `TEXT_STRONG`.
+// **The Pane frame.** A Pane's content starts at its own edges; its 1px
+// edge is an overlay laid over them (the prototype's `.pane::after`), so a
+// state change reflows nothing. By precedence (`pane::PaneEdge`): a
+// waiting Pane `ATTENTION_EDGE` on every side, focused or not (focus then
+// shows in its head ground and title) > focused `FOCUS_RING` > at rest
+// `TRANSPARENT` — the seams separate Panes, an edge only ever says
+// something. Focus is drawn only while more than one Pane is on the board.
+// Every Pane root is the `pane::PANE_GROUP` hover group.
 //
 // **Solo has no head**: the titlebar carries the Thread (`ferrite / title ·
 // state · branch`) and the body starts at the plane's top edge.
 //
-// **The Group head is one row** (`PANE_HEAD_H`, a row and 4px) at every tier,
-// closed by a `paint::LINE` rule: the state dot in a 2-cell column
-// (`HEAD_DOT_W`; a working Thread's dot is the braille spinner), the title
-// at `W_LABEL` (`TEXT`, `TEXT_STRONG` when focused or unread), the provider
-// mark at the right. **No state word and no number rides a head** (rule 7):
-// state reads at the Pane's foot. The focused Pane's head lays the
-// `paint::HEAD` band. A draft carries its × at the right instead.
+// **The Group head is one row** (`PANE_HEAD_H`, a row and 4px, its rule
+// inside it) at every size: the state dot the size of the face's `●` in
+// the first cell of a 2-cell column (`HEAD_DOT_W`; a working Thread's is
+// the braille spinner, `HEAD_SPINNER_LEFT`), the title at `W_LABEL` —
+// `TEXT`, `TEXT_STRONG` on the focused Pane only — and the provider's
+// `PROVIDER_MARK_SM` mark a cell after it, a cell in from the edge. **No
+// state word and no number rides a head** (rule 7): state reads at the
+// Pane's foot. The focused Pane's head lays the `paint::HEAD` band. A
+// draft carries its × at the right instead.
 //
-// **One Level per board** (rule 2.3.5): the default Group tree is the
-// aspect-aware grid (`layout::Tree::grid`), and every Pane on a board draws
-// at the smallest Level its cells allow, with `LEVEL_HYSTERESIS`. At the
-// wall (L3) a tile is the head, its state word at the strong weight in its
-// colour, the last lines of its transcript dim and, while it waits, quick
-// answers boxed in `paint::LINE2`; no meter, no sparkline.
+// **Two altitudes** (R12): a Pane reads its transcript from 300px wide and
+// 360px tall (`docview::Level::for_cell`); smaller, it is a wall tile. One
+// Level per board (rule 2.3.5), with `LEVEL_HYSTERESIS`. A tile is the
+// head, its state word at the strong weight in its colour, half a row, its
+// last `WALL_LINES` lines — one `TEXT_MUTED` run each, glyph included —
+// and, while it waits, quick answers boxed in `paint::LINE2`; no meter, no
+// sparkline.
 //
 // **The window chrome.** The titlebar's right cell lies on the plane: the
-// location dim with the title the one strong word, and the trailing door
-// (`⌘T new thread`) dim at the right; no rule closes the band. The bottom
-// bar (`STATUS_BAR_H`) lies on the chrome under a `paint::LINE` rule: the
-// session in `ACCENT` at the strong weight, a tab per view (the current one
-// `TEXT_STRONG` on `paint::BAND2`), the provider usage and the clock. No
-// state counts in either.
+// location dim with the title the one strong word (`ferrite / Perf sweep ·
+// 4 · 1 needs you · dev`), and the one trailing door, `⌘K commands`, dim at
+// the right; no rule closes the band, and no build badge. The bottom bar
+// (`STATUS_BAR_H`) lies on the chrome under a `paint::LINE` rule: the
+// session in `ACCENT` at the strong weight, `1 solo` and a tab per Group
+// (the current view's `TEXT_STRONG` on `paint::BAND2`), each provider's
+// usage behind its mark, and the clock. No state counts in either.
+//
+// **Text rasterisation** (F-17). The prototype's glyphs are greyscale with
+// no stem darkening (`-webkit-font-smoothing: antialiased`); gpui-pre-macos
+// thickens light ink on dark ground whenever `AppleFontSmoothing` is not an
+// explicit 0 for the app, read once per process. `platform_text::
+// disable_font_smoothing` sets it to 0 in the app's own domain before the
+// first glyph (from `main`, and from a scene before its first render), so
+// `done`, titles and the state words carry the prototype's weight.
 
 /// The Windows caption buttons (`titlebar.rs`), which exist only where the
 /// app draws its own titlebar. 46px is the width Windows gives each of its
@@ -1411,15 +1426,12 @@ pub const TITLE_GAP: f32 = CH;
 /// The titlebar's right cell (over the board) holds its words two cells in
 /// from either edge, the transcript's own gutter.
 pub const TITLE_PAD_X: f32 = 2.0 * CH;
-/// The Project's floor in a narrow titlebar: it truncates after the branch
-/// but keeps a few letters, so the `/` never stands alone.
-pub const TITLE_PROJECT_MIN_W: f32 = 48.0;
-/// The titlebar's trailing door (`⌘T new thread`): dim words on the plane,
-/// no box, a cell of padding each side and a cell between key and verb.
-pub const TITLE_ADD_PAD_X: f32 = CH;
-pub const TITLE_ADD_GAP: f32 = CH;
-/// The smallest window the chrome still lays out in: the nav plus one Pane
-/// at L2, the title, the add control and the Windows caption group.
+/// The titlebar's one trailing door (`⌘K commands`): dim words on the
+/// plane, no box, a cell between the chord and its word, ending
+/// `TITLE_PAD_X` in from the window's edge.
+pub const TITLE_DOOR_GAP: f32 = CH;
+/// The smallest window the chrome still lays out in: the nav plus one wall
+/// tile, the title, the door and the Windows caption group.
 pub const WINDOW_MIN_W: f32 = 640.0;
 pub const WINDOW_MIN_H: f32 = 420.0;
 
@@ -1441,15 +1453,17 @@ pub const CHROME_SEAM_W: f32 = 1.0;
 pub const PANE_HEAD_H: f32 = ROW + SPACE_1;
 /// A head's inline inset: one cell.
 pub const HEAD_PAD_X: f32 = CH;
-/// The head's dot column: two cells, the dot (or the braille spinner)
-/// centred in a `GLYPH_BOX` at its left.
+/// The head's dot column: two cells, the dot centred in the first (where
+/// the face's `●` would sit).
 pub const HEAD_DOT_W: f32 = 2.0 * CH;
+/// Where a working head's braille spinner box sits in the dot column: its
+/// first dot (3.35 into the `GLYPH_BOX` frame, `braille-*.svg`) lands at
+/// the Pane's left + 9.5, where the prototype's typed `⠋` starts.
+pub const HEAD_SPINNER_LEFT: f32 = 9.5 - HEAD_PAD_X - 3.35;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
 pub const HEAD_TITLE_MIN_W: f32 = 96.0;
-/// Between the head's title and its provider mark (or a draft's ×).
-pub const HEAD_GAP: f32 = CH;
 /// Between the tab strip's tabs and the plan's meter at its right.
 pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
 /// The tasks meter: 6 × 3 segments, 1px radius, 2px apart (an 8px pitch).
@@ -1462,7 +1476,7 @@ pub const METER_SEG_CAP: usize = 12;
 pub const METER_TRACK_W: f32 = 48.0;
 /// Between the meter and its `3/4` count.
 pub const METER_GAP: f32 = CH;
-/// The checks card the head's PR/CI chip opens (#29): wide enough for a
+/// The checks card (`open_checks`, a palette command): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
 pub const CHECKS_CARD_W: f32 = 312.0;
@@ -1479,16 +1493,26 @@ pub const CHECKS_ROW_H: f32 = MENU_ROW_H;
 /// heading itself is the menu section title (`MENU_SECTION_H`).
 pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
-/// The wall tile's body (L3): half a row above and below, two cells in.
+/// The wall tile's body: half a row above and below, two cells in.
 pub const WALL_PAD_Y: f32 = HALF_ROW;
 pub const WALL_PAD_X: f32 = 2.0 * CH;
-/// How many of a tile's last transcript lines it shows, dim, under its
-/// state word.
+/// How many rows of a tile's last transcript lines it shows, dim, under its
+/// state word (a wrapped prose line spends two).
 pub const WALL_LINES: usize = 3;
-/// A quick answer at the wall: words in a 1px `paint::LINE2` box, a cell of
-/// padding each side, a cell between boxes, half a row above the row.
+/// A quick answer at the wall: `1 allow` in a 1px `paint::LINE2` box 22px
+/// tall outside (one line and its two borders), a cell of padding each
+/// side, a cell between boxes, half a row above the row.
+pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
 pub const QUICK_ANSWER_PAD_X: f32 = CH;
 pub const QUICK_ANSWER_GAP: f32 = CH;
+
+/// The reader beside a Pane (`cockpit/beside.rs`): line numbers in a
+/// 6-cell column, right-aligned, two cells before the code.
+pub const READER_NUMBER_W: f32 = 6.0 * CH;
+pub const READER_NUMBER_GAP: f32 = 2.0 * CH;
+/// The share of a Pane's slot a reader opening beside it takes, and how
+/// far a drag can take the seam between them (the board's 22–78%).
+pub const READER_SHARE: f32 = 0.5;
 
 /// A dragged Pane's drop wash: `DROP_WASH` ground, `ACCENT_EDGE` edge,
 /// square; its label is a float tag one row high, a cell padded.
@@ -1507,16 +1531,17 @@ pub const EMPTY_PAD_Y: f32 = 2.0 * ROW;
 pub const EMPTY_PAD_X: f32 = 4.0 * CH;
 pub const EMPTY_BANNER_GAP: f32 = 3.0 * CH;
 pub const EMPTY_MARK_H: f32 = 3.0 * ROW;
-/// A command row: the `❯` column, the verb's 30 cells, the key's 10.
+/// A command row (fit-content): the `❯` column, the verb's 30 cells, the
+/// key's 10 right-aligned, a cell of padding after it.
 pub const EMPTY_VERB_W: f32 = 30.0 * CH;
 pub const EMPTY_KEY_W: f32 = 10.0 * CH;
-/// A recent row: the dot's two cells, the title's 44, the project's 14,
-/// the age's 6.
+/// A recent row (fit-content, 68 cells under the hover band): two cells of
+/// air, the dot's two, the title's 44, the project's 14, the age's 6.
 pub const EMPTY_RECENT_TITLE_W: f32 = 44.0 * CH;
 pub const EMPTY_RECENT_PROJECT_W: f32 = 14.0 * CH;
 pub const EMPTY_RECENT_AGE_W: f32 = 6.0 * CH;
-/// How many recent Threads the empty board lists.
-pub const EMPTY_RECENT_MAX: usize = 5;
+/// How many recent Threads the empty board lists (R13).
+pub const EMPTY_RECENT_MAX: usize = 4;
 
 /// The bottom bar's segments (session, tabs, usage, clock): a cell of
 /// padding each side, the full bar's height.
@@ -2058,7 +2083,7 @@ pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 //   working line's glyph spinner (`MOTION_WORKING_FRAME_MS`) and its
 //   caption's shimmer (`MOTION_SHIMMER_MS`) on the focused Pane, and the
 //   focused Composer's caret blink (`MOTION_CARET_BLINK_MS`). No dot pulses
-//   or breathes: `MOTION_BREATH_MS` is legacy.
+//   or breathes.
 // - **Interruptible.** A state the operator can flip back (a hover, a
 //   chevron) retargets from where it is, never restarts.
 // - **No entrance on first paint.** Only a change the operator watched
@@ -2076,7 +2101,8 @@ pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 /// CSS `transition-colors`' default curve: every hover blend.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
-/// CSS `ease-out`: the sidebar's width and the Parked fold.
+/// CSS `ease-out`: the Parked fold. (The sidebar's width rides CSS `ease`,
+/// the prototype's `grid-template-columns .2s ease`.)
 pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
@@ -2085,10 +2111,13 @@ pub const MOTION_ROW_IN_MS: u64 = 180;
 /// while rising `MOTION_FADE_IN_RISE` into place.
 pub const MOTION_FADE_IN_MS: u64 = 500;
 pub const MOTION_FADE_IN_RISE: f32 = 4.0;
-/// The sidebar's width between column and rail (cmd-B), and the Parked
-/// fold growing open under its header.
+/// The sidebar's width between column and rail (cmd-B) — the board's
+/// width rides it every frame — and the Parked fold growing open under its
+/// header.
 pub const MOTION_RESIZE_MS: u64 = 200;
 pub const MOTION_COLLAPSE_MS: u64 = 180;
+/// A board seam's accent line fading in under the pointer: 120ms.
+pub const MOTION_SEAM_FADE_MS: u64 = 120;
 /// Where the sidebar's content fades up from while its width moves.
 pub const MOTION_NAV_CONTENT_FROM: f32 = 0.35;
 /// `fade-quick`: 150ms, opacity only.
@@ -2110,10 +2139,6 @@ pub const MOTION_SLOT_SHIFT: f32 = 6.0;
 pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
-/// 2.4s — the one breath (rule 2.10.3): unread breathing on a head dot
-/// reads `motion::pulse_phase` on this period, so every breathing dot on
-/// screen shares one ~30fps tick. Held at its start under reduced motion.
-pub const MOTION_BREATH_MS: u64 = 2_400;
 /// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
 pub const MOTION_TOAST_IN_MS: u64 = 180;
 pub const MOTION_TOAST_OUT_MS: u64 = 100;

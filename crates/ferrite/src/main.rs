@@ -23,6 +23,7 @@ mod motion;
 mod nav;
 mod notifications;
 mod pane;
+mod platform_text;
 mod pointer;
 mod prefs;
 mod project_editor;
@@ -104,6 +105,9 @@ pub(crate) fn register_fonts(cx: &App) {
 }
 
 fn main() {
+    // Before the first glyph is rasterised (gpui caches the answer once):
+    // greyscale text with no stem darkening, as the prototype is drawn.
+    platform_text::disable_font_smoothing();
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-reference") {
         cockpit::visual_reference::capture(
