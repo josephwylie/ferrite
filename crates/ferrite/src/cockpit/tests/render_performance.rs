@@ -323,6 +323,9 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     std::fs::write(&file, "guide\n").unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    // The column stays open, so the narrowest window below leaves the Pane
+    // narrower than the line (folded, the nav gives the board its width).
+    hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(600.)));
 
     // Short enough to sit on one line of the 720px reading column.
@@ -1296,9 +1299,11 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
         cx.debug_bounds("progress-mark-live").is_some(),
         "the premise: a working mark is on screen"
     );
+    // The nav pulses no dot now (theme rule 8): unread is ink. The loop it
+    // keeps is a working Thread's braille spinner, on the same clock.
     assert!(
-        cx.debug_bounds("breathing-dot").is_some(),
-        "the premise: an unread dot breathes"
+        cx.debug_bounds("braille-spinner").is_some(),
+        "the premise: a working Thread's spinner turns in the nav"
     );
     let before = cx.update(|_, _| crate::motion::testing::pulse_ticks());
     let step = Duration::from_millis(11);
@@ -1349,7 +1354,7 @@ fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestApp
     assert!(display_frames(cx) > 0, "a moving column asks for frames");
     let mid = nav_column_width(cx);
     assert!(
-        mid < nav::WIDTH && mid > nav::RAIL_WIDTH,
+        mid < nav::WIDTH && mid > nav::FOLDED_WIDTH,
         "mid-flight at 100ms: {mid}"
     );
 
@@ -1380,7 +1385,7 @@ fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     settle(cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.run_until_parked();
-    assert_eq!(nav_column_width(cx), nav::RAIL_WIDTH);
+    assert_eq!(nav_column_width(cx), nav::FOLDED_WIDTH);
     assert_eq!(display_frames(cx), 0);
 }
 

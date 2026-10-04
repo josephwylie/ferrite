@@ -164,57 +164,51 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     view.read_with(cx, |view, _| assert!(view.popover.is_none()));
 }
 
+/// Folded (cmd-B), the column draws nothing and the board takes the width;
+/// the titlebar cell keeps the traffic lights' reserve, then the sidebar
+/// toggle, the bell and Settings in that order, and the toggle opens the
+/// column again (the prototype's collapsed titlebar).
 #[gpui::test]
-fn a_short_collapsed_rail_scrolls_to_every_thread_without_moving_its_utilities(
-    cx: &mut TestAppContext,
-) {
-    let (core, _fake) = cockpit("short-collapsed-rail", 14);
+fn a_folded_nav_keeps_its_doors_in_the_titlebar_cell(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("folded-nav-doors", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(640.), px(500.)));
+    cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
 
-    let last = view.read_with(cx, |view, _| {
-        view.nav_state().ordered_rows().last().unwrap().thread
-    });
-    let selector = format!("nav-rail-item-{}", last.get());
-    let viewport = cx.debug_bounds("nav-rail-items").unwrap();
-    let before = bounds(cx, selector.clone());
-    let new_thread = cx.debug_bounds("rail-add-thread").unwrap();
+    let first = view.read_with(cx, |view, _| view.nav_state().ordered_rows()[0].thread);
+    let row: &'static str = format!("nav-thread-{}", first.get()).leak();
+    assert!(
+        cx.debug_bounds(row).is_none(),
+        "folded, the column draws no rows"
+    );
+    assert_eq!(
+        cx.debug_bounds("nav-column").unwrap().size.width,
+        px(nav::FOLDED_WIDTH)
+    );
+    let cell = cx.debug_bounds("nav-chrome").unwrap();
+    assert!((cell.size.width - px(crate::theme::NAV_CHROME_FOLDED_W)).abs() < px(1.));
+    let toggle = bounds(cx, "nav-collapse".to_string());
     let bell = cx.debug_bounds("notifications-bell").unwrap();
     let settings = cx.debug_bounds("settings-gear").unwrap();
     assert!(
-        before.top() >= viewport.bottom(),
-        "the last Thread needs scrolling"
+        toggle.left() >= px(crate::theme::NAV_CHROME_LEAD),
+        "clear of the traffic lights"
     );
-    assert!(new_thread.bottom() <= viewport.top());
-    assert!(viewport.bottom() <= bell.top());
-    assert!(settings.bottom() <= px(500.));
-
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: viewport.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
-        modifiers: gpui::Modifiers::none(),
-        touch_phase: gpui::TouchPhase::default(),
-    });
-    cx.run_until_parked();
-
-    let after = bounds(cx, selector);
     assert!(
-        after.top() >= viewport.top() && after.bottom() <= viewport.bottom(),
-        "the last Thread's entire target is reachable: {after:?} in {viewport:?}"
+        toggle.right() <= bell.left() + px(0.5) && bell.right() <= settings.left() + px(0.5),
+        "toggle, bell, Settings: {toggle:?} {bell:?} {settings:?}"
     );
-    assert_eq!(
-        after.size, before.size,
-        "scrolling never compresses an avatar"
-    );
-    assert_eq!(cx.debug_bounds("rail-add-thread").unwrap(), new_thread);
-    assert_eq!(cx.debug_bounds("notifications-bell").unwrap(), bell);
-    assert_eq!(cx.debug_bounds("settings-gear").unwrap(), settings);
+    assert!(settings.right() <= cell.right());
+    for door in [toggle, bell, settings] {
+        assert!(door.bottom() <= px(crate::theme::WIN_CHROME_H));
+    }
 
-    cx.simulate_click(after.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().focused_thread(), Some(last));
-    });
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(!view.read_with(cx, |view, _| view.nav_railed()));
+    assert!(
+        cx.debug_bounds(row).is_some(),
+        "open again, the rows are back"
+    );
 }
