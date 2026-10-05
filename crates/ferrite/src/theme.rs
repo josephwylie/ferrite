@@ -237,9 +237,13 @@ pub const PLANE_GLASS: u32 = 0x1a1a1bf0;
 /// `#242425` — chrome, lifted off the plane: the sidebar, the titlebar cell
 /// over it, the bottom bar.
 pub const CHROME: u32 = 0x242425;
-/// Chrome as glass: thin, 72%.
+/// Chrome as glass, 88%. The window's blur shows whatever sits behind
+/// Ferrite — other windows included — so a bright window behind turned a
+/// 72% sidebar light grey (sampled #5f5f60) and its muted ink fell to 2.8:1.
+/// At 88% the chrome stays dark over pure white (≈#3e3e40), keeping
+/// `CHROME_MUTED` above 4.5:1, and still takes a tint of what is behind.
 #[allow(dead_code)]
-pub const CHROME_GLASS: u32 = 0x242427b8;
+pub const CHROME_GLASS: u32 = 0x242427e0;
 /// `#242425` — the focused Pane's head band: chrome's value, on the plane.
 #[allow(dead_code)]
 pub const HEAD: u32 = 0x242425;
@@ -2615,7 +2619,7 @@ mod tests {
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         let near = |a: f32, b: f32| (a - b).abs() < 0.01;
         assert!(near(alpha(PLANE_GLASS), 0.94));
-        assert!(near(alpha(CHROME_GLASS), 0.72));
+        assert!(near(alpha(CHROME_GLASS), 0.88), "dark enough over a white window behind");
         assert!(near(alpha(BAND_GLASS), 0.80));
         assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");
         for (overlay, opacity) in [
