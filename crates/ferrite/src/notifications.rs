@@ -387,9 +387,7 @@ pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::B
     .h(px(ICON_BUTTON_H))
     .p_0()
     .accessibility_label("Notifications")
-    .child(
-        icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph),
-    )
+    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
     .when(requests > 0, |door| door.child(badge(requests)))
 }
 

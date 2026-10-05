@@ -86,7 +86,10 @@ fn the_decision_row_reads_head_band_options_hint(cx: &mut TestAppContext) {
         near(head.size.height, line),
         "the head is one row: {head:?}"
     );
-    assert!(near(mark.left(), head.left()), "◆ typed at the gutter's origin");
+    assert!(
+        near(mark.left(), head.left()),
+        "◆ typed at the gutter's origin"
+    );
     assert!(
         near(well.top() - head.bottom(), half),
         "{head:?} / {well:?}"

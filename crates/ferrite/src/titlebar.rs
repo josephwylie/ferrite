@@ -393,7 +393,7 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, usage: Vec<AnyElement>, clock: SharedSt
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(LH_UI))
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(CHROME_MUTED))
         .whitespace_nowrap()
         .overflow_hidden()
         .child(
@@ -486,7 +486,7 @@ pub fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'
 }
 
 /// One provider's usage segment (F-9): its 11px mark, a cell, and its more
-/// used window (`5h 41%`), a cell of padding each side, `TEXT_MUTED` —
+/// used window (`5h 41%`), a cell of padding each side, `CHROME_MUTED` —
 /// `TEXT` on `paint::HOVER` under the pointer. `None` when the provider has
 /// reported no window.
 pub fn bar_usage(
@@ -515,7 +515,7 @@ pub fn bar_usage(
             .child(icon(glyph, BAR_MARK, ink))
             .child(components::tabular(
                 components::cells(format!("{window} {}%", (used * 100.).round() as u32))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(CHROME_MUTED))
                     .group_hover(key, |style| style.text_color(rgb(TEXT))),
             )),
     )

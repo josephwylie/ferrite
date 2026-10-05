@@ -27,7 +27,7 @@
 //! its Pane head and in the palette's context column.
 //!
 //! Colour is state, carried by the dot alone; every right-hand word is
-//! `TEXT_MUTED`. The selection is `paint::SELECTION` on the row of what the
+//! `CHROME_MUTED`. The selection is `paint::SELECTION` on the row of what the
 //! board shows — the Group being viewed, or the Solo Thread — with the `❯`
 //! and a `TEXT_STRONG` title; hover is `paint::HOVER`, reaching full in
 //! 80ms, and the pointer stays the arrow. One thing moves: a working
@@ -232,7 +232,7 @@ pub struct ThreadRow {
 /// Session `failed`; a working Thread its live elapsed time (`1m04s`,
 /// `12s`, never coarsened); a finished turn `done`; otherwise the age, once
 /// it reaches a minute (`facts::since_label` says nothing before that).
-/// Never `now`. Every one is `TEXT_MUTED`: the dot carries the colour (the
+/// Never `now`. Every one is `CHROME_MUTED`: the dot carries the colour (the
 /// prototype's `.nrow .s` outranks its `.warn`/`.bad` classes, so its words
 /// read dim on screen).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -421,7 +421,7 @@ fn tree_cell(last: bool) -> Div {
         .flex_shrink_0()
         .w(px(NAV_CELL))
         .h(px(NAV_LINE))
-        .text_color(rgb(TEXT_FAINT))
+        .text_color(rgb(CHROME_FAINT))
         .child(if last { "\u{2514}" } else { "\u{251c}" })
 }
 
@@ -429,12 +429,8 @@ fn tree_cell(last: bool) -> Div {
 /// `  └ ` closing the Group, in the faint structure ink.
 fn tree_lead(last: bool) -> Div {
     components::glyph(
-        if last {
-            "  \u{2514} "
-        } else {
-            "  \u{251c} "
-        },
-        TEXT_FAINT,
+        if last { "  \u{2514} " } else { "  \u{251c} " },
+        CHROME_FAINT,
     )
     .whitespace_nowrap()
     .h(px(NAV_LINE))
@@ -445,7 +441,7 @@ fn tree_lead(last: bool) -> Div {
 /// triangle in the face the platform falls back to — the run's own width
 /// before the title.
 fn disclosure(open: bool) -> Div {
-    components::glyph(if open { "\u{25be} " } else { "\u{25b8} " }, TEXT_FAINT)
+    components::glyph(if open { "\u{25be} " } else { "\u{25b8} " }, CHROME_FAINT)
         .whitespace_nowrap()
         .h(px(NAV_LINE))
 }
@@ -460,7 +456,7 @@ fn word_cell(word: Option<SharedString>) -> Div {
         .justify_end()
         .h(px(NAV_LINE))
         .when(word.is_some(), |cell| cell.pl(px(NAV_WORD_GAP)))
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(CHROME_MUTED))
         // Exactly its cells: the word is right-aligned, and a measured run
         // rounds up a pixel and would stand it that much left.
         .children(word.map(components::cells))
@@ -525,7 +521,7 @@ fn row_frame(id: (&'static str, usize), key: SharedString, selected: bool) -> St
 fn status_mark(row: &ThreadRow) -> AnyElement {
     match row.status {
         RowStatus::Working => components::braille_spinner(RUNNING),
-        RowStatus::Parked => components::status_ring(TEXT_FAINT).into_any_element(),
+        RowStatus::Parked => components::status_ring(CHROME_FAINT).into_any_element(),
         _ => dot_face(row).into_any_element(),
     }
 }
@@ -694,8 +690,8 @@ pub fn collapse_button() -> Stateful<Div> {
             "cockpit::ToggleNav",
         ))
         .child(
-            icon(icons::SIDEBAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(motion::mix(
-                rgb(TEXT_MUTED).into(),
+            icon(icons::SIDEBAR, ICON_BUTTON_GLYPH, CHROME_MUTED).text_color(motion::mix(
+                rgb(CHROME_MUTED).into(),
                 rgb(TEXT).into(),
                 t,
             )),
@@ -867,9 +863,9 @@ pub fn thread_row_with_title(
     // cursor takes its first two cells when the row is selected.
     let frame = match place {
         RowPlace::Root => frame.child(cursor_cell(row.selected)),
-        RowPlace::Member { last } if row.selected => frame
-            .child(cursor_cell(true))
-            .child(tree_cell(last)),
+        RowPlace::Member { last } if row.selected => {
+            frame.child(cursor_cell(true)).child(tree_cell(last))
+        }
         RowPlace::Member { last } => frame.child(tree_lead(last)),
     };
     frame
@@ -915,10 +911,10 @@ pub fn needs_you_row(entry: &NeedsYouRow) -> Stateful<Div> {
 /// keycap reads (`key_combo`). It washes under the pointer like any row.
 pub fn needs_you_header(count: usize) -> Stateful<Div> {
     let key = components::bound_chord("cockpit::NextDecision")
-        .map(|keys| components::key_combo(&keys, TEXT_MUTED));
+        .map(|keys| components::key_combo(&keys, CHROME_MUTED));
     row_frame(("nav-needs-you", 0), "nav-needs-you".into(), false)
         .debug_selector(|| "nav-needs-you".into())
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(CHROME_MUTED))
         .child(SharedString::from(format!("{} {count}", words::NEEDS_YOU)))
         .children(key.map(|key| div().flex().ml_auto().child(key)))
 }
@@ -944,7 +940,7 @@ fn title_ink(selected: bool, parked: bool) -> u32 {
     if selected {
         TEXT_STRONG
     } else if parked {
-        TEXT_MUTED
+        CHROME_MUTED
     } else {
         TEXT
     }
@@ -1027,7 +1023,7 @@ pub fn loose_ground(index: usize) -> Stateful<Div> {
 }
 
 /// What an empty tree says, on the rows' title column, sentence case and
-/// no full stop: a line in `TEXT_MUTED` and, where there is one, a way
+/// no full stop: a line in `CHROME_MUTED` and, where there is one, a way
 /// forward in the same voice. Filtered to a Project it names the Project
 /// rather than shrugging; when the Parked section below holds Threads the
 /// filter admits, it says *open* and points below, so the operator is not
@@ -1050,7 +1046,7 @@ pub fn empty_filter(project: Option<&str>, parked_below: bool) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(CH))
-                .child(components::key_combo(&keys, TEXT_MUTED))
+                .child(components::key_combo(&keys, CHROME_MUTED))
                 .child("new thread")
                 .into_any_element()
         }),
@@ -1065,7 +1061,7 @@ pub fn empty_filter(project: Option<&str>, parked_below: bool) -> Div {
         .pr(px(NAV_PAD_X))
         .child(
             components::text_ui()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(CHROME_MUTED))
                 .child(SharedString::from(message)),
         )
         .children(hint)
@@ -1118,7 +1114,7 @@ pub fn parked_header(count: usize, open: bool, eased: bool) -> Stateful<Div> {
     };
     row_frame(("nav-parked", 0), "nav-parked".into(), false)
         .debug_selector(|| "nav-parked".into())
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(CHROME_MUTED))
         .child(mark)
         .child(
             div()
@@ -1289,7 +1285,7 @@ mod tests {
     fn titles_are_body_ink_but_the_selected_and_the_parked() {
         assert_eq!(title_ink(false, false), TEXT);
         assert_eq!(title_ink(true, false), TEXT_STRONG);
-        assert_eq!(title_ink(false, true), TEXT_MUTED);
+        assert_eq!(title_ink(false, true), CHROME_MUTED);
         assert_eq!(
             title_ink(true, true),
             TEXT_STRONG,
@@ -1327,7 +1323,7 @@ mod tests {
         }
         // The triangle and its space are typed: the run's own width.
         let mut fold = group_fold(&group(false, true));
-        assert_eq!(fold.style().text.color, Some(rgb(TEXT_FAINT).into()));
+        assert_eq!(fold.style().text.color, Some(rgb(CHROME_FAINT).into()));
     }
 
     /// A row whose Project or checkout has not resolved keeps its line: the
@@ -1518,7 +1514,7 @@ mod tests {
         assert_eq!(text(NavTail::Age(age())), Some(age()));
         assert_eq!(text(NavTail::None), None);
         let mut word = word_cell(text(NavTail::Failing(Some(2))));
-        assert_eq!(word.style().text.color, Some(rgb(TEXT_MUTED).into()));
+        assert_eq!(word.style().text.color, Some(rgb(CHROME_MUTED).into()));
     }
 
     /// The nav never says `now` (C10): a Thread used seconds ago has an
@@ -1603,8 +1599,8 @@ mod tests {
                 assert_eq!(RowStatus::of(row.status.wall()), row.status);
             }
         }
-        let mut ring = components::status_ring(TEXT_FAINT);
-        assert_eq!(ring.style().text.color, Some(rgb(TEXT_FAINT).into()));
+        let mut ring = components::status_ring(CHROME_FAINT);
+        assert_eq!(ring.style().text.color, Some(rgb(CHROME_FAINT).into()));
     }
 
     /// N-8: the column paints no ground over the titlebar band — its chrome
@@ -1735,7 +1731,7 @@ mod tests {
         let mut header = parked_header(3, false, false);
         assert_eq!(
             header.style().text.color,
-            Some(rgb(TEXT_MUTED).into()),
+            Some(rgb(CHROME_MUTED).into()),
             "a dim header line"
         );
     }

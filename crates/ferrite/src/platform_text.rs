@@ -22,10 +22,20 @@
 //! before their first render. Every other platform: a no-op.
 
 /// Turn off gpui's stem darkening for this process (see the module doc).
-/// Idempotent; safe to call before `App` exists.
+/// Idempotent; safe to call before `App` exists. Only the visual-reference
+/// captures use it: on glass the greyscale glyphs read thin and wispy, so
+/// the product draws text the way macOS does (`follow_system_font_smoothing`).
 pub fn disable_font_smoothing() {
     #[cfg(target_os = "macos")]
-    mac::set_app_font_smoothing(0);
+    mac::set_app_font_smoothing(Some(0));
+}
+
+/// Draw text the way the system does: clear any `AppleFontSmoothing` the app
+/// domain holds (an earlier build wrote `0` there), so macOS's own smoothing
+/// applies. Call before the first glyph is rasterised.
+pub fn follow_system_font_smoothing() {
+    #[cfg(target_os = "macos")]
+    mac::set_app_font_smoothing(None);
 }
 
 #[cfg(target_os = "macos")]
@@ -62,8 +72,9 @@ mod mac {
         fn CFRelease(object: CFTypeRef);
     }
 
-    /// `AppleFontSmoothing = value` in the current application's domain.
-    pub(super) fn set_app_font_smoothing(value: i32) {
+    /// `AppleFontSmoothing = value` in the current application's domain;
+    /// `None` removes the key, so the system setting applies.
+    pub(super) fn set_app_font_smoothing(value: Option<i32>) {
         // SAFETY: plain CoreFoundation calls on objects created here and
         // released here; the key is a NUL-terminated literal, the value a
         // live `i32`, and the domain the framework's own constant.
@@ -76,14 +87,23 @@ mod mac {
             if key.is_null() {
                 return;
             }
-            let number = CFNumberCreate(
-                std::ptr::null(),
-                NUMBER_SINT32,
-                (&value as *const i32).cast::<c_void>(),
-            );
-            if !number.is_null() {
-                CFPreferencesSetAppValue(key, number, kCFPreferencesCurrentApplication);
-                CFRelease(number);
+            match value {
+                Some(value) => {
+                    let number = CFNumberCreate(
+                        std::ptr::null(),
+                        NUMBER_SINT32,
+                        (&value as *const i32).cast::<c_void>(),
+                    );
+                    if !number.is_null() {
+                        CFPreferencesSetAppValue(key, number, kCFPreferencesCurrentApplication);
+                        CFRelease(number);
+                    }
+                }
+                None => CFPreferencesSetAppValue(
+                    key,
+                    std::ptr::null(),
+                    kCFPreferencesCurrentApplication,
+                ),
             }
             CFRelease(key);
         }

@@ -97,7 +97,9 @@ pub(crate) fn hang_element(
             .child(float)
             .into_any_element(),
     };
-    deferred(float).with_priority(FLOAT_PRIORITY).into_any_element()
+    deferred(float)
+        .with_priority(FLOAT_PRIORITY)
+        .into_any_element()
 }
 
 /// Its child laid out on its own at `at` (window coordinates), then moved
@@ -137,10 +139,7 @@ impl gpui::Element for Translated {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, ()) {
-        (
-            window.request_layout(gpui::Style::default(), None, cx),
-            (),
-        )
+        (window.request_layout(gpui::Style::default(), None, cx), ())
     }
 
     fn prepaint(

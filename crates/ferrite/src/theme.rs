@@ -368,6 +368,14 @@ pub const TEXT_MUTED: u32 = 0x98989d;
 /// `#5e5e63` — structure, never words: the `·` seam, `└` elbows, rails,
 /// disclosure glyphs, the parked ring.
 pub const TEXT_FAINT: u32 = 0x5e5e63;
+/// The muted ink on the chrome glass (the sidebar, the titlebar cell over it,
+/// the bottom bar). Over a see-through ground the opaque `TEXT_MUTED` loses
+/// its contrast against a bright desktop, so on glass it lifts a step;
+/// opaque builds keep `TEXT_MUTED`.
+pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6bb } else { TEXT_MUTED };
+/// The faint (structure-only) ink on the chrome glass: tree glyphs, fold
+/// triangles, the parked ring. Lifted on glass for the same reason.
+pub const CHROME_FAINT: u32 = if GLASS { 0x7e7e84 } else { TEXT_FAINT };
 
 // --------------------------------------------------------------- palette
 //

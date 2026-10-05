@@ -373,9 +373,12 @@ pub fn duration_label(elapsed: std::time::Duration) -> String {
         format!("{secs:.1}s")
     } else if secs < 60.0 {
         format!("{}s", secs as u64)
-    } else {
+    } else if secs < 3600.0 {
         let whole = secs as u64;
         format!("{}m{:02}s", whole / 60, whole % 60)
+    } else {
+        let whole = secs as u64;
+        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
     }
 }
 
@@ -434,14 +437,17 @@ pub fn spinner_verb(thread: u64, turn: usize) -> &'static str {
 }
 
 /// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
-/// never runs ahead of the clock — `0s` … `59s`, then `1m04s`. A frozen
-/// fact keeps its tenths (`duration_label`).
+/// never runs ahead of the clock — `0s` … `59s`, then `1m04s`, and from an
+/// hour `3h11m` (never `191m16s`). A frozen fact keeps its tenths
+/// (`duration_label`).
 pub fn live_seconds(elapsed: std::time::Duration) -> String {
     let whole = elapsed.as_secs();
     if whole < 60 {
         format!("{whole}s")
-    } else {
+    } else if whole < 3600 {
         format!("{}m{:02}s", whole / 60, whole % 60)
+    } else {
+        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
     }
 }
 
@@ -455,8 +461,10 @@ pub fn settled_duration_label(elapsed: std::time::Duration) -> String {
         "<1s".to_string()
     } else if whole < 60 {
         format!("{whole}s")
-    } else {
+    } else if whole < 3600 {
         format!("{}m {}s", whole / 60, whole % 60)
+    } else {
+        format!("{}h {}m", whole / 3600, whole % 3600 / 60)
     }
 }
 
@@ -466,8 +474,10 @@ pub fn coarse_seconds(elapsed: std::time::Duration) -> String {
     let whole = elapsed.as_secs();
     if whole < 60 {
         format!("{whole}s")
-    } else {
+    } else if whole < 3600 {
         format!("{}m", whole / 60)
+    } else {
+        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
     }
 }
 

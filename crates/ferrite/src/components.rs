@@ -657,9 +657,8 @@ mod loops {
             let scale = window.scale_factor();
             let left = f32::from(bounds.left());
             let right = f32::from(bounds.right()).min(left + width);
-            let baseline = bounds.top()
-                + (line_height - line.ascent - line.descent) / 2.
-                + line.ascent;
+            let baseline =
+                bounds.top() + (line_height - line.ascent - line.descent) / 2. + line.ascent;
             let glyphs: Vec<_> = line
                 .runs
                 .iter()
@@ -1363,7 +1362,9 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                     .child(key),
             )
         })
-        .when(item.checked, |row| row.child(glyph("\u{2713}", theme::ACCENT)))
+        .when(item.checked, |row| {
+            row.child(glyph("\u{2713}", theme::ACCENT))
+        })
 }
 
 /// A menu row. The only place a menu row takes its pointer role: the raised
