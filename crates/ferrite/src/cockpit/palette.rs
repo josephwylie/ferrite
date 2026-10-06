@@ -665,6 +665,22 @@ impl CockpitView {
             None,
             Command::HideThinking,
         );
+        // Smart filtering's `done` and `working` sections over the tree.
+        let smart = self.prefs.settings.smart_filtering;
+        add(
+            !smart,
+            "smart filtering on".into(),
+            "",
+            None,
+            Command::SmartFilteringOn,
+        );
+        add(
+            smart,
+            "smart filtering off".into(),
+            "",
+            None,
+            Command::SmartFilteringOff,
+        );
         add(
             true,
             "notifications".into(),
@@ -814,6 +830,11 @@ impl CockpitView {
             Command::ShowThinking | Command::HideThinking => {
                 let show = command == Command::ShowThinking;
                 self.change_settings(|settings| settings.show_thinking = show, cx);
+                cx.notify();
+            }
+            Command::SmartFilteringOn | Command::SmartFilteringOff => {
+                let on = command == Command::SmartFilteringOn;
+                self.change_settings(|settings| settings.smart_filtering = on, cx);
                 cx.notify();
             }
             Command::Notifications => self.toggle_notifications(&ToggleNotifications, window, cx),

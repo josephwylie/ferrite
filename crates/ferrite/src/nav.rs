@@ -104,6 +104,8 @@ pub(crate) const BAND_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_BAND_MS, mot
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum NavFold {
     Project(ProjectId),
+    /// The Groups section: the Groups that span Projects.
+    Groups,
     Group(GroupId),
     Parked,
 }
@@ -116,6 +118,8 @@ pub struct NavState {
     /// (`Cockpit::needs_you`), whatever the Project filter says: the strip
     /// is the queue ⌘D walks, and its first row is the answer target.
     pub needs_you: Vec<NeedsYouRow>,
+    /// Smart filtering's sections over the tree, or `None` while it is off.
+    pub smart: Option<SmartSections>,
     /// One section per Project with a row to show, in creation order, then
     /// `Other` for Threads whose Project cannot be read.
     pub sections: Vec<ProjectSection>,
@@ -165,9 +169,14 @@ impl NavState {
 
 /// One Project's run of the tree: its heading (the name in `W_STRONG`
 /// `TEXT_STRONG`, its branch dim at the right), its loose rows, then its
-/// Groups — each Group listed under the Project of its first member.
+/// Groups — each Group listed under the one Project its members share. A
+/// Group spanning Projects belongs to none of them: it is listed in the
+/// Groups section (`mixed`), first in the tree.
 pub struct ProjectSection {
     pub project: Option<ProjectId>,
+    /// The Groups section: no Project, no loose rows, only Groups whose
+    /// members span Projects.
+    pub mixed: bool,
     pub label: SharedString,
     /// The branch the heading names at its right: the checkout every row
     /// shares, else the Project's default. `None` says nothing.
@@ -178,6 +187,18 @@ pub struct ProjectSection {
     pub solos: Vec<usize>,
     /// Indices into `NavState::groups`.
     pub groups: Vec<usize>,
+}
+
+/// Smart filtering (`Settings::smart_filtering`): two sections over the
+/// Project tree, a rule between them and it. Like the Needs-you strip, each
+/// row is a reference to the Thread — its own row stays in the tree.
+#[derive(Clone, Default)]
+pub struct SmartSections {
+    /// Threads that finished while the operator looked elsewhere (an unread
+    /// Notice). Landing on one reads it, and it leaves.
+    pub done: Vec<ThreadRow>,
+    /// Threads whose Main or a Subagent is working right now.
+    pub working: Vec<ThreadRow>,
 }
 
 /// One row of the Needs-you strip: a second, reference row for a Thread
@@ -929,6 +950,49 @@ pub fn needs_you_strip() -> Div {
         .flex_col()
         .flex_shrink_0()
         .pb(px(NAV_SECTION_GAP))
+}
+
+// ------------------------------------------------------- smart filtering
+
+/// A smart section's header: its word and count, dim (`done 2`,
+/// `working 3`), the Needs-you header's shape without a key.
+pub fn smart_header(word: &'static str, count: usize) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-smart-{word}"));
+    row_frame(("nav-smart", word.len()), key.clone(), false)
+        .debug_selector(move || key.to_string())
+        .text_color(rgb(CHROME_MUTED))
+        .child(SharedString::from(format!("{word} {count}")))
+}
+
+/// One row of a smart section: the Thread's own mark, its title and its
+/// word (`done`, or the live elapsed time). A reference like a Needs-you
+/// row: no cursor cell and no selection.
+pub fn smart_row(row: &ThreadRow, section: &'static str) -> Stateful<Div> {
+    let thread = row.thread;
+    let word = row.tail.text();
+    let key = SharedString::from(format!("nav-smart-{section}-{}", thread.get()));
+    row_frame(("nav-smart-row", thread.get() as usize), key.clone(), false)
+        .debug_selector(move || key.to_string())
+        .child(cell(status_mark(row)))
+        .child(fitted(
+            title_w(1.0, word.as_deref()),
+            TEXT,
+            W_BODY,
+            row.name.clone(),
+        ))
+        .child(word_cell(word))
+}
+
+/// The rule between the smart sections and the Project tree: one seam-wide
+/// line in the seam ink, a half row clear on either side.
+pub fn smart_rule() -> Div {
+    div()
+        .debug_selector(|| "nav-smart-rule".into())
+        .flex_shrink_0()
+        .h(px(CHROME_SEAM_W))
+        .mx(px(NAV_PAD_X))
+        .my(px(NAV_SECTION_GAP))
+        .bg(paint::CHROME_SEAM)
 }
 
 /// A title's ink. Every unselected title is the body ink, read or unread —

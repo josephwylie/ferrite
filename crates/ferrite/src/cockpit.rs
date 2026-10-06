@@ -4173,6 +4173,13 @@ impl CockpitView {
                 settings.nav_collapsed,
                 self.setting_change(cx, |s, v| s.nav_collapsed = v),
             ),
+            prefs::toggle(
+                "settings-smart-filtering",
+                "Smart filtering",
+                "Done and working threads above the project tree",
+                settings.smart_filtering,
+                self.setting_change(cx, |s, v| s.smart_filtering = v),
+            ),
         ];
         let size = settings.reading_size;
         let reading = vec![prefs::stepper(
@@ -7652,11 +7659,13 @@ impl CockpitView {
         drop(snapshot);
 
         // The Groups, in the durable order (creation order unless the
-        // operator moved one), each under the Project of its first member —
-        // or, filtered, under the filter's Project when any member is
-        // there, drawing only those members. A member whose leave is parked
-        // on a pending draft has already left, as in `visible_indices`.
-        let placed: Vec<(Option<ProjectId>, nav::GroupBlock)> = self
+        // operator moved one), each under the one Project its members share
+        // — or, when they span Projects, in the Groups section, belonging
+        // to none of them. Filtered, a Group sits under the filter's Project
+        // when any member is there, drawing only those members. A member
+        // whose leave is parked on a pending draft has already left, as in
+        // `visible_indices`.
+        let placed: Vec<(Option<Option<ProjectId>>, nav::GroupBlock)> = self
             .cockpit
             .groups()
             .iter()
@@ -7677,9 +7686,22 @@ impl CockpitView {
                 if shown.is_empty() {
                     return None;
                 }
+                // `None` is the Groups section; `Some(project)` a Project's.
                 let project = match self.nav_filter {
-                    Some(filter) => Some(filter),
-                    None => members.first().and_then(|first| project_of(*first)),
+                    Some(filter) => Some(Some(filter)),
+                    None => {
+                        let mut projects: Vec<ProjectId> = members
+                            .iter()
+                            .filter_map(|thread| project_of(*thread))
+                            .collect();
+                        projects.sort();
+                        projects.dedup();
+                        match projects.as_slice() {
+                            [] => Some(None),
+                            [only] => Some(Some(*only)),
+                            _ => None,
+                        }
+                    }
                 };
                 Some((
                     project,
@@ -7696,16 +7718,36 @@ impl CockpitView {
 
         // The sections: every Project something is drawn under, in creation
         // order (ids are handed out in registration order), `Other` last.
+        // The Groups section, when any Group spans Projects, comes first.
         let mut keys: Vec<Option<ProjectId>> = loose
             .iter()
             .map(|thread| project_of(*thread))
-            .chain(placed.iter().map(|(project, _)| *project))
+            .chain(placed.iter().filter_map(|(project, _)| *project))
             .collect();
         keys.sort_by_key(|key| (key.is_none(), *key));
         keys.dedup();
         let mut solos: Vec<nav::ThreadRow> = Vec::new();
         let mut groups: Vec<nav::GroupBlock> = Vec::new();
         let mut sections: Vec<nav::ProjectSection> = Vec::new();
+        let mixed: Vec<usize> = placed
+            .iter()
+            .filter(|(project, _)| project.is_none())
+            .map(|(_, block)| {
+                groups.push(block.clone());
+                groups.len() - 1
+            })
+            .collect();
+        if !mixed.is_empty() {
+            sections.push(nav::ProjectSection {
+                project: None,
+                mixed: true,
+                label: SharedString::from("Groups"),
+                branch: None,
+                folded: self.nav_folds.contains(&NavFold::Groups),
+                solos: Vec::new(),
+                groups: mixed,
+            });
+        }
         for key in keys {
             let mut section_solos = Vec::new();
             for thread in loose.iter().filter(|thread| project_of(**thread) == key) {
@@ -7713,7 +7755,7 @@ impl CockpitView {
                 solos.push(row(*thread));
             }
             let mut section_groups = Vec::new();
-            for (_, block) in placed.iter().filter(|(project, _)| *project == key) {
+            for (_, block) in placed.iter().filter(|(project, _)| *project == Some(key)) {
                 section_groups.push(groups.len());
                 groups.push(block.clone());
             }
@@ -7753,6 +7795,7 @@ impl CockpitView {
             });
             sections.push(nav::ProjectSection {
                 project: key,
+                mixed: false,
                 label,
                 branch,
                 folded: key
@@ -7775,15 +7818,44 @@ impl CockpitView {
             })
             .collect();
         let parked = self.parked_threads().into_iter().map(row).collect();
+        let smart = self
+            .prefs
+            .settings
+            .smart_filtering
+            .then(|| self.smart_sections());
 
         nav::NavState {
             needs_you,
+            smart,
             sections,
             groups,
             solos,
             parked,
             parked_open: self.nav_parked_open,
         }
+    }
+
+    /// Smart filtering's sections, whatever the Project filter admits (like
+    /// the Needs-you strip), in creation order so a row never moves under
+    /// the pointer: `done` is every open Thread holding an unread Notice
+    /// that is no longer working or waiting, `working` every open Thread at
+    /// work. A Thread waiting on the operator is the strip's, not these.
+    fn smart_sections(&self) -> nav::SmartSections {
+        let mut threads = self.cockpit.threads();
+        threads.sort();
+        let mut sections = nav::SmartSections::default();
+        for thread in threads {
+            let row = self.thread_row(thread);
+            match row.status {
+                nav::RowStatus::Working | nav::RowStatus::Failing => sections.working.push(row),
+                nav::RowStatus::NeedsYou | nav::RowStatus::Parked => {}
+                nav::RowStatus::Idle | nav::RowStatus::Failed if row.unread => {
+                    sections.done.push(row)
+                }
+                nav::RowStatus::Idle | nav::RowStatus::Failed => {}
+            }
+        }
+        sections
     }
 
     /// What a waiting Thread waits for, in the lexicon: `question` or
@@ -11997,6 +12069,29 @@ impl CockpitView {
         Some(strip)
     }
 
+    /// Smart filtering over the tree: `done N` and its rows, `working N`
+    /// and its rows, then the rule. A row's press lands on its Thread like
+    /// its own row's.
+    fn smart_sections_element(&self, smart: &nav::SmartSections, cx: &mut Context<Self>) -> Div {
+        let mut block = div().flex().flex_col().flex_shrink_0();
+        for (word, rows) in [
+            (crate::theme::words::DONE, &smart.done),
+            (crate::theme::words::WORKING, &smart.working),
+        ] {
+            block = block.child(nav::smart_header(word, rows.len()));
+            for row in rows {
+                let thread = row.thread;
+                block = block.child(nav::smart_row(row, word).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        view.land_on_thread(thread, cx);
+                    }),
+                ));
+            }
+        }
+        block.child(nav::smart_rule())
+    }
+
     /// The scrolling tree: one section per Project (`nav_state`), each its
     /// heading, its loose rows — a `LooseZone`, a place to drop a row to get
     /// it out of its Group — and its Groups, then the ground, which is a
@@ -12007,6 +12102,9 @@ impl CockpitView {
         let mut tree = nav::nav_tree(&self.nav_scroll);
         if let Some(error) = &self.group_error {
             tree = tree.child(nav::notice(error.clone()));
+        }
+        if let Some(smart) = &state.smart {
+            tree = tree.child(self.smart_sections_element(smart, cx));
         }
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate() {
@@ -12071,15 +12169,17 @@ impl CockpitView {
             section.branch.clone(),
             section.folded,
         );
-        let Some(project) = section.project else {
-            return heading.into_any_element();
+        let fold = match section.project {
+            _ if section.mixed => NavFold::Groups,
+            Some(project) => NavFold::Project(project),
+            None => return heading.into_any_element(),
         };
         let folded = section.folded;
         heading
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.set_nav_fold(NavFold::Project(project), !folded, cx);
+                    view.set_nav_fold(fold, !folded, cx);
                 }),
             )
             .into_any_element()
@@ -13321,9 +13421,11 @@ mod tests {
                     .iter()
                     .map(|section| section.project)
                     .collect::<Vec<_>>(),
-                [Some(first_project)],
-                "a cross-Project Group sits under the Project of its first member"
+                [None],
+                "a cross-Project Group belongs to none of its Projects"
             );
+            assert!(nav.sections[0].mixed, "it is the Groups section");
+            assert_eq!(nav.sections[0].label.as_ref(), "Groups");
             assert_eq!(nav.sections[0].groups, [0]);
             view.nav_filter = Some(second_project);
             let nav = view.nav_state();
@@ -13810,6 +13912,73 @@ mod tests {
             "the premise: the turn is over"
         );
         assert_eq!(order(&view, cx), before, "nor does finishing");
+    }
+
+    /// Smart filtering: off, the nav has no sections over the tree; on, a
+    /// Thread at work is listed under `working`, and once it finishes out
+    /// of sight under `done` — until the operator lands on it. Its own row
+    /// stays in the tree throughout.
+    #[gpui::test]
+    fn smart_filtering_lists_working_then_done_over_the_tree(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("smart-filtering", 2);
+        let threads = core.threads();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        tick(cx);
+        assert!(view.read_with(cx, |view, _| view.nav_state().smart.is_none()));
+        assert!(
+            cx.debug_bounds("nav-smart-rule").is_none(),
+            "off by default"
+        );
+
+        view.update(cx, |view, cx| {
+            view.change_settings(|settings| settings.smart_filtering = true, cx)
+        });
+        tick(cx);
+        assert!(cx.debug_bounds("nav-smart-done").is_some());
+        assert!(cx.debug_bounds("nav-smart-working").is_some());
+        assert!(cx.debug_bounds("nav-smart-rule").is_some());
+
+        let focused = view.read_with(cx, |view, _| view.cockpit.roster().focused_thread());
+        let stream = threads
+            .iter()
+            .position(|thread| Some(*thread) != focused)
+            .unwrap();
+        let away = threads[stream];
+        let listed = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let smart = view.nav_state().smart.unwrap();
+                let ids = |rows: &[nav::ThreadRow]| -> Vec<ThreadId> {
+                    rows.iter().map(|row| row.thread).collect()
+                };
+                (ids(&smart.done), ids(&smart.working))
+            })
+        };
+
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::TextDelta {
+                text: "thinking".into(),
+            })
+            .unwrap();
+        tick(cx);
+        assert_eq!(listed(&view, cx), (vec![], vec![away]), "working");
+        let own: &'static str = format!("nav-thread-{}", away.get()).leak();
+        assert!(cx.debug_bounds(own).is_some(), "its own row stays");
+
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert_eq!(listed(&view, cx), (vec![away], vec![]), "done, unseen");
+        let row: &'static str = format!("nav-smart-done-{}", away.get()).leak();
+        assert!(cx.debug_bounds(row).is_some());
+
+        view.update(cx, |view, cx| view.land_on_thread(away, cx));
+        tick(cx);
+        assert_eq!(listed(&view, cx), (vec![], vec![]), "seen, it leaves");
     }
 
     /// C8 under `sort: recent`: the tree never re-sorts under the pointer.
