@@ -99,7 +99,10 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
 - `with_image(StyleRefinement)`: a block Markdown image is drawn in a frame
   refined by this style (its width, border, ground), the picture filling the
   frame's width at its own proportions. The default draws no frame, exactly as
-  upstream does. Images inside an `InlineFlow` paragraph are unchanged.
+  upstream does. An image alone on its line inside a paragraph of text (a
+  caption over a picture: a line break or the paragraph's edge on each side)
+  is split out of the `InlineFlow` and framed the same way; an image with text
+  beside it on its line (a badge) stays text-sized in the flow.
 
 Ferrite's `rich.rs` `vendor_knob_tests` pin these through the real renderer
 (this crate is not a workspace member, so its own tests do not run there).

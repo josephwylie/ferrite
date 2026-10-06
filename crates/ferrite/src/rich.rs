@@ -2163,6 +2163,44 @@ mod spacing_tests {
         // layout coordinates and do not report that paint translation.
     }
 
+    /// An image on its own line under a caption gets the answer's image
+    /// frame; one with text beside it (a badge) stays text-sized in the line.
+    #[gpui::test]
+    fn an_image_on_its_own_line_is_framed_and_a_badge_stays_inline(cx: &mut TestAppContext) {
+        struct ImageRoot(&'static str);
+        impl Render for ImageRoot {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(800.)).child(
+                    TextView::markdown("image-lines", self.0)
+                        .max_lines(usize::MAX)
+                        .style(style(window.rem_size())),
+                )
+            }
+        }
+        let frame_w = px(theme::IMAGE_CELLS * theme::tx_cell(theme::FS_PROSE));
+        cx.update(gpui::component::init);
+        for (source, framed) in [
+            ("**Caption**\n![a](https://example.invalid/a.png)", true),
+            ("![a](https://example.invalid/a.png)\nCaption under", true),
+            ("Above\n![a](https://example.invalid/a.png)\nBelow", true),
+            (
+                "A badge ![b](https://example.invalid/b.png) in a line.",
+                false,
+            ),
+        ] {
+            let (_, cx) = cx.add_window_view(|_, _| ImageRoot(source));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let frame = cx.debug_bounds("markdown-image-frame");
+            assert_eq!(frame.is_some(), framed, "{source:?}");
+            if let Some(frame) = frame {
+                assert!((frame.size.width - frame_w).abs() < px(1.), "{source:?}");
+            }
+        }
+    }
+
     #[gpui::test]
     fn native_markdown_preserves_literal_bytes_and_link_destinations(cx: &mut TestAppContext) {
         use gpui::base::text::SelectionFormat;
