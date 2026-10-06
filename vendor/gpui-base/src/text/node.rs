@@ -1441,6 +1441,10 @@ impl Paragraph {
                 .iter()
                 .any(|child| child.marks.iter().any(|(_, mark)| mark.link.is_some()));
         if self.should_render_inline_flow() || has_custom_links {
+            let own_line = self.own_line_images();
+            if !own_line.is_empty() {
+                return self.render_split(&own_line, node_cx, _window, cx);
+            }
             let flow = InlineFlow::new(
                 span.unwrap_or_default(),
                 self.inline_flow_items(node_cx, cx),
@@ -1488,58 +1492,7 @@ impl Paragraph {
                         .into_any_element(),
                     );
                 }
-                let link_click_handler = node_cx.link_click_handler.clone();
-                // Ferrite: a frame set by `TextViewStyle::with_image` holds the
-                // picture, which fills its width at its own proportions.
-                let frame = node_cx.style.image();
-                let framed = frame != StyleRefinement::default();
-                let picture =
-                    img(image_source(&image.url))
-                        .id(ix)
-                        .object_fit(ObjectFit::Contain)
-                        .max_w(relative(1.))
-                        .when(framed, |this| this.w_full())
-                        .when_some(image.width, |this, width| this.w(width))
-                        .when_some(image.link.clone(), |this, link| {
-                            let link_click_handler = link_click_handler.clone();
-                            let aux_link = link.clone();
-                            let aux_link_click_handler = link_click_handler.clone();
-                            this.cursor_pointer()
-                                .on_click(move |event, window, cx| {
-                                    crate::TextSelection::end(window, cx);
-                                    cx.stop_propagation();
-                                    handle_link_click(
-                                        &link_click_handler,
-                                        link.url.clone(),
-                                        event.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                                .on_aux_click(move |event, window, cx| {
-                                    crate::TextSelection::end(window, cx);
-                                    cx.stop_propagation();
-                                    handle_link_click(
-                                        &aux_link_click_handler,
-                                        aux_link.url.clone(),
-                                        event.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                        })
-                        .into_any_element();
-                child_nodes.push(if framed {
-                    div()
-                        .flex_shrink_0()
-                        .max_w(relative(1.))
-                        .overflow_hidden()
-                        .refine_style(&frame)
-                        .child(picture)
-                        .into_any_element()
-                } else {
-                    picture
-                });
+                child_nodes.push(block_image(ix, image, node_cx));
 
                 text.clear();
                 links.clear();
@@ -1627,6 +1580,100 @@ impl Paragraph {
         div()
             .id(span.unwrap_or_default())
             .children(child_nodes)
+            .into_any_element()
+    }
+
+    /// Ferrite: the children that are images alone on their line, with a
+    /// line break or the paragraph's edge on each side (a caption over a
+    /// picture). An image with text beside it (a badge) stays in the line.
+    fn own_line_images(&self) -> Vec<usize> {
+        let children = &self.children;
+        let blank = |c: &&InlineNode| c.image.is_none() && c.text.is_empty();
+        (0..children.len())
+            .filter(|&ix| children[ix].image.is_some())
+            .filter(|&ix| {
+                children[..ix]
+                    .iter()
+                    .rev()
+                    .find(|c| !blank(c))
+                    .is_none_or(|c| {
+                        c.image.is_none() && c.text.trim_end_matches([' ', '\t']).ends_with('\n')
+                    })
+            })
+            .filter(|&ix| {
+                children[ix + 1..]
+                    .iter()
+                    .find(|c| !blank(c))
+                    .is_none_or(|c| {
+                        c.image.is_none()
+                            && c.text.trim_start_matches([' ', '\t']).starts_with('\n')
+                    })
+            })
+            .collect()
+    }
+
+    /// Ferrite: the paragraph as a column, each image in `own_line` framed as
+    /// a block image between the text runs around it. Each run renders as its
+    /// own paragraph (an inline flow when it still holds badges or cards),
+    /// without the line breaks that set the images apart.
+    fn render_split(
+        &self,
+        own_line: &[usize],
+        node_cx: &NodeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let mut parts: Vec<AnyElement> = vec![];
+        let mut start = 0;
+        for end in own_line.iter().copied().chain([self.children.len()]) {
+            let run = &self.children[start..end];
+            if run
+                .iter()
+                .any(|c| c.image.is_some() || !c.text.trim().is_empty())
+            {
+                let last = run.len() - 1;
+                let children = run
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, c)| {
+                        let c = if ix == 0 && start > 0 {
+                            without_break(c, false)
+                        } else {
+                            c.clone()
+                        };
+                        if ix == last && end < self.children.len() {
+                            without_break(&c, true)
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+                let run = Paragraph {
+                    span: self.span,
+                    children,
+                    link_refs: self.link_refs.clone(),
+                    // The state of the node that ends the run holds its text,
+                    // as in the block layout below.
+                    state: self
+                        .children
+                        .get(end)
+                        .map_or_else(|| self.state.clone(), |c| c.state.clone()),
+                };
+                parts.push(
+                    div()
+                        .id(ElementId::named_usize("run", start))
+                        .child(run.render(node_cx, window, cx))
+                        .into_any_element(),
+                );
+            }
+            if let Some(image) = self.children.get(end).and_then(|c| c.image.as_ref()) {
+                parts.push(block_image(end, image, node_cx));
+            }
+            start = end + 1;
+        }
+        div()
+            .id(self.span.unwrap_or_default())
+            .children(parts)
             .into_any_element()
     }
 
@@ -1742,6 +1789,88 @@ impl Paragraph {
 
         items
     }
+}
+
+/// A paragraph's image laid out as a block. Ferrite: a frame set by
+/// `TextViewStyle::with_image` holds the picture, which fills its width at
+/// its own proportions.
+fn block_image(ix: usize, image: &ImageNode, node_cx: &NodeContext) -> AnyElement {
+    let link_click_handler = node_cx.link_click_handler.clone();
+    let frame = node_cx.style.image();
+    let framed = frame != StyleRefinement::default();
+    let picture = img(image_source(&image.url))
+        .id(ix)
+        .object_fit(ObjectFit::Contain)
+        .max_w(relative(1.))
+        .when(framed, |this| this.w_full())
+        .when_some(image.width, |this, width| this.w(width))
+        .when_some(image.link.clone(), |this, link| {
+            let link_click_handler = link_click_handler.clone();
+            let aux_link = link.clone();
+            let aux_link_click_handler = link_click_handler.clone();
+            this.cursor_pointer()
+                .on_click(move |event, window, cx| {
+                    crate::TextSelection::end(window, cx);
+                    cx.stop_propagation();
+                    handle_link_click(
+                        &link_click_handler,
+                        link.url.clone(),
+                        event.clone(),
+                        window,
+                        cx,
+                    );
+                })
+                .on_aux_click(move |event, window, cx| {
+                    crate::TextSelection::end(window, cx);
+                    cx.stop_propagation();
+                    handle_link_click(
+                        &aux_link_click_handler,
+                        aux_link.url.clone(),
+                        event.clone(),
+                        window,
+                        cx,
+                    );
+                })
+        })
+        .into_any_element();
+    if framed {
+        div()
+            .debug_selector(|| "markdown-image-frame".into())
+            .flex_shrink_0()
+            .max_w(relative(1.))
+            .overflow_hidden()
+            .refine_style(&frame)
+            .child(picture)
+            .into_any_element()
+    } else {
+        picture
+    }
+}
+
+/// Ferrite: `node` without the line break at its end (`at_end`) or start,
+/// its marks clamped to the text that is left.
+fn without_break(node: &InlineNode, at_end: bool) -> InlineNode {
+    let text = node.text.as_ref();
+    let kept = if at_end {
+        let head = text.trim_end_matches([' ', '\t']);
+        0..head.strip_suffix('\n').map_or(text.len(), str::len)
+    } else {
+        let tail = text.trim_start_matches([' ', '\t']);
+        tail.strip_prefix('\n')
+            .map_or(0, |rest| text.len() - rest.len())..text.len()
+    };
+    let mut node = node.clone();
+    node.text = text[kept.clone()].to_string().into();
+    node.marks = node
+        .marks
+        .into_iter()
+        .filter_map(|(range, mark)| {
+            let start = range.start.clamp(kept.start, kept.end);
+            let end = range.end.clamp(kept.start, kept.end);
+            (start < end).then(|| (start - kept.start..end - kept.start, mark))
+        })
+        .collect();
+    node
 }
 
 impl Paragraph {
