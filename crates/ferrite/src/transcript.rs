@@ -810,6 +810,17 @@ impl TranscriptView {
         if let Some(source) = row.source() {
             let block = &row.blocks()[0];
             let _ = selection.answer(block.markdown_run.unwrap_or(block.id), self.linked(source));
+        } else if row.kind() == RowKind::Group {
+            pane::collect_group_text(
+                row.blocks(),
+                self.group_expanded(row),
+                |tool| {
+                    self.tool_state(DisclosureId::Tool(tool.call.clone()))
+                        == DisclosureState::Expanded
+                },
+                self.wide.get(),
+                selection,
+            );
         } else if let Some(block) = row.blocks().first() {
             let expanded = match &block.body {
                 Body::Tool(tool) => self.tool_state(DisclosureId::Tool(tool.call.clone())),
@@ -941,31 +952,21 @@ impl TranscriptView {
             return div().into_any_element();
         }
         let row_cx = self.row_cx(selection);
+        if row.kind() == RowKind::Group {
+            return self.render_group(row, &row_cx, view);
+        }
         match &block.body {
-            Body::Tool(tool) => {
-                let call = DisclosureId::Tool(tool.call.clone());
-                let expanded = self.tool_state(&call) == DisclosureState::Expanded;
-                let disclosure = view.as_ref().map(|view| {
-                    self.tool_control(&call, pane::tool_has_details(tool), view.clone())
-                });
-                let diff_toggle = view
-                    .as_ref()
-                    .map(|view| self.toggle(DisclosureId::Diff(tool.call.clone()), view.clone()));
-                pane::render_tool(
-                    block.id,
-                    tool,
-                    &row_cx,
-                    pane::ToolCx {
-                        expanded,
-                        disclosure,
-                        diff: pane::DiffFold {
-                            folds: row.diff_folds(),
-                            shown: row.diff_shown(),
-                            toggle: diff_toggle,
-                        },
-                    },
-                )
-            }
+            Body::Tool(tool) => self.render_call(
+                block.id,
+                tool,
+                &row_cx,
+                view.as_ref(),
+                pane::DiffFold {
+                    folds: row.diff_folds(),
+                    shown: row.diff_shown(),
+                    toggle: None,
+                },
+            ),
             _ => {
                 let call = match &block.body {
                     Body::Thinking(text) if pane::reasoning_has_details(text) => {
@@ -985,6 +986,140 @@ impl TranscriptView {
                 )
             }
         }
+    }
+
+    /// One call as its row draws it, alone or in a group: its disclosure
+    /// (the bullet's toggle, the keyboard's target, its folds) and, when
+    /// its diff is drawn, the diff's fold.
+    fn render_call(
+        &self,
+        block: BlockId,
+        tool: &ferrite_core::transcript::ToolBlock,
+        row_cx: &pane::RowCx,
+        view: Option<&Entity<Self>>,
+        diff: pane::DiffFold,
+    ) -> AnyElement {
+        let call = DisclosureId::Tool(tool.call.clone());
+        let expanded = self.tool_state(&call) == DisclosureState::Expanded;
+        let disclosure =
+            view.map(|view| self.tool_control(&call, pane::tool_has_details(tool), view.clone()));
+        let toggle =
+            view.map(|view| self.toggle(DisclosureId::Diff(tool.call.clone()), view.clone()));
+        pane::render_tool(
+            block,
+            tool,
+            row_cx,
+            pane::ToolCx {
+                expanded,
+                disclosure,
+                diff: pane::DiffFold { toggle, ..diff },
+            },
+        )
+    }
+
+    /// The disclosure naming a group row: its first call's.
+    fn group_id(row: &TranscriptRow) -> Option<DisclosureId> {
+        row.blocks().first().and_then(|block| match &block.body {
+            Body::Tool(tool) => Some(DisclosureId::Group(tool.call.clone())),
+            _ => None,
+        })
+    }
+
+    fn group_expanded(&self, row: &TranscriptRow) -> bool {
+        Self::group_id(row).is_some_and(|id| self.tool_state(id) == DisclosureState::Expanded)
+    }
+
+    /// A group row (`pane::render_tool_group`): its summary is the
+    /// disclosure — the whole line under the pointer, its chevron always
+    /// shown — and its calls, open, are each the row they would be alone.
+    fn render_group(
+        &self,
+        row: &TranscriptRow,
+        row_cx: &pane::RowCx,
+        view: Option<Entity<Self>>,
+    ) -> AnyElement {
+        let Some(id) = Self::group_id(row) else {
+            return div().into_any_element();
+        };
+        let expanded = self.group_expanded(row);
+        let disclosure = view
+            .clone()
+            .map(|view| self.disclosure_control(&id, true, view));
+        let members = move || {
+            let drawn: Vec<&ferrite_core::transcript::Block> = if expanded {
+                row.blocks().iter().collect()
+            } else {
+                pane::group_live(row.blocks()).into_iter().collect()
+            };
+            drawn
+                .into_iter()
+                .filter_map(|block| match &block.body {
+                    Body::Tool(tool) => Some(self.render_call(
+                        block.id,
+                        tool,
+                        row_cx,
+                        view.as_ref(),
+                        pane::DiffFold::default(),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        };
+        pane::render_tool_group(
+            row.blocks(),
+            row_cx,
+            pane::GroupCx {
+                expanded,
+                disclosure,
+                members: Box::new(members),
+            },
+        )
+    }
+
+    /// Every disclosure the rows draw, in order: the keyboard's stops. A
+    /// call with details, a long thought, a group — and, while a group is
+    /// open, its calls; while shut, the call it shows working.
+    pub(crate) fn disclosures(&self) -> Vec<DisclosureId> {
+        let mut stops = Vec::new();
+        let call = |stops: &mut Vec<DisclosureId>, block: &ferrite_core::transcript::Block| {
+            if let Body::Tool(tool) = &block.body {
+                if pane::tool_has_details(tool) {
+                    stops.push(DisclosureId::Tool(tool.call.clone()));
+                }
+            }
+        };
+        for row in self.rows.rows() {
+            match row.kind() {
+                RowKind::Group => {
+                    let Some(id) = Self::group_id(row) else {
+                        continue;
+                    };
+                    stops.push(id);
+                    if self.group_expanded(row) {
+                        for block in row.blocks() {
+                            call(&mut stops, block);
+                        }
+                    } else if let Some(block) = pane::group_live(row.blocks()) {
+                        call(&mut stops, block);
+                    }
+                }
+                RowKind::Activity { .. } => {
+                    if let Some(block) = row.blocks().first() {
+                        call(&mut stops, block);
+                    }
+                }
+                RowKind::Reasoning => {
+                    if let Some(block) = row.blocks().first() {
+                        if matches!(&block.body, Body::Thinking(text) if pane::reasoning_has_details(text))
+                        {
+                            stops.push(DisclosureId::Reasoning(block.id));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        stops
     }
 
     /// The banner (the prototype's `.banner`): the steel mark three rows
@@ -1135,6 +1270,19 @@ impl TranscriptView {
         view: Entity<Self>,
         _cx: &mut Context<Self>,
     ) -> pane::Disclosure {
+        self.disclosure_control(call, false, view)
+    }
+
+    /// A header's disclosure: the whole header toggles under the pointer,
+    /// its chevron turning; `shown` keeps the chevron in view (a group's,
+    /// whose line is only ever a disclosure) where a reasoning row's shows
+    /// under the pointer.
+    fn disclosure_control(
+        &self,
+        call: &DisclosureId,
+        shown: bool,
+        view: Entity<Self>,
+    ) -> pane::Disclosure {
         let call = call.clone();
         let clicked = call.clone();
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
@@ -1173,7 +1321,7 @@ impl TranscriptView {
         let eased = self.eased.as_ref() == Some(&(call.clone(), expanded));
         pane::Disclosure {
             overlay: Some(control.into_any_element()),
-            chevron: Some(pane::disclosure_chevron(expanded, targeted, eased)),
+            chevron: Some(pane::disclosure_chevron(expanded, targeted || shown, eased)),
             targeted,
             toggle: Some(toggle),
             focus: None,

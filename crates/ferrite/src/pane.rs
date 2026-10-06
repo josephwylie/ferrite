@@ -17,7 +17,7 @@
 //! state word in colour, the last lines dim, the quick answers.
 
 mod text;
-pub(crate) use text::collect_block_text;
+pub(crate) use text::{collect_block_text, collect_group_text, group_live};
 
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
@@ -136,13 +136,15 @@ struct TranscriptViewport {
 }
 
 /// Disclosure identities preserve choices while content streams or Subjects
-/// switch: a call's details (or its output fold), a long thought, and a
-/// later edit's folded diff (`+ show diff`).
+/// switch: a call's details (or its output fold), a long thought, a later
+/// edit's folded diff (`+ show diff`), and a group of calls, named by its
+/// first call.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DisclosureId {
     Tool(String),
     Reasoning(BlockId),
     Diff(String),
+    Group(String),
 }
 impl From<&str> for DisclosureId {
     fn from(call: &str) -> Self {
@@ -3080,24 +3082,6 @@ pub fn tool_has_details(tool: &ToolBlock) -> bool {
         || tool.structured_result.is_some()
         || !tool.summary.is_empty()
         || !tool.diffs.is_empty()
-}
-
-/// One visibility rule for rendering controls, keyboard cycling and focus:
-/// every call is its own row, so each call with details and each long
-/// thought is one stop, oldest first.
-pub fn rendered_disclosures(_view: &PaneView, blocks: &[Block], level: Level) -> Vec<DisclosureId> {
-    rendered_window(blocks, level)
-        .iter()
-        .filter_map(|block| match &block.body {
-            Body::Tool(tool) if tool_has_details(tool) => {
-                Some(DisclosureId::Tool(tool.call.clone()))
-            }
-            Body::Thinking(text) if reasoning_text(text).1.is_some() => {
-                Some(DisclosureId::Reasoning(block.id))
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 /// The working line's mark (the prototype's `.spin`): the star spinner
@@ -7305,6 +7289,236 @@ pub(crate) fn render_tool(
         .into_any_element()
 }
 
+/// A group's disclosure state: whether it is open, the keyboard's target
+/// and the pointer's toggle over its summary, whether the pointer just
+/// flipped it (its members ease in), and how its members draw — every call
+/// while open; while shut, the call still working (`text::group_live`).
+/// They draw after the summary, so their text registers after its own.
+pub(crate) struct GroupCx<'a> {
+    pub expanded: bool,
+    pub disclosure: Option<Disclosure>,
+    pub members: Box<dyn FnOnce() -> Vec<AnyElement> + 'a>,
+}
+
+/// A group's bullet, read as a call's is: green while any call works, the
+/// failure ink once any failed, hollow when none answered, else settled.
+fn group_dot_ink(members: &[Block]) -> (u32, DotShape) {
+    let tools: Vec<&ToolBlock> = text::group_tools(members).collect();
+    if tools.iter().any(|tool| tool.state == ToolState::Running) {
+        (RUNNING, DotShape::Solid)
+    } else if tools.iter().any(|tool| text::call_failed(tool)) {
+        (BLOCKED, DotShape::Solid)
+    } else if tools
+        .iter()
+        .all(|tool| tool.state == ToolState::Unavailable)
+    {
+        (TEXT_FAINT, DotShape::Ring)
+    } else {
+        (TEXT_MUTED, DotShape::Solid)
+    }
+}
+
+/// A group's time in its trail: its calls' times summed — ticking while
+/// one works, coarsened as a live call's is on a Pane without the keyboard
+/// — shown from one second up.
+fn group_duration(
+    members: &[Block],
+    timings: Option<&HashMap<String, ToolTiming>>,
+    focused: bool,
+) -> Option<String> {
+    let timings = timings?;
+    let now = ferrite_core::clock::instant();
+    let mut total = Duration::ZERO;
+    let mut live = false;
+    for tool in text::group_tools(members) {
+        match timings.get(&tool.call) {
+            Some(ToolTiming::Running(started)) => {
+                total += now.saturating_duration_since(*started);
+                live = true;
+            }
+            Some(ToolTiming::Done(spent)) => total += *spent,
+            None => {}
+        }
+    }
+    if total.as_millis() < theme::DURATION_MIN_MS {
+        return None;
+    }
+    Some(if live && !focused {
+        ferrite_core::progress::coarse_seconds(total)
+    } else {
+        ferrite_core::progress::live_seconds(total)
+    })
+}
+
+/// A run of routine calls under one summary (`text::group_summary`):
+/// `● Ran 12 commands, read 1 file · 2 failed ›` with the calls' summed
+/// time hard right (shut over a working call, that call's clock alone). The bullet is the group's state (`group_dot_ink`); the
+/// summary reads in `TEXT`, its failure count in `BLOCKED`. The whole line
+/// is the pointer's toggle — it lifts to `TEXT_STRONG` under the pointer,
+/// its chevron always shown, a quarter turned when open — and the
+/// keyboard's (`ToolDisclosure`), wearing `paint::HOVER` when targeted.
+///
+/// Open, the calls hang under the summary one gutter in, each the row it
+/// would be on its own (its folds and details its own), on a 1px
+/// `paint::LINE2` rail under the bullet, easing in; shut, a working call
+/// hangs there alone so a live suite's bar and a command's live line stay
+/// in view.
+pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupCx) -> AnyElement {
+    let grid = row_cx.grid();
+    let GroupCx {
+        expanded,
+        disclosure,
+        members: draw_members,
+    } = state;
+    let Some(leader) = members.first() else {
+        return div().into_any_element();
+    };
+    let leader_call = match &leader.body {
+        Body::Tool(tool) => tool.call.clone(),
+        _ => format!("{:?}", leader.id),
+    };
+    let (overlay, chevron, targeted, focus) = match disclosure {
+        Some(Disclosure {
+            overlay,
+            chevron,
+            targeted,
+            focus,
+            ..
+        }) => (overlay, chevron, targeted, focus),
+        None => (None, None, false, None),
+    };
+    let summary = text::group_summary(members);
+    let mut highlights = separators(&summary.text);
+    if let Some(failed) = summary.failed.clone() {
+        highlights.push((
+            failed,
+            HighlightStyle {
+                color: Some(rgb(BLOCKED).into()),
+                ..Default::default()
+            },
+        ));
+    }
+    let (ink, shape) = group_dot_ink(members);
+    // Shut with its working call under it, the call's own clock is the
+    // group's: one ticking time, never two.
+    let live = !expanded && text::group_live(members).is_some();
+    let trail = (!live)
+        .then(|| group_duration(members, row_cx.timings, row_cx.focused))
+        .flatten()
+        .map(|duration| {
+            // Right-aligned words hold exactly their cells.
+            let cells = duration.chars().count() as f32;
+            components::tabular(
+                div()
+                    .debug_selector(|| "tool-group-duration".into())
+                    .flex_shrink_0()
+                    .w(px(cells * grid.cell()))
+                    .whitespace_nowrap()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(SharedString::from(duration)),
+            )
+        });
+    let row_selector = format!("tool-group-{leader_call}");
+    let mut header =
+        grid_row(glyph_gutter(grid, shape.glyph(), ink).debug_selector(|| "tool-group-dot".into()))
+            .id(SharedString::from(row_selector.clone()))
+            .debug_selector(move || row_selector.clone())
+            .group(DISCLOSURE_ROW)
+            .relative()
+            .items_center()
+            .child(
+                div()
+                    .debug_selector(|| "tool-group-summary".into())
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT))
+                    .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT_STRONG)))
+                    .child(
+                        row_cx
+                            .selection
+                            .line(leader.id, summary.text.clone(), highlights),
+                    ),
+            )
+            .children(chevron)
+            .child(div().flex_1())
+            .when_some(trail, |header, trail| {
+                header.child(div().flex_shrink_0().pl(px(2.0 * grid.cell())).child(trail))
+            })
+            .children(overlay);
+    if targeted {
+        header = header.bg(theme::paint::HOVER).child(
+            div()
+                .debug_selector(|| "tool-disclosure-keyboard-target".into())
+                .absolute()
+                .inset_0(),
+        );
+        if let Some(focus) = &focus {
+            header = header.track_focus(focus).key_context("ToolDisclosure");
+        }
+    }
+    let rail = |members: Vec<AnyElement>| {
+        div()
+            .debug_selector(|| "tool-group-members".into())
+            .relative()
+            .flex()
+            .flex_col()
+            .w_full()
+            .min_w_0()
+            .pl(px(grid.gutter()))
+            .child(
+                div()
+                    .debug_selector(|| "tool-group-rail".into())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px((grid.cell() / 2.).floor()))
+                    .w(px(1.))
+                    .bg(theme::paint::LINE2),
+            )
+            .children(members)
+    };
+    let drawn = draw_members();
+    let open_id = SharedString::from(format!("tool-group-open-{leader_call}"));
+    let spec = crate::motion::MotionSpec::new(theme::FOLD_EASE_MS, crate::motion::EASE);
+    let body = if expanded {
+        let members = rail(drawn);
+        crate::motion::settled(open_id, true, spec, move |t| {
+            div()
+                .w_full()
+                .min_w_0()
+                .opacity(t.clamp(0., 1.))
+                .child(members)
+        })
+        .reveal_only()
+        .into_any_element()
+    } else {
+        // Mounted shut too, so the next opening eases.
+        let shut = crate::motion::settled(open_id, false, spec, |_| div())
+            .reveal_only()
+            .into_any_element();
+        if drawn.is_empty() {
+            shut
+        } else {
+            div()
+                .w_full()
+                .min_w_0()
+                .child(shut)
+                .child(rail(drawn))
+                .into_any_element()
+        }
+    };
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .text_color(rgb(TEXT_MUTED))
+        .child(header)
+        .child(body)
+        .into_any_element()
+}
+
 /// A test run's elbow row: `└ ok · 38 passed`, `└ failed · running 38
 /// tests` — the lead word alone in its state ink.
 fn test_elbow_row(block: BlockId, elbow: &TestElbow, selection: &TextRuns, grid: Grid) -> Div {
@@ -7658,6 +7872,8 @@ pub fn tool_disclosure_control(
         (DisclosureId::Reasoning(_), true) => "Hide reasoning",
         (DisclosureId::Diff(_), false) => "Show diff",
         (DisclosureId::Diff(_), true) => "Hide diff",
+        (DisclosureId::Group(_), false) => "Show tool calls",
+        (DisclosureId::Group(_), true) => "Hide tool calls",
         (_, false) => "Show tool details",
         (_, true) => "Hide tool details",
     };
@@ -9138,6 +9354,8 @@ mod tests {
         selection: crate::select::TranscriptText,
         blocks: Vec<Block>,
         expanded: HashSet<String>,
+        /// Groups open, by their first call.
+        groups: HashSet<String>,
         reasoning_expanded: bool,
         transcript: Entity<crate::transcript::TranscriptView>,
         display_revision: u64,
@@ -9155,6 +9373,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .map(DisclosureId::Tool)
+                .chain(self.groups.iter().cloned().map(DisclosureId::Group))
                 .collect();
             if self.reasoning_expanded {
                 expanded.extend(self.blocks.iter().filter_map(|block| {
@@ -9238,6 +9457,7 @@ mod tests {
             selection,
             blocks,
             expanded: HashSet::new(),
+            groups: HashSet::new(),
             reasoning_expanded: false,
             transcript,
             display_revision: 0,
@@ -9565,6 +9785,156 @@ mod tests {
     /// a kind that registers nothing would select and copy as a silent
     /// hole. Chrome — gutter glyphs, bullets, verdict chips, the diff
     /// number column — never registers, so it can never be copied.
+    /// A group copies as it reads: shut, its summary alone; open, the
+    /// summary and every call as its own row would copy. Each render also
+    /// checks the copy projection against what was drawn.
+    #[gpui::test]
+    fn a_group_copies_what_it_draws_shut_and_open(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("reconcile".into()));
+        for (id, command, output, error) in [
+            ("g1", "python3 match.py", "12 matched", false),
+            ("g2", "grep -n adelaide notes.md", "", true),
+        ] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": command }),
+            }));
+            transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: output.into(),
+                is_error: error,
+                result: ferrite_core::ToolResult::Opaque,
+            }));
+        }
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "g3".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": "notes.md" }),
+        }));
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let thread = ThreadId::new(1);
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            shows_blocks(blocks, cx)
+        });
+        cx.simulate_resize(size(px(900.), px(600.)));
+        cx.run_until_parked();
+        let copied = |view: &Entity<ShowsBlocks>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| view.selection.registered(thread))
+                .into_iter()
+                .map(|(_, _, _, text)| text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let shut = copied(&view, cx);
+        assert!(
+            shut.contains("Ran 2 commands, reading 1 file \u{b7} 1 failed"),
+            "{shut}"
+        );
+        // Shut, it draws its working call alone.
+        assert!(shut.contains("Read(notes.md)"), "{shut}");
+        assert!(!shut.contains("python3 match.py"), "{shut}");
+        assert!(cx.debug_bounds("tool-group-g1").is_some());
+        assert!(cx.debug_bounds("tool-row-g1").is_none());
+        assert!(cx.debug_bounds("tool-row-g3").is_some(), "the live call");
+
+        view.update(cx, |view, cx| {
+            view.groups.insert("g1".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let open = copied(&view, cx);
+        for text in [
+            "python3 match.py",
+            "12 matched",
+            "grep -n adelaide",
+            "Read(notes.md)",
+        ] {
+            assert!(open.contains(text), "{text}: {open}");
+        }
+        // Each call hangs one gutter in, on the rail under the bullet.
+        let summary = cx.debug_bounds("tool-group-g1").unwrap();
+        let member = cx.debug_bounds("tool-row-g1").unwrap();
+        let rail = cx.debug_bounds("tool-group-rail").unwrap();
+        let gutter = px(Grid::of(Default::default()).gutter());
+        assert!(
+            // Boxes round to the pixel; the gutter keeps its fraction.
+            ((member.left() - summary.left()) - gutter).abs() <= px(1.0),
+            "{member:?} {summary:?} {gutter:?}"
+        );
+        assert!(rail.left() > summary.left() && rail.left() < member.left());
+        assert_eq!(
+            member.top(),
+            summary.bottom(),
+            "the calls hang flush under it"
+        );
+    }
+
+    #[test]
+    fn a_group_summary_names_its_work_in_order_and_tense() {
+        let mut transcript = Transcript::default();
+        let mut call = |id: &str, name: &str, input: serde_json::Value, done: Option<bool>| {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input,
+            }));
+            if let Some(error) = done {
+                transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+                    id: id.into(),
+                    output: "out".into(),
+                    is_error: error,
+                    result: ferrite_core::ToolResult::Opaque,
+                }));
+            }
+        };
+        let path = serde_json::json!({ "file_path": "a.rs" });
+        call(
+            "a",
+            "Grep",
+            serde_json::json!({ "pattern": "x" }),
+            Some(false),
+        );
+        call("b", "Read", path.clone(), Some(false));
+        call("c", "Read", path.clone(), Some(true));
+        call(
+            "d",
+            "mcp__github__get_issue",
+            serde_json::json!({}),
+            Some(false),
+        );
+        call(
+            "e",
+            "mcp__github__list_prs",
+            serde_json::json!({}),
+            Some(false),
+        );
+        call(
+            "f",
+            "WebFetch",
+            serde_json::json!({ "url": "https://x" }),
+            None,
+        );
+        let blocks = transcript.blocks();
+        assert_eq!(
+            text::group_summary(blocks).text,
+            "Searched for 1 pattern, read 2 files, called github 2 times, \
+             fetching 1 page \u{b7} 1 failed"
+        );
+        let summary = text::group_summary(&blocks[..2]);
+        assert_eq!(summary.text, "Searched for 1 pattern, read 1 file");
+        assert_eq!(summary.failed, None);
+        let failed = text::group_summary(&blocks[..3]);
+        assert_eq!(&failed.text[failed.failed.clone().unwrap()], "1 failed");
+        assert_eq!(
+            text::group_live(blocks).map(|block| block.id),
+            Some(blocks[5].id)
+        );
+        assert_eq!(text::group_live(&blocks[..5]), None);
+    }
+
     #[gpui::test]
     fn every_block_kind_registers_its_selectable_text(cx: &mut TestAppContext) {
         let transcript = every_kind();

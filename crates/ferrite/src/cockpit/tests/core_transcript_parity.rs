@@ -1,5 +1,5 @@
 //! Terminal-native parity, core-transcript package: the reading grid, the
-//! banner, every call its own row, elbows and folds, the turn's stamp, the
+//! banner, call rows and their groups, elbows and folds, the turn's stamp, the
 //! prompt's inline chips, the hover card's placement and the Markdown knobs.
 use super::*;
 use ferrite_core::transcript::{BlockId, ToolBlock, ToolOutput, ToolState, TurnEnd};
@@ -219,7 +219,7 @@ fn answers_underline_links_on_hover_align_numbers_and_frame_images() {
     );
 }
 
-/// The banner heads the transcript; every call is its own row; a later edit
+/// The banner heads the transcript; every edit is its own row; a later edit
 /// to a file already diffed in its turn folds its diff behind `+ show diff`
 /// until it is opened.
 #[gpui::test]

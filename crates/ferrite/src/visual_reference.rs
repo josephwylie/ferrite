@@ -319,6 +319,8 @@ const STATES: &[(&str, &[&str])] = &[
     ("empty-transcript", &["app"]),
     ("starting", &["app"]),
     ("error-turn", &["wide", "app"]),
+    ("toolgroups", &["app", "narrow"]),
+    ("toolgroups-open", &["app", "narrow"]),
     // ---- WP-A states (append above the end line)
     // (end WP-A)
 
@@ -543,6 +545,21 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
     match state {
         state if parity_scenes::handles(state) => parity_scenes::build(state),
         "conversation" => (conversation(label), none),
+        "toolgroups" => (tool_groups(label), none),
+        "toolgroups-open" => {
+            let scene = tool_groups(label);
+            let setup: Setup = Box::new(|view, _, cx| {
+                use crate::pane::DisclosureId;
+                view.panes[0].toggle_tool(&DisclosureId::Group("probe-1".into()));
+                view.panes[0].toggle_tool(&DisclosureId::Tool("probe-3".into()));
+                if let Some(transcript) = view.panes[0].transcript() {
+                    transcript.update(cx, |transcript, cx| {
+                        transcript.scroll_to(crate::transcript::ScrollTarget::Top, cx)
+                    });
+                }
+            });
+            (scene, setup)
+        }
         "nav" => nav(),
         "group4" => group4(),
         "group9" => group9(),
@@ -555,8 +572,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let scene = conversation(label);
             let setup: Setup = Box::new(|view, _, _| {
                 use crate::pane::DisclosureId;
-                // Every call is its own row (no group summaries): each Edit
-                // shows its hunks once disclosed.
+                // Edits never fold into a group: each Edit shows its hunks
+                // once disclosed.
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-1".into()));
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-2".into()));
             });
@@ -1383,6 +1400,110 @@ fn error_turn(label: &str) -> Scene {
             outcome: TurnOutcome::Error("API Error: 529 overloaded".into()),
             cost_usd: None,
         });
+    scene
+}
+
+/// Runs of routine calls folded into groups: a settled run with failures,
+/// a run between two edits, and a run still working, its live call drawn
+/// under the summary.
+fn tool_groups(label: &str) -> Scene {
+    let mut scene = Scene::new(&format!("toolgroups-{label}"));
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Reconcile October invoices");
+    scene.core.send(
+        thread,
+        "Reconcile the October supplier invoices against MYOB.".into(),
+    );
+    let read = |id: &str, path: &str, lines: usize| {
+        feed.tool(id, "Read", serde_json::json!({ "file_path": path }))
+            .ok(id, &"line\n".repeat(lines));
+    };
+    feed.boot(Provider::Claude, 64_000);
+    feed.bash(
+        "probe-1",
+        "cd outputs/invoice-reconcile/2026-10-06 && python3 -c 'import json; print(list(json.load(open(\"bills.json\"))[0]))'",
+        "['SupplierInvoiceNumber', 'DateDue', 'BalanceDue', 'DateOccurred', 'DisplayId', 'Id']",
+        0,
+        1_400,
+    );
+    feed.bash(
+        "probe-2",
+        "cd outputs/invoice-reconcile/2026-10-06 && python3 match.py --dry-run",
+        "",
+        0,
+        900,
+    );
+    read("probe-read", "/tmp/saxon.png", 1);
+    feed.bash(
+        "probe-3",
+        "cd outputs/invoice-reconcile/2026-10-06/myob-prep && python3 prep.py --hold",
+        "16:HOLD={\n  'a-p01': 'Rivera',\n  'a-p05': 'platform10',\n  'a-p06': 'Tribe Market'\n}\n  # 61 more held",
+        0,
+        104_000,
+    );
+    feed.bash(
+        "probe-4",
+        "cd outputs/invoice-reconcile && grep -n -i '25436\\|adelaide' notes.md",
+        "",
+        1,
+        200,
+    );
+    feed.tool(
+        "probe-5",
+        "Grep",
+        serde_json::json!({ "pattern": "create_contact", "path": ".claude/skills" }),
+    )
+    .ok(
+        "probe-5",
+        ".claude/skills/integrations/myob/scripts/myob.py:316:    emit(args, call(...))",
+    );
+    feed.bash(
+        "probe-6",
+        "cd outputs/invoice-reconcile/2026-10-06/myob-prep && python3 accounts.py 6-3001",
+        "{'id': '97', 'code': '6-3001', 'name': 'Kitchen Consumables'}\nTraceback (most recent call last):\n  KeyError: 'tax_id'",
+        1,
+        700,
+    );
+    feed.bash(
+        "probe-7",
+        "cd outputs/invoice-reconcile/2026-10-06/myob-prep && python3 prep.py --summary",
+        "a-p06 skip Tribe Market (Level Group OMO43465)\n+ 12 bills ready",
+        0,
+        15_000,
+    );
+    feed.text("Twelve bills are ready to enter; two need a decision first.\n\n");
+    feed.ev(SessionEvent::ContentBoundary);
+    feed.edit(
+        "fix-1",
+        "myob-prep/accounts.py",
+        Hunk {
+            old_start: 40,
+            old_lines: 1,
+            new_start: 40,
+            new_lines: 1,
+            lines: vec![
+                "-    tax = row['tax_id']".into(),
+                "+    tax = row.get('tax_id', DEFAULT_TAX)".into(),
+            ],
+            section: None,
+        },
+    );
+    read("check-1", "myob-prep/accounts.py", 120);
+    feed.bash(
+        "check-2",
+        "cd myob-prep && python3 accounts.py 6-3001",
+        "{'id': '97', 'code': '6-3001', 'tax_id': '1'}",
+        0,
+        800,
+    );
+    feed.text("Accounts resolve now. Entering the drafts.\n\n");
+    feed.ev(SessionEvent::ContentBoundary);
+    read("live-1", "myob-prep/bills.json", 64);
+    feed.tool(
+        "live-2",
+        "Bash",
+        serde_json::json!({ "command": "cd myob-prep && python3 enter.py --draft --all" }),
+    );
     scene
 }
 

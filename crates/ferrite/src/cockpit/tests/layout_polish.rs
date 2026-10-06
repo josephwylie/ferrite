@@ -295,7 +295,7 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         })
         .unwrap();
     tick(cx);
-    let group = pane::DisclosureId::Tool("clicked-a".into());
+    let group = pane::DisclosureId::Group("clicked-a".into());
     let at = view.read_with(cx, |view, _| {
         view.panes[0].tool_bounds(group.clone()).unwrap().center()
     });
@@ -304,7 +304,7 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     view.read_with(cx, |view, _| {
         assert!(
             view.panes[0].tool_expanded(group.clone()),
-            "the click opens the call"
+            "the click opens the group"
         );
         assert!(
             !view.panes[0].has_tool_target(),
@@ -333,4 +333,73 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         cx.debug_bounds("tool-disclosure-keyboard-target").is_some(),
         "Tab still draws the ring"
     );
+}
+
+/// The keyboard walks a group as the pointer sees it: Tab lands on the
+/// summary, a shut group's calls are no stops, Enter opens it, and then
+/// Tab steps into its calls.
+#[gpui::test]
+fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("polish-group-keys", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect output".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    for id in ["keys-a", "keys-b"] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command":"echo result"}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "result".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let group = pane::DisclosureId::Group("keys-a".into());
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].targeted_tool(), Some(&group));
+    });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.panes[0].targeted_tool(),
+            None,
+            "a shut group's calls are no stops"
+        );
+    });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.panes[0].tool_expanded(group.clone()), "Enter opens it");
+    });
+    assert!(cx.debug_bounds("tool-row-keys-b").is_some());
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.panes[0].targeted_tool(),
+            Some(&pane::DisclosureId::Tool("keys-a".into())),
+            "open, Tab steps into its calls"
+        );
+    });
 }

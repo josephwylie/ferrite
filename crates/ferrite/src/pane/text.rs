@@ -53,6 +53,166 @@ pub(super) fn path_argument(tool: &ToolBlock) -> Option<(usize, usize)> {
 /// What a call whose result never came says under it.
 pub(super) const NO_RESULT: &str = "no result";
 
+/// What kind of work a call in a group did, for its summary. Classified by
+/// the tool alone: a command is a command whatever it ran — `cat` is not
+/// read as a read without knowing what the shell made of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WorkKind {
+    Command,
+    Read,
+    Search,
+    List,
+    Fetch,
+    WebSearch,
+    /// An MCP call, by its server (`mcp__github__get_issue` → `github`).
+    Mcp(String),
+    Other(String),
+}
+
+impl WorkKind {
+    fn of(tool: &ToolBlock) -> Self {
+        match tool.name.as_str() {
+            "Bash" | "commandExecution" | "BashOutput" => Self::Command,
+            "Read" | "NotebookRead" | "read_file" | "imageView" => Self::Read,
+            "Grep" | "Glob" => Self::Search,
+            "LS" => Self::List,
+            "WebFetch" => Self::Fetch,
+            "WebSearch" | "webSearch" => Self::WebSearch,
+            name => match name
+                .strip_prefix("mcp__")
+                .and_then(|rest| rest.split_once("__"))
+            {
+                Some((server, _)) if !server.is_empty() => Self::Mcp(server.to_owned()),
+                _ => Self::Other(ferrite_core::transcript::display_tool_name(name).to_owned()),
+            },
+        }
+    }
+
+    /// `Ran 3 commands`, `Reading 1 file`, `Called github 2 times`: the
+    /// verb in the present tense while one of its calls runs.
+    fn phrase(&self, count: usize, running: bool) -> String {
+        let counted = |active: &str, done: &str, one: &str, many: &str| {
+            let verb = if running { active } else { done };
+            format!("{verb} {count} {}", if count == 1 { one } else { many })
+        };
+        match self {
+            Self::Command => counted("Running", "Ran", "command", "commands"),
+            Self::Read => counted("Reading", "Read", "file", "files"),
+            Self::Search => counted("Searching for", "Searched for", "pattern", "patterns"),
+            Self::List => counted("Listing", "Listed", "directory", "directories"),
+            Self::Fetch => counted("Fetching", "Fetched", "page", "pages"),
+            Self::WebSearch => counted("Running", "Ran", "web search", "web searches"),
+            Self::Mcp(server) | Self::Other(server) => {
+                let verb = match (self, running) {
+                    (Self::Mcp(_), true) => "Calling",
+                    (Self::Mcp(_), false) => "Called",
+                    (_, true) => "Using",
+                    (_, false) => "Used",
+                };
+                match count {
+                    1 => format!("{verb} {server}"),
+                    count => format!("{verb} {server} {count} times"),
+                }
+            }
+        }
+    }
+}
+
+/// A group's summary line, as it reads and copies: what its calls did by
+/// kind, in the order the kinds first appear, the first phrase capitalised
+/// (`Ran 12 commands, read 1 file`), then what went wrong (`· 2 failed`,
+/// `· 1 without a result`). `failed` is the failure count's range, which
+/// wears the failure ink.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GroupSummary {
+    pub text: String,
+    pub failed: Option<std::ops::Range<usize>>,
+}
+
+pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
+    let mut kinds: Vec<(WorkKind, usize, bool)> = Vec::new();
+    let (mut failed, mut unanswered) = (0, 0);
+    for tool in group_tools(members) {
+        let kind = WorkKind::of(tool);
+        let running = tool.state == ToolState::Running;
+        match kinds.iter_mut().find(|(seen, ..)| *seen == kind) {
+            Some((_, count, live)) => {
+                *count += 1;
+                *live |= running;
+            }
+            None => kinds.push((kind, 1, running)),
+        }
+        if call_failed(tool) {
+            failed += 1;
+        }
+        if tool.state == ToolState::Unavailable {
+            unanswered += 1;
+        }
+    }
+    let mut text = String::new();
+    for (index, (kind, count, running)) in kinds.iter().enumerate() {
+        let phrase = kind.phrase(*count, *running);
+        if index == 0 {
+            text.push_str(&phrase);
+        } else {
+            // Only the verb lowers: a server's name keeps its case.
+            text.push_str(", ");
+            let mut chars = phrase.chars();
+            if let Some(first) = chars.next() {
+                text.extend(first.to_lowercase());
+                text.push_str(chars.as_str());
+            }
+        }
+    }
+    let mut failed_range = None;
+    if failed > 0 {
+        text.push_str(" \u{b7} ");
+        let start = text.len();
+        text.push_str(&format!("{failed} {}", theme::words::FAILED));
+        failed_range = Some(start..text.len());
+    }
+    if unanswered > 0 {
+        text.push_str(&format!(
+            " \u{b7} {unanswered} without {}",
+            if unanswered == 1 {
+                "a result"
+            } else {
+                "results"
+            }
+        ));
+    }
+    GroupSummary {
+        text,
+        failed: failed_range,
+    }
+}
+
+/// A group's calls, in order.
+pub(crate) fn group_tools(members: &[Block]) -> impl Iterator<Item = &ToolBlock> {
+    members.iter().filter_map(|block| match &block.body {
+        Body::Tool(tool) => Some(tool),
+        _ => None,
+    })
+}
+
+/// Whether a call failed: its state, or its own test report behind a pipe
+/// that exited 0 — the call's bullet reads the same.
+pub(crate) fn call_failed(tool: &ToolBlock) -> bool {
+    matches!(tool.state, ToolState::Failed(_))
+        || (tool.state == ToolState::Ok
+            && test_elbow(tool).is_some_and(|elbow| elbow.lead == theme::words::FAILED))
+}
+
+/// The call a shut group shows under its summary while it works: its
+/// newest running call, drawn whole (a suite's bar, a command's live
+/// line). Settled, a shut group shows nothing under it.
+pub(crate) fn group_live(members: &[Block]) -> Option<&Block> {
+    members
+        .iter()
+        .rev()
+        .find(|block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running))
+}
+
 /// Whether a disclosed call echoes its input: only where the call line
 /// could not already show it whole (`INPUT_ECHO_CHARS`), or where the input
 /// is all there is to disclose (a call still running). A command the call
@@ -184,6 +344,39 @@ pub(crate) fn collect_block_text(
     }
 }
 
+/// A group's copy fragments, in the order `render_tool_group` registers
+/// them: its summary, then the calls it draws — every call while open,
+/// the working call while shut — each as its own row's would be.
+pub(crate) fn collect_group_text(
+    members: &[Block],
+    expanded: bool,
+    member_expanded: impl Fn(&ToolBlock) -> bool,
+    wide: bool,
+    selection: &TextRuns,
+) {
+    let Some(leader) = members.first() else {
+        return;
+    };
+    let _ = selection.line(leader.id, group_summary(members).text, Vec::new());
+    let drawn: Vec<&Block> = if expanded {
+        members.iter().collect()
+    } else {
+        group_live(members).into_iter().collect()
+    };
+    for block in drawn {
+        if let Body::Tool(tool) = &block.body {
+            collect_tool_text(
+                block.id,
+                tool,
+                member_expanded(tool),
+                false,
+                wide,
+                selection,
+            );
+        }
+    }
+}
+
 /// A call's copy fragments, in the order `render_tool` registers them: its
 /// call line; what hangs on its elbow (a test run's verdict and preview, a
 /// command's first line, a failure and its fold, a result); its disclosed
@@ -231,13 +424,18 @@ fn collect_tool_text(
                     collect_fold(block, tool, test_rest(tool, &elbow), selection);
                 }
             } else {
-                line(failed_head());
-                if let Some(detail) = tool
+                let detail = tool
                     .result_line
                     .clone()
                     .or_else(|| failed_excerpt(tool).map(str::to_owned))
-                {
-                    line(detail);
+                    .filter(|detail| !detail.trim().is_empty());
+                // Nothing said: the word alone, as `render_tool` draws it.
+                match detail {
+                    Some(detail) => {
+                        line(failed_head());
+                        line(detail);
+                    }
+                    None => line(theme::words::FAILED.to_string()),
                 }
                 if let Some((shown, hidden)) = output_fold(tool) {
                     line(shown);
