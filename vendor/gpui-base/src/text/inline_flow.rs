@@ -946,6 +946,9 @@ fn runs_for_highlights(
     let mut ix = 0;
 
     for (range, highlight) in highlights {
+        if !super::inline::highlight_fits(text, ix, &range) {
+            continue;
+        }
         if ix < range.start {
             runs.push(default_style.clone().to_run(range.start - ix));
         }

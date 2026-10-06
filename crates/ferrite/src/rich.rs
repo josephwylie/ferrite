@@ -890,6 +890,7 @@ impl gpui::RenderOnce for Literal {
         let inherited = window.text_style();
         let source = literal_source(&self.text);
         let highlights = self.highlights;
+        let text = self.text.clone();
         let style = style(window.rem_size())
             .with_foreground(inherited.color)
             .with_paragraph_gap(rems(0.))
@@ -913,7 +914,16 @@ impl gpui::RenderOnce for Literal {
             // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
             .style(style)
-            .code_block_highlighter(move |_| highlights.clone())
+            // The retained state re-parses off the main thread, so for a frame
+            // after the text changes its block still holds the previous text.
+            // The highlights index this text; they wait for its parse.
+            .code_block_highlighter(move |block| {
+                if block.code() == text {
+                    highlights.clone()
+                } else {
+                    Vec::new()
+                }
+            })
     }
 }
 

@@ -15,6 +15,11 @@ hitbox calculations for clipped transcript paragraphs during streaming.
 The original function already clipped every returned hitbox to that mask;
 selection calculation and copying of offscreen text remain unchanged.
 
+- `Inline` and `InlineFlow` drop a highlight that overlaps its predecessor, runs past the text
+  or splits a character, instead of handing `StyledText::with_runs` runs that
+  abort the app. A retained view re-parses off the main thread, so for a frame
+  its text can trail highlights computed for the next revision.
+
 - `TextView::link_renderer` lets Ferrite replace local file links with native
   inline attachment cards. The callback leaves ordinary links alone and never
   rewrites Markdown. InlineFlow measures/wraps each card as one element, scopes
