@@ -73,6 +73,12 @@ pub struct Settings {
     /// approved transcript has none, so they are kept off it and shown from
     /// the ⌘K palette's `show thinking`. Default: false.
     pub show_thinking: bool,
+    /// Smart filtering: the nav opens with a `done` section (Threads that
+    /// finished while the operator looked elsewhere) and a `working`
+    /// section above a rule, the usual Project tree below it — for running
+    /// many Sessions at once. Toggled from Settings or the ⌘K palette.
+    /// Default: false.
+    pub smart_filtering: bool,
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -155,6 +161,7 @@ impl Default for Settings {
             reading_size: ReadingSize::STANDARD,
             auto_update_clis: true,
             show_thinking: false,
+            smart_filtering: false,
         }
     }
 }
@@ -277,6 +284,7 @@ mod tests {
             reading_size: ReadingSize(18),
             auto_update_clis: false,
             show_thinking: true,
+            smart_filtering: true,
         }
     }
 
