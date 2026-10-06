@@ -4252,7 +4252,7 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
                 .min_w_0()
                 .truncate()
                 .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(held.to_owned())),
+                .child(SharedString::from(queued_preview(held))),
         )
         .when(latest, |row| {
             row.child(components::tabular(
@@ -4264,6 +4264,13 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
                     .child(StyledText::new(hints).with_highlights(seams)),
             ))
         })
+}
+
+/// A held prompt as one line: the row is a single `QUEUE_ROW_H` line and
+/// gpui's truncation still breaks at `\n`, so a multi-line prompt would
+/// stack its lines into the row and clip them both.
+fn queued_preview(held: &str) -> String {
+    held.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The text of an approval's command well: a command's source, else the
@@ -8954,6 +8961,14 @@ mod tests {
         assert_eq!(tokens_label(340), "340");
         assert_eq!(tokens_label(8_040), "8.0k");
         assert_eq!(tokens_label(12_400), "12k");
+    }
+    /// A multi-line queued prompt reads as one line in its one-line row.
+    #[test]
+    fn a_queued_prompt_previews_on_one_line() {
+        assert_eq!(
+            queued_preview("try again...\n@\"/tmp/shot.png\"\r\n\n  thanks "),
+            "try again... @\"/tmp/shot.png\" thanks"
+        );
     }
     /// The placeholder's pieces after its head (terminal-native, WP-D): at
     /// rest the `/` menu and the drop hint; a prediction's accept key (the
