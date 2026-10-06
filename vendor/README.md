@@ -185,6 +185,11 @@ browser does, so the same CSS geometry lands on the same device pixels:
   fallback written `postscript:<name>` names one face exactly (the braille
   spinner's `AppleBraille-Outline6Dot`, whose family's faces share one
   weight).
+- **Blur material** (`gpui-pre-macos`, `window.rs`). A blurred window's
+  `NSVisualEffectView` uses `HeaderView`, not upstream's `Selection`: macOS 27
+  removed `Selection`'s backdrop blur (no `CABackdropLayer`, only a vibrancy
+  tint), so the window showed the desktop unblurred. `HeaderView` keeps the
+  gaussian blur on every supported macOS.
 - **Debug bounds on a window** (`window.rs`, test support only).
   `Window::debug_bounds` reads the last frame's `debug_selector` bounds,
   which upstream exposes only through `VisualTestContext`: the live
