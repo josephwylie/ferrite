@@ -726,6 +726,20 @@ impl IntoElement for Inline {
     }
 }
 
+/// Whether a highlight can be shaped as a run after the runs ending at `ix`.
+///
+/// `StyledText::with_runs` panics unless the runs tile the text exactly on
+/// char boundaries. Highlights can be computed against a different revision
+/// of the text than the one parsed (a retained view re-parses off the main
+/// thread), so a range that overlaps its predecessor, runs past the end or
+/// splits a character is dropped rather than trusted into a panic.
+pub(super) fn highlight_fits(text: &str, ix: usize, range: &Range<usize>) -> bool {
+    ix <= range.start
+        && range.start < range.end
+        && text.is_char_boundary(range.start)
+        && text.is_char_boundary(range.end)
+}
+
 impl Element for Inline {
     type RequestLayoutState = ();
     type PrepaintState = Hitbox;
@@ -753,6 +767,9 @@ impl Element for Inline {
         let mut ix = 0;
         self.underlines.clear();
         for (range, highlight) in self.highlights.iter() {
+            if !highlight_fits(&self.text, ix, range) {
+                continue;
+            }
             if ix < range.start {
                 runs.push(text_style.clone().to_run(range.start - ix));
             }
@@ -1166,7 +1183,7 @@ fn point_in_text_selection(
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineSelectionProjection, InlineState, point_in_text_selection,
+        InlineSelectionProjection, InlineState, highlight_fits, point_in_text_selection,
         selection_for_document_range,
     };
     use crate::{TextSelectionContentKey, text_selection::TextSelectionDocumentRange};
@@ -1195,6 +1212,18 @@ mod tests {
             vec![(px(0.), px(0.), px(10.)), (px(20.), px(0.), px(10.))],
             "the first line's stroke stops at `b`'s right edge, not the space's"
         );
+    }
+
+    #[test]
+    fn highlights_that_do_not_fit_the_text_are_skipped() {
+        // Highlights for "10 tool calls · 2" applied to the previous
+        // revision's "9 tool calls · 2": the dot's range splits the `·`.
+        let text = "9 tool calls · 2";
+        assert!(!highlight_fits(text, 0, &(14..16)));
+        assert!(!highlight_fits(text, 0, &(0..99)));
+        assert!(!highlight_fits(text, 2, &(0..2)), "overlaps its predecessor");
+        assert!(highlight_fits(text, 0, &(13..15)));
+        assert!(highlight_fits(text, 13, &(13..15)));
     }
 
     #[test]
