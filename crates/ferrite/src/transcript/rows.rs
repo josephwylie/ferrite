@@ -10,7 +10,7 @@ use std::{
     rc::Rc,
 };
 
-use ferrite_core::transcript::{Block, BlockId, Body, ToolState};
+use ferrite_core::transcript::{Block, BlockId, Body, ToolBlock, ToolState};
 
 /// A stable semantic-row identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -21,6 +21,9 @@ pub(crate) enum RowId {
     Markdown(BlockId),
     /// One transcript block: a prompt, a tool call, a note.
     Block(BlockId),
+    /// A run of routine calls folded under one summary, named by its first
+    /// call's block: the run grows at its tail, so the name holds.
+    Group(BlockId),
     /// What a package appends after the last row (the pending Decision).
     Tail,
 }
@@ -40,6 +43,9 @@ pub(crate) enum RowKind {
     Activity {
         diff_shown: bool,
     },
+    /// Two or more routine calls in a row, folded under one summary
+    /// (`Ran 4 commands, read 1 file`). It spaces as a call does.
+    Group,
     Reasoning,
     Notice,
     /// A decision record or a revival note: it hangs on an elbow under the
@@ -82,8 +88,9 @@ impl RowKind {
 /// of vertical rhythm (the transcript grammar in `theme.rs`). Blocks are
 /// one blank line apart, as a terminal prints them: the banner, a turn's
 /// prompt band, prose, a run of tool calls, the stamp, the Decision. The
-/// calls of one run sit flush — except that a call after a drawn diff sits a
-/// line below it — and a row that hangs on an elbow under the row it answers
+/// calls of one run sit flush — a group of calls is a call here — except
+/// that a call after a drawn diff sits a line below it — and a row that
+/// hangs on an elbow under the row it answers
 /// (a decision record, an interrupted or failed turn's end) sits flush under
 /// it. A first row is flush to the top when it is a prompt band and a line
 /// down otherwise (the banner, first whenever there is one, takes the
@@ -96,8 +103,9 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     };
     match (previous, kind) {
         (_, Tail) => line,
-        (Activity { diff_shown: true }, Activity { .. }) => line,
-        (_, TurnEnd { hangs: true } | Meta) | (Activity { .. }, Activity { .. }) => 0.,
+        (Activity { diff_shown: true }, Activity { .. } | Group) => line,
+        (_, TurnEnd { hangs: true } | Meta)
+        | (Activity { .. } | Group, Activity { .. } | Group) => 0.,
         _ => line,
     }
 }
@@ -342,6 +350,79 @@ pub(crate) fn gated(call: &str, pending: &str) -> bool {
     call == pending || call.ends_with(&format!("\"{pending}\"]"))
 }
 
+/// Whether a call is routine work that folds into a group with the calls
+/// beside it: a command, a read, a search, a fetch, an MCP call. An edit
+/// is the work itself, its diff drawn under it, and a subagent has a
+/// transcript of its own: each keeps its own row, between groups. Decided
+/// by the tool, never by a result still to come, so a running edit never
+/// leaves a group when its diff lands.
+pub(crate) fn groups(tool: &ToolBlock) -> bool {
+    const OWN_ROW: &[&str] = &[
+        "Edit",
+        "MultiEdit",
+        "Write",
+        "Update",
+        "NotebookEdit",
+        "fileChange",
+        "apply_patch",
+        "Task",
+        "Agent",
+        "collabAgentToolCall",
+    ];
+    tool.diffs.is_empty() && !OWN_ROW.contains(&tool.name.as_str())
+}
+
+/// A block that projects to no row: blank or hidden thinking, an answered
+/// request's record, the `opened in` note, the call a pending Decision
+/// gates. A group of calls reads across it.
+fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
+    if block.markdown.is_some() {
+        return false;
+    }
+    match &block.body {
+        Body::Thinking(text) => text.trim().is_empty() || !shape.thinking,
+        Body::Meta(text) => ferrite_core::transcript::is_decision_record(text),
+        Body::Notice(text) => ferrite_core::transcript::is_opened_notice(text),
+        Body::Tool(tool) => is_gated(tool, shape),
+        _ => false,
+    }
+}
+
+/// The call a pending Decision gates waits in the Decision itself; it
+/// shows once answered.
+fn is_gated(tool: &ToolBlock, shape: &RowShape) -> bool {
+    tool.state == ToolState::Running
+        && shape
+            .pending_call
+            .as_deref()
+            .is_some_and(|pending| gated(&tool.call, pending))
+}
+
+/// The routine calls that fold with the one at `blocks[start]`: it and
+/// every routine call after it up to the first row that is not one,
+/// reading across blocks that draw nothing. Returns the members' indices
+/// and the index after the run.
+fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, usize) {
+    let mut members = vec![start];
+    let mut end = start + 1;
+    let mut index = end;
+    while let Some(block) = blocks.get(index) {
+        match &block.body {
+            Body::Tool(tool) if block.markdown.is_none() && !is_gated(tool, shape) => {
+                if !groups(tool) {
+                    break;
+                }
+                members.push(index);
+                index += 1;
+                end = index;
+            }
+            _ if draws_nothing(block, shape) => index += 1,
+            _ => break,
+        }
+    }
+    (members, end)
+}
+
 fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<TranscriptRow>> {
     let mut rows = Vec::new();
     let row = |id, blocks: &[Block], source: Option<Rc<str>>, kind| TranscriptRow {
@@ -400,15 +481,18 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 ));
             }
             Body::Tool(tool) => {
-                // The call a pending Decision gates waits in the Decision
-                // itself; it shows once answered.
-                if tool.state == ToolState::Running
-                    && shape
-                        .pending_call
-                        .as_deref()
-                        .is_some_and(|pending| gated(&tool.call, pending))
-                {
+                if is_gated(tool, shape) {
                     continue;
+                }
+                if groups(tool) {
+                    let (members, end) = group_at(blocks, index - 1, shape);
+                    if members.len() > 1 {
+                        let run: Vec<Block> =
+                            members.iter().map(|at| blocks[*at].clone()).collect();
+                        rows.push(row(RowId::Group(block.id), &run, None, RowKind::Group));
+                        index = end;
+                        continue;
+                    }
                 }
                 let mut entry = row(
                     RowId::Block(block.id),
@@ -431,12 +515,11 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 }
                 rows.push(entry);
             }
-            Body::Thinking(text) if text.trim().is_empty() || !shape.thinking => {}
-            // An answered request's record (`allowed Bash`): the call's own
-            // row is its account, as the approved transcript draws it.
-            Body::Meta(text) if ferrite_core::transcript::is_decision_record(text) => {}
-            // Where the Thread works: the banner says it.
-            Body::Notice(text) if ferrite_core::transcript::is_opened_notice(text) => {}
+            // Hidden thinking; an answered request's record (`allowed
+            // Bash`), whose call's own row is its account, as the approved
+            // transcript draws it; and where the Thread works, which the
+            // banner says.
+            _ if draws_nothing(block, shape) => {}
             _ => rows.push(row(
                 RowId::Block(block.id),
                 std::slice::from_ref(block),
@@ -465,14 +548,14 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
 }
 
 impl TranscriptRow {
-    /// Who the row speaks for: an answer is the agent, a tool row a
-    /// machine; a lone block its own body's speaker. The banner and the
+    /// Who the row speaks for: an answer is the agent, a tool row or group
+    /// a machine; a lone block its own body's speaker. The banner and the
     /// tail speak for no one.
     fn speaker(&self) -> Option<crate::transcript::Speaker> {
         use crate::transcript::Speaker;
         match self.kind {
             RowKind::Answer { .. } => Some(Speaker::Agent),
-            RowKind::Activity { .. } => Some(Speaker::Other),
+            RowKind::Activity { .. } | RowKind::Group => Some(Speaker::Other),
             RowKind::Banner | RowKind::Tail => None,
             _ => self
                 .blocks
@@ -699,20 +782,164 @@ mod tests {
         assert!(Rc::ptr_eq(&old[1], rows.get(3).unwrap()));
     }
 
-    /// CT-10: adjacent calls are separate rows, each under its own block id;
-    /// nothing folds them into a summary.
+    fn settle(transcript: &mut Transcript, id: &str, is_error: bool) {
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: "done".into(),
+            is_error,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+    }
+
+    fn ids(rows: &TranscriptRows) -> Vec<RowId> {
+        rows.rows().iter().map(|row| row.id().clone()).collect()
+    }
+
+    /// Adjacent routine calls fold into one group row, named by its first
+    /// call's block, holding every call in order.
     #[test]
-    fn adjacent_tools_are_separate_rows() {
+    fn adjacent_routine_calls_fold_into_one_group() {
         let mut transcript = Transcript::default();
         tool(&mut transcript, "first");
-        tool(&mut transcript, "second");
+        bash(&mut transcript, "second");
+        tool(&mut transcript, "third");
         let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
+        let group = rows.get(0).unwrap();
+        assert_eq!(group.kind(), RowKind::Group);
+        assert_eq!(group.id(), &RowId::Group(transcript.blocks()[0].id));
+        let calls: Vec<_> = group
+            .blocks()
+            .iter()
+            .map(|block| match &block.body {
+                Body::Tool(tool) => tool.call.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(calls, ["first", "second", "third"]);
+    }
+
+    /// A lone call stays its own row; the second turns it into a group
+    /// under the same first block, and a third joins it without renaming
+    /// the row — a group grows in place.
+    #[test]
+    fn a_group_forms_at_the_second_call_and_grows_in_place() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "a");
+        let mut rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let first = transcript.blocks()[1].id;
+        assert_eq!(rows.get(1).unwrap().id(), &RowId::Block(first));
+        bash(&mut transcript, "b");
+        rows.reconcile(transcript.blocks(), &shape(), READING);
+        assert_eq!(rows.get(1).unwrap().id(), &RowId::Group(first));
+        bash(&mut transcript, "c");
+        let delta = rows.reconcile(transcript.blocks(), &shape(), READING);
+        assert!(delta.splices.is_empty(), "{delta:?}");
+        assert_eq!(delta.remeasure, vec![1]);
+        assert_eq!(rows.get(1).unwrap().blocks().len(), 3);
+    }
+
+    /// Visible rows split groups: prose, a prompt, a turn's end, shown
+    /// thinking. Edits keep their own rows, with their diffs, between groups.
+    #[test]
+    fn prose_prompts_edits_and_shown_thinking_split_groups() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        tool(&mut transcript, "r1");
+        tool(&mut transcript, "r2");
+        edit(&mut transcript, "e1", "src/lib.rs");
+        bash(&mut transcript, "b1");
+        bash(&mut transcript, "b2");
+        text(&mut transcript, "Now the tests.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        bash(&mut transcript, "b3");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "checking the output".into(),
+        }));
+        bash(&mut transcript, "b4");
+        let kinds = |shape: &RowShape| -> Vec<RowKind> {
+            TranscriptRows::new(transcript.blocks(), shape, READING)
+                .rows()
+                .iter()
+                .map(|row| row.kind())
+                .collect()
+        };
+        let call = RowKind::Activity { diff_shown: false };
+        assert_eq!(
+            kinds(&shape()),
+            vec![
+                RowKind::Prompt,
+                RowKind::Group,
+                RowKind::Activity { diff_shown: true },
+                RowKind::Group,
+                RowKind::Answer { commentary: true },
+                call,
+                RowKind::Reasoning,
+                call,
+            ]
+        );
+        // Hidden thinking draws nothing, so the calls either side of it
+        // read as one run.
+        assert_eq!(
+            kinds(&RowShape::default())[4..],
+            [RowKind::Answer { commentary: true }, RowKind::Group]
+        );
+    }
+
+    /// An answered request's record and the gated call draw nothing, so a
+    /// group reads across them; the gated call is no member while it waits.
+    #[test]
+    fn a_group_reads_across_rows_that_draw_nothing() {
+        let mut transcript = Transcript::default();
+        bash(&mut transcript, "b1");
+        settle(&mut transcript, "b1", false);
+        transcript.apply(Input::Answered {
+            allowed: true,
+            tool_name: "Bash".into(),
+        });
+        bash(&mut transcript, "b2");
+        bash(&mut transcript, "gated");
+        let pending = RowShape {
+            pending_call: Some("gated".into()),
+            ..RowShape::default()
+        };
+        let rows = TranscriptRows::new(transcript.blocks(), &pending, READING);
+        assert_eq!(rows.len(), 1);
+        let group = rows.get(0).unwrap();
+        assert_eq!(group.kind(), RowKind::Group);
+        assert_eq!(
+            group.blocks().len(),
+            2,
+            "the gated call waits in the Decision"
+        );
+        // A gated call alone beside one call leaves no group.
+        let mut lone = Transcript::default();
+        bash(&mut lone, "b1");
+        bash(&mut lone, "gated");
+        let rows = TranscriptRows::new(lone.blocks(), &pending, READING);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows.get(0).unwrap().id(), RowId::Block(_)));
+    }
+
+    /// Edits and subagents never fold, even running with no diff yet: a
+    /// call never leaves a group when its result lands.
+    #[test]
+    fn edits_and_subagents_keep_their_own_rows() {
+        let mut transcript = Transcript::default();
+        for (id, name) in [("w", "Write"), ("e", "Edit"), ("t", "Task"), ("a", "Agent")] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input: serde_json::json!({ "file_path": "src/lib.rs" }),
+            }));
+        }
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        assert_eq!(rows.len(), 4);
         assert!(rows
             .rows()
             .iter()
             .all(|row| matches!(row.id(), RowId::Block(_))));
-        assert_eq!(rows.get(1).unwrap().gap(), 0., "calls of one run sit flush");
     }
 
     /// Terminal-native rhythm: blocks one blank line apart, the calls of a
@@ -740,6 +967,12 @@ mod tests {
             (Some(Prompt), Reasoning, line),
             (Some(call), call, 0.),
             (Some(call), diffed, 0.),
+            (Some(Group), call, 0.),
+            (Some(call), Group, 0.),
+            (Some(diffed), Group, line),
+            (Some(Group), prose, line),
+            (Some(prose), Group, line),
+            (Some(Group), Tail, line),
             (Some(diffed), call, line),
             (Some(commentary), call, line),
             (Some(prose), call, line),
@@ -815,21 +1048,25 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ContentBoundary));
         tool(&mut transcript, "a");
         tool(&mut transcript, "b");
+        edit(&mut transcript, "e", "src/lib.rs");
         let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
         let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
-        let call = RowKind::Activity { diff_shown: false };
         assert_eq!(
             kinds,
             vec![
                 RowKind::Prompt,
                 RowKind::Answer { commentary: true },
-                call,
-                call
+                RowKind::Group,
+                RowKind::Activity { diff_shown: true },
             ]
         );
         let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
         let line = crate::theme::LH_PROSE;
-        assert_eq!(gaps, vec![0., line, line, 0.]);
+        assert_eq!(
+            gaps,
+            vec![0., line, line, 0.],
+            "a call sits flush under a group"
+        );
     }
 
     /// Q2: the mark goes on the first prose after a prompt or a tool row;

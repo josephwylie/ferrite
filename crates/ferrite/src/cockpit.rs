@@ -1973,6 +1973,7 @@ impl CockpitView {
                     ferrite_core::transcript::Body::Tool(tool) => {
                         valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
                         valid.insert(pane::DisclosureId::Diff(tool.call.clone()));
+                        valid.insert(pane::DisclosureId::Group(tool.call.clone()));
                     }
                     ferrite_core::transcript::Body::Thinking(_) => {
                         valid.insert(pane::DisclosureId::Reasoning(block.id));
@@ -5214,7 +5215,7 @@ impl CockpitView {
             return;
         }
         let focused = self.focused();
-        let calls = self.expandable_tools(focused, Level::Transcript);
+        let calls = self.expandable_tools(focused, cx);
         let transcript = self.panes[focused].transcript();
         let tool_focus = self.panes[focused].tool_focus();
         let in_controls = crate::rich::code_actions_focused(window);
@@ -5265,18 +5266,17 @@ impl CockpitView {
         self.toggle_tool(thread, &call, window, cx);
     }
 
-    fn expandable_tools(&self, index: usize, level: Level) -> Vec<pane::DisclosureId> {
-        let Some(thread) = self.panes[index].thread() else {
+    /// The disclosures the Pane's transcript draws, in order: what the
+    /// keyboard walks. The rows decide it — a call folded in a shut group
+    /// is not a stop — so it is read from the transcript as last drawn.
+    fn expandable_tools(&self, index: usize, cx: &gpui::App) -> Vec<pane::DisclosureId> {
+        if self.panes[index].thread().is_none() {
             return Vec::new();
-        };
-        self.cockpit
-            .thread(thread)
-            .and_then(|open| open.activity().subject(&self.panes[index].selected))
-            .into_iter()
-            .flat_map(|subject| {
-                pane::rendered_disclosures(&self.panes[index], subject.transcript().blocks(), level)
-            })
-            .collect::<Vec<_>>()
+        }
+        self.panes[index]
+            .transcript()
+            .map(|transcript| transcript.read(cx).disclosures())
+            .unwrap_or_default()
     }
 
     fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
@@ -8727,26 +8727,9 @@ impl CockpitView {
         if level == Level::Transcript {
             for index in 0..self.panes.len() {
                 let target = self.panes[index].targeted_tool().cloned();
-                let target_is_rendered = target.as_ref().is_none_or(|target| {
-                    self.panes[index]
-                        .thread()
-                        .and_then(|thread| {
-                            self.cockpit
-                                .thread(thread)
-                                .and_then(|open| {
-                                    open.activity().subject(&self.panes[index].selected)
-                                })
-                                .map(|subject| subject.transcript())
-                        })
-                        .is_some_and(|transcript| {
-                            pane::rendered_disclosures(
-                                &self.panes[index],
-                                transcript.blocks(),
-                                level,
-                            )
-                            .contains(target)
-                        })
-                });
+                let target_is_rendered = target
+                    .as_ref()
+                    .is_none_or(|target| self.expandable_tools(index, cx).contains(target));
                 if !target_is_rendered {
                     self.panes[index].clear_tool_target();
                 }
@@ -17452,25 +17435,27 @@ mod tests {
             cx.simulate_resize(gpui::size(px(width), px(700.)));
             tick(cx);
             let prompt = cx.debug_bounds("transcript-prompt").unwrap();
-            let tools = cx.debug_bounds("tool-row-spacing-0").unwrap();
-            let last_tool = cx.debug_bounds("tool-row-spacing-1").unwrap();
+            let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
             let answer = cx.debug_bounds("transcript-answer").unwrap();
             let stamp = cx.debug_bounds("turn-stamp").unwrap();
             // Terminal-native: blocks sit one blank line apart under the
-            // prompt's band; consecutive calls stack with none between.
+            // prompt's band; consecutive calls fold into one summary line.
             let line = px(crate::theme::LH_PROSE);
             assert_eq!(tools.top() - prompt.bottom(), line);
-            assert!(last_tool.top() > tools.top(), "every call is its own row");
-            assert!(answer.top() - last_tool.bottom() >= line);
+            assert!(
+                cx.debug_bounds("tool-row-spacing-1").is_none(),
+                "a shut group draws no call rows"
+            );
+            assert_eq!(answer.top() - tools.bottom(), line);
             // The stamp is one blank line under the turn's last block.
             assert_eq!(stamp.top() - answer.bottom(), line);
-            // One content edge: the prompt's text, the call line and the
-            // answer's prose all start on the content column.
+            // One content edge: the prompt's text, the group's summary and
+            // the answer's prose all start on the content column.
             let prompt_start = caret(&view, cx, 0, 0).x;
             let tools_start = caret(&view, cx, 1, 0).x;
             let answer_start = caret(&view, cx, 3, 0).x;
             assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
-            assert_eq!(tools_start, prompt_start, "the call line sits on C1");
+            assert_eq!(tools_start, prompt_start, "the summary sits on C1");
             // The row's box is rounded to the pixel and its text keeps its
             // fraction (the browser's model, vendor/gpui-pre "Pixel
             // snapping"): the two agree to within a pixel.
