@@ -1603,6 +1603,110 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     );
 }
 
+/// A Thread waiting on the operator: a Decision pending in the focused
+/// Pane of an active window, nothing else happening. Waiting is not
+/// working: it costs the Cockpit no more than an idle window does.
+#[gpui::test]
+fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, fake) = cockpit("decision-idle", 2);
+    let thread = core.threads()[0];
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    fake.streams.borrow()[0]
+        .send(decision("perm-idle"))
+        .unwrap();
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .pending_decisions()
+                .len(),
+            1,
+            "the premise: a Decision waits"
+        );
+    });
+    let rendered = cockpit_renders_over(cx, 5_000);
+    eprintln!("DECISION_PENDING cockpit_renders_5s={rendered}");
+    assert!(
+        rendered <= A1_IDLE_FOCUSED_BUDGET,
+        "a pending Decision rebuilt the Cockpit {rendered} times in 5s; \
+         budget is {A1_IDLE_FOCUSED_BUDGET}"
+    );
+}
+
+/// The A-1 checkpoint for an untouched focused window (the test above it
+/// holds the final 10): the caret's fades are all that draws — the grid
+/// instants inside its 110ms fall and 55ms rise and the one landing each,
+/// six to eight every 1.1s turn (33 measured).
+const A1_IDLE_FOCUSED_BUDGET: usize = 37;
+
+/// The A-1 checkpoint: an active window, the keyboard in a Composer, two
+/// idle Threads. Only the caret's fades redraw the Cockpit (A-2 takes the
+/// caret off the Cockpit for the final budget).
+#[gpui::test]
+fn a_focused_idle_window_renders_the_cockpit_only_for_the_carets_fades(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("idle-focused-a1", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    let rendered = cockpit_renders_over(cx, 5_000);
+    eprintln!("IDLE_FOCUSED_A1 cockpit_renders_5s={rendered}");
+    assert!(
+        rendered <= A1_IDLE_FOCUSED_BUDGET,
+        "an untouched focused window rebuilt the Cockpit {rendered} times in 5s; \
+         the caret's fades ask for at most {A1_IDLE_FOCUSED_BUDGET}"
+    );
+}
+
+/// Under reduced motion nothing loops, yet a working Thread's clock still
+/// moves: the sweep redraws a busy Cockpit, its `12s` turning over.
+#[gpui::test]
+fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("reduced-working-clock", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    cx.update(|window, _| window.activate_window());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking marks**".into(),
+            summary_index: 0,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("progress-mark-still").is_some(),
+        "the premise: reduced motion holds the working mark still"
+    );
+    cockpit_renders_over(cx, 1_000);
+    let rendered = cockpit_renders_over(cx, 5_000);
+    assert!(pulse_parked(cx), "nothing loops");
+    assert!(
+        rendered >= 2,
+        "the working clock's text must still be redrawn: {rendered} renders in 5s"
+    );
+}
+
 /// A path the pointer rests on keeps its underline while its transcript
 /// streams: the Cockpit around the cached transcript redraws on every step
 /// of the working Thread's loops without drawing the transcript, and the

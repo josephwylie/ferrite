@@ -257,6 +257,9 @@ pub struct CockpitView {
     /// cached from the RSS worker, so a sweep never waits for an
     /// operating-system query.
     swept: std::time::Instant,
+    /// When the next nav age (`2m`) turns over, as of the last draw: the
+    /// sweep redraws an otherwise quiet window then.
+    ages_turn_at: Option<std::time::SystemTime>,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
     /// The branch a draft's chosen project checkout is on, cached by
@@ -1244,6 +1247,7 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             swept: cx.background_executor().now(),
+            ages_turn_at: None,
             branch_refreshing: false,
             selection: TranscriptText::default(),
             native_copy: None,
@@ -1761,7 +1765,7 @@ impl CockpitView {
             }
         }
         let mut restarted = Vec::new();
-        let mut branch_tick = false;
+        let mut swept_change = false;
         let now = cx.background_executor().now();
         if now.duration_since(self.swept) >= SWEEP_INTERVAL {
             self.swept = now;
@@ -1772,9 +1776,20 @@ impl CockpitView {
                 );
                 restarted.push(restart.thread);
             }
-            self.facts.tick(&self.cockpit);
+            // Redraw only for what moved: a fact, a working Thread's clock
+            // (under reduced motion the sweep is its only ride), a nav
+            // row's age turning over. An idle window stays undrawn.
+            let facts_moved = self.facts.tick(&self.cockpit);
+            let working = self.cockpit.threads().into_iter().any(|thread| {
+                self.cockpit
+                    .thread(thread)
+                    .is_some_and(|open| open.busy() || open.activity().working_descendants() > 0)
+            });
+            let aged = self
+                .ages_turn_at
+                .is_some_and(|at| ferrite_core::clock::system_time() >= at);
+            swept_change = facts_moved || working || aged;
             self.refresh_branches(cx);
-            branch_tick = true;
         } else if self.cockpit.wants_worktree_listing() {
             // A Main just finished making a worktree: ask git now, not in
             // up to two seconds, so the header follows without a pause.
@@ -1785,7 +1800,7 @@ impl CockpitView {
         // notice's only ride to the screen.
         if frame.is_empty()
             && restarted.is_empty()
-            && !branch_tick
+            && !swept_change
             && !startup_changed
             && !models_changed
             && !commands_changed
@@ -1934,13 +1949,13 @@ impl CockpitView {
                 .await;
             this.update(cx, |view, cx| {
                 view.branch_refreshing = false;
-                view.facts.set_branches(
+                let labels = view.facts.set_branches(
                     branches
                         .iter()
                         .map(|(thread, status, _)| (*thread, status.clone()))
                         .collect(),
                 );
-                view.facts.set_project_branches(
+                let roots = view.facts.set_project_branches(
                     branches
                         .into_iter()
                         .map(|(thread, _, project_branches)| (thread, project_branches))
@@ -1950,7 +1965,10 @@ impl CockpitView {
                 for (thread, listing) in listings {
                     moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
-                cx.notify();
+                // Git said what it said last time: nothing to redraw.
+                if labels || roots || moved {
+                    cx.notify();
+                }
                 if moved {
                     // The labels above were read for the old cwd; go
                     // straight back for the new one.
@@ -8727,7 +8745,7 @@ impl CockpitView {
     /// `12s` (its working line, head and tile), a nav row's `2m` — ride the
     /// pulse clock (`motion::ride`) to their next turn: while a loop runs
     /// they change on its grid, as its fixed rate redrew them; otherwise the
-    /// next draw brings them up to date.
+    /// sweep brings them up to date.
     fn ride_clock_text(&mut self, cx: &mut Context<Self>) {
         let wall = ferrite_core::clock::system_time();
         // Every age the Cockpit can show: a Thread's (the nav, a parked
@@ -8745,6 +8763,8 @@ impl CockpitView {
             .into_iter()
             .chain(notices)
             .min();
+        // The sweep redraws a window nothing else draws when an age turns.
+        self.ages_turn_at = ages.map(|next| wall + next);
         if crate::motion::reduced_motion(cx) {
             return;
         }

@@ -197,34 +197,46 @@ impl Facts {
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
     /// — the agent may have switched branches under a Pane — for every
     /// open Thread.
-    pub fn tick(&mut self, cockpit: &Cockpit) {
+    /// Answers whether any fact a row draws moved.
+    pub fn tick(&mut self, cockpit: &Cockpit) -> bool {
+        let mut changed = false;
         for thread in cockpit.threads() {
-            self.refresh_metadata(cockpit, thread);
+            changed |= self.refresh_metadata(cockpit, thread);
         }
+        changed
     }
 
     /// Adopt checkout labels and their status, collected away from the UI
     /// thread. The two travel together because one `git status` answers
     /// both, and a branch name without its drift would draw a header that
-    /// contradicts itself for a tick.
-    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) {
+    /// contradicts itself for a tick. Answers whether any moved.
+    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) -> bool {
+        let mut changed = false;
         for (thread, status) in branches {
             let facts = self.threads.entry(thread).or_default();
-            facts.branch = status
+            let branch = status
                 .as_ref()
                 .and_then(|status| status.branch.clone())
                 .map(SharedString::from);
+            changed |= facts.branch != branch || facts.status != status;
+            facts.branch = branch;
             facts.status = status;
         }
+        changed
     }
 
+    /// Adopt each Project root's branch; answers whether any moved.
     pub fn set_project_branches(
         &mut self,
         branches: Vec<(ThreadId, Vec<(SharedString, SharedString)>)>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         for (thread, project_branches) in branches {
-            self.threads.entry(thread).or_default().project_branches = project_branches;
+            let facts = self.threads.entry(thread).or_default();
+            changed |= facts.project_branches != project_branches;
+            facts.project_branches = project_branches;
         }
+        changed
     }
 
     /// The parked set changed — a park, a revive, an import, a rename: the
@@ -353,7 +365,8 @@ impl Facts {
 
     /// Refresh everything except the checkout label. This path stays in the
     /// pump, so it must never launch Git.
-    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    /// Answers whether any of these facts moved.
+    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
         let (project, project_label) = match cockpit.peek(thread) {
             Ok(meta) => (
                 meta.project_id,
@@ -364,10 +377,15 @@ impl Facts {
         let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
+        let changed = facts.last_used != last_used
+            || facts.project != project
+            || facts.project_label != project_label
+            || facts.name != name;
         facts.last_used = last_used;
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
+        changed
     }
 
     /// The name alone — after a first prompt or a rename, the one fact
