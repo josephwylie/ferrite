@@ -7,6 +7,7 @@ pub(crate) mod beside;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;
 mod palette;
+mod parts;
 pub(crate) mod subagents;
 mod transcript_glue;
 
@@ -262,9 +263,16 @@ pub struct CockpitView {
     /// cached from the RSS worker, so a sweep never waits for an
     /// operating-system query.
     swept: std::time::Instant,
+    /// The nav and each Pane as cached parts (`parts`), and what notifies
+    /// the frame around them alone.
+    parts: std::cell::RefCell<parts::Parts>,
+    frame_tick: Entity<parts::FrameTick>,
     /// When the next nav age (`2m`) turns over, as of the last draw: the
     /// sweep redraws an otherwise quiet window then.
     ages_turn_at: Option<std::time::SystemTime>,
+    /// When the frame's own clock text (the bottom bar's minute, a
+    /// notice's age) next turns over, as of the last draw.
+    frame_turn_at: Option<std::time::SystemTime>,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
     /// A moment that must not be skipped (a turn ended) asked for a
@@ -1170,6 +1178,79 @@ thread_local! {
     pub(crate) static RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// What the last frame drew for each Pane and nav row, and how often each
+/// was built: the stale-chrome tests read what is on screen, not the model,
+/// and the frame budgets count the work each part did.
+#[cfg(test)]
+pub(crate) mod drawn {
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+
+    use ferrite_core::roster::PaneIdentity;
+    use ferrite_core::ThreadId;
+
+    /// One Pane as its last build drew it.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub(crate) struct Pane {
+        pub focused: bool,
+        pub attention: bool,
+        pub drop_target: bool,
+        pub editing: bool,
+        pub reduce_motion: bool,
+        pub cell_width: f32,
+        /// The working clock its lines read (`12s`).
+        pub clock: Option<String>,
+        /// Its usage meter's facts: the context window and the account's.
+        pub usage: Option<String>,
+        /// Its head holds the rename editor.
+        pub renaming: bool,
+    }
+
+    thread_local! {
+        static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
+        static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
+        static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
+    }
+
+    pub(crate) fn built_pane(identity: PaneIdentity) {
+        PANE_RENDERS.with(|renders| *renders.borrow_mut().entry(identity).or_default() += 1);
+    }
+
+    pub(crate) fn record_pane(identity: PaneIdentity, pane: Pane) {
+        PANES.with(|panes| panes.borrow_mut().insert(identity, pane));
+    }
+
+    pub(crate) fn built_nav() {
+        NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    pub(crate) fn record_row(thread: ThreadId, row: String) {
+        NAV_ROWS.with(|rows| rows.borrow_mut().insert(thread, row));
+    }
+
+    /// The Pane as last drawn.
+    pub(crate) fn pane(identity: PaneIdentity) -> Pane {
+        PANES.with(|panes| panes.borrow().get(&identity).cloned().unwrap_or_default())
+    }
+
+    /// How many times this Pane has been built on this thread.
+    pub(crate) fn pane_renders(identity: PaneIdentity) -> usize {
+        PANE_RENDERS.with(|renders| renders.borrow().get(&identity).copied().unwrap_or(0))
+    }
+
+    /// How many times the nav has been built on this thread.
+    pub(crate) fn nav_renders() -> usize {
+        NAV_RENDERS.with(Cell::get)
+    }
+
+    /// The nav row for `thread` as last drawn: its status, unread, tail
+    /// and name.
+    pub(crate) fn row(thread: ThreadId) -> String {
+        NAV_ROWS.with(|rows| rows.borrow().get(&thread).cloned().unwrap_or_default())
+    }
+}
+
 /// The panes24 instrument, kept behind an env var: frames actually painted,
 /// and what the process is holding while it paints them.
 struct Perf {
@@ -1265,7 +1346,10 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             swept: cx.background_executor().now(),
+            parts: Default::default(),
+            frame_tick: cx.new(|_| parts::FrameTick),
             ages_turn_at: None,
+            frame_turn_at: None,
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
@@ -1673,15 +1757,24 @@ impl CockpitView {
         } else if dismiss && !composer.read(cx).is_empty() {
             self.popover = None;
         }
+        let popover_on = self.popover.as_ref().map(|open| open.pane);
         if self.suppress_recall_menu_once {
             self.suppress_recall_menu_once = false;
             self.close_text_menu();
-            cx.notify();
-            return;
+        } else {
+            self.menu_muted = false;
+            self.sync_menu(cx);
         }
-        self.menu_muted = false;
-        self.sync_menu(cx);
-        cx.notify();
+        // A keystroke redraws its own Pane (its line, its menu); only a
+        // menu moving to another Pane redraws more.
+        let menu_moved = [popover_on, self.popover.as_ref().map(|open| open.pane)]
+            .into_iter()
+            .flatten()
+            .any(|pane| Some(pane) != edited);
+        match edited {
+            Some(edited) if !menu_moved => self.notify_part(parts::Part::Pane(edited), cx),
+            _ => cx.notify(),
+        }
     }
 
     /// Close the `/`/`@` menu if that is what the slot holds; a picker or
@@ -1721,6 +1814,9 @@ impl CockpitView {
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
+        // What a stream can move beyond its own Pane and nav row, before it
+        // moves: a frame that changes none of it redraws only those.
+        let shared = self.parts.borrow().on.then(|| self.shared_chrome());
         self.poll_navigation(cx);
         let commands_changed = self
             .draft_commands
@@ -1787,7 +1883,12 @@ impl CockpitView {
             }
         }
         let mut restarted = Vec::new();
+        // What the sweep found moved: a fact or a Thread's age (everything
+        // redraws), a working Thread (its Pane and the nav), the frame's
+        // clock (the frame alone).
         let mut swept_change = false;
+        let mut swept_busy: Vec<ThreadId> = Vec::new();
+        let mut swept_frame = false;
         let now = cx.background_executor().now();
         if now.duration_since(self.swept) >= SWEEP_INTERVAL {
             self.swept = now;
@@ -1801,16 +1902,24 @@ impl CockpitView {
             // Redraw only for what moved: a fact, a working Thread's clock
             // (under reduced motion the sweep is its only ride), a nav
             // row's age turning over. An idle window stays undrawn.
-            let facts_moved = self.facts.tick(&self.cockpit);
-            let working = self.cockpit.threads().into_iter().any(|thread| {
-                self.cockpit
-                    .thread(thread)
-                    .is_some_and(|open| open.busy() || open.activity().working_descendants() > 0)
-            });
-            let aged = self
-                .ages_turn_at
-                .is_some_and(|at| ferrite_core::clock::system_time() >= at);
-            swept_change = facts_moved || working || aged;
+            // A Thread's facts (its name, Project, last use) are drawn by
+            // its nav row and its Pane: they redraw like a working one.
+            let moved = self.facts.tick(&self.cockpit);
+            swept_busy = self
+                .cockpit
+                .threads()
+                .into_iter()
+                .filter(|thread| {
+                    self.cockpit.thread(*thread).is_some_and(|open| {
+                        open.busy() || open.activity().working_descendants() > 0
+                    })
+                })
+                .chain(moved)
+                .collect();
+            let wall = ferrite_core::clock::system_time();
+            let aged = self.ages_turn_at.is_some_and(|at| wall >= at);
+            swept_frame = self.frame_turn_at.is_some_and(|at| wall >= at);
+            swept_change = aged;
             self.refresh_branches(cx);
         } else if self.cockpit.wants_worktree_listing() {
             // A Main just finished making a worktree: ask git now, not in
@@ -1827,6 +1936,8 @@ impl CockpitView {
         if frame.is_empty()
             && restarted.is_empty()
             && !swept_change
+            && swept_busy.is_empty()
+            && !swept_frame
             && !startup_changed
             && !models_changed
             && !commands_changed
@@ -1878,6 +1989,12 @@ impl CockpitView {
                     .selected(&self.cockpit, update.thread, &self.panes[index].selected);
             }
         }
+        let precise = restarted.is_empty()
+            && !swept_change
+            && !startup_changed
+            && !models_changed
+            && !commands_changed
+            && shared.is_some_and(|shared| shared == self.shared_chrome());
         for thread in restarted {
             self.facts.acted(&self.cockpit, thread);
         }
@@ -1885,7 +2002,46 @@ impl CockpitView {
             // The agent may have moved the checkout during its turn.
             self.refresh_branches_soon(cx);
         }
-        cx.notify();
+        if !precise {
+            cx.notify();
+            return;
+        }
+        // Streaming: the Panes it reached and the nav redraw, and the frame
+        // with them; every other Pane is reused. The transcripts take their
+        // new inputs first, as the Cockpit's own notify has them do
+        // (`observe_self`), so they draw in this same frame.
+        self.sync_visible_transcripts(cx);
+        let rows = !frame.is_empty() || !swept_busy.is_empty();
+        for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
+            self.notify_thread_pane(thread, cx);
+        }
+        if rows {
+            self.notify_part(parts::Part::Nav, cx);
+        }
+        self.notify_frame(cx);
+    }
+
+    /// What a stream can change that more than its own Pane and nav row
+    /// draw: the account's usage windows (every Pane's meter), the Threads
+    /// waiting on the operator (every wall tile's answer keys, the
+    /// needs-you strip), the unread notices and attention (the bell, each
+    /// Pane's head).
+    fn shared_chrome(&self) -> String {
+        let notifications = self.cockpit.notifications();
+        let attention: Vec<ThreadId> = self
+            .cockpit
+            .threads()
+            .into_iter()
+            .filter(|thread| notifications.attention(*thread))
+            .collect();
+        format!(
+            "{:?} {:?} {:?} {} {:?}",
+            self.cockpit.account_limits(Provider::Claude),
+            self.cockpit.account_limits(Provider::Codex),
+            self.cockpit.needs_you(),
+            notifications.unread(),
+            attention,
+        )
     }
 
     /// `refresh_branches`, but never skipped: a refresh already under way
@@ -2017,9 +2173,17 @@ impl CockpitView {
                 for (thread, listing) in listings {
                     moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
-                // Git said what it said last time: nothing to redraw.
-                if labels || roots || moved {
+                // Git said what it said last time: nothing to redraw. A
+                // label that moved is its Thread's: its Pane, its nav row,
+                // the titlebar's crumb. A binding that moved, everything.
+                if moved {
                     cx.notify();
+                } else if !labels.is_empty() || !roots.is_empty() {
+                    for thread in labels.iter().chain(&roots) {
+                        view.notify_thread_pane(*thread, cx);
+                    }
+                    view.notify_part(parts::Part::Nav, cx);
+                    view.notify_frame(cx);
                 }
                 if moved || std::mem::take(&mut view.branch_refresh_queued) {
                     // The labels above were read for the old cwd, or
@@ -3437,7 +3601,7 @@ impl CockpitView {
                     let Some(index) = self.index_of(identity) else {
                         continue;
                     };
-                    self.pane_cell(index, level, window, cx)
+                    self.pane_slot(index, level, window, cx)
                 }
                 Slot::Reader(owner) => {
                     let Some(cell) = self.reader_cell(owner, leaf, cx) else {
@@ -8085,7 +8249,7 @@ impl CockpitView {
             .and_then(|facts| facts.last_used)
             .map(|at| crate::facts::since_label(at, now))
             .unwrap_or_default();
-        nav::ThreadRow {
+        let row = nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
             status,
@@ -8093,7 +8257,16 @@ impl CockpitView {
             project: facts.and_then(|facts| facts.project_label.clone()),
             selected: false,
             tail: nav::NavTail::of(slot.as_ref(), age),
-        }
+        };
+        #[cfg(test)]
+        drawn::record_row(
+            thread,
+            format!(
+                "{:?} unread={} {:?} {}",
+                row.status, row.unread, row.tail, row.name
+            ),
+        );
+        row
     }
 
     /// The branch a Project heading names: the checkout every one of its
@@ -8858,18 +9031,25 @@ impl Render for CockpitView {
         let nav_moving = self
             .nav_tween
             .is_some_and(|tween| tween.running(now, reduced));
-        if crate::motion::hover_fades_active() | nav_moving {
+        let fading = crate::motion::hover_fades_active();
+        if nav_moving {
+            // The column's width moves the whole board: every part redraws.
             window.request_animation_frame();
-            // A blend fading inside a cached view (a transcript's link)
-            // is drawn by that view: it comes with the next frame too.
+        } else if fading {
+            // A blend is drawn again by the view that paints it alone: a
+            // part (a nav row, a Pane's control, a transcript's link), or,
+            // for the frame's own controls, the frame around the parts.
             let root = cx.entity_id();
-            let fading: Vec<_> = crate::motion::hover_fading_views()
+            let frame = self.frame_tick_id();
+            let views: Vec<_> = crate::motion::hover_fading_views()
                 .into_iter()
-                .filter(|view| *view != root)
+                .map(|view| if view == root { frame } else { view })
                 .collect();
-            if !fading.is_empty() {
+            if views.is_empty() {
+                window.request_animation_frame();
+            } else {
                 window.on_next_frame(move |_, cx| {
-                    for view in &fading {
+                    for view in &views {
                         cx.notify(*view);
                     }
                 });
@@ -8896,40 +9076,90 @@ impl CockpitView {
             .notices()
             .map(|notice| notice.at)
             .chain(notifications.decisions().map(|request| request.at))
-            .filter_map(|at| crate::facts::since_label_changes_in(at, wall));
-        let ages = self
-            .facts
-            .next_age_change(wall)
-            .into_iter()
-            .chain(notices)
+            .filter_map(|at| crate::facts::since_label_changes_in(at, wall))
             .min();
-        // The sweep redraws a window nothing else draws when an age turns.
-        self.ages_turn_at = ages.map(|next| wall + next);
+        let thread_ages = self.facts.next_age_change(wall);
+        // The bottom bar's clock turns over on the minute.
+        let minute = crate::facts::next_minute(wall);
+        // The sweep redraws a window nothing else draws when an age turns:
+        // a Thread's everywhere, the clock's and a notice's in the frame.
+        self.ages_turn_at = thread_ages.map(|next| wall + next);
+        self.frame_turn_at = Some(wall + notices.map_or(minute, |next| next.min(minute)));
         if crate::motion::reduced_motion(cx) {
             return;
         }
         let second = Duration::from_secs(1);
-        let working = self.panes.iter().filter_map(|pane| {
-            let open = self.cockpit.thread(pane.thread()?)?;
+        let rollover = |transcript: Option<&ferrite_core::transcript::Transcript>| {
+            transcript
+                .and_then(|transcript| transcript.turn_elapsed())
+                .map(|elapsed| ferrite_core::cadence::next_rollover(elapsed, second))
+        };
+        let now = cx.background_executor().now();
+        let focused = self.panes.get(self.focused()).and_then(PaneView::thread);
+        let parts = self.parts.borrow().on;
+        let mut nav = thread_ages;
+        let mut frame = Some(notices.map_or(minute, |next| next.min(minute)));
+        let mut everything = nav.into_iter().chain(frame).min();
+        // Each Pane's working clocks: its own part rides them.
+        for pane in &self.panes {
+            let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) else {
+                continue;
+            };
             let subject = open
                 .activity()
                 .subject(&pane.selected)
-                .and_then(|subject| subject.transcript().turn_elapsed());
-            [open.transcript().turn_elapsed(), subject]
+                .map(|subject| subject.transcript());
+            let Some(next) = [rollover(Some(open.transcript())), rollover(subject)]
                 .into_iter()
                 .flatten()
-                .map(|elapsed| ferrite_core::cadence::next_rollover(elapsed, second))
                 .min()
-        });
-        if let Some(next) = working.chain(ages).min() {
-            let at = cx.background_executor().now() + next;
-            crate::motion::ride(cx.entity_id(), at, cx);
+            else {
+                continue;
+            };
+            everything = Some(everything.map_or(next, |at| at.min(next)));
+            if pane.thread() == focused {
+                // The titlebar names the focused Thread's clock.
+                frame = Some(frame.map_or(next, |at| at.min(next)));
+            }
+            if parts {
+                let view = self
+                    .parts
+                    .borrow()
+                    .view_id(parts::Part::Pane(pane.identity));
+                if let Some(view) = view {
+                    crate::motion::ride(view, now + next, cx);
+                }
+            }
+        }
+        // Every working Thread's nav row reads its clock.
+        for thread in self.cockpit.threads() {
+            if let Some(next) = rollover(self.cockpit.thread(thread).map(|open| open.transcript()))
+            {
+                nav = Some(nav.map_or(next, |at| at.min(next)));
+                everything = Some(everything.map_or(next, |at| at.min(next)));
+            }
+        }
+        if !parts {
+            if let Some(next) = everything {
+                crate::motion::ride(cx.entity_id(), now + next, cx);
+            }
+            return;
+        }
+        let nav_view = self.parts.borrow().view_id(parts::Part::Nav);
+        if let (Some(view), Some(next)) = (nav_view, nav) {
+            crate::motion::ride(view, now + next, cx);
+        }
+        if let Some(next) = frame {
+            crate::motion::ride(self.frame_tick_id(), now + next, cx);
         }
     }
 
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The loops this render lays out go to the loops overlay afresh.
         crate::loops_overlay::begin(window, cx.entity_id());
+        // Read, so its notify redraws the frame around the parts alone.
+        let _ = self.frame_tick.read(cx);
+        self.prune_parts();
         self.measure();
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
@@ -9284,7 +9514,7 @@ impl CockpitView {
             frame()
                 .flex()
                 .flex_col()
-                .child(self.pane_cell(index, level, window, cx))
+                .child(self.pane_slot(index, level, window, cx))
         } else if let Some((board, tree)) = self
             .board()
             .and_then(|board| self.board_tree(board).map(|tree| (board, tree)))
@@ -9313,7 +9543,7 @@ impl CockpitView {
                     if column > 0 {
                         line = line.child(board_seam(layout::Axis::Row));
                     }
-                    line = line.child(self.pane_cell(*index, level, window, cx));
+                    line = line.child(self.pane_slot(*index, level, window, cx));
                 }
                 grid = grid.child(line);
             }
@@ -9448,7 +9678,8 @@ impl CockpitView {
                 let inside = f32::from(event.position.x) < view.nav_width();
                 if inside != view.nav_hovered {
                     view.nav_hovered = inside;
-                    cx.notify();
+                    // Only the nav's order reads it.
+                    view.notify_part(parts::Part::Nav, cx);
                 }
                 if view.seam_drag.is_some() {
                     if event.dragging() {
@@ -9594,6 +9825,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        #[cfg(test)]
+        drawn::built_pane(self.panes[index].identity);
         let content = self.pane_content(index, level, window, cx);
         if self.settings_open || self.project_editor.is_some() {
             return content;
@@ -9829,6 +10062,32 @@ impl CockpitView {
         let expand_question = level != Level::Wall && self.question_needs_expansion(index, false);
         let mut facts = facts;
         facts.decision_joined = joins && activity_decisions.is_some();
+        #[cfg(test)]
+        drawn::record_pane(
+            pane.identity,
+            drawn::Pane {
+                focused,
+                attention: facts.attention,
+                drop_target: facts.drop_target,
+                editing: facts.editing,
+                reduce_motion: facts.reduce_motion,
+                cell_width: facts.cell_width,
+                clock: open
+                    .and_then(|open| open.transcript().turn_elapsed())
+                    .map(ferrite_core::progress::live_seconds),
+                usage: open.map(|open| {
+                    format!(
+                        "{:?} {:?}",
+                        open.transcript().usage().map(|usage| usage.total_tokens),
+                        self.cockpit.account_limits(open.provider())
+                    )
+                }),
+                renaming: matches!(
+                    &self.rename,
+                    Some((RenameTarget::PaneTitle(renamed), _)) if *renamed == thread
+                ),
+            },
+        );
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
             changed_files,
@@ -12164,6 +12423,27 @@ impl CockpitView {
     /// moves) while its content fades on its own clock (N-15): 1 → 0 over
     /// 150ms folding, 0 → 1 opening. At rest folded, the column draws
     /// nothing and the seam beside it is the plane.
+    /// The nav's rows at its content's width (`nav::content`): the
+    /// needs-you strip, the tree and its scrollbar, the parked fold.
+    fn nav_content(&self, cx: &mut Context<Self>) -> Div {
+        #[cfg(test)]
+        drawn::built_nav();
+        let state = self.nav_state();
+        nav::content()
+            .children(self.needs_you_strip(&state, cx))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.nav_tree(&state, cx))
+                    .child(nav::scrollbar(&self.nav_scroll)),
+            )
+            .children(self.nav_parked(&state, cx))
+    }
+
     fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
         let now = cx.background_executor().now();
@@ -12182,26 +12462,9 @@ impl CockpitView {
         if collapsed && ride.is_none() {
             return frame.child(shell).child(nav::seam(true)).into_any_element();
         }
-        let state = self.nav_state();
-        let content = nav::content()
-            .children(self.needs_you_strip(&state, cx))
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.nav_tree(&state, cx))
-                    .child(nav::scrollbar(&self.nav_scroll)),
-            )
-            .children(self.nav_parked(&state, cx));
+        let rows = self.nav_rows(self.nav_content_opacity(now, reduced), cx);
         frame
-            .child(
-                shell
-                    .child(nav::body())
-                    .child(content.opacity(self.nav_content_opacity(now, reduced))),
-            )
+            .child(shell.child(nav::body()).child(rows))
             .child(nav::seam(collapsed))
             .into_any_element()
     }
@@ -12927,6 +13190,7 @@ mod tests {
     mod render_performance;
     mod retention;
     mod stab;
+    mod stale_chrome;
     mod subagents;
     mod ui_a;
     mod ui_b;

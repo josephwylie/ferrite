@@ -132,12 +132,13 @@ fn typing_reaches_a_line_the_overlay_draws_the_caret_of(cx: &mut TestAppContext)
     });
 }
 
-/// A float stays above the overlay and draws its own loops: with the
-/// palette open, the board's lit line blinks in the overlay (under the
-/// palette's veil, which is deferred and paints after it), while the
-/// palette's own line — inside the float — blinks in place.
+/// A float's loops are drawn over the float: with the palette open, the
+/// board's lit line blinks in the overlay's main layer (under the palette's
+/// veil, which is deferred and paints after it), and the palette's own line
+/// in the overlay's layer at the float's priority, right over the float —
+/// neither rebuilding the Cockpit.
 #[gpui::test]
-fn a_float_draws_its_own_caret_above_the_overlay(cx: &mut TestAppContext) {
+fn an_open_palettes_caret_blinks_in_the_overlay_over_its_float(cx: &mut TestAppContext) {
     let (view, cx) = focused("overlay-float", 2, cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
@@ -153,11 +154,13 @@ fn a_float_draws_its_own_caret_above_the_overlay(cx: &mut TestAppContext) {
             .clone()
     });
     palette_line.update(cx, |line, _| line.clear_caret_log());
+    let cockpit = renders();
     frames(cx, 1_200);
-    assert_eq!(
-        hosted(cx),
-        1,
-        "only the board's line is in the overlay; the float keeps its own"
+    assert_eq!(hosted(cx), 2, "the board's lit line and the palette's");
+    assert!(
+        renders() - cockpit <= 1,
+        "the blinks rebuilt the Cockpit {} times",
+        renders() - cockpit
     );
     let (_, draws) = palette_line.read_with(cx, |line, _| line.caret_log());
     let alphas: std::collections::BTreeSet<u32> = draws
@@ -169,7 +172,7 @@ fn a_float_draws_its_own_caret_above_the_overlay(cx: &mut TestAppContext) {
         .collect();
     assert!(
         alphas.len() > 2,
-        "the palette's caret blinks where the float draws it: {draws:?}"
+        "the palette's caret blinks over its float: {draws:?}"
     );
 }
 

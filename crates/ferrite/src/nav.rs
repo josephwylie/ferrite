@@ -509,6 +509,8 @@ fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selec
         element = element.bg(paint::SELECTION);
     } else {
         let t = motion::hover_t(&key);
+        #[cfg(test)]
+        testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), t));
         if t > 0.0 {
             element = element.bg(motion::mix(
                 rgba(TRANSPARENT).into(),
@@ -1813,5 +1815,25 @@ mod tests {
         for spec in [ROW_HOVER, DOOR_HOVER, CONTENT_FADE, BAND_FADE] {
             assert_eq!(spec.curve, motion::EASE);
         }
+    }
+}
+
+/// The hover each row's wash was last drawn at: the stale-chrome tests read
+/// what is on screen, not the blend.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use gpui::SharedString;
+
+    thread_local! {
+        pub(super) static DRAWN_HOVER: RefCell<HashMap<SharedString, f32>> =
+            RefCell::new(HashMap::new());
+    }
+
+    /// The hover the row behind `key` was last drawn at.
+    pub(crate) fn drawn_hover(key: &str) -> Option<f32> {
+        DRAWN_HOVER.with(|drawn| drawn.borrow().get(key).copied())
     }
 }

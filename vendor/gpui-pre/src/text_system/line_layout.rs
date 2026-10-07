@@ -476,12 +476,38 @@ struct FrameCache {
     used_wrapped_lines_by_hash: Vec<Arc<HashedCacheKey>>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct LineLayoutIndex {
     lines_index: usize,
     wrapped_lines_index: usize,
     lines_by_hash_index: usize,
     wrapped_lines_by_hash_index: usize,
+}
+
+impl LineLayoutIndex {
+    /// Ferrite's patch: this index, inside a subtree reused from `from` to
+    /// `to` (each list copied in order), where it now lies.
+    pub(crate) fn moved(&self, from: &Self, to: &Self) -> Self {
+        let shift = crate::window::shift_index;
+        Self {
+            lines_index: shift(self.lines_index, from.lines_index, to.lines_index),
+            wrapped_lines_index: shift(
+                self.wrapped_lines_index,
+                from.wrapped_lines_index,
+                to.wrapped_lines_index,
+            ),
+            lines_by_hash_index: shift(
+                self.lines_by_hash_index,
+                from.lines_by_hash_index,
+                to.lines_by_hash_index,
+            ),
+            wrapped_lines_by_hash_index: shift(
+                self.wrapped_lines_by_hash_index,
+                from.wrapped_lines_by_hash_index,
+                to.wrapped_lines_by_hash_index,
+            ),
+        }
+    }
 }
 
 impl LineLayoutCache {

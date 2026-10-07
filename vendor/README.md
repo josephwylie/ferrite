@@ -203,13 +203,26 @@ browser does, so the same CSS geometry lands on the same device pixels:
   the kit Root — still counts), and when it is redrawn the cached views
   inside it keep their caches instead of being redrawn with it. The
   Cockpit is cached this way under the loops overlay
-  (`crates/ferrite/src/loops_overlay.rs`).
+  (`crates/ferrite/src/loops_overlay.rs`), and so are its nav and Panes
+  inside it (`crates/ferrite/src/cockpit/parts.rs`).
+- **Nested caches moved with a reused parent** (`window.rs`, `view.rs`,
+  `text_system/line_layout.rs`). When a cached view's prepaint or paint is
+  reused at a new place in the frame, the cached views inside it have the
+  ranges they recorded moved with it (`PrepaintStateIndex::moved`,
+  `PaintIndex::moved`, `LineLayoutIndex::moved`): upstream redraws every
+  view inside a redrawn one, so its nested ranges never outlive a frame,
+  but kept caches would next replay ranges that no longer hold them.
 - **Deferred draws and opacity, for an overlay** (`window.rs`,
   `elements/deferred.rs`). `Window::drawing_deferred` says whether the
   element now laid out, prepainted or painted sits in a `deferred` draw
   (it paints after everything else); `Window::element_opacity` and
   `Window::with_element_opacity` are public, so an overlay redraws an
-  element under the opacity it was painted with.
+  element under the opacity it was painted with. `Window::deferred_priority`
+  names the priority of the deferred draw now prepainted or painted, so the
+  overlay draws a float's loop at that float's layer; `Window::is_view_drawn`
+  (the frame being drawn) and `Window::drew_view` (the last frame) say
+  whether a view is in the frame (`DispatchTree::contains_view`), so it
+  drops the loops of a view no longer drawn.
 - **Debug bounds kept by a reused view** (`window.rs`, `elements/div.rs`,
   test support only). A cached view's reused paint range carries its
   `debug_selector` bounds into the next frame, as a fresh paint would.

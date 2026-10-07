@@ -21,7 +21,7 @@
 //! with `FERRITE_LOOPS_OVERLAY=0`, which also leaves the Cockpit uncached.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
@@ -66,6 +66,8 @@ impl CockpitWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Over a cached Cockpit, its nav and Panes are cached parts too.
+        cockpit.update(cx, |view, _| view.set_parts(overlay));
         let overlay = overlay.then(|| {
             let overlay = cx.new(|_| LoopsOverlay);
             let id = window.window_handle().window_id();
@@ -107,33 +109,39 @@ impl Render for CockpitWindow {
 
 // ---------------------------------------------------------------- the marks
 
-/// One loop the overlay draws: the element to build, and where the Cockpit
-/// laid it out.
+/// One loop the overlay draws: the element to build, and where the view
+/// that owns it laid it out.
 struct Mark {
+    /// The `deferred` draw's priority it was laid out in (a float), or
+    /// `None` in the main tree: the overlay layer that draws it.
+    priority: Option<usize>,
     /// The element's box, unrounded: where the overlay places its copy.
     bounds: Bounds<Pixels>,
     mask: ContentMask<Pixels>,
     text_style: TextStyle,
-    /// The opacity it was painted under (the Cockpit's paint fills it in).
+    /// The opacity it was painted under (the owner's paint fills it in).
     opacity: f32,
     build: Rc<dyn Fn() -> AnyElement>,
 }
 
-/// One window's overlay and the loops its Cockpit laid out on its last
-/// render.
+/// One window's overlay and the loops its views laid out.
 #[derive(Default)]
 struct WindowMarks {
     overlay: Option<EntityId>,
-    /// The views whose loops go to the overlay this frame: the Cockpit and
-    /// the Composers it renders (never a cached view inside it, whose loops
-    /// would be lost the next time the Cockpit renders without it).
-    hosts: HashSet<EntityId>,
-    marks: Vec<Mark>,
+    /// Each hosting view's loops, as its last render laid them out: the
+    /// Cockpit, its cached parts (the nav, each Pane) and the Composers in
+    /// them. A view reused from its cache keeps its loops; one rendered
+    /// again lays them out afresh; one no longer drawn is passed over.
+    owners: HashMap<EntityId, Vec<Mark>>,
 }
 
 thread_local! {
     static WINDOWS: RefCell<HashMap<WindowId, WindowMarks>> = RefCell::new(HashMap::new());
 }
+
+/// The priorities of the `deferred` draws whose loops the overlay draws:
+/// every one the app's floats use (`float::FLOAT_PRIORITY` is the highest).
+const LAYERS: std::ops::RangeInclusive<usize> = 0..=8;
 
 fn with_marks<R>(window: WindowId, f: impl FnOnce(&mut WindowMarks) -> R) -> R {
     WINDOWS.with(|windows| f(windows.borrow_mut().entry(window).or_default()))
@@ -151,31 +159,25 @@ fn with_overlay_marks(window: &Window, f: impl FnOnce(&mut WindowMarks)) {
     });
 }
 
-/// The Cockpit starts rendering: it lays its loops out again, so forget the
-/// last render's.
-pub fn begin(window: &Window, cockpit: EntityId) {
+/// `owner` (the Cockpit, a cached part of it, a Composer) starts rendering:
+/// its loops go to the overlay, laid out afresh, so forget its last ones.
+pub fn begin(window: &Window, owner: EntityId) {
     with_overlay_marks(window, |marks| {
-        marks.marks.clear();
-        marks.hosts.clear();
-        marks.hosts.insert(cockpit);
-    });
-}
-
-/// A Composer renders inside the Cockpit: its caret can go to the overlay.
-pub fn host(window: &Window, view: EntityId) {
-    with_overlay_marks(window, |marks| {
-        marks.hosts.insert(view);
+        marks.owners.insert(owner, Vec::new());
     });
 }
 
 /// Whether the loop now laid out goes to the overlay: there is one, the view
-/// drawing it hosts its loops, the loop moves, and nothing must stay above
-/// it (a float it sits in, a drag's indicators).
+/// drawing it hosts its loops, the loop moves, and no drag's indicators
+/// must stay above it. In a float, an overlay layer at the float's priority
+/// draws it, right over the float.
 pub(crate) fn hosting(window: &Window, cx: &App) -> bool {
-    if window.drawing_deferred()
-        || cx.has_active_drag()
+    if cx.has_active_drag()
         || crate::motion::reduced_motion(cx)
         || crate::motion::held_loops().is_some()
+        || window
+            .deferred_priority()
+            .is_some_and(|priority| !LAYERS.contains(&priority))
     {
         return false;
     }
@@ -184,22 +186,29 @@ pub(crate) fn hosting(window: &Window, cx: &App) -> bool {
         windows
             .borrow()
             .get(&window.window_handle().window_id())
-            .is_some_and(|marks| marks.overlay.is_some() && marks.hosts.contains(&view))
+            .is_some_and(|marks| marks.overlay.is_some() && marks.owners.contains_key(&view))
     })
 }
 
-/// Record a loop for the overlay, at prepaint; returns its slot, which the
-/// paint fills with its opacity.
-fn push(window: &Window, mark: Mark) -> usize {
+/// Record a loop for the overlay, at prepaint, under the view laying it
+/// out; returns its slot, which the paint fills with its opacity.
+fn push(window: &Window, mut mark: Mark) -> (EntityId, usize) {
+    let owner = window.current_view();
+    mark.priority = window.deferred_priority();
     with_marks(window.window_handle().window_id(), |marks| {
-        marks.marks.push(mark);
-        marks.marks.len() - 1
+        let loops = marks.owners.entry(owner).or_default();
+        loops.push(mark);
+        (owner, loops.len() - 1)
     })
 }
 
-fn set_opacity(window: &Window, slot: usize, opacity: f32) {
+fn set_opacity(window: &Window, (owner, slot): (EntityId, usize), opacity: f32) {
     with_marks(window.window_handle().window_id(), |marks| {
-        if let Some(mark) = marks.marks.get_mut(slot) {
+        if let Some(mark) = marks
+            .owners
+            .get_mut(&owner)
+            .and_then(|loops| loops.get_mut(slot))
+        {
             mark.opacity = opacity;
         }
     });
@@ -246,7 +255,7 @@ pub struct Hosted {
     build: Rc<dyn Fn() -> AnyElement>,
     child: Option<AnyElement>,
     /// The overlay slot it was recorded in, when hosted.
-    slot: Option<usize>,
+    slot: Option<(EntityId, usize)>,
 }
 
 impl IntoElement for Hosted {
@@ -303,6 +312,7 @@ impl Element for Hosted {
         }
         if *hosted {
             let mark = Mark {
+                priority: None,
                 bounds: window.unsnapped_layout_bounds(*layout),
                 mask: window.content_mask(),
                 text_style: window.text_style(),
@@ -344,10 +354,11 @@ pub(crate) fn record(
     window: &Window,
     bounds: Bounds<Pixels>,
     build: impl Fn() -> AnyElement + 'static,
-) -> usize {
+) -> (EntityId, usize) {
     push(
         window,
         Mark {
+            priority: None,
             bounds,
             mask: window.content_mask(),
             text_style: window.text_style(),
@@ -358,44 +369,72 @@ pub(crate) fn record(
 }
 
 /// How many loops the overlay draws in `window` now (a parity capture's
-/// premise).
-#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+/// premise, the tests').
+#[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
 pub(crate) fn hosted_marks(window: &Window) -> usize {
     WINDOWS.with(|windows| {
         windows
             .borrow()
             .get(&window.window_handle().window_id())
-            .map_or(0, |marks| marks.marks.len())
+            .map_or(0, |marks| {
+                marks
+                    .owners
+                    .iter()
+                    .filter(|(owner, _)| window.drew_view(**owner))
+                    .map(|(_, loops)| loops.len())
+                    .sum()
+            })
     })
 }
 
 /// At paint, the opacity a recorded loop would have been painted under.
-pub(crate) fn paint_hosted(window: &Window, slot: usize) {
+pub(crate) fn paint_hosted(window: &Window, slot: (EntityId, usize)) {
     set_opacity(window, slot, window.element_opacity());
 }
 
 // ---------------------------------------------------------------- overlay
 
-/// The view that draws the hosted loops, above the Cockpit. It takes no
-/// pointer; each of its draws declares itself on the pulse clock through the
-/// loops it builds.
+/// The view that draws the hosted loops, above the Cockpit: those laid out
+/// in its main tree in one layer after it, and those laid out in a float in
+/// a `deferred` layer of the float's priority, drawn right after it. It
+/// takes no pointer; each of its draws declares itself on the pulse clock
+/// through the loops it builds.
 pub struct LoopsOverlay;
 
 impl Render for LoopsOverlay {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         testing::OVERLAY_RENDERS.with(|renders| renders.set(renders.get() + 1));
-        Marks { built: Vec::new() }
+        div().absolute().child(Layer::new(None)).children(
+            LAYERS
+                .map(|priority| gpui::deferred(Layer::new(Some(priority))).with_priority(priority)),
+        )
     }
 }
 
-/// The hosted loops, built again where the Cockpit laid them out, each
-/// with the content mask, text style and opacity it was drawn under there.
-struct Marks {
-    built: Vec<(AnyElement, ContentMask<Pixels>, TextStyleRefinement, f32)>,
+/// One layer of hosted loops — the main tree's, or one float priority's —
+/// built again where their views laid them out, each with the content
+/// mask, text style and opacity it was drawn under there.
+struct Layer {
+    priority: Option<usize>,
+    built: Vec<(
+        AnyElement,
+        ContentMask<Pixels>,
+        TextStyleRefinement,
+        (EntityId, usize),
+    )>,
 }
 
-impl IntoElement for Marks {
+impl Layer {
+    fn new(priority: Option<usize>) -> Self {
+        Self {
+            priority,
+            built: Vec::new(),
+        }
+    }
+}
+
+impl IntoElement for Layer {
     type Element = Self;
 
     fn into_element(self) -> Self::Element {
@@ -403,7 +442,7 @@ impl IntoElement for Marks {
     }
 }
 
-impl Element for Marks {
+impl Element for Layer {
     type RequestLayoutState = ();
     type PrepaintState = ();
 
@@ -436,30 +475,41 @@ impl Element for Marks {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // The Cockpit before it in the tree has prepainted: its marks are
-        // this frame's, or, replayed from its cache, its last render's.
-        let marks: Vec<(
+        // Everything before this layer in its order has prepainted: the
+        // main tree's views for the main layer, a float's for its layer.
+        // Their loops are this frame's, or, reused from a cache, its last
+        // render's; a view not drawn this frame is passed over.
+        let priority = self.priority;
+        type Due = (
+            (EntityId, usize),
             Bounds<Pixels>,
             ContentMask<Pixels>,
             TextStyle,
-            f32,
             Rc<dyn Fn() -> AnyElement>,
-        )> = with_marks(window.window_handle().window_id(), |marks| {
+        );
+        let due: Vec<Due> = with_marks(window.window_handle().window_id(), |marks| {
             marks
-                .marks
+                .owners
                 .iter()
-                .map(|mark| {
-                    (
-                        mark.bounds,
-                        mark.mask.clone(),
-                        mark.text_style.clone(),
-                        mark.opacity,
-                        mark.build.clone(),
-                    )
+                .filter(|(owner, _)| window.is_view_drawn(**owner))
+                .flat_map(|(owner, loops)| {
+                    loops
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, mark)| mark.priority == priority)
+                        .map(|(slot, mark)| {
+                            (
+                                (*owner, slot),
+                                mark.bounds,
+                                mark.mask.clone(),
+                                mark.text_style.clone(),
+                                mark.build.clone(),
+                            )
+                        })
                 })
                 .collect()
         });
-        for (bounds, mask, text_style, opacity, build) in marks {
+        for (slot, bounds, mask, text_style, build) in due {
             let mut element = build();
             let text_style = refinement(&text_style);
             window.with_text_style(Some(text_style.clone()), |window| {
@@ -475,7 +525,7 @@ impl Element for Marks {
                     element.prepaint_at(bounds.origin, window, cx);
                 });
             });
-            self.built.push((element, mask, text_style, opacity));
+            self.built.push((element, mask, text_style, slot));
         }
     }
 
@@ -489,12 +539,15 @@ impl Element for Marks {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // The Cockpit painted first; each loop's opacity is now known.
-        let opacities: Vec<f32> = with_marks(window.window_handle().window_id(), |marks| {
-            marks.marks.iter().map(|mark| mark.opacity).collect()
-        });
-        for (index, (element, mask, text_style, opacity)) in self.built.iter_mut().enumerate() {
-            let opacity = opacities.get(index).copied().unwrap_or(*opacity);
+        // The views before it have painted: each loop's opacity is known.
+        for (element, mask, text_style, (owner, slot)) in self.built.iter_mut() {
+            let opacity = with_marks(window.window_handle().window_id(), |marks| {
+                marks
+                    .owners
+                    .get(owner)
+                    .and_then(|loops| loops.get(*slot))
+                    .map_or(1.0, |mark| mark.opacity)
+            });
             // An element can read its text style at paint too (the
             // shimmer's line height).
             window.with_text_style(Some(text_style.clone()), |window| {
