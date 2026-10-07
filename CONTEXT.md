@@ -93,6 +93,13 @@ Session there, the Transcript kept, and a digest of the earlier exchanges
 carried ahead of the next prompt, once. Not a resume — the new Provider
 never saw the old conversation.
 
+**Header**
+A Thread's durable facts: its Provider, model, Effort, Title, Workspace
+binding and Project. They are written first when the Thread is created.
+Each later change is appended to the Thread's history as an amendment, and
+the newest amendment wins. Earlier history is never rewritten to change one.
+_Avoid_: metadata, sidecar.
+
 **Settings**
 The operator's defaults for new Threads (Provider, model, effort,
 permissions) and for the app's behaviour, in one file beside the store. Never history: a

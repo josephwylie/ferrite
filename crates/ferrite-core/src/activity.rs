@@ -2275,7 +2275,7 @@ impl ExecutionEvent {
         })
     }
 
-    fn into_input(self) -> Input {
+    pub(crate) fn into_input(self) -> Input {
         Input::Event(match self {
             Self::Progress { event } => SessionEvent::Progress { event },
             Self::ContentBoundary => SessionEvent::ContentBoundary,
@@ -2498,7 +2498,7 @@ fn append_delta(previous: &mut Input, next: &Input) -> bool {
     }
 }
 
-fn input_bytes(input: &Input) -> usize {
+pub(crate) fn input_bytes(input: &Input) -> usize {
     match input {
         Input::Prompt(text) | Input::Notice(text) => text.len(),
         Input::Event(event) => match event {

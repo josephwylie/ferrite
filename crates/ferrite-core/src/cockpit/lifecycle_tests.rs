@@ -365,12 +365,11 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
     cockpit
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
-    let tmp = cockpit
+    cockpit
         .store
-        .dir()
-        .join(thread.to_string())
-        .join("log.jsonl.tmp");
-    std::fs::create_dir(&tmp).unwrap();
+        .faults()
+        .fail_commit
+        .store(true, Ordering::SeqCst);
     replacement.ready();
     until(|| {
         cockpit.pump();

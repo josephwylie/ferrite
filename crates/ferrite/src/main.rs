@@ -111,6 +111,9 @@ pub(crate) fn register_fonts(cx: &App) {
 }
 
 fn main() {
+    // A panic must not take accepted history with it: whatever a writer
+    // holds goes into its log before the process unwinds (ADR 0008).
+    ferrite_core::store::install_panic_rescue();
     // Before the first glyph is rasterised (gpui caches the answer once):
     // the product draws text as macOS does; only the parity captures turn
     // smoothing off to match the browser-drawn prototype pixel for pixel.
@@ -261,11 +264,12 @@ fn main() {
                     if load {
                         demo::seed_load_group(&mut core);
                     }
-                } else {
+                } else if core.store_read_only().is_none() {
                     // Restore exactly the Panes that were open. A legacy
                     // store has no open-state marker, so its most recently
                     // used Thread remains the one-time migration fallback.
-                    // An empty store starts as a draft Pane (#29).
+                    // An empty store starts as a draft Pane (#29). A store
+                    // another Ferrite holds stays as that one left it.
                     revive_launch_threads(&mut core);
                 }
             }

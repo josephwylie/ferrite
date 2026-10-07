@@ -212,7 +212,7 @@ fn write_history(writer: &mut crate::store::ThreadWriter, parsed: ParsedSession)
             Entry::Event(event) => writer.record_event(event, None)?,
         }
     }
-    writer.flush()
+    writer.flush_fully()
 }
 
 /// Parse the file as whichever vendor's session it is. Detection reads the

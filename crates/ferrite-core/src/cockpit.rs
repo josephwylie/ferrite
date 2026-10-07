@@ -325,6 +325,9 @@ struct Replacement {
     model: Option<String>,
     effort: Option<String>,
     kind: ReplacementKind,
+    /// A handover's exchanges, once their read has started: the commit
+    /// waits for them, and the old Session's events wait with it.
+    exchanges: Option<crate::store::ExchangeRead>,
 }
 
 struct PendingBootstrap {
@@ -442,7 +445,7 @@ impl Thread {
         let generation = next_generation();
         let mut activity = Activity::default();
         activity.apply(ActivityInput::Connect { generation });
-        Self {
+        let mut state = Self {
             activity,
             generation,
             store_error: None,
@@ -471,7 +474,11 @@ impl Thread {
             suggestion: None,
             suggestion_revision: 0,
             permission_mode: None,
+        };
+        if let Some(notice) = state.native_queue.take_unreadable() {
+            state.apply(Input::Notice(notice));
         }
+        state
     }
 }
 
@@ -579,6 +586,10 @@ pub struct Cockpit {
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
+
+/// How long quitting waits for the drive to take every log's final sync.
+/// The writes themselves are always waited for.
+const QUIT_SYNC_DEADLINE: Duration = Duration::from_millis(500);
 
 impl Cockpit {
     pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
@@ -957,13 +968,10 @@ impl Cockpit {
         // The chosen effort goes into the header beside the model, so a
         // revive spawns on it too.
         if effort.is_some() {
-            if let Err(e) = self.store.set_provider(
-                id,
-                provider,
-                model.clone(),
-                effort.clone(),
-                Some(&mut writer),
-            ) {
+            if let Err(e) =
+                self.store
+                    .set_tuning(id, model.clone(), effort.clone(), Some(&mut writer))
+            {
                 let _ = self.store.delete(id);
                 return Err(io::Error::other(e.to_string()));
             }
@@ -1196,9 +1204,9 @@ impl Cockpit {
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
         let Some(state) = self.threads.get(&thread) else {
-            // Parked: the lock reads the log the way a revive would.
-            let snapshot = self.store.load(thread).map_err(ProvisionError::Store)?;
-            if history_locks(&snapshot.inputs()) {
+            // Parked: the lock is whether a prompt was ever sent, which the
+            // log's tail says without a full load.
+            if self.store.prompted(thread).map_err(ProvisionError::Store)? {
                 return Err(ProvisionError::Locked);
             }
             return self
@@ -1290,18 +1298,51 @@ impl Cockpit {
                 ),
             })
             .map_err(ProvisionError::Spawn)?;
-        let replacement = Replacement {
+        let mut replacement = Replacement {
             session,
             provider,
             model,
             effort,
             kind,
+            exchanges: None,
         };
         if replacement.session.is_starting() {
             self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
-            Ok(())
-        } else {
-            self.commit_replacement(thread, replacement)
+            return Ok(());
+        }
+        match self.carry_read(thread, &mut replacement)? {
+            Some(exchanges) => self.commit_replacement(thread, replacement, exchanges),
+            None => {
+                self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
+                Ok(())
+            }
+        }
+    }
+
+    /// A handover's exchanges, read whole from the log before it commits
+    /// (invariant 3): `Some` once read — at once for a small log — and
+    /// `None` while a large one is read off the UI thread. Other
+    /// replacements carry nothing and are ready now.
+    fn carry_read(
+        &mut self,
+        thread: ThreadId,
+        replacement: &mut Replacement,
+    ) -> Result<Option<Vec<(String, String)>>, ProvisionError> {
+        if !matches!(replacement.kind, ReplacementKind::Handover) {
+            return Ok(Some(Vec::new()));
+        }
+        if replacement.exchanges.is_none() {
+            // Everything the old Session said is in the log before it is read.
+            let state = self.threads.get_mut(&thread).expect("checked");
+            state
+                .writer
+                .flush()
+                .map_err(|error| ProvisionError::Store(LoadError::Io(error)))?;
+            replacement.exchanges = Some(self.store.read_exchanges(thread));
+        }
+        match replacement.exchanges.as_mut().expect("started").poll() {
+            Some(read) => read.map(Some).map_err(ProvisionError::Store),
+            None => Ok(None),
         }
     }
 
@@ -1309,6 +1350,7 @@ impl Cockpit {
         &mut self,
         thread: ThreadId,
         replacement: Replacement,
+        exchanges: Vec<(String, String)>,
     ) -> Result<(), ProvisionError> {
         self.visible_subjects.remove(&thread);
         let Replacement {
@@ -1317,12 +1359,13 @@ impl Cockpit {
             model,
             effort,
             kind,
+            ..
         } = replacement;
         let state = self.threads.get_mut(&thread).expect("checked");
         let handover = if matches!(kind, ReplacementKind::Handover) {
             Some(
                 self.store
-                    .hand_over(thread, provider, model.clone(), &mut state.writer)
+                    .commit_handover(provider, model.clone(), &mut state.writer, exchanges)
                     .map_err(ProvisionError::Store)?,
             )
         } else {
@@ -1396,7 +1439,7 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             return self.park(thread).map_err(DeleteError::Io);
         }
-        let snapshot = self.store.load(thread).map_err(DeleteError::Load)?;
+        let meta = self.store.peek(thread).map_err(DeleteError::Load)?;
         let groups_before = self.groups.clone();
         let grouped = self.groups.of(thread).is_some();
         if grouped {
@@ -1407,7 +1450,7 @@ impl Cockpit {
 
         let deleted = (|| {
             if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
-                (snapshot.project_id(), snapshot.workspace())
+                (meta.project_id, meta.workspace)
             {
                 // A worktree already gone by hand leaves nothing to check or
                 // remove; the log's deletion below is all that is left to do.
@@ -1471,13 +1514,19 @@ impl Cockpit {
             self.roster.remove_thread(thread);
             return Ok(());
         };
+        // The parked row's subagent count, from the Activity that knows it.
+        state
+            .writer
+            .note_subagents(state.activity.view().children().len());
         // A failed write keeps the live owner and its retry buffer reachable.
         if let Err(error) = state.writer.flush() {
             state.report_store_error(io::Error::new(error.kind(), error.to_string()));
             return Err(error);
         }
-        self.store.mark_parked(thread)?;
         let mut state = self.threads.remove(&thread).expect("checked");
+        // The rest — the open marker, a final mark, a sync through the
+        // drive's cache — is the store's worker's; a revive waits for it.
+        state.writer.park();
         self.notifications.disconnect(thread);
         self.visible_subjects.remove(&thread);
         self.roster.remove_thread(thread);
@@ -1493,9 +1542,17 @@ impl Cockpit {
     /// Reopen a parked Thread: its history is replayed from the log into a
     /// fresh Transcript, and the new Session is told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        let snapshot = self.store.load(thread)?;
+        // Bounded: what Activity retains, not the whole log (ADR 0008).
+        let mut revival = self.store.revive(thread)?;
+        let snapshot = revival.snapshot();
         let provider = snapshot.provider();
         let mut workspace = snapshot.workspace();
+        let session_project_root = snapshot.session_project_root();
+        let model = snapshot.model();
+        let effort = snapshot.effort();
+        let title = snapshot.title().map(str::to_string);
+        let project_id = snapshot.project_id();
+        let resume = snapshot.resume_target().map(str::to_string);
         // A worktree the agent made and the Thread followed into is the
         // agent's, not Ferrite's: gone while parked, the Thread goes back
         // to main rather than rebuilding somebody else's tree. Ferrite's
@@ -1509,7 +1566,8 @@ impl Cockpit {
                 let main = WorkspaceBinding::Main {
                     checkout: repo.clone(),
                 };
-                self.store.set_workspace(thread, &main, None)?;
+                self.store
+                    .set_workspace(thread, &main, Some(revival.writer()))?;
                 workspace = Some(main);
             }
         }
@@ -1520,29 +1578,24 @@ impl Cockpit {
             ensure_workspace(&self.registry, binding, thread)
                 .map_err(|e| LoadError::Io(io::Error::other(e)))?;
         }
-        let session_project_root = snapshot.session_project_root();
         let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
             .map(Path::to_path_buf);
-        let model = snapshot.model();
-        let effort = snapshot.effort();
-        let title = snapshot.title().map(str::to_string);
         let additional_directories =
-            project_additional_directories(&self.registry, snapshot.project_id(), cwd.as_deref());
+            project_additional_directories(&self.registry, project_id, cwd.as_deref());
         let session = self
             .spawner
             .start(SpawnRequest {
                 provider,
                 model: model.as_deref(),
                 effort: effort.as_deref(),
-                resume: snapshot.resume_target(),
+                resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
                 name: title.as_deref(),
                 additional_directories,
             })
             .map_err(LoadError::Io)?;
-        let writer = self.store.writer(thread)?;
+        let writer = revival.take_writer();
 
-        let resume = snapshot.resume_target().map(|target| target.to_string());
         let mut state = Thread::fresh(
             session,
             writer,
@@ -1557,17 +1610,23 @@ impl Cockpit {
         state.title = title;
         // A switch whose carry never went out (parked before the next
         // prompt) still owes it: the new Provider has heard nothing yet.
-        if let Some(handover) = snapshot.last_handover().filter(|h| !h.delivered) {
+        if let Some(handover) = revival.owed_handover() {
             state.carry = Some(carry_digest(handover.from, &handover.exchanges));
         }
-        state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
-        let inputs = snapshot.inputs();
-        state.first_prompt_sent = history_locks(&inputs);
+        state.prompt_history = PromptHistory::new(revival.snapshot().prompt_texts());
+        state.first_prompt_sent = revival.prompted();
         state.activity.apply(ActivityInput::Disconnect);
-        for input in snapshot.activity_inputs() {
+        for input in revival.activity_inputs() {
             state.activity.apply(input);
         }
         state.apply(Input::Revived);
+        for kept in self.store.pending_records(thread) {
+            state.apply(Input::Notice(format!(
+                "history from before Ferrite last quit could not be saved in the log; \
+                 it is kept in {}",
+                kept.display()
+            )));
+        }
         if let Some(notice) = state.native_queue.disconnect(provider == Provider::Codex) {
             state.apply(Input::Notice(notice));
         }
@@ -1897,6 +1956,12 @@ impl Cockpit {
         self.store.tracks_open_state()
     }
 
+    /// Why this Ferrite may only read its store — another one holds the
+    /// store's claim — or `None` when it may change it (ADR 0008).
+    pub fn store_read_only(&self) -> Option<&str> {
+        self.store.read_only()
+    }
+
     /// Whether some Thread's Main just finished making a worktree and is
     /// waiting on a fresh listing to name it — the driver's cue to list
     /// now rather than on its next tick.
@@ -2019,6 +2084,9 @@ impl Cockpit {
             state.replacement = None;
             state.session = None;
         }
+        // Every record accepted is written before Ferrite goes (E1); only
+        // the final syncs are bounded.
+        self.store.quit(QUIT_SYNC_DEADLINE);
     }
 
     /// The durable operator title, whether this Thread is live or parked.
@@ -2118,19 +2186,37 @@ impl Cockpit {
                 .get_mut(&id)
                 .and_then(|state| state.replacement.take());
             if let Some(mut replacement) = replacement {
-                let result = match replacement.session.poll() {
+                // A handover whose exchanges are being read was ready already.
+                let ready = if replacement.exchanges.is_some() {
+                    Ok(true)
+                } else {
+                    replacement.session.poll()
+                };
+                let result = match ready {
                     Ok(false) => {
                         self.threads.get_mut(&id).expect("exists").replacement = Some(replacement);
                         continue;
                     }
                     Ok(true) => {
-                        if let (Some(title), Some(session)) = (
-                            self.threads[&id].title.as_deref(),
-                            replacement.session.session_mut(),
-                        ) {
-                            let _ = session.set_name(title);
+                        if replacement.exchanges.is_none() {
+                            if let (Some(title), Some(session)) = (
+                                self.threads[&id].title.as_deref(),
+                                replacement.session.session_mut(),
+                            ) {
+                                let _ = session.set_name(title);
+                            }
                         }
-                        self.commit_replacement(id, replacement)
+                        match self.carry_read(id, &mut replacement) {
+                            Ok(Some(exchanges)) => {
+                                self.commit_replacement(id, replacement, exchanges)
+                            }
+                            Ok(None) => {
+                                self.threads.get_mut(&id).expect("exists").replacement =
+                                    Some(replacement);
+                                continue;
+                            }
+                            Err(error) => Err(error),
+                        }
                     }
                     Err(error) => Err(ProvisionError::Spawn(error)),
                 };
@@ -2260,6 +2346,14 @@ impl Cockpit {
             // for new work; highlighted Blocks remain an explicit next-frame wake.
             let highlighted = thread.activity.apply(ActivityInput::DrainHighlights);
             update.absorb(highlighted, false);
+            // A log the worker cannot sync holds the Session's events too:
+            // nothing more is accepted than the disk can keep.
+            if let Some(failure) = thread.writer.failure() {
+                thread.report_store_error(io::Error::other(failure));
+                update.activity_changed = true;
+                frame.push(update);
+                continue;
+            }
             // Backpressure on failed persistence: retain the writer's buffer
             // and let the bounded provider channel fill rather than lose history.
             if thread.store_error.is_some() {
@@ -2277,6 +2371,18 @@ impl Cockpit {
                 }
             }
             if thread.history_backpressure() {
+                if update.activity_changed {
+                    frame.push(update);
+                }
+                continue;
+            }
+            // A handover reading its exchanges: the old Session's events wait,
+            // so none lands between what is read and the switch's line.
+            if thread
+                .replacement
+                .as_ref()
+                .is_some_and(|replacement| replacement.exchanges.is_some())
+            {
                 if update.activity_changed {
                     frame.push(update);
                 }
@@ -2520,6 +2626,9 @@ impl Cockpit {
             }
             if turn_ended {
                 ended.push(*id);
+                thread
+                    .writer
+                    .note_subagents(thread.activity.view().children().len());
             }
             if update.activity_changed || !update.dirty.is_empty() || !update.subjects.is_empty() {
                 frame.push(update);
@@ -2888,10 +2997,9 @@ impl Cockpit {
     ) -> Result<(), ProvisionError> {
         let effort = self.tuning(thread)?.1;
         let Some(state) = self.threads.get_mut(&thread) else {
-            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, model, effort, None)
+                .set_tuning(thread, model, effort, None)
                 .map_err(ProvisionError::Store);
         };
         if state.busy()
@@ -2922,13 +3030,10 @@ impl Cockpit {
             }
         }
         state.history.clear();
-        if let Err(error) = self.store.set_provider(
-            thread,
-            state.provider,
-            model.clone(),
-            effort,
-            Some(&mut state.writer),
-        ) {
+        if let Err(error) =
+            self.store
+                .set_tuning(thread, model.clone(), effort, Some(&mut state.writer))
+        {
             if let Some(session) = state
                 .session
                 .as_mut()
@@ -2958,7 +3063,7 @@ impl Cockpit {
             let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, meta.model, effort, None)
+                .set_tuning(thread, meta.model, effort, None)
                 .map_err(ProvisionError::Store);
         };
         if state.busy()
@@ -2988,9 +3093,8 @@ impl Cockpit {
             return Ok(());
         }
         state.history.clear();
-        if let Err(error) = self.store.set_provider(
+        if let Err(error) = self.store.set_tuning(
             thread,
-            state.provider,
             state.model.clone(),
             effort.clone(),
             Some(&mut state.writer),
@@ -3034,10 +3138,9 @@ impl Cockpit {
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
         let Some(state) = self.threads.get(&thread) else {
-            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, model, effort, None)
+                .set_tuning(thread, model, effort, None)
                 .map_err(ProvisionError::Store);
         };
         if state.model == model && state.effort == effort {
@@ -3982,13 +4085,6 @@ pub fn title_from_prompt(text: &str) -> String {
     }
 }
 
-/// The first-prompt lock, read off a replayed history (#25, #29): an
-/// operator prompt in the log is a first prompt already sent. The one rule
-/// for every Thread that is not live — a revive arming its state, and a
-/// parked `set_provider` judging the log directly.
-fn history_locks(inputs: &[Input]) -> bool {
-    inputs.iter().any(|input| matches!(input, Input::Prompt(_)))
-}
 
 /// The #24 guard: a session project root that no longer exists on disk
 /// refuses the send — readably, naming the path and the remedy — never a
@@ -4346,25 +4442,37 @@ pub struct LogReader {
 impl LogReader {
     /// The subagents a parked Thread's durable activity knows — a replay of
     /// its whole log, so never on the UI thread for more than one Thread.
+    /// Read off the log's tail for a schema-13 log; a log from before is
+    /// replayed once and remembered (`Store::summary`).
     pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        let snapshot = self.store.load(thread)?;
-        let mut activity = Activity::default();
-        for input in snapshot.activity_inputs() {
-            activity.apply(input);
-        }
-        Ok(activity.view().children().len())
+        Ok(self
+            .store
+            .summary(thread, replayed_subagents)?
+            .subagents
+            .unwrap_or_default())
     }
 
     /// How many turns a parked Thread's log holds — its prompts since the
     /// last conversation reset: the wall's parked tile reads `11 turns`.
-    /// A whole-log read, so never on the UI thread for more than one.
+    /// Off the log's tail, or remembered like `subagent_count`.
     pub fn turn_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        Ok(self.store.load(thread)?.prompt_texts().len())
+        Ok(self.store.summary(thread, replayed_subagents)?.turns)
     }
+}
+
+/// The subagents a full replay of a snapshot knows: what a pre-13 log's
+/// parked row is counted from, once.
+fn replayed_subagents(snapshot: &crate::store::ThreadSnapshot) -> usize {
+    let mut activity = Activity::default();
+    for input in snapshot.activity_inputs() {
+        activity.apply(input);
+    }
+    activity.view().children().len()
 }
 
 #[cfg(test)]
 mod tests {
+    mod context;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
