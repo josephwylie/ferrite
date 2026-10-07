@@ -116,7 +116,12 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
             },
         )
         .unwrap();
-    cockpit.pump();
+    // A long log's exchanges are read off the UI thread; the switch commits
+    // once they are.
+    while cockpit.thread(thread).unwrap().starting() {
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     cockpit.send(thread, "next".into());
     assert_eq!(
         fake.sent.borrow().last().unwrap(),
@@ -355,4 +360,54 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
         notices.iter().any(|line| line.contains("log.pending-")),
         "{notices:?}"
     );
+}
+
+/// A switch on a long Thread reads its exchanges off the UI thread: the
+/// switch is pending meanwhile, the old Session's events wait, and the
+/// carry still holds the whole history (invariant 3).
+#[test]
+fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
+    let (mut cockpit, fake) = cockpit("switch-async");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let mut exchanges = Vec::new();
+    for n in 0..4 {
+        let answer = format!("answer {n} {}", "v".repeat(800_000));
+        cockpit.send(thread, format!("question {n}"));
+        live(&fake).send(text(&answer)).unwrap();
+        live(&fake).send(ended()).unwrap();
+        cockpit.pump();
+        exchanges.push((format!("question {n}"), answer));
+    }
+    let old = live(&fake);
+    cockpit
+        .set_provider(
+            thread,
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        )
+        .unwrap();
+    assert!(cockpit.thread(thread).unwrap().starting(), "pending on its read");
+    // The old Session's late word waits; the switch drops it with the Session.
+    old.send(SessionEvent::Init {
+        session_id: "late-claude".into(),
+        model: "claude-opus-5".into(),
+    })
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while cockpit.thread(thread).unwrap().starting() {
+        assert!(std::time::Instant::now() < deadline, "the switch never committed");
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cockpit.send(thread, "next".into());
+    assert_eq!(
+        fake.sent.borrow().last().unwrap(),
+        &format!("{}\n\nnext", carry_digest(Provider::Claude, &exchanges))
+    );
+    let log = std::fs::read_to_string(cockpit.store.dir().join(thread.to_string()).join("log.jsonl"))
+        .unwrap();
+    assert!(!log.contains("late-claude"), "no old word after the switch's line");
+    let _ = std::fs::remove_dir_all(cockpit.store.dir());
 }

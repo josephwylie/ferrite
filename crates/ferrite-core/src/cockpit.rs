@@ -325,6 +325,9 @@ struct Replacement {
     model: Option<String>,
     effort: Option<String>,
     kind: ReplacementKind,
+    /// A handover's exchanges, once their read has started: the commit
+    /// waits for them, and the old Session's events wait with it.
+    exchanges: Option<crate::store::ExchangeRead>,
 }
 
 struct PendingBootstrap {
@@ -1291,18 +1294,51 @@ impl Cockpit {
                 ),
             })
             .map_err(ProvisionError::Spawn)?;
-        let replacement = Replacement {
+        let mut replacement = Replacement {
             session,
             provider,
             model,
             effort,
             kind,
+            exchanges: None,
         };
         if replacement.session.is_starting() {
             self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
-            Ok(())
-        } else {
-            self.commit_replacement(thread, replacement)
+            return Ok(());
+        }
+        match self.carry_read(thread, &mut replacement)? {
+            Some(exchanges) => self.commit_replacement(thread, replacement, exchanges),
+            None => {
+                self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
+                Ok(())
+            }
+        }
+    }
+
+    /// A handover's exchanges, read whole from the log before it commits
+    /// (invariant 3): `Some` once read — at once for a small log — and
+    /// `None` while a large one is read off the UI thread. Other
+    /// replacements carry nothing and are ready now.
+    fn carry_read(
+        &mut self,
+        thread: ThreadId,
+        replacement: &mut Replacement,
+    ) -> Result<Option<Vec<(String, String)>>, ProvisionError> {
+        if !matches!(replacement.kind, ReplacementKind::Handover) {
+            return Ok(Some(Vec::new()));
+        }
+        if replacement.exchanges.is_none() {
+            // Everything the old Session said is in the log before it is read.
+            let state = self.threads.get_mut(&thread).expect("checked");
+            state
+                .writer
+                .flush()
+                .map_err(|error| ProvisionError::Store(LoadError::Io(error)))?;
+            replacement.exchanges = Some(self.store.read_exchanges(thread));
+        }
+        match replacement.exchanges.as_mut().expect("started").poll() {
+            Some(read) => read.map(Some).map_err(ProvisionError::Store),
+            None => Ok(None),
         }
     }
 
@@ -1310,6 +1346,7 @@ impl Cockpit {
         &mut self,
         thread: ThreadId,
         replacement: Replacement,
+        exchanges: Vec<(String, String)>,
     ) -> Result<(), ProvisionError> {
         self.visible_subjects.remove(&thread);
         let Replacement {
@@ -1318,12 +1355,13 @@ impl Cockpit {
             model,
             effort,
             kind,
+            ..
         } = replacement;
         let state = self.threads.get_mut(&thread).expect("checked");
         let handover = if matches!(kind, ReplacementKind::Handover) {
             Some(
                 self.store
-                    .hand_over(thread, provider, model.clone(), &mut state.writer)
+                    .commit_handover(provider, model.clone(), &mut state.writer, exchanges)
                     .map_err(ProvisionError::Store)?,
             )
         } else {
@@ -2144,19 +2182,37 @@ impl Cockpit {
                 .get_mut(&id)
                 .and_then(|state| state.replacement.take());
             if let Some(mut replacement) = replacement {
-                let result = match replacement.session.poll() {
+                // A handover whose exchanges are being read was ready already.
+                let ready = if replacement.exchanges.is_some() {
+                    Ok(true)
+                } else {
+                    replacement.session.poll()
+                };
+                let result = match ready {
                     Ok(false) => {
                         self.threads.get_mut(&id).expect("exists").replacement = Some(replacement);
                         continue;
                     }
                     Ok(true) => {
-                        if let (Some(title), Some(session)) = (
-                            self.threads[&id].title.as_deref(),
-                            replacement.session.session_mut(),
-                        ) {
-                            let _ = session.set_name(title);
+                        if replacement.exchanges.is_none() {
+                            if let (Some(title), Some(session)) = (
+                                self.threads[&id].title.as_deref(),
+                                replacement.session.session_mut(),
+                            ) {
+                                let _ = session.set_name(title);
+                            }
                         }
-                        self.commit_replacement(id, replacement)
+                        match self.carry_read(id, &mut replacement) {
+                            Ok(Some(exchanges)) => {
+                                self.commit_replacement(id, replacement, exchanges)
+                            }
+                            Ok(None) => {
+                                self.threads.get_mut(&id).expect("exists").replacement =
+                                    Some(replacement);
+                                continue;
+                            }
+                            Err(error) => Err(error),
+                        }
                     }
                     Err(error) => Err(ProvisionError::Spawn(error)),
                 };
@@ -2311,6 +2367,18 @@ impl Cockpit {
                 }
             }
             if thread.history_backpressure() {
+                if update.activity_changed {
+                    frame.push(update);
+                }
+                continue;
+            }
+            // A handover reading its exchanges: the old Session's events wait,
+            // so none lands between what is read and the switch's line.
+            if thread
+                .replacement
+                .as_ref()
+                .is_some_and(|replacement| replacement.exchanges.is_some())
+            {
                 if update.activity_changed {
                     frame.push(update);
                 }

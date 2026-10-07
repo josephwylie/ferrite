@@ -2649,9 +2649,10 @@ impl Store {
         })
     }
 
-    /// Commit the new header and its Handover together. Before the rename,
-    /// every refusal leaves the old log and writer authoritative; afterwards
-    /// no fallible read remains between persistence and Session adoption.
+    /// Read every exchange and commit the switch in one call. The cockpit
+    /// does the two apart (`read_exchanges`, `commit_handover`), so a long
+    /// log is read off the UI thread.
+    #[cfg(test)]
     pub(crate) fn hand_over(
         &self,
         id: ThreadId,
@@ -2662,22 +2663,61 @@ impl Store {
         self.writable()?;
         writer.flush()?;
         // Every exchange the log holds, read whole (ADR 0008, invariant 3).
-        let mut snapshot = self.load(id)?;
+        let exchanges = self.load(id)?.exchanges_so_far();
+        self.commit_handover(provider, model, writer, exchanges)
+    }
+
+    /// The exchanges a provider switch made now carries, read whole from the
+    /// log as it stands (invariant 3): here, for a small log; on a thread of
+    /// its own for a large one, so no caller waits on it. Everything the
+    /// writer holds must be written first.
+    pub(crate) fn read_exchanges(&self, id: ThreadId) -> ExchangeRead {
+        let store = self.clone();
+        let read = move || store.load(id).map(|snapshot| snapshot.exchanges_so_far());
+        let size = fs::metadata(self.log_path(id)).map_or(0, |meta| meta.len());
+        if size <= INLINE_EXCHANGE_READ {
+            return ExchangeRead::Ready(Some(read()));
+        }
+        let (send, receive) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("ferrite-handover".into())
+            .spawn(move || {
+                let _ = send.send(read());
+            });
+        match spawned {
+            Ok(_) => ExchangeRead::Pending(receive),
+            Err(error) => ExchangeRead::Ready(Some(Err(LoadError::Io(error)))),
+        }
+    }
+
+    /// Commit a provider switch: one line, carrying the facts it switches
+    /// to, so the switch and its facts land together or not at all. Answers
+    /// the Handover the next prompt owes, with `exchanges` read before it.
+    pub(crate) fn commit_handover(
+        &self,
+        provider: Provider,
+        model: Option<String>,
+        writer: &mut ThreadWriter,
+        exchanges: Vec<(String, String)>,
+    ) -> Result<Handover, LoadError> {
+        self.writable()?;
         let mut writer = writer.lock();
         let from = writer.facts.provider;
         let mut facts = writer.facts.clone();
         facts.provider = provider;
         facts.model = model.clone();
         facts.effort = None;
-        let switch = |facts: Option<Facts>| Record::Handover {
+        writer.commit(Record::Handover {
             from,
             to: provider,
-            model: model.clone(),
-            facts,
-        };
-        writer.commit(switch(Some(facts)))?;
-        snapshot.records.push(switch(None));
-        Ok(snapshot.last_handover().expect("just added"))
+            model,
+            facts: Some(facts),
+        })?;
+        Ok(Handover {
+            from,
+            exchanges,
+            delivered: false,
+        })
     }
 
     /// Record the model and effort this Thread runs with, leaving its
@@ -3321,6 +3361,33 @@ pub struct ThreadSnapshot {
     records: Vec<Record>,
 }
 
+/// How large a log may be for a provider switch to read its exchanges on
+/// the caller's thread: a few milliseconds of parsing at most.
+const INLINE_EXCHANGE_READ: u64 = 2 * 1024 * 1024;
+
+/// A provider switch's exchanges, being read (`Store::read_exchanges`).
+pub(crate) enum ExchangeRead {
+    Ready(Option<Result<Vec<(String, String)>, LoadError>>),
+    Pending(std::sync::mpsc::Receiver<Result<Vec<(String, String)>, LoadError>>),
+}
+
+impl ExchangeRead {
+    /// The exchanges once read — taken, so asked once — or `None` while
+    /// the read is still running.
+    pub(crate) fn poll(&mut self) -> Option<Result<Vec<(String, String)>, LoadError>> {
+        match self {
+            Self::Ready(read) => read.take(),
+            Self::Pending(receive) => match receive.try_recv() {
+                Ok(read) => Some(read),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(LoadError::Io(
+                    io::Error::other("the read of the switch's exchanges stopped"),
+                ))),
+            },
+        }
+    }
+}
+
 /// The last provider switch a log records, and what the next prompt on
 /// the new provider owes it.
 pub(crate) struct Handover {
@@ -3478,6 +3545,25 @@ impl ThreadSnapshot {
         let Record::Handover { from, .. } = &self.records[at] else {
             unreachable!("rposition matched a handover");
         };
+        Some(Handover {
+            from: *from,
+            exchanges: self.exchanges_before(at),
+            delivered: self.records[at + 1..]
+                .iter()
+                .any(|record| matches!(record, Record::Prompt { .. })),
+        })
+    }
+
+    /// Every prompt since the last reset with the answer that followed it:
+    /// what a provider switch made now carries.
+    pub(crate) fn exchanges_so_far(&self) -> Vec<(String, String)> {
+        self.exchanges_before(self.records.len())
+    }
+
+    /// Every prompt between the last reset before record `at` and `at`,
+    /// with the answer text that followed it (tool runs and reasoning left
+    /// out).
+    fn exchanges_before(&self, at: usize) -> Vec<(String, String)> {
         let mut exchanges: Vec<(String, AnswerText)> = Vec::new();
         let after_reset = self.records[..at]
             .iter()
@@ -3506,16 +3592,10 @@ impl ThreadSnapshot {
                 _ => {}
             }
         }
-        Some(Handover {
-            from: *from,
-            exchanges: exchanges
-                .into_iter()
-                .map(|(prompt, answer)| (prompt, answer.parts.concat()))
-                .collect(),
-            delivered: self.records[at + 1..]
-                .iter()
-                .any(|record| matches!(record, Record::Prompt { .. })),
-        })
+        exchanges
+            .into_iter()
+            .map(|(prompt, answer)| (prompt, answer.parts.concat()))
+            .collect()
     }
 
     /// Legacy Main-only inputs. Child facts and identity-bearing Main content
