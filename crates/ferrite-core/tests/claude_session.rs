@@ -867,6 +867,99 @@ cat >> '{log}'"#,
     assert_eq!(user["type"], "user");
 }
 
+/// The UI thread both drains the event channel and changes settings, so a
+/// reader parked on a full channel must not be holding anything a setting
+/// change waits on. Here the reader parks while delivering a control's
+/// answer; the change then fails at its acknowledgement deadline (its ack is
+/// queued behind the full channel) instead of hanging the UI for good, and
+/// nothing the CLI said is lost once the channel drains.
+#[test]
+fn a_setting_change_while_the_reader_is_parked_fails_instead_of_hanging() {
+    // Channel capacity: the reader parks on whichever event comes next.
+    const CAPACITY: usize = 1024;
+    // Several answered controls straddle the full mark, so the reader parks
+    // inside control handling even if spawn announced a few events first.
+    const CONTROLS: usize = 8;
+    const DELTAS: usize = CAPACITY - CONTROLS / 2;
+
+    let payload = log_path("parked-reader.jsonl");
+    let mut lines = String::new();
+    for n in 0..DELTAS {
+        lines.push_str(&format!(
+            r#"{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"{n} "}}}}}}"#
+        ));
+        lines.push('\n');
+    }
+    // req_2 … req_9 are the controls below; req_1 was the handshake, which
+    // the stub reads first along with them.
+    for n in 0..CONTROLS {
+        lines.push_str(&format!(
+            r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"req_{}","response":{{"mcpServers":[]}}}}}}"#,
+            n + 2
+        ));
+        lines.push('\n');
+    }
+    fs::write(&payload, &lines).unwrap();
+    let log = log_path("parked-reader.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "claude-parked-reader",
+        &format!(
+            r#"{PRELUDE}
+for n in 0 1 2 3 4 5 6 7 8; do take; done
+cat '{payload}'
+take
+echo "$line" >> '{log}'
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_10","response":{{}}}}}}'
+cat >> '{log}'"#,
+            payload = payload.display(),
+            log = log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    for _ in 0..CONTROLS {
+        session
+            .control(ferrite_core::SessionControl::RefreshMcp)
+            .unwrap();
+    }
+    // Long enough for the reader to fill the channel and park on it.
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = session.set_effort(Some("max"));
+        let _ = done.send((session, result));
+    });
+    let (mut session, result) = finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the setting change hung behind the parked reader");
+    // Its acknowledgement never arrived in time: it must not look applied.
+    assert!(
+        result.is_err(),
+        "an unacknowledged change looked successful"
+    );
+
+    let mut deltas = 0;
+    let mut answers = 0;
+    while answers < CONTROLS {
+        match session.events().recv_timeout(Duration::from_secs(5)) {
+            Ok(SessionEvent::TextDelta { .. }) => deltas += 1,
+            Ok(SessionEvent::McpServers { .. }) => answers += 1,
+            Ok(_) => {}
+            Err(error) => {
+                panic!("events stopped after {deltas} deltas, {answers} answers: {error}")
+            }
+        }
+    }
+    assert_eq!(deltas, DELTAS, "the parked reader lost events");
+    session.send("still here").unwrap();
+    let recorded = read_lines(&log, 2);
+    let setting: Value = serde_json::from_str(&recorded[0]).unwrap();
+    assert_eq!(setting["request"]["subtype"], "apply_flag_settings");
+    let user: Value = serde_json::from_str(&recorded[1]).unwrap();
+    assert_eq!(user["type"], "user");
+}
+
 /// The Thread's workspace binding is exactly the CLI's working directory —
 /// the agent has to be editing that checkout and no other.
 #[test]
