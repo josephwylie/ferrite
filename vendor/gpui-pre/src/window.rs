@@ -993,6 +993,10 @@ pub(crate) struct Frame {
     pub(crate) cursor_styles: Vec<CursorStyleRequest>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
+    /// Ferrite's patch: `debug_bounds` in the order prepaint recorded them,
+    /// so a cached view's reused subtree keeps its selectors.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) debug_bounds_log: Vec<(String, Bounds<Pixels>)>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -1013,6 +1017,8 @@ pub(crate) struct PrepaintStateIndex {
 #[derive(Clone, Default)]
 pub(crate) struct PaintIndex {
     scene_index: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    debug_bounds_index: usize,
     mouse_listeners_index: usize,
     input_handlers_index: usize,
     cursor_styles_index: usize,
@@ -1040,6 +1046,8 @@ impl Frame {
 
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds: FxHashMap::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            debug_bounds_log: Vec::new(),
 
             #[cfg(any(feature = "inspector", debug_assertions))]
             next_inspector_instance_ids: FxHashMap::default(),
@@ -1068,6 +1076,7 @@ impl Frame {
         #[cfg(any(test, feature = "test-support"))]
         {
             self.debug_bounds.clear();
+            self.debug_bounds_log.clear();
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -1188,6 +1197,12 @@ pub struct Window {
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     pub(crate) next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
+    /// Ferrite's patch: every entity notified since the last frame, views or
+    /// not, for a cached view that tracks its reads (`ViewElement::tracking_reads`).
+    pub(crate) notified_entities: FxHashSet<EntityId>,
+    /// Ferrite's patch: how deep the element now laid out, prepainted or
+    /// painted sits inside `deferred` draws (`Window::drawing_deferred`).
+    pub(crate) deferred_depth: usize,
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     focus_lost_path: SmallVec<[FocusId; 8]>,
@@ -2014,6 +2029,8 @@ impl Window {
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
             dirty_views: FxHashSet::default(),
+            notified_entities: FxHashSet::default(),
+            deferred_depth: 0,
             focus_listeners: SubscriberSet::new(),
             focus_lost_listeners: SubscriberSet::new(),
             focus_lost_path: SmallVec::new(),
@@ -3085,6 +3102,7 @@ impl Window {
             }
         }
         self.dirty_views.clear();
+        self.notified_entities.clear();
         self.next_frame.window_active = self.active.get();
 
         // Register requested input handler with the platform window.
@@ -3205,7 +3223,9 @@ impl Window {
 
     fn invalidate_entities(&mut self) {
         let mut views = self.invalidator.take_views();
+        self.notified_entities.clear();
         for entity in views.drain() {
+            self.notified_entities.insert(entity);
             self.mark_view_dirty(entity);
         }
         self.invalidator.replace_views(views);
@@ -3515,6 +3535,7 @@ impl Window {
 
                 let prepaint_start = self.prepaint_index();
                 if let Some(mut element) = element {
+                    self.deferred_depth += 1;
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
@@ -3522,6 +3543,7 @@ impl Window {
                             });
                         });
                     });
+                    self.deferred_depth -= 1;
                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
                 } else {
                     self.reuse_prepaint(prepaint_range);
@@ -3559,13 +3581,15 @@ impl Window {
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
             if let Some(element) = deferred_draw.element.as_mut() {
+                self.deferred_depth += 1;
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
                             element.paint(window, cx);
                         });
                     })
-                })
+                });
+                self.deferred_depth -= 1;
             } else {
                 self.reuse_paint(deferred_draw.paint_range.clone());
             }
@@ -3648,6 +3672,8 @@ impl Window {
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
+            #[cfg(any(test, feature = "test-support"))]
+            debug_bounds_index: self.next_frame.debug_bounds_log.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
@@ -3658,6 +3684,18 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        #[cfg(any(test, feature = "test-support"))]
+        for (selector, bounds) in self.rendered_frame.debug_bounds_log
+            [range.start.debug_bounds_index..range.end.debug_bounds_index]
+            .iter()
+        {
+            self.next_frame
+                .debug_bounds
+                .insert(selector.clone(), *bounds);
+            self.next_frame
+                .debug_bounds_log
+                .push((selector.clone(), *bounds));
+        }
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
@@ -3826,7 +3864,10 @@ impl Window {
         result
     }
 
-    pub(crate) fn with_element_opacity<R>(
+    /// Paint (or prepaint) under `opacity`, multiplied into the current one
+    /// (public in Ferrite's patch, for an overlay redrawing an element under
+    /// the opacity it was painted with).
+    pub fn with_element_opacity<R>(
         &mut self,
         opacity: Option<f32>,
         f: impl FnOnce(&mut Self) -> R,
@@ -3938,7 +3979,7 @@ impl Window {
     /// Obtain the current element opacity. This method should only be called during the
     /// prepaint phase of element drawing.
     #[inline]
-    pub(crate) fn element_opacity(&self) -> f32 {
+    pub fn element_opacity(&self) -> f32 {
         self.invalidator.debug_assert_paint_or_prepaint();
         self.element_opacity
     }
@@ -5076,6 +5117,14 @@ impl Window {
     /// than refreshing every view in the window. `None` anywhere else.
     pub fn hover_listener_view(&self) -> Option<EntityId> {
         self.hover_listener_view
+    }
+
+    /// Ferrite's patch: whether the element now drawing sits inside a
+    /// `deferred` draw — laid out in the tree, but prepainted and painted
+    /// after every other element (a float). What it paints lands above
+    /// anything the main tree paints, an overlay included.
+    pub fn drawing_deferred(&self) -> bool {
+        self.deferred_depth > 0
     }
 
     #[inline]
