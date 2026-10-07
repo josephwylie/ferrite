@@ -603,9 +603,26 @@ impl SubjectState {
         if matches!(input, Input::Highlighted { .. } | Input::Revived) {
             return update;
         }
+        // A report repeating the last record replays as nothing after its
+        // twin; the live view above has taken it already.
+        if update.dirty.is_empty()
+            && reports(&input)
+            && self.records.back().is_some_and(|last| last.input == input)
+        {
+            return update;
+        }
         let bytes = input_bytes(&input);
-        // A streamed item is retained as one growing record, not one allocation per token.
-        let at = self.records.len().checked_sub(1);
+        // A streamed item is retained as one growing record, not one allocation per token,
+        // even with reports between its deltas: they write no Block, so the item's
+        // words replay the same ahead of them, and trim as the one stream they are.
+        let reports = self
+            .records
+            .iter()
+            .rev()
+            .take(REPORTS_BETWEEN_DELTAS)
+            .take_while(|record| record.reach.is_none() && reports(&record.input))
+            .count();
+        let at = self.records.len().checked_sub(reports + 1);
         let merged = at
             .and_then(|at| self.records.get_mut(at))
             .filter(|last| last.stream == stream && last.content_id == content_id)
@@ -2389,6 +2406,25 @@ fn attribute(
     update.dirty.iter().copied().max().max(consulted)
 }
 
+/// How many reports a streamed delta may fold past into its item's record.
+const REPORTS_BETWEEN_DELTAS: usize = 8;
+
+/// Whether `input` only reports on the run (its phase, its token usage)
+/// and so can never write a Block when it carries none.
+fn reports(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::Event(
+            SessionEvent::Progress { .. }
+                | SessionEvent::TokenUsage { .. }
+                | SessionEvent::UsageDetails { .. }
+                | SessionEvent::ContextUsage { .. }
+                | SessionEvent::ContextDetails { .. }
+                | SessionEvent::RateLimits { .. }
+        )
+    )
+}
+
 /// Whether `input` can grow a Block an earlier record began (streamed
 /// prose, a thought, a summary, a turn's completion stamp) rather than
 /// only settle it. Replayed without that Block, it would begin its own.
@@ -2431,6 +2467,19 @@ fn append_delta(previous: &mut Input, next: &Input) -> bool {
                 snapshot: false,
             }),
         ) if item_id == next && summary_index == part => {
+            text.push_str(more);
+            true
+        }
+        (
+            Input::Event(SessionEvent::ReasoningSummaryDelta {
+                text,
+                summary_index,
+            }),
+            Input::Event(SessionEvent::ReasoningSummaryDelta {
+                text: more,
+                summary_index: part,
+            }),
+        ) if summary_index == part => {
             text.push_str(more);
             true
         }

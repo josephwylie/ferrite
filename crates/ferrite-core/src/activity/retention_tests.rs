@@ -4,8 +4,8 @@
 //! Markdown runs, streaming on the same way.
 //!
 //! The streams leave out what a rebuild itself cannot reproduce from the
-//! records, so no eviction could match it: progress phases (whether one
-//! leaves a notice depends on the phase before it, which a rebuild keeps
+//! records, so no eviction could match it: the phases that leave a notice
+//! (whether one does depends on the phase before it, which a rebuild keeps
 //! from the live view), and a revival's notice, which is not a record.
 
 use super::*;
@@ -94,7 +94,7 @@ fn main_input(rng: &mut Rng) -> Input {
             input: serde_json::json!({ "command": "cargo test", "file_path": "src/a.rs" }),
         });
     }
-    match rng.below(18) {
+    match rng.below(20) {
         0..=4 => Input::Event(SessionEvent::TextDelta { text: prose(rng) }),
         5 => Input::Event(SessionEvent::ThinkingDelta {
             text: if rng.chance(10) {
@@ -170,6 +170,16 @@ fn main_input(rng: &mut Rng) -> Input {
             },
             _ => Input::Event(SessionEvent::ContentBoundary),
         },
+        18 | 19 => Input::Event(SessionEvent::Progress {
+            event: crate::progress::ProgressEvent::Phase {
+                phase: match rng.below(3) {
+                    0 => crate::progress::Phase::Thinking,
+                    1 => crate::progress::Phase::Answering,
+                    _ => crate::progress::Phase::Working,
+                },
+                detail: String::new(),
+            },
+        }),
         _ => Input::Event(SessionEvent::TokenUsage {
             total_tokens: rng.below(1000),
             input_tokens: rng.below(1000),
@@ -185,8 +195,18 @@ fn main_input(rng: &mut Rng) -> Input {
 /// snapshot and retract — the record shapes Main's own events never take.
 fn child_event(rng: &mut Rng) -> (Option<String>, ExecutionEvent) {
     let id = Some(format!("item-{}", rng.below(4)));
-    let event = match rng.below(8) {
+    let event = match rng.below(10) {
         0..=2 => ExecutionEvent::TextDelta { text: prose(rng) },
+        8 => ExecutionEvent::ReasoningSummaryDelta {
+            text: prose(rng),
+            summary_index: rng.below(2),
+        },
+        9 => ExecutionEvent::Progress {
+            event: crate::progress::ProgressEvent::Phase {
+                phase: crate::progress::Phase::Thinking,
+                detail: String::new(),
+            },
+        },
         3 => ExecutionEvent::Text { text: prose(rng) },
         4 => ExecutionEvent::TextSnapshot { text: prose(rng) },
         5 => ExecutionEvent::ThinkingSnapshot { text: prose(rng) },

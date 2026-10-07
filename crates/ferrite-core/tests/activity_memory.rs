@@ -343,3 +343,84 @@ fn streaming_at_the_retention_cap_evicts_history_without_rebuilding_it() {
         .sum();
     assert!(retained <= CAP, "retained {retained} bytes of answer");
 }
+
+/// One Claude turn as it streams: each thinking delta follows a progress
+/// report, the completed thought arrives again as its snapshot, then the
+/// answer. Answers how many bytes of content it streamed.
+fn stream_claude_turn(activity: &mut Activity, turn: usize) -> usize {
+    use ferrite_core::progress::{Phase, ProgressEvent};
+    use ferrite_core::transcript::Input;
+    use ferrite_core::SessionEvent;
+    let thought_id = Some(format!("thinking-{turn}"));
+    let mut main = |event: ExecutionEvent, id: Option<String>| {
+        activity.apply(ActivityInput::Observe {
+            generation: 1,
+            event: ActivityEvent::MainContent { id, event },
+            at: Instant::now(),
+        });
+    };
+    let mut thought = String::new();
+    for delta in 0..32 {
+        main(
+            ExecutionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase: Phase::Thinking,
+                    detail: String::new(),
+                },
+            },
+            None,
+        );
+        let text = format!("considering step {turn}.{delta} of the plan; ");
+        thought.push_str(&text);
+        main(ExecutionEvent::ThinkingDelta { text }, thought_id.clone());
+    }
+    let streamed = thought.len();
+    main(
+        ExecutionEvent::ThinkingSnapshot { text: thought },
+        thought_id,
+    );
+    activity.apply(ActivityInput::Main {
+        input: Input::Event(SessionEvent::ContentBoundary),
+        at: Instant::now(),
+    });
+    streamed + stream_turn(activity, turn)
+}
+
+/// Claude reports progress between every thinking delta. The thought must
+/// still trim as one stream, and its snapshot (the same words again) must
+/// change nothing: neither may rebuild history at the cap.
+#[test]
+fn a_thought_streamed_between_progress_reports_trims_without_rebuilding() {
+    const CAP: usize = 64 * 1024;
+    let mut activity = Activity::new(ActivityLimits {
+        content_bytes_per_subject: CAP,
+        ..ActivityLimits::default()
+    });
+    activity.apply(ActivityInput::Connect { generation: 1 });
+    let mut turn = 0;
+    let mut streamed = 0;
+    while streamed < 2 * CAP {
+        streamed += stream_claude_turn(&mut activity, turn);
+        turn += 1;
+    }
+    let before = activity.view().main().revision();
+    let at_cap = streamed;
+    while streamed < at_cap + 1024 * 1024 {
+        streamed += stream_claude_turn(&mut activity, turn);
+        turn += 1;
+    }
+    let rebuilds = activity.view().main().revision() - before;
+    assert_eq!(
+        rebuilds, 0,
+        "{rebuilds} history rebuilds while streaming 1 MiB of Claude turns at the cap"
+    );
+    let thoughts = activity
+        .view()
+        .main()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter(|block| matches!(&block.body, ferrite_core::transcript::Body::Thinking(_)))
+        .count();
+    assert!(thoughts > 0, "the newest thoughts are retained");
+}
