@@ -1790,6 +1790,10 @@ impl CockpitView {
             // up to two seconds, so the header follows without a pause.
             self.refresh_branches(cx);
         }
+        // A wall card a throttled stream left behind refolds once its
+        // quarter second is up, whether or not anything streams again.
+        let streaming: Vec<ThreadId> = frame.iter().map(|update| update.thread).collect();
+        let walls_settled = self.facts.settle_walls(&self.cockpit, now, &streaming);
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
@@ -1799,6 +1803,7 @@ impl CockpitView {
             && !startup_changed
             && !models_changed
             && !commands_changed
+            && !walls_settled
         {
             return;
         }
@@ -1840,7 +1845,7 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            turn_ended |= self.facts.streamed(&self.cockpit, update.thread);
+            turn_ended |= self.facts.streamed(&self.cockpit, update.thread, now);
             if let Some(index) = self.pane_for(update.thread) {
                 self.facts
                     .selected(&self.cockpit, update.thread, &self.panes[index].selected);
@@ -16684,6 +16689,146 @@ mod tests {
         );
         cx.run_until_parked();
         assert_eq!(branch(&view, cx).as_deref(), Some("agent-moved"));
+    }
+
+    /// What a Thread's wall card says right now: its alert context and the
+    /// text of its lines.
+    fn wall_text(
+        view: &gpui::Entity<CockpitView>,
+        cx: &mut gpui::VisualTestContext,
+        thread: ThreadId,
+    ) -> (String, Vec<String>) {
+        view.read_with(cx, |view, _| {
+            let wall = &view.facts.get(thread).expect("an open Thread").wall;
+            (
+                wall.context.to_string(),
+                wall.lines
+                    .iter()
+                    .map(|line| line.text.to_string())
+                    .collect(),
+            )
+        })
+    }
+
+    fn step(cx: &mut gpui::VisualTestContext, ms: u64) {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.run_until_parked();
+    }
+
+    /// The wall card is a fold over every Block, and the pump would refold
+    /// a streaming Thread's on every tick — 125 times a second. It refolds
+    /// at most four times a second instead, and nothing streamed is left
+    /// out: a line held back lands a quarter second after the last refold
+    /// even when the stream has gone quiet.
+    #[gpui::test]
+    fn a_streaming_wall_card_refolds_at_most_four_times_a_second(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("wall-throttle", 1);
+        let thread = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        step(cx, 1_000);
+        let stream = |text: String| {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TextDelta { text })
+                .unwrap()
+        };
+        let shows = |wall: &(String, Vec<String>), text: &str| {
+            wall.1.iter().any(|line| line.contains(text))
+        };
+
+        // A second of streaming, a line every display frame.
+        let mut refolds = 0;
+        let mut last = wall_text(&view, cx, thread);
+        for n in 0..60 {
+            stream(format!("streamed line {n:02}\n\n"));
+            step(cx, 16);
+            let now = wall_text(&view, cx, thread);
+            if now != last {
+                refolds += 1;
+                last = now;
+            }
+        }
+        assert!(
+            (3..=5).contains(&refolds),
+            "a second of streaming refolded the wall card {refolds} times"
+        );
+
+        // The stream goes quiet with its newest line held back; that line
+        // still reaches the card, with nothing more arriving.
+        step(cx, 250);
+        stream("the held-back line\n\n".into());
+        step(cx, 16);
+        stream("the last line\n\n".into());
+        step(cx, 16);
+        assert!(
+            !shows(&wall_text(&view, cx, thread), "the last line"),
+            "inside the quarter second the card holds still"
+        );
+        step(cx, 250);
+        assert!(
+            shows(&wall_text(&view, cx, thread), "the last line"),
+            "the trailing refold brings the card up to date"
+        );
+    }
+
+    /// What the operator must see at once is never held for the throttle:
+    /// a Decision arriving, its answer, and the turn's end — even a turn
+    /// that starts and ends inside one quarter second.
+    #[gpui::test]
+    fn a_decision_or_a_turn_end_refolds_the_wall_card_at_once(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("wall-forced", 1);
+        let thread = core.threads()[0];
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
+        });
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        step(cx, 1_000);
+        let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+        let turn_ended = || SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        };
+
+        send(SessionEvent::TextDelta {
+            text: "working\n\n".into(),
+        });
+        step(cx, 16);
+        send(decision("perm_wall"));
+        step(cx, 16);
+        assert!(
+            wall_text(&view, cx, thread).0.contains("ferrite-perm.txt"),
+            "a Decision reaches the card at once: {:?}",
+            wall_text(&view, cx, thread)
+        );
+        cx.simulate_keystrokes("y");
+        assert!(
+            !wall_text(&view, cx, thread).0.contains("ferrite-perm.txt"),
+            "and so does its answer"
+        );
+
+        send(turn_ended());
+        step(cx, 16);
+        // An idle card was just refolded; inside its quarter second a turn
+        // starts, streams and ends. The end is seen and refolds at once.
+        send(SessionEvent::TextDelta {
+            text: "a quick turn\n\n".into(),
+        });
+        step(cx, 16);
+        send(turn_ended());
+        step(cx, 16);
+        assert!(
+            view.read_with(cx, |view, _| !view.cockpit.thread(thread).unwrap().busy()),
+            "the premise: the turn is over"
+        );
+        assert!(
+            wall_text(&view, cx, thread)
+                .1
+                .iter()
+                .any(|line| line.contains("a quick turn")),
+            "the turn's end refolds the card at once: {:?}",
+            wall_text(&view, cx, thread)
+        );
     }
 
     /// #29: the header's binding slot is fed from the branch cache — the

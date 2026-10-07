@@ -8,7 +8,7 @@
 //! parks or changes a Thread names the moment and cannot forget a cache.
 
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::pane::{wall_card, wall_card_timed, WallCard};
 use ferrite_core::activity::Subject;
@@ -79,6 +79,15 @@ pub struct ThreadFacts {
     pub changed_files: Vec<FileChange>,
     main_busy: bool,
     selected_wall: Option<(Subject, WallCard)>,
+    /// When a stream last refolded the wall card, on the pump's clock —
+    /// what the next streamed refold waits `WALL_REFOLD` after.
+    wall_at: Option<Instant>,
+    /// Something streamed that the wall card has not folded yet: one more
+    /// refold is owed once `WALL_REFOLD` is up (`settle_walls`).
+    wall_owed: bool,
+    /// The Decision the wall card last folded in; another one (or none)
+    /// refolds at once.
+    wall_decision: Option<String>,
     /// Whether `branch` has been asked for (a `None` answer included), so a
     /// parked row's checkout costs one `git` call, ever.
     branch_asked: bool,
@@ -120,6 +129,12 @@ impl ThreadFacts {
         }
     }
 }
+
+/// How often a streaming Thread's wall card may refold: four times a
+/// second. The fold walks every Block the Thread holds (and its subagents',
+/// for the changed files) while the pump drains a stream up to 125 times a
+/// second; a tile a quarter second behind is still ahead of the eye at L3.
+const WALL_REFOLD: Duration = Duration::from_millis(250);
 
 pub struct Facts {
     threads: HashMap<ThreadId, ThreadFacts>,
@@ -168,34 +183,84 @@ impl Facts {
     /// A Thread's Pane opened: everything about it, from scratch.
     pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         self.refresh_slow(cockpit, thread);
-        self.refresh_wall(cockpit, thread);
+        self.refresh_wall(cockpit, thread, None);
     }
 
-    /// The pump streamed into a Thread: the wall card refolds — this is the
-    /// seam that keeps L3 free of per-frame Block walks — and a turn that
-    /// just ended may have moved the checkout, the other stated refresh
-    /// moment (#29), so the metadata follows it. The checkout itself is a
-    /// `git` call, which the pump must never wait on: answers whether the
-    /// turn just ended, for the caller to re-read it off the UI thread.
-    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
-        let was_busy = self
-            .threads
-            .get(&thread)
-            .is_some_and(|facts| facts.main_busy);
-        let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
-        self.refresh_wall(cockpit, thread);
-        let settled = was_busy && !busy;
+    /// The pump streamed into a Thread at `now`: the wall card refolds —
+    /// this is the seam that keeps L3 free of per-frame Block walks — at
+    /// most once per `WALL_REFOLD`, with what the throttle holds back owed
+    /// to `settle_walls`. A Decision arriving or leaving, and the turn's
+    /// end, refold at once. A turn that just ended may have moved the
+    /// checkout, the other stated refresh moment (#29), so the metadata
+    /// follows it; the checkout itself is a `git` call the pump must never
+    /// wait on, so this answers whether the turn just ended, for the
+    /// caller to re-read it off the UI thread.
+    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId, now: Instant) -> bool {
+        let open = cockpit.thread(thread);
+        let busy = open.is_some_and(|open| open.busy());
+        let decision = open
+            .and_then(|open| open.pending())
+            .map(|decision| decision.id.as_str());
+        let facts = self.threads.entry(thread).or_default();
+        let settled = facts.main_busy && !busy;
+        // Followed on every call, refolded or not: a turn that starts and
+        // ends inside one throttled quarter second still ends here.
+        facts.main_busy = busy;
+        let due = settled
+            || facts.wall_decision.as_deref() != decision
+            || facts
+                .wall_at
+                .is_none_or(|at| now.saturating_duration_since(at) >= WALL_REFOLD);
+        if due {
+            self.refresh_wall(cockpit, thread, Some(now));
+        } else {
+            facts.wall_owed = true;
+        }
         if settled {
             self.refresh_metadata(cockpit, thread);
         }
         settled
     }
 
+    /// Every pump at `now`, before its streams: refold each wall card a
+    /// throttled stream left owing once its `WALL_REFOLD` is up — the
+    /// trailing edge, so the last thing streamed reaches the card even
+    /// when nothing follows it. `streaming` this pump are left to
+    /// `streamed`. Answers whether any card refolded.
+    pub fn settle_walls(
+        &mut self,
+        cockpit: &Cockpit,
+        now: Instant,
+        streaming: &[ThreadId],
+    ) -> bool {
+        let due: Vec<ThreadId> = self
+            .threads
+            .iter()
+            .filter(|(thread, facts)| {
+                facts.wall_owed
+                    && !streaming.contains(thread)
+                    && facts
+                        .wall_at
+                        .is_none_or(|at| now.saturating_duration_since(at) >= WALL_REFOLD)
+            })
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in &due {
+            if cockpit.thread(*thread).is_some() {
+                self.refresh_wall(cockpit, *thread, Some(now));
+            } else if let Some(facts) = self.threads.get_mut(thread) {
+                // Parked meanwhile: its card is the parked row's now.
+                facts.wall_owed = false;
+            }
+        }
+        !due.is_empty()
+    }
+
     /// The operator's own act — a prompt, an interrupt, an answer, a
     /// re-aim — or the watchdog's restart notice changed the transcript:
-    /// the wall card refolds.
+    /// the wall card refolds, at once.
     pub fn acted(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        self.refresh_wall(cockpit, thread);
+        self.refresh_wall(cockpit, thread, None);
     }
 
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
@@ -418,8 +483,9 @@ impl Facts {
 
     /// Refold one Thread's wall card, wherever its transcript can change —
     /// with its calls' clocks, so a settled call's tile line carries its
-    /// time (`● Bash(cargo test --workspace) 1m01s`).
-    fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    /// time (`● Bash(cargo test --workspace) 1m01s`). A stream's refold
+    /// passes its pump's clock (`streamed`), which the throttle runs from.
+    fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId, streamed_at: Option<Instant>) {
         let open = cockpit.thread(thread);
         let card = wall_card_timed(
             open.map(|open| open.transcript()),
@@ -454,6 +520,13 @@ impl Facts {
             facts.last_used = last_used;
         }
         facts.main_busy = open.is_some_and(|open| open.busy());
+        facts.wall_decision = open
+            .and_then(|open| open.pending())
+            .map(|decision| decision.id.clone());
+        facts.wall_owed = false;
+        if streamed_at.is_some() {
+            facts.wall_at = streamed_at;
+        }
     }
 }
 
@@ -640,7 +713,6 @@ pub struct ParkedAnswers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn ago(secs: u64) -> SharedString {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
