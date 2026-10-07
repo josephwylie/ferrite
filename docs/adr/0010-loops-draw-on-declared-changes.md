@@ -1,4 +1,4 @@
-# 0008 — Loops draw on declared changes
+# 0010 — Loops draw on declared changes
 
 Status: accepted 2026-10-07 (performance plan, Track A, phase A-1).
 
