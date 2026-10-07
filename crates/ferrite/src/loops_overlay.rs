@@ -66,6 +66,8 @@ impl CockpitWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Over a cached Cockpit, its nav and Panes are cached parts too.
+        cockpit.update(cx, |view, _| view.set_parts(overlay));
         let overlay = overlay.then(|| {
             let overlay = cx.new(|_| LoopsOverlay);
             let id = window.window_handle().window_id();

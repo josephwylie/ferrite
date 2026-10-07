@@ -1570,6 +1570,15 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     let (core, fake) = cockpit("nav-hover-sweep", 4);
     let threads = core.threads().to_vec();
     long_transcripts(&fake);
+    // Every turn over: nothing on the board moves but the pointer.
+    for stream in fake.streams.borrow().iter() {
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
@@ -1587,7 +1596,10 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
         .iter()
         .map(|thread| debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("a nav row"))
         .collect();
+    // The transcript's scrollbar, shown by the stream, fades out first.
+    cockpit_renders_over(cx, 2_000);
     reset_native_text_renders(cx);
+    let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
     let mut rendered = 0;
     for crossing in 0..20 {
         let row = rows[crossing % rows.len()];
@@ -1595,11 +1607,21 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
         rendered += cockpit_renders_over(cx, 250);
     }
     let transcript = native_text_renders(&prefix, cx);
-    eprintln!("NAV_HOVER_SWEEP cockpit_renders_5s={rendered} transcript_text_renders={transcript}");
+    let nav = crate::cockpit::drawn::nav_renders() - nav;
+    let built: usize = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .sum();
+    eprintln!(
+        "NAV_HOVER_SWEEP cockpit_renders_5s={rendered} nav_builds={nav} pane_builds={built} \
+         transcript_text_renders={transcript}"
+    );
     assert_eq!(
         transcript, 0,
         "a hover in the nav rebuilt the transcript's native text"
     );
+    assert_eq!(built, 0, "a hover in the nav rebuilt a Pane");
 }
 
 /// A Thread waiting on the operator: a Decision pending in the focused
@@ -1730,4 +1752,168 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
         underlined(cx),
         "the transcript drew again under the pointer and lost the link's underline"
     );
+}
+
+// ----------------------------------------------- the parts each change builds
+
+fn pane_builds(threads: &[ThreadId]) -> Vec<usize> {
+    threads
+        .iter()
+        .map(|thread| {
+            crate::cockpit::drawn::pane_renders(ferrite_core::roster::PaneIdentity::Thread(*thread))
+        })
+        .collect()
+}
+
+/// A four-Pane Group in an active window, the keyboard in the first Pane,
+/// `working` mid-turn, first paint settled.
+fn group_board<'a>(
+    name: &str,
+    working: &[usize],
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<CockpitView>,
+    Fake,
+    Vec<ThreadId>,
+    &'a mut gpui::VisualTestContext,
+) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit(name, 4);
+    let group = group_all(&mut core);
+    let threads = core.threads().to_vec();
+    for index in working {
+        core.send(threads[*index], "Keep going".into());
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.enter_group(group, cx);
+        view.focus_pane(0);
+        cx.notify();
+    });
+    for index in working {
+        fake.streams.borrow()[*index]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Working**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    (view, fake, threads, cx)
+}
+
+/// Typing twenty characters into one Pane of a four-Pane Group rebuilds
+/// that Pane, never its siblings.
+#[gpui::test]
+fn typing_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("typing-parts", &[], cx);
+    // The first key moves the window from pointer to keyboard, which every
+    // view redraws for (gpui's focus-visible styling): measure typing after.
+    cx.simulate_keystrokes("left");
+    cx.run_until_parked();
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    for character in "the quick brown foxes".chars().take(20) {
+        cx.simulate_input(&character.to_string());
+        cx.run_until_parked();
+    }
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    eprintln!(
+        "TYPING_20 cockpit_renders={} pane_builds={built:?}",
+        renders() - cockpit
+    );
+    assert!(built[0] >= 20, "the typed-into Pane redraws its line");
+    assert_eq!(&built[1..], [0, 0, 0], "typing rebuilt a sibling Pane");
+}
+
+/// Streaming into one Pane rebuilds that Pane, never its siblings.
+#[gpui::test]
+fn streaming_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
+    let (_view, fake, threads, cx) = group_board("streaming-parts", &[1], cx);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    for line in 0..20 {
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TextDelta {
+                text: format!("streamed line {line}\n\n"),
+            })
+            .unwrap();
+        tick(cx);
+    }
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    eprintln!(
+        "STREAMING_20 cockpit_renders={} pane_builds={built:?}",
+        renders() - cockpit
+    );
+    assert!(built[1] > 0, "the streaming Pane redraws");
+    assert_eq!(
+        [built[0], built[2], built[3]],
+        [0, 0, 0],
+        "streaming rebuilt a sibling Pane"
+    );
+}
+
+/// The working clocks turning over rebuild the working Pane alone; the
+/// idle Panes beside it sit still.
+#[gpui::test]
+fn a_clock_rollover_rebuilds_only_the_working_pane(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("clock-parts", &[1], cx);
+    // The first sweep's git labels land on every Pane's head: past it.
+    cockpit_renders_over(cx, 2_500);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    std::thread::sleep(Duration::from_millis(1_100));
+    cockpit_renders_over(cx, 3_000);
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    eprintln!(
+        "CLOCK_3S cockpit_renders={} pane_builds={built:?}",
+        renders() - cockpit
+    );
+    assert!(built[1] > 0, "the working Pane redrew its clock");
+    assert_eq!(
+        [built[0], built[2], built[3]],
+        [0, 0, 0],
+        "a clock rebuilt an idle Pane"
+    );
+}
+
+/// With the palette open its line blinks, under the float, without the
+/// Cockpit or any Pane being rebuilt for it.
+#[gpui::test]
+fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("palette-parts", &[], cx);
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cockpit_renders_over(cx, 1_000);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    cockpit_renders_over(cx, 5_000);
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    let rendered = renders() - cockpit;
+    eprintln!("PALETTE_OPEN cockpit_renders_5s={rendered} pane_builds={built:?}");
+    assert!(
+        rendered <= 10,
+        "an open palette rebuilt the Cockpit {rendered} times in 5s"
+    );
+    assert_eq!(built, [0, 0, 0, 0]);
 }

@@ -197,43 +197,51 @@ impl Facts {
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
     /// — the agent may have switched branches under a Pane — for every
     /// open Thread.
-    /// Answers whether any fact a row draws moved.
-    pub fn tick(&mut self, cockpit: &Cockpit) -> bool {
-        let mut changed = false;
-        for thread in cockpit.threads() {
-            changed |= self.refresh_metadata(cockpit, thread);
-        }
-        changed
+    /// Answers the Threads whose drawn facts moved.
+    pub fn tick(&mut self, cockpit: &Cockpit) -> Vec<ThreadId> {
+        cockpit
+            .threads()
+            .into_iter()
+            .filter(|thread| self.refresh_metadata(cockpit, *thread))
+            .collect()
     }
 
     /// Adopt checkout labels and their status, collected away from the UI
     /// thread. The two travel together because one `git status` answers
     /// both, and a branch name without its drift would draw a header that
-    /// contradicts itself for a tick. Answers whether any moved.
-    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) -> bool {
-        let mut changed = false;
+    /// contradicts itself for a tick. Answers the Threads whose labels moved.
+    pub fn set_branches(
+        &mut self,
+        branches: Vec<(ThreadId, Option<BranchStatus>)>,
+    ) -> Vec<ThreadId> {
+        let mut changed = Vec::new();
         for (thread, status) in branches {
             let facts = self.threads.entry(thread).or_default();
             let branch = status
                 .as_ref()
                 .and_then(|status| status.branch.clone())
                 .map(SharedString::from);
-            changed |= facts.branch != branch || facts.status != status;
+            if facts.branch != branch || facts.status != status {
+                changed.push(thread);
+            }
             facts.branch = branch;
             facts.status = status;
         }
         changed
     }
 
-    /// Adopt each Project root's branch; answers whether any moved.
+    /// Adopt each Project root's branch; answers the Threads whose branches
+    /// moved.
     pub fn set_project_branches(
         &mut self,
         branches: Vec<(ThreadId, Vec<(SharedString, SharedString)>)>,
-    ) -> bool {
-        let mut changed = false;
+    ) -> Vec<ThreadId> {
+        let mut changed = Vec::new();
         for (thread, project_branches) in branches {
             let facts = self.threads.entry(thread).or_default();
-            changed |= facts.project_branches != project_branches;
+            if facts.project_branches != project_branches {
+                changed.push(thread);
+            }
             facts.project_branches = project_branches;
         }
         changed
@@ -595,6 +603,15 @@ pub fn since_label_changes_in(last_used: SystemTime, now: SystemTime) -> Option<
     Some(rollover.min(secs(end) - elapsed))
 }
 
+/// How long until the wall clock's minute turns over (the bottom bar's
+/// `7:31 pm`).
+pub fn next_minute(now: SystemTime) -> Duration {
+    let since = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    ferrite_core::cadence::next_rollover(since, Duration::from_secs(60))
+}
+
 /// A notification's age (the notifications list's right column): the one
 /// unit `since_label` reads, with `now` for its first minute — a row
 /// there always says how old it is.
@@ -737,6 +754,20 @@ mod tests {
             since_label_changes_in(now + s(30), now),
             Some(s(90)),
             "a clock that moved back: a minute past the stamp"
+        );
+    }
+
+    /// The bottom bar's wall clock reads differently at the next whole
+    /// minute, never sooner.
+    #[test]
+    fn the_wall_clock_turns_over_on_the_minute() {
+        let minute = SystemTime::UNIX_EPOCH + Duration::from_secs(29_850_000 * 60);
+        let s = Duration::from_secs;
+        assert_eq!(next_minute(minute), s(60), "on the minute: the next one");
+        assert_eq!(next_minute(minute + s(1)), s(59));
+        assert_eq!(
+            next_minute(minute + Duration::from_millis(59_750)),
+            Duration::from_millis(250)
         );
     }
 
