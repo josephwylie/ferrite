@@ -522,7 +522,7 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
     cx.update(|_, cx| cx.set_reduce_motion(true));
     tick(cx);
     cx.executor().advance_clock(Duration::from_millis(
-        crate::theme::MOTION_PULSE_LEASE_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
+        crate::theme::MOTION_WORKING_FRAME_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
     assert!(

@@ -190,6 +190,29 @@ browser does, so the same CSS geometry lands on the same device pixels:
   removed `Selection`'s backdrop blur (no `CABackdropLayer`, only a vibrancy
   tint), so the window showed the desktop unblurred. `HeaderView` keeps the
   gaussian blur on every supported macOS.
+- **Hover listener's view** (`elements/div.rs`, `window.rs`). An `on_hover`
+  listener runs with `Window::hover_listener_view` naming the view that
+  painted it, so a hover blend can notify that view alone instead of
+  `Window::refresh`, which re-renders every cached view in the window (every
+  transcript) on each pointer crossing.
+- **A cached view that behaves like its parent's redraw** (`view.rs`,
+  `window.rs`, `app.rs`). `ViewElement::tracking_reads` (on a cached
+  `AnyView`) also redraws the view when any entity it read while it last
+  rendered was notified since (`Window::notified_entities`; the reads are
+  recorded exactly, so an entity something earlier in the frame had read —
+  the kit Root — still counts), and when it is redrawn the cached views
+  inside it keep their caches instead of being redrawn with it. The
+  Cockpit is cached this way under the loops overlay
+  (`crates/ferrite/src/loops_overlay.rs`).
+- **Deferred draws and opacity, for an overlay** (`window.rs`,
+  `elements/deferred.rs`). `Window::drawing_deferred` says whether the
+  element now laid out, prepainted or painted sits in a `deferred` draw
+  (it paints after everything else); `Window::element_opacity` and
+  `Window::with_element_opacity` are public, so an overlay redraws an
+  element under the opacity it was painted with.
+- **Debug bounds kept by a reused view** (`window.rs`, `elements/div.rs`,
+  test support only). A cached view's reused paint range carries its
+  `debug_selector` bounds into the next frame, as a fresh paint would.
 - **Debug bounds on a window** (`window.rs`, test support only).
   `Window::debug_bounds` reads the last frame's `debug_selector` bounds,
   which upstream exposes only through `VisualTestContext`: the live

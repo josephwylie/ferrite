@@ -262,6 +262,9 @@ pub struct CockpitView {
     /// cached from the RSS worker, so a sweep never waits for an
     /// operating-system query.
     swept: std::time::Instant,
+    /// When the next nav age (`2m`) turns over, as of the last draw: the
+    /// sweep redraws an otherwise quiet window then.
+    ages_turn_at: Option<std::time::SystemTime>,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
     /// A moment that must not be skipped (a turn ended) asked for a
@@ -1260,6 +1263,7 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             swept: cx.background_executor().now(),
+            ages_turn_at: None,
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
@@ -1780,7 +1784,7 @@ impl CockpitView {
             }
         }
         let mut restarted = Vec::new();
-        let mut branch_tick = false;
+        let mut swept_change = false;
         let now = cx.background_executor().now();
         if now.duration_since(self.swept) >= SWEEP_INTERVAL {
             self.swept = now;
@@ -1791,9 +1795,20 @@ impl CockpitView {
                 );
                 restarted.push(restart.thread);
             }
-            self.facts.tick(&self.cockpit);
+            // Redraw only for what moved: a fact, a working Thread's clock
+            // (under reduced motion the sweep is its only ride), a nav
+            // row's age turning over. An idle window stays undrawn.
+            let facts_moved = self.facts.tick(&self.cockpit);
+            let working = self.cockpit.threads().into_iter().any(|thread| {
+                self.cockpit
+                    .thread(thread)
+                    .is_some_and(|open| open.busy() || open.activity().working_descendants() > 0)
+            });
+            let aged = self
+                .ages_turn_at
+                .is_some_and(|at| ferrite_core::clock::system_time() >= at);
+            swept_change = facts_moved || working || aged;
             self.refresh_branches(cx);
-            branch_tick = true;
         } else if self.cockpit.wants_worktree_listing() {
             // A Main just finished making a worktree: ask git now, not in
             // up to two seconds, so the header follows without a pause.
@@ -1808,7 +1823,7 @@ impl CockpitView {
         // notice's only ride to the screen.
         if frame.is_empty()
             && restarted.is_empty()
-            && !branch_tick
+            && !swept_change
             && !startup_changed
             && !models_changed
             && !commands_changed
@@ -1983,13 +1998,13 @@ impl CockpitView {
                 .await;
             this.update(cx, |view, cx| {
                 view.branch_refreshing = false;
-                view.facts.set_branches(
+                let labels = view.facts.set_branches(
                     branches
                         .iter()
                         .map(|(thread, status, _)| (*thread, status.clone()))
                         .collect(),
                 );
-                view.facts.set_project_branches(
+                let roots = view.facts.set_project_branches(
                     branches
                         .into_iter()
                         .map(|(thread, _, project_branches)| (thread, project_branches))
@@ -1999,7 +2014,10 @@ impl CockpitView {
                 for (thread, listing) in listings {
                     moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
-                cx.notify();
+                // Git said what it said last time: nothing to redraw.
+                if labels || roots || moved {
+                    cx.notify();
+                }
                 if moved || std::mem::take(&mut view.branch_refresh_queued) {
                     // The labels above were read for the old cwd, or
                     // before a turn ended; go straight back for the new.
@@ -3947,7 +3965,13 @@ impl CockpitView {
         use crate::cli_updates::{name, Toast};
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        for toast in self.cli_updates.take_toasts() {
+        let toasts = self.cli_updates.take_toasts();
+        if toasts.is_empty() {
+            // Called every render: a notify here with nothing to show would
+            // rebuild the Cockpit on every frame anything else draws.
+            return;
+        }
+        for toast in toasts {
             let notification = match toast {
                 Toast::Offer { provider, latest } => {
                     let view = cx.entity().downgrade();
@@ -8810,13 +8834,76 @@ impl Render for CockpitView {
             .is_some_and(|tween| tween.running(now, reduced));
         if crate::motion::hover_fades_active() | nav_moving {
             window.request_animation_frame();
+            // A blend fading inside a cached view (a transcript's link)
+            // is drawn by that view: it comes with the next frame too.
+            let root = cx.entity_id();
+            let fading: Vec<_> = crate::motion::hover_fading_views()
+                .into_iter()
+                .filter(|view| *view != root)
+                .collect();
+            if !fading.is_empty() {
+                window.on_next_frame(move |_, cx| {
+                    for view in &fading {
+                        cx.notify(*view);
+                    }
+                });
+            }
         }
+        self.ride_clock_text(cx);
         root
     }
 }
 
 impl CockpitView {
+    /// The Cockpit's words that change with the clock — a working Thread's
+    /// `12s` (its working line, head and tile), a nav row's `2m` — ride the
+    /// pulse clock (`motion::ride`) to their next turn: while a loop runs
+    /// they change on its grid, as its fixed rate redrew them; otherwise the
+    /// sweep brings them up to date.
+    fn ride_clock_text(&mut self, cx: &mut Context<Self>) {
+        let wall = ferrite_core::clock::system_time();
+        // Every age the Cockpit can show: a Thread's (the nav, a parked
+        // tile, the palette), a notice's and a waiting request's (the
+        // bell, its toasts).
+        let notifications = self.cockpit.notifications();
+        let notices = notifications
+            .notices()
+            .map(|notice| notice.at)
+            .chain(notifications.decisions().map(|request| request.at))
+            .filter_map(|at| crate::facts::since_label_changes_in(at, wall));
+        let ages = self
+            .facts
+            .next_age_change(wall)
+            .into_iter()
+            .chain(notices)
+            .min();
+        // The sweep redraws a window nothing else draws when an age turns.
+        self.ages_turn_at = ages.map(|next| wall + next);
+        if crate::motion::reduced_motion(cx) {
+            return;
+        }
+        let second = Duration::from_secs(1);
+        let working = self.panes.iter().filter_map(|pane| {
+            let open = self.cockpit.thread(pane.thread()?)?;
+            let subject = open
+                .activity()
+                .subject(&pane.selected)
+                .and_then(|subject| subject.transcript().turn_elapsed());
+            [open.transcript().turn_elapsed(), subject]
+                .into_iter()
+                .flatten()
+                .map(|elapsed| ferrite_core::cadence::next_rollover(elapsed, second))
+                .min()
+        });
+        if let Some(next) = working.chain(ages).min() {
+            let at = cx.background_executor().now() + next;
+            crate::motion::ride(cx.entity_id(), at, cx);
+        }
+    }
+
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The loops this render lays out go to the loops overlay afresh.
+        crate::loops_overlay::begin(window, cx.entity_id());
         self.measure();
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
@@ -12805,6 +12892,7 @@ mod tests {
     mod floats_parity;
     mod frame_parity;
     mod layout_polish;
+    mod loops_overlay;
     mod nav_parity;
     mod provider_controls;
     mod provider_forms;
@@ -14496,10 +14584,14 @@ mod tests {
     ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| build(window, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         (view, cx)
     }
@@ -18622,10 +18714,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let stream = fake.streams.borrow();
@@ -22145,10 +22241,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -22210,10 +22310,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         tick(cx);
         let size = |cx: &mut gpui::VisualTestContext| {
@@ -22245,10 +22349,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -22523,10 +22631,15 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx).bordered(false)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
+            .bordered(false)
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1200.), px(700.)));
         let files = vec![

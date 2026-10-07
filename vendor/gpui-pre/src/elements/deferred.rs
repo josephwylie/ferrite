@@ -47,7 +47,11 @@ impl Element for Deferred {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
+        // Ferrite's patch: the child lays out knowing it draws deferred
+        // (`Window::drawing_deferred`).
+        window.deferred_depth += 1;
         let layout_id = self.child.as_mut().unwrap().request_layout(window, cx);
+        window.deferred_depth -= 1;
         (layout_id, ())
     }
 

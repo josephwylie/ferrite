@@ -5,6 +5,7 @@
 //! transcript, store, cockpit — added as their tickets land.
 
 pub mod activity;
+pub mod cadence;
 pub mod clock;
 pub mod cockpit;
 pub mod docview;

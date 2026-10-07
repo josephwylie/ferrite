@@ -266,34 +266,46 @@ impl Facts {
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
     /// — the agent may have switched branches under a Pane — for every
     /// open Thread.
-    pub fn tick(&mut self, cockpit: &Cockpit) {
+    /// Answers whether any fact a row draws moved.
+    pub fn tick(&mut self, cockpit: &Cockpit) -> bool {
+        let mut changed = false;
         for thread in cockpit.threads() {
-            self.refresh_metadata(cockpit, thread);
+            changed |= self.refresh_metadata(cockpit, thread);
         }
+        changed
     }
 
     /// Adopt checkout labels and their status, collected away from the UI
     /// thread. The two travel together because one `git status` answers
     /// both, and a branch name without its drift would draw a header that
-    /// contradicts itself for a tick.
-    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) {
+    /// contradicts itself for a tick. Answers whether any moved.
+    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) -> bool {
+        let mut changed = false;
         for (thread, status) in branches {
             let facts = self.threads.entry(thread).or_default();
-            facts.branch = status
+            let branch = status
                 .as_ref()
                 .and_then(|status| status.branch.clone())
                 .map(SharedString::from);
+            changed |= facts.branch != branch || facts.status != status;
+            facts.branch = branch;
             facts.status = status;
         }
+        changed
     }
 
+    /// Adopt each Project root's branch; answers whether any moved.
     pub fn set_project_branches(
         &mut self,
         branches: Vec<(ThreadId, Vec<(SharedString, SharedString)>)>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         for (thread, project_branches) in branches {
-            self.threads.entry(thread).or_default().project_branches = project_branches;
+            let facts = self.threads.entry(thread).or_default();
+            changed |= facts.project_branches != project_branches;
+            facts.project_branches = project_branches;
         }
+        changed
     }
 
     /// The parked set changed — a park, a revive, an import, a rename: the
@@ -422,8 +434,8 @@ impl Facts {
 
     /// Refresh everything except the checkout label (and the Project's
     /// default branch, read once). This path stays in the pump, so it must
-    /// never launch Git.
-    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    /// never launch Git. Answers whether any of these facts moved.
+    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
         let (project, project_label) = match cockpit.peek(thread) {
             Ok(meta) => (
                 meta.project_id,
@@ -434,10 +446,15 @@ impl Facts {
         let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
+        let changed = facts.last_used != last_used
+            || facts.project != project
+            || facts.project_label != project_label
+            || facts.name != name;
         facts.last_used = last_used;
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
+        changed
     }
 
     /// The name alone — after a first prompt or a rename, the one fact
@@ -479,6 +496,16 @@ impl Facts {
 
     pub fn last_used(&self, thread: ThreadId) -> Option<SystemTime> {
         self.threads.get(&thread).and_then(|facts| facts.last_used)
+    }
+
+    /// How long until any Thread's age (`since_label`, a nav row's `2m`)
+    /// next reads differently.
+    pub fn next_age_change(&self, now: SystemTime) -> Option<Duration> {
+        self.threads
+            .values()
+            .filter_map(|facts| facts.last_used)
+            .filter_map(|at| since_label_changes_in(at, now))
+            .min()
     }
 
     /// Refold one Thread's wall card, wherever its transcript can change —
@@ -616,6 +643,35 @@ pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
     SharedString::from(text)
 }
 
+/// How long until `since_label(last_used, ·)` next reads differently:
+/// the next whole unit of the band it is in, or the band's end. `None`
+/// once it reads in years (nothing on screen waits that long).
+pub fn since_label_changes_in(last_used: SystemTime, now: SystemTime) -> Option<Duration> {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const MONTH: u64 = 2_629_746;
+    const YEAR: u64 = 12 * MONTH;
+    let secs = |n: u64| Duration::from_secs(n);
+    let elapsed = match now.duration_since(last_used) {
+        Ok(elapsed) => elapsed,
+        // A time ahead of the clock says nothing until a minute past it.
+        Err(ahead) => return Some(ahead.duration() + secs(MINUTE)),
+    };
+    let (unit, end) = match elapsed.as_secs() {
+        s if s < MINUTE => return Some(secs(MINUTE) - elapsed),
+        s if s < HOUR => (MINUTE, HOUR),
+        s if s < DAY => (HOUR, DAY),
+        s if s < WEEK => (DAY, WEEK),
+        s if s < MONTH => (WEEK, MONTH),
+        s if s < YEAR => (MONTH, YEAR),
+        _ => return None,
+    };
+    let rollover = ferrite_core::cadence::next_rollover(elapsed, secs(unit));
+    Some(rollover.min(secs(end) - elapsed))
+}
+
 /// A notification's age (the notifications list's right column): the one
 /// unit `since_label` reads, with `now` for its first minute — a row
 /// there always says how old it is.
@@ -717,6 +773,47 @@ mod tests {
     fn ago(secs: u64) -> SharedString {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
         since_label(now - Duration::from_secs(secs), now)
+    }
+
+    /// An age turns over where `since_label` does: a minute in, then each
+    /// minute, each hour from an hour, each day from a day.
+    #[test]
+    fn an_age_says_when_it_next_reads_differently() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
+        let in_ = |ago: Duration| since_label_changes_in(now - ago, now);
+        let s = Duration::from_secs;
+        assert_eq!(in_(s(0)), Some(s(60)), "nothing until a minute");
+        assert_eq!(
+            in_(Duration::from_millis(59_500)),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(in_(s(90)), Some(s(30)), "1m turns 2m at 120s");
+        assert_eq!(in_(s(3_599)), Some(s(1)), "59m turns 1h");
+        assert_eq!(in_(s(3_600 + 30)), Some(s(3_600 - 30)), "1h turns 2h");
+        assert_eq!(in_(s(6 * 86_400 + 10)), Some(s(86_400 - 10)), "6d turns 1w");
+        for ago in [0u64, 59, 60, 61, 3_599, 3_600, 7_300, 86_399, 90_000] {
+            let next = in_(s(ago)).unwrap();
+            let before = since_label(now - s(ago), now);
+            let at = now + next;
+            assert_ne!(
+                since_label(now - s(ago), at),
+                before,
+                "{ago}s: changes then"
+            );
+            if next > s(1) {
+                let just_before = at - s(1);
+                assert_eq!(
+                    since_label(now - s(ago), just_before),
+                    before,
+                    "{ago}s: not sooner"
+                );
+            }
+        }
+        assert_eq!(
+            since_label_changes_in(now + s(30), now),
+            Some(s(90)),
+            "a clock that moved back: a minute past the stamp"
+        );
     }
 
     /// A provisional title never ends on half a word, and a whole title is

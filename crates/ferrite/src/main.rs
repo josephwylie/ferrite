@@ -20,6 +20,7 @@ mod hover_card;
 mod icons;
 mod keymap;
 mod line;
+mod loops_overlay;
 mod menu;
 mod motion;
 mod nav;
@@ -121,6 +122,17 @@ fn main() {
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-reference") {
         cockpit::visual_reference::capture(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
+    // The loops overlay's pixel parity: one scene drawn with and without
+    // it at the same instants (`visual_reference::loops_parity`).
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--loops-parity") {
+        cockpit::visual_reference::loops_parity(
             std::env::args()
                 .nth(2)
                 .expect("an output directory is required"),
@@ -327,8 +339,10 @@ fn main() {
                         // under everything; on glass the window's root paints
                         // nothing (`paint::WINDOW`), so the blur reaches the
                         // regions' own fills.
+                        let content =
+                            cx.new(|cx| loops_overlay::CockpitWindow::new(view, window, cx));
                         cx.new(|cx| {
-                            kit::component::Root::new(view, window, cx)
+                            kit::component::Root::new(content, window, cx)
                                 .bordered(false)
                                 .bg(theme::paint::WINDOW)
                         })

@@ -7,7 +7,7 @@ use crate::{Empty, Window};
 use anyhow::Result;
 use collections::FxHashSet;
 use refineable::Refineable;
-use std::mem;
+
 use std::{any::TypeId, fmt, ops::Range};
 
 /// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
@@ -241,6 +241,9 @@ pub struct ViewElement<V: View> {
     view: Option<V>,
     entity_id: Option<EntityId>,
     cached_style: Option<StyleRefinement>,
+    /// Ferrite's patch: the cached subtree is also redrawn when an entity it
+    /// read while rendering was notified (`tracking_reads`).
+    tracks_reads: bool,
     #[cfg(debug_assertions)]
     source: &'static core::panic::Location<'static>,
 }
@@ -253,6 +256,7 @@ impl<V: View> ViewElement<V> {
         ViewElement {
             entity_id,
             cached_style: None,
+            tracks_reads: false,
             view: Some(view),
             #[cfg(debug_assertions)]
             source: core::panic::Location::caller(),
@@ -270,6 +274,18 @@ impl<V: View> ViewElement<V> {
     /// entity-backed by construction.
     pub(crate) fn cached(mut self, style: StyleRefinement) -> Self {
         self.cached_style = Some(style);
+        self
+    }
+
+    /// Ferrite's patch: cache this view the way redrawing it with its parent
+    /// behaved before it was cached. It is also redrawn when any entity it
+    /// read while it last rendered (a model, another view's state, the kit
+    /// Root's layers) has been notified since; without this, only a notify
+    /// on the view itself or a descendant busts the cache. And when it is
+    /// redrawn, the cached views inside it keep their own caches, rather
+    /// than being redrawn with it.
+    pub fn tracking_reads(mut self) -> Self {
+        self.tracks_reads = true;
         self
     }
 }
@@ -396,6 +412,11 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.text_style == text_style
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
+                            && !(self.tracks_reads
+                                && element_state
+                                    .accessed_entities
+                                    .iter()
+                                    .any(|entity| window.notified_entities.contains(entity)))
                         {
                             let prepaint_start = window.prepaint_index();
                             window.reuse_prepaint(element_state.prepaint_range.clone());
@@ -407,7 +428,10 @@ impl<V: View> Element for ViewElement<V> {
                             return (None, element_state);
                         }
 
-                        let refreshing = mem::replace(&mut window.refreshing, true);
+                        let refreshing = window.refreshing;
+                        if !self.tracks_reads {
+                            window.refreshing = true;
+                        }
                         let prepaint_start = window.prepaint_index();
                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
                             let mut element = self
@@ -475,7 +499,10 @@ impl<V: View> Element for ViewElement<V> {
                             let paint_start = window.paint_index();
 
                             if let Some(element) = element {
-                                let refreshing = mem::replace(&mut window.refreshing, true);
+                                let refreshing = window.refreshing;
+                                if !self.tracks_reads {
+                                    window.refreshing = true;
+                                }
                                 element.paint(window, cx);
                                 window.refreshing = refreshing;
                             } else {

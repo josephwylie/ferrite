@@ -389,9 +389,10 @@ pub fn status_ring(ink: u32) -> Div {
 // ------------------------------------------------------------------ loops
 //
 // The few loops the terminal grammar allows (theme rule 8). Each rides the
-// shared pulse clock (`motion::pulse_phase`: one ~30fps tick for the whole
-// window, parked when nothing loops), leasing the view that paints it, and
-// holds a static end state under reduced motion that says the same thing.
+// shared pulse clock (`motion::loop_phase`: one timer on a ~30fps grid for
+// the whole window, parked when nothing loops), declaring how its picture
+// moves so the view that paints it is drawn only when it changes, and holds
+// a static end state under reduced motion that says the same thing.
 
 #[allow(unused_imports)] // until the builders call them
 pub use loops::*;
@@ -419,9 +420,11 @@ mod loops {
     /// spinner under reduced motion.
     pub const WORKED: char = '\u{273b}';
 
-    /// Which of `frames` a loop shows at `phase` [0, 1) of its turn.
+    /// Which of `frames` a loop shows at `phase` [0, 1) of its turn: the
+    /// cadence's own count, so the frame drawn and the step the pulse clock
+    /// wakes for never disagree.
     pub fn frame_at(phase: f32, frames: usize) -> usize {
-        ((phase.rem_euclid(1.0) * frames as f32) as usize).min(frames.saturating_sub(1))
+        ferrite_core::cadence::frame_at(phase, frames)
     }
 
     /// The braille spinner (theme rule 8): `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, one frame per
@@ -433,14 +436,17 @@ mod loops {
     /// Thread's status dot, in the sidebar and in Pane heads, so a board of
     /// them shares one tick. Under reduced motion it is the still dot.
     pub fn braille_spinner(ink: u32) -> AnyElement {
-        let mut spinner = div().child(Spinner {
+        let spinner = Spinner {
             frames: &BRAILLE_FRAMES,
             frame_ms: theme::MOTION_BRAILLE_FRAME_MS,
             still: '\u{25cf}',
             ink,
             weight: theme::W_STRONG,
             selector: "braille-spinner",
-        });
+        };
+        let mut spinner = div().child(crate::loops_overlay::hosted(move || {
+            spinner.into_any_element()
+        }));
         spinner.text_style().font_fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![
             BRAILLE_FACE.to_string(),
         ]));
@@ -458,18 +464,18 @@ mod loops {
     /// clock. Under reduced motion it holds `✻` (`WORKED`), the mark a
     /// finished turn wears.
     pub fn working_spinner(ink: u32) -> AnyElement {
-        Spinner {
+        let spinner = Spinner {
             frames: &WORKING_FRAMES,
             frame_ms: theme::MOTION_WORKING_FRAME_MS,
             still: WORKED,
             ink,
             weight: theme::W_BODY,
             selector: "working-spinner",
-        }
-        .into_any_element()
+        };
+        crate::loops_overlay::hosted(move || spinner.into_any_element()).into_any_element()
     }
 
-    #[derive(IntoElement)]
+    #[derive(IntoElement, Clone, Copy)]
     struct Spinner {
         frames: &'static [char],
         frame_ms: u64,
@@ -485,7 +491,9 @@ mod loops {
                 self.still
             } else {
                 let turn = Duration::from_millis(self.frame_ms * self.frames.len() as u64);
-                let phase = motion::script_phase(turn, window.current_view(), cx);
+                // Drawn again only when its glyph steps.
+                let steps = motion::Motion::Frames(self.frames.len());
+                let phase = motion::script_phase(turn, steps, window.current_view(), cx);
                 self.frames[frame_at(phase, self.frames.len())]
             };
             let selector = self.selector;
@@ -525,14 +533,14 @@ mod loops {
     /// wears it; under reduced motion it is plain `base`. The caller sets
     /// the face, size and line height.
     pub fn shimmer(text: impl Into<SharedString>, base: u32) -> AnyElement {
-        Shimmer {
+        let shimmer = Shimmer {
             text: text.into(),
             base,
-        }
-        .into_any_element()
+        };
+        crate::loops_overlay::hosted(move || shimmer.clone().into_any_element()).into_any_element()
     }
 
-    #[derive(IntoElement)]
+    #[derive(IntoElement, Clone)]
     struct Shimmer {
         text: SharedString,
         base: u32,
@@ -543,8 +551,10 @@ mod loops {
             let base: Hsla = rgb(self.base).into();
             let lit = (!motion::reduced_motion(cx)).then(|| {
                 let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
+                // The crest moves a few device columns every tick.
+                let sweep = motion::Motion::Continuous;
                 (
-                    motion::css_phase(turn, window.current_view(), cx),
+                    motion::css_phase(turn, sweep, window.current_view(), cx),
                     shimmer_crest(self.base),
                 )
             });
@@ -659,6 +669,7 @@ mod loops {
             let right = f32::from(bounds.right()).min(left + width);
             let baseline =
                 bounds.top() + (line_height - line.ascent - line.descent) / 2. + line.ascent;
+
             let glyphs: Vec<_> = line
                 .runs
                 .iter()
@@ -695,6 +706,12 @@ mod loops {
         }
     }
 
+    /// Where `caret_blink` moves: only through its fall (45%–55%) and its
+    /// rise (95% to the turn's end). Its two plateaus repaint nothing, so the
+    /// pulse clock draws each of them once.
+    pub const CARET_FADES: motion::Motion<'static> =
+        motion::Motion::Spans(&[(0.45, 0.55), (0.95, 1.0)]);
+
     /// The soft block caret's opacity at `phase` [0, 1) of
     /// `MOTION_CARET_BLINK_MS` (the prototype's keyframes): full to 45%, eased
     /// down to `CARET_BLINK_MIN` by 55%, held to 95%, eased back to full.
@@ -713,15 +730,21 @@ mod loops {
         }
     }
 
-    /// The focused Composer's caret opacity now, leasing the painting view on
-    /// the pulse clock; full and still under reduced motion. An unfocused
-    /// Composer draws no blinking caret (its caret is a faint outline, still).
+    /// The focused Composer's caret opacity now, declaring the painting view
+    /// on the pulse clock through the blink's fades; full and still under
+    /// reduced motion. An unfocused Composer draws no blinking caret (its
+    /// caret is a faint outline, still).
     pub fn caret_opacity(window: &mut Window, cx: &mut App) -> f32 {
         if motion::reduced_motion(cx) {
             return 1.0;
         }
         let turn = Duration::from_millis(theme::MOTION_CARET_BLINK_MS);
-        caret_blink(motion::css_phase(turn, window.current_view(), cx))
+        caret_blink(motion::css_phase(
+            turn,
+            CARET_FADES,
+            window.current_view(),
+            cx,
+        ))
     }
 }
 
@@ -2146,6 +2169,29 @@ mod tests {
         assert_eq!(caret_blink(1.0), 1.0, "a period wraps");
     }
 
+    /// The pulse clock draws the caret only through `CARET_FADES`: outside
+    /// them the blink holds exactly one value per plateau.
+    #[test]
+    fn the_caret_holds_still_outside_its_declared_fades() {
+        let motion::Motion::Spans(fades) = CARET_FADES else {
+            unreachable!("the blink moves in spans")
+        };
+        let moving = |p: f32| fades.iter().any(|(from, to)| (*from..*to).contains(&p));
+        let mut plateau: Option<f32> = None;
+        for step in 0..100_000 {
+            let p = step as f32 / 100_000.0;
+            if moving(p) {
+                plateau = None;
+                continue;
+            }
+            let alpha = caret_blink(p);
+            match plateau {
+                Some(held) => assert_eq!(alpha, held, "moved at {p} outside a fade"),
+                None => plateau = Some(alpha),
+            }
+        }
+    }
+
     /// In tests the kit rests (reduced motion): each loop draws its still
     /// state and leases nothing, so a board of spinners schedules no frame.
     #[gpui::test]
@@ -2168,5 +2214,38 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         cx.update(|cx| assert!(motion::pulse_parked(cx), "no loop leased the clock"));
+    }
+
+    /// Live, a spinner is drawn when its glyph steps and not between: the
+    /// braille spinner's 80ms frames ask for 12 or 13 draws a second, where
+    /// the pulse clock's fixed rate drew 30.
+    #[gpui::test]
+    fn a_spinner_is_drawn_only_when_its_glyph_steps(cx: &mut gpui::TestAppContext) {
+        motion::testing::drive();
+        struct Board(std::rc::Rc<std::cell::Cell<usize>>);
+        impl gpui::Render for Board {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                self.0.set(self.0.get() + 1);
+                div().child(braille_spinner(theme::RUNNING))
+            }
+        }
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = renders.clone();
+        let window = cx.add_window(move |_, _| Board(counted));
+        cx.run_until_parked();
+        let before = renders.get();
+        for _ in 0..1_000 {
+            cx.executor().advance_clock(Duration::from_millis(1));
+            cx.run_until_parked();
+        }
+        let drawn = renders.get() - before;
+        let steps = 1_000 / theme::MOTION_BRAILLE_FRAME_MS as usize;
+        assert!(
+            (steps..=steps + 1).contains(&drawn),
+            "{drawn} draws in a second of 80ms steps"
+        );
+        window
+            .update(cx, |_, _, cx| assert!(!motion::pulse_parked(cx)))
+            .unwrap();
     }
 }
