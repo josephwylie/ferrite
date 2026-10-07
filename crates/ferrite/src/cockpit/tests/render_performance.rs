@@ -1141,11 +1141,9 @@ fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut Tes
 /// What an operator actually leaves on screen: an active window, the
 /// keyboard in a Composer, two idle Threads, nothing changing. The caret may
 /// blink, but holding still must not rebuild the whole Cockpit at the pulse
-/// clock's rate — that is the idle CPU the shipped app burns. A-1 draws only
-/// the caret's fades (33 in 5s, `a_focused_idle_window_renders_the_cockpit_
-/// only_for_the_carets_fades`); 10 needs the caret off the Cockpit (A-2).
+/// clock's rate — that is the idle CPU the shipped app burns. The caret's
+/// blink is drawn by the loops overlay, over a cached Cockpit.
 #[gpui::test]
-#[ignore = "A-2 target"]
 fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (core, _fake) = cockpit("idle-focused", 2);
@@ -1493,8 +1491,8 @@ fn cockpit_renders_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
 /// A board at work: four Panes, two of them working, an active window. The
 /// loops on screen — the working lines' stars, the braille spinners in the
 /// heads and the nav, the caret, and the focused working Pane's shimmer —
-/// redraw the Cockpit only when one of them steps, never more than once a
-/// pulse tick.
+/// are drawn by the loops overlay when one of them steps, never more than
+/// once a pulse tick, and the Cockpit is rebuilt only for its clocks.
 #[gpui::test]
 fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
@@ -1548,18 +1546,19 @@ fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppCo
         ticked <= tick_rate + 1,
         "{ticked} pulse ticks in 5s: more than one a tick"
     );
-    assert!(
-        stepping <= A1_WORKING_BOARD_BUDGET,
-        "a working board with the keyboard on an idle Pane rebuilt the Cockpit \
-         {stepping} times in 5s; the steps on screen ask for at most {A1_WORKING_BOARD_BUDGET}"
-    );
+    for (keyboard, rendered) in [("a working", shimmering), ("an idle", stepping)] {
+        assert!(
+            rendered <= WORKING_BOARD_BUDGET,
+            "a working board with the keyboard on {keyboard} Pane rebuilt the Cockpit \
+             {rendered} times in 5s; budget is {WORKING_BOARD_BUDGET}"
+        );
+    }
 }
 
-/// What the steps of a working board ask for in 5s, the keyboard on an
-/// idle Pane: the stars' 120ms and the spinners' 80ms on one epoch (four
-/// distinct instants every 240ms), the caret's fades, the working clocks'
-/// seconds.
-const A1_WORKING_BOARD_BUDGET: usize = 120;
+/// What a working board may rebuild the Cockpit in 5s: its loops are drawn
+/// by the overlay, so only the working clocks' seconds (two Threads) and
+/// the sweep redraw it.
+const WORKING_BOARD_BUDGET: usize = 30;
 
 /// The pointer sweeping down the nav, a row every 250ms: each crossing
 /// blends a row's wash in and the last one's out, redrawing the Cockpit
@@ -1638,42 +1637,15 @@ fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut Tes
     let rendered = cockpit_renders_over(cx, 5_000);
     eprintln!("DECISION_PENDING cockpit_renders_5s={rendered}");
     assert!(
-        rendered <= A1_IDLE_FOCUSED_BUDGET,
+        rendered <= IDLE_BUDGET,
         "a pending Decision rebuilt the Cockpit {rendered} times in 5s; \
-         budget is {A1_IDLE_FOCUSED_BUDGET}"
+         budget is {IDLE_BUDGET}"
     );
 }
 
-/// The A-1 checkpoint for an untouched focused window (the test above it
-/// holds the final 10): the caret's fades are all that draws — the grid
-/// instants inside its 110ms fall and 55ms rise and the one landing each,
-/// six to eight every 1.1s turn (33 measured).
-const A1_IDLE_FOCUSED_BUDGET: usize = 37;
-
-/// The A-1 checkpoint: an active window, the keyboard in a Composer, two
-/// idle Threads. Only the caret's fades redraw the Cockpit (A-2 takes the
-/// caret off the Cockpit for the final budget).
-#[gpui::test]
-fn a_focused_idle_window_renders_the_cockpit_only_for_the_carets_fades(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
-    let (core, _fake) = cockpit("idle-focused-a1", 2);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    cx.update(|window, _| window.activate_window());
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        cx.notify();
-    });
-    tick(cx);
-    cockpit_renders_over(cx, 1_000);
-    let rendered = cockpit_renders_over(cx, 5_000);
-    eprintln!("IDLE_FOCUSED_A1 cockpit_renders_5s={rendered}");
-    assert!(
-        rendered <= A1_IDLE_FOCUSED_BUDGET,
-        "an untouched focused window rebuilt the Cockpit {rendered} times in 5s; \
-         the caret's fades ask for at most {A1_IDLE_FOCUSED_BUDGET}"
-    );
-}
+/// What an untouched window may rebuild the Cockpit in 5s: the sweep's
+/// rare redraw for a fact that moved, never a loop's.
+const IDLE_BUDGET: usize = 10;
 
 /// Under reduced motion nothing loops, yet a working Thread's clock still
 /// moves: the sweep redraws a busy Cockpit, its `12s` turning over.
