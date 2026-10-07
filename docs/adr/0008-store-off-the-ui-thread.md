@@ -575,6 +575,30 @@ disk:
 13. `queue.json`: a barrier before its rename, and a Notice when it is
     unreadable.
 
+## Revision during implementation: the worker syncs, the caller writes
+
+The worker described in §1 was to perform the writes too. As built, a
+record is still written (`write(2)`) where it is accepted, into the page
+cache. The store's worker owns everything that waits on a drive:
+
+- every sync: barriers at boundaries, and the 30 s full sync on its own
+  timer;
+- the marks, which follow a barrier;
+- a park: removing the open marker, writing the final mark, and a full
+  sync.
+
+Every stall this ADR set out to remove was a sync: F_FULLFSYNC ran up to
+2.6 s under load. A write into the page cache does not wait on the drive.
+Keeping writes on the caller brings three benefits:
+
+- every reader sees what was accepted at once;
+- the write-retry contract (`PendingFlush`) is unchanged;
+- a write failure is reported to its caller exactly as before.
+
+A failed sync is reported through `ThreadWriter::failure`, and the pump
+then holds the Session's events. The quit, `log.pending-*` and panic-hook
+items in §1 apply to the writes that remain buffered.
+
 ## Review (2026-10-07)
 
 An independent review of the draft raised eleven findings. Each is resolved

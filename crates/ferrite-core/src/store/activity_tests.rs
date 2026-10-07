@@ -362,7 +362,7 @@ fn child_completion_flushes_after_main_idle_without_cross_actor_coalescing() {
     );
     let snapshot = store.load(thread).unwrap();
     assert_eq!(&replay_events(&snapshot)[..3], &facts);
-    assert!(writer.buffer.is_empty());
+    assert!(writer.state().buffer.is_empty());
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn partial_write_retry_preserves_buffer_and_never_duplicates_the_written_prefix(
     }];
     let first = line(&buffer[0]).unwrap();
     let mut pending = None;
-    assert!(flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier, &mut |_, _| {}).is_err());
+    assert!(flush_records(&mut sink, &mut buffer, &mut pending, Some(SyncLevel::Barrier), &mut |_, _| {}).is_err());
     assert_eq!(buffer.len(), 1);
     assert_eq!(pending.as_ref().unwrap().written, 7);
     buffer.push(Record::Text {
@@ -555,7 +555,7 @@ fn partial_write_retry_preserves_buffer_and_never_duplicates_the_written_prefix(
     });
     let second = line(&buffer[1]).unwrap();
     sink.fail_after = None;
-    flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier, &mut |_, _| {}).unwrap();
+    flush_records(&mut sink, &mut buffer, &mut pending, Some(SyncLevel::Barrier), &mut |_, _| {}).unwrap();
     assert_eq!(String::from_utf8(sink.bytes).unwrap(), first + &second);
     assert!(buffer.is_empty());
     assert!(pending.is_none());
@@ -572,11 +572,11 @@ fn sync_failure_retries_sync_without_reappending_already_written_records() {
     }];
     let expected = line(&buffer[0]).unwrap();
     let mut pending = None;
-    assert!(flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier, &mut |_, _| {}).is_err());
+    assert!(flush_records(&mut sink, &mut buffer, &mut pending, Some(SyncLevel::Barrier), &mut |_, _| {}).is_err());
     assert_eq!(buffer.len(), 1);
     assert_eq!(sink.bytes, expected.as_bytes());
     sink.fail_sync.set(false);
-    flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier, &mut |_, _| {}).unwrap();
+    flush_records(&mut sink, &mut buffer, &mut pending, Some(SyncLevel::Barrier), &mut |_, _| {}).unwrap();
     assert_eq!(sink.bytes, expected.as_bytes());
     assert!(buffer.is_empty());
 }
@@ -592,9 +592,9 @@ fn failed_writer_keeps_encoded_records_immutable_when_new_text_arrives() {
             None,
         )
         .unwrap();
-    writer.file = File::open(store.log_path(thread)).unwrap(); // Read-only descriptor fails append.
+    writer.state().file = File::open(store.log_path(thread)).unwrap(); // Read-only descriptor fails append.
     assert!(writer.flush().is_err());
-    assert!(writer.buffered_since.is_some());
+    assert!(writer.state().buffered_since.is_some());
     writer
         .record_event(
             &SessionEvent::TextDelta {
@@ -604,11 +604,11 @@ fn failed_writer_keeps_encoded_records_immutable_when_new_text_arrives() {
         )
         .unwrap();
     assert_eq!(
-        writer.buffer.len(),
+        writer.state().buffer.len(),
         2,
         "frozen prefix must not coalesce with new text"
     );
-    writer.file = OpenOptions::new()
+    writer.state().file = OpenOptions::new()
         .append(true)
         .open(store.log_path(thread))
         .unwrap();
@@ -664,7 +664,7 @@ fn child_cache_checkpoint_excludes_later_appends_and_unrelated_actors() {
     writer.record_prompt("Main only").unwrap();
     let checkpoint = writer.checkpoint().unwrap();
     assert!(
-        writer.buffer.is_empty(),
+        writer.state().buffer.is_empty(),
         "checkpoint is durable before worker starts"
     );
     record(

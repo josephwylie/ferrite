@@ -24,6 +24,10 @@ mod activity;
 use activity::{Execution as PersistedExecution, PersistedActivity};
 mod base;
 use base::{Base, Tracker};
+mod worker;
+use worker::Worker;
+#[cfg(test)]
+pub(crate) use worker::lock as worker_lock;
 #[cfg(test)]
 mod activity_tests;
 #[cfg(test)]
@@ -1498,6 +1502,11 @@ struct Shared {
     read_only: Option<String>,
     /// The derived summary cache (`Store::summary`), loaded on first use.
     summaries: std::sync::Mutex<Option<BTreeMap<u64, CachedSummary>>>,
+    /// The store's worker, started with its first writer.
+    worker: std::sync::OnceLock<std::sync::Arc<Worker>>,
+    /// What the worker synced and marked, in order, for tests.
+    #[cfg(test)]
+    journal: std::sync::Mutex<Vec<(&'static str, u64)>>,
     /// Every byte read off a log, so tests can bound what a read costs.
     #[cfg(test)]
     read_bytes: std::sync::atomic::AtomicU64,
@@ -1520,6 +1529,35 @@ impl Shared {
         #[cfg(test)]
         self.syncs[_level as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// The store's worker, started on first use.
+    fn worker(self: &std::sync::Arc<Self>) -> std::sync::Arc<Worker> {
+        self.worker
+            .get_or_init(|| Worker::start(std::sync::Arc::downgrade(self)))
+            .clone()
+    }
+
+    /// A sync the worker runs: where a test can slow or fail it.
+    fn sync_in_worker(&self, file: &File, level: SyncLevel) -> io::Result<()> {
+        #[cfg(test)]
+        {
+            let delay = *worker::lock(&self.faults.sync_delay);
+            std::thread::sleep(delay);
+            if self
+                .faults
+                .fail_sync
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(io::Error::other("injected sync failure"));
+            }
+        }
+        self.sync(file, level)
+    }
+
+    #[cfg(test)]
+    fn journal(&self, what: &'static str, at: u64) {
+        worker::lock(&self.journal).push((what, at));
+    }
 }
 
 /// Failures a test can switch on for every handle on one store.
@@ -1533,6 +1571,10 @@ pub(crate) struct Faults {
     pub(crate) fail_commit: std::sync::atomic::AtomicBool,
     /// And then fail taking it back off the log.
     pub(crate) fail_rollback: std::sync::atomic::AtomicBool,
+    /// Slow every sync the worker runs by this much.
+    pub(crate) sync_delay: std::sync::Mutex<std::time::Duration>,
+    /// Fail every sync the worker runs.
+    pub(crate) fail_sync: std::sync::atomic::AtomicBool,
 }
 
 /// The steps of putting a rewritten log in place, for fault injection.
@@ -1595,6 +1637,9 @@ impl Shared {
         Self {
             read_only,
             summaries: std::sync::Mutex::new(None),
+            worker: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            journal: Default::default(),
             #[cfg(test)]
             read_bytes: Default::default(),
             #[cfg(test)]
@@ -1894,7 +1939,13 @@ impl Store {
     /// A writer appending to `file`, the open log of Thread `id`, which ends
     /// as `tail` says.
     fn writer_on(&self, id: ThreadId, file: File, tail: Tail) -> ThreadWriter {
-        ThreadWriter {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(self.state_on(id, file, tail)));
+        self.shared.worker().follow(&state);
+        ThreadWriter { state }
+    }
+
+    fn state_on(&self, id: ThreadId, file: File, tail: Tail) -> WriterState {
+        WriterState {
             file,
             path: self.log_path(id),
             buffer: Vec::new(),
@@ -1903,7 +1954,6 @@ impl Store {
             pending_flush: None,
             full_sync_interval: self.full_sync_interval,
             fully_synced: std::time::Instant::now(),
-            unsynced: false,
             facts: tail.facts,
             len: tail.len,
             last_mark: tail.last_mark,
@@ -1911,10 +1961,107 @@ impl Store {
             broken: None,
             summary: tail.summary,
             mark_spacing: self.mark_spacing,
+            synced: tail.len,
+            full_synced: tail.len,
             tracker: tail.tracker,
             inherited: tail.base,
+            failure: None,
+            parking: false,
+            park_marked: false,
+            unmark: None,
             shared: self.shared.clone(),
         }
+    }
+
+    /// Wait until a parked Thread's log is as its park left it: the open
+    /// marker gone and the final mark written. A failed sync there is this
+    /// read's error — what the park could not save, a revive must not hide.
+    fn settle(&self, id: ThreadId) -> io::Result<()> {
+        let Some(worker) = self.shared.worker.get() else {
+            return Ok(());
+        };
+        let path = self.log_path(id);
+        let mut queue = worker.queue();
+        loop {
+            let mut pending = false;
+            for writer in &queue.held {
+                let state = worker::lock(writer);
+                if state.path != path {
+                    continue;
+                }
+                if state.parking && (state.unmark.is_some() || !state.park_marked) {
+                    if let Some(failure) = &state.failure {
+                        return Err(io::Error::other(format!(
+                            "history could not be saved: {failure}"
+                        )));
+                    }
+                    pending = true;
+                }
+            }
+            if !pending {
+                return Ok(());
+            }
+            queue = worker
+                .passed
+                .wait_timeout(queue, std::time::Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Wait until every park's open marker is gone: what the open state
+    /// says must be what the operator last did.
+    fn settle_markers(&self) {
+        let Some(worker) = self.shared.worker.get() else {
+            return;
+        };
+        let mut queue = worker.queue();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while queue
+            .held
+            .iter()
+            .any(|writer| worker::lock(writer).unmark.is_some())
+            && std::time::Instant::now() < deadline
+        {
+            queue = worker
+                .passed
+                .wait_timeout(queue, std::time::Duration::from_millis(20))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Wait until the worker has synced everything written so far.
+    #[cfg(test)]
+    pub(crate) fn settle_all(&self) {
+        let Some(worker) = self.shared.worker.get() else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut queue = worker.queue();
+        while std::time::Instant::now() < deadline {
+            let held_done = queue.held.iter().all(|writer| worker::lock(writer).finished());
+            let live_done = queue.live_writers().iter().all(|writer| {
+                let state = worker::lock(writer);
+                state.synced >= state.len && !state.mark_due()
+            });
+            if held_done && live_done {
+                drop(queue);
+                return;
+            }
+            queue = worker
+                .passed
+                .wait_timeout(queue, std::time::Duration::from_millis(20))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        panic!("the store's worker did not settle");
+    }
+
+    /// What the worker synced and marked, in order.
+    #[cfg(test)]
+    pub(crate) fn journal(&self) -> Vec<(&'static str, u64)> {
+        worker::lock(&self.shared.journal).clone()
     }
 
     /// Open one Thread's log for reading.
@@ -2029,6 +2176,7 @@ impl Store {
             return Err(io::Error::other("stub refused Thread deletion"));
         }
         self.writable()?;
+        self.settle(id)?;
         fs::remove_dir_all(self.dir.join(id.to_string()))
     }
 
@@ -2077,6 +2225,7 @@ impl Store {
 
     /// Threads whose Panes were open when the previous process ended.
     pub fn open_threads(&self) -> io::Result<Vec<ThreadId>> {
+        self.settle_markers();
         Ok(self
             .thread_ids()?
             .into_iter()
@@ -2085,6 +2234,7 @@ impl Store {
     }
 
     pub fn tracks_open_state(&self) -> bool {
+        self.settle_markers();
         self.dir.join(OPEN_STATE_MARKER).is_file()
     }
 
@@ -2107,6 +2257,7 @@ impl Store {
 
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
         use std::io::BufRead;
+        self.settle(id)?;
         let mut first = Vec::new();
         io::BufReader::new(self.read_log(id)?).read_until(b'\n', &mut first)?;
         let header: Header = serde_json::from_slice(&first).map_err(|_| LoadError::Corrupt {
@@ -2353,6 +2504,7 @@ impl Store {
         // Bytes, not a String: a crash can tear the tail mid-character, and
         // a loader that insists the whole file is UTF-8 would lose the
         // Thread over its last three bytes.
+        self.settle(id)?;
         Ok(parse(id, &self.read_whole_log(id)?)?.snapshot)
     }
 
@@ -2428,6 +2580,7 @@ impl Store {
         writer.flush()?;
         // Every exchange the log holds, read whole (ADR 0008, invariant 3).
         let mut snapshot = self.load(id)?;
+        let mut writer = writer.lock();
         let from = writer.facts.provider;
         let mut facts = writer.facts.clone();
         facts.provider = provider;
@@ -2473,9 +2626,10 @@ impl Store {
     ) -> Result<(), LoadError> {
         self.writable()?;
         match writer {
-            Some(writer) => writer.amend(change)?,
+            Some(writer) => writer.lock().amend(change)?,
             None => {
-                let mut writer = self.writer(id)?;
+                let writer = self.writer(id)?;
+                let mut writer = writer.lock();
                 writer.amend(change)?;
                 writer.flush_fully()?;
             }
@@ -2504,6 +2658,7 @@ impl Store {
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
         use std::io::BufRead;
         self.writable()?;
+        self.settle(id)?;
         self.sweep_temps(id);
         let mut first = Vec::new();
         io::BufReader::new(self.read_log(id)?).read_until(b'\n', &mut first)?;
@@ -2720,7 +2875,8 @@ impl Store {
     /// A switch whose carry never went out still gets every exchange, read
     /// whole (invariant 3).
     pub fn revive(&self, id: ThreadId) -> Result<Revival, LoadError> {
-        let mut writer = self.writer(id)?;
+        let handle = self.writer(id)?;
+        let mut writer = handle.lock();
         let bounded = match writer.inherited.clone() {
             Some(base) => self.read_from(id, &base, writer.len)?,
             None => None,
@@ -2760,12 +2916,13 @@ impl Store {
                 .records
                 .iter()
                 .any(|record| matches!(record, Record::Prompt { .. }));
+        drop(writer);
         Ok(Revival {
             snapshot,
             evict,
             owed,
             prompted,
-            writer: Some(writer),
+            writer: Some(handle),
         })
     }
 
@@ -3381,6 +3538,122 @@ impl ThreadSnapshot {
     }
 }
 
+impl ThreadWriter {
+    fn lock(&self) -> std::sync::MutexGuard<'_, WriterState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The writer's state, for tests that reach past its interface.
+    #[cfg(test)]
+    fn state(&self) -> std::sync::MutexGuard<'_, WriterState> {
+        self.lock()
+    }
+
+    /// Buffer one Session event, converted to the persisted schema. Flushes
+    /// when the event is a boundary (turn end, close). `duration` is the
+    /// wall clock a settled tool call took, where the caller measured one.
+    pub fn record_event(
+        &mut self,
+        event: &SessionEvent,
+        duration: Option<std::time::Duration>,
+    ) -> io::Result<()> {
+        self.lock().record_event(event, duration)
+    }
+
+    /// Persist the values observed at a live completion.
+    pub fn record_completion(
+        &mut self,
+        subject: &crate::activity::Subject,
+        observed: &CompletionFacts,
+    ) -> io::Result<()> {
+        self.lock().record_completion(subject, observed)
+    }
+
+    /// Tell the log how many subagents the Thread's Activity knows, for the
+    /// next mark: what a parked row shows without replaying the log.
+    pub fn note_subagents(&mut self, count: usize) {
+        self.lock().note_subagents(count);
+    }
+
+    /// Buffer one line the operator sent.
+    pub fn record_prompt(&mut self, text: &str) -> io::Result<()> {
+        self.lock().record_prompt(text)
+    }
+
+    /// Buffer when the prompt just recorded was sent (`7:31 pm`).
+    pub fn record_prompt_observation(&mut self, sent_at: &str) -> io::Result<()> {
+        self.lock().record_prompt_observation(sent_at)
+    }
+
+    /// Record a provider switch the old way: a handover carrying no facts.
+    pub fn record_handover(
+        &mut self,
+        from: Provider,
+        to: Provider,
+        model: Option<String>,
+    ) -> io::Result<()> {
+        self.lock().record_handover(from, to, model)
+    }
+
+    /// Everything buffered, written.
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.lock().flush()
+    }
+
+    /// Everything buffered and written, through the drive's own cache.
+    pub fn flush_fully(&mut self) -> io::Result<()> {
+        self.lock().flush_fully()
+    }
+
+    /// Flush all accepted facts and freeze the readable byte boundary for
+    /// an asynchronous child-cache reload.
+    pub fn checkpoint(&mut self) -> io::Result<u64> {
+        self.lock().checkpoint()
+    }
+
+    /// Why the worker could not sync this log, until it can: the pump holds
+    /// the Session's events while this says anything, so nothing more is
+    /// accepted than the disk can keep.
+    pub fn failure(&self) -> Option<String> {
+        self.lock().failure.clone()
+    }
+
+    /// The Thread is parked: hand the writer to the worker, which removes
+    /// the open marker, ends the log in a mark and syncs it through the
+    /// drive's cache. Returns at once; everything buffered must already be
+    /// written (`flush`). A sync that fails is retried, and a revive waits
+    /// for it (`Store::settle`).
+    pub fn park(self) {
+        let worker = {
+            let mut state = self.lock();
+            state.park();
+            state.park_marked = state.since_mark() == 0;
+            state.shared.worker()
+        };
+        worker.hold(self.state.clone());
+    }
+}
+
+impl Drop for ThreadWriter {
+    /// A writer let go of with writes not yet synced: the worker finishes
+    /// them.
+    fn drop(&mut self) {
+        if std::sync::Arc::strong_count(&self.state) > 1 {
+            return;
+        }
+        let worker = {
+            let state = self.lock();
+            if state.synced >= state.len || state.parking {
+                return;
+            }
+            state.shared.worker()
+        };
+        worker.hold(self.state.clone());
+    }
+}
+
 /// What a live turn's end observed: its elapsed, the stamp's clock, and its
 /// token counts (`None` where the provider reported none).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3392,8 +3665,14 @@ pub struct CompletionFacts {
 }
 
 /// Appends one Thread's records. Buffered: nothing reaches the disk until a
-/// boundary (turn end, close), a timeout, or an explicit `flush`.
+/// boundary (turn end, close), a timeout, or an explicit `flush`. A handle:
+/// the store's worker shares what it appends to, to sync it (ADR 0008).
 pub struct ThreadWriter {
+    state: std::sync::Arc<std::sync::Mutex<WriterState>>,
+}
+
+/// One Thread's open log and everything buffered for it.
+struct WriterState {
     file: File,
     buffer: Vec<Record>,
     flush_interval: std::time::Duration,
@@ -3406,8 +3685,6 @@ pub struct ThreadWriter {
     full_sync_interval: std::time::Duration,
     /// When the log last had one.
     fully_synced: std::time::Instant,
-    /// Whether anything was written since.
-    unsynced: bool,
     path: PathBuf,
     /// The Thread's facts as this log now has them: what every amendment
     /// changes and every mark restates.
@@ -3427,6 +3704,17 @@ pub struct ThreadWriter {
     /// See `Tail`.
     tracker: Option<Tracker>,
     inherited: Option<Base>,
+    /// How much of the log the worker has synced behind a barrier, and
+    /// through the drive's cache.
+    synced: u64,
+    full_synced: u64,
+    /// Why the worker's last sync failed, until one succeeds.
+    failure: Option<String>,
+    /// Parked: the worker marks and fully syncs the log, then lets it go.
+    parking: bool,
+    park_marked: bool,
+    /// The open marker a park removes, and the store's open-state marker.
+    unmark: Option<(PathBuf, PathBuf)>,
     shared: std::sync::Arc<Shared>,
 }
 
@@ -3467,7 +3755,7 @@ fn flush_records(
     file: &mut impl DurableWrite,
     buffer: &mut Vec<Record>,
     pending: &mut Option<PendingFlush>,
-    level: SyncLevel,
+    level: Option<SyncLevel>,
     encoded: &mut dyn FnMut(&Record, usize),
 ) -> io::Result<()> {
     while !buffer.is_empty() {
@@ -3493,14 +3781,16 @@ fn flush_records(
                 Err(error) => return Err(error),
             }
         }
-        file.sync(level)?;
+        if let Some(level) = level {
+            file.sync(level)?;
+        }
         buffer.drain(..append.records);
         *pending = None;
     }
     Ok(())
 }
 
-impl ThreadWriter {
+impl WriterState {
     /// Buffer one Session event, converted to the persisted schema. Flushes
     /// internally when the event is a boundary (turn end, close).
     /// `duration` is the wall clock a settled tool call took, where the
@@ -3585,40 +3875,18 @@ impl ThreadWriter {
         })
     }
 
-    /// Everything buffered, on disk in order behind a barrier: it survives
-    /// a crash of Ferrite or the OS. A full sync instead, once the log has
-    /// waited `FULL_SYNC_INTERVAL` for one.
+    /// Everything buffered, written: in the page cache, where every reader
+    /// sees it and a crash of Ferrite cannot lose it. The worker syncs it,
+    /// behind a barrier at once and through the drive's cache within
+    /// `FULL_SYNC_INTERVAL` — never this caller (ADR 0008).
     pub fn flush(&mut self) -> io::Result<()> {
-        let level = if self.fully_synced.elapsed() >= self.full_sync_interval {
-            SyncLevel::Full
-        } else {
-            SyncLevel::Barrier
-        };
-        self.flush_at(level)
-    }
-
-    /// Everything buffered, and everything written before it, through the
-    /// drive's own cache: it survives a power cut. The lever for the moments
-    /// the writer cannot see: parking a Thread, quitting the app.
-    pub fn flush_fully(&mut self) -> io::Result<()> {
-        self.flush_at(SyncLevel::Full)?;
-        if self.since_mark() > 0 {
-            // A parked log ends in a mark: its next peek reads one line.
-            self.mark()?;
-            self.unsynced = true;
-        }
-        if self.unsynced {
-            // Earlier flushes only reached a barrier; this one wrote nothing.
-            self.shared.sync(&self.file, SyncLevel::Full)?;
-            self.fully_synced = std::time::Instant::now();
-            self.unsynced = false;
-        }
-        Ok(())
-    }
-
-    fn flush_at(&mut self, level: SyncLevel) -> io::Result<()> {
         self.usable()?;
         let wrote = !self.buffer.is_empty();
+        if wrote && self.synced == self.len && self.mark_due() {
+            // Everything before is synced already: a mark may vouch for it
+            // here, ahead of what this flush adds.
+            self.mark()?;
+        }
         // Each record as it is encoded, where it will start in the log.
         let mut at = self.len
             + self
@@ -3630,7 +3898,7 @@ impl ThreadWriter {
             &mut self.file,
             &mut self.buffer,
             &mut self.pending_flush,
-            level,
+            None,
             &mut |record, len| {
                 if let Some(tracker) = tracker.as_mut() {
                     tracker.observe(at, record);
@@ -3640,22 +3908,37 @@ impl ThreadWriter {
         )?;
         self.buffered_since = None;
         if wrote {
-            self.shared.synced(level);
-            match level {
-                SyncLevel::Full => {
-                    self.fully_synced = std::time::Instant::now();
-                    self.unsynced = false;
-                }
-                SyncLevel::Barrier => self.unsynced = true,
-            }
             self.len = self.file.metadata()?.len();
-            if self.since_mark() >= self.mark_spacing.max(16 * self.mark_len as u64) {
-                // Behind the barrier just taken: never ahead of what it vouches for.
-                self.mark()?;
-                self.shared.sync(&self.file, SyncLevel::Barrier)?;
-            }
+            self.shared.worker().poke();
         }
         Ok(())
+    }
+
+    /// Everything buffered, written and synced through the drive's own
+    /// cache, here and now, ending in a mark: what an import or a test waits
+    /// for. A park hands its writer to the worker instead (`park`).
+    pub fn flush_fully(&mut self) -> io::Result<()> {
+        self.flush()?;
+        if self.synced < self.len {
+            // A mark vouches for what precedes it: that first.
+            self.shared.sync(&self.file, SyncLevel::Barrier)?;
+            self.synced = self.len;
+        }
+        if self.since_mark() > 0 {
+            self.mark()?;
+        }
+        if self.full_synced < self.len {
+            self.shared.sync(&self.file, SyncLevel::Full)?;
+            self.synced = self.len;
+            self.full_synced = self.len;
+            self.fully_synced = std::time::Instant::now();
+        }
+        Ok(())
+    }
+
+    /// Whether a mark is due: the bytes since the last one.
+    fn mark_due(&self) -> bool {
+        self.since_mark() >= self.mark_spacing.max(16 * self.mark_len as u64)
     }
 
     /// Bytes written since the newest mark (or the header).
@@ -3683,6 +3966,8 @@ impl ThreadWriter {
         self.append_now(mark.as_bytes())?;
         self.last_mark = Some(at);
         self.mark_len = mark.len();
+        #[cfg(test)]
+        self.shared.journal("mark", at);
         Ok(())
     }
 
@@ -3708,7 +3993,7 @@ impl ThreadWriter {
         let at = self.len;
         self.append_now(written.as_bytes())?;
         self.shared.sync(&self.file, SyncLevel::Barrier)?;
-        self.unsynced = true;
+        self.synced = self.len;
         if let Some(tracker) = self.tracker.as_mut() {
             tracker.observe(at, &record);
         }

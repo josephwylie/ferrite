@@ -86,6 +86,7 @@ fn parking_syncs_the_log_through_the_drive_cache() {
     cockpit.pump();
     let (_, full) = cockpit.store.syncs();
     cockpit.park(thread).unwrap();
+    cockpit.store.settle_all();
     assert_eq!(cockpit.store.syncs().1, full + 1);
 }
 
@@ -239,4 +240,63 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
         cockpit.store.bytes_read() - read
     );
     let _ = std::fs::remove_dir_all(cockpit.store.dir());
+}
+
+/// Parking returns before the drive's cache is flushed; the store's worker
+/// finishes it, and a revive waits only for the park's final mark.
+#[test]
+fn parking_never_waits_for_the_drive() {
+    let (mut cockpit, fake) = cockpit("park-async");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    cockpit.store.settle_all();
+    *crate::store::worker_lock(&cockpit.store.faults().sync_delay) =
+        std::time::Duration::from_millis(400);
+    let started = std::time::Instant::now();
+    cockpit.park(thread).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_millis(150));
+    cockpit.revive(thread).unwrap();
+    assert_eq!(
+        cockpit.peek(thread).unwrap().summary.map(|summary| summary.turns),
+        Some(1)
+    );
+    *crate::store::worker_lock(&cockpit.store.faults().sync_delay) = std::time::Duration::ZERO;
+}
+
+/// A log the worker cannot sync holds the Session's events where they wait
+/// (its bounded channel) until it can; then every event lands, in order.
+#[test]
+fn a_failed_sync_holds_the_session_until_it_succeeds() {
+    use std::sync::atomic::Ordering;
+    let (mut cockpit, fake) = cockpit("sync-failure");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    cockpit.store.faults().fail_sync.store(true, Ordering::SeqCst);
+    live(&fake).send(text("before")).unwrap();
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    // The worker fails the turn's sync; the pump then holds the next events.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while cockpit.thread(thread).unwrap().store_error().is_none() {
+        assert!(std::time::Instant::now() < deadline, "the failure never surfaced");
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    live(&fake).send(text("held")).unwrap();
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    let log = cockpit.store.dir().join(thread.to_string()).join("log.jsonl");
+    assert!(!std::fs::read_to_string(&log).unwrap().contains("held"));
+
+    cockpit.store.faults().fail_sync.store(false, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !std::fs::read_to_string(&log).unwrap().contains("held") {
+        assert!(std::time::Instant::now() < deadline, "never drained");
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.find("before").unwrap() < text.find("held").unwrap());
 }

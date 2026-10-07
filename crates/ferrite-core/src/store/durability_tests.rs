@@ -122,11 +122,13 @@ fn a_boundary_orders_the_log_without_a_full_sync() {
     let (barriers, full) = store.syncs();
     writer.record_prompt("go").unwrap();
     writer.record_event(&turn_end(), None).unwrap();
+    store.settle_all();
     assert_eq!(store.syncs(), (barriers + 1, full));
 }
 
 /// Barriers bound what a crash costs; the interval bounds what a power cut
-/// costs. A log written past it gets a full sync at its next flush.
+/// costs. A log written and left alone is fully synced once the interval
+/// passes — by the worker, with nothing more written.
 #[test]
 fn a_written_log_is_fully_synced_within_the_interval() {
     let store = Store::open(scratch("sync-interval"))
@@ -134,10 +136,12 @@ fn a_written_log_is_fully_synced_within_the_interval() {
         .full_sync_every(std::time::Duration::from_millis(50));
     let (_, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
     writer.record_event(&turn_end(), None).unwrap();
-    let (barriers, full) = store.syncs();
-    std::thread::sleep(std::time::Duration::from_millis(80));
-    writer.record_event(&turn_end(), None).unwrap();
-    assert_eq!(store.syncs(), (barriers, full + 1));
+    let (_, full) = store.syncs();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.syncs().1 == full {
+        assert!(std::time::Instant::now() < deadline, "never fully synced");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Parking leaves nothing behind a barrier only: everything written,
@@ -148,6 +152,7 @@ fn a_full_flush_covers_what_barriers_only_ordered() {
     let store = Store::open(scratch("sync-park")).unwrap();
     let (_, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
     writer.record_event(&turn_end(), None).unwrap();
+    store.settle_all();
     let (barriers, full) = store.syncs();
     writer.flush_fully().unwrap();
     assert_eq!(store.syncs(), (barriers, full + 1));
@@ -341,6 +346,10 @@ fn an_interrupted_upgrade_never_loses_a_record() {
 fn long_thread(store: &Store, megabytes: usize) -> (ThreadId, ThreadWriter) {
     let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
     for turn in 0..megabytes * 100 {
+        if turn % 25 == 0 {
+            // Real turns pause; the worker syncs (and marks) in between.
+            store.settle_all();
+        }
         writer.record_prompt(&format!("turn {turn}")).unwrap();
         writer
             .record_event(
@@ -352,6 +361,8 @@ fn long_thread(store: &Store, megabytes: usize) -> (ThreadId, ThreadWriter) {
             .unwrap();
         writer.record_event(&turn_end(), None).unwrap();
     }
+    // The worker marks behind its barriers: let it catch up.
+    store.settle_all();
     (id, writer)
 }
 
@@ -543,6 +554,9 @@ fn marks_restate_the_facts_and_change_nothing_a_reader_sees() {
     let (id, mut writer) = long_thread(&store, 2);
     store.set_title(id, "midway".into(), Some(&mut writer)).unwrap();
     for turn in 0..150 {
+        if turn % 25 == 0 {
+            store.settle_all();
+        }
         writer.record_prompt(&format!("more {turn}")).unwrap();
         writer
             .record_event(&SessionEvent::TextDelta { text: "m".repeat(10_000) }, None)
@@ -749,5 +763,53 @@ fn a_parked_lock_check_reads_only_the_tail() {
     let read = store.bytes_read();
     assert!(store.prompted(id).unwrap());
     assert!(store.bytes_read() - read <= 2 * MARK_SPACING + 256 * 1024);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// No caller waits on a drive: a turn's end is written at once and synced
+/// by the store's worker, however slow the sync.
+#[test]
+fn a_boundary_never_waits_for_its_sync() {
+    let dir = scratch("worker-boundary");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    *worker::lock(&store.faults().sync_delay) = std::time::Duration::from_millis(400);
+    let (barriers, _) = store.syncs();
+    let started = std::time::Instant::now();
+    writer.record_prompt("go").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_millis(150));
+    assert_eq!(store.load(id).unwrap().prompt_texts(), vec!["go"], "written at once");
+    store.settle_all();
+    assert_eq!(store.syncs().0, barriers + 1, "synced by the worker");
+    *worker::lock(&store.faults().sync_delay) = std::time::Duration::ZERO;
+}
+
+/// A mark vouches for every line before it, so the worker writes one only
+/// once a sync has covered all of them.
+#[test]
+fn a_mark_never_reaches_the_log_before_its_barrier() {
+    let dir = scratch("worker-marks");
+    let store = Store::open(&dir).unwrap();
+    let (_, writer) = long_thread(&store, 3);
+    drop(writer);
+    store.settle_all();
+    let journal = store.journal();
+    let marks: Vec<u64> = journal
+        .iter()
+        .filter(|(what, _)| *what == "mark")
+        .map(|(_, at)| *at)
+        .collect();
+    assert!(marks.len() >= 2, "{journal:?}");
+    for (index, (what, at)) in journal.iter().enumerate() {
+        if *what == "mark" {
+            assert!(
+                journal[..index]
+                    .iter()
+                    .any(|(what, synced)| *what == "synced" && synced >= at),
+                "the mark at {at} came before a sync covered it: {journal:?}"
+            );
+        }
+    }
     let _ = fs::remove_dir_all(&dir);
 }

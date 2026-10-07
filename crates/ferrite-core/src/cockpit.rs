@@ -1473,13 +1473,14 @@ impl Cockpit {
             .writer
             .note_subagents(state.activity.view().children().len());
         // A failed write keeps the live owner and its retry buffer reachable.
-        // Parked, nothing else will sync the log: through the drive's cache.
-        if let Err(error) = state.writer.flush_fully() {
+        if let Err(error) = state.writer.flush() {
             state.report_store_error(io::Error::new(error.kind(), error.to_string()));
             return Err(error);
         }
-        self.store.mark_parked(thread)?;
         let mut state = self.threads.remove(&thread).expect("checked");
+        // The rest — the open marker, a final mark, a sync through the
+        // drive's cache — is the store's worker's; a revive waits for it.
+        state.writer.park();
         self.notifications.disconnect(thread);
         self.visible_subjects.remove(&thread);
         self.roster.remove_thread(thread);
@@ -2271,6 +2272,14 @@ impl Cockpit {
             // for new work; highlighted Blocks remain an explicit next-frame wake.
             let highlighted = thread.activity.apply(ActivityInput::DrainHighlights);
             update.absorb(highlighted, false);
+            // A log the worker cannot sync holds the Session's events too:
+            // nothing more is accepted than the disk can keep.
+            if let Some(failure) = thread.writer.failure() {
+                thread.report_store_error(io::Error::other(failure));
+                update.activity_changed = true;
+                frame.push(update);
+                continue;
+            }
             // Backpressure on failed persistence: retain the writer's buffer
             // and let the bounded provider channel fill rather than lose history.
             if thread.store_error.is_some() {
