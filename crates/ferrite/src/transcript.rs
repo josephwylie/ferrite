@@ -308,10 +308,6 @@ pub(crate) struct TranscriptView {
     transcript_focus: FocusHandle,
     controls_end: FocusHandle,
     document: gpui::base::TextSelectionDocument,
-    /// The one-second clock a live tool call's trail ticks on: armed while
-    /// any call runs, for the next whole second of its count, and never
-    /// faster. Idle, nothing is armed.
-    second_tick: Option<gpui::Task<()>>,
     /// The disclosure the pointer last flipped, and to which state: only
     /// its chevron eases; a keyboard toggle turns it at once.
     eased: Option<(DisclosureId, bool)>,
@@ -439,7 +435,6 @@ impl TranscriptView {
             // transcript instead of wrapping round the window.
             controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
-            second_tick: None,
             eased: None,
             wide: Rc::new(Cell::new(false)),
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
@@ -453,6 +448,9 @@ impl TranscriptView {
         };
         view.register_scope(cx);
         view.sync_members(cx);
+        let owner = cx.entity_id();
+        cx.on_release(move |view: &mut Self, cx| view.forget_namespace(owner, cx))
+            .detach();
         view
     }
 
@@ -462,6 +460,7 @@ impl TranscriptView {
         let weak = cx.entity().downgrade();
         crate::file_links::register_scope(
             self.input.namespace.clone(),
+            cx.entity_id(),
             Rc::new(move |path, line, _window, cx| {
                 let _ = weak.update(cx, |_, cx| {
                     cx.emit(TranscriptEvent::OpenReader { path, line });
@@ -469,6 +468,17 @@ impl TranscriptView {
             }),
             cx,
         );
+    }
+
+    /// Nothing under this transcript's namespace can be drawn again: the
+    /// transcript was released, or its history regenerated under a new
+    /// namespace. Release its ⌘-click route, its laid-out targets and its
+    /// native text, unless another transcript has taken the namespace.
+    /// A Subject switch keeps both transcripts and their namespaces.
+    fn forget_namespace(&self, owner: gpui::EntityId, cx: &mut App) {
+        if crate::file_links::release_scope(&self.input.namespace, owner, cx) {
+            self.rich.forget_namespace(&self.input.namespace);
+        }
     }
 
     /// Whether this view already shows `key` (the cockpit compares it every
@@ -497,6 +507,9 @@ impl TranscriptView {
         let shape_changed = self.input.shape() != input.shape();
         let display_changed = before != after || disclosure_changed;
         let workspace_changed = before.workspace != after.workspace;
+        if namespace_changed {
+            self.forget_namespace(cx.entity_id(), cx);
+        }
         self.input = input;
         self.selection_source = selection_source;
         if namespace_changed {
@@ -1328,13 +1341,11 @@ impl TranscriptView {
         }
     }
 
-    /// Arm the one-second clock while a call runs: one notify at the next
-    /// whole second of the youngest-rounding live count, so a trail reading
-    /// `3s` turns to `4s` on time and no faster.
+    /// While a call runs, ask the pulse clock (`motion::wake_at`) for one
+    /// draw at the next whole second of the youngest-rounding live count,
+    /// so a trail reading `3s` turns to `4s` on time, on the clock's grid,
+    /// and no faster. Idle, nothing is asked.
     fn arm_second_tick(&mut self, cx: &mut Context<Self>) {
-        if self.second_tick.is_some() {
-            return;
-        }
         let now = ferrite_core::clock::instant();
         let next = self
             .input
@@ -1351,13 +1362,8 @@ impl TranscriptView {
         let Some(next) = next else {
             return;
         };
-        self.second_tick = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(next).await;
-            let _ = this.update(cx, |view, cx| {
-                view.second_tick = None;
-                cx.notify();
-            });
-        }));
+        let at = cx.background_executor().now() + next;
+        crate::motion::wake_at(cx.entity_id(), at, cx);
     }
 
     /// The hover card this transcript hosts now, hung under its path.
@@ -2041,7 +2047,12 @@ impl Render for TranscriptView {
                     });
                 }
                 if anchored || settled {
-                    window.defer(cx, |window, _| window.refresh());
+                    // Lay this transcript (and the Pane around it) out again
+                    // where the scroll settled; nothing else moved.
+                    let weak = weak.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = weak.update(cx, |_, cx| cx.notify());
+                    });
                 }
             })
             .id(SharedString::from(format!(

@@ -1,0 +1,440 @@
+//! Agent context lives in the provider CLI (resumed by id) and in the log
+//! (carried on a hand-over). ADR 0009's invariants 2 and 3, end to end
+//! through park and revive.
+
+use super::*;
+
+fn live(fake: &Fake) -> Sender<SessionEvent> {
+    fake.streams.borrow().last().unwrap().clone()
+}
+
+fn last_resume(fake: &Fake) -> Option<String> {
+    fake.resumed.borrow().last().unwrap().clone()
+}
+
+/// Invariant 2: the id a revive resumes is exactly the newest the log
+/// recorded — through parks, a conversation reset, and a provider switch
+/// whose carry is still owed.
+#[test]
+fn invariant_resume_ids_persist_exactly() {
+    let (mut cockpit, fake) = cockpit("invariant-resume");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake)
+        .send(SessionEvent::Init {
+            session_id: "sess-1".into(),
+            model: "claude-opus-5".into(),
+        })
+        .unwrap();
+    live(&fake).send(text("first")).unwrap();
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    cockpit.park(thread).unwrap();
+    cockpit.revive(thread).unwrap();
+    assert_eq!(last_resume(&fake).as_deref(), Some("sess-1"));
+
+    // A /clear names a new conversation; the next revive resumes that.
+    live(&fake)
+        .send(SessionEvent::ConversationReset {
+            session_id: "sess-2".into(),
+        })
+        .unwrap();
+    cockpit.pump();
+    cockpit.park(thread).unwrap();
+    cockpit.revive(thread).unwrap();
+    assert_eq!(last_resume(&fake).as_deref(), Some("sess-2"));
+
+    // A switch whose carry has not gone out: nothing to resume.
+    cockpit
+        .set_provider(
+            thread,
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        )
+        .unwrap();
+    cockpit.pump();
+    cockpit.park(thread).unwrap();
+    cockpit.revive(thread).unwrap();
+    assert_eq!(fake.providers.borrow().last(), Some(&Provider::Codex));
+    assert_eq!(last_resume(&fake), None);
+
+    // Once the carry went out and Codex named its thread, that id resumes.
+    cockpit.send(thread, "two".into());
+    live(&fake)
+        .send(SessionEvent::Init {
+            session_id: "codex-1".into(),
+            model: "gpt-5.4".into(),
+        })
+        .unwrap();
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    cockpit.park(thread).unwrap();
+    cockpit.revive(thread).unwrap();
+    assert_eq!(last_resume(&fake).as_deref(), Some("codex-1"));
+}
+
+/// A parked Thread has no writer left to sync it later: parking takes its
+/// log through the drive's cache.
+#[test]
+fn parking_syncs_the_log_through_the_drive_cache() {
+    let (mut cockpit, fake) = cockpit("park-full-sync");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    let (_, full) = cockpit.store.syncs();
+    cockpit.park(thread).unwrap();
+    cockpit.store.settle_all();
+    assert_eq!(cockpit.store.syncs().1, full + 1);
+}
+
+/// Invariant 3: a hand-over after a revive carries what the whole log
+/// holds, even when the history is longer than what Activity retains.
+#[test]
+fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
+    let (mut cockpit, fake) = cockpit("invariant-carry");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let answer = |n: usize| format!("answer {n} {}", "z".repeat(700_000));
+    let mut exchanges = Vec::new();
+    for n in 0..8 {
+        cockpit.send(thread, format!("question {n}"));
+        live(&fake).send(text(&answer(n))).unwrap();
+        live(&fake).send(ended()).unwrap();
+        cockpit.pump();
+        exchanges.push((format!("question {n}"), answer(n)));
+    }
+    cockpit.park(thread).unwrap();
+    cockpit.revive(thread).unwrap();
+    cockpit
+        .set_provider(
+            thread,
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        )
+        .unwrap();
+    // A long log's exchanges are read off the UI thread; the switch commits
+    // once they are.
+    while cockpit.thread(thread).unwrap().starting() {
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cockpit.send(thread, "next".into());
+    assert_eq!(
+        fake.sent.borrow().last().unwrap(),
+        &format!("{}\n\nnext", carry_digest(Provider::Claude, &exchanges))
+    );
+    let _ = std::fs::remove_dir_all(cockpit.store.dir());
+}
+
+/// What the store costs on a real log, end to end through the Cockpit:
+/// the parked row's lookups, a rename parked and live, and a revive (the
+/// first one also upgrades an old log). Set `LAB_LOG` to a log to copy;
+/// the copy's binding is pointed at a scratch checkout, so nothing outside
+/// the scratch directory is touched. Run in release for real numbers.
+#[test]
+#[ignore = "needs LAB_LOG, a copy of a real Thread log"]
+fn lab_store_costs_on_a_real_log() {
+    use std::time::Instant;
+    let Ok(source) = std::env::var("LAB_LOG") else {
+        return;
+    };
+    let dir = scratch("lab-costs");
+    let checkout = dir.join("checkout");
+    std::fs::create_dir_all(dir.join("threads").join("3")).unwrap();
+    std::fs::create_dir_all(&checkout).unwrap();
+    // A clone on APFS: no second copy of the bytes until one is written.
+    std::fs::copy(&source, dir.join("threads").join("3").join("log.jsonl")).unwrap();
+    let store = Store::open(dir.join("threads")).unwrap();
+    // Point the binding at the scratch checkout, so a revive asks no git of
+    // the operator's own repos.
+    store
+        .set_workspace(
+            ThreadId::new(3),
+            &WorkspaceBinding::Main {
+                checkout: checkout.clone(),
+            },
+            None,
+        )
+        .unwrap();
+    let fake = Fake::default();
+    let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+    let thread = ThreadId::new(3);
+    let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.0;
+
+    let started = Instant::now();
+    cockpit.peek(thread).unwrap();
+    eprintln!("LAB peek_ms={:.3}", ms(started));
+    let started = Instant::now();
+    let reader = cockpit.log_reader();
+    let turns = reader.turn_count(thread).unwrap();
+    let subagents = reader.subagent_count(thread).unwrap();
+    eprintln!(
+        "LAB parked_lookup_ms={:.1} turns={turns} subagents={subagents}",
+        ms(started)
+    );
+    let started = Instant::now();
+    cockpit.rename_thread(thread, "lab parked title").unwrap();
+    eprintln!("LAB rename_parked_ms={:.1}", ms(started));
+    for round in 0..2 {
+        let started = Instant::now();
+        cockpit.revive(thread).unwrap();
+        eprintln!("LAB revive#{round}_ms={:.1}", ms(started));
+        let started = Instant::now();
+        cockpit.rename_thread(thread, "lab live title").unwrap();
+        eprintln!("LAB rename_live#{round}_ms={:.1}", ms(started));
+        let started = Instant::now();
+        cockpit.park(thread).unwrap();
+        eprintln!("LAB park#{round}_ms={:.1}", ms(started));
+    }
+    let started = Instant::now();
+    let reader = cockpit.log_reader();
+    let turns = reader.turn_count(thread).unwrap();
+    let subagents = reader.subagent_count(thread).unwrap();
+    eprintln!(
+        "LAB parked_lookup_after_ms={:.1} turns={turns} subagents={subagents}",
+        ms(started)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A parked row's counts — subagents and turns — come off the log's tail
+/// for a Thread this Ferrite parked: no replay, however long the log.
+#[test]
+fn parked_lookups_read_the_tail_of_a_parked_thread() {
+    use crate::activity::{ActivityEvent, AgentInfo, AgentKey};
+    let (mut cockpit, fake) = cockpit("parked-lookups");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "start".into());
+    live(&fake)
+        .send(SessionEvent::Init {
+            session_id: "sess-1".into(),
+            model: "claude-opus-5".into(),
+        })
+        .unwrap();
+    let mut info = AgentInfo::new(AgentKey::new(Provider::Claude, "sess-1", "agent-1"));
+    info.parent = Some(Subject::Main);
+    live(&fake)
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    // Fewer events than one pump drains (256), each large.
+    for n in 0..40 {
+        live(&fake).send(text(&format!("{n} {}", "y".repeat(100_000)))).unwrap();
+    }
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    let live_count = cockpit.thread(thread).unwrap().activity().children().len();
+    assert_eq!(live_count, 1);
+    cockpit.park(thread).unwrap();
+
+    let reader = cockpit.log_reader();
+    let read = cockpit.store.bytes_read();
+    assert_eq!(reader.subagent_count(thread).unwrap(), live_count);
+    assert_eq!(reader.turn_count(thread).unwrap(), 1);
+    let size = std::fs::metadata(cockpit.store.dir().join(thread.to_string()).join("log.jsonl"))
+        .unwrap()
+        .len();
+    assert!(size > 3_000_000);
+    // Each lookup: the header line and one chunk back from the end.
+    assert!(
+        cockpit.store.bytes_read() - read <= 256 * 1024,
+        "parked lookups read {} bytes of a {size} byte log",
+        cockpit.store.bytes_read() - read
+    );
+    let _ = std::fs::remove_dir_all(cockpit.store.dir());
+}
+
+/// Parking returns before the drive's cache is flushed; the store's worker
+/// finishes it, and a revive waits only for the park's final mark.
+#[test]
+fn parking_never_waits_for_the_drive() {
+    let (mut cockpit, fake) = cockpit("park-async");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    cockpit.store.settle_all();
+    *crate::store::worker_lock(&cockpit.store.faults().sync_delay) =
+        std::time::Duration::from_millis(400);
+    let started = std::time::Instant::now();
+    cockpit.park(thread).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_millis(150));
+    cockpit.revive(thread).unwrap();
+    assert_eq!(
+        cockpit.peek(thread).unwrap().summary.map(|summary| summary.turns),
+        Some(1)
+    );
+    *crate::store::worker_lock(&cockpit.store.faults().sync_delay) = std::time::Duration::ZERO;
+}
+
+/// A log the worker cannot sync holds the Session's events where they wait
+/// (its bounded channel) until it can; then every event lands, in order.
+#[test]
+fn a_failed_sync_holds_the_session_until_it_succeeds() {
+    use std::sync::atomic::Ordering;
+    let (mut cockpit, fake) = cockpit("sync-failure");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    cockpit.store.faults().fail_sync.store(true, Ordering::SeqCst);
+    live(&fake).send(text("before")).unwrap();
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    // The worker fails the turn's sync; the pump then holds the next events.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while cockpit.thread(thread).unwrap().store_error().is_none() {
+        assert!(std::time::Instant::now() < deadline, "the failure never surfaced");
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    live(&fake).send(text("held")).unwrap();
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    let log = cockpit.store.dir().join(thread.to_string()).join("log.jsonl");
+    assert!(!std::fs::read_to_string(&log).unwrap().contains("held"));
+
+    cockpit.store.faults().fail_sync.store(false, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !std::fs::read_to_string(&log).unwrap().contains("held") {
+        assert!(std::time::Instant::now() < deadline, "never drained");
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.find("before").unwrap() < text.find("held").unwrap());
+}
+
+/// Quitting writes every record accepted (E1): a turn still streaming is
+/// in the log, which ends in a mark and stays open for the next launch.
+#[test]
+fn quitting_writes_every_accepted_record() {
+    let (mut cockpit, fake) = cockpit("quit-writes");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(text("still streaming")).unwrap();
+    cockpit.pump();
+    let (_, full) = cockpit.store.syncs();
+    cockpit.halt_sessions();
+    let log = cockpit.store.dir().join(thread.to_string()).join("log.jsonl");
+    let written = std::fs::read_to_string(&log).unwrap();
+    assert!(written.contains("still streaming"), "lost at quit");
+    assert!(written.lines().last().unwrap().starts_with(r#"{"type":"mark""#));
+    assert!(cockpit.store.syncs().1 > full, "synced through the drive's cache");
+    assert_eq!(cockpit.store.open_threads().unwrap(), vec![thread], "reopened next launch");
+}
+
+/// A writer that cannot write at quit keeps what it holds beside its log,
+/// and the next revive of that Thread says where.
+#[test]
+fn what_quitting_cannot_write_is_kept_and_reported() {
+    let (mut cockpit, fake) = cockpit("quit-pending");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(text("unsaved words")).unwrap();
+    cockpit.pump();
+    // A descriptor that cannot write: every append fails.
+    cockpit.threads[&thread].writer.break_writes();
+    cockpit.halt_sessions();
+    let kept = cockpit.store.pending_records(thread);
+    assert_eq!(kept.len(), 1);
+    assert!(std::fs::read_to_string(&kept[0]).unwrap().contains("unsaved words"));
+
+    let dir = cockpit.store.dir().to_path_buf();
+    drop(cockpit);
+    let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+    relaunched.revive(thread).unwrap();
+    let notices: Vec<String> = relaunched
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Notice(line) => Some(line.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        notices.iter().any(|line| line.contains("log.pending-")),
+        "{notices:?}"
+    );
+}
+
+/// A switch on a long Thread reads its exchanges off the UI thread: the
+/// switch is pending meanwhile, the old Session's events wait, and the
+/// carry still holds the whole history (invariant 3).
+#[test]
+fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
+    let (mut cockpit, fake) = cockpit("switch-async");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    let mut exchanges = Vec::new();
+    for n in 0..4 {
+        let answer = format!("answer {n} {}", "v".repeat(800_000));
+        cockpit.send(thread, format!("question {n}"));
+        live(&fake).send(text(&answer)).unwrap();
+        live(&fake).send(ended()).unwrap();
+        cockpit.pump();
+        exchanges.push((format!("question {n}"), answer));
+    }
+    let old = live(&fake);
+    cockpit
+        .set_provider(
+            thread,
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        )
+        .unwrap();
+    assert!(cockpit.thread(thread).unwrap().starting(), "pending on its read");
+    // The old Session's late word waits; the switch drops it with the Session.
+    old.send(SessionEvent::Init {
+        session_id: "late-claude".into(),
+        model: "claude-opus-5".into(),
+    })
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while cockpit.thread(thread).unwrap().starting() {
+        assert!(std::time::Instant::now() < deadline, "the switch never committed");
+        cockpit.pump();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cockpit.send(thread, "next".into());
+    assert_eq!(
+        fake.sent.borrow().last().unwrap(),
+        &format!("{}\n\nnext", carry_digest(Provider::Claude, &exchanges))
+    );
+    let log = std::fs::read_to_string(cockpit.store.dir().join(thread.to_string()).join("log.jsonl"))
+        .unwrap();
+    assert!(!log.contains("late-claude"), "no old word after the switch's line");
+    let _ = std::fs::remove_dir_all(cockpit.store.dir());
+}
+
+/// A saved queue that cannot be read starts empty — and says so.
+#[test]
+fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
+    let (mut cockpit, fake) = cockpit("queue-unreadable");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    cockpit.park(thread).unwrap();
+    std::fs::write(
+        cockpit.store.dir().join(thread.to_string()).join("queue.json"),
+        "{ not json",
+    )
+    .unwrap();
+    cockpit.revive(thread).unwrap();
+    assert!(cockpit
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .any(|block| matches!(
+            &block.body,
+            Body::Notice(line) if line.contains("queued prompts saved for this Thread could not be read")
+        )));
+}

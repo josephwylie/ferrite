@@ -1114,15 +1114,18 @@ impl App {
         &mut self,
         callback: impl FnOnce(&mut App) -> R,
     ) -> (R, FxHashSet<EntityId>) {
-        let accessed_entities_start = self.entities.accessed_entities.get_mut().clone();
+        // Ferrite's patch: every entity the callback reads, including one
+        // something earlier in the frame had already read (the kit Root,
+        // read by its own render before a cached view reads its layers):
+        // a cached view tracking its reads is redrawn when any is notified.
+        let outer = std::mem::take(self.entities.accessed_entities.get_mut());
         let result = callback(self);
-        let entities_accessed_in_callback = self
-            .entities
+        let entities_accessed_in_callback =
+            std::mem::replace(self.entities.accessed_entities.get_mut(), outer);
+        self.entities
             .accessed_entities
             .get_mut()
-            .difference(&accessed_entities_start)
-            .copied()
-            .collect::<FxHashSet<EntityId>>();
+            .extend(entities_accessed_in_callback.iter().copied());
         (result, entities_accessed_in_callback)
     }
 

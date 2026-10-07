@@ -20,6 +20,7 @@ mod hover_card;
 mod icons;
 mod keymap;
 mod line;
+mod loops_overlay;
 mod menu;
 mod motion;
 mod nav;
@@ -110,6 +111,9 @@ pub(crate) fn register_fonts(cx: &App) {
 }
 
 fn main() {
+    // A panic must not take accepted history with it: whatever a writer
+    // holds goes into its log before the process unwinds (ADR 0009).
+    ferrite_core::store::install_panic_rescue();
     // Before the first glyph is rasterised (gpui caches the answer once):
     // the product draws text as macOS does; only the parity captures turn
     // smoothing off to match the browser-drawn prototype pixel for pixel.
@@ -121,6 +125,17 @@ fn main() {
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-reference") {
         cockpit::visual_reference::capture(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
+    // The loops overlay's pixel parity: one scene drawn with and without
+    // it at the same instants (`visual_reference::loops_parity`).
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--loops-parity") {
+        cockpit::visual_reference::loops_parity(
             std::env::args()
                 .nth(2)
                 .expect("an output directory is required"),
@@ -249,11 +264,12 @@ fn main() {
                     if load {
                         demo::seed_load_group(&mut core);
                     }
-                } else {
+                } else if core.store_read_only().is_none() {
                     // Restore exactly the Panes that were open. A legacy
                     // store has no open-state marker, so its most recently
                     // used Thread remains the one-time migration fallback.
-                    // An empty store starts as a draft Pane (#29).
+                    // An empty store starts as a draft Pane (#29). A store
+                    // another Ferrite holds stays as that one left it.
                     revive_launch_threads(&mut core);
                 }
             }
@@ -327,8 +343,10 @@ fn main() {
                         // under everything; on glass the window's root paints
                         // nothing (`paint::WINDOW`), so the blur reaches the
                         // regions' own fills.
+                        let content =
+                            cx.new(|cx| loops_overlay::CockpitWindow::new(view, window, cx));
                         cx.new(|cx| {
-                            kit::component::Root::new(view, window, cx)
+                            kit::component::Root::new(content, window, cx)
                                 .bordered(false)
                                 .bg(theme::paint::WINDOW)
                         })

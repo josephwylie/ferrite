@@ -76,6 +76,16 @@ pub(super) enum PersistedSubject {
     Subagent { key: String },
 }
 
+impl PersistedSubject {
+    /// The child's stored key, or `None` for Main.
+    pub(super) fn key(&self) -> Option<&str> {
+        match self {
+            Self::Main => None,
+            Self::Subagent { key } => Some(key),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Coverage {
@@ -662,6 +672,22 @@ impl PersistedActivity {
             },
         }
     }
+    /// Every child key this observation names.
+    pub(super) fn children(&self) -> impl Iterator<Item = &str> {
+        let keys: [Option<&str>; 2] = match self {
+            Self::Discovered { key, .. }
+            | Self::Status { key, .. }
+            | Self::Content { key, .. }
+            | Self::HistoryContent { key, .. }
+            | Self::Coverage { key, .. }
+            | Self::Detached { key } => [Some(key), None],
+            Self::Alias { from, to } => [Some(from), Some(to)],
+            Self::CompletionObservation { subject, .. } => [subject.key(), None],
+            Self::MainContent { .. } | Self::BackgroundTurnEnded { .. } => [None, None],
+        };
+        keys.into_iter().flatten()
+    }
+
     pub(super) fn is_boundary(&self) -> bool {
         matches!(
             self,

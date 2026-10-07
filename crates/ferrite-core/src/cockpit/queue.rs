@@ -20,6 +20,8 @@ pub(super) struct Queue {
     /// Native ids Ferrite let go of itself (an interrupt's resend); their
     /// late cancellation receipts are not the operator's news.
     dropped: HashSet<String>,
+    /// Why the saved queue could not be read, until said once.
+    unreadable: Option<String>,
 }
 pub(super) struct Change {
     pub prompt: Option<String>,
@@ -27,16 +29,35 @@ pub(super) struct Change {
     pub notice: Option<String>,
 }
 impl Queue {
+    /// The queue saved beside a Thread's log. A missing one is an empty
+    /// queue; one that cannot be read starts empty too, but says so
+    /// (`take_unreadable`) rather than drop what it held without a word.
     pub fn open(path: PathBuf) -> Self {
-        let metadata = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let read = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| error.to_string()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Metadata::default()),
+            Err(error) => Err(error.to_string()),
+        };
+        let (metadata, unreadable) = match read {
+            Ok(metadata) => (metadata, None),
+            Err(error) => (Metadata::default(), Some(error)),
+        };
         Self {
             path,
             metadata,
+            unreadable,
             ..Self::default()
         }
+    }
+
+    /// The Notice an unreadable saved queue owes the operator, once.
+    pub fn take_unreadable(&mut self) -> Option<String> {
+        self.unreadable.take().map(|error| {
+            format!(
+                "the queued prompts saved for this Thread could not be read ({error}); \
+                 the queue starts empty"
+            )
+        })
     }
     pub fn pending(&self) -> bool {
         !self.items.is_empty() || !self.admitting.is_empty()
@@ -201,11 +222,14 @@ impl Queue {
         }
         change
     }
+    /// Saved beside and renamed over, behind a barrier: the queue is whole
+    /// on disk before the rename can be, without waiting on the drive's
+    /// cache for every prompt queued (ADR 0009).
     fn save(&self) -> io::Result<()> {
         let temporary = self.path.with_extension("queue.tmp");
         let mut file = std::fs::File::create(&temporary)?;
         file.write_all(&serde_json::to_vec(&self.metadata)?)?;
-        file.sync_data()?;
+        crate::store::sync_ordered(&file)?;
         std::fs::rename(temporary, &self.path)
     }
 }

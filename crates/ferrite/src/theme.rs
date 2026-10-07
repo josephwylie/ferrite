@@ -2254,8 +2254,9 @@ pub const MOTION_NAV_BAND_MS: u64 = 200;
 //   without motion. Reduced motion (the system flag, `cx.reduce_motion()`)
 //   snaps a one-shot to its end and holds a loop at its start.
 // - **A window with nothing animating schedules no frame.** Loops ride one
-//   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`), leased by the
-//   views that paint them; it parks when the last lease lapses.
+//   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`): each declares
+//   when its picture next changes, and the clock wakes only the views due
+//   then, on its grid; it parks when nothing is declared.
 
 /// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
@@ -2305,11 +2306,11 @@ pub const MOTION_TOAST_OUT_MS: u64 = 100;
 /// 1.4s — how long a scrollbar thumb holds after the last scroll frame
 /// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
 pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
-/// The pulse clock: one ~30fps tick shared by every loop in the window.
-/// A view stays on it `MOTION_PULSE_LEASE_MS` after its last paint of a
-/// loop, so an unmounted loader drops off and the clock parks.
+/// The pulse clock's grid: one ~30fps tick shared by every loop in the
+/// window. A loop is drawn on the ticks where its picture changes; one that
+/// stops painting drops off after its last declared tick, and the clock
+/// parks.
 pub const MOTION_PULSE_TICK_MS: u64 = 33;
-pub const MOTION_PULSE_LEASE_MS: u64 = 300;
 /// 80ms — one frame of the braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, ten frames, an
 /// 800ms turn) that stands in a working Thread's dot.
 #[allow(dead_code)]

@@ -38,6 +38,9 @@ pub(crate) struct HoverTarget {
 #[derive(Default)]
 pub(crate) struct HoverCards {
     current: Option<HoverTarget>,
+    /// The view that painted the target the card hangs from: the one that
+    /// draws it. `None` when no hover opened the card (a scene's ask).
+    host: Option<gpui::EntityId>,
     /// `preview_path`'s ask: the target (its scope, path and line) to open
     /// once a target naming the same file lays out.
     pending: Option<PathTarget>,
@@ -61,10 +64,13 @@ pub(crate) fn enter(
         target: target.clone(),
         anchor,
     };
+    let host = window.hover_listener_view();
     let cards = cx.default_global::<HoverCards>();
     if cards.current.as_ref() != Some(&next) {
+        let shown = cards.current.is_some().then_some(cards.host);
         cards.current = Some(next);
-        window.refresh();
+        cards.host = host;
+        redraw_hosts(shown.into_iter().chain([host]), window, cx);
     }
 }
 
@@ -77,7 +83,32 @@ pub(crate) fn leave(target: &PathTarget, window: &mut Window, cx: &mut App) {
         .is_some_and(|current| &current.target == target)
     {
         cards.current = None;
-        window.refresh();
+        let host = cards.host.take();
+        redraw_hosts([host], window, cx);
+    }
+}
+
+/// Draw the card's hosts again — the view that drew it and the one that
+/// will — and no other: every other transcript is reused from its cache.
+/// A host no hover named refreshes the window.
+fn redraw_hosts(
+    hosts: impl IntoIterator<Item = Option<gpui::EntityId>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let mut views = Vec::new();
+    for host in hosts {
+        match host {
+            Some(view) => views.push(view),
+            None => {
+                window.refresh();
+                return;
+            }
+        }
+    }
+    views.dedup();
+    for view in views {
+        cx.notify(view);
     }
 }
 
@@ -91,7 +122,9 @@ pub(crate) fn request(target: PathTarget, window: &mut Window, cx: &mut App) {
     };
     match crate::file_links::laid_out(&scope, &target.path, cx) {
         Some(anchor) => {
-            cx.default_global::<HoverCards>().current = Some(HoverTarget { target, anchor });
+            let cards = cx.default_global::<HoverCards>();
+            cards.current = Some(HoverTarget { target, anchor });
+            cards.host = None;
         }
         None => cx.default_global::<HoverCards>().pending = Some(target),
     }
@@ -112,6 +145,7 @@ pub(crate) fn laid_out(target: &PathTarget, anchor: Bounds<Pixels>, cx: &mut App
     if matches {
         let cards = cx.default_global::<HoverCards>();
         cards.pending = None;
+        cards.host = None;
         cards.current = Some(HoverTarget {
             target: PathTarget {
                 line: pending.line.or(target.line),

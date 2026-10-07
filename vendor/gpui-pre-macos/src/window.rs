@@ -3432,8 +3432,11 @@ extern "C" fn blurred_view_init_with_frame(this: &Object, _: Sel, frame: NSRect)
     unsafe {
         let view = msg_send![super(this, class!(NSVisualEffectView)), initWithFrame: frame];
         // Use a colorless semantic material. The default value `AppearanceBased`, though not
-        // manually set, is deprecated.
-        NSVisualEffectView::setMaterial_(view, NSVisualEffectMaterial::Selection);
+        // manually set, is deprecated. Not `Selection`: macOS 27 dropped its backdrop blur
+        // (only a vibrancy tint is left, which `remove_layer_background` clears, so the window
+        // goes see-through). `HeaderView` still carries the gaussian blur, without the
+        // saturation filter the hack below would strip anyway.
+        NSVisualEffectView::setMaterial_(view, NSVisualEffectMaterial::HeaderView);
         NSVisualEffectView::setState_(view, NSVisualEffectState::Active);
         view
     }

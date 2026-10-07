@@ -24,6 +24,23 @@ pub mod update;
 #[cfg(any(windows, test))]
 mod job;
 
+/// Read a provider's next stdout line into `line`, replacing what it held.
+/// Answers the bytes read; 0 at the end of the stream. A buffer a rare
+/// huge line (a large tool result) grew past `LINE_KEEP` is released to a
+/// working size first, so it is not held for the rest of the Session.
+pub(crate) fn read_line(reader: &mut impl io::BufRead, line: &mut Vec<u8>) -> io::Result<usize> {
+    line.clear();
+    if line.capacity() > LINE_KEEP {
+        line.shrink_to(LINE_START);
+    }
+    reader.read_until(b'\n', line)
+}
+
+/// The most a provider's line buffer keeps between lines, and the size it
+/// returns to once a line has grown it past that.
+const LINE_KEEP: usize = 1024 * 1024;
+const LINE_START: usize = 64 * 1024;
+
 /// The program `Command::new` should exec for a configured CLI name.
 ///
 /// npm installs the provider CLIs as `claude.cmd` / `codex.cmd` shims on
@@ -309,6 +326,26 @@ mod tests {
 
     fn path_of(dirs: &[&Path]) -> std::ffi::OsString {
         std::env::join_paths(dirs.iter().copied()).unwrap()
+    }
+
+    /// One huge line (a large tool result) must not keep its buffer for
+    /// the rest of the Session's life.
+    #[test]
+    fn a_huge_line_does_not_keep_its_buffer_for_the_lines_after_it() {
+        let huge = "x".repeat(5 * 1024 * 1024);
+        let stream = format!("{huge}\nsmall\nsmaller\n");
+        let mut reader = io::BufReader::new(stream.as_bytes());
+        let mut line = Vec::new();
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), huge.len() + 1);
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), 6);
+        assert_eq!(line, b"small\n");
+        assert!(
+            line.capacity() <= 1024 * 1024,
+            "a {} byte buffer kept after the huge line",
+            line.capacity()
+        );
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), 8);
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), 0);
     }
 
     #[test]

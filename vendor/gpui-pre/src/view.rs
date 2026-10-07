@@ -7,7 +7,7 @@ use crate::{Empty, Window};
 use anyhow::Result;
 use collections::FxHashSet;
 use refineable::Refineable;
-use std::mem;
+
 use std::{any::TypeId, fmt, ops::Range};
 
 /// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
@@ -241,6 +241,9 @@ pub struct ViewElement<V: View> {
     view: Option<V>,
     entity_id: Option<EntityId>,
     cached_style: Option<StyleRefinement>,
+    /// Ferrite's patch: the cached subtree is also redrawn when an entity it
+    /// read while rendering was notified (`tracking_reads`).
+    tracks_reads: bool,
     #[cfg(debug_assertions)]
     source: &'static core::panic::Location<'static>,
 }
@@ -253,6 +256,7 @@ impl<V: View> ViewElement<V> {
         ViewElement {
             entity_id,
             cached_style: None,
+            tracks_reads: false,
             view: Some(view),
             #[cfg(debug_assertions)]
             source: core::panic::Location::caller(),
@@ -272,6 +276,18 @@ impl<V: View> ViewElement<V> {
         self.cached_style = Some(style);
         self
     }
+
+    /// Ferrite's patch: cache this view the way redrawing it with its parent
+    /// behaved before it was cached. It is also redrawn when any entity it
+    /// read while it last rendered (a model, another view's state, the kit
+    /// Root's layers) has been notified since; without this, only a notify
+    /// on the view itself or a descendant busts the cache. And when it is
+    /// redrawn, the cached views inside it keep their own caches, rather
+    /// than being redrawn with it.
+    pub fn tracking_reads(mut self) -> Self {
+        self.tracks_reads = true;
+        self
+    }
 }
 
 impl<V: View> IntoElement for ViewElement<V> {
@@ -282,11 +298,26 @@ impl<V: View> IntoElement for ViewElement<V> {
     }
 }
 
-struct ViewElementState {
+pub(crate) struct ViewElementState {
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,
     accessed_entities: FxHashSet<EntityId>,
+}
+
+impl ViewElementState {
+    /// Ferrite's patch: the subtree holding this view was reused, its
+    /// prepaint copied from `from` to `to`.
+    pub(crate) fn move_prepaint(&mut self, from: &PrepaintStateIndex, to: &PrepaintStateIndex) {
+        self.prepaint_range =
+            self.prepaint_range.start.moved(from, to)..self.prepaint_range.end.moved(from, to);
+    }
+
+    /// Ferrite's patch: as `move_prepaint`, for its paint.
+    pub(crate) fn move_paint(&mut self, from: &PaintIndex, to: &PaintIndex) {
+        self.paint_range =
+            self.paint_range.start.moved(from, to)..self.paint_range.end.moved(from, to);
+    }
 }
 
 struct ViewElementCacheKey {
@@ -396,6 +427,11 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.text_style == text_style
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
+                            && !(self.tracks_reads
+                                && element_state
+                                    .accessed_entities
+                                    .iter()
+                                    .any(|entity| window.notified_entities.contains(entity)))
                         {
                             let prepaint_start = window.prepaint_index();
                             window.reuse_prepaint(element_state.prepaint_range.clone());
@@ -407,7 +443,10 @@ impl<V: View> Element for ViewElement<V> {
                             return (None, element_state);
                         }
 
-                        let refreshing = mem::replace(&mut window.refreshing, true);
+                        let refreshing = window.refreshing;
+                        if !self.tracks_reads {
+                            window.refreshing = true;
+                        }
                         let prepaint_start = window.prepaint_index();
                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
                             let mut element = self
@@ -475,7 +514,10 @@ impl<V: View> Element for ViewElement<V> {
                             let paint_start = window.paint_index();
 
                             if let Some(element) = element {
-                                let refreshing = mem::replace(&mut window.refreshing, true);
+                                let refreshing = window.refreshing;
+                                if !self.tracks_reads {
+                                    window.refreshing = true;
+                                }
                                 element.paint(window, cx);
                                 window.refreshing = refreshing;
                             } else {

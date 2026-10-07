@@ -189,6 +189,9 @@ pub struct Composer {
     /// How the caret was last drawn, for the tests.
     #[cfg(test)]
     last_caret: Option<Caret>,
+    /// Every caret drawn, and when, for the tests of its cadence.
+    #[cfg(test)]
+    caret_draws: Vec<(Instant, Option<Caret>)>,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -217,7 +220,22 @@ impl Composer {
             role: Role::Prompt,
             #[cfg(test)]
             last_caret: None,
+            #[cfg(test)]
+            caret_draws: Vec::new(),
         }
+    }
+
+    /// Every caret drawn and when, and when its blink last restarted: the
+    /// cockpit's tests of the blink drawn by the loops overlay.
+    #[cfg(test)]
+    pub(crate) fn caret_log(&self) -> (Option<Instant>, Vec<(Instant, Option<Caret>)>) {
+        (self.blink_from, self.caret_draws.clone())
+    }
+
+    /// Forget the carets drawn so far.
+    #[cfg(test)]
+    pub(crate) fn clear_caret_log(&mut self) {
+        self.caret_draws.clear();
     }
 
     /// What this line is for (`Role`): a Pane's prompt, or a field.
@@ -818,7 +836,10 @@ impl Focusable for Composer {
 }
 
 impl Render for Composer {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Inside the Cockpit, the blinking caret is drawn by the loops
+        // overlay (`loops_overlay`): laid out afresh from here.
+        crate::loops_overlay::begin(window, cx.entity_id());
         div()
             .flex()
             .flex_1()
@@ -1167,6 +1188,9 @@ struct PrepaintState {
     scroll: usize,
     cursor: Option<PaintQuad>,
     selection: Vec<PaintQuad>,
+    /// The loops overlay's slot when it draws the blinking caret and the
+    /// text over it: this line then paints neither.
+    overlay: Option<(gpui::EntityId, usize)>,
 }
 
 impl IntoElement for LineElement {
@@ -1261,24 +1285,26 @@ impl Element for LineElement {
         let blinks = holds || under_float;
         let focused = focused || lit;
         let selected = self.composer.read(cx).line.selection();
-        // The soft blink rides the shared pulse clock (theme rule 8),
-        // leasing it to keep the frames coming; while this line holds the
-        // keyboard the phase is the line's own, from its last focus or
-        // edit. Still and solid under reduced motion.
+        let origin = blink_from.filter(|_| holds);
+        // A blinking block goes to the loops overlay where there is one: it
+        // draws the block and the text over it (`CaretOverlay`) on every
+        // change of the blink, and this line, laid out and taking input as
+        // ever, is not redrawn for it.
+        let overlay =
+            focused && selected.is_empty() && blinks && crate::loops_overlay::hosting(window, cx);
+        // The soft blink rides the shared pulse clock (theme rule 8), which
+        // draws it again through its fades and holds its plateaus; while
+        // this line holds the keyboard the phase is the line's own, from its
+        // last focus or edit. Still and solid under reduced motion.
         let alpha = (focused && selected.is_empty()).then(|| {
-            if crate::motion::reduced_motion(cx) || !blinks {
+            if crate::motion::reduced_motion(cx) || !blinks || overlay {
                 return 1.0;
             }
             // A capture holds the blink where the prototype's shot caught it.
             if let Some(held) = crate::motion::held_loops() {
                 return caret_alpha(held.css);
             }
-            let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
-            let shared = crate::motion::pulse_phase(turn, window.current_view(), cx);
-            match blink_from.filter(|_| holds) {
-                Some(from) => caret_alpha(now.saturating_duration_since(from)),
-                None => crate::components::caret_blink(shared),
-            }
+            caret_blink_now(origin, window, cx)
         });
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
@@ -1376,17 +1402,37 @@ impl Element for LineElement {
                 .collect();
             (quads, None, None)
         };
-        #[cfg(test)]
-        self.composer
-            .update(cx, |composer, _| composer.last_caret = caret);
-        #[cfg(not(test))]
-        let _ = caret;
+        let (cursor, overlay) = if overlay {
+            let caret = CaretOverlay {
+                composer: self.composer.clone(),
+                bounds,
+                scroll,
+                cell,
+                origin,
+                layout: None,
+                block: None,
+            };
+            let slot = crate::loops_overlay::record(window, bounds, move || {
+                caret.fresh().into_any_element()
+            });
+            (None, Some(slot))
+        } else {
+            #[cfg(test)]
+            self.composer.update(cx, |composer, _| {
+                composer.last_caret = caret;
+                composer.caret_draws.push((now, caret));
+            });
+            #[cfg(not(test))]
+            let _ = caret;
+            (cursor, None)
+        };
 
         PrepaintState {
             layout: Some(layout),
             scroll,
             cursor,
             selection,
+            overlay,
         }
     }
 
@@ -1437,41 +1483,211 @@ impl Element for LineElement {
         });
         let layout = prepaint.layout.take().unwrap();
         let scroll = prepaint.scroll;
-        let line_height = layout.line_height;
-        // Rows scrolled off the top or bottom are clipped, not skipped: the
-        // mask is the box, and a hard line is painted whole.
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            for quad in prepaint.selection.drain(..) {
-                window.paint_quad(quad);
-            }
-            // The block goes under the glyphs, so the character it stands on
-            // reads in its own (`ON_ACCENT`) ink over it, as a terminal's does.
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
-            for (index, line) in layout.lines.iter().enumerate() {
-                let first_row = layout.first_row_of_line(index);
-                let top = bounds.top() + line_height * first_row - line_height * scroll;
-                let rows = line.wrap_boundaries().len() + 1;
-                if top + line_height * rows <= bounds.top() || top >= bounds.bottom() {
-                    continue;
-                }
-                line.paint(
-                    point(bounds.left(), top),
-                    line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                )
-                .unwrap();
-            }
-        });
+        match prepaint.overlay {
+            // The overlay draws the block and the text over it.
+            Some(slot) => crate::loops_overlay::paint_hosted(window, slot),
+            None => paint_text(
+                &layout,
+                bounds,
+                scroll,
+                prepaint.selection.drain(..).chain(prepaint.cursor.take()),
+                window,
+                cx,
+            ),
+        }
         self.composer.update(cx, |composer, _cx| {
             composer.last_layout = Some(layout);
             composer.last_bounds = Some(bounds);
             composer.scroll = scroll;
         });
+    }
+}
+
+/// The soft block's opacity now, declaring the drawing view on the pulse
+/// clock through the blink's fades: from the line's own last focus or edit
+/// (`origin`), else on the shared epoch (a lit line blinking under a float).
+fn caret_blink_now(origin: Option<Instant>, window: &mut Window, cx: &mut App) -> f32 {
+    let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
+    let fades = crate::components::CARET_FADES;
+    let view = window.current_view();
+    let phase = match origin {
+        Some(from) => crate::motion::loop_phase_from(from, turn, fades, view, cx),
+        None => crate::motion::loop_phase(turn, fades, view, cx),
+    };
+    crate::components::caret_blink(phase)
+}
+
+/// Paint the line's text in `bounds`, its rows from `scroll`, over `quads`
+/// (the selection wash, or the block caret). Rows scrolled off the top or
+/// bottom are clipped, not skipped: the mask is the box, and a hard line is
+/// painted whole.
+fn paint_text(
+    layout: &Layout,
+    bounds: Bounds<Pixels>,
+    scroll: usize,
+    quads: impl IntoIterator<Item = PaintQuad>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let line_height = layout.line_height;
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        // The block goes under the glyphs, so the character it stands on
+        // reads in its own (`ON_ACCENT`) ink over it, as a terminal's does.
+        for quad in quads {
+            window.paint_quad(quad);
+        }
+        for (index, line) in layout.lines.iter().enumerate() {
+            let first_row = layout.first_row_of_line(index);
+            let top = bounds.top() + line_height * first_row - line_height * scroll;
+            let rows = line.wrap_boundaries().len() + 1;
+            if top + line_height * rows <= bounds.top() || top >= bounds.bottom() {
+                continue;
+            }
+            line.paint(
+                point(bounds.left(), top),
+                line_height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .unwrap();
+        }
+    });
+}
+
+/// The blinking block caret and the text over it, as the loops overlay draws
+/// them where a Composer's line laid them out: the line's own shaping at the
+/// blink's ink and its own paint, in the same order (`paint_text`), so the
+/// pixels are the ones the line drew itself.
+struct CaretOverlay {
+    composer: Entity<Composer>,
+    /// The line's box, as its paint used it.
+    bounds: Bounds<Pixels>,
+    scroll: usize,
+    cell: Pixels,
+    origin: Option<Instant>,
+    layout: Option<Layout>,
+    block: Option<PaintQuad>,
+}
+
+impl CaretOverlay {
+    /// A fresh one to draw: the shaping and the block are each draw's own.
+    fn fresh(&self) -> Self {
+        Self {
+            composer: self.composer.clone(),
+            bounds: self.bounds,
+            scroll: self.scroll,
+            cell: self.cell,
+            origin: self.origin,
+            layout: None,
+            block: None,
+        }
+    }
+}
+
+impl IntoElement for CaretOverlay {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for CaretOverlay {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = self.bounds.size.width.into();
+        style.size.height = self.bounds.size.height.into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let alpha = caret_blink_now(self.origin, window, cx);
+        let ink = crate::motion::mix(
+            rgb(crate::theme::TEXT).into(),
+            rgb(crate::theme::ON_ACCENT).into(),
+            alpha,
+        );
+        let line_height = window.line_height();
+        let text_style = window.text_style();
+        let bounds = self.bounds;
+        let composer = self.composer.read(cx);
+        let cursor = composer.line.cursor();
+        let layout = Layout::shape(
+            composer,
+            &text_style,
+            line_height,
+            Some(bounds.size.width),
+            Some(ink),
+            window,
+        );
+        let at = layout.position(cursor);
+        let top = bounds.top() + line_height * layout.row_of(cursor) - line_height * self.scroll;
+        let block = Bounds::new(
+            point(bounds.left() + at.x, top),
+            size(self.cell, line_height),
+        );
+        self.block = Some(fill(
+            block,
+            Hsla::from(rgb(crate::theme::CARET)).opacity(alpha),
+        ));
+        self.layout = Some(layout);
+        #[cfg(test)]
+        {
+            let now = cx.background_executor().now();
+            self.composer.update(cx, |composer, _| {
+                composer.last_caret = Some(Caret::Block(alpha));
+                composer.caret_draws.push((now, Some(Caret::Block(alpha))));
+            });
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Some(layout) = self.layout.take() {
+            paint_text(
+                &layout,
+                self.bounds,
+                self.scroll,
+                self.block.take(),
+                window,
+                cx,
+            );
+        }
     }
 }
 
@@ -1874,6 +2090,123 @@ mod tests {
         cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
         cx.run_until_parked();
         assert_eq!(caret(cx), Some(Caret::Hollow));
+    }
+
+    /// The block's alpha on screen at `at`: the last draw at or before it.
+    fn shown_at(draws: &[(Instant, Option<Caret>)], at: Instant) -> Option<f32> {
+        draws
+            .iter()
+            .rev()
+            .find(|(drawn, _)| *drawn <= at)
+            .and_then(|(_, caret)| match caret {
+                Some(Caret::Block(alpha)) => Some(*alpha),
+                _ => None,
+            })
+    }
+
+    /// The soft blink on the pulse clock's declared cadence keeps its look:
+    /// at every instant of the clock's 33ms grid, the caret on screen is
+    /// the blink's value there (what the fixed ~30fps rate drew); the fades
+    /// are drawn on every grid instant, land on solid and on
+    /// `CARET_BLINK_MIN`, and the plateaus between them draw nothing new —
+    /// yet the clock stays armed across them.
+    #[gpui::test]
+    fn the_blink_draws_only_its_fades_and_keeps_its_look(cx: &mut TestAppContext) {
+        crate::motion::testing::drive();
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let from = composer
+            .read_with(cx, |c, _| c.blink_from)
+            .expect("focus restarts the blink");
+        composer.update(cx, |c, _| c.caret_draws.clear());
+        let turn = crate::theme::MOTION_CARET_BLINK_MS;
+        let mut armed = true;
+        for _ in 0..3 * turn {
+            cx.executor().advance_clock(Duration::from_millis(1));
+            cx.run_until_parked();
+            armed &= !cx.update(|_, cx| crate::motion::pulse_parked(cx));
+        }
+        assert!(armed, "the clock stays armed across the plateaus");
+        let end = cx.update(|_, cx| cx.background_executor().now());
+        let draws = composer.read_with(cx, |c, _| c.caret_draws.clone());
+        let (epoch, tick) = cx
+            .update(|_, cx| crate::motion::testing::grid(cx))
+            .expect("the blink declared on the clock");
+        let low = crate::theme::CARET_BLINK_MIN;
+
+        // Every grid instant shows what the fixed rate drew there.
+        let first = draws.first().map(|(at, _)| *at).unwrap_or(end);
+        let mut at = epoch;
+        while at <= end {
+            if at >= first {
+                assert_eq!(
+                    shown_at(&draws, at),
+                    Some(caret_alpha(at.saturating_duration_since(from))),
+                    "at {:?} into the blink",
+                    at.saturating_duration_since(from)
+                );
+            }
+            at += tick;
+        }
+        // Fades are drawn a tick apart; each lands on its plateau.
+        let alphas: Vec<(Instant, f32)> = draws
+            .iter()
+            .filter_map(|(at, caret)| match caret {
+                Some(Caret::Block(alpha)) => Some((*at, *alpha)),
+                _ => None,
+            })
+            .collect();
+        for pair in alphas.windows(2) {
+            let ((was, before), (now, _)) = (pair[0], pair[1]);
+            if before > low && before < 1.0 {
+                assert!(now - was <= tick, "a fade frame waited {:?}", now - was);
+            }
+        }
+        let landings = |value: f32| {
+            alphas
+                .windows(2)
+                .filter(|pair| pair[0].1 != value && pair[1].1 == value)
+                .count()
+        };
+        assert!(landings(low) >= 3, "every fall lands on the dim plateau");
+        assert!(landings(1.0) >= 2, "every rise lands solid");
+        // The plateaus repaint nothing: a handful of draws per turn.
+        assert!(
+            draws.len() <= 3 * 8,
+            "{} caret draws in three turns; the fades need at most 8 a turn",
+            draws.len()
+        );
+    }
+
+    /// Reduced motion: the block is solid and still, and nothing ticks.
+    #[gpui::test]
+    fn reduced_motion_holds_the_caret_solid_and_ticks_nothing(cx: &mut TestAppContext) {
+        crate::motion::testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        composer.update(cx, |c, _| c.caret_draws.clear());
+        composer.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let ticks = crate::motion::testing::pulse_ticks();
+        for _ in 0..200 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+        }
+        assert_eq!(crate::motion::testing::pulse_ticks(), ticks, "no tick");
+        assert!(cx.update(|_, cx| crate::motion::pulse_parked(cx)));
+        let draws = composer.read_with(cx, |c, _| c.caret_draws.clone());
+        assert!(!draws.is_empty());
+        assert!(
+            draws
+                .iter()
+                .all(|(_, caret)| *caret == Some(Caret::Block(1.0))),
+            "solid and still: {draws:?}"
+        );
     }
 
     #[gpui::test]

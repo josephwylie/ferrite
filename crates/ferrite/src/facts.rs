@@ -8,7 +8,7 @@
 //! parks or changes a Thread names the moment and cannot forget a cache.
 
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::pane::{wall_card, wall_card_timed, WallCard};
 use ferrite_core::activity::Subject;
@@ -79,6 +79,15 @@ pub struct ThreadFacts {
     pub changed_files: Vec<FileChange>,
     main_busy: bool,
     selected_wall: Option<(Subject, WallCard)>,
+    /// When a stream last refolded the wall card, on the pump's clock —
+    /// what the next streamed refold waits `WALL_REFOLD` after.
+    wall_at: Option<Instant>,
+    /// Something streamed that the wall card has not folded yet: one more
+    /// refold is owed once `WALL_REFOLD` is up (`settle_walls`).
+    wall_owed: bool,
+    /// The Decision the wall card last folded in; another one (or none)
+    /// refolds at once.
+    wall_decision: Option<String>,
     /// Whether `branch` has been asked for (a `None` answer included), so a
     /// parked row's checkout costs one `git` call, ever.
     branch_asked: bool,
@@ -120,6 +129,12 @@ impl ThreadFacts {
         }
     }
 }
+
+/// How often a streaming Thread's wall card may refold: four times a
+/// second. The fold walks every Block the Thread holds (and its subagents',
+/// for the changed files) while the pump drains a stream up to 125 times a
+/// second; a tile a quarter second behind is still ahead of the eye at L3.
+const WALL_REFOLD: Duration = Duration::from_millis(250);
 
 pub struct Facts {
     threads: HashMap<ThreadId, ThreadFacts>,
@@ -168,63 +183,137 @@ impl Facts {
     /// A Thread's Pane opened: everything about it, from scratch.
     pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         self.refresh_slow(cockpit, thread);
-        self.refresh_wall(cockpit, thread);
+        self.refresh_wall(cockpit, thread, None);
     }
 
-    /// The pump streamed into a Thread: the wall card refolds — this is the
-    /// seam that keeps L3 free of per-frame Block walks — and a turn that
-    /// just ended may have moved the checkout, the other stated refresh
-    /// moment (#29), so the slow facts follow it.
-    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        let was_busy = self
-            .threads
-            .get(&thread)
-            .is_some_and(|facts| facts.main_busy);
-        let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
-        self.refresh_wall(cockpit, thread);
-        if was_busy && !busy {
-            self.refresh_slow(cockpit, thread);
+    /// The pump streamed into a Thread at `now`: the wall card refolds —
+    /// this is the seam that keeps L3 free of per-frame Block walks — at
+    /// most once per `WALL_REFOLD`, with what the throttle holds back owed
+    /// to `settle_walls`. A Decision arriving or leaving, and the turn's
+    /// end, refold at once. A turn that just ended may have moved the
+    /// checkout, the other stated refresh moment (#29), so the metadata
+    /// follows it; the checkout itself is a `git` call the pump must never
+    /// wait on, so this answers whether the turn just ended, for the
+    /// caller to re-read it off the UI thread.
+    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId, now: Instant) -> bool {
+        let open = cockpit.thread(thread);
+        let busy = open.is_some_and(|open| open.busy());
+        let decision = open
+            .and_then(|open| open.pending())
+            .map(|decision| decision.id.as_str());
+        let facts = self.threads.entry(thread).or_default();
+        let settled = facts.main_busy && !busy;
+        // Followed on every call, refolded or not: a turn that starts and
+        // ends inside one throttled quarter second still ends here.
+        facts.main_busy = busy;
+        let due = settled
+            || facts.wall_decision.as_deref() != decision
+            || facts
+                .wall_at
+                .is_none_or(|at| now.saturating_duration_since(at) >= WALL_REFOLD);
+        if due {
+            self.refresh_wall(cockpit, thread, Some(now));
+        } else {
+            facts.wall_owed = true;
         }
+        if settled {
+            self.refresh_metadata(cockpit, thread);
+        }
+        settled
+    }
+
+    /// Every pump at `now`, before its streams: refold each wall card a
+    /// throttled stream left owing once its `WALL_REFOLD` is up — the
+    /// trailing edge, so the last thing streamed reaches the card even
+    /// when nothing follows it. `streaming` this pump are left to
+    /// `streamed`. Answers whether any card refolded.
+    pub fn settle_walls(
+        &mut self,
+        cockpit: &Cockpit,
+        now: Instant,
+        streaming: &[ThreadId],
+    ) -> bool {
+        let due: Vec<ThreadId> = self
+            .threads
+            .iter()
+            .filter(|(thread, facts)| {
+                facts.wall_owed
+                    && !streaming.contains(thread)
+                    && facts
+                        .wall_at
+                        .is_none_or(|at| now.saturating_duration_since(at) >= WALL_REFOLD)
+            })
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in &due {
+            if cockpit.thread(*thread).is_some() {
+                self.refresh_wall(cockpit, *thread, Some(now));
+            } else if let Some(facts) = self.threads.get_mut(thread) {
+                // Parked meanwhile: its card is the parked row's now.
+                facts.wall_owed = false;
+            }
+        }
+        !due.is_empty()
     }
 
     /// The operator's own act — a prompt, an interrupt, an answer, a
     /// re-aim — or the watchdog's restart notice changed the transcript:
-    /// the wall card refolds.
+    /// the wall card refolds, at once.
     pub fn acted(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        self.refresh_wall(cockpit, thread);
+        self.refresh_wall(cockpit, thread, None);
     }
 
     /// The watchdog's tick: the checkout labels ride its slow cadence (#29)
     /// — the agent may have switched branches under a Pane — for every
     /// open Thread.
-    pub fn tick(&mut self, cockpit: &Cockpit) {
-        for thread in cockpit.threads() {
-            self.refresh_metadata(cockpit, thread);
-        }
+    /// Answers the Threads whose drawn facts moved.
+    pub fn tick(&mut self, cockpit: &Cockpit) -> Vec<ThreadId> {
+        cockpit
+            .threads()
+            .into_iter()
+            .filter(|thread| self.refresh_metadata(cockpit, *thread))
+            .collect()
     }
 
     /// Adopt checkout labels and their status, collected away from the UI
     /// thread. The two travel together because one `git status` answers
     /// both, and a branch name without its drift would draw a header that
-    /// contradicts itself for a tick.
-    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) {
+    /// contradicts itself for a tick. Answers the Threads whose labels moved.
+    pub fn set_branches(
+        &mut self,
+        branches: Vec<(ThreadId, Option<BranchStatus>)>,
+    ) -> Vec<ThreadId> {
+        let mut changed = Vec::new();
         for (thread, status) in branches {
             let facts = self.threads.entry(thread).or_default();
-            facts.branch = status
+            let branch = status
                 .as_ref()
                 .and_then(|status| status.branch.clone())
                 .map(SharedString::from);
+            if facts.branch != branch || facts.status != status {
+                changed.push(thread);
+            }
+            facts.branch = branch;
             facts.status = status;
         }
+        changed
     }
 
+    /// Adopt each Project root's branch; answers the Threads whose branches
+    /// moved.
     pub fn set_project_branches(
         &mut self,
         branches: Vec<(ThreadId, Vec<(SharedString, SharedString)>)>,
-    ) {
+    ) -> Vec<ThreadId> {
+        let mut changed = Vec::new();
         for (thread, project_branches) in branches {
-            self.threads.entry(thread).or_default().project_branches = project_branches;
+            let facts = self.threads.entry(thread).or_default();
+            if facts.project_branches != project_branches {
+                changed.push(thread);
+            }
+            facts.project_branches = project_branches;
         }
+        changed
     }
 
     /// The parked set changed — a park, a revive, an import, a rename: the
@@ -351,9 +440,10 @@ impl Facts {
         facts.name = name;
     }
 
-    /// Refresh everything except the checkout label. This path stays in the
-    /// pump, so it must never launch Git.
-    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    /// Refresh everything except the checkout label (and the Project's
+    /// default branch, read once). This path stays in the pump, so it must
+    /// never launch Git. Answers whether any of these facts moved.
+    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
         let (project, project_label) = match cockpit.peek(thread) {
             Ok(meta) => (
                 meta.project_id,
@@ -364,10 +454,15 @@ impl Facts {
         let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
+        let changed = facts.last_used != last_used
+            || facts.project != project
+            || facts.project_label != project_label
+            || facts.name != name;
         facts.last_used = last_used;
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
+        changed
     }
 
     /// The name alone — after a first prompt or a rename, the one fact
@@ -411,10 +506,21 @@ impl Facts {
         self.threads.get(&thread).and_then(|facts| facts.last_used)
     }
 
+    /// How long until any Thread's age (`since_label`, a nav row's `2m`)
+    /// next reads differently.
+    pub fn next_age_change(&self, now: SystemTime) -> Option<Duration> {
+        self.threads
+            .values()
+            .filter_map(|facts| facts.last_used)
+            .filter_map(|at| since_label_changes_in(at, now))
+            .min()
+    }
+
     /// Refold one Thread's wall card, wherever its transcript can change —
     /// with its calls' clocks, so a settled call's tile line carries its
-    /// time (`● Bash(cargo test --workspace) 1m01s`).
-    fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    /// time (`● Bash(cargo test --workspace) 1m01s`). A stream's refold
+    /// passes its pump's clock (`streamed`), which the throttle runs from.
+    fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId, streamed_at: Option<Instant>) {
         let open = cockpit.thread(thread);
         let card = wall_card_timed(
             open.map(|open| open.transcript()),
@@ -449,6 +555,13 @@ impl Facts {
             facts.last_used = last_used;
         }
         facts.main_busy = open.is_some_and(|open| open.busy());
+        facts.wall_decision = open
+            .and_then(|open| open.pending())
+            .map(|decision| decision.id.clone());
+        facts.wall_owed = false;
+        if streamed_at.is_some() {
+            facts.wall_at = streamed_at;
+        }
     }
 }
 
@@ -536,6 +649,44 @@ pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
         s => format!("{}y", s / YEAR),
     };
     SharedString::from(text)
+}
+
+/// How long until `since_label(last_used, ·)` next reads differently:
+/// the next whole unit of the band it is in, or the band's end. `None`
+/// once it reads in years (nothing on screen waits that long).
+pub fn since_label_changes_in(last_used: SystemTime, now: SystemTime) -> Option<Duration> {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const MONTH: u64 = 2_629_746;
+    const YEAR: u64 = 12 * MONTH;
+    let secs = |n: u64| Duration::from_secs(n);
+    let elapsed = match now.duration_since(last_used) {
+        Ok(elapsed) => elapsed,
+        // A time ahead of the clock says nothing until a minute past it.
+        Err(ahead) => return Some(ahead.duration() + secs(MINUTE)),
+    };
+    let (unit, end) = match elapsed.as_secs() {
+        s if s < MINUTE => return Some(secs(MINUTE) - elapsed),
+        s if s < HOUR => (MINUTE, HOUR),
+        s if s < DAY => (HOUR, DAY),
+        s if s < WEEK => (DAY, WEEK),
+        s if s < MONTH => (WEEK, MONTH),
+        s if s < YEAR => (MONTH, YEAR),
+        _ => return None,
+    };
+    let rollover = ferrite_core::cadence::next_rollover(elapsed, secs(unit));
+    Some(rollover.min(secs(end) - elapsed))
+}
+
+/// How long until the wall clock's minute turns over (the bottom bar's
+/// `7:31 pm`).
+pub fn next_minute(now: SystemTime) -> Duration {
+    let since = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    ferrite_core::cadence::next_rollover(since, Duration::from_secs(60))
 }
 
 /// A notification's age (the notifications list's right column): the one
@@ -635,11 +786,65 @@ pub struct ParkedAnswers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn ago(secs: u64) -> SharedString {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
         since_label(now - Duration::from_secs(secs), now)
+    }
+
+    /// An age turns over where `since_label` does: a minute in, then each
+    /// minute, each hour from an hour, each day from a day.
+    #[test]
+    fn an_age_says_when_it_next_reads_differently() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
+        let in_ = |ago: Duration| since_label_changes_in(now - ago, now);
+        let s = Duration::from_secs;
+        assert_eq!(in_(s(0)), Some(s(60)), "nothing until a minute");
+        assert_eq!(
+            in_(Duration::from_millis(59_500)),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(in_(s(90)), Some(s(30)), "1m turns 2m at 120s");
+        assert_eq!(in_(s(3_599)), Some(s(1)), "59m turns 1h");
+        assert_eq!(in_(s(3_600 + 30)), Some(s(3_600 - 30)), "1h turns 2h");
+        assert_eq!(in_(s(6 * 86_400 + 10)), Some(s(86_400 - 10)), "6d turns 1w");
+        for ago in [0u64, 59, 60, 61, 3_599, 3_600, 7_300, 86_399, 90_000] {
+            let next = in_(s(ago)).unwrap();
+            let before = since_label(now - s(ago), now);
+            let at = now + next;
+            assert_ne!(
+                since_label(now - s(ago), at),
+                before,
+                "{ago}s: changes then"
+            );
+            if next > s(1) {
+                let just_before = at - s(1);
+                assert_eq!(
+                    since_label(now - s(ago), just_before),
+                    before,
+                    "{ago}s: not sooner"
+                );
+            }
+        }
+        assert_eq!(
+            since_label_changes_in(now + s(30), now),
+            Some(s(90)),
+            "a clock that moved back: a minute past the stamp"
+        );
+    }
+
+    /// The bottom bar's wall clock reads differently at the next whole
+    /// minute, never sooner.
+    #[test]
+    fn the_wall_clock_turns_over_on_the_minute() {
+        let minute = SystemTime::UNIX_EPOCH + Duration::from_secs(29_850_000 * 60);
+        let s = Duration::from_secs;
+        assert_eq!(next_minute(minute), s(60), "on the minute: the next one");
+        assert_eq!(next_minute(minute + s(1)), s(59));
+        assert_eq!(
+            next_minute(minute + Duration::from_millis(59_750)),
+            Duration::from_millis(250)
+        );
     }
 
     /// A provisional title never ends on half a word, and a whole title is

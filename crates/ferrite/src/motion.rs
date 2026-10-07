@@ -13,7 +13,7 @@
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTION`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
-//! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat; no dot breathes |
+//! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
@@ -51,7 +51,7 @@
 //!
 //! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
 //! one-shot to its end state, a loop to its start) and every kit spring. The
-//! clocks here follow the same rule: [`pulse_phase`] returns 0 and leases
+//! clocks here follow the same rule: [`loop_phase`] returns 0 and declares
 //! nothing, a [`Tween`] reads its target, and a hover snaps. [`init`] sets
 //! the flag from the system setting at launch.
 
@@ -59,6 +59,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use ferrite_core::cadence;
 use gpui::{
     px, Animation, AnimationElement, AnimationExt, App, ElementId, EntityId, Global, Hsla,
     IntoElement, Rgba, SharedString, Styled, Window,
@@ -536,91 +537,178 @@ where
 // A `with_animation(...repeat())` loop asks for a frame on every display
 // frame for as long as it is mounted: one working Thread held the whole
 // cockpit at the display's refresh rate. The clock replaces that with one
-// ~30fps tick. A loop reads its phase from [`pulse_phase`], which also
-// leases the painting view onto the clock; each tick notifies the leased
-// views, and a view that stops painting a loop stops renewing, lapses, and
-// drops off. With no lease left the clock parks: no timer, no frame. All
-// loops share one epoch, so two marks on screen stay phase-locked.
+// timer on a ~30fps grid. A loop reads its phase from [`loop_phase`] (or
+// [`pulse_phase`], [`css_phase`], [`script_phase`]), which also declares
+// when the loop's picture next changes (`ferrite_core::cadence`): the
+// caret's fades and not its plateaus, a spinner's steps and not the
+// instants between them. The timer wakes at the earliest declared change,
+// snapped to the grid from the clock's epoch, and notifies only the views
+// due then. A view that stops painting a loop declares nothing more and
+// lapses after its last wake; with nothing declared the clock parks: no
+// timer, no frame. All loops share one epoch, so two marks on screen stay
+// phase-locked, and every frame drawn is the one the fixed rate drew at
+// that instant.
 
 fn pulse_tick() -> Duration {
     Duration::from_millis(theme::MOTION_PULSE_TICK_MS)
 }
 
-fn pulse_lease() -> Duration {
-    Duration::from_millis(theme::MOTION_PULSE_LEASE_MS)
-}
-
-/// The clock's bookkeeping, pure over an explicit `now` so the lease and
-/// park rules are testable without a window.
-#[derive(Debug, Default)]
-struct PulseLeases {
-    until: HashMap<EntityId, Instant>,
-}
-
-impl PulseLeases {
-    fn renew(&mut self, view: EntityId, now: Instant) {
-        self.until.insert(view, now + pulse_lease());
-    }
-
-    /// One tick: drop lapsed leases, then the views to notify — `None` when
-    /// nothing is leased and the clock should park.
-    fn tick(&mut self, now: Instant) -> Option<Vec<EntityId>> {
-        self.until.retain(|_, until| *until > now);
-        (!self.until.is_empty()).then(|| self.until.keys().copied().collect())
-    }
-}
-
 #[derive(Default)]
 struct PulseClock {
     epoch: Option<Instant>,
-    leases: PulseLeases,
-    running: bool,
+    schedule: cadence::Schedule<EntityId>,
+    /// The armed wake and its timer; `None` when parked.
+    timer: Option<(Instant, gpui::Task<()>)>,
 }
 
 impl Global for PulseClock {}
 
-/// The phase `[0, 1)` of a loop with this `period`, leasing `view` onto the
-/// clock so it re-renders on the next tick. Call it only while painting the
-/// loop. Reduced motion returns the loop's start (0) and leases nothing.
+impl PulseClock {
+    fn grid(&mut self, now: Instant) -> cadence::Grid {
+        cadence::Grid {
+            epoch: *self.epoch.get_or_insert(now),
+            tick: pulse_tick(),
+        }
+    }
+}
+
+/// How a loop's picture moves through its turn (`cadence::Motion`).
+pub use ferrite_core::cadence::Motion;
+
+/// The phase `[0, 1)` of a loop with this `period` and `motion`, on the
+/// shared epoch, declaring `view`'s next draw for the instant its picture
+/// next changes. Call it only while painting the loop. Reduced motion
+/// returns the loop's start (0) and declares nothing.
+pub fn loop_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
+    run_loop(None, period, motion, view, cx)
+}
+
+/// [`loop_phase`] from the loop's own `origin` rather than the shared
+/// epoch: the caret's blink restarts solid on every focus and edit.
+pub fn loop_phase_from(
+    origin: Instant,
+    period: Duration,
+    motion: Motion,
+    view: EntityId,
+    cx: &mut App,
+) -> f32 {
+    run_loop(Some(origin), period, motion, view, cx)
+}
+
+/// A loop whose picture moves at every instant ([`loop_phase`] with
+/// `Motion::Continuous`): `view` is drawn on every tick of the grid. (The
+/// app's loops name their motion; the clock's own tests drive this one.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+    loop_phase(period, Motion::Continuous, view, cx)
+}
+
+fn run_loop(
+    origin: Option<Instant>,
+    period: Duration,
+    motion: Motion,
+    view: EntityId,
+    cx: &mut App,
+) -> f32 {
     if reduced_motion(cx) || period.is_zero() {
         return 0.0;
     }
     let now = cx.background_executor().now();
     let clock = cx.default_global::<PulseClock>();
-    let epoch = *clock.epoch.get_or_insert(now);
-    clock.leases.renew(view, now);
-    if !clock.running {
-        cx.default_global::<PulseClock>().running = true;
-        cx.spawn(async move |cx| loop {
-            cx.background_executor().timer(pulse_tick()).await;
-            let parked = cx.update(|cx| {
-                let now = cx.background_executor().now();
-                let clock = cx.default_global::<PulseClock>();
-                match clock.leases.tick(now) {
-                    Some(views) => {
-                        #[cfg(test)]
-                        testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
-                        for view in views {
-                            cx.notify(view);
-                        }
-                        false
-                    }
-                    None => {
-                        clock.running = false;
-                        true
-                    }
-                }
-            });
-            if parked {
-                break;
-            }
-        })
-        .detach();
+    let grid = clock.grid(now);
+    let looped = cadence::Loop {
+        origin: origin.unwrap_or(grid.epoch),
+        period,
+        motion,
+    };
+    if let Some(change) = looped.next_change(now).filter(|_| !quiet()) {
+        clock.schedule.declare(view, grid.wake(change, now), now);
+        arm(now, cx);
     }
-    let elapsed = now.saturating_duration_since(epoch);
-    let period = period.as_nanos();
-    (elapsed.as_nanos() % period) as f32 / period as f32
+    looped.phase(now)
+}
+
+thread_local! {
+    static QUIET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Lay `f`'s loops out at their phase now without declaring them on the
+/// clock: their view is not drawn again for them, because something else
+/// draws them (the loops overlay, `loops_overlay::hosted`).
+pub fn quietly<R>(f: impl FnOnce() -> R) -> R {
+    QUIET.with(|quiet| quiet.set(quiet.get() + 1));
+    let result = f();
+    QUIET.with(|quiet| quiet.set(quiet.get() - 1));
+    result
+}
+
+fn quiet() -> bool {
+    QUIET.with(|quiet| quiet.get() > 0)
+}
+
+/// Text in `view` that changes with time but is no loop (a working clock's
+/// `12s`, a nav row's `2m`) next changes at `at`: while a loop keeps the
+/// clock running, `view` is drawn on the grid then, as the fixed rate drew
+/// it; otherwise it waits for whatever next draws `view`. Nothing rides
+/// under reduced motion or a held capture.
+pub fn ride(view: EntityId, at: Instant, cx: &mut App) {
+    if reduced_motion(cx) || held_loops().is_some() {
+        return;
+    }
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let wake = clock.grid(now).wake(at, now);
+    clock.schedule.ride(view, wake, now);
+    arm(now, cx);
+}
+
+/// Text in `view` that must move on its own at `at` whatever else runs
+/// (a live tool call's `3s` → `4s`): `view` is drawn on the grid then,
+/// under reduced motion too — a clock is no motion.
+pub fn wake_at(view: EntityId, at: Instant, cx: &mut App) {
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let wake = clock.grid(now).wake(at, now);
+    clock.schedule.declare(view, wake, now);
+    arm(now, cx);
+}
+
+/// Arm the one timer for the schedule's earliest wake, unless it is armed
+/// for that or sooner. Nothing declared: it stays parked.
+fn arm(now: Instant, cx: &mut App) {
+    let clock = cx.default_global::<PulseClock>();
+    let Some(wake) = clock.schedule.next_wake() else {
+        return;
+    };
+    if clock
+        .timer
+        .as_ref()
+        .is_some_and(|(armed, _)| *armed <= wake)
+    {
+        return;
+    }
+    let delay = wake.saturating_duration_since(now);
+    let timer = cx.spawn(async move |cx| {
+        cx.background_executor().timer(delay).await;
+        cx.update(fire);
+    });
+    cx.default_global::<PulseClock>().timer = Some((wake, timer));
+}
+
+/// The timer's wake: notify each view due, then arm for the next.
+fn fire(cx: &mut App) {
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    clock.timer = None;
+    let due = clock.schedule.take_due(now);
+    if !due.is_empty() {
+        #[cfg(test)]
+        testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
+        for view in due {
+            cx.notify(view);
+        }
+    }
+    arm(now, cx);
 }
 
 /// The two clocks a browser runs its loops on, held at a fixed time: a
@@ -653,33 +741,32 @@ pub fn held_loops() -> Option<HeldLoops> {
 }
 
 fn phase_at(elapsed: Duration, period: Duration) -> f32 {
-    let period = period.as_nanos().max(1);
-    (elapsed.as_nanos() % period) as f32 / period as f32
+    cadence::phase_after(elapsed, period)
 }
 
 /// A CSS loop's phase (the caret's blink, the shimmer): the held capture
-/// time's, else the pulse clock's (`pulse_phase`).
-pub fn css_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+/// time's, else the pulse clock's (`loop_phase`).
+pub fn css_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
     match held_loops() {
         Some(held) if !reduced_motion(cx) => phase_at(held.css, period),
-        _ => pulse_phase(period, view, cx),
+        _ => loop_phase(period, motion, view, cx),
     }
 }
 
 /// A scripted loop's phase (the spinners' frames): the held capture time's,
-/// else the pulse clock's (`pulse_phase`).
-pub fn script_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+/// else the pulse clock's (`loop_phase`).
+pub fn script_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
     match held_loops() {
         Some(held) if !reduced_motion(cx) => phase_at(held.script, period),
-        _ => pulse_phase(period, view, cx),
+        _ => loop_phase(period, motion, view, cx),
     }
 }
 
-/// The clock is parked: no view holds a lease and no timer is armed.
+/// The clock is parked: nothing is declared and no timer is armed.
 #[cfg(test)]
 pub fn pulse_parked(cx: &App) -> bool {
     cx.try_global::<PulseClock>()
-        .is_none_or(|clock| !clock.running)
+        .is_none_or(|clock| clock.timer.is_none())
 }
 
 // ---------------------------------------------------------------------------
@@ -695,20 +782,33 @@ pub fn pulse_parked(cx: &App) -> bool {
 //
 // The store is a main-thread `thread_local`, so row builders without a `cx`
 // can blend; the root view stamps each frame's time on it first
-// ([`hover_frame_start`]). An element that unmounts mid-hover never hears its leave, so
-// every read stamps the entry with the frame counter and
-// [`hover_fades_active`] (once per frame, at the root view's tail) prunes
-// an entry a full frame goes unread.
+// ([`hover_frame_start`]). The pointer's flip notifies only the view that
+// painted the listener (`Window::hover_listener_view`), so a hover in the
+// nav leaves every cached transcript as it is; while a blend is mid-flight
+// that view is drawn again each frame ([`hover_fades_active`]).
+//
+// A blend read by a cached view goes unread for as long as that view is
+// reused, so frames say nothing about whether its element is still
+// mounted: an entry is forgotten once it is unread for `HOVER_FORGET` (an
+// element that unmounted mid-hover never hears its leave), or once it has
+// faded back to rest.
+
+/// How long a blend nobody draws is kept: past any cached view's quiet
+/// spell while it streams, short of a hover anyone would see come back.
+const HOVER_FORGET: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy)]
 struct FadeEntry {
     origin: f32,
     target: f32,
     started: Instant,
-    seen: u64,
+    /// When a draw last read it, or the pointer set it.
+    read: Instant,
     /// The blend's timing: `HOVER_FADE`, unless the surface names its own
     /// ([`hover_listener_with`]).
     spec: MotionSpec,
+    /// The view whose listener set it: drawn again while it fades.
+    view: Option<EntityId>,
 }
 
 impl FadeEntry {
@@ -730,19 +830,20 @@ impl FadeEntry {
 #[derive(Default)]
 pub struct HoverFades {
     entries: HashMap<SharedString, FadeEntry>,
-    frame: u64,
+    /// The views painting a blend still mid-flight, as of the last tick.
+    fading: Vec<EntityId>,
 }
 
 impl HoverFades {
-    /// `set_with` on the one 150ms blend.
+    /// `set_with` on the one 150ms blend, from no view.
     #[cfg(test)]
     pub fn set_at(&mut self, key: &SharedString, hovered: bool, reduced: bool, now: Instant) {
-        self.set_with(key, hovered, reduced, now, HOVER_FADE);
+        self.set_with(key, hovered, reduced, now, HOVER_FADE, None);
     }
 
     /// The pointer entered (`hovered`) or left the element behind `key`,
-    /// blending on `spec` (`HOVER_FADE`, or a surface's own timing).
-    /// Reduced motion snaps to the endpoint.
+    /// painted by `view`, blending on `spec` (`HOVER_FADE`, or a surface's
+    /// own timing). Reduced motion snaps to the endpoint.
     pub fn set_with(
         &mut self,
         key: &SharedString,
@@ -750,18 +851,19 @@ impl HoverFades {
         reduced: bool,
         now: Instant,
         spec: MotionSpec,
+        view: Option<EntityId>,
     ) {
         let target = if hovered { 1.0 } else { 0.0 };
         let Some(current) = self.entries.get(key).map(|entry| entry.value(now)) else {
             if hovered {
                 let origin = if reduced { target } else { 0.0 };
-                self.insert(key, origin, target, now, spec);
+                self.insert(key, origin, target, now, spec, view);
             }
             // A leave for a key never entered: nothing to fade.
             return;
         };
         let origin = if reduced { target } else { current };
-        self.insert(key, origin, target, now, spec);
+        self.insert(key, origin, target, now, spec, view);
     }
 
     fn insert(
@@ -771,40 +873,47 @@ impl HoverFades {
         target: f32,
         now: Instant,
         spec: MotionSpec,
+        view: Option<EntityId>,
     ) {
         let entry = FadeEntry {
             origin,
             target,
             started: now,
-            seen: self.frame,
+            read: now,
             spec,
+            view,
         };
         self.entries.insert(key.clone(), entry);
     }
 
-    /// Hover progress (0..1) for `key` at `now`; stamps it as mounted.
+    /// Hover progress (0..1) for `key` at `now`; stamps it as drawn.
     pub fn value_at(&mut self, key: &str, now: Instant) -> f32 {
-        let frame = self.frame;
         self.entries.get_mut(key).map_or(0.0, |entry| {
-            entry.seen = frame;
+            entry.read = now;
             entry.value(now)
         })
     }
 
-    /// Once per frame: advance the counter, drop entries at rest or unread
-    /// for a whole frame, and say whether a fade is still mid-flight.
+    /// Once per frame: drop entries back at rest or unread for
+    /// `HOVER_FORGET`, note the views whose blend is mid-flight, and say
+    /// whether any is.
     pub fn tick_at(&mut self, now: Instant) -> bool {
-        self.frame += 1;
-        let frame = self.frame;
         let mut active = false;
+        let fading = &mut self.fading;
+        fading.clear();
         self.entries.retain(|_, entry| {
-            if entry.seen + 1 < frame {
+            if now.saturating_duration_since(entry.read) > HOVER_FORGET {
                 return false;
             }
             let settled = entry.settled(now);
-            active |= !settled;
+            if !settled {
+                active = true;
+                fading.extend(entry.view);
+            }
             !(settled && entry.target == 0.0)
         });
+        fading.sort_unstable();
+        fading.dedup();
         active
     }
 }
@@ -848,24 +957,36 @@ pub fn hover_listener_with(
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
         let now = cx.background_executor().now();
+        let view = window.hover_listener_view();
         HOVER_FADES.with(|fades| {
             fades
                 .borrow_mut()
-                .set_with(&key, *hovered, reduced, now, spec)
+                .set_with(&key, *hovered, reduced, now, spec, view)
         });
-        // Dispatch runs outside any view's draw, so `request_animation_frame`
-        // cannot name a view here: refresh (what a gpui `.hover()` style does
-        // on the same event), and the root's tail keeps frames coming.
-        window.refresh();
+        // Only the view that painted the blend draws it: notifying that
+        // view redraws it and its ancestors, and reuses every other cached
+        // view (the transcripts). Called from outside a painted listener,
+        // refresh, as a gpui `.hover()` style does on the same event.
+        match view {
+            Some(view) => cx.notify(view),
+            None => window.refresh(),
+        }
     }
 }
 
 /// The frame hook's second half: call once per window frame, at the root
 /// view's render tail. True while a blend is mid-flight and frames must keep
-/// coming.
+/// coming; the views painting one are [`hover_fading_views`].
 pub fn hover_fades_active() -> bool {
     let now = hover_now();
     HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now))
+}
+
+/// The views painting a blend still mid-flight, as of the last
+/// [`hover_fades_active`]: the root draws them again with its next frame (a
+/// cached view would otherwise be reused, its blend frozen).
+pub fn hover_fading_views() -> Vec<EntityId> {
+    HOVER_FADES.with(|fades| fades.borrow().fading.clone())
 }
 
 /// Blend two colours the way a browser transitions them: sRGB components
@@ -939,6 +1060,26 @@ pub mod testing {
     /// This test (its thread) runs the motion kit live.
     pub fn drive() {
         DRIVE.with(|drive| drive.set(true));
+    }
+
+    /// Every hover blend held now, and its value this frame (read without
+    /// stamping it as drawn).
+    pub fn hover_values() -> Vec<(gpui::SharedString, f32)> {
+        let now = super::hover_now();
+        super::HOVER_FADES.with(|fades| {
+            fades
+                .borrow()
+                .entries
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.value(now)))
+                .collect()
+        })
+    }
+
+    /// The pulse clock's grid: its epoch and tick, once anything declared.
+    pub fn grid(cx: &gpui::App) -> Option<(std::time::Instant, std::time::Duration)> {
+        let epoch = cx.try_global::<super::PulseClock>()?.epoch?;
+        Some((epoch, super::pulse_tick()))
     }
 }
 
@@ -1138,7 +1279,7 @@ mod tests {
         let key = SharedString::from("seam");
         let t0 = Instant::now();
         let ms = |m: u64| t0 + Duration::from_millis(m);
-        fades.set_with(&key, true, false, t0, SEAM_FADE);
+        fades.set_with(&key, true, false, t0, SEAM_FADE, None);
         assert!(fades.value_at("seam", ms(60)) < 1.0);
         assert_eq!(fades.value_at("seam", ms(120)), 1.0);
     }
@@ -1180,12 +1321,53 @@ mod tests {
         assert!(!fades.tick_at(ms(450)));
         assert!(fades.entries.is_empty(), "rest entries are pruned");
 
-        // Unmounted mid-hover: its leave never comes; one unread frame
-        // drops it.
+        // Unmounted mid-hover: its leave never comes; unread past
+        // `HOVER_FORGET`, it is forgotten.
         fades.set_at(&key, true, false, ms(500));
         fades.tick_at(ms(516));
-        fades.tick_at(ms(532));
+        assert_eq!(fades.entries.len(), 1, "a frame unread is no unmount");
+        fades.tick_at(ms(500) + HOVER_FORGET + Duration::from_millis(16));
         assert!(fades.entries.is_empty(), "unread entry evicted");
+    }
+
+    /// A hovered link in a cached transcript goes unread while the rest of
+    /// the window draws: frames pass without it, and when the transcript
+    /// draws again (the next streamed line) it still reads hovered.
+    #[test]
+    fn a_hovered_blend_survives_frames_its_cached_view_skips() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("link");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        fades.set_with(&key, true, false, t0, HOVER_FADE, None);
+        assert_eq!(fades.value_at("link", ms(150)), 1.0);
+        for frame in 1..=30 {
+            fades.tick_at(ms(150 + frame * 33));
+        }
+        assert_eq!(
+            fades.value_at("link", ms(1_200)),
+            1.0,
+            "still under the pointer, still underlined"
+        );
+    }
+
+    /// The views that painted a blend still mid-flight are named, once each,
+    /// so the root can draw them again with its next frame.
+    #[test]
+    fn the_hover_tick_names_the_views_mid_flight() {
+        let mut fades = HoverFades::default();
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let (a, b) = (EntityId::from(1u64), EntityId::from(2u64));
+        fades.set_with(&"one".into(), true, false, t0, HOVER_FADE, Some(a));
+        fades.set_with(&"two".into(), true, false, t0, HOVER_FADE, Some(a));
+        fades.set_with(&"three".into(), true, false, ms(100), HOVER_FADE, Some(b));
+        assert!(fades.tick_at(ms(50)));
+        assert_eq!(fades.fading, [a, b]);
+        assert!(fades.tick_at(ms(200)), "b is still fading");
+        assert_eq!(fades.fading, [b]);
+        assert!(!fades.tick_at(ms(300)));
+        assert!(fades.fading.is_empty());
     }
 
     #[test]
@@ -1199,20 +1381,6 @@ mod tests {
         close(half.a, 0.5, 1e-4, "alpha ramps");
         let (h, half) = (Rgba::from(hover), Rgba::from(half));
         close(half.r, h.r, 1e-3, "the wash keeps its colour");
-    }
-
-    #[test]
-    fn a_lease_lapses_unless_renewed_and_an_empty_clock_parks() {
-        let mut leases = PulseLeases::default();
-        let view = EntityId::from(1u64);
-        let t0 = Instant::now();
-        let ms = |m: u64| t0 + Duration::from_millis(m);
-        assert_eq!(leases.tick(t0), None, "nothing leased: park");
-        leases.renew(view, t0);
-        assert_eq!(leases.tick(ms(33)), Some(vec![view]));
-        leases.renew(view, ms(200));
-        assert_eq!(leases.tick(ms(450)), Some(vec![view]), "renewed at 200");
-        assert_eq!(leases.tick(ms(500)), None, "unpainted: lapses and parks");
     }
 
     struct Loop {
@@ -1267,8 +1435,8 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
-        cx.executor()
-            .advance_clock(pulse_lease() + pulse_tick() * 2);
+        // Its last declared wake (the next tick) passes undeclared.
+        cx.executor().advance_clock(pulse_tick() * 2);
         cx.run_until_parked();
         assert!(
             cx.update(|_, cx| pulse_parked(cx)),
