@@ -710,6 +710,9 @@ pub struct Transcript {
     /// Each running test call's count, folded line by line from its stream.
     test_counts: std::collections::BTreeMap<String, TestCounter>,
     thinking_open: bool,
+    /// The thought still growing at the tail, and how far its heading has
+    /// been read for the live status.
+    thought: Option<(BlockId, crate::progress::HeadingScan)>,
     latest_reasoning_part: Option<BlockId>,
     reasoning_parts: std::collections::BTreeMap<(String, u64), BlockId>,
 }
@@ -994,6 +997,7 @@ impl Transcript {
             output_tails: Default::default(),
             test_counts: Default::default(),
             thinking_open: false,
+            thought: None,
             latest_reasoning_part: None,
             reasoning_parts: Default::default(),
         }
@@ -2040,14 +2044,20 @@ impl Transcript {
         }) = self.blocks.last_mut().filter(|_| self.thinking_open)
         {
             thought.push_str(text);
-            self.progress.thinking(thought);
             let id = *id;
+            let scan = match &mut self.thought {
+                Some((owner, scan)) if *owner == id => scan,
+                slot => &mut slot.insert((id, Default::default())).1,
+            };
+            self.progress.thought_heading(scan.read(thought));
             self.open = None;
             self.source.clear();
             return id;
         }
-        self.progress.thinking(text);
         let id = self.push(Body::Thinking(text.to_string()));
+        let mut scan = crate::progress::HeadingScan::default();
+        self.progress.thought_heading(scan.read(text));
+        self.thought = Some((id, scan));
         self.thinking_open = true;
         id
     }
@@ -3784,6 +3794,78 @@ mod tests {
             transcript.blocks()[1].body,
             Body::Paragraph { .. }
         ));
+    }
+
+    fn thinking(text: &str) -> Input {
+        Input::Event(SessionEvent::ThinkingDelta { text: text.into() })
+    }
+
+    /// The live status reads a thought's first bold heading, however the
+    /// stream splits it: the marks, the words between them, or a heading
+    /// arriving late in a long thought.
+    #[test]
+    fn a_streamed_thought_finds_its_heading_wherever_the_deltas_split() {
+        let caption = |deltas: &[&str]| {
+            let mut transcript = Transcript::default();
+            for delta in deltas {
+                transcript.apply(thinking(delta));
+            }
+            transcript.progress().caption()
+        };
+        let heading = Some("Planning the fix".to_string());
+        assert_eq!(caption(&["**Planning the fix** then more"]), heading);
+        assert_eq!(caption(&["*", "*Planning", " the fix*", "* more"]), heading);
+        assert_eq!(
+            caption(&["no heading yet ", "**Planning the fix**"]),
+            heading
+        );
+        assert_eq!(caption(&["**Planning the fix**", " **Later**"]), heading);
+        assert_eq!(
+            caption(&["界**", "Planning the fix", "**"]),
+            heading,
+            "a mark right after a multi-byte character"
+        );
+        assert_eq!(
+            caption(&["***Planning the fix**"]),
+            Some("*Planning the fix".into())
+        );
+        assert_eq!(
+            caption(&["** **", " **Later**"]),
+            Some("Working".into()),
+            "a blank heading names none, and no later one stands in"
+        );
+        assert_eq!(
+            caption(&["an open **mark ", "never closed"]),
+            Some("Working".into())
+        );
+        // A new thought reads its own heading.
+        let mut transcript = Transcript::default();
+        transcript.apply(thinking("**First**"));
+        transcript.apply(text("answer\n\n"));
+        transcript.apply(thinking("plain words, ending with **Second**"));
+        assert_eq!(transcript.progress().caption(), Some("Second".into()));
+    }
+
+    /// Claude streams a thought in thousands of small deltas. Each delta
+    /// must cost what it adds, not a re-read of the whole thought so far.
+    #[test]
+    fn a_long_thought_streams_in_time_linear_in_its_length() {
+        let mut transcript = Transcript::default();
+        let delta = format!("{} ", "w".repeat(127));
+        let started = std::time::Instant::now();
+        for _ in 0..16_000 {
+            transcript.apply(thinking(&delta));
+        }
+        transcript.apply(thinking("**Heading at last**"));
+        let elapsed = started.elapsed();
+        assert_eq!(
+            transcript.progress().caption(),
+            Some("Heading at last".into())
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(1500),
+            "a 2 MB thought in 16,000 deltas took {elapsed:?}"
+        );
     }
 
     /// The working line's clock runs from the prompt to the turn's end,

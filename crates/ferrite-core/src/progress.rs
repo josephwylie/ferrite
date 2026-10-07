@@ -285,7 +285,13 @@ impl Progress {
     /// is the model talking to itself, not a status, so without a heading
     /// the line keeps the turn's verb (`Reticulating…`).
     pub fn thinking(&mut self, text: &str) {
-        self.summary = bold_heading(text).unwrap_or_default();
+        self.thought_heading(bold_heading(text));
+    }
+
+    /// `thinking` for a thought whose heading was read as it streamed
+    /// (`HeadingScan`).
+    pub(crate) fn thought_heading(&mut self, heading: Option<String>) {
+        self.summary = heading.unwrap_or_default();
     }
     pub fn caption(&self) -> Option<String> {
         let phase = self.phase?;
@@ -534,6 +540,50 @@ fn bold_heading(text: &str) -> Option<String> {
     (!heading.trim().is_empty()).then(|| one_line(heading, 160))
 }
 
+/// `bold_heading` over a text that only grows, as a thought streams: each
+/// read covers what was appended since the last, so a thought of n deltas
+/// costs its length once, not n times. Once both marks have arrived the
+/// heading can no longer change.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HeadingScan {
+    /// Bytes searched so far; a mark may straddle the last of them.
+    read: usize,
+    /// Where the heading begins, once its opening mark has arrived.
+    open: Option<usize>,
+    /// The answer, once the closing mark has arrived.
+    found: Option<Option<String>>,
+}
+
+impl HeadingScan {
+    /// The first complete bold heading in `text`, which extends the text
+    /// this scan last read.
+    pub(crate) fn read(&mut self, text: &str) -> Option<String> {
+        loop {
+            if let Some(found) = &self.found {
+                return found.clone();
+            }
+            let mut from = self.read.saturating_sub(1).max(self.open.unwrap_or(0));
+            while !text.is_char_boundary(from) {
+                from -= 1;
+            }
+            let Some(at) = text[from..].find("**").map(|at| from + at) else {
+                self.read = text.len();
+                return None;
+            };
+            match self.open {
+                None => {
+                    self.open = Some(at + 2);
+                    self.read = at + 2;
+                }
+                Some(open) => {
+                    let heading = &text[open..at];
+                    self.found = Some((!heading.trim().is_empty()).then(|| one_line(heading, 160)));
+                }
+            }
+        }
+    }
+}
+
 fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len().min(1024));
     let mut chars = text.chars().peekable();
@@ -603,6 +653,28 @@ mod duration_tests {
 
     /// The working line says `Working` for thinking and answering alike,
     /// and names only the phases that are something else.
+    #[test]
+    fn a_heading_scan_reads_a_growing_text_as_the_whole_text_reads() {
+        const PIECES: &[&str] = &["*", "**", "***", " ", "word", "界", "\n", "Plan", "  "];
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as usize % n
+        };
+        for _ in 0..2000 {
+            let mut scan = HeadingScan::default();
+            let mut text = String::new();
+            for _ in 0..next(12) {
+                for _ in 0..1 + next(3) {
+                    text.push_str(PIECES[next(PIECES.len())]);
+                }
+                assert_eq!(scan.read(&text), bold_heading(&text), "{text:?}");
+            }
+        }
+    }
+
     #[test]
     fn thinking_and_answering_read_as_working() {
         assert_eq!(Phase::Thinking.label(), "Working");
