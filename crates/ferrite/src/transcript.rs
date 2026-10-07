@@ -2029,7 +2029,12 @@ impl Render for TranscriptView {
                     });
                 }
                 if anchored || settled {
-                    window.defer(cx, |window, _| window.refresh());
+                    // Lay this transcript (and the Pane around it) out again
+                    // where the scroll settled; nothing else moved.
+                    let weak = weak.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = weak.update(cx, |_, cx| cx.notify());
+                    });
                 }
             })
             .id(SharedString::from(format!(
