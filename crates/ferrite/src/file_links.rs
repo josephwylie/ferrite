@@ -188,19 +188,46 @@ type OpenReader = Rc<dyn Fn(PathBuf, Option<u32>, &mut Window, &mut App)>;
 /// Where ⌘-click on a target goes, by the transcript namespace hosting it,
 /// and where each target last laid out (a scene's `preview_path` anchors on
 /// it). Main-thread state: path elements carry only their scope key, so a
-/// Markdown link renderer (which must be `Send`) can build them.
+/// Markdown link renderer (which must be `Send`) can build them. A scope
+/// lives as long as the transcript hosting it under that namespace.
 #[derive(Default)]
 pub(crate) struct PathScopes {
-    open: HashMap<SharedString, OpenReader>,
-    laid_out: HashMap<(SharedString, PathBuf), Bounds<Pixels>>,
+    open: HashMap<SharedString, (gpui::EntityId, OpenReader)>,
+    laid_out: HashMap<SharedString, HashMap<PathBuf, Bounds<Pixels>>>,
 }
 
 impl gpui::Global for PathScopes {}
 
-/// Route ⌘-click on `scope`'s targets to `open` (the transcript's
+/// Route ⌘-click on `scope`'s targets to `open` (the transcript `owner`'s
 /// `TranscriptEvent::OpenReader`).
-pub(crate) fn register_scope(scope: SharedString, open: OpenReader, cx: &mut App) {
-    cx.default_global::<PathScopes>().open.insert(scope, open);
+pub(crate) fn register_scope(
+    scope: SharedString,
+    owner: gpui::EntityId,
+    open: OpenReader,
+    cx: &mut App,
+) {
+    cx.default_global::<PathScopes>()
+        .open
+        .insert(scope, (owner, open));
+}
+
+/// The transcript `owner` no longer hosts `scope`: it was released, or its
+/// history regenerated under a new namespace. Forget the scope's route and
+/// where its targets laid out, unless another transcript has taken the
+/// scope since. Answers whether the scope was `owner`'s to forget.
+pub(crate) fn release_scope(scope: &str, owner: gpui::EntityId, cx: &mut App) -> bool {
+    let owned = cx.try_global::<PathScopes>().is_some_and(|scopes| {
+        scopes
+            .open
+            .get(scope)
+            .is_some_and(|(held, _)| *held == owner)
+    });
+    if owned {
+        let scopes = cx.default_global::<PathScopes>();
+        scopes.open.remove(scope);
+        scopes.laid_out.remove(scope);
+    }
+    owned
 }
 
 /// Open a target in a reader beside its Thread (its scope's handler), or
@@ -208,7 +235,7 @@ pub(crate) fn register_scope(scope: SharedString, open: OpenReader, cx: &mut App
 pub(crate) fn open_target(target: &PathTarget, window: &mut Window, cx: &mut App) {
     let handler = target.scope.as_ref().and_then(|scope| {
         cx.try_global::<PathScopes>()
-            .and_then(|scopes| scopes.open.get(scope).cloned())
+            .and_then(|scopes| scopes.open.get(scope).map(|(_, open)| open.clone()))
     });
     match handler {
         Some(open) => open(target.path.clone(), target.line, window, cx),
@@ -223,40 +250,42 @@ pub(crate) fn open_target(target: &PathTarget, window: &mut Window, cx: &mut App
 /// A transcript renders `scope` anew: the first target of each path laid
 /// out from here (the topmost) is the one `laid_out` names.
 pub(crate) fn begin_layout(scope: &str, cx: &mut App) {
-    if let Some(scopes) = cx.try_global::<PathScopes>() {
-        if !scopes
-            .laid_out
-            .keys()
-            .any(|(owner, _)| owner.as_ref() == scope)
-        {
-            return;
-        }
-    } else {
-        return;
+    if cx
+        .try_global::<PathScopes>()
+        .is_some_and(|scopes| scopes.laid_out.contains_key(scope))
+    {
+        cx.default_global::<PathScopes>().laid_out.remove(scope);
     }
-    cx.default_global::<PathScopes>()
-        .laid_out
-        .retain(|(owner, _), _| owner.as_ref() != scope);
+}
+
+/// The scopes holding a ⌘-click route, and those holding laid-out targets.
+#[cfg(test)]
+pub(crate) fn scopes(cx: &App) -> (Vec<SharedString>, Vec<SharedString>) {
+    let Some(scopes) = cx.try_global::<PathScopes>() else {
+        return Default::default();
+    };
+    let sorted = |keys: Vec<SharedString>| {
+        let mut keys = keys;
+        keys.sort();
+        keys
+    };
+    (
+        sorted(scopes.open.keys().cloned().collect()),
+        sorted(scopes.laid_out.keys().cloned().collect()),
+    )
 }
 
 /// Where a target naming `path` in `scope` last laid out: the exact path,
 /// else one that names the same file by a path suffix.
 #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
 pub(crate) fn laid_out(scope: &str, path: &Path, cx: &App) -> Option<Bounds<Pixels>> {
-    let scopes = cx.try_global::<PathScopes>()?;
-    scopes
-        .laid_out
-        .iter()
-        .filter(|((owner, _), _)| owner.as_ref() == scope)
-        .find(|((_, at), _)| at == path)
-        .or_else(|| {
-            scopes
-                .laid_out
-                .iter()
-                .filter(|((owner, _), _)| owner.as_ref() == scope)
-                .find(|((_, at), _)| same_file(at, path))
-        })
-        .map(|(_, bounds)| *bounds)
+    let targets = cx.try_global::<PathScopes>()?.laid_out.get(scope)?;
+    targets.get(path).copied().or_else(|| {
+        targets
+            .iter()
+            .find(|(at, _)| same_file(at, path))
+            .map(|(_, bounds)| *bounds)
+    })
 }
 
 /// Whether two paths name one file: equal, or one is the other's tail at a
@@ -329,7 +358,9 @@ fn wire_target(
         if let Some(scope) = recorded.scope.clone() {
             cx.default_global::<PathScopes>()
                 .laid_out
-                .entry((scope, recorded.path.clone()))
+                .entry(scope)
+                .or_default()
+                .entry(recorded.path.clone())
                 .or_insert(laid);
             crate::hover_card::laid_out(&recorded, laid, cx);
         }

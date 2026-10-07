@@ -80,6 +80,10 @@ struct CachedText {
     touched: u64,
 }
 
+/// The kinds of native text a transcript keys under its namespace
+/// (`select.rs`): `{kind}{namespace}-…`.
+const TEXT_KINDS: [&str; 4] = ["markdown-", "literal-", "thinking-", "output-"];
+
 /// Pane-owned native text entities survive temporarily hidden Subjects. The
 /// least recently used run is discarded only at this explicit cache limit.
 #[derive(Clone, Default)]
@@ -100,6 +104,12 @@ impl TextCache {
     #[cfg(test)]
     pub(crate) fn retained_handles(&self) -> usize {
         Rc::strong_count(&self.0)
+    }
+
+    /// Every native text this cache holds, by id.
+    #[cfg(test)]
+    pub(crate) fn cached_ids(&self) -> Vec<SharedString> {
+        self.0.borrow().1.keys().cloned().collect()
     }
 
     pub fn file_context(
@@ -146,19 +156,36 @@ impl TextCache {
         }
     }
 
+    /// Release every native text built under `namespace`: a transcript's
+    /// key that can never be drawn again (its history regenerated under a
+    /// new one, or the transcript released).
+    pub fn forget_namespace(&self, namespace: &str) {
+        let prefixes = TEXT_KINDS.map(|kind| format!("{kind}{namespace}-"));
+        let mut cache = self.0.borrow_mut();
+        let cache = &mut *cache;
+        let mut freed = 0;
+        cache.1.retain(|id, text| {
+            let stale = prefixes
+                .iter()
+                .any(|prefix| id.starts_with(prefix.as_str()));
+            if stale {
+                freed += text.source.len();
+            }
+            !stale
+        });
+        cache.2 -= freed;
+    }
+
     pub fn redirect_namespace(&self, from: &str, to: &str) {
         let mut cache = self.0.borrow_mut();
         let keys: Vec<_> = cache
             .1
             .keys()
             .filter_map(|key| {
-                ["markdown-", "literal-", "thinking-", "output-"]
-                    .into_iter()
-                    .find_map(|kind| {
-                        key.strip_prefix(&format!("{kind}{from}")).map(|tail| {
-                            (key.clone(), SharedString::from(format!("{kind}{to}{tail}")))
-                        })
-                    })
+                TEXT_KINDS.into_iter().find_map(|kind| {
+                    key.strip_prefix(&format!("{kind}{from}"))
+                        .map(|tail| (key.clone(), SharedString::from(format!("{kind}{to}{tail}"))))
+                })
             })
             .collect();
         for (from, to) in keys {
