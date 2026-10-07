@@ -361,3 +361,43 @@ fn a_working_clock_turns_over_on_its_pane(cx: &mut TestAppContext) {
     let after = b.pane(1).clock.clone().unwrap_or_default();
     assert_ne!(after, before, "the Pane redrew its clock");
 }
+
+/// A choice menu: the model picker opens placed on its Composer's edge
+/// with no frame asked for beyond its own, and its drawn cursor follows the
+/// arrows.
+#[gpui::test]
+fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut TestAppContext) {
+    let b = board("stale-picker", &[], cx);
+    bind_production_keys(b.cx);
+    let thread = b.threads[0];
+    b.view
+        .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
+    frames(b.cx, 300);
+    let drawn = crate::menu::testing::drawn();
+    assert!(drawn.placed, "drawn placed, not left at zero opacity");
+    let menu =
+        b.cx.debug_bounds("choice-menu")
+            .expect("the picker is open");
+    b.cx.update(|window, _| window.refresh());
+    frames(b.cx, 50);
+    assert_eq!(
+        b.cx.debug_bounds("choice-menu"),
+        Some(menu),
+        "already where a full redraw puts it"
+    );
+    b.cx.simulate_keystrokes("down");
+    frames(b.cx, 50);
+    let moved = crate::menu::testing::drawn().cursor;
+    assert!(
+        moved.is_some() && moved != drawn.cursor,
+        "↓ moves the drawn cursor: {:?} → {moved:?}",
+        drawn.cursor
+    );
+    b.cx.simulate_keystrokes("up");
+    frames(b.cx, 50);
+    assert_eq!(
+        crate::menu::testing::drawn().cursor,
+        drawn.cursor,
+        "and ↑ back"
+    );
+}

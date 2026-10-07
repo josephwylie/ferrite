@@ -583,6 +583,9 @@ struct ChoiceContent {
     lead: f32,
     state: gpui::Entity<ChoiceState>,
     focus: gpui::FocusHandle,
+    /// The view that draws the menu, redrawn when the menu's own state
+    /// moves (the cursor, the ladder, its place): it alone, not the window.
+    owner: gpui::EntityId,
 }
 
 impl ChoiceContent {
@@ -612,6 +615,13 @@ impl ChoiceContent {
                     .or_else(|| self.ladder.as_ref().and_then(|ladder| ladder.chosen)),
             )
         };
+        #[cfg(test)]
+        testing::DRAWN.with(|drawn| {
+            drawn.set(testing::Drawn {
+                placed: self.state.read(cx).placed,
+                cursor,
+            })
+        });
         let mut surface = float()
             .debug_selector(|| "choice-menu".into())
             .key_context("PopupMenu")
@@ -622,20 +632,20 @@ impl ChoiceContent {
             })
             .on_action({
                 let menu = self.clone();
-                move |_: &SelectUp, window, cx| {
+                move |_: &SelectUp, _, cx| {
                     menu.state.update(cx, |state, _| {
                         state.cursor = step_cursor(&menu.choices, state.cursor, -1);
                     });
-                    window.refresh();
+                    cx.notify(menu.owner);
                 }
             })
             .on_action({
                 let menu = self.clone();
-                move |_: &SelectDown, window, cx| {
+                move |_: &SelectDown, _, cx| {
                     menu.state.update(cx, |state, _| {
                         state.cursor = step_cursor(&menu.choices, state.cursor, 1);
                     });
-                    window.refresh();
+                    cx.notify(menu.owner);
                 }
             })
             .on_action({
@@ -775,7 +785,11 @@ impl ChoiceContent {
                     moved
                 });
                 if moved {
-                    window.refresh();
+                    // Measured in prepaint, where a notify is lost with the
+                    // frame being drawn: the owner draws the menu in its
+                    // place on the next.
+                    let owner = menu.owner;
+                    window.defer(cx, move |_, cx| cx.notify(owner));
                 }
             }
             let first = menu.state.update(cx, |state, _| {
@@ -813,7 +827,7 @@ impl ChoiceContent {
         };
         self.state.update(cx, |state, _| state.ladder = Some(at));
         (ladder.on_step)(at, window, cx);
-        window.refresh();
+        cx.notify(self.owner);
     }
 }
 
@@ -885,12 +899,36 @@ impl RenderOnce for ChoiceMenu {
                 lead: self.lead,
                 state,
                 focus: focus.clone(),
+                owner: window.current_view(),
             });
             popover = popover
                 .track_focus(&focus)
                 .content(move |_, _, cx| content.build(cx));
         }
         popover
+    }
+}
+
+/// What the open choice menu was last drawn with: the stale-chrome tests
+/// read what is on screen.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub(crate) struct Drawn {
+        /// Moved onto its measured place (else drawn at zero opacity).
+        pub placed: bool,
+        pub cursor: Option<usize>,
+    }
+
+    thread_local! {
+        pub(super) static DRAWN: Cell<Drawn> = Cell::new(Drawn::default());
+    }
+
+    /// The open choice menu as last drawn.
+    pub(crate) fn drawn() -> Drawn {
+        DRAWN.with(Cell::get)
     }
 }
 
