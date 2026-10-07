@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-07
 ---
 
@@ -154,13 +154,16 @@ A `facts` record restates every fact, not a delta, so the newest one alone is
 enough.
 
 **Fold rule.** Readers start from the header, then apply each record in
-order:
+order. A record that carries facts replaces them all:
 
-- `facts` replaces all the facts.
-- `handover` sets `provider` to its `to`, `model` to its model, and `effort`
-  to `None`.
-- `mark` changes nothing. It restates the fold up to itself, and a test pins
-  that equality.
+- `facts` carries them.
+- A schema-13 `handover` carries them in a `facts` field, beside `from`, `to`
+  and `model`.
+- `mark` restates the fold up to itself; a test pins that equality.
+
+A pre-13 `handover` carries no facts and changes nothing, because its effect
+is already in the header that was rewritten with it. Folding it again would
+clobber later changes, such as a model picked after the switch.
 
 `load` and `peek` share one implementation of the rule.
 
@@ -173,8 +176,8 @@ batch, which is never the 12–25 MB measured above. `peek_first_prompt` is
 unchanged.
 
 **`hand_over`.** The new provider and its Handover must commit together. One
-line already does that: the `handover` record now implies the facts change,
-so no second record is needed. The worker runs the commit in three steps:
+line does that: the schema-13 `handover` record carries the new facts, so no
+second record is needed. The worker runs the commit in three steps:
 
 1. Flush, then compute the exchanges from the last `conversation_reset` up to
    EOF with today's `AnswerText` logic. This is a full read, never a bounded
@@ -356,10 +359,11 @@ plain `fsync`.
 - An upgraded log keeps every record's bytes.
 - Torn-tail repair removes only bytes that never formed a committed record.
 
-**Interior damage.** The upgrade's full parse can find an unreadable line
-that is not the last one. Today's `writer()` silently discards everything
-after such a line. The proposal is to hard-link the original as
-`log.damaged-<offset>.jsonl` before renaming, so no byte is lost.
+**Interior damage.** A full parse can find an unreadable line that is not
+the last one. Today's `writer()` silently discards everything after such a
+line. Instead, the original is copied to `log.damaged-<offset>.jsonl` first,
+so no byte is lost. The copy is an APFS clone. A hard link would not work:
+truncation changes the inode it shares.
 
 **Downgrade.** An older Ferrite refuses a schema-13 log whole
 (`FutureSchema`). Its `writer`, `set_*` and `load` all read the schema
@@ -454,18 +458,20 @@ Logs that have not been upgraded stay readable by the older version.
 
 1. Test-only: the equivalence harness, the counting file seam, and the
    ignored lab test.
-2. Torn-tail repair truncates the last line, and `has_torn_tail`'s full
-   reparse goes. `writer()` drops from ≈260 to ≈135 ms, and revive goes from
-   three full parses to two.
+2. Torn-tail repair truncates instead of rewriting, and `has_torn_tail`'s
+   full reparse goes. `writer()` drops from ≈260 to ≈135 ms, and revive goes
+   from three full parses to two. Once commit 5 lands, opening a schema-13 log
+   reads only its header and tail.
 3. Sync levels: plain `fsync` at boundaries, F_FULLFSYNC at park, quit,
    create and rewrite.
 4. Byte-verbatim upgrade replaces the reserializing rewrite.
-5. Schema 13 and `facts` amendments. The setters and `hand_over` append,
-   their `writer` parameters go, and `rewrite` is deleted except for the
-   upgrade. `set_title` drops from ≈270 ms to ≈0.1 ms.
-6. Marks with facts and summary, `ThreadMeta.summary`, and `LogReader` and
-   `ParkedLookups` on the summary. This removes the launch-time parked
-   replays.
+5. Schema 13, `facts` amendments, facts-carrying `handover`, and marks that
+   restate the facts, so `peek` stays bounded on a log that was never
+   amended. The setters and `hand_over` append, and `rewrite` is deleted
+   except for the upgrade. `set_title` drops from ≈270 ms to ≈0.1 ms.
+6. The mark summary, `ThreadMeta.summary`, and `LogReader` and
+   `ParkedLookups` on the summary, plus the derived summary cache for pre-13
+   logs. This removes the launch-time parked replays.
 7. Base marks with carry, plus `Store::revive` → `Revival` and the full
    fallback. Revive takes one bounded read and goes from O(log) to
    O(retained): ≈0.4 s of reads plus 32–42 s of replay becomes about 45 ms
@@ -491,22 +497,23 @@ The UI thread no longer performs file IO, except for bounded peek misses and
 - Children older than the replay base start evicted after a revive.
 - A park whose flush fails is reported afterwards rather than refused.
 
-When this ADR is accepted, CONTEXT.md's **Settings** entry ("a Thread's
-header remains the durable truth") gains a **Header** entry. A Header is the
-Thread's facts as created, amended by appended records, with the newest
-winning.
+CONTEXT.md gains a **Header** entry.
 
-## Open questions
+## Decisions (operator, 2026-10-07)
 
-- **Park:** Report a failed write afterwards (proposed), or block on the
-  write barrier, as park does today (write plus F_FULLFSYNC)?
-- **Revive:** Keep revive synchronous but bounded (proposed for now), or
-  make it asynchronous with a "reviving" Pane? The asynchronous version
-  removes the remaining one-time upgrade wait of about 250 ms per old log.
-- **Children:** Is it acceptable that children introduced before the replay
-  base start evicted and reload on first selection?
-- **Pre-13 parked summaries:** Use a derived summary cache file (proposed),
-  or show no count until the Thread is revived?
-- **Downgrade:** Upgrade lazily (proposed) or eagerly? Do we need a downgrade
-  tool, given the effect on an older `Groups::load`?
-- **Durability:** Is a 30 s periodic F_FULLFSYNC window acceptable?
+- **Park** reports a failed write afterwards. It never blocks on a sync.
+- **Revive** stays synchronous but bounded. An asynchronous revive is not
+  planned.
+- **Subagents** introduced before the replay base load lazily on first
+  selection.
+- **Pre-13 parked logs** use a derived summary cache file in the store
+  directory. It is deletable, computed in the background, and never a full
+  replay on the UI thread.
+- **Upgrades** are lazy, and there is no downgrade tool.
+- **Durability:** plain `fsync` at boundaries; F_FULLFSYNC at park, quit,
+  upgrade and `create`, and every 30 s for logs written since. A 30 s
+  power-loss window is accepted.
+
+Every upgrade or rewrite writes a temp file, syncs it, renames it and syncs
+the directory. None re-serializes an existing record. A fault-injected test
+proves that a failure at each step loses no data.
