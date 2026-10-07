@@ -1834,8 +1834,9 @@ fn prose() -> Scene {
 /// shimmer, the nav's braille spinner, the Composer's caret blinking over a
 /// character of typed text — drawn with the overlay and without it, at the
 /// same instants every 20ms across more than a blink, must give the same
-/// framebuffer. Writes `loops-parity.json` and, for any instant that
-/// differs, both shots.
+/// framebuffer; then again with the palette open over it, its caret
+/// blinking on the float. Writes `loops-parity.json` (the palette pass under
+/// `palette`) and, for any instant that differs, both shots.
 pub fn loops_parity(output: String) {
     let output = PathBuf::from(output);
     std::fs::create_dir_all(&output).expect("create artifact directory");
@@ -1845,14 +1846,33 @@ pub fn loops_parity(output: String) {
         .and_then(|steps| steps.parse().ok())
         .unwrap_or(65u64);
     let instants: Vec<u64> = (0..=steps).map(|step| step * 20).collect();
+    let mut report = loops_parity_pass(&platform, false, &instants, &output);
+    report["palette"] = loops_parity_pass(&platform, true, &instants, &output);
+    std::fs::write(
+        output.join("loops-parity.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+/// One parity pass: the scene, the palette open over it or not, drawn with
+/// and without the overlay; answers the pass's report and saves the shots
+/// of any instant that differs.
+fn loops_parity_pass(
+    platform: &std::rc::Rc<dyn gpui::Platform>,
+    palette: bool,
+    instants: &[u64],
+    output: &std::path::Path,
+) -> serde_json::Value {
     let mut on = Vec::new();
-    let on_hosted = loops_frames(&platform, true, &instants, |cx, window| {
+    let on_hosted = loops_frames(platform, true, palette, instants, |cx, window| {
         on.push(cx.capture_screenshot(window).unwrap())
     });
     let mut off = Vec::new();
-    let off_hosted = loops_frames(&platform, false, &instants, |cx, window| {
+    let off_hosted = loops_frames(platform, false, palette, instants, |cx, window| {
         off.push(cx.capture_screenshot(window).unwrap())
     });
+    let pass = if palette { "palette-" } else { "" };
     // The premise: the loops moved — the instants show different pictures.
     let distinct = {
         let mut frames: Vec<&[u8]> = on.iter().map(|frame| frame.as_raw().as_slice()).collect();
@@ -1885,10 +1905,10 @@ pub fn loops_parity(output: String) {
                 bottom = bottom.max(y);
             }
         }
-        with.save(output.join(format!("loops-{at:04}ms-overlay.png")))
+        with.save(output.join(format!("loops-{pass}{at:04}ms-overlay.png")))
             .unwrap();
         without
-            .save(output.join(format!("loops-{at:04}ms-in-place.png")))
+            .save(output.join(format!("loops-{pass}{at:04}ms-in-place.png")))
             .unwrap();
         differing.push(serde_json::json!({
             "ms": at, "pixels": pixels, "max_channel_delta": worst,
@@ -1902,24 +1922,21 @@ pub fn loops_parity(output: String) {
         "in_place_hosted_marks": off_hosted,
         "differing": differing,
     });
-    std::fs::write(
-        output.join("loops-parity.json"),
-        serde_json::to_vec_pretty(&report).unwrap(),
-    )
-    .unwrap();
     eprintln!(
-        "LOOPS_PARITY instants={} distinct_frames={distinct} differing={} overlay_marks={on_hosted:?} in_place_marks={off_hosted:?}",
+        "LOOPS_PARITY palette={palette} instants={} distinct_frames={distinct} differing={} overlay_marks={on_hosted:?} in_place_marks={off_hosted:?}",
         instants.len(),
         report["differing"].as_array().map_or(0, Vec::len),
     );
+    report
 }
 
 /// The parity scene drawn at each of `instants` (ms from its first frame),
-/// with or without the overlay, each frame handed to `shot`; answers how
-/// many loops the overlay drew.
+/// with or without the overlay, the palette open over it or not, each frame
+/// handed to `shot`; answers how many loops the overlay drew.
 fn loops_frames(
     platform: &std::rc::Rc<dyn gpui::Platform>,
     overlay: bool,
+    palette: bool,
     instants: &[u64],
     mut shot: impl FnMut(&mut HeadlessAppContext, gpui::AnyWindowHandle),
 ) -> Vec<usize> {
@@ -1988,6 +2005,9 @@ fn loops_frames(
                 composer.insert("blink over this text", cx);
             });
             window.focus(&gpui::Focusable::focus_handle(composer.read(cx), cx), cx);
+            if palette {
+                view.open_palette(crate::palette::PaletteScope::All, "caret", window, cx);
+            }
             cx.notify();
         });
     })
