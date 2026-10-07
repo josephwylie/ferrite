@@ -813,3 +813,30 @@ fn a_mark_never_reaches_the_log_before_its_barrier() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A parked-row lookup reads on a background thread while the UI thread
+/// writes: the two never wait on each other's locks.
+#[test]
+fn reads_on_another_thread_never_deadlock_with_writes() {
+    let dir = scratch("worker-locks");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    let (parked, parked_writer) = store.create(Provider::Codex, None, main()).unwrap();
+    parked_writer.park();
+    let reader = store.clone();
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop = done.clone();
+    let reading = std::thread::spawn(move || {
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            reader.peek(parked).unwrap();
+            reader.peek(id).unwrap();
+        }
+    });
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_millis(500) {
+        writer.record_prompt("again").unwrap();
+        writer.record_event(&turn_end(), None).unwrap();
+    }
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    reading.join().unwrap();
+}

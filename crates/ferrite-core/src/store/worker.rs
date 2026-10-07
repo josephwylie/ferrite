@@ -44,6 +44,20 @@ impl Queue {
 }
 
 impl Worker {
+    /// Wait for the worker's next pass, or `timeout`. Holds no writer.
+    pub(super) fn wait_pass(&self, timeout: Duration) {
+        let queue = self.queue();
+        let _ = self
+            .passed
+            .wait_timeout(queue, timeout)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+
+    /// The writers it holds, collected without holding any of them.
+    pub(super) fn held(&self) -> Vec<Arc<Mutex<WriterState>>> {
+        self.queue().held.clone()
+    }
+
     /// Start the worker for one store. It lives while the store or any of
     /// its writers does.
     pub(super) fn start(shared: Weak<Shared>) -> Arc<Self> {
@@ -110,9 +124,18 @@ impl Worker {
             for writer in &writers {
                 again |= step(writer);
             }
+            // Never a writer's lock while holding the queue's: a writer's
+            // owner takes the queue's (to poke) while holding its own.
+            let finished: Vec<*const Mutex<WriterState>> = writers
+                .iter()
+                .filter(|writer| lock(writer).finished())
+                .map(Arc::as_ptr)
+                .collect();
             drop(writers);
             let mut queue = self.queue();
-            queue.held.retain(|writer| !lock(writer).finished());
+            queue
+                .held
+                .retain(|writer| !finished.contains(&Arc::as_ptr(writer)));
             queue.dirty |= again;
             drop(queue);
             self.passed.notify_all();

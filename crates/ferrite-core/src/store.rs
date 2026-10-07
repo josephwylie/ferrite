@@ -1981,11 +1981,10 @@ impl Store {
             return Ok(());
         };
         let path = self.log_path(id);
-        let mut queue = worker.queue();
         loop {
             let mut pending = false;
-            for writer in &queue.held {
-                let state = worker::lock(writer);
+            for writer in worker.held() {
+                let state = worker::lock(&writer);
                 if state.path != path {
                     continue;
                 }
@@ -2001,11 +2000,7 @@ impl Store {
             if !pending {
                 return Ok(());
             }
-            queue = worker
-                .passed
-                .wait_timeout(queue, std::time::Duration::from_millis(50))
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
+            worker.wait_pass(std::time::Duration::from_millis(50));
         }
     }
 
@@ -2015,19 +2010,14 @@ impl Store {
         let Some(worker) = self.shared.worker.get() else {
             return;
         };
-        let mut queue = worker.queue();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while queue
-            .held
+        while worker
+            .held()
             .iter()
             .any(|writer| worker::lock(writer).unmark.is_some())
             && std::time::Instant::now() < deadline
         {
-            queue = worker
-                .passed
-                .wait_timeout(queue, std::time::Duration::from_millis(20))
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
+            worker.wait_pass(std::time::Duration::from_millis(20));
         }
     }
 
@@ -2038,22 +2028,17 @@ impl Store {
             return;
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        let mut queue = worker.queue();
         while std::time::Instant::now() < deadline {
-            let held_done = queue.held.iter().all(|writer| worker::lock(writer).finished());
-            let live_done = queue.live_writers().iter().all(|writer| {
+            let held_done = worker.held().iter().all(|writer| worker::lock(writer).finished());
+            let live = worker.queue().live_writers();
+            let live_done = live.iter().all(|writer| {
                 let state = worker::lock(writer);
                 state.synced >= state.len && !state.mark_due()
             });
             if held_done && live_done {
-                drop(queue);
                 return;
             }
-            queue = worker
-                .passed
-                .wait_timeout(queue, std::time::Duration::from_millis(20))
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
+            worker.wait_pass(std::time::Duration::from_millis(20));
         }
         panic!("the store's worker did not settle");
     }
