@@ -1795,37 +1795,7 @@ impl Store {
         // Bytes, not a String: a crash can tear the tail mid-character, and
         // a loader that insists the whole file is UTF-8 would lose the
         // Thread over its last three bytes.
-        let bytes = self.read_whole_log(id)?;
-        let mut lines = bytes.split(|byte| *byte == b'\n');
-        let header: Header = lines
-            .next()
-            .and_then(|first| serde_json::from_slice(first).ok())
-            .ok_or_else(|| LoadError::Corrupt {
-                detail: format!("thread {id} has no readable header"),
-            })?;
-        if header.schema > SCHEMA_VERSION {
-            return Err(LoadError::FutureSchema {
-                found: header.schema,
-                supported: SCHEMA_VERSION,
-            });
-        }
-        // Recover to the last complete record: a crash tears at most the
-        // final line, so the first unreadable line is where the log ends.
-        let records = lines
-            .map_while(|body_line| serde_json::from_slice(body_line).ok())
-            .collect();
-        Ok(ThreadSnapshot {
-            id,
-            provider: header.provider,
-            schema: header.schema,
-            workspace: header.workspace,
-            session_project_root: header.session_project_root,
-            model: header.model,
-            project_id: header.project_id,
-            title: header.title,
-            effort: header.effort,
-            records,
-        })
+        Ok(parse(id, &self.read_whole_log(id)?)?.snapshot)
     }
 
     /// Record where inside the binding this Thread's work happens — or
@@ -1972,14 +1942,47 @@ impl Store {
     /// loader stops, hiding every turn after the crash.
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
         self.writable()?;
-        let snapshot = self.load(id)?;
-        let file =
-            if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&self.read_whole_log(id)?) {
-                self.rewrite(&snapshot)?
-            } else {
-                OpenOptions::new().append(true).open(self.log_path(id))?
-            };
+        let bytes = self.read_whole_log(id)?;
+        let parsed = parse(id, &bytes)?;
+        let file = if parsed.snapshot.schema < SCHEMA_VERSION {
+            self.rewrite(&parsed.snapshot)?
+        } else {
+            self.repair(id, &bytes, parsed.readable)?;
+            OpenOptions::new().append(true).open(self.log_path(id))?
+        };
         Ok(self.writer_on(file))
+    }
+
+    /// Make the log end in whole, readable records before anything is
+    /// appended: an append straight after a crash's fragment would fuse
+    /// with it into one unreadable line, where every reader stops, hiding
+    /// every turn after the crash.
+    ///
+    /// Nothing is rewritten. A last record missing only its newline gets
+    /// it. Anything unreadable is cut off in place — but only once every
+    /// byte about to go is kept in `log.damaged-<offset>.jsonl` and synced:
+    /// a crash's fragment was never a record, but damage inside the log
+    /// may hide records after it, and those must never be lost. If keeping
+    /// them fails, nothing is cut and the log stays closed to appends.
+    fn repair(&self, id: ThreadId, bytes: &[u8], readable: usize) -> io::Result<()> {
+        let path = self.log_path(id);
+        if readable == bytes.len() {
+            if !bytes.ends_with(b"\n") {
+                let mut log = OpenOptions::new().append(true).open(&path)?;
+                log.write_all(b"\n")?;
+                self.shared.sync(&log, SyncLevel::Full)?;
+            }
+            return Ok(());
+        }
+        let kept = path.with_file_name(format!("log.damaged-{readable}.jsonl"));
+        let mut copy = File::create(&kept)?;
+        copy.write_all(&bytes[readable..])?;
+        self.shared.sync(&copy, SyncLevel::Full)?;
+        // Not the append handle: Windows truncates only through a handle
+        // opened for writing.
+        let log = OpenOptions::new().write(true).open(&path)?;
+        log.set_len(readable as u64)?;
+        self.shared.sync(&log, SyncLevel::Full)
     }
 
     /// Recover one child's recent persisted content for an off-thread cache
@@ -2630,21 +2633,60 @@ impl ThreadWriter {
     }
 }
 
-/// Whether a loaded log's bytes end in anything but whole, newline-terminated,
-/// readable records — the leavings of a crash, which an append must not build
-/// on. The header is not judged here: `load` already required it.
-fn has_torn_tail(bytes: &[u8]) -> bool {
-    if !bytes.ends_with(b"\n") {
-        // Even a fragment that happens to parse is dirty: the next append
-        // would land on its line.
-        return true;
+/// A log read as far as it is readable.
+struct Parsed {
+    snapshot: ThreadSnapshot,
+    /// Where the readable log ends: after the last record that parsed, and
+    /// its newline when it has one. Anything past it is a crash's fragment
+    /// or damage.
+    readable: usize,
+}
+
+/// Read a log's bytes: the header, then every record up to the first line
+/// that does not parse — a crash tears at most the final line, so the
+/// first unreadable line is where the log ends.
+fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
+    let line_at = |start: usize| {
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |at| start + at);
+        (&bytes[start..end], (end + 1).min(bytes.len()))
+    };
+    let (first, mut readable) = line_at(0);
+    let header: Header = serde_json::from_slice(first).map_err(|_| LoadError::Corrupt {
+        detail: format!("thread {id} has no readable header"),
+    })?;
+    if header.schema > SCHEMA_VERSION {
+        return Err(LoadError::FutureSchema {
+            found: header.schema,
+            supported: SCHEMA_VERSION,
+        });
     }
-    let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
-    // First line is the header; last is the empty slice after the final
-    // newline. Everything between must be a whole record.
-    lines[1..lines.len() - 1]
-        .iter()
-        .any(|body_line| serde_json::from_slice::<Record>(body_line).is_err())
+    let mut records = Vec::new();
+    while readable < bytes.len() {
+        let (body_line, next) = line_at(readable);
+        let Ok(record) = serde_json::from_slice(body_line) else {
+            break;
+        };
+        records.push(record);
+        readable = next;
+    }
+    Ok(Parsed {
+        snapshot: ThreadSnapshot {
+            id,
+            provider: header.provider,
+            schema: header.schema,
+            workspace: header.workspace,
+            session_project_root: header.session_project_root,
+            model: header.model,
+            project_id: header.project_id,
+            title: header.title,
+            effort: header.effort,
+            records,
+        },
+        readable,
+    })
 }
 
 /// One record as one JSONL line.

@@ -154,3 +154,115 @@ fn a_full_flush_covers_what_barriers_only_ordered() {
     writer.flush_fully().unwrap();
     assert_eq!(store.syncs(), (barriers, full + 1), "nothing new to sync");
 }
+
+/// A current-schema log as some crash left it: its header and whole
+/// records, then `tail`.
+fn current_log(tail: &str) -> String {
+    format!(
+        "{}\n{}\n{}\n{tail}",
+        format_args!(
+            r#"{{"schema":{SCHEMA_VERSION},"provider":"codex","workspace":null,"session_project_root":null,"model":null,"project_id":null,"title":null,"effort":null}}"#
+        ),
+        r#"{"type":"prompt","text":"before the crash"}"#,
+        r#"{"type":"turn_ended","outcome":"completed","cost_usd":null}"#,
+    )
+}
+
+#[cfg(unix)]
+fn inode(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).unwrap().ino()
+}
+
+/// A crash's fragment is cut off where it lies: the log keeps its inode and
+/// every byte before the tear, is read once rather than parsed twice, and
+/// the fragment itself is kept beside it.
+#[test]
+fn a_torn_tail_is_cut_off_in_place_and_read_once() {
+    let dir = scratch("repair-torn");
+    let planted = current_log(r#"{"type":"text","te"#);
+    plant(&dir, 4, &planted);
+    let log = dir.join("4").join("log.jsonl");
+    #[cfg(unix)]
+    let before = inode(&log);
+    let store = Store::open(&dir).unwrap();
+    let read = store.bytes_read();
+
+    let mut writer = store.writer(ThreadId::new(4)).unwrap();
+
+    assert!(
+        store.bytes_read() - read <= planted.len() as u64,
+        "the log was read more than once"
+    );
+    #[cfg(unix)]
+    assert_eq!(inode(&log), before, "the log was rewritten, not repaired");
+    let readable = planted.len() - r#"{"type":"text","te"#.len();
+    assert_eq!(fs::read(&log).unwrap(), &planted.as_bytes()[..readable]);
+    assert_eq!(
+        fs::read_to_string(dir.join("4").join(format!("log.damaged-{readable}.jsonl"))).unwrap(),
+        r#"{"type":"text","te"#
+    );
+    writer.record_prompt("after the crash").unwrap();
+    writer.flush().unwrap();
+    assert_eq!(
+        store.load(ThreadId::new(4)).unwrap().prompt_texts(),
+        vec!["before the crash", "after the crash"]
+    );
+}
+
+/// A record torn between its last brace and its newline is whole: it keeps
+/// its place and gets its newline.
+#[test]
+fn a_last_record_missing_only_its_newline_is_kept() {
+    let dir = scratch("repair-newline");
+    let planted = current_log(r#"{"type":"prompt","text":"last"}"#);
+    plant(&dir, 4, &planted);
+    let log = dir.join("4").join("log.jsonl");
+    let store = Store::open(&dir).unwrap();
+    drop(store.writer(ThreadId::new(4)).unwrap());
+    assert_eq!(fs::read_to_string(&log).unwrap(), format!("{planted}\n"));
+    assert_eq!(
+        store.load(ThreadId::new(4)).unwrap().prompt_texts(),
+        vec!["before the crash", "last"]
+    );
+}
+
+/// Damage inside a log hides the records after it from every reader. They
+/// are cut so appends can be read again — but kept, every byte, first.
+#[test]
+fn damaged_records_are_kept_before_they_are_cut() {
+    let dir = scratch("repair-damaged");
+    let damaged = concat!(
+        "not a record\n",
+        r#"{"type":"prompt","text":"hidden by the damage"}"#,
+        "\n"
+    );
+    let planted = current_log(damaged);
+    plant(&dir, 4, &planted);
+    let store = Store::open(&dir).unwrap();
+    drop(store.writer(ThreadId::new(4)).unwrap());
+    let readable = planted.len() - damaged.len();
+    assert_eq!(
+        fs::read(dir.join("4").join("log.jsonl")).unwrap(),
+        &planted.as_bytes()[..readable]
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("4").join(format!("log.damaged-{readable}.jsonl"))).unwrap(),
+        damaged
+    );
+}
+
+/// If what would be cut cannot be kept, nothing is cut: the writer is
+/// refused and the log is exactly as it was.
+#[test]
+fn a_repair_that_cannot_keep_the_damage_cuts_nothing() {
+    let dir = scratch("repair-refused");
+    let planted = current_log("not a record\n");
+    plant(&dir, 4, &planted);
+    let readable = planted.len() - "not a record\n".len();
+    // Something already stands where the damage would be kept.
+    fs::create_dir(dir.join("4").join(format!("log.damaged-{readable}.jsonl"))).unwrap();
+    let store = Store::open(&dir).unwrap();
+    assert!(store.writer(ThreadId::new(4)).is_err());
+    assert_eq!(fs::read_to_string(dir.join("4").join("log.jsonl")).unwrap(), planted);
+}
