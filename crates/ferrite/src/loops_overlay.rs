@@ -80,7 +80,8 @@ impl CockpitWindow {
         Self { cockpit, overlay }
     }
 
-    /// The Cockpit this window shows.
+    /// The Cockpit this window shows (what a test window's root holds).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn cockpit(&self) -> &Entity<CockpitView> {
         &self.cockpit
     }
