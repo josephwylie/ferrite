@@ -838,8 +838,8 @@ impl Focusable for Composer {
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Inside the Cockpit, the blinking caret is drawn by the loops
-        // overlay (`loops_overlay`).
-        crate::loops_overlay::host(window, cx.entity_id());
+        // overlay (`loops_overlay`): laid out afresh from here.
+        crate::loops_overlay::begin(window, cx.entity_id());
         div()
             .flex()
             .flex_1()
@@ -1190,7 +1190,7 @@ struct PrepaintState {
     selection: Vec<PaintQuad>,
     /// The loops overlay's slot when it draws the blinking caret and the
     /// text over it: this line then paints neither.
-    overlay: Option<usize>,
+    overlay: Option<(gpui::EntityId, usize)>,
 }
 
 impl IntoElement for LineElement {
