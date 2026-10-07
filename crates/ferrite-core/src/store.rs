@@ -7,6 +7,7 @@
 //! flush on boundary marks (turn end, close) or a timeout — a durable write
 //! per delta is impossible by interface shape.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -254,8 +255,56 @@ impl Facts {
             project_id: self.project_id,
             title: self.title,
             effort: self.effort,
+            summary: None,
         }
     }
+}
+
+/// What a parked Thread's nav row counts (schema 13, in every mark): read
+/// off the log's tail instead of replaying the whole log.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct Summary {
+    /// Prompts since the last conversation reset: the wall's `11 turns`.
+    turns: u64,
+    /// Whether any prompt was ever sent, which locks the provider choice.
+    prompted: bool,
+    /// The subagents the live Activity knew when the mark was written;
+    /// absent when no Activity has told the writer yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagents: Option<u64>,
+}
+
+impl Summary {
+    fn public(&self) -> ThreadSummary {
+        ThreadSummary {
+            turns: self.turns as usize,
+            prompted: self.prompted,
+            subagents: self.subagents.map(|count| count as usize),
+        }
+    }
+
+    /// Count `record` in.
+    fn observe(&mut self, record: &Record) {
+        match record {
+            Record::Prompt { .. } => {
+                self.turns += 1;
+                self.prompted = true;
+            }
+            Record::ConversationReset { .. } => self.turns = 0,
+            _ => {}
+        }
+    }
+}
+
+/// What a parked Thread's row says without replaying its log (ADR 0008).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSummary {
+    /// Prompts since the last conversation reset.
+    pub turns: usize,
+    /// Whether the operator ever sent a prompt (the provider lock).
+    pub prompted: bool,
+    /// The subagents the Thread knew when it was last written, when known.
+    pub subagents: Option<usize>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -442,6 +491,9 @@ enum Record {
         /// The offset of the mark before this one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prev: Option<u64>,
+        /// The parked row's counts at this point.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<Summary>,
     },
 }
 
@@ -1432,6 +1484,8 @@ pub struct Store {
 struct Shared {
     /// Why this process may not write here, or `None` when it may.
     read_only: Option<String>,
+    /// The derived summary cache (`Store::summary`), loaded on first use.
+    summaries: std::sync::Mutex<Option<BTreeMap<u64, CachedSummary>>>,
     /// Every byte read off a log, so tests can bound what a read costs.
     #[cfg(test)]
     read_bytes: std::sync::atomic::AtomicU64,
@@ -1498,7 +1552,6 @@ impl Faults {
 /// the last handle dropped, a reopen racing that drop (or a second Ferrite)
 /// could find it taken, or take it, in between.
 fn claim(dir: &Path, key: &DirKey) -> io::Result<Option<String>> {
-    use std::collections::BTreeMap;
     use std::sync::{Mutex, PoisonError};
     static CLAIMED: Mutex<BTreeMap<DirKey, File>> = Mutex::new(BTreeMap::new());
     let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1529,6 +1582,7 @@ impl Shared {
     fn new(read_only: Option<String>) -> Self {
         Self {
             read_only,
+            summaries: std::sync::Mutex::new(None),
             #[cfg(test)]
             read_bytes: Default::default(),
             #[cfg(test)]
@@ -1541,7 +1595,6 @@ impl Shared {
     /// The one `Shared` for `dir` in this process, keyed by what the
     /// directory is rather than how it is spelled.
     fn of(dir: &Path) -> io::Result<std::sync::Arc<Self>> {
-        use std::collections::BTreeMap;
         use std::sync::{Arc, Mutex, PoisonError, Weak};
         static OPEN: Mutex<BTreeMap<DirKey, Weak<Shared>>> = Mutex::new(BTreeMap::new());
         let key = dir_key(dir)?;
@@ -1573,6 +1626,30 @@ type DirKey = PathBuf;
 #[cfg(not(unix))]
 fn dir_key(dir: &Path) -> io::Result<DirKey> {
     fs::canonicalize(dir)
+}
+
+/// The derived summary cache beside the logs: counts for pre-13 logs that
+/// would otherwise be replayed whole for every parked row.
+const SUMMARIES: &str = "summaries.json";
+
+/// One cached count, valid while its log is unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedSummary {
+    stamp: (u64, u128),
+    summary: Summary,
+}
+
+/// What identifies a log's contents cheaply: its length and modification
+/// time in nanoseconds.
+fn log_stamp(path: &Path) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), modified))
 }
 
 /// A name for a file written beside a log and renamed over it. Never a
@@ -1809,6 +1886,7 @@ impl Store {
             last_mark: tail.last_mark,
             mark_len: tail.mark_len,
             broken: None,
+            summary: tail.summary,
             shared: self.shared.clone(),
         }
     }
@@ -1902,6 +1980,7 @@ impl Store {
             len: written.len() as u64,
             last_mark: None,
             mark_len: 0,
+            summary: Some(Summary::default()),
         };
         Ok((id, self.writer_on(id, file, tail)))
     }
@@ -2015,16 +2094,171 @@ impl Store {
             // Before amendments, the header was the only place facts lived.
             return Ok(header.facts().meta());
         }
-        let newest = self.backwards(id, first.len() as u64)?.find_map(|(_, line)| {
-            let carrier = [r#"{"type":"facts""#, r#"{"type":"mark""#, r#"{"type":"handover""#];
-            carrier
+        // Back from the end to the newest mark: the newest facts on the way,
+        // and the prompts and resets after the mark, which its counts miss.
+        let mut facts = None;
+        let mut after = Summary::default();
+        let mut reset = false;
+        let mut marked = None;
+        for (_, line) in self.backwards(id, first.len() as u64)? {
+            let kinds = [
+                &br#"{"type":"prompt","#[..],
+                br#"{"type":"conversation_reset","#,
+                br#"{"type":"facts","#,
+                br#"{"type":"mark","#,
+                br#"{"type":"handover","#,
+            ];
+            if !kinds.iter().any(|kind| line.starts_with(kind)) {
+                continue;
+            }
+            // A crash's fragment may start like a record; it is not one.
+            let Ok(record) = serde_json::from_slice::<Record>(&line) else {
+                continue;
+            };
+            if facts.is_none() {
+                facts = record.facts().cloned();
+            }
+            match record {
+                Record::Prompt { .. } => {
+                    after.prompted = true;
+                    if !reset {
+                        after.turns += 1;
+                    }
+                }
+                Record::ConversationReset { .. } => reset = true,
+                Record::Mark { summary, .. } => {
+                    marked = Some(summary);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let summary = match marked {
+            // Read to the header: the counts are exact.
+            None => Some(after),
+            Some(None) => None,
+            Some(Some(mark)) => Some(Summary {
+                turns: if reset { after.turns } else { mark.turns + after.turns },
+                prompted: mark.prompted || after.prompted,
+                subagents: mark.subagents,
+            }),
+        };
+        let mut meta = facts.unwrap_or_else(|| header.facts()).meta();
+        meta.summary = summary.as_ref().map(Summary::public);
+        Ok(meta)
+    }
+
+    /// A parked Thread's counts without replaying it: off its tail
+    /// (`peek`) when the log is schema 13; otherwise from a derived cache
+    /// beside the logs, filled once per log by `count` over a full load —
+    /// call this off the UI thread. The cache is pure acceleration: delete
+    /// it and the next call counts again.
+    pub fn summary(
+        &self,
+        id: ThreadId,
+        count_subagents: impl FnOnce(&ThreadSnapshot) -> usize,
+    ) -> Result<ThreadSummary, LoadError> {
+        let meta = self.peek(id)?;
+        if let Some(summary) = meta.summary.filter(|summary| summary.subagents.is_some()) {
+            return Ok(summary);
+        }
+        if let Some(cached) = self.cached_summary(id) {
+            return Ok(cached.public());
+        }
+        let snapshot = self.load(id)?;
+        let summary = Summary {
+            turns: snapshot.prompt_texts().len() as u64,
+            prompted: snapshot
+                .records
                 .iter()
-                .any(|kind| line.starts_with(kind.as_bytes()))
-                .then(|| serde_json::from_slice::<Record>(&line).ok())
-                .flatten()
-                .and_then(|record| record.facts().cloned())
-        });
-        Ok(newest.unwrap_or_else(|| header.facts()).meta())
+                .any(|record| matches!(record, Record::Prompt { .. })),
+            subagents: Some(count_subagents(&snapshot) as u64),
+        };
+        self.remember_summary(id, &summary);
+        Ok(summary.public())
+    }
+
+    /// Whether a prompt was ever sent on this Thread — what locks its
+    /// provider — without a full load when the log can say so cheaply.
+    pub fn prompted(&self, id: ThreadId) -> Result<bool, LoadError> {
+        if let Some(summary) = self.peek(id)?.summary {
+            return Ok(summary.prompted);
+        }
+        if let Some(cached) = self.cached_summary(id) {
+            return Ok(cached.prompted);
+        }
+        if self.peek_first_prompt(id)?.is_some() {
+            return Ok(true);
+        }
+        if fs::metadata(self.log_path(id))?.len() <= FIRST_PROMPT_SCAN as u64 {
+            return Ok(false);
+        }
+        Ok(self
+            .load(id)?
+            .records
+            .iter()
+            .any(|record| matches!(record, Record::Prompt { .. })))
+    }
+
+    /// The derived summary of a pre-13 log, if one was counted for it as it
+    /// is now (its length and modification time).
+    fn cached_summary(&self, id: ThreadId) -> Option<Summary> {
+        let stamp = log_stamp(&self.log_path(id))?;
+        let mut cache = self.summaries();
+        cache
+            .as_mut()?
+            .get(&id.get())
+            .filter(|cached| cached.stamp == stamp)
+            .map(|cached| cached.summary.clone())
+    }
+
+    fn remember_summary(&self, id: ThreadId, summary: &Summary) {
+        let Some(stamp) = log_stamp(&self.log_path(id)) else {
+            return;
+        };
+        let mut cache = self.summaries();
+        let Some(entries) = cache.as_mut() else {
+            return;
+        };
+        entries.insert(
+            id.get(),
+            CachedSummary {
+                stamp,
+                summary: summary.clone(),
+            },
+        );
+        if self.writable().is_err() {
+            return;
+        }
+        // A cache: written whole and renamed, never synced; a lost one is
+        // counted again.
+        let path = self.dir.join(SUMMARIES);
+        let tmp = temp_beside(&path);
+        let written = serde_json::to_vec(&*entries)
+            .map_err(io::Error::other)
+            .and_then(|bytes| fs::write(&tmp, bytes))
+            .and_then(|()| fs::rename(&tmp, &path));
+        if written.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+    }
+
+    /// The summary cache, loaded on first use.
+    fn summaries(&self) -> std::sync::MutexGuard<'_, Option<BTreeMap<u64, CachedSummary>>> {
+        let mut cache = self
+            .shared
+            .summaries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache.is_none() {
+            *cache = Some(
+                fs::read(self.dir.join(SUMMARIES))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .unwrap_or_default(),
+            );
+        }
+        cache
     }
 
     /// One log's lines from its end back to `floor` (the end of its header),
@@ -2276,13 +2510,16 @@ impl Store {
                 return None;
             }
             match serde_json::from_slice::<Record>(&line) {
-                Ok(Record::Mark { facts, .. }) => Some((at, line.len() as u64 + 1, facts)),
+                Ok(Record::Mark { facts, summary, .. }) => {
+                    Some((at, line.len() as u64 + 1, facts, summary))
+                }
                 _ => None,
             }
         });
-        let (from, mut facts) = match &mark {
-            Some((at, _, facts)) => (*at, facts.clone()),
-            None => (header_end, header.facts()),
+        let (from, mut facts, mut summary) = match &mark {
+            Some((at, _, facts, summary)) => (*at, facts.clone(), summary.clone()),
+            // Read from the header on, so the counts are exact.
+            None => (header_end, header.facts(), Some(Summary::default())),
         };
         let mut tail = Vec::new();
         let mut file = self.read_log(id)?;
@@ -2300,13 +2537,16 @@ impl Store {
             if let Some(restated) = record.facts() {
                 facts = restated.clone();
             }
+            if let Some(summary) = summary.as_mut() {
+                summary.observe(&record);
+            }
             readable = (end + 1).min(tail.len());
         }
         self.repair_tail(id, from, &tail, readable)?;
         let file = OpenOptions::new().append(true).open(self.log_path(id))?;
         let len = file.metadata()?.len();
         let (last_mark, mark_len) = match mark {
-            Some((at, mark_len, _)) => (Some(at), mark_len as usize),
+            Some((at, mark_len, _, _)) => (Some(at), mark_len as usize),
             None => (None, 0),
         };
         Ok(self.writer_on(
@@ -2317,6 +2557,7 @@ impl Store {
                 len,
                 last_mark,
                 mark_len,
+                summary,
             },
         ))
     }
@@ -2325,20 +2566,21 @@ impl Store {
     /// appended (`rewrite_from`), ending it with a mark.
     fn upgrade(&self, id: ThreadId, bytes: &[u8], parsed: Parsed) -> Result<ThreadWriter, LoadError> {
         let facts = parsed.snapshot.facts();
-        let mark = line(&Record::Mark {
+        let mut summary = Summary::default();
+        for record in &parsed.snapshot.records {
+            summary.observe(record);
+        }
+        // A parked row counted this log's subagents once already: keep it.
+        summary.subagents = self
+            .cached_summary(id)
+            .and_then(|cached| cached.subagents);
+        let mark = |summary: &Summary| Record::Mark {
             facts: facts.clone(),
             prev: None,
-        })?;
-        let (file, _) = self.rewrite_from(
-            id,
-            bytes,
-            parsed,
-            |_| {},
-            Some(Record::Mark {
-                facts: facts.clone(),
-                prev: None,
-            }),
-        )?;
+            summary: Some(summary.clone()),
+        };
+        let marked = line(&mark(&summary))?;
+        let (file, _) = self.rewrite_from(id, bytes, parsed, |_| {}, Some(mark(&summary)))?;
         let len = file.metadata()?.len();
         Ok(self.writer_on(
             id,
@@ -2346,8 +2588,9 @@ impl Store {
             Tail {
                 facts,
                 len,
-                last_mark: Some(len - mark.len() as u64),
-                mark_len: mark.len(),
+                last_mark: Some(len - marked.len() as u64),
+                mark_len: marked.len(),
+                summary: Some(summary),
             },
         ))
     }
@@ -2580,6 +2823,9 @@ pub struct ThreadMeta {
     /// `None` — including every pre-v8 log — means the provider's default
     /// reasoning effort.
     pub effort: Option<String>,
+    /// The counts a parked row shows, read off the log's tail; `None` for
+    /// a log from before schema 13 (see `Store::summary`).
+    pub summary: Option<ThreadSummary>,
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -2937,6 +3183,9 @@ pub struct ThreadWriter {
     /// Why this writer may no longer append: a failed amendment could not
     /// be taken back off the log. Reopening the Thread repairs it.
     broken: Option<String>,
+    /// The parked row's counts as of every record accepted; `None` while
+    /// unknown (a log whose last mark predates them).
+    summary: Option<Summary>,
     shared: std::sync::Arc<Shared>,
 }
 
@@ -2946,6 +3195,7 @@ struct Tail {
     len: u64,
     last_mark: Option<u64>,
     mark_len: usize,
+    summary: Option<Summary>,
 }
 
 struct PendingFlush {
@@ -3045,6 +3295,14 @@ impl ThreadWriter {
             },
         };
         self.push(record)
+    }
+
+    /// Tell the log how many subagents the Thread's Activity knows, for the
+    /// next mark: what a parked row shows without replaying the log.
+    pub fn note_subagents(&mut self, count: usize) {
+        if let Some(summary) = self.summary.as_mut() {
+            summary.subagents = Some(count as u64);
+        }
     }
 
     /// Buffer one line the operator sent. Not a Session event: the prompt is
@@ -3150,6 +3408,7 @@ impl ThreadWriter {
         let mark = line(&Record::Mark {
             facts: self.facts.clone(),
             prev: self.last_mark,
+            summary: self.summary.clone(),
         })?;
         let at = self.len;
         self.append_now(mark.as_bytes())?;
@@ -3250,6 +3509,9 @@ impl ThreadWriter {
     }
 
     fn push(&mut self, record: Record) -> io::Result<()> {
+        if let Some(summary) = self.summary.as_mut() {
+            summary.observe(&record);
+        }
         // Records already encoded for a retry are immutable until committed.
         let frozen = self
             .pending_flush

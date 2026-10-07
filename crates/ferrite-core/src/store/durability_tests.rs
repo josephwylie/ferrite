@@ -636,3 +636,118 @@ fn an_old_log_upgrades_once_and_ends_in_a_mark() {
     #[cfg(unix)]
     assert_eq!(inode(&log), before, "upgraded once");
 }
+
+/// A parked row's counts come off the log's tail: the newest mark, plus
+/// whatever was written after it.
+#[test]
+fn a_parked_thread_s_counts_come_from_its_tail() {
+    let dir = scratch("summary-tail");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    for text in ["one", "two", "three"] {
+        writer.record_prompt(text).unwrap();
+    }
+    writer
+        .record_event(
+            &SessionEvent::ConversationReset {
+                session_id: "s-2".into(),
+            },
+            None,
+        )
+        .unwrap();
+    writer.record_prompt("four").unwrap();
+    writer.note_subagents(4);
+    writer.flush_fully().unwrap();
+    let summary = store.peek(id).unwrap().summary.unwrap();
+    assert_eq!((summary.turns, summary.prompted, summary.subagents), (1, true, Some(4)));
+
+    // After the last mark: counted from the lines that follow it.
+    writer.record_prompt("five").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    let summary = store.peek(id).unwrap().summary.unwrap();
+    assert_eq!((summary.turns, summary.subagents), (2, Some(4)));
+    assert_eq!(store.load(id).unwrap().prompt_texts().len(), 2);
+}
+
+/// Whatever mix of prompts, resets and marks a log holds, its tail counts
+/// agree with a full load.
+#[test]
+fn tail_counts_agree_with_a_full_load() {
+    for seed in 0..24u64 {
+        let dir = scratch(&format!("summary-property-{seed}"));
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer) = store.create(Provider::Codex, None, main()).unwrap();
+        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        for step in 0..60 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            match (state >> 33) % 7 {
+                0 => writer
+                    .record_event(
+                        &SessionEvent::ConversationReset {
+                            session_id: format!("s-{step}"),
+                        },
+                        None,
+                    )
+                    .unwrap(),
+                1 => writer.flush_fully().unwrap(),
+                2 => writer.record_event(&turn_end(), None).unwrap(),
+                _ => writer.record_prompt(&format!("p{step}")).unwrap(),
+            }
+        }
+        writer.flush().unwrap();
+        let summary = store.peek(id).unwrap().summary.unwrap();
+        let snapshot = store.load(id).unwrap();
+        assert_eq!(summary.turns, snapshot.prompt_texts().len(), "seed {seed}");
+        assert_eq!(
+            summary.prompted,
+            snapshot.inputs().iter().any(|input| matches!(input, Input::Prompt(_))),
+            "seed {seed}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A parked pre-13 log is counted once, by its caller's replay, and
+/// remembered beside the logs — and an upgrade keeps what was counted.
+#[test]
+fn an_old_parked_log_is_counted_once_and_the_count_survives_its_upgrade() {
+    let dir = scratch("summary-old");
+    let (_, v11, _, _) = super::compat_tests::FIXTURES[2];
+    plant(&dir, 7, v11);
+    let store = Store::open(&dir).unwrap();
+    let id = ThreadId::new(7);
+    let replays = std::cell::Cell::new(0);
+    let count = |_: &ThreadSnapshot| {
+        replays.set(replays.get() + 1);
+        3
+    };
+    let first = store.summary(id, count).unwrap();
+    assert_eq!((first.turns, first.subagents), (2, Some(3)));
+    let read = store.bytes_read();
+    let again = store.summary(id, count).unwrap();
+    assert_eq!(again, first);
+    assert_eq!(replays.get(), 1, "remembered, not replayed again");
+    assert!(store.bytes_read() - read <= 64 * 1024, "only the header was read");
+    assert!(dir.join(SUMMARIES).is_file());
+
+    // The first rename upgrades the log; its mark keeps the count.
+    store.set_title(id, "renamed".into(), None).unwrap();
+    let upgraded = store.summary(id, count).unwrap();
+    assert_eq!((upgraded.turns, upgraded.subagents), (2, Some(3)));
+    assert_eq!(replays.get(), 1);
+}
+
+/// Whether a parked Thread is locked — any prompt ever sent — is known
+/// from the tail of a long log, not a full load.
+#[test]
+fn a_parked_lock_check_reads_only_the_tail() {
+    let dir = scratch("summary-lock");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = long_thread(&store, 3);
+    writer.flush_fully().unwrap();
+    drop(writer);
+    let read = store.bytes_read();
+    assert!(store.prompted(id).unwrap());
+    assert!(store.bytes_read() - read <= 2 * MARK_SPACING + 256 * 1024);
+    let _ = fs::remove_dir_all(&dir);
+}

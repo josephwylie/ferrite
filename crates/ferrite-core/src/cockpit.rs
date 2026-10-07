@@ -1193,9 +1193,9 @@ impl Cockpit {
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
         let Some(state) = self.threads.get(&thread) else {
-            // Parked: the lock reads the log the way a revive would.
-            let snapshot = self.store.load(thread).map_err(ProvisionError::Store)?;
-            if history_locks(&snapshot.inputs()) {
+            // Parked: the lock is whether a prompt was ever sent, which the
+            // log's tail says without a full load.
+            if self.store.prompted(thread).map_err(ProvisionError::Store)? {
                 return Err(ProvisionError::Locked);
             }
             return self
@@ -1393,7 +1393,7 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             return self.park(thread).map_err(DeleteError::Io);
         }
-        let snapshot = self.store.load(thread).map_err(DeleteError::Load)?;
+        let meta = self.store.peek(thread).map_err(DeleteError::Load)?;
         let groups_before = self.groups.clone();
         let grouped = self.groups.of(thread).is_some();
         if grouped {
@@ -1404,7 +1404,7 @@ impl Cockpit {
 
         let deleted = (|| {
             if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
-                (snapshot.project_id(), snapshot.workspace())
+                (meta.project_id, meta.workspace)
             {
                 // A worktree already gone by hand leaves nothing to check or
                 // remove; the log's deletion below is all that is left to do.
@@ -1468,6 +1468,10 @@ impl Cockpit {
             self.roster.remove_thread(thread);
             return Ok(());
         };
+        // The parked row's subagent count, from the Activity that knows it.
+        state
+            .writer
+            .note_subagents(state.activity.view().children().len());
         // A failed write keeps the live owner and its retry buffer reachable.
         // Parked, nothing else will sync the log: through the drive's cache.
         if let Err(error) = state.writer.flush_fully() {
@@ -2524,6 +2528,9 @@ impl Cockpit {
             }
             if turn_ended {
                 ended.push(*id);
+                thread
+                    .writer
+                    .note_subagents(thread.activity.view().children().len());
             }
             if update.activity_changed || !update.dirty.is_empty() || !update.subjects.is_empty() {
                 frame.push(update);
@@ -4344,21 +4351,32 @@ pub struct LogReader {
 impl LogReader {
     /// The subagents a parked Thread's durable activity knows — a replay of
     /// its whole log, so never on the UI thread for more than one Thread.
+    /// Read off the log's tail for a schema-13 log; a log from before is
+    /// replayed once and remembered (`Store::summary`).
     pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        let snapshot = self.store.load(thread)?;
-        let mut activity = Activity::default();
-        for input in snapshot.activity_inputs() {
-            activity.apply(input);
-        }
-        Ok(activity.view().children().len())
+        Ok(self
+            .store
+            .summary(thread, replayed_subagents)?
+            .subagents
+            .unwrap_or_default())
     }
 
     /// How many turns a parked Thread's log holds — its prompts since the
     /// last conversation reset: the wall's parked tile reads `11 turns`.
-    /// A whole-log read, so never on the UI thread for more than one.
+    /// Off the log's tail, or remembered like `subagent_count`.
     pub fn turn_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        Ok(self.store.load(thread)?.prompt_texts().len())
+        Ok(self.store.summary(thread, replayed_subagents)?.turns)
     }
+}
+
+/// The subagents a full replay of a snapshot knows: what a pre-13 log's
+/// parked row is counted from, once.
+fn replayed_subagents(snapshot: &crate::store::ThreadSnapshot) -> usize {
+    let mut activity = Activity::default();
+    for input in snapshot.activity_inputs() {
+        activity.apply(input);
+    }
+    activity.view().children().len()
 }
 
 #[cfg(test)]

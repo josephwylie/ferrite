@@ -194,3 +194,49 @@ fn lab_store_costs_on_a_real_log() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A parked row's counts — subagents and turns — come off the log's tail
+/// for a Thread this Ferrite parked: no replay, however long the log.
+#[test]
+fn parked_lookups_read_the_tail_of_a_parked_thread() {
+    use crate::activity::{ActivityEvent, AgentInfo, AgentKey};
+    let (mut cockpit, fake) = cockpit("parked-lookups");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "start".into());
+    live(&fake)
+        .send(SessionEvent::Init {
+            session_id: "sess-1".into(),
+            model: "claude-opus-5".into(),
+        })
+        .unwrap();
+    let mut info = AgentInfo::new(AgentKey::new(Provider::Claude, "sess-1", "agent-1"));
+    info.parent = Some(Subject::Main);
+    live(&fake)
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    // Fewer events than one pump drains (256), each large.
+    for n in 0..40 {
+        live(&fake).send(text(&format!("{n} {}", "y".repeat(100_000)))).unwrap();
+    }
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    let live_count = cockpit.thread(thread).unwrap().activity().children().len();
+    assert_eq!(live_count, 1);
+    cockpit.park(thread).unwrap();
+
+    let reader = cockpit.log_reader();
+    let read = cockpit.store.bytes_read();
+    assert_eq!(reader.subagent_count(thread).unwrap(), live_count);
+    assert_eq!(reader.turn_count(thread).unwrap(), 1);
+    let size = std::fs::metadata(cockpit.store.dir().join(thread.to_string()).join("log.jsonl"))
+        .unwrap()
+        .len();
+    assert!(size > 3_000_000);
+    // Each lookup: the header line and one chunk back from the end.
+    assert!(
+        cockpit.store.bytes_read() - read <= 256 * 1024,
+        "parked lookups read {} bytes of a {size} byte log",
+        cockpit.store.bytes_read() - read
+    );
+    let _ = std::fs::remove_dir_all(cockpit.store.dir());
+}
