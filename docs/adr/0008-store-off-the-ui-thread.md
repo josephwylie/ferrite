@@ -80,6 +80,21 @@ that revive makes are deepened into one call.
 
 ### 1. One store worker behind the Store interface
 
+**One writing process per store.** Two Ferrites can share a store (a dev
+build beside the installed app; both default to `~/.ferrite/threads`). If
+both write, one can truncate the other's committed records, strand its
+appends behind a rename, or interleave marks. To prevent that:
+
+- `Store::open` takes an exclusive, non-blocking lock on `<store>/.lock`
+  through `File::try_lock`, which is `flock` on Unix and `LockFileEx` on
+  Windows.
+- A process that cannot get the lock opens the store **read-only**. It
+  lists and peeks Threads but refuses create, revive, amendments, repair
+  and upgrade with `StoreError::ReadOnly`, and the window says so.
+- Stores are keyed by the directory's device and inode, so every handle in
+  one process shares one lock, one meta cache and, later, one worker.
+- Temporary files carry the process id and a counter, never a shared name.
+
 Each store directory gets one worker per process. `Store::open` hands out
 clones of a shared inner, so `Groups`, the history loader and `LogReader`
 reach the same worker. The worker owns every log handle and runs commands in
@@ -98,11 +113,11 @@ What callers get:
 | Caller act | Contract after this ADR |
 |---|---|
 | `record_event`, `record_prompt`, `record_prompt_observation`, `record_completion` | Returns at once. The record is converted to the store's schema on the caller and queued. Coalescing, boundary flushes and the 5 s interval move into the worker unchanged. `Err` reports the writer's current failure. The record is still accepted, as today. |
-| `set_title`, `set_workspace`, `set_provider` | Returns at once. Appends a `facts` amendment through the same FIFO, so no `writer` parameter is needed and it is removed. The meta cache that `peek` reads is updated before returning. |
+| `set_title`, `set_workspace`, `set_provider` | Returns at once. Enqueues only the **change** (a delta). The worker applies it to its own fold of the Thread's facts and appends the full result as a `facts` record. A caller's stale view therefore cannot undo an earlier change, such as a provider switch committed just before a rename. No `writer` parameter is needed, and it is removed. The meta cache that `peek` reads is updated before returning. |
 | `peek` | Served from the in-process meta cache. The worker warms it for every Thread at open. A miss reads the header plus the tail back to the newest facts-bearing record, which section 3 bounds. A miss never waits on the worker: an amended Thread is always cached. |
 | `ThreadWriter::health()` (new) | Answers `Ok`, `Backlogged` or `Failed(message)` without blocking. |
-| child-history checkpoint | Asynchronous. A `Checkpoint` command writes the Thread's buffered records, then forwards the ADR-0002 request to the reader with `through` = committed length. The cockpit inserts its `Pending` buffer when it enqueues. Everything accepted after the barrier lands past `through` and replays once from the buffer, the same contract as today. |
-| `park` | Hands the writer to the worker, which writes, appends a mark, F_FULLFSYNCs and removes `.open`. Park no longer waits. A failure is retained and reported (below). |
+| child-history checkpoint | Asynchronous. A `Checkpoint` command writes the Thread's buffered records, then forwards the ADR-0002 request to the reader with `through` = committed length. The cockpit inserts its `Pending` buffer when it enqueues. Everything accepted after the barrier lands past `through` and replays once from the buffer, the same contract as today. If the writer is `Failed`, the checkpoint answers `Err` for that serial and the cockpit drops its `Pending`. |
+| `park` | Hands the writer to the worker, which writes, appends a mark, F_FULLFSYNCs and removes `.open`. Park no longer waits. A failure is retained and reported (below). `mark_open` and `mark_parked` travel through the same FIFO with a per-Thread generation, so a park's late marker removal can never delete the marker of a revive that came after it. |
 | `hand_over` | Asynchronous commit (section 2). |
 | `revive` | One call, `Store::revive(id) -> Revival` (section 3). It waits only for a write barrier and a bounded read. |
 | `delete`, `flush` (import, tests), quit | Blocking barriers through the FIFO. `delete` closes the handles before `remove_dir_all`, which Windows needs. `flush` returns when its records are durable. Quit is bounded (E1, below). |
@@ -134,11 +149,22 @@ cannot be written. Today it is the park that refuses in that case.
 
 **Quit and E1.** Today `halt_sessions` never flushes writers, so ⌘Q loses up
 to 5 s of records per Thread. Under this ADR, `halt_sessions` calls
-`Store::close_all(QUIT_DEADLINE)`. That writes every buffered record and a
-mark, then requests F_FULLFSYNC. It waits for the writes and for as much of
-the sync as fits in the deadline (proposed 500 ms), and never longer. Data
-that has passed `write(2)` survives process exit. Only power loss inside the
-deadline can cost the unsynced tail.
+`Store::close_all(QUIT_DEADLINE)`:
+
+- It always waits for every accepted record to be **written**. A record
+  that passed a boundary must survive a Ferrite crash, so writes are never
+  abandoned.
+- It writes a mark and requests F_FULLFSYNC. The deadline (proposed 500 ms)
+  bounds only that **sync**.
+- A writer that is `Failed` at quit saves its pending encoded bytes to
+  `log.pending-<pid>-<n>.jsonl` beside the log. The next launch reports
+  that file in a Notice and never merges it automatically.
+- A panic hook asks the worker to drain before the process unwinds.
+
+Data that has passed `write(2)` survives process exit. Only power loss
+inside the deadline can cost the unsynced tail. If the disk stalls and the
+writes cannot finish, the quit waits. A force quit is the operator's
+choice, never Ferrite's.
 
 ### 2. Header facts as appended amendments
 
@@ -174,6 +200,19 @@ scan going until the next facts-bearing record, then applies on top of it.
 The mark policy (section 3) bounds this scan to about 1 MiB plus one flush
 batch, which is never the 12–25 MB measured above. `peek_first_prompt` is
 unchanged.
+
+**Commit path.** Amendments and handovers are never retried from a buffer:
+a caller told that a change failed must not see it land later. They take a
+commit path instead:
+
+1. Flush the buffer.
+2. Write the line and sync it.
+3. On any failure, truncate back to the committed length, through a
+   separate `write(true)` handle, because an append-only handle cannot
+   truncate on Windows.
+
+If that truncation also fails, the writer becomes `Failed` and refuses
+appends until the log is reopened and repaired.
 
 **`hand_over`.** The new provider and its Handover must commit together. One
 line does that: the schema-13 `handover` record carries the new facts, so no
@@ -230,14 +269,25 @@ Two more alternatives were rejected:
  "cost":91234567,"prev":126800211,"base":{"carry":[102648572,114702941,…]}}
 ```
 
-**When the worker writes a mark.**
+**When the worker writes a mark.** At the first flush boundary after
+`max(1 MiB, 16 × last mark size)` bytes since the previous mark, and always
+at `create`, park, quit and upgrade. That keeps the overhead below 6.25% and
+bounds the tail that `peek` and the summary must scan. Every mark follows a
+barrier sync. A mark therefore never reaches the disk ahead of the records
+it vouches for.
 
-- **Policy:** at the first flush boundary after `max(1 MiB, 16 × last mark
-  size)` bytes since the previous mark, and always at park, quit and upgrade.
-  That keeps the overhead below 6.25% and bounds the tail that `peek` and the
-  summary must scan.
-- **Turn starts:** a mark written immediately before a Main `prompt` record
-  carries `base`, which makes it a replay base.
+**Replay base.** A mark's `base` names a replay base **at any offset**:
+`base: {at, carry}`. `at` is a turn start, meaning a Main `prompt` written
+while Main was idle. Claude's queued prompts land mid-turn and do not
+count. `carry` lists the offsets of the earlier records a replay from `at`
+needs.
+
+- The live writer keeps the carry state for recent turn starts. Each mark
+  names the newest turn start with at least 2 × the Main content budget of
+  Main cost after it.
+- The one-time upgrade computes the same thing from its full parse. A
+  Thread's first revive after the upgrade is therefore already bounded,
+  which is what the 42 existing logs need.
 
 **Field contents.**
 
@@ -265,11 +315,9 @@ mtime) in the background and freely deletable, like `rate-limits/`.
 **Bounded revive.** `Store::revive(id)` works in four steps:
 
 1. Behind a write barrier, repair the tail and upgrade the log if it is old.
-2. Find the newest mark by reverse scan, then follow `prev` back to the
-   newest base mark B where `cost(newest) − cost(B) ≥ 2 ×` the Main content
-   budget (8 MB). If no mark is that far back, B is the start of the log.
-3. Read the records named in B's `carry` by offset, then read `[B, EOF)`
-   sequentially.
+2. Find the newest mark by reverse scan and take its base.
+3. Read the records named in the base's `carry` by offset, then read
+   `[at, EOF)` sequentially.
 4. Open the append handle.
 
 The returned `Revival` replaces the separate `load`, `writer`,
@@ -294,7 +342,7 @@ kinds:
 |---|---|
 | (a) latest-of-kind | The newest `init`/`conversation_reset`/`handover` (resume), `model_changed`, `token_usage`, `context_usage`, `usage_details`, `context_details`, `run_state`, `turn_ended`, `turn_diff` |
 | (b) fold families | The newest plan, tasks snapshot and background snapshot, plus the deltas after each |
-| (c) child identity | Per canonical child: its first introduction, every alias, and its newest status and outcome |
+| (c) child identity | Per canonical child: its first introduction, every alias, its newest status, coverage and outcome, and any detached record |
 | (d) recall | Every `prompt` since the last reset |
 
 **Why the replay is equivalent.** The Main window is a suffix, and trimming
@@ -302,9 +350,16 @@ only pops from the front. So any replay that contains every record from a
 turn start at or before the window start ends with the same retained Main
 records. `rebuild` keeps the runtime that the carried records set.
 
-Children introduced before B are restored with identity, status and outcome
-intact, then evicted. Selecting one reloads its content through the
-ADR-0002 loader, which reads from disk off the paint path. With no usable
+Children introduced before the base are restored with identity, status and
+outcome intact. They are evicted only **after** the whole replay, so content
+in the suffix cannot reattach to an already evicted child. Selecting one
+reloads its content through the ADR-0002 loader, which reads from disk off
+the paint path. The property tests cover:
+
+- a small `max_children`;
+- aliases that cross the base;
+- whichever trimming Activity uses. Track C is moving it to incremental
+  eviction, so this ADR keeps its `activity.rs` changes to a minimum. With no usable
 mark (a crash before the first mark, or a carry offset that fails to parse
 as its declared kind), revive falls back to a full replay. Correctness never
 depends on the accelerator.
@@ -313,17 +368,26 @@ Persisting Activity's derived runtime in the mark was rejected. It would
 make internal state, which changes freely, part of the schema. Carry offsets
 name records the log already holds.
 
-**Torn tail without a second parse.** A schema-13 log can only tear at its
-last line: writers append whole lines, a failed write finishes its own bytes
-on retry, and every open repairs first. Repair reads the last 64 KiB. If the
-file does not end in `\n`, or its last line does not parse, the worker
-truncates to the end of the last good line with `ftruncate`, then syncs.
-Nothing is rewritten.
+**Repair without a full parse.** After a crash, only the bytes after the
+newest intact mark are in doubt. Barrier syncs order every write, so a
+power cut can leave a hole only after the last barrier, never before a mark
+that reached the disk. Repair runs in four steps:
+
+1. Parse every line from the newest mark that parses to EOF.
+2. If all of them parse, no repair is needed. A final record missing only
+   its newline gets the newline appended.
+3. Otherwise, copy every byte from the first unreadable line onward to
+   `log.damaged-<offset>.jsonl` and sync the copy. If the copy fails,
+   repair aborts and **truncates nothing**.
+4. Truncate to the end of the last good line, then sync.
+
+Line length never counts as damage. A tool-output line can exceed any
+window.
 
 A mark certifies that every line before it parsed when it was written. That
 is what lets the bounded reader keep `load`'s "the first unreadable line is
-the end" meaning without reading the prefix. Corruption of a pre-13 log in
-the middle is found, once, by the upgrade's full parse.
+the end" meaning without reading the prefix. A pre-13 log has no marks, so
+its first repair or upgrade parses it whole, once.
 
 **ADR-0002 caches.** Byte offsets no longer move after an amendment, so the
 `history.clear()` invalidations in `apply_move`, `rename_thread`, `set_model`
@@ -334,21 +398,29 @@ that is safe.
 
 | Moment | Sync |
 |---|---|
-| Boundaries: turn end, `closed`, `handover`, child terminal facts, amendments, the 5 s interval | Plain `fsync` |
+| Boundaries: turn end, `closed`, `handover`, child terminal facts, amendments, the 5 s interval, and before every mark | Barrier: `fcntl(F_BARRIERFSYNC)` on macOS, `fdatasync` elsewhere on Unix |
 | Park, quit, upgrade, `create` | F_FULLFSYNC |
-| Any log written since its last full sync | F_FULLFSYNC every 30 s (proposed) |
+| Any log written since its last full sync | F_FULLFSYNC every 30 s |
 
-All syncs run on the sync thread. On Windows both levels are
-`FlushFileBuffers`.
+Plain `fsync` is not used at boundaries on macOS. It does not order writes,
+so after a power cut a later block could persist without an earlier one,
+leaving a hole that a last-line check would miss. A barrier costs about
+what `fsync` does.
 
-The durability contract this implies: a record past a boundary survives a
-Ferrite crash or a kernel panic. After power loss, everything up to the last
-full sync survives. In the worst case, a sudden power cut loses up to 30 s of
-records. The log stays consistent in every case, because tail repair handles
-the cut.
+All syncs run on the sync thread. On Windows every level is
+`FlushFileBuffers`, which does order writes.
 
-`queue.json` keeps its synchronous save, with its refusal contract, but uses
-plain `fsync`.
+The durability contract this implies:
+
+- A record past a boundary survives a Ferrite crash or a kernel panic.
+- After power loss, everything up to the last full sync survives, and
+  nothing after it can come back out of order. At worst, a sudden power cut
+  loses up to 30 s of records.
+- The log stays consistent in every case, because repair handles the cut.
+
+`queue.json` keeps its synchronous save, with its refusal contract. It uses
+a barrier before its rename. An unreadable `queue.json` now produces a
+Notice instead of silently starting empty.
 
 ### 5. Migration and rollback
 
@@ -361,9 +433,20 @@ plain `fsync`.
 
 **Interior damage.** A full parse can find an unreadable line that is not
 the last one. Today's `writer()` silently discards everything after such a
-line. Instead, the original is copied to `log.damaged-<offset>.jsonl` first,
-so no byte is lost. The copy is an APFS clone. A hard link would not work:
-truncation changes the inode it shares.
+line. Instead, the bytes to be cut are copied to `log.damaged-<offset>.jsonl`
+and synced first, so no byte is lost. A hard link would not work, because
+truncation changes the inode it shares. If the copy fails (NTFS has no
+clone, so this is a full copy), the repair aborts. The Thread then stays
+readable but is not reopened for writing.
+
+**Windows.**
+
+- Truncation uses a separate `write(true)` handle.
+- `delete` waits until the worker, the sync thread and the reader have all
+  dropped their handles.
+- Rename-over uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING |
+  MOVEFILE_WRITE_THROUGH)` instead of a directory fsync. A directory fsync
+  exists only on Unix.
 
 **Downgrade.** An older Ferrite refuses a schema-13 log whole
 (`FutureSchema`). Its `writer`, `set_*` and `load` all read the schema
@@ -454,33 +537,78 @@ Logs that have not been upgraded stay readable by the older version.
   Revive waits for a parked Thread's retained records. On Windows, delete
   waits for the worker to close the log.
 
-**Commit order.** Each commit is independently shippable and green:
+**Commit order.** Each commit is independently shippable and green. The
+review's blockers land before the first commit that changes anything on
+disk:
 
-1. Test-only: the equivalence harness, the counting file seam, and the
-   ignored lab test.
-2. Torn-tail repair truncates instead of rewriting, and `has_torn_tail`'s
-   full reparse goes. `writer()` drops from ≈260 to ≈135 ms, and revive goes
-   from three full parses to two. Once commit 5 lands, opening a schema-13 log
-   reads only its header and tail.
-3. Sync levels: plain `fsync` at boundaries, F_FULLFSYNC at park, quit,
-   create and rewrite.
-4. Byte-verbatim upgrade replaces the reserializing rewrite.
-5. Schema 13, `facts` amendments, facts-carrying `handover`, and marks that
-   restate the facts, so `peek` stays bounded on a log that was never
-   amended. The setters and `hand_over` append, and `rewrite` is deleted
-   except for the upgrade. `set_title` drops from ≈270 ms to ≈0.1 ms.
-6. The mark summary, `ThreadMeta.summary`, and `LogReader` and
-   `ParkedLookups` on the summary, plus the derived summary cache for pre-13
-   logs. This removes the launch-time parked replays.
-7. Base marks with carry, plus `Store::revive` → `Revival` and the full
-   fallback. Revive takes one bounded read and goes from O(log) to
-   O(retained): ≈0.4 s of reads plus 32–42 s of replay becomes about 45 ms
-   on the lab log.
-8. The store worker, with writer handles, health, backpressure and barriers
-   (checkpoint, delete, revive), one per directory.
-9. Park and E1 quit through the worker.
-10. Asynchronous hand-over commit.
-11. The sync thread.
+1. Test-only: fixtures, invariant tests, the counting file seam, and the
+   ignored lab tests.
+2. **One writing process per store**: the store lock, read-only second
+   instances with a UI notice, stores keyed by device and inode, and unique
+   temp names.
+3. **Sync levels**: a barrier at boundaries, F_FULLFSYNC at park, create
+   and rewrite.
+4. Repair by copy-then-truncate, parsing from the newest intact mark, which
+   for now means from the start. `has_torn_tail`'s second full parse goes.
+5. Byte-verbatim, crash-safe upgrade and replace: unique temp name, full
+   sync, rename, directory sync or write-through. A fault-injected test
+   covers every step.
+6. Schema 13, `facts` deltas folded by the writer, facts-carrying
+   `handover`, the commit path with truncation rollback, and marks that
+   restate the facts. The setters and `hand_over` append, and `rewrite`
+   survives only for the upgrade. `set_title` drops from ≈270 ms to
+   ≈0.1 ms.
+7. The mark summary, `ThreadMeta.summary`, and `LogReader` and
+   `ParkedLookups` on the summary. The derived summary cache covers pre-13
+   logs, and its entry carries over into the upgrade's mark. Parked
+   `set_provider` and `delete` stop loading the whole log.
+8. Base marks with carry. The upgrade computes a base, and `Store::revive`
+   returns a `Revival`, with the full fallback. Revive goes from O(log) to
+   O(retained).
+9. The store worker: writer handles, health, backpressure, and barriers
+   (checkpoint, which answers `Err` per serial; delete; revive), plus
+   queued markers with generations.
+10. Park and E1 quit through the worker, `log.pending-*`, and the panic
+    hook.
+11. Asynchronous hand-over commit.
+12. The sync thread, including the 30 s full sync.
+13. `queue.json`: a barrier before its rename, and a Notice when it is
+    unreadable.
+
+## Review (2026-10-07)
+
+An independent review of the draft raised eleven findings. Each is resolved
+above:
+
+1. **Two processes on one store.** Resolved by the store lock and read-only
+   second instances, in §1 and commit 2.
+2. **Plain fsync cannot prove that only the last line tears.** Resolved by
+   barrier syncs, repair from the newest intact mark, and copy-before-
+   truncate, in §3 and §4.
+3. **Full-restatement facts could undo an async handover.** Resolved by
+   setters sending deltas that the worker folds, and a failed rollback
+   setting `Failed`, in §1 and §2.
+4. **Quit or a crash could drop accepted records.** Resolved by quit always
+   waiting for writes, `log.pending-*`, and the panic hook, in §1.
+5. **Existing logs would never get a bounded revive.** Resolved by bases at
+   any offset, which the upgrade computes, in §3.
+6. **Windows truncation, deletion, directory sync and copies.** Resolved in
+   §5.
+7. **Checkpoint on a failing writer.** Resolved by answering `Err` for that
+   serial, in §1.
+8. **A park removing a revive's `.open` marker.** Resolved by queued
+   markers with generations, in §1.
+9. **Children at the base, turn starts and property tests.** Resolved in
+   §3.
+10. **`queue.json` barrier and Notice.** Resolved in §4.
+11. **Remaining full loads.**
+    - `first_prompt_sent` is read from `summary.prompted`.
+    - Parked `set_provider` and `delete` read the summary and the facts,
+      in commit 7.
+    - A parked pre-13 Thread keeps its summary across the upgrade that its
+      first rename causes, in commit 7.
+    - ADR 0002's "Ordinary Thread loading still reads a full snapshot" now
+      means the bounded `Revival`.
 
 ## Consequences
 
