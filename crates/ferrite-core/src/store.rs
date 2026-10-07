@@ -2259,7 +2259,11 @@ impl Store {
             return Err(io::Error::other("stub refused Thread deletion"));
         }
         self.writable()?;
-        self.settle(id)?;
+        // A parking Thread's writer still holds its log open; whatever it
+        // had left to sync goes with the Thread.
+        if let Some(worker) = self.shared.worker.get() {
+            worker.forget(&self.log_path(id));
+        }
         fs::remove_dir_all(self.dir.join(id.to_string()))
     }
 

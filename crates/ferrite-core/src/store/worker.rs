@@ -62,6 +62,20 @@ impl Worker {
             .unwrap_or_else(PoisonError::into_inner);
     }
 
+    /// Let go of every writer held for the log at `path`, closing its
+    /// handle: Windows removes no directory a handle is open in.
+    pub(super) fn forget(&self, path: &std::path::Path) {
+        let gone: Vec<*const Mutex<WriterState>> = self
+            .held()
+            .iter()
+            .filter(|writer| lock(writer).path == path)
+            .map(Arc::as_ptr)
+            .collect();
+        self.queue()
+            .held
+            .retain(|writer| !gone.contains(&Arc::as_ptr(writer)));
+    }
+
     /// The writers it holds, collected without holding any of them.
     pub(super) fn held(&self) -> Vec<Arc<Mutex<WriterState>>> {
         self.queue().held.clone()

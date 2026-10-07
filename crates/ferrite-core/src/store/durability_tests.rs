@@ -880,3 +880,25 @@ fn reads_on_another_thread_never_deadlock_with_writes() {
     reading.join().unwrap();
     store.rescue();
 }
+
+/// Deleting a Thread the worker is still finishing lets go of its log
+/// first: on Windows no directory with an open handle can be removed.
+#[test]
+fn deleting_a_parking_thread_lets_go_of_its_log() {
+    let dir = scratch("delete-parking");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_prompt("hello").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    *worker::lock(&store.faults().sync_delay) = std::time::Duration::from_millis(300);
+    writer.park();
+    store.delete(id).unwrap();
+    *worker::lock(&store.faults().sync_delay) = std::time::Duration::ZERO;
+    let path = store.log_path(id);
+    let worker = store.shared.worker.get().unwrap();
+    assert!(
+        worker.held().iter().all(|writer| worker::lock(writer).path != path),
+        "a writer still holds the deleted Thread's log"
+    );
+    assert!(!dir.join(id.to_string()).exists());
+}
