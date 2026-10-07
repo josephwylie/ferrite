@@ -1152,6 +1152,79 @@ thread_local! {
     pub(crate) static RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// What the last frame drew for each Pane and nav row, and how often each
+/// was built: the stale-chrome tests read what is on screen, not the model,
+/// and the frame budgets count the work each part did.
+#[cfg(test)]
+pub(crate) mod drawn {
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+
+    use ferrite_core::roster::PaneIdentity;
+    use ferrite_core::ThreadId;
+
+    /// One Pane as its last build drew it.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub(crate) struct Pane {
+        pub focused: bool,
+        pub attention: bool,
+        pub drop_target: bool,
+        pub editing: bool,
+        pub reduce_motion: bool,
+        pub cell_width: f32,
+        /// The working clock its lines read (`12s`).
+        pub clock: Option<String>,
+        /// Its usage meter's facts: the context window and the account's.
+        pub usage: Option<String>,
+        /// Its head holds the rename editor.
+        pub renaming: bool,
+    }
+
+    thread_local! {
+        static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
+        static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
+        static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
+    }
+
+    pub(crate) fn built_pane(identity: PaneIdentity) {
+        PANE_RENDERS.with(|renders| *renders.borrow_mut().entry(identity).or_default() += 1);
+    }
+
+    pub(crate) fn record_pane(identity: PaneIdentity, pane: Pane) {
+        PANES.with(|panes| panes.borrow_mut().insert(identity, pane));
+    }
+
+    pub(crate) fn built_nav() {
+        NAV_RENDERS.with(|renders| renders.set(renders.get() + 1));
+    }
+
+    pub(crate) fn record_row(thread: ThreadId, row: String) {
+        NAV_ROWS.with(|rows| rows.borrow_mut().insert(thread, row));
+    }
+
+    /// The Pane as last drawn.
+    pub(crate) fn pane(identity: PaneIdentity) -> Pane {
+        PANES.with(|panes| panes.borrow().get(&identity).cloned().unwrap_or_default())
+    }
+
+    /// How many times this Pane has been built on this thread.
+    pub(crate) fn pane_renders(identity: PaneIdentity) -> usize {
+        PANE_RENDERS.with(|renders| renders.borrow().get(&identity).copied().unwrap_or(0))
+    }
+
+    /// How many times the nav has been built on this thread.
+    pub(crate) fn nav_renders() -> usize {
+        NAV_RENDERS.with(Cell::get)
+    }
+
+    /// The nav row for `thread` as last drawn: its status, unread, tail
+    /// and name.
+    pub(crate) fn row(thread: ThreadId) -> String {
+        NAV_ROWS.with(|rows| rows.borrow().get(&thread).cloned().unwrap_or_default())
+    }
+}
+
 /// The panes24 instrument, kept behind an env var: frames actually painted,
 /// and what the process is holding while it paints them.
 struct Perf {
@@ -7951,7 +8024,7 @@ impl CockpitView {
             .and_then(|facts| facts.last_used)
             .map(|at| crate::facts::since_label(at, now))
             .unwrap_or_default();
-        nav::ThreadRow {
+        let row = nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
             status,
@@ -7959,7 +8032,16 @@ impl CockpitView {
             project: facts.and_then(|facts| facts.project_label.clone()),
             selected: false,
             tail: nav::NavTail::of(slot.as_ref(), age),
-        }
+        };
+        #[cfg(test)]
+        drawn::record_row(
+            thread,
+            format!(
+                "{:?} unread={} {:?} {}",
+                row.status, row.unread, row.tail, row.name
+            ),
+        );
+        row
     }
 
     /// The branch a Project heading names: the checkout every one of its
@@ -9459,6 +9541,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        #[cfg(test)]
+        drawn::built_pane(self.panes[index].identity);
         let content = self.pane_content(index, level, window, cx);
         if self.settings_open || self.project_editor.is_some() {
             return content;
@@ -9694,6 +9778,32 @@ impl CockpitView {
         let expand_question = level != Level::Wall && self.question_needs_expansion(index, false);
         let mut facts = facts;
         facts.decision_joined = joins && activity_decisions.is_some();
+        #[cfg(test)]
+        drawn::record_pane(
+            pane.identity,
+            drawn::Pane {
+                focused,
+                attention: facts.attention,
+                drop_target: facts.drop_target,
+                editing: facts.editing,
+                reduce_motion: facts.reduce_motion,
+                cell_width: facts.cell_width,
+                clock: open
+                    .and_then(|open| open.transcript().turn_elapsed())
+                    .map(ferrite_core::progress::live_seconds),
+                usage: open.map(|open| {
+                    format!(
+                        "{:?} {:?}",
+                        open.transcript().usage().map(|usage| usage.total_tokens),
+                        self.cockpit.account_limits(open.provider())
+                    )
+                }),
+                renaming: matches!(
+                    &self.rename,
+                    Some((RenameTarget::PaneTitle(renamed), _)) if *renamed == thread
+                ),
+            },
+        );
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
             changed_files,
@@ -11999,6 +12109,8 @@ impl CockpitView {
     /// 150ms folding, 0 → 1 opening. At rest folded, the column draws
     /// nothing and the seam beside it is the plane.
     fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(test)]
+        drawn::built_nav();
         let collapsed = self.nav_railed();
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
@@ -12760,6 +12872,7 @@ mod tests {
     mod provider_navigation;
     mod render_performance;
     mod stab;
+    mod stale_chrome;
     mod subagents;
     mod ui_a;
     mod ui_b;
