@@ -22,12 +22,16 @@ use crate::{transcript::Input, ThreadId};
 
 mod activity;
 use activity::{Execution as PersistedExecution, PersistedActivity};
+mod base;
+use base::{Base, Tracker};
 #[cfg(test)]
 mod activity_tests;
 #[cfg(test)]
 pub(crate) mod compat_tests;
 #[cfg(test)]
 mod durability_tests;
+#[cfg(test)]
+mod revive_tests;
 
 /// The schema this store writes. Every log names the schema it was written
 /// at in its header line; `load` accepts this version and every version
@@ -494,6 +498,9 @@ enum Record {
         /// The parked row's counts at this point.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<Summary>,
+        /// Where a revive may start reading, and what it replays first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<Base>,
     },
 }
 
@@ -1469,6 +1476,11 @@ pub struct Store {
     dir: PathBuf,
     flush_interval: std::time::Duration,
     full_sync_interval: std::time::Duration,
+    /// How far apart marks sit, at least.
+    mark_spacing: u64,
+    /// The Main cost a replay base must have after it: twice what Activity
+    /// retains of Main, so its window lies wholly after the base.
+    base_cost: u64,
     shared: std::sync::Arc<Shared>,
     #[cfg(test)]
     fail_create: bool,
@@ -1814,6 +1826,8 @@ impl Store {
             dir,
             flush_interval,
             full_sync_interval: FULL_SYNC_INTERVAL,
+            mark_spacing: MARK_SPACING,
+            base_cost: 2 * crate::activity::ActivityLimits::default().content_bytes_per_subject as u64,
             shared,
             #[cfg(test)]
             fail_create: false,
@@ -1861,6 +1875,15 @@ impl Store {
         (count(SyncLevel::Barrier), count(SyncLevel::Full))
     }
 
+    /// Marks this far apart at least, and replay bases sized for an
+    /// Activity with these limits: a small world for a test.
+    #[cfg(test)]
+    pub(crate) fn scaled(mut self, mark_spacing: u64, limits: crate::activity::ActivityLimits) -> Self {
+        self.mark_spacing = mark_spacing;
+        self.base_cost = 2 * limits.content_bytes_per_subject as u64;
+        self
+    }
+
     /// The writers' longest wait for a full sync, shortened for a test.
     #[cfg(test)]
     pub(crate) fn full_sync_every(mut self, interval: std::time::Duration) -> Self {
@@ -1887,6 +1910,9 @@ impl Store {
             mark_len: tail.mark_len,
             broken: None,
             summary: tail.summary,
+            mark_spacing: self.mark_spacing,
+            tracker: tail.tracker,
+            inherited: tail.base,
             shared: self.shared.clone(),
         }
     }
@@ -1981,6 +2007,8 @@ impl Store {
             last_mark: None,
             mark_len: 0,
             summary: Some(Summary::default()),
+            tracker: Some(Tracker::new(self.base_cost)),
+            base: None,
         };
         Ok((id, self.writer_on(id, file, tail)))
     }
@@ -2510,17 +2538,22 @@ impl Store {
                 return None;
             }
             match serde_json::from_slice::<Record>(&line) {
-                Ok(Record::Mark { facts, summary, .. }) => {
-                    Some((at, line.len() as u64 + 1, facts, summary))
-                }
+                Ok(Record::Mark {
+                    facts,
+                    summary,
+                    base,
+                    ..
+                }) => Some((at, line.len() as u64 + 1, facts, summary, base)),
                 _ => None,
             }
         });
         let (from, mut facts, mut summary) = match &mark {
-            Some((at, _, facts, summary)) => (*at, facts.clone(), summary.clone()),
+            Some((at, _, facts, summary, _)) => (*at, facts.clone(), summary.clone()),
             // Read from the header on, so the counts are exact.
             None => (header_end, header.facts(), Some(Summary::default())),
         };
+        // From the header on, the whole log passes through: follow it.
+        let mut tracker = mark.is_none().then(|| Tracker::new(self.base_cost));
         let mut tail = Vec::new();
         let mut file = self.read_log(id)?;
         file.seek(io::SeekFrom::Start(from))?;
@@ -2540,14 +2573,17 @@ impl Store {
             if let Some(summary) = summary.as_mut() {
                 summary.observe(&record);
             }
+            if let Some(tracker) = tracker.as_mut() {
+                tracker.observe(from + readable as u64, &record);
+            }
             readable = (end + 1).min(tail.len());
         }
         self.repair_tail(id, from, &tail, readable)?;
         let file = OpenOptions::new().append(true).open(self.log_path(id))?;
         let len = file.metadata()?.len();
-        let (last_mark, mark_len) = match mark {
-            Some((at, mark_len, _, _)) => (Some(at), mark_len as usize),
-            None => (None, 0),
+        let (last_mark, mark_len, base) = match mark {
+            Some((at, mark_len, _, _, base)) => (Some(at), mark_len as usize, base),
+            None => (None, 0, None),
         };
         Ok(self.writer_on(
             id,
@@ -2558,6 +2594,8 @@ impl Store {
                 last_mark,
                 mark_len,
                 summary,
+                tracker,
+                base,
             },
         ))
     }
@@ -2574,10 +2612,21 @@ impl Store {
         summary.subagents = self
             .cached_summary(id)
             .and_then(|cached| cached.subagents);
+        // Follow every record where it will sit in the upgraded log — the
+        // same bytes after a new header line — so the upgrade's mark names
+        // a base, and a long Thread's first revive is already bounded.
+        let old_header = parsed.offsets.first().copied().unwrap_or(parsed.readable as u64);
+        let new_header = line(&Header::of(facts.clone()))?.len() as u64;
+        let mut tracker = Tracker::new(self.base_cost);
+        for (at, record) in parsed.offsets.iter().zip(&parsed.snapshot.records) {
+            tracker.observe(at - old_header + new_header, record);
+        }
+        let base = tracker.base();
         let mark = |summary: &Summary| Record::Mark {
             facts: facts.clone(),
             prev: None,
             summary: Some(summary.clone()),
+            base: base.clone(),
         };
         let marked = line(&mark(&summary))?;
         let (file, _) = self.rewrite_from(id, bytes, parsed, |_| {}, Some(mark(&summary)))?;
@@ -2591,6 +2640,8 @@ impl Store {
                 last_mark: Some(len - marked.len() as u64),
                 mark_len: marked.len(),
                 summary: Some(summary),
+                tracker: Some(tracker),
+                base,
             },
         ))
     }
@@ -2656,6 +2707,137 @@ impl Store {
         self.shared.sync(&log, SyncLevel::Full)
     }
 
+    /// Reopen a parked Thread for a revive: its writer, and what to replay,
+    /// read in time proportional to what Activity retains rather than to
+    /// the log (ADR 0008). The newest mark names a base — a turn start far
+    /// enough back that Activity's window lies wholly after it — and the
+    /// records before it that a replay from there needs first; those are
+    /// read by offset, then the log from the base on. Children known from
+    /// before the base come back as identity, status and outcome, their
+    /// content left on disk for the ADR-0002 loader to restore when shown.
+    /// Without a usable base the whole log is read, as before.
+    ///
+    /// A switch whose carry never went out still gets every exchange, read
+    /// whole (invariant 3).
+    pub fn revive(&self, id: ThreadId) -> Result<Revival, LoadError> {
+        let mut writer = self.writer(id)?;
+        let bounded = match writer.inherited.clone() {
+            Some(base) => self.read_from(id, &base, writer.len)?,
+            None => None,
+        };
+        let (records, tracker, evict) = match bounded {
+            Some(read) => read,
+            None => {
+                let parsed = parse(id, &self.read_whole_log(id)?)?;
+                let mut tracker = Tracker::new(self.base_cost);
+                for (at, record) in parsed.offsets.iter().zip(&parsed.snapshot.records) {
+                    tracker.observe(*at, record);
+                }
+                (parsed.snapshot.records, tracker, Vec::new())
+            }
+        };
+        // From here the writer follows the log, so its marks name fresh bases.
+        writer.tracker = Some(tracker);
+        let facts = writer.facts.clone();
+        let snapshot = ThreadSnapshot {
+            id,
+            provider: facts.provider,
+            schema: SCHEMA_VERSION,
+            workspace: facts.workspace,
+            session_project_root: facts.session_project_root,
+            model: facts.model,
+            project_id: facts.project_id,
+            title: facts.title,
+            effort: facts.effort,
+            records,
+        };
+        let owed = match snapshot.last_handover() {
+            Some(handover) if !handover.delivered => self.load(id)?.last_handover(),
+            _ => None,
+        };
+        let prompted = writer.summary.as_ref().is_some_and(|summary| summary.prompted)
+            || snapshot
+                .records
+                .iter()
+                .any(|record| matches!(record, Record::Prompt { .. }));
+        Ok(Revival {
+            snapshot,
+            evict,
+            owed,
+            prompted,
+            writer: Some(writer),
+        })
+    }
+
+    /// The records a replay from `base` needs: the carried ones, read by
+    /// offset, then the log from the base to `end`. `None` when the base
+    /// cannot be trusted (an offset that is not a whole record), and the
+    /// caller reads the whole log instead.
+    #[allow(clippy::type_complexity)]
+    fn read_from(
+        &self,
+        id: ThreadId,
+        base: &Base,
+        end: u64,
+    ) -> Result<Option<(Vec<Record>, Tracker, Vec<String>)>, LoadError> {
+        use std::io::BufRead;
+        // Small records mostly, read in log order: skip ahead within what
+        // is buffered rather than seek and refill for each one.
+        let mut file = io::BufReader::with_capacity(1024, self.read_log(id)?);
+        let mut position = 0;
+        let go_to = |file: &mut io::BufReader<LogRead>, position: u64, at: u64| {
+            if at >= position && at - position <= file.buffer().len() as u64 {
+                file.seek_relative((at - position) as i64)
+            } else {
+                file.seek(io::SeekFrom::Start(at)).map(|_| ())
+            }
+        };
+        let mut tracker = Tracker::new(self.base_cost);
+        let mut records = Vec::new();
+        let mut evict = Vec::new();
+        let mut line = Vec::new();
+        for at in &base.carry {
+            line.clear();
+            go_to(&mut file, position, *at)?;
+            position = *at + file.read_until(b'\n', &mut line)? as u64;
+            let Ok(record) = serde_json::from_slice::<Record>(&line) else {
+                return Ok(None);
+            };
+            if record.is_bookkeeping() || *at >= base.at {
+                return Ok(None);
+            }
+            if let Record::Activity { observation } = &record {
+                evict.extend(observation.children().map(str::to_string));
+            }
+            tracker.seed(*at, &record);
+            records.push(record);
+        }
+        tracker.idle();
+        go_to(&mut file, position, base.at)?;
+        let mut at = base.at;
+        while at < end {
+            line.clear();
+            let read = file.read_until(b'\n', &mut line)?;
+            if read == 0 {
+                break;
+            }
+            let Ok(record) = serde_json::from_slice::<Record>(&line) else {
+                return Ok(None);
+            };
+            if at == base.at && !matches!(record, Record::Prompt { .. }) {
+                return Ok(None);
+            }
+            tracker.observe(at, &record);
+            if !record.is_bookkeeping() {
+                records.push(record);
+            }
+            at += read as u64;
+        }
+        evict.sort_unstable();
+        evict.dedup();
+        Ok(Some((records, tracker, evict)))
+    }
+
     /// Recover one child's recent persisted content for an off-thread cache
     /// reload. No current status or actionable request is restored. The return
     /// value is bounded by Activity's default rendering budget; omitted local
@@ -2716,6 +2898,7 @@ impl Store {
         let Parsed {
             mut snapshot,
             readable,
+            ..
         } = parsed;
         amend(&mut snapshot);
         let header_end = bytes
@@ -2826,6 +3009,60 @@ pub struct ThreadMeta {
     /// The counts a parked row shows, read off the log's tail; `None` for
     /// a log from before schema 13 (see `Store::summary`).
     pub summary: Option<ThreadSummary>,
+}
+
+/// What a revive replays and resumes from (`Store::revive`): the Thread's
+/// facts and the records a replay needs — the whole log, or a bounded read
+/// of it — plus its writer.
+pub struct Revival {
+    snapshot: ThreadSnapshot,
+    /// Children known from before the replay base: evicted once the replay
+    /// is done, their content restored from disk when shown.
+    evict: Vec<String>,
+    owed: Option<Handover>,
+    prompted: bool,
+    writer: Option<ThreadWriter>,
+}
+
+impl Revival {
+    /// The facts and the records read; recall, the resume target and the
+    /// handover state read exactly as from a full load.
+    pub fn snapshot(&self) -> &ThreadSnapshot {
+        &self.snapshot
+    }
+
+    /// The switch whose carry never went out, with every exchange before it.
+    pub(crate) fn owed_handover(&self) -> Option<&Handover> {
+        self.owed.as_ref()
+    }
+
+    /// Whether a prompt was ever sent: what locks the provider choice.
+    pub fn prompted(&self) -> bool {
+        self.prompted
+    }
+
+    /// The replay, then the eviction of every child known from before the
+    /// replay base — after it, so later content cannot land on a child
+    /// already evicted.
+    pub fn activity_inputs(&self) -> Vec<crate::activity::ActivityInput> {
+        let mut inputs = self.snapshot.activity_inputs();
+        inputs.extend(self.evict.iter().map(|key| {
+            crate::activity::ActivityInput::Evict(crate::activity::Subject::Subagent(
+                crate::activity::AgentKey::from_stored(key.clone()),
+            ))
+        }));
+        inputs
+    }
+
+    /// The Thread's writer, for amendments before the revive completes.
+    pub fn writer(&mut self) -> &mut ThreadWriter {
+        self.writer.as_mut().expect("taken once, last")
+    }
+
+    /// Take the writer for the revived Thread.
+    pub fn take_writer(&mut self) -> ThreadWriter {
+        self.writer.take().expect("taken once")
+    }
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -3186,6 +3423,10 @@ pub struct ThreadWriter {
     /// The parked row's counts as of every record accepted; `None` while
     /// unknown (a log whose last mark predates them).
     summary: Option<Summary>,
+    mark_spacing: u64,
+    /// See `Tail`.
+    tracker: Option<Tracker>,
+    inherited: Option<Base>,
     shared: std::sync::Arc<Shared>,
 }
 
@@ -3196,6 +3437,12 @@ struct Tail {
     last_mark: Option<u64>,
     mark_len: usize,
     summary: Option<Summary>,
+    /// Following the log record by record, when the writer has read (or
+    /// written) all of it that a base needs; `None` after a tail-only
+    /// reopen, whose marks keep naming the newest base it found.
+    tracker: Option<Tracker>,
+    /// The newest base a mark named.
+    base: Option<Base>,
 }
 
 struct PendingFlush {
@@ -3221,12 +3468,15 @@ fn flush_records(
     buffer: &mut Vec<Record>,
     pending: &mut Option<PendingFlush>,
     level: SyncLevel,
+    encoded: &mut dyn FnMut(&Record, usize),
 ) -> io::Result<()> {
     while !buffer.is_empty() {
         if pending.is_none() {
             let mut bytes = Vec::new();
             for record in buffer.iter() {
-                bytes.extend_from_slice(line(record)?.as_bytes());
+                let line = line(record)?;
+                encoded(record, line.len());
+                bytes.extend_from_slice(line.as_bytes());
             }
             *pending = Some(PendingFlush {
                 bytes,
@@ -3369,11 +3619,24 @@ impl ThreadWriter {
     fn flush_at(&mut self, level: SyncLevel) -> io::Result<()> {
         self.usable()?;
         let wrote = !self.buffer.is_empty();
+        // Each record as it is encoded, where it will start in the log.
+        let mut at = self.len
+            + self
+                .pending_flush
+                .as_ref()
+                .map_or(0, |append| append.bytes.len() as u64);
+        let tracker = &mut self.tracker;
         flush_records(
             &mut self.file,
             &mut self.buffer,
             &mut self.pending_flush,
             level,
+            &mut |record, len| {
+                if let Some(tracker) = tracker.as_mut() {
+                    tracker.observe(at, record);
+                }
+                at += len as u64;
+            },
         )?;
         self.buffered_since = None;
         if wrote {
@@ -3386,7 +3649,7 @@ impl ThreadWriter {
                 SyncLevel::Barrier => self.unsynced = true,
             }
             self.len = self.file.metadata()?.len();
-            if self.since_mark() >= MARK_SPACING.max(16 * self.mark_len as u64) {
+            if self.since_mark() >= self.mark_spacing.max(16 * self.mark_len as u64) {
                 // Behind the barrier just taken: never ahead of what it vouches for.
                 self.mark()?;
                 self.shared.sync(&self.file, SyncLevel::Barrier)?;
@@ -3405,10 +3668,16 @@ impl ThreadWriter {
 
     /// Append a mark restating the facts as they are now.
     fn mark(&mut self) -> io::Result<()> {
+        // A fresh base when one is far enough back; else the newest one a
+        // mark named, still valid, only further back.
+        if let Some(base) = self.tracker.as_mut().and_then(Tracker::base) {
+            self.inherited = Some(base);
+        }
         let mark = line(&Record::Mark {
             facts: self.facts.clone(),
             prev: self.last_mark,
             summary: self.summary.clone(),
+            base: self.inherited.clone(),
         })?;
         let at = self.len;
         self.append_now(mark.as_bytes())?;
@@ -3436,9 +3705,13 @@ impl ThreadWriter {
     fn commit(&mut self, record: Record) -> io::Result<()> {
         self.flush()?;
         let written = line(&record)?;
+        let at = self.len;
         self.append_now(written.as_bytes())?;
         self.shared.sync(&self.file, SyncLevel::Barrier)?;
         self.unsynced = true;
+        if let Some(tracker) = self.tracker.as_mut() {
+            tracker.observe(at, &record);
+        }
         if let Some(facts) = record.facts() {
             self.facts = facts.clone();
         }
@@ -3539,6 +3812,8 @@ impl ThreadWriter {
 /// A log read as far as it is readable.
 struct Parsed {
     snapshot: ThreadSnapshot,
+    /// Where each of `snapshot.records` starts in the log.
+    offsets: Vec<u64>,
     /// Where the readable log ends: after the last record that parsed, and
     /// its newline when it has one. Anything past it is a crash's fragment
     /// or damage.
@@ -3568,6 +3843,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
     }
     let mut facts = header.facts();
     let mut records = Vec::new();
+    let mut offsets = Vec::new();
     while readable < bytes.len() {
         let (body_line, next) = line_at(readable);
         let Ok(record) = serde_json::from_slice::<Record>(body_line) else {
@@ -3577,6 +3853,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             facts = restated.clone();
         }
         if !record.is_bookkeeping() {
+            offsets.push(readable as u64);
             records.push(record);
         }
         readable = next;
@@ -3594,6 +3871,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             effort: facts.effort,
             records,
         },
+        offsets,
         readable,
     })
 }

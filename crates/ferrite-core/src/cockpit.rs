@@ -1495,9 +1495,17 @@ impl Cockpit {
     /// Reopen a parked Thread: its history is replayed from the log into a
     /// fresh Transcript, and the new Session is told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        let snapshot = self.store.load(thread)?;
+        // Bounded: what Activity retains, not the whole log (ADR 0008).
+        let mut revival = self.store.revive(thread)?;
+        let snapshot = revival.snapshot();
         let provider = snapshot.provider();
         let mut workspace = snapshot.workspace();
+        let session_project_root = snapshot.session_project_root();
+        let model = snapshot.model();
+        let effort = snapshot.effort();
+        let title = snapshot.title().map(str::to_string);
+        let project_id = snapshot.project_id();
+        let resume = snapshot.resume_target().map(str::to_string);
         // A worktree the agent made and the Thread followed into is the
         // agent's, not Ferrite's: gone while parked, the Thread goes back
         // to main rather than rebuilding somebody else's tree. Ferrite's
@@ -1511,7 +1519,8 @@ impl Cockpit {
                 let main = WorkspaceBinding::Main {
                     checkout: repo.clone(),
                 };
-                self.store.set_workspace(thread, &main, None)?;
+                self.store
+                    .set_workspace(thread, &main, Some(revival.writer()))?;
                 workspace = Some(main);
             }
         }
@@ -1522,29 +1531,24 @@ impl Cockpit {
             ensure_workspace(&self.registry, binding, thread)
                 .map_err(|e| LoadError::Io(io::Error::other(e)))?;
         }
-        let session_project_root = snapshot.session_project_root();
         let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
             .map(Path::to_path_buf);
-        let model = snapshot.model();
-        let effort = snapshot.effort();
-        let title = snapshot.title().map(str::to_string);
         let additional_directories =
-            project_additional_directories(&self.registry, snapshot.project_id(), cwd.as_deref());
+            project_additional_directories(&self.registry, project_id, cwd.as_deref());
         let session = self
             .spawner
             .start(SpawnRequest {
                 provider,
                 model: model.as_deref(),
                 effort: effort.as_deref(),
-                resume: snapshot.resume_target(),
+                resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
                 name: title.as_deref(),
                 additional_directories,
             })
             .map_err(LoadError::Io)?;
-        let writer = self.store.writer(thread)?;
+        let writer = revival.take_writer();
 
-        let resume = snapshot.resume_target().map(|target| target.to_string());
         let mut state = Thread::fresh(
             session,
             writer,
@@ -1559,14 +1563,13 @@ impl Cockpit {
         state.title = title;
         // A switch whose carry never went out (parked before the next
         // prompt) still owes it: the new Provider has heard nothing yet.
-        if let Some(handover) = snapshot.last_handover().filter(|h| !h.delivered) {
+        if let Some(handover) = revival.owed_handover() {
             state.carry = Some(carry_digest(handover.from, &handover.exchanges));
         }
-        state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
-        let inputs = snapshot.inputs();
-        state.first_prompt_sent = history_locks(&inputs);
+        state.prompt_history = PromptHistory::new(revival.snapshot().prompt_texts());
+        state.first_prompt_sent = revival.prompted();
         state.activity.apply(ActivityInput::Disconnect);
-        for input in snapshot.activity_inputs() {
+        for input in revival.activity_inputs() {
             state.activity.apply(input);
         }
         state.apply(Input::Revived);
@@ -3987,13 +3990,6 @@ pub fn title_from_prompt(text: &str) -> String {
     }
 }
 
-/// The first-prompt lock, read off a replayed history (#25, #29): an
-/// operator prompt in the log is a first prompt already sent. The one rule
-/// for every Thread that is not live — a revive arming its state, and a
-/// parked `set_provider` judging the log directly.
-fn history_locks(inputs: &[Input]) -> bool {
-    inputs.iter().any(|input| matches!(input, Input::Prompt(_)))
-}
 
 /// The #24 guard: a session project root that no longer exists on disk
 /// refuses the send — readably, naming the path and the remedy — never a
