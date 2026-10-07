@@ -712,13 +712,20 @@ fn read_stdout(
                 lock(&suggestions).observe(&value);
                 lock(&requests).observe(&value);
                 let response = &value["response"];
-                let mut pending = lock(&setting_reply);
-                if value["type"] == "control_response"
-                    && pending
-                        .as_ref()
-                        .is_some_and(|(id, _)| response["request_id"].as_str() == Some(id.as_str()))
-                {
-                    let (_, reply) = pending.take().expect("matched above");
+                // Released before any event is sent: `set_setting` takes this
+                // lock on the UI thread, the thread that drains the channel,
+                // so holding it while parked on a full channel would wait
+                // out a frame that can never come.
+                let setting = if value["type"] == "control_response" {
+                    let mut pending = lock(&setting_reply);
+                    let answers = pending.as_ref().is_some_and(|(id, _)| {
+                        response["request_id"].as_str() == Some(id.as_str())
+                    });
+                    answers.then(|| pending.take().expect("matched above").1)
+                } else {
+                    None
+                };
+                if let Some(reply) = setting {
                     let result = if response["subtype"] == "success" {
                         Ok(())
                     } else {

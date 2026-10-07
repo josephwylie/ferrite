@@ -360,6 +360,8 @@ fn git_diff(workspace: &Path, base: &str) -> String {
         .arg(workspace)
         .args(["diff", "--no-color"])
         .arg(format!("{base}...HEAD"))
+        // A read, never a lock on the index an agent may be writing.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()
         .filter(|out| out.status.success())
@@ -373,6 +375,8 @@ fn git_branch(workspace: &Path) -> Option<String> {
         .arg("-C")
         .arg(workspace)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        // A read, never a lock on the index an agent may be writing.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()
         .filter(|out| out.status.success())

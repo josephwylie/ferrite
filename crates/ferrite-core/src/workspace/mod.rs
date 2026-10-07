@@ -525,7 +525,8 @@ fn cached_pull_request(cwd: &Path) -> Option<PullRequest> {
 
 /// The branch's PR through `gh`. Every failure — no `gh`, not logged
 /// in, not a GitHub remote, no PR for this branch — is the same
-/// answer: the header says nothing about a PR.
+/// answer: the header says nothing about a PR. `gh` reads the checkout
+/// through `git`, so it is held to the same no-optional-locks rule.
 fn pull_request(cwd: &Path) -> Option<PullRequest> {
     let output = Command::new("gh")
         .args([
@@ -535,6 +536,7 @@ fn pull_request(cwd: &Path) -> Option<PullRequest> {
             "number,state,isDraft,statusCheckRollup",
         ])
         .current_dir(cwd)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .no_console_window()
         .output()
         .ok()?;
@@ -721,12 +723,31 @@ pub(crate) fn git_for_tests(repo: &Path, args: &[&str]) -> String {
     git(repo, args).unwrap()
 }
 
+thread_local! {
+    /// How many `git` processes this thread has started.
+    static GIT_SPAWNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `git` processes the calling thread has started through this
+/// module. A `git` call is milliseconds at best and seconds on a busy repo,
+/// so the UI's own thread must start none: its tests hold it to zero across
+/// a frame and a pump, and every read here belongs off that thread.
+pub fn git_spawns_on_this_thread() -> u64 {
+    GIT_SPAWNS.with(std::cell::Cell::get)
+}
+
 /// Run one git command against `repo`, answering its stdout.
+///
+/// Never with git's optional locks: the checkouts Ferrite reads are the
+/// ones its agents are writing, and a read that refreshed the index on the
+/// side would take `index.lock` from under the agent's own `git`.
 fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+    GIT_SPAWNS.with(|spawns| spawns.set(spawns.get() + 1));
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .no_console_window()
         .output()
         .map_err(GitError::Io)?;
@@ -1342,5 +1363,33 @@ mod tests {
         assert_eq!(fs::read_to_string(path.join("file.txt")).unwrap(), "base\n");
         assert_eq!(branch_of(&path), "ferrite/thread-1");
         assert_eq!(branch_of(&repo), "main");
+    }
+
+    /// Ferrite reads a checkout the agent is working in at the same moment,
+    /// so reading it must never take the index lock: a status read that
+    /// refreshed the index would race the agent's own `git add` into an
+    /// `index.lock` refusal. A tracked file whose timestamp moved is what
+    /// tempts a plain `git status` into rewriting the index.
+    #[test]
+    fn reading_a_checkouts_status_never_rewrites_its_index() {
+        let root = scratch("optional-locks");
+        let repo = init_repo(&root);
+        let index = repo.join(".git").join("index");
+        let before = fs::read(&index).unwrap();
+        let touched = std::time::SystemTime::now() + Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(repo.join("file.txt"))
+            .unwrap()
+            .set_modified(touched)
+            .unwrap();
+
+        assert!(is_clean(&repo).unwrap(), "only the timestamp moved");
+        assert_eq!(checkout_branch(&repo).as_deref(), Some("main"));
+
+        assert!(
+            fs::read(&index).unwrap() == before,
+            "reading the checkout rewrote its index"
+        );
     }
 }

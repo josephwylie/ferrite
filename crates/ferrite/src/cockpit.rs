@@ -236,6 +236,11 @@ fn pump_interval() -> Duration {
 const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
+
+/// How many frames a card waits for its Pane's geometry (`card_corner`).
+/// A Pane laid out for the first time has it by the next frame; a few more
+/// cover a layout that settles over two.
+const CARD_GEOMETRY_FRAMES: u8 = 3;
 const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
 
 pub struct CockpitView {
@@ -259,11 +264,19 @@ pub struct CockpitView {
     swept: std::time::Instant,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
-    /// The branch a draft's chosen project checkout is on, cached by
-    /// project: the band chip names it every frame, and git must not be
-    /// asked every frame. Cleared whenever a band popover opens, so the
-    /// menu always answers about the checkout as it stands now.
-    checked_out: std::cell::RefCell<Option<(ProjectId, SharedString)>>,
+    /// A moment that must not be skipped (a turn ended) asked for a
+    /// refresh while one was under way: another follows it.
+    branch_refresh_queued: bool,
+    /// The branch each Project's checkout is on, as git last answered —
+    /// what a draft's workspace chip names every frame. Never read from a
+    /// frame: a Project the chip has not named yet, every draft's Project
+    /// on each branch refresh, and the Project whose band popover opens
+    /// are all asked about off the UI thread (`look_up_checkouts`), and the
+    /// last answer stands until the new one lands.
+    checked_out: std::cell::RefCell<std::collections::HashMap<ProjectId, SharedString>>,
+    /// Projects whose checkout is being asked about: one lookup each at a
+    /// time, however many frames name it meanwhile.
+    checking_out: std::cell::RefCell<std::collections::HashSet<ProjectId>>,
     /// What git lists for a draft's chosen repo — its other worktrees and
     /// its local branches — read off the UI thread when the workspace
     /// popover opens and kept by project: the rows show the last answer
@@ -386,6 +399,9 @@ pub struct CockpitView {
     /// Each card trigger's bounds as last laid out (`usage-…`,
     /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
     float_triggers: FloatTriggers,
+    /// Frames each open card has waited for its Pane's geometry, by trigger
+    /// key (`card_corner`); none once it has some.
+    card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
     /// A seam being dragged: the board, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
@@ -1245,6 +1261,7 @@ impl CockpitView {
             }),
             swept: cx.background_executor().now(),
             branch_refreshing: false,
+            branch_refresh_queued: false,
             selection: TranscriptText::default(),
             native_copy: None,
             nav_filter: None,
@@ -1262,7 +1279,8 @@ impl CockpitView {
             pending_files: None,
             pending_discovery: None,
             launch_project,
-            checked_out: std::cell::RefCell::new(None),
+            checked_out: Default::default(),
+            checking_out: Default::default(),
             repo_listing: None,
             rename: None,
             context_menu: None,
@@ -1274,6 +1292,7 @@ impl CockpitView {
             context_checks: None,
             changed_files_card: None,
             float_triggers: FloatTriggers::default(),
+            card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_rail: std::cell::Cell::new(false),
             nav_forced_open: false,
@@ -1780,6 +1799,10 @@ impl CockpitView {
             // up to two seconds, so the header follows without a pause.
             self.refresh_branches(cx);
         }
+        // A wall card a throttled stream left behind refolds once its
+        // quarter second is up, whether or not anything streams again.
+        let streaming: Vec<ThreadId> = frame.iter().map(|update| update.thread).collect();
+        let walls_settled = self.facts.settle_walls(&self.cockpit, now, &streaming);
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
@@ -1789,9 +1812,11 @@ impl CockpitView {
             && !startup_changed
             && !models_changed
             && !commands_changed
+            && !walls_settled
         {
             return;
         }
+        let mut turn_ended = false;
         for update in &frame {
             if let Some(index) = self.pane_for(update.thread) {
                 for (from, to) in &update.redirects {
@@ -1829,7 +1854,7 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            self.facts.streamed(&self.cockpit, update.thread);
+            turn_ended |= self.facts.streamed(&self.cockpit, update.thread, now);
             if let Some(index) = self.pane_for(update.thread) {
                 self.facts
                     .selected(&self.cockpit, update.thread, &self.panes[index].selected);
@@ -1838,7 +1863,22 @@ impl CockpitView {
         for thread in restarted {
             self.facts.acted(&self.cockpit, thread);
         }
+        if turn_ended {
+            // The agent may have moved the checkout during its turn.
+            self.refresh_branches_soon(cx);
+        }
         cx.notify();
+    }
+
+    /// `refresh_branches`, but never skipped: a refresh already under way
+    /// may have read git before the moment that asks, so one more follows
+    /// it as soon as it lands.
+    fn refresh_branches_soon(&mut self, cx: &mut Context<Self>) {
+        if self.branch_refreshing {
+            self.branch_refresh_queued = true;
+        } else {
+            self.refresh_branches(cx);
+        }
     }
 
     /// Refresh checkout labels and their branch status without ever waiting
@@ -1847,6 +1887,15 @@ impl CockpitView {
     /// that is how a binding follows the agent into a worktree it made
     /// (`workspace::follow`), and the labels re-read on the very next pass.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+        // A draft has no Thread yet, but its workspace chip names its
+        // Project's checkout, which the operator may switch under it.
+        let drafted: Vec<ProjectId> = self
+            .panes
+            .iter()
+            .filter_map(PaneView::draft)
+            .map(|draft| draft.binding.project())
+            .collect();
+        self.look_up_checkouts(drafted, cx);
         if self.branch_refreshing {
             return;
         }
@@ -1951,9 +2000,9 @@ impl CockpitView {
                     moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
                 cx.notify();
-                if moved {
-                    // The labels above were read for the old cwd; go
-                    // straight back for the new one.
+                if moved || std::mem::take(&mut view.branch_refresh_queued) {
+                    // The labels above were read for the old cwd, or
+                    // before a turn ended; go straight back for the new.
                     view.refresh_branches(cx);
                 }
             })
@@ -6790,9 +6839,9 @@ impl CockpitView {
     /// Open one chip's popover on the focused draft — the shared tail of a
     /// chip click and ↵ on a tab-focused chip. Toggles shut when the same
     /// chip's popover is already up. Rows are registry reads, discovered at
-    /// open — never per frame, never a filesystem scan. The workspace chip
-    /// alone asks git, once per open and off the UI thread, what the repo
-    /// holds; its rows fill in when the answer lands.
+    /// open — never per frame, never a filesystem scan. Git is asked, off
+    /// the UI thread, what the checkout is on now and — for the workspace
+    /// chip — what the repo holds; the rows take each answer as it lands.
     fn open_band_popover(&mut self, chip: pane::BandChip, cx: &mut Context<Self>) {
         let Some(pane) = self.panes.get(self.focused()) else {
             return;
@@ -6809,7 +6858,9 @@ impl CockpitView {
         }
         let identity = pane.identity;
         let project = draft.binding.project();
-        self.checked_out.replace(None);
+        // The menu answers about the checkout as it stands now; until git
+        // says, it names the last answer.
+        self.look_up_checkouts([project], cx);
         let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
@@ -6887,23 +6938,80 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// What `project`'s checkout is actually on right now, cached so the
-    /// chip can name it every frame. A project git cannot answer for is
-    /// named `main` — the branch a fresh clone would be sitting on.
-    fn checked_out_branch(&self, project: ProjectId) -> SharedString {
-        if let Some((cached, branch)) = self.checked_out.borrow().as_ref() {
-            if *cached == project {
-                return branch.clone();
+    /// What `project`'s checkout is on, as git last answered, so the chip
+    /// can name it every frame without asking. A Project not named yet is
+    /// asked about off the UI thread and reads `main` until the answer
+    /// lands — the name a Project git cannot answer for keeps, the branch
+    /// a fresh clone would be sitting on.
+    fn checked_out_branch(&self, project: ProjectId, cx: &Context<Self>) -> SharedString {
+        if let Some(branch) = self.checked_out.borrow().get(&project) {
+            return branch.clone();
+        }
+        self.look_up_checkouts([project], cx);
+        SharedString::from(MAIN_BRANCH)
+    }
+
+    /// Ask git, off the UI thread, what each of `projects`' checkouts is
+    /// on. Callable from a frame: it only starts the lookup, once per
+    /// Project at a time, and `checkouts_read` takes the answers.
+    fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectId>, cx: &Context<Self>) {
+        let mut checking = self.checking_out.borrow_mut();
+        let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
+        for project in projects {
+            if checking.contains(&project) || roots.iter().any(|(asked, _)| *asked == project) {
+                continue;
+            }
+            if let Some(found) = self.cockpit.registry().project(project) {
+                roots.push((project, found.root.clone()));
             }
         }
-        let branch = self
-            .cockpit
-            .registry()
-            .project(project)
-            .and_then(|project| ferrite_core::workspace::checkout_branch(&project.root))
-            .map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
-        self.checked_out.replace(Some((project, branch.clone())));
-        branch
+        if roots.is_empty() {
+            return;
+        }
+        checking.extend(roots.iter().map(|(project, _)| *project));
+        cx.spawn(async move |this, cx| {
+            let answers = cx
+                .background_executor()
+                .spawn(async move {
+                    roots
+                        .into_iter()
+                        .map(|(project, root)| {
+                            (project, ferrite_core::workspace::checkout_branch(&root))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |view, cx| view.checkouts_read(answers, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Checkout answers, back from off the UI thread. Only a changed
+    /// answer repaints — the chip, and an open workspace menu's rows.
+    fn checkouts_read(
+        &mut self,
+        answers: Vec<(ProjectId, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        {
+            let mut checking = self.checking_out.borrow_mut();
+            let mut known = self.checked_out.borrow_mut();
+            for (project, branch) in answers {
+                checking.remove(&project);
+                let branch =
+                    branch.map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
+                if known.get(&project) != Some(&branch) {
+                    known.insert(project, branch);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.sync_workspace_rows(cx);
+            cx.notify();
+        }
     }
 
     /// One chip's rows for the focused draft. The workspace chip is scoped
@@ -7018,7 +7126,7 @@ impl CockpitView {
                 // in an isolated worktree.
                 let project = draft.binding.project();
                 let target = draft.binding.target();
-                let checked_out = self.checked_out_branch(project);
+                let checked_out = self.checked_out_branch(project, cx);
                 let mut rows = vec![band_row(
                     checked_out.clone(),
                     SharedString::from("checked out"),
@@ -7348,7 +7456,7 @@ impl CockpitView {
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "project".into());
         let workspace_label = match draft.binding.target() {
-            DraftTarget::Main => self.checked_out_branch(draft.binding.project()),
+            DraftTarget::Main => self.checked_out_branch(draft.binding.project(), cx),
             DraftTarget::Branch { name } => SharedString::from(name.clone()),
             DraftTarget::NewBranch => SharedString::from("new branch"),
             DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
@@ -10385,7 +10493,11 @@ impl CockpitView {
 
     /// Where a card opened from trigger `key` in Pane `identity` hangs
     /// (`FloatPlace::card_corner`). Until the Pane has been laid out once,
-    /// it waits a frame rather than guess.
+    /// it waits a frame rather than guess — `CARD_GEOMETRY_FRAMES` of them
+    /// at most, then hangs from the board's corner: a Pane with nothing to
+    /// give (an L3 tile draws no Composer, a Pane gone from the roster
+    /// draws nothing) would have the card ask for every frame for as long
+    /// as it stayed open.
     fn card_corner(
         &self,
         key: String,
@@ -10416,13 +10528,40 @@ impl CockpitView {
         // A card opened with no chip on screen (a slash command, a scene)
         // hangs off the Composer's right edge, or the card's top.
         let trigger = trigger.or(if up { geometry.composer } else { geometry.card });
+        let mut waits = self.card_waits.borrow_mut();
         match (trigger, place) {
-            (Some(trigger), Some(place)) => Some(place.card_corner(trigger, up)),
+            (Some(trigger), Some(place)) => {
+                waits.remove(&key);
+                Some(place.card_corner(trigger, up))
+            }
             _ => {
-                window.request_animation_frame();
-                None
+                let waited = waits.entry(key).or_default();
+                if *waited < CARD_GEOMETRY_FRAMES {
+                    *waited += 1;
+                    window.request_animation_frame();
+                    return None;
+                }
+                Some(self.board_card_corner(up, window))
             }
         }
+    }
+
+    /// Where a card hangs with no Pane geometry to hang from: off the
+    /// board as though it were the Pane — from its foot (where a Composer
+    /// would be) for a card opening up, its head for one opening down.
+    fn board_card_corner(&self, up: bool, window: &Window) -> Point<Pixels> {
+        let board = self.board_bounds(window);
+        let right = board.x + board.w;
+        let bottom = board.y + board.h;
+        let place = crate::components::FloatPlace {
+            floor: bottom,
+            limit_right: right - crate::theme::PANE_PAD_X,
+        };
+        let edge = if up { bottom } else { board.y };
+        place.card_corner(
+            gpui::Bounds::new(gpui::point(px(right), px(edge)), gpui::Size::default()),
+            up,
+        )
     }
 
     fn run_session_control(
@@ -16454,6 +16593,358 @@ mod tests {
                 "the same draft bootstraps on the retry"
             );
         });
+    }
+
+    fn git_in(repo: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// The draft's workspace chip names its Project's checkout every frame,
+    /// yet no frame asks git: a Project the chip has not named yet is looked
+    /// up off the UI thread, and opening the menu re-reads the checkout
+    /// there too — the menu names the last answer (never a stand-in `main`)
+    /// until the fresh one lands.
+    #[gpui::test]
+    fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
+        let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+        let base = scratch("chip-git-off-ui");
+        let repo = repo_in(&base);
+        git_in(&repo, &["switch", "-q", "-c", "feature/drafted"]);
+        let store = Store::open(base.join("threads")).unwrap();
+        let core = Cockpit::new(store, Box::new(Fake::default()));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let before = spawned();
+        view.update(cx, |view, cx| {
+            view.aim_launch(&repo);
+            cx.notify();
+        });
+        assert_eq!(spawned() - before, 0, "a frame asked git for the chip");
+        cx.run_until_parked();
+        // The menu's first row is the checkout exactly as the chip names it.
+        let checkout_row = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let open = view.popover.as_ref().expect("the workspace menu is open");
+                assert!(matches!(open.kind, Kind::Band(pane::BandChip::Workspace)));
+                (
+                    open.rows[0].name.to_string(),
+                    open.rows[0].detail.to_string(),
+                )
+            })
+        };
+        let toggle_menu = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |view, cx| {
+                view.open_band_popover(pane::BandChip::Workspace, cx)
+            })
+        };
+        toggle_menu(&view, cx);
+        assert_eq!(
+            checkout_row(&view, cx),
+            ("feature/drafted".to_string(), "checked out".to_string())
+        );
+        cx.run_until_parked();
+        toggle_menu(&view, cx);
+
+        // The operator switches branches in a terminal, then opens the menu.
+        git_in(&repo, &["switch", "-q", "-c", "feature/moved"]);
+        let before = spawned();
+        toggle_menu(&view, cx);
+        assert_eq!(spawned() - before, 0, "opening the menu asked git");
+        assert_eq!(
+            checkout_row(&view, cx),
+            ("feature/drafted".to_string(), "checked out".to_string()),
+            "the last answer stands until the fresh one lands"
+        );
+        cx.run_until_parked();
+        assert_eq!(
+            checkout_row(&view, cx),
+            ("feature/moved".to_string(), "checked out".to_string())
+        );
+    }
+
+    /// A Main turn ending is a moment the checkout may have moved (#29) —
+    /// but the pump that notices never waits on git. The label is re-read
+    /// off the UI thread and follows the repo once the answer lands.
+    #[gpui::test]
+    fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
+        let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+        let base = scratch("turn-end-git");
+        let repo = repo_in(&base);
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake.clone()));
+        let thread = core
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "Moving the checkout".into(),
+            })
+            .unwrap();
+        tick(cx);
+        assert!(
+            view.read_with(cx, |view, _| view.cockpit.thread(thread).unwrap().busy()),
+            "the premise: a turn is under way"
+        );
+        let branch = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                view.facts
+                    .get(thread)
+                    .and_then(|facts| facts.branch.as_ref())
+                    .map(|branch| branch.to_string())
+            })
+        };
+        assert!(branch(&view, cx).is_some_and(|branch| branch != "agent-moved"));
+
+        // The agent switches branches during its turn; then the turn ends.
+        git_in(&repo, &["switch", "-q", "-c", "agent-moved"]);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        let before = spawned();
+        view.update(cx, |view, cx| view.pump(cx));
+        assert_eq!(
+            spawned() - before,
+            0,
+            "the turn end asked git on the UI thread"
+        );
+        assert!(
+            view.read_with(cx, |view, _| !view.cockpit.thread(thread).unwrap().busy()),
+            "the pump saw the turn end"
+        );
+        cx.run_until_parked();
+        assert_eq!(branch(&view, cx).as_deref(), Some("agent-moved"));
+    }
+
+    /// What a Thread's wall card says right now: its alert context and the
+    /// text of its lines.
+    fn wall_text(
+        view: &gpui::Entity<CockpitView>,
+        cx: &mut gpui::VisualTestContext,
+        thread: ThreadId,
+    ) -> (String, Vec<String>) {
+        view.read_with(cx, |view, _| {
+            let wall = &view.facts.get(thread).expect("an open Thread").wall;
+            (
+                wall.context.to_string(),
+                wall.lines
+                    .iter()
+                    .map(|line| line.text.to_string())
+                    .collect(),
+            )
+        })
+    }
+
+    fn step(cx: &mut gpui::VisualTestContext, ms: u64) {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.run_until_parked();
+    }
+
+    /// The wall card is a fold over every Block, and the pump would refold
+    /// a streaming Thread's on every tick — 125 times a second. It refolds
+    /// at most four times a second instead, and nothing streamed is left
+    /// out: a line held back lands a quarter second after the last refold
+    /// even when the stream has gone quiet.
+    #[gpui::test]
+    fn a_streaming_wall_card_refolds_at_most_four_times_a_second(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("wall-throttle", 1);
+        let thread = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        step(cx, 1_000);
+        let stream = |text: String| {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TextDelta { text })
+                .unwrap()
+        };
+        let shows = |wall: &(String, Vec<String>), text: &str| {
+            wall.1.iter().any(|line| line.contains(text))
+        };
+
+        // A second of streaming, a line every display frame.
+        let mut refolds = 0;
+        let mut last = wall_text(&view, cx, thread);
+        for n in 0..60 {
+            stream(format!("streamed line {n:02}\n\n"));
+            step(cx, 16);
+            let now = wall_text(&view, cx, thread);
+            if now != last {
+                refolds += 1;
+                last = now;
+            }
+        }
+        assert!(
+            (3..=5).contains(&refolds),
+            "a second of streaming refolded the wall card {refolds} times"
+        );
+
+        // The stream goes quiet with its newest line held back; that line
+        // still reaches the card, with nothing more arriving.
+        step(cx, 250);
+        stream("the held-back line\n\n".into());
+        step(cx, 16);
+        stream("the last line\n\n".into());
+        step(cx, 16);
+        assert!(
+            !shows(&wall_text(&view, cx, thread), "the last line"),
+            "inside the quarter second the card holds still"
+        );
+        step(cx, 250);
+        assert!(
+            shows(&wall_text(&view, cx, thread), "the last line"),
+            "the trailing refold brings the card up to date"
+        );
+    }
+
+    /// What the operator must see at once is never held for the throttle:
+    /// a Decision arriving, its answer, and the turn's end — even a turn
+    /// that starts and ends inside one quarter second.
+    #[gpui::test]
+    fn a_decision_or_a_turn_end_refolds_the_wall_card_at_once(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("wall-forced", 1);
+        let thread = core.threads()[0];
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
+        });
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        step(cx, 1_000);
+        let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+        let turn_ended = || SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        };
+
+        send(SessionEvent::TextDelta {
+            text: "working\n\n".into(),
+        });
+        step(cx, 16);
+        send(decision("perm_wall"));
+        step(cx, 16);
+        assert!(
+            wall_text(&view, cx, thread).0.contains("ferrite-perm.txt"),
+            "a Decision reaches the card at once: {:?}",
+            wall_text(&view, cx, thread)
+        );
+        cx.simulate_keystrokes("y");
+        assert!(
+            !wall_text(&view, cx, thread).0.contains("ferrite-perm.txt"),
+            "and so does its answer"
+        );
+
+        send(turn_ended());
+        step(cx, 16);
+        // An idle card was just refolded; inside its quarter second a turn
+        // starts, streams and ends. The end is seen and refolds at once.
+        send(SessionEvent::TextDelta {
+            text: "a quick turn\n\n".into(),
+        });
+        step(cx, 16);
+        send(turn_ended());
+        step(cx, 16);
+        assert!(
+            view.read_with(cx, |view, _| !view.cockpit.thread(thread).unwrap().busy()),
+            "the premise: the turn is over"
+        );
+        assert!(
+            wall_text(&view, cx, thread)
+                .1
+                .iter()
+                .any(|line| line.contains("a quick turn")),
+            "the turn's end refolds the card at once: {:?}",
+            wall_text(&view, cx, thread)
+        );
+    }
+
+    /// A card hangs from its Pane's laid-out geometry and waits a frame or
+    /// two for it. One whose Pane has nothing it can hang from — the
+    /// changed-files card the palette opens on an L3 wall tile, which draws
+    /// no Composer to rest above — must not wait for ever, asking the
+    /// display for every frame: after a few it hangs from the board's
+    /// corner instead.
+    #[gpui::test]
+    fn a_card_with_nothing_to_hang_from_stops_asking_for_frames(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("card-corner-wall", 24);
+        let group = group_all(&mut core);
+        core.enter_group(group).unwrap();
+        let thread = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        let stream = view.read_with(cx, |view, _| view.pane_for(thread).unwrap());
+        for event in [
+            SessionEvent::ToolStarted {
+                id: "edit".into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "src/lib.rs" }),
+            },
+            SessionEvent::ToolCompleted {
+                id: "edit".into(),
+                output: "updated".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "src/lib.rs".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 0,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["+pub fn changed() {}".into()],
+                        section: None,
+                    }],
+                },
+            },
+        ] {
+            fake.streams.borrow()[stream].send(event).unwrap();
+        }
+        tick(cx);
+        assert_eq!(
+            cx.update(|window, cx| view.read(cx).level_now(window)),
+            Level::Wall,
+            "the premise: wall tiles, no Composer"
+        );
+
+        // What the palette's `show changes` does.
+        view.update(cx, |view, cx| {
+            view.focus_pane(stream);
+            view.changed_files_card = Some(thread);
+            cx.notify();
+        });
+        let mut asked = Vec::new();
+        for _ in 0..8 {
+            asked.push(cx.update(|window, cx| window.simulate_next_frame(cx)));
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            asked.last(),
+            Some(&0),
+            "the open card asks for a frame every frame: {asked:?}"
+        );
+        let card = cx
+            .debug_bounds("changed-files-card")
+            .expect("the card is up");
+        let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
+        assert!(
+            f32::from(card.left()) >= board.x
+                && f32::from(card.right()) <= board.x + board.w
+                && f32::from(card.top()) >= board.y
+                && f32::from(card.bottom()) <= board.y + board.h,
+            "it hangs inside the board: {card:?} in {board:?}"
+        );
     }
 
     /// #29: the header's binding slot is fed from the branch cache — the
