@@ -723,12 +723,26 @@ pub(crate) fn git_for_tests(repo: &Path, args: &[&str]) -> String {
     git(repo, args).unwrap()
 }
 
+thread_local! {
+    /// How many `git` processes this thread has started.
+    static GIT_SPAWNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `git` processes the calling thread has started through this
+/// module. A `git` call is milliseconds at best and seconds on a busy repo,
+/// so the UI's own thread must start none: its tests hold it to zero across
+/// a frame and a pump, and every read here belongs off that thread.
+pub fn git_spawns_on_this_thread() -> u64 {
+    GIT_SPAWNS.with(std::cell::Cell::get)
+}
+
 /// Run one git command against `repo`, answering its stdout.
 ///
 /// Never with git's optional locks: the checkouts Ferrite reads are the
 /// ones its agents are writing, and a read that refreshed the index on the
 /// side would take `index.lock` from under the agent's own `git`.
 fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
+    GIT_SPAWNS.with(|spawns| spawns.set(spawns.get() + 1));
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)

@@ -259,11 +259,16 @@ pub struct CockpitView {
     swept: std::time::Instant,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
-    /// The branch a draft's chosen project checkout is on, cached by
-    /// project: the band chip names it every frame, and git must not be
-    /// asked every frame. Cleared whenever a band popover opens, so the
-    /// menu always answers about the checkout as it stands now.
-    checked_out: std::cell::RefCell<Option<(ProjectId, SharedString)>>,
+    /// The branch each Project's checkout is on, as git last answered —
+    /// what a draft's workspace chip names every frame. Never read from a
+    /// frame: a Project the chip has not named yet, every draft's Project
+    /// on each branch refresh, and the Project whose band popover opens
+    /// are all asked about off the UI thread (`look_up_checkouts`), and the
+    /// last answer stands until the new one lands.
+    checked_out: std::cell::RefCell<std::collections::HashMap<ProjectId, SharedString>>,
+    /// Projects whose checkout is being asked about: one lookup each at a
+    /// time, however many frames name it meanwhile.
+    checking_out: std::cell::RefCell<std::collections::HashSet<ProjectId>>,
     /// What git lists for a draft's chosen repo — its other worktrees and
     /// its local branches — read off the UI thread when the workspace
     /// popover opens and kept by project: the rows show the last answer
@@ -1262,7 +1267,8 @@ impl CockpitView {
             pending_files: None,
             pending_discovery: None,
             launch_project,
-            checked_out: std::cell::RefCell::new(None),
+            checked_out: Default::default(),
+            checking_out: Default::default(),
             repo_listing: None,
             rename: None,
             context_menu: None,
@@ -1847,6 +1853,15 @@ impl CockpitView {
     /// that is how a binding follows the agent into a worktree it made
     /// (`workspace::follow`), and the labels re-read on the very next pass.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+        // A draft has no Thread yet, but its workspace chip names its
+        // Project's checkout, which the operator may switch under it.
+        let drafted: Vec<ProjectId> = self
+            .panes
+            .iter()
+            .filter_map(PaneView::draft)
+            .map(|draft| draft.binding.project())
+            .collect();
+        self.look_up_checkouts(drafted, cx);
         if self.branch_refreshing {
             return;
         }
@@ -6790,9 +6805,9 @@ impl CockpitView {
     /// Open one chip's popover on the focused draft — the shared tail of a
     /// chip click and ↵ on a tab-focused chip. Toggles shut when the same
     /// chip's popover is already up. Rows are registry reads, discovered at
-    /// open — never per frame, never a filesystem scan. The workspace chip
-    /// alone asks git, once per open and off the UI thread, what the repo
-    /// holds; its rows fill in when the answer lands.
+    /// open — never per frame, never a filesystem scan. Git is asked, off
+    /// the UI thread, what the checkout is on now and — for the workspace
+    /// chip — what the repo holds; the rows take each answer as it lands.
     fn open_band_popover(&mut self, chip: pane::BandChip, cx: &mut Context<Self>) {
         let Some(pane) = self.panes.get(self.focused()) else {
             return;
@@ -6809,7 +6824,9 @@ impl CockpitView {
         }
         let identity = pane.identity;
         let project = draft.binding.project();
-        self.checked_out.replace(None);
+        // The menu answers about the checkout as it stands now; until git
+        // says, it names the last answer.
+        self.look_up_checkouts([project], cx);
         let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
@@ -6887,23 +6904,80 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// What `project`'s checkout is actually on right now, cached so the
-    /// chip can name it every frame. A project git cannot answer for is
-    /// named `main` — the branch a fresh clone would be sitting on.
-    fn checked_out_branch(&self, project: ProjectId) -> SharedString {
-        if let Some((cached, branch)) = self.checked_out.borrow().as_ref() {
-            if *cached == project {
-                return branch.clone();
+    /// What `project`'s checkout is on, as git last answered, so the chip
+    /// can name it every frame without asking. A Project not named yet is
+    /// asked about off the UI thread and reads `main` until the answer
+    /// lands — the name a Project git cannot answer for keeps, the branch
+    /// a fresh clone would be sitting on.
+    fn checked_out_branch(&self, project: ProjectId, cx: &Context<Self>) -> SharedString {
+        if let Some(branch) = self.checked_out.borrow().get(&project) {
+            return branch.clone();
+        }
+        self.look_up_checkouts([project], cx);
+        SharedString::from(MAIN_BRANCH)
+    }
+
+    /// Ask git, off the UI thread, what each of `projects`' checkouts is
+    /// on. Callable from a frame: it only starts the lookup, once per
+    /// Project at a time, and `checkouts_read` takes the answers.
+    fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectId>, cx: &Context<Self>) {
+        let mut checking = self.checking_out.borrow_mut();
+        let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
+        for project in projects {
+            if checking.contains(&project) || roots.iter().any(|(asked, _)| *asked == project) {
+                continue;
+            }
+            if let Some(found) = self.cockpit.registry().project(project) {
+                roots.push((project, found.root.clone()));
             }
         }
-        let branch = self
-            .cockpit
-            .registry()
-            .project(project)
-            .and_then(|project| ferrite_core::workspace::checkout_branch(&project.root))
-            .map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
-        self.checked_out.replace(Some((project, branch.clone())));
-        branch
+        if roots.is_empty() {
+            return;
+        }
+        checking.extend(roots.iter().map(|(project, _)| *project));
+        cx.spawn(async move |this, cx| {
+            let answers = cx
+                .background_executor()
+                .spawn(async move {
+                    roots
+                        .into_iter()
+                        .map(|(project, root)| {
+                            (project, ferrite_core::workspace::checkout_branch(&root))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |view, cx| view.checkouts_read(answers, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Checkout answers, back from off the UI thread. Only a changed
+    /// answer repaints — the chip, and an open workspace menu's rows.
+    fn checkouts_read(
+        &mut self,
+        answers: Vec<(ProjectId, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        {
+            let mut checking = self.checking_out.borrow_mut();
+            let mut known = self.checked_out.borrow_mut();
+            for (project, branch) in answers {
+                checking.remove(&project);
+                let branch =
+                    branch.map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
+                if known.get(&project) != Some(&branch) {
+                    known.insert(project, branch);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.sync_workspace_rows(cx);
+            cx.notify();
+        }
     }
 
     /// One chip's rows for the focused draft. The workspace chip is scoped
@@ -7018,7 +7092,7 @@ impl CockpitView {
                 // in an isolated worktree.
                 let project = draft.binding.project();
                 let target = draft.binding.target();
-                let checked_out = self.checked_out_branch(project);
+                let checked_out = self.checked_out_branch(project, cx);
                 let mut rows = vec![band_row(
                     checked_out.clone(),
                     SharedString::from("checked out"),
@@ -7348,7 +7422,7 @@ impl CockpitView {
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "project".into());
         let workspace_label = match draft.binding.target() {
-            DraftTarget::Main => self.checked_out_branch(draft.binding.project()),
+            DraftTarget::Main => self.checked_out_branch(draft.binding.project(), cx),
             DraftTarget::Branch { name } => SharedString::from(name.clone()),
             DraftTarget::NewBranch => SharedString::from("new branch"),
             DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
@@ -16454,6 +16528,79 @@ mod tests {
                 "the same draft bootstraps on the retry"
             );
         });
+    }
+
+    fn git_in(repo: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// The draft's workspace chip names its Project's checkout every frame,
+    /// yet no frame asks git: a Project the chip has not named yet is looked
+    /// up off the UI thread, and opening the menu re-reads the checkout
+    /// there too — the menu names the last answer (never a stand-in `main`)
+    /// until the fresh one lands.
+    #[gpui::test]
+    fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
+        let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+        let base = scratch("chip-git-off-ui");
+        let repo = repo_in(&base);
+        git_in(&repo, &["switch", "-q", "-c", "feature/drafted"]);
+        let store = Store::open(base.join("threads")).unwrap();
+        let core = Cockpit::new(store, Box::new(Fake::default()));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let before = spawned();
+        view.update(cx, |view, cx| {
+            view.aim_launch(&repo);
+            cx.notify();
+        });
+        assert_eq!(spawned() - before, 0, "a frame asked git for the chip");
+        cx.run_until_parked();
+        // The menu's first row is the checkout exactly as the chip names it.
+        let checkout_row = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let open = view.popover.as_ref().expect("the workspace menu is open");
+                assert!(matches!(open.kind, Kind::Band(pane::BandChip::Workspace)));
+                (
+                    open.rows[0].name.to_string(),
+                    open.rows[0].detail.to_string(),
+                )
+            })
+        };
+        let toggle_menu = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |view, cx| {
+                view.open_band_popover(pane::BandChip::Workspace, cx)
+            })
+        };
+        toggle_menu(&view, cx);
+        assert_eq!(
+            checkout_row(&view, cx),
+            ("feature/drafted".to_string(), "checked out".to_string())
+        );
+        cx.run_until_parked();
+        toggle_menu(&view, cx);
+
+        // The operator switches branches in a terminal, then opens the menu.
+        git_in(&repo, &["switch", "-q", "-c", "feature/moved"]);
+        let before = spawned();
+        toggle_menu(&view, cx);
+        assert_eq!(spawned() - before, 0, "opening the menu asked git");
+        assert_eq!(
+            checkout_row(&view, cx),
+            ("feature/drafted".to_string(), "checked out".to_string()),
+            "the last answer stands until the fresh one lands"
+        );
+        cx.run_until_parked();
+        assert_eq!(
+            checkout_row(&view, cx),
+            ("feature/moved".to_string(), "checked out".to_string())
+        );
     }
 
     /// #29: the header's binding slot is fed from the branch cache — the
