@@ -298,11 +298,26 @@ impl<V: View> IntoElement for ViewElement<V> {
     }
 }
 
-struct ViewElementState {
+pub(crate) struct ViewElementState {
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,
     accessed_entities: FxHashSet<EntityId>,
+}
+
+impl ViewElementState {
+    /// Ferrite's patch: the subtree holding this view was reused, its
+    /// prepaint copied from `from` to `to`.
+    pub(crate) fn move_prepaint(&mut self, from: &PrepaintStateIndex, to: &PrepaintStateIndex) {
+        self.prepaint_range =
+            self.prepaint_range.start.moved(from, to)..self.prepaint_range.end.moved(from, to);
+    }
+
+    /// Ferrite's patch: as `move_prepaint`, for its paint.
+    pub(crate) fn move_paint(&mut self, from: &PaintIndex, to: &PaintIndex) {
+        self.paint_range =
+            self.paint_range.start.moved(from, to)..self.paint_range.end.moved(from, to);
+    }
 }
 
 struct ViewElementCacheKey {
