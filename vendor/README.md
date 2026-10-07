@@ -190,6 +190,11 @@ browser does, so the same CSS geometry lands on the same device pixels:
   removed `Selection`'s backdrop blur (no `CABackdropLayer`, only a vibrancy
   tint), so the window showed the desktop unblurred. `HeaderView` keeps the
   gaussian blur on every supported macOS.
+- **Hover listener's view** (`elements/div.rs`, `window.rs`). An `on_hover`
+  listener runs with `Window::hover_listener_view` naming the view that
+  painted it, so a hover blend can notify that view alone instead of
+  `Window::refresh`, which re-renders every cached view in the window (every
+  transcript) on each pointer crossing.
 - **Debug bounds on a window** (`window.rs`, test support only).
   `Window::debug_bounds` reads the last frame's `debug_selector` bounds,
   which upstream exposes only through `VisualTestContext`: the live

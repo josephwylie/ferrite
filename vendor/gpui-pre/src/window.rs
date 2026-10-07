@@ -1166,6 +1166,9 @@ pub struct Window {
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
+    /// Ferrite's patch: the view that painted the `on_hover` listener now
+    /// running (`hover_listener_view`).
+    pub(crate) hover_listener_view: Option<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     /// Ferrite's patch: translations applied after rounding (`with_transform_offset`).
     pub(crate) transform_offset_stack: Vec<Point<Pixels>>,
@@ -1996,6 +1999,7 @@ impl Window {
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
+            hover_listener_view: None,
             element_offset_stack: Vec::new(),
             transform_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -5065,6 +5069,13 @@ impl Window {
     pub fn current_view(&self) -> EntityId {
         self.invalidator.debug_assert_paint_or_prepaint();
         self.rendered_entity_stack.last().copied().unwrap()
+    }
+
+    /// Ferrite's patch: while an `on_hover` listener runs, the view that
+    /// painted it — the one to notify for a change the hover makes, rather
+    /// than refreshing every view in the window. `None` anywhere else.
+    pub fn hover_listener_view(&self) -> Option<EntityId> {
+        self.hover_listener_view
     }
 
     #[inline]
