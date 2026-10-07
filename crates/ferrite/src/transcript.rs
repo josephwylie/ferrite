@@ -308,10 +308,6 @@ pub(crate) struct TranscriptView {
     transcript_focus: FocusHandle,
     controls_end: FocusHandle,
     document: gpui::base::TextSelectionDocument,
-    /// The one-second clock a live tool call's trail ticks on: armed while
-    /// any call runs, for the next whole second of its count, and never
-    /// faster. Idle, nothing is armed.
-    second_tick: Option<gpui::Task<()>>,
     /// The disclosure the pointer last flipped, and to which state: only
     /// its chevron eases; a keyboard toggle turns it at once.
     eased: Option<(DisclosureId, bool)>,
@@ -439,7 +435,6 @@ impl TranscriptView {
             // transcript instead of wrapping round the window.
             controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
-            second_tick: None,
             eased: None,
             wide: Rc::new(Cell::new(false)),
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
@@ -1328,13 +1323,11 @@ impl TranscriptView {
         }
     }
 
-    /// Arm the one-second clock while a call runs: one notify at the next
-    /// whole second of the youngest-rounding live count, so a trail reading
-    /// `3s` turns to `4s` on time and no faster.
+    /// While a call runs, ask the pulse clock (`motion::wake_at`) for one
+    /// draw at the next whole second of the youngest-rounding live count,
+    /// so a trail reading `3s` turns to `4s` on time, on the clock's grid,
+    /// and no faster. Idle, nothing is asked.
     fn arm_second_tick(&mut self, cx: &mut Context<Self>) {
-        if self.second_tick.is_some() {
-            return;
-        }
         let now = ferrite_core::clock::instant();
         let next = self
             .input
@@ -1351,13 +1344,8 @@ impl TranscriptView {
         let Some(next) = next else {
             return;
         };
-        self.second_tick = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(next).await;
-            let _ = this.update(cx, |view, cx| {
-                view.second_tick = None;
-                cx.notify();
-            });
-        }));
+        let at = cx.background_executor().now() + next;
+        crate::motion::wake_at(cx.entity_id(), at, cx);
     }
 
     /// The hover card this transcript hosts now, hung under its path.

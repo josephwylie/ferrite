@@ -628,6 +628,33 @@ fn run_loop(
     looped.phase(now)
 }
 
+/// Text in `view` that changes with time but is no loop (a working clock's
+/// `12s`, a nav row's `2m`) next changes at `at`: while a loop keeps the
+/// clock running, `view` is drawn on the grid then, as the fixed rate drew
+/// it; otherwise it waits for whatever next draws `view`. Nothing rides
+/// under reduced motion or a held capture.
+pub fn ride(view: EntityId, at: Instant, cx: &mut App) {
+    if reduced_motion(cx) || held_loops().is_some() {
+        return;
+    }
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let wake = clock.grid(now).wake(at, now);
+    clock.schedule.ride(view, wake, now);
+    arm(now, cx);
+}
+
+/// Text in `view` that must move on its own at `at` whatever else runs
+/// (a live tool call's `3s` → `4s`): `view` is drawn on the grid then,
+/// under reduced motion too — a clock is no motion.
+pub fn wake_at(view: EntityId, at: Instant, cx: &mut App) {
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let wake = clock.grid(now).wake(at, now);
+    clock.schedule.declare(view, wake, now);
+    arm(now, cx);
+}
+
 /// Arm the one timer for the schedule's earliest wake, unless it is armed
 /// for that or sooner. Nothing declared: it stays parked.
 fn arm(now: Instant, cx: &mut App) {

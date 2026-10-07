@@ -8717,11 +8717,56 @@ impl Render for CockpitView {
                 });
             }
         }
+        self.ride_clock_text(cx);
         root
     }
 }
 
 impl CockpitView {
+    /// The Cockpit's words that change with the clock — a working Thread's
+    /// `12s` (its working line, head and tile), a nav row's `2m` — ride the
+    /// pulse clock (`motion::ride`) to their next turn: while a loop runs
+    /// they change on its grid, as its fixed rate redrew them; otherwise the
+    /// next draw brings them up to date.
+    fn ride_clock_text(&mut self, cx: &mut Context<Self>) {
+        let wall = ferrite_core::clock::system_time();
+        // Every age the Cockpit can show: a Thread's (the nav, a parked
+        // tile, the palette), a notice's and a waiting request's (the
+        // bell, its toasts).
+        let notifications = self.cockpit.notifications();
+        let notices = notifications
+            .notices()
+            .map(|notice| notice.at)
+            .chain(notifications.decisions().map(|request| request.at))
+            .filter_map(|at| crate::facts::since_label_changes_in(at, wall));
+        let ages = self
+            .facts
+            .next_age_change(wall)
+            .into_iter()
+            .chain(notices)
+            .min();
+        if crate::motion::reduced_motion(cx) {
+            return;
+        }
+        let second = Duration::from_secs(1);
+        let working = self.panes.iter().filter_map(|pane| {
+            let open = self.cockpit.thread(pane.thread()?)?;
+            let subject = open
+                .activity()
+                .subject(&pane.selected)
+                .and_then(|subject| subject.transcript().turn_elapsed());
+            [open.transcript().turn_elapsed(), subject]
+                .into_iter()
+                .flatten()
+                .map(|elapsed| ferrite_core::cadence::next_rollover(elapsed, second))
+                .min()
+        });
+        if let Some(next) = working.chain(ages).min() {
+            let at = cx.background_executor().now() + next;
+            crate::motion::ride(cx.entity_id(), at, cx);
+        }
+    }
+
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
         #[cfg(test)]
