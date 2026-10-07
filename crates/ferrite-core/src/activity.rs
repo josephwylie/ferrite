@@ -8,7 +8,7 @@ use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
 
 use crate::store::Provider;
-use crate::transcript::{self, Input, Lexer, Transcript};
+use crate::transcript::{self, BlockId, Input, Lexer, Transcript};
 use crate::{Decision, SessionEvent, ToolResult, TurnOutcome};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -348,6 +348,24 @@ struct Record {
     content_id: Option<String>,
     input: Input,
     bytes: usize,
+    /// Order among this Subject's records, renumbered by every rebuild.
+    serial: u64,
+    /// The newest Block this record wrote. Trimming the record drops every
+    /// Block up to the newest that any trimmed record wrote.
+    reach: Option<BlockId>,
+}
+
+/// What trimming the records to their limits asks of the projection.
+enum Trimmed {
+    Nothing,
+    /// Whole records left the front, `through` the last of them by serial;
+    /// `reach` is the newest Block any of them wrote.
+    Front {
+        through: u64,
+        reach: Option<BlockId>,
+    },
+    /// The newest record alone exceeded the limit and was shortened.
+    Oversized,
 }
 
 struct SubjectState {
@@ -355,6 +373,14 @@ struct SubjectState {
     highlights: Receiver<Input>,
     records: VecDeque<Record>,
     bytes: usize,
+    /// The serial the next record takes.
+    serials: u64,
+    /// For each Block, the last record that gave it content: created it,
+    /// or streamed into it. A Block another record only settled (a tool's
+    /// result, a prompt's time) is not that record's. Kept past the
+    /// Transcript's own eviction until the record that began the Block is
+    /// trimmed: a later record's part of it outlives the Block itself.
+    authors: BTreeMap<BlockId, u64>,
     seen: BTreeSet<String>,
     seen_order: VecDeque<String>,
     retracted: BTreeSet<String>,
@@ -381,6 +407,8 @@ impl SubjectState {
             highlights,
             records: VecDeque::new(),
             bytes: 0,
+            serials: 0,
+            authors: BTreeMap::new(),
             seen: BTreeSet::new(),
             seen_order: VecDeque::new(),
             retracted: BTreeSet::new(),
@@ -567,6 +595,7 @@ impl SubjectState {
         if !self.retained {
             return transcript::Update::default();
         }
+        let newest = self.transcript.blocks().last().map(|block| block.id);
         let mut update = self.transcript.apply(input.clone());
         if !update.evicted.is_empty() {
             self.truncated = true;
@@ -576,9 +605,9 @@ impl SubjectState {
         }
         let bytes = input_bytes(&input);
         // A streamed item is retained as one growing record, not one allocation per token.
-        let merged = self
-            .records
-            .back_mut()
+        let at = self.records.len().checked_sub(1);
+        let merged = at
+            .and_then(|at| self.records.get_mut(at))
             .filter(|last| last.stream == stream && last.content_id == content_id)
             .is_some_and(|last| {
                 if append_delta(&mut last.input, &input) {
@@ -588,18 +617,47 @@ impl SubjectState {
                     false
                 }
             });
-        if !merged {
+        let at = if merged {
+            at.expect("merged into a record")
+        } else {
             self.records.push_back(Record {
                 sequence,
                 stream,
                 content_id,
                 input,
                 bytes,
+                serial: self.serials,
+                reach: None,
             });
-        }
+            self.serials += 1;
+            self.records.len() - 1
+        };
+        let record = &mut self.records[at];
+        let reach = attribute(
+            &mut self.authors,
+            &self.transcript,
+            record.serial,
+            &record.input,
+            &update,
+            newest,
+        );
+        record.reach = record.reach.max(reach);
         self.bytes += bytes;
-        if self.trim(limits) {
-            update = merge_updates(update, self.rebuild(limits));
+        match self.trim(limits) {
+            Trimmed::Nothing => {}
+            Trimmed::Front { through, reach } => {
+                let generation = self.revision;
+                let trimmed = self.evict_trimmed(through, reach, limits);
+                if self.revision == generation {
+                    // Only the oldest Blocks went; nothing this input
+                    // changed among them is still there to draw.
+                    if let Some(last) = trimmed.evicted.last() {
+                        update.dirty.retain(|id| id > last);
+                    }
+                }
+                update = merge_updates(update, trimmed);
+            }
+            Trimmed::Oversized => update = merge_updates(update, self.rebuild(limits)),
         }
         self.prune_timings(limits);
         update
@@ -630,16 +688,23 @@ impl SubjectState {
         self.rebuild(limits)
     }
 
-    fn trim(&mut self, limits: ActivityLimits) -> bool {
+    fn trim(&mut self, limits: ActivityLimits) -> Trimmed {
         let max_records = limits.blocks_per_subject.saturating_mul(8).max(1);
-        let mut trimmed = false;
+        let mut trimmed = Trimmed::Nothing;
         while self.records.len() > 1
             && (self.bytes > limits.content_bytes_per_subject || self.records.len() > max_records)
         {
             if let Some(old) = self.records.pop_front() {
                 self.bytes = self.bytes.saturating_sub(old.bytes);
+                let reach = match trimmed {
+                    Trimmed::Front { reach, .. } => reach.max(old.reach),
+                    _ => old.reach,
+                };
+                trimmed = Trimmed::Front {
+                    through: old.serial,
+                    reach,
+                };
             }
-            trimmed = true;
         }
         // Bound a single enormous text/tool event too. The original accepted event
         // still reaches the owning Store; only this rendering projection is shortened.
@@ -650,14 +715,39 @@ impl SubjectState {
                 last.input = preview;
                 last.stream = None;
                 self.bytes = last.bytes;
-                trimmed = true;
+                trimmed = Trimmed::Oversized;
             }
         }
-        if trimmed {
+        if !matches!(trimmed, Trimmed::Nothing) {
             self.truncated = true;
             self.coverage = TranscriptCoverage::Partial;
         }
         trimmed
+    }
+
+    /// Drop the Blocks of records trimmed off the front without replaying
+    /// the rest. Only a Block a surviving record gave content to needs the
+    /// replay: without its beginning, that record's part would stand alone.
+    /// A survivor that only settled a trimmed Block (a tool's result) would
+    /// find nothing to settle in a replay either.
+    fn evict_trimmed(
+        &mut self,
+        through: u64,
+        reach: Option<BlockId>,
+        limits: ActivityLimits,
+    ) -> transcript::Update {
+        let Some(reach) = reach else {
+            return transcript::Update::default();
+        };
+        if self
+            .authors
+            .range(..=reach)
+            .any(|(_, author)| *author > through)
+        {
+            return self.rebuild(limits);
+        }
+        self.authors.retain(|id, _| *id > reach);
+        self.transcript.evict_through(reach)
     }
 
     fn rebuild(&mut self, limits: ActivityLimits) -> transcript::Update {
@@ -671,16 +761,24 @@ impl SubjectState {
         let (lexer, highlights) = Lexer::new();
         self.transcript = Transcript::with_capacity(Arc::new(lexer), limits.blocks_per_subject);
         self.highlights = highlights; // drops answers for the old content revision
-        for record in &self.records {
-            if !self
-                .transcript
-                .apply(record.input.clone())
-                .evicted
-                .is_empty()
-            {
+        self.authors.clear();
+        for (serial, record) in (0..).zip(self.records.iter_mut()) {
+            let newest = self.transcript.blocks().last().map(|block| block.id);
+            let update = self.transcript.apply(record.input.clone());
+            if !update.evicted.is_empty() {
                 self.truncated = true;
             }
+            record.serial = serial;
+            record.reach = attribute(
+                &mut self.authors,
+                &self.transcript,
+                serial,
+                &record.input,
+                &update,
+                newest,
+            );
         }
+        self.serials = self.records.len() as u64;
         self.transcript.restore_runtime(runtime);
         self.revision = self.revision.wrapping_add(1);
         transcript::Update {
@@ -737,12 +835,15 @@ impl SubjectState {
                 let mut kept = VecDeque::new();
                 for (index, record) in self.records.drain(..).enumerate() {
                     if index == first {
+                        // Serials and reach are renumbered by the rebuild below.
                         kept.push_back(Record {
                             sequence: old_sequence,
                             stream: stream.clone(),
                             content_id: id.clone(),
                             input: input.clone(),
                             bytes,
+                            serial: 0,
+                            reach: None,
                         });
                     }
                     if record.stream.as_ref() != Some(identity) {
@@ -2248,6 +2349,62 @@ fn delivery_id(event: &ExecutionEvent, id: Option<&str>) -> Option<String> {
     id.map(|id| format!("{kind}:{id}"))
 }
 
+/// Note what one record's input wrote, for trimming it later: name it the
+/// author of every Block it gave content, and answer the newest Block it
+/// wrote at all. `newest` is the newest Block before the input applied.
+fn attribute(
+    authors: &mut BTreeMap<BlockId, u64>,
+    transcript: &Transcript,
+    serial: u64,
+    input: &Input,
+    update: &transcript::Update,
+    newest: Option<BlockId>,
+) -> Option<BlockId> {
+    let extends = extends(input);
+    for id in &update.dirty {
+        if extends || newest.is_none_or(|newest| *id > newest) {
+            authors.insert(*id, serial);
+        }
+    }
+    // A repeated start, or a summary part's unchanged snapshot, changes
+    // nothing here; a replay without the Block it found would begin one.
+    let consulted = match input {
+        _ if !update.dirty.is_empty() => None,
+        Input::Event(SessionEvent::ToolStarted { id, .. }) => transcript
+            .blocks()
+            .iter()
+            .rev()
+            .find(|block| matches!(&block.body, transcript::Body::Tool(tool) if &tool.call == id))
+            .map(|block| block.id),
+        Input::Event(SessionEvent::ReasoningSummaryPart {
+            item_id,
+            summary_index,
+            ..
+        }) => transcript.reasoning_part(item_id, *summary_index),
+        _ => None,
+    };
+    if let Some(id) = consulted {
+        authors.insert(id, serial);
+    }
+    update.dirty.iter().copied().max().max(consulted)
+}
+
+/// Whether `input` can grow a Block an earlier record began (streamed
+/// prose, a thought, a summary, a turn's completion stamp) rather than
+/// only settle it. Replayed without that Block, it would begin its own.
+fn extends(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::CompletionObservation { .. }
+            | Input::Event(
+                SessionEvent::TextDelta { .. }
+                    | SessionEvent::ThinkingDelta { .. }
+                    | SessionEvent::ReasoningSummaryDelta { .. }
+                    | SessionEvent::ReasoningSummaryPart { .. }
+            )
+    )
+}
+
 fn append_delta(previous: &mut Input, next: &Input) -> bool {
     match (previous, next) {
         (
@@ -2376,3 +2533,6 @@ fn merge_updates(mut first: transcript::Update, second: transcript::Update) -> t
     first.boundary = second.boundary.or(first.boundary);
     first
 }
+
+#[cfg(test)]
+mod retention_tests;
