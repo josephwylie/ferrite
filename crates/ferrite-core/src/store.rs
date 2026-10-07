@@ -25,6 +25,8 @@ use activity::{Execution as PersistedExecution, PersistedActivity};
 mod activity_tests;
 #[cfg(test)]
 pub(crate) mod compat_tests;
+#[cfg(test)]
+mod durability_tests;
 
 /// The schema this store writes. Every log names the schema it was written
 /// at in its header line; `load` accepts this version and every version
@@ -80,6 +82,14 @@ const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 /// choice is.
 const OPEN_MARKER: &str = ".open";
 const OPEN_STATE_MARKER: &str = ".open-state-v1";
+
+/// The store's single-writer claim (ADR 0008): the process holding an
+/// exclusive lock on this file is the only one that changes any log.
+const CLAIM: &str = ".lock";
+
+/// What a process that found the claim taken may still do, in its own words.
+const READ_ONLY: &str = "another Ferrite has this store open, so this window can read \
+     its Threads but not open, create or change them";
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -1246,13 +1256,113 @@ const DEFAULT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_se
 pub struct Store {
     dir: PathBuf,
     flush_interval: std::time::Duration,
+    shared: std::sync::Arc<Shared>,
     #[cfg(test)]
     fail_create: bool,
     #[cfg(test)]
     fail_delete: bool,
+}
+
+/// What every handle this process opens on one store directory shares.
+/// Two Ferrites on one store (a dev build beside the installed app) must
+/// never both write: one could cut the other's records off a log or strand
+/// its appends behind a rename. The first to open holds the claim; any other
+/// reads and refuses to write.
+struct Shared {
+    /// The lock file, held open for as long as any handle lives.
+    _claim: Option<File>,
+    /// Why this process may not write here, or `None` when it may.
+    read_only: Option<String>,
     /// Every byte read off a log, so tests can bound what a read costs.
     #[cfg(test)]
-    read_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    read_bytes: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    faults: Faults,
+}
+
+/// Failures a test can switch on for every handle on one store.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Faults {
+    /// Refuse to rename a rewritten log over the original.
+    pub(crate) refuse_replace: std::sync::atomic::AtomicBool,
+}
+
+impl Shared {
+    /// Take the claim, or note that another process holds it.
+    fn claim(dir: &Path) -> io::Result<Self> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(CLAIM))?;
+        let (claim, read_only) = match lock.try_lock() {
+            Ok(()) => (Some(lock), None),
+            Err(fs::TryLockError::WouldBlock) => (None, Some(READ_ONLY.to_string())),
+            // A filesystem without locks cannot hold the claim; this process
+            // writes as Ferrite always did there.
+            Err(fs::TryLockError::Error(error)) if error.kind() == io::ErrorKind::Unsupported => {
+                (None, None)
+            }
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+        };
+        Ok(Self {
+            _claim: claim,
+            read_only,
+            #[cfg(test)]
+            read_bytes: Default::default(),
+            #[cfg(test)]
+            faults: Faults::default(),
+        })
+    }
+
+    /// The one `Shared` for `dir` in this process, keyed by what the
+    /// directory is rather than how it is spelled.
+    fn of(dir: &Path) -> io::Result<std::sync::Arc<Self>> {
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex, PoisonError, Weak};
+        static OPEN: Mutex<BTreeMap<DirKey, Weak<Shared>>> = Mutex::new(BTreeMap::new());
+        let key = dir_key(dir)?;
+        let mut open = OPEN.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(shared) = open.get(&key).and_then(Weak::upgrade) {
+            return Ok(shared);
+        }
+        open.retain(|_, shared| shared.strong_count() > 0);
+        let shared = Arc::new(Self::claim(dir)?);
+        open.insert(key, Arc::downgrade(&shared));
+        Ok(shared)
+    }
+}
+
+#[cfg(unix)]
+type DirKey = (u64, u64);
+
+/// A directory's device and inode: the same for every path that names it.
+#[cfg(unix)]
+fn dir_key(dir: &Path) -> io::Result<DirKey> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(dir)?;
+    Ok((meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+type DirKey = PathBuf;
+
+#[cfg(not(unix))]
+fn dir_key(dir: &Path) -> io::Result<DirKey> {
+    fs::canonicalize(dir)
+}
+
+/// A name for a file written beside a log and renamed over it. Never a
+/// shared name: two writers must not truncate each other's temp file.
+fn temp_beside(path: &Path) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!("{name}.tmp-{}-{n}", std::process::id()))
 }
 
 /// A log opened for reading. Every read of a log goes through one, so
@@ -1260,14 +1370,15 @@ pub struct Store {
 struct LogRead {
     file: File,
     #[cfg(test)]
-    read_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    shared: std::sync::Arc<Shared>,
 }
 
 impl Read for LogRead {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let read = self.file.read(buf)?;
         #[cfg(test)]
-        self.read_bytes
+        self.shared
+            .read_bytes
             .fetch_add(read as u64, std::sync::atomic::Ordering::Relaxed);
         Ok(read)
     }
@@ -1286,22 +1397,46 @@ impl Store {
     ) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
+        let shared = Shared::of(&dir)?;
         Ok(Self {
             dir,
             flush_interval,
+            shared,
             #[cfg(test)]
             fail_create: false,
             #[cfg(test)]
             fail_delete: false,
-            #[cfg(test)]
-            read_bytes: Default::default(),
         })
     }
 
-    /// Bytes this store (and its clones) has read off logs so far.
+    /// Why this process may only read the store — another Ferrite holds its
+    /// claim — or `None` when it may write.
+    pub fn read_only(&self) -> Option<&str> {
+        self.shared.read_only.as_deref()
+    }
+
+    /// Every change to a log starts here: a read-only store refuses it.
+    fn writable(&self) -> io::Result<()> {
+        match &self.shared.read_only {
+            Some(reason) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                reason.clone(),
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// Bytes read off logs so far, by this store and every handle sharing it.
     #[cfg(test)]
     pub(crate) fn bytes_read(&self) -> u64 {
-        self.read_bytes.load(std::sync::atomic::Ordering::Relaxed)
+        self.shared
+            .read_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn faults(&self) -> &Faults {
+        &self.shared.faults
     }
 
     /// Open one Thread's log for reading.
@@ -1309,7 +1444,7 @@ impl Store {
         Ok(LogRead {
             file: File::open(self.log_path(id))?,
             #[cfg(test)]
-            read_bytes: self.read_bytes.clone(),
+            shared: self.shared.clone(),
         })
     }
 
@@ -1357,6 +1492,7 @@ impl Store {
         if self.fail_create {
             return Err(io::Error::other("stub refused Thread creation"));
         }
+        self.writable()?;
         let mut next = self.thread_ids()?.last().map_or(1, |id| id.get() + 1);
         loop {
             match fs::create_dir(self.dir.join(next.to_string())) {
@@ -1413,6 +1549,7 @@ impl Store {
         if self.fail_delete {
             return Err(io::Error::other("stub refused Thread deletion"));
         }
+        self.writable()?;
         fs::remove_dir_all(self.dir.join(id.to_string()))
     }
 
@@ -1433,6 +1570,7 @@ impl Store {
     /// separate from history because opening a Pane is cockpit state, not a
     /// conversation event.
     pub fn mark_open(&self, id: ThreadId) -> io::Result<()> {
+        self.writable()?;
         File::create(self.dir.join(OPEN_STATE_MARKER))?.sync_data()?;
         File::create(self.dir.join(id.to_string()).join(OPEN_MARKER))?.sync_data()
     }
@@ -1440,6 +1578,7 @@ impl Store {
     /// Remember an explicit park. Missing markers are also the legacy format,
     /// in which Threads were all considered parked on startup.
     pub fn mark_parked(&self, id: ThreadId) -> io::Result<()> {
+        self.writable()?;
         File::create(self.dir.join(OPEN_STATE_MARKER))?.sync_data()?;
         match fs::remove_file(self.dir.join(id.to_string()).join(OPEN_MARKER)) {
             Ok(()) => Ok(()),
@@ -1590,6 +1729,7 @@ impl Store {
         root: Option<PathBuf>,
         mut writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
+        self.writable()?;
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
@@ -1622,6 +1762,7 @@ impl Store {
         effort: Option<String>,
         mut writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
+        self.writable()?;
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
@@ -1655,6 +1796,7 @@ impl Store {
         binding: &WorkspaceBinding,
         mut writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
+        self.writable()?;
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
@@ -1683,6 +1825,7 @@ impl Store {
         model: Option<String>,
         writer: &mut ThreadWriter,
     ) -> Result<Handover, LoadError> {
+        self.writable()?;
         writer.flush()?;
         let mut snapshot = self.load(id)?;
         snapshot.records.push(Record::Handover {
@@ -1711,6 +1854,7 @@ impl Store {
         title: String,
         mut writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
+        self.writable()?;
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
@@ -1742,6 +1886,7 @@ impl Store {
     /// first new record onto the fragment — one unreadable line where the
     /// loader stops, hiding every turn after the crash.
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
+        self.writable()?;
         let snapshot = self.load(id)?;
         let file =
             if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&self.read_whole_log(id)?) {
@@ -1821,11 +1966,21 @@ impl Store {
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
         }
-        let tmp = path.with_extension("jsonl.tmp");
+        let tmp = temp_beside(&path);
         let mut file = File::create(&tmp)?;
         file.write_all(contents.as_bytes())?;
         file.sync_data()?;
         let handle = OpenOptions::new().append(true).open(&tmp)?;
+        #[cfg(test)]
+        if self
+            .shared
+            .faults
+            .refuse_replace
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let _ = fs::remove_file(&tmp);
+            return Err(io::Error::other("stub refused to replace the log"));
+        }
         fs::rename(&tmp, &path)?;
         Ok(handle)
     }

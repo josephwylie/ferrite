@@ -1897,6 +1897,12 @@ impl Cockpit {
         self.store.tracks_open_state()
     }
 
+    /// Why this Ferrite may only read its store — another one holds the
+    /// store's claim — or `None` when it may change it (ADR 0008).
+    pub fn store_read_only(&self) -> Option<&str> {
+        self.store.read_only()
+    }
+
     /// Whether some Thread's Main just finished making a worktree and is
     /// waiting on a fresh listing to name it — the driver's cue to list
     /// now rather than on its next tick.

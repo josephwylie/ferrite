@@ -249,11 +249,12 @@ fn main() {
                     if load {
                         demo::seed_load_group(&mut core);
                     }
-                } else {
+                } else if core.store_read_only().is_none() {
                     // Restore exactly the Panes that were open. A legacy
                     // store has no open-state marker, so its most recently
                     // used Thread remains the one-time migration fallback.
-                    // An empty store starts as a draft Pane (#29).
+                    // An empty store starts as a draft Pane (#29). A store
+                    // another Ferrite holds stays as that one left it.
                     revive_launch_threads(&mut core);
                 }
             }

@@ -449,6 +449,8 @@ pub struct CockpitView {
     pub(crate) shown_version: SharedString,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
+    /// Whether the window has said the store is read-only (ADR 0008).
+    read_only_told: bool,
     group_error: Option<SharedString>,
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
@@ -1307,6 +1309,7 @@ impl CockpitView {
             cli_probing: false,
             shown_version: env!("CARGO_PKG_VERSION").into(),
             cli_updates: Default::default(),
+            read_only_told: false,
             group_error: None,
             bell: Bell::new(),
             floats: palette::Floats::new(cx),
@@ -3926,6 +3929,29 @@ impl CockpitView {
             window.push_notification(notification, cx);
         }
         cx.notify();
+    }
+
+    /// A second Ferrite on one store reads it and changes nothing (ADR
+    /// 0008). Said once, and kept on screen: every refused act would
+    /// otherwise look like a fault of its own.
+    fn present_read_only(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        if self.read_only_told {
+            return;
+        }
+        let Some(reason) = self.cockpit.store_read_only() else {
+            return;
+        };
+        self.read_only_told = true;
+        window.push_notification(
+            Notification::new()
+                .title("This window is read-only")
+                .message(format!("{reason}. Quit the other Ferrite to work here."))
+                .with_type(NotificationType::Warning)
+                .autohide(false),
+            cx,
+        );
     }
 
     /// Every change to the settings goes through here: saved at once, the
@@ -8722,6 +8748,7 @@ impl CockpitView {
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_notices(window, cx);
         self.present_cli_updates(window, cx);
+        self.present_read_only(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the

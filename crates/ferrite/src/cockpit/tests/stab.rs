@@ -1424,3 +1424,28 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
     );
     assert_eq!(cx.debug_bounds("composer-meta"), Some(line));
 }
+
+/// A second Ferrite on the same store (a dev build beside the installed
+/// app) says once that it is read-only, and keeps saying it on screen.
+#[gpui::test]
+fn a_second_ferrite_on_one_store_says_it_is_read_only(cx: &mut TestAppContext) {
+    let dir = scratch("read-only-store");
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(".lock"))
+        .unwrap();
+    other.lock().unwrap();
+    let core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+    assert!(core.store_read_only().is_some());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    tick(cx);
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        assert_eq!(window.notifications(cx).len(), 1, "said once");
+    });
+    drop(other);
+}
