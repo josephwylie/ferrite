@@ -174,17 +174,21 @@ impl Facts {
     /// The pump streamed into a Thread: the wall card refolds — this is the
     /// seam that keeps L3 free of per-frame Block walks — and a turn that
     /// just ended may have moved the checkout, the other stated refresh
-    /// moment (#29), so the slow facts follow it.
-    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+    /// moment (#29), so the metadata follows it. The checkout itself is a
+    /// `git` call, which the pump must never wait on: answers whether the
+    /// turn just ended, for the caller to re-read it off the UI thread.
+    pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
         let was_busy = self
             .threads
             .get(&thread)
             .is_some_and(|facts| facts.main_busy);
         let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
         self.refresh_wall(cockpit, thread);
-        if was_busy && !busy {
-            self.refresh_slow(cockpit, thread);
+        let settled = was_busy && !busy;
+        if settled {
+            self.refresh_metadata(cockpit, thread);
         }
+        settled
     }
 
     /// The operator's own act — a prompt, an interrupt, an answer, a
@@ -351,8 +355,9 @@ impl Facts {
         facts.name = name;
     }
 
-    /// Refresh everything except the checkout label. This path stays in the
-    /// pump, so it must never launch Git.
+    /// Refresh everything except the checkout label (and the Project's
+    /// default branch, read once). This path stays in the pump, so it must
+    /// never launch Git.
     fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let (project, project_label) = match cockpit.peek(thread) {
             Ok(meta) => (

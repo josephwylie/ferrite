@@ -259,6 +259,9 @@ pub struct CockpitView {
     swept: std::time::Instant,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
+    /// A moment that must not be skipped (a turn ended) asked for a
+    /// refresh while one was under way: another follows it.
+    branch_refresh_queued: bool,
     /// The branch each Project's checkout is on, as git last answered —
     /// what a draft's workspace chip names every frame. Never read from a
     /// frame: a Project the chip has not named yet, every draft's Project
@@ -1250,6 +1253,7 @@ impl CockpitView {
             }),
             swept: cx.background_executor().now(),
             branch_refreshing: false,
+            branch_refresh_queued: false,
             selection: TranscriptText::default(),
             native_copy: None,
             nav_filter: None,
@@ -1798,6 +1802,7 @@ impl CockpitView {
         {
             return;
         }
+        let mut turn_ended = false;
         for update in &frame {
             if let Some(index) = self.pane_for(update.thread) {
                 for (from, to) in &update.redirects {
@@ -1835,7 +1840,7 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            self.facts.streamed(&self.cockpit, update.thread);
+            turn_ended |= self.facts.streamed(&self.cockpit, update.thread);
             if let Some(index) = self.pane_for(update.thread) {
                 self.facts
                     .selected(&self.cockpit, update.thread, &self.panes[index].selected);
@@ -1844,7 +1849,22 @@ impl CockpitView {
         for thread in restarted {
             self.facts.acted(&self.cockpit, thread);
         }
+        if turn_ended {
+            // The agent may have moved the checkout during its turn.
+            self.refresh_branches_soon(cx);
+        }
         cx.notify();
+    }
+
+    /// `refresh_branches`, but never skipped: a refresh already under way
+    /// may have read git before the moment that asks, so one more follows
+    /// it as soon as it lands.
+    fn refresh_branches_soon(&mut self, cx: &mut Context<Self>) {
+        if self.branch_refreshing {
+            self.branch_refresh_queued = true;
+        } else {
+            self.refresh_branches(cx);
+        }
     }
 
     /// Refresh checkout labels and their branch status without ever waiting
@@ -1966,9 +1986,9 @@ impl CockpitView {
                     moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
                 cx.notify();
-                if moved {
-                    // The labels above were read for the old cwd; go
-                    // straight back for the new one.
+                if moved || std::mem::take(&mut view.branch_refresh_queued) {
+                    // The labels above were read for the old cwd, or
+                    // before a turn ended; go straight back for the new.
                     view.refresh_branches(cx);
                 }
             })
@@ -16601,6 +16621,69 @@ mod tests {
             checkout_row(&view, cx),
             ("feature/moved".to_string(), "checked out".to_string())
         );
+    }
+
+    /// A Main turn ending is a moment the checkout may have moved (#29) —
+    /// but the pump that notices never waits on git. The label is re-read
+    /// off the UI thread and follows the repo once the answer lands.
+    #[gpui::test]
+    fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
+        let spawned = ferrite_core::workspace::git_spawns_on_this_thread;
+        let base = scratch("turn-end-git");
+        let repo = repo_in(&base);
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake.clone()));
+        let thread = core
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "Moving the checkout".into(),
+            })
+            .unwrap();
+        tick(cx);
+        assert!(
+            view.read_with(cx, |view, _| view.cockpit.thread(thread).unwrap().busy()),
+            "the premise: a turn is under way"
+        );
+        let branch = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                view.facts
+                    .get(thread)
+                    .and_then(|facts| facts.branch.as_ref())
+                    .map(|branch| branch.to_string())
+            })
+        };
+        assert!(branch(&view, cx).is_some_and(|branch| branch != "agent-moved"));
+
+        // The agent switches branches during its turn; then the turn ends.
+        git_in(&repo, &["switch", "-q", "-c", "agent-moved"]);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        let before = spawned();
+        view.update(cx, |view, cx| view.pump(cx));
+        assert_eq!(
+            spawned() - before,
+            0,
+            "the turn end asked git on the UI thread"
+        );
+        assert!(
+            view.read_with(cx, |view, _| !view.cockpit.thread(thread).unwrap().busy()),
+            "the pump saw the turn end"
+        );
+        cx.run_until_parked();
+        assert_eq!(branch(&view, cx).as_deref(), Some("agent-moved"));
     }
 
     /// #29: the header's binding slot is fed from the branch cache — the
