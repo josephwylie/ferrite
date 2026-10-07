@@ -527,7 +527,7 @@ impl Write for FaultySink {
     }
 }
 impl DurableWrite for FaultySink {
-    fn sync_data(&self) -> io::Result<()> {
+    fn sync(&self, _: SyncLevel) -> io::Result<()> {
         if self.fail_sync.get() {
             Err(io::Error::other("injected sync failure"))
         } else {
@@ -547,7 +547,7 @@ fn partial_write_retry_preserves_buffer_and_never_duplicates_the_written_prefix(
     }];
     let first = line(&buffer[0]).unwrap();
     let mut pending = None;
-    assert!(flush_records(&mut sink, &mut buffer, &mut pending).is_err());
+    assert!(flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier).is_err());
     assert_eq!(buffer.len(), 1);
     assert_eq!(pending.as_ref().unwrap().written, 7);
     buffer.push(Record::Text {
@@ -555,7 +555,7 @@ fn partial_write_retry_preserves_buffer_and_never_duplicates_the_written_prefix(
     });
     let second = line(&buffer[1]).unwrap();
     sink.fail_after = None;
-    flush_records(&mut sink, &mut buffer, &mut pending).unwrap();
+    flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier).unwrap();
     assert_eq!(String::from_utf8(sink.bytes).unwrap(), first + &second);
     assert!(buffer.is_empty());
     assert!(pending.is_none());
@@ -572,11 +572,11 @@ fn sync_failure_retries_sync_without_reappending_already_written_records() {
     }];
     let expected = line(&buffer[0]).unwrap();
     let mut pending = None;
-    assert!(flush_records(&mut sink, &mut buffer, &mut pending).is_err());
+    assert!(flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier).is_err());
     assert_eq!(buffer.len(), 1);
     assert_eq!(sink.bytes, expected.as_bytes());
     sink.fail_sync.set(false);
-    flush_records(&mut sink, &mut buffer, &mut pending).unwrap();
+    flush_records(&mut sink, &mut buffer, &mut pending, SyncLevel::Barrier).unwrap();
     assert_eq!(sink.bytes, expected.as_bytes());
     assert!(buffer.is_empty());
 }

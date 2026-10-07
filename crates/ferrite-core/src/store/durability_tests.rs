@@ -96,3 +96,61 @@ fn a_replaced_log_is_written_under_a_name_of_its_own() {
     store.set_title(id, "renamed".into(), None).unwrap();
     assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("renamed"));
 }
+
+fn turn_end() -> SessionEvent {
+    SessionEvent::TurnEnded {
+        outcome: crate::TurnOutcome::Completed,
+        cost_usd: None,
+    }
+}
+
+/// A Thread is durable through a power cut from the moment it exists.
+#[test]
+fn creating_a_thread_syncs_it_through_the_drive_cache() {
+    let store = Store::open(scratch("sync-create")).unwrap();
+    let (barriers, full) = store.syncs();
+    store.create(Provider::Claude, None, main()).unwrap();
+    assert_eq!(store.syncs(), (barriers, full + 1));
+}
+
+/// A turn's end orders the log behind a barrier — cheap enough that no
+/// keystroke waits on it — and never empties the drive's cache.
+#[test]
+fn a_boundary_orders_the_log_without_a_full_sync() {
+    let store = Store::open(scratch("sync-boundary")).unwrap();
+    let (_, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    let (barriers, full) = store.syncs();
+    writer.record_prompt("go").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    assert_eq!(store.syncs(), (barriers + 1, full));
+}
+
+/// Barriers bound what a crash costs; the interval bounds what a power cut
+/// costs. A log written past it gets a full sync at its next flush.
+#[test]
+fn a_written_log_is_fully_synced_within_the_interval() {
+    let store = Store::open(scratch("sync-interval"))
+        .unwrap()
+        .full_sync_every(std::time::Duration::from_millis(50));
+    let (_, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    let (barriers, full) = store.syncs();
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    writer.record_event(&turn_end(), None).unwrap();
+    assert_eq!(store.syncs(), (barriers, full + 1));
+}
+
+/// Parking leaves nothing behind a barrier only: everything written,
+/// including what earlier boundaries only ordered, goes through the drive's
+/// cache, even when the park itself has nothing new to write.
+#[test]
+fn a_full_flush_covers_what_barriers_only_ordered() {
+    let store = Store::open(scratch("sync-park")).unwrap();
+    let (_, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    let (barriers, full) = store.syncs();
+    writer.flush_fully().unwrap();
+    assert_eq!(store.syncs(), (barriers, full + 1));
+    writer.flush_fully().unwrap();
+    assert_eq!(store.syncs(), (barriers, full + 1), "nothing new to sync");
+}

@@ -485,7 +485,7 @@ fn invariant_hand_over_receives_every_exchange() {
         .map(|n| (format!("question {n}"), answer(n)))
         .collect();
     assert_eq!(handover.exchanges.len(), expected.len());
-    assert!(handover.exchanges == expected, "an exchange was lost or changed");
+    assert!(handover.exchanges == expected, "an exchange was lost or changed");    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Invariant 4 (ADR 0008): nothing the store does to an existing log loses

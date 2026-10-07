@@ -1472,7 +1472,8 @@ impl Cockpit {
             return Ok(());
         };
         // A failed write keeps the live owner and its retry buffer reachable.
-        if let Err(error) = state.writer.flush() {
+        // Parked, nothing else will sync the log: through the drive's cache.
+        if let Err(error) = state.writer.flush_fully() {
             state.report_store_error(io::Error::new(error.kind(), error.to_string()));
             return Err(error);
         }

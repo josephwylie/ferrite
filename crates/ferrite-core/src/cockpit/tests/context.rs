@@ -75,6 +75,20 @@ fn invariant_resume_ids_persist_exactly() {
     assert_eq!(last_resume(&fake).as_deref(), Some("codex-1"));
 }
 
+/// A parked Thread has no writer left to sync it later: parking takes its
+/// log through the drive's cache.
+#[test]
+fn parking_syncs_the_log_through_the_drive_cache() {
+    let (mut cockpit, fake) = cockpit("park-full-sync");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    let (_, full) = cockpit.store.syncs();
+    cockpit.park(thread).unwrap();
+    assert_eq!(cockpit.store.syncs().1, full + 1);
+}
+
 /// Invariant 3: a hand-over after a revive carries what the whole log
 /// holds, even when the history is longer than what Activity retains.
 #[test]
@@ -107,6 +121,7 @@ fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
         fake.sent.borrow().last().unwrap(),
         &format!("{}\n\nnext", carry_digest(Provider::Claude, &exchanges))
     );
+    let _ = std::fs::remove_dir_all(cockpit.store.dir());
 }
 
 /// What the store costs on a real log, end to end through the Cockpit:
@@ -125,20 +140,22 @@ fn lab_store_costs_on_a_real_log() {
     let checkout = dir.join("checkout");
     std::fs::create_dir_all(dir.join("threads").join("3")).unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
-    let bytes = std::fs::read(&source).unwrap();
-    let header_end = bytes.iter().position(|b| *b == b'\n').unwrap();
-    let mut header: serde_json::Value = serde_json::from_slice(&bytes[..header_end]).unwrap();
-    header["workspace"] = serde_json::json!({ "kind": "main", "checkout": checkout });
-    header["project_id"] = serde_json::Value::Null;
-    let mut copy = serde_json::to_vec(&header).unwrap();
-    copy.extend_from_slice(&bytes[header_end..]);
-    std::fs::write(dir.join("threads").join("3").join("log.jsonl"), copy).unwrap();
-
+    // A clone on APFS: no second copy of the bytes until one is written.
+    std::fs::copy(&source, dir.join("threads").join("3").join("log.jsonl")).unwrap();
+    let store = Store::open(dir.join("threads")).unwrap();
+    // Point the binding at the scratch checkout, so a revive asks no git of
+    // the operator's own repos.
+    store
+        .set_workspace(
+            ThreadId::new(3),
+            &WorkspaceBinding::Main {
+                checkout: checkout.clone(),
+            },
+            None,
+        )
+        .unwrap();
     let fake = Fake::default();
-    let mut cockpit = Cockpit::new(
-        Store::open(dir.join("threads")).unwrap(),
-        Box::new(fake.clone()),
-    );
+    let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
     let thread = ThreadId::new(3);
     let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.0;
 

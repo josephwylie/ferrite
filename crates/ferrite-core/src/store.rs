@@ -1251,11 +1251,62 @@ impl Record {
 /// short turns never reach it, flushing on their boundary instead.
 const DEFAULT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The longest a written record waits for a full sync (ADR 0008). Barriers
+/// at every boundary already survive a crash of Ferrite or the OS; this
+/// bounds what a power cut can cost.
+const FULL_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How far a sync reaches (ADR 0008).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncLevel {
+    /// The log's writes so far reach the drive before any that follow:
+    /// they survive a crash of Ferrite or the OS, and a power cut can lose
+    /// only a suffix, never leave a hole. Cheap enough for every boundary.
+    Barrier,
+    /// The drive's own cache too (F_FULLFSYNC on macOS): the writes survive
+    /// a power cut. Park, create, rewrite, and at least every 30 s.
+    Full,
+}
+
+/// Sync one file to `level`. Plain `fsync` is never used on macOS: it does
+/// not order writes, so a power cut could persist a later block without an
+/// earlier one.
+fn sync_file(file: &File, level: SyncLevel) -> io::Result<()> {
+    match level {
+        SyncLevel::Full => file.sync_data(),
+        SyncLevel::Barrier => barrier(file),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn barrier(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    const F_BARRIERFSYNC: std::ffi::c_int = 85;
+    extern "C" {
+        fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
+    }
+    // SAFETY: F_BARRIERFSYNC takes no argument and only reads the
+    // descriptor, which `file` keeps open for the call.
+    if unsafe { fcntl(file.as_raw_fd(), F_BARRIERFSYNC) } == -1 {
+        // A filesystem without barriers still gets its writes to disk.
+        return file.sync_data();
+    }
+    Ok(())
+}
+
+/// Elsewhere the data sync orders writes already (`fdatasync`,
+/// `FlushFileBuffers`).
+#[cfg(not(target_os = "macos"))]
+fn barrier(file: &File) -> io::Result<()> {
+    file.sync_data()
+}
+
 /// A directory of Thread logs.
 #[derive(Clone)]
 pub struct Store {
     dir: PathBuf,
     flush_interval: std::time::Duration,
+    full_sync_interval: std::time::Duration,
     shared: std::sync::Arc<Shared>,
     #[cfg(test)]
     fail_create: bool,
@@ -1274,8 +1325,25 @@ struct Shared {
     /// Every byte read off a log, so tests can bound what a read costs.
     #[cfg(test)]
     read_bytes: std::sync::atomic::AtomicU64,
+    /// Syncs so far, barrier then full, so tests can see which one ran.
+    #[cfg(test)]
+    syncs: [std::sync::atomic::AtomicU64; 2],
     #[cfg(test)]
     faults: Faults,
+}
+
+impl Shared {
+    /// Sync `file` to `level`, counted for tests.
+    fn sync(&self, file: &File, level: SyncLevel) -> io::Result<()> {
+        sync_file(file, level)?;
+        self.synced(level);
+        Ok(())
+    }
+
+    fn synced(&self, _level: SyncLevel) {
+        #[cfg(test)]
+        self.syncs[_level as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Failures a test can switch on for every handle on one store.
@@ -1324,6 +1392,8 @@ impl Shared {
             read_only,
             #[cfg(test)]
             read_bytes: Default::default(),
+            #[cfg(test)]
+            syncs: Default::default(),
             #[cfg(test)]
             faults: Faults::default(),
         }
@@ -1414,6 +1484,7 @@ impl Store {
         Ok(Self {
             dir,
             flush_interval,
+            full_sync_interval: FULL_SYNC_INTERVAL,
             shared,
             #[cfg(test)]
             fail_create: false,
@@ -1450,6 +1521,37 @@ impl Store {
     #[cfg(test)]
     pub(crate) fn faults(&self) -> &Faults {
         &self.shared.faults
+    }
+
+    /// Syncs run so far on this store: (barriers, full syncs).
+    #[cfg(test)]
+    pub(crate) fn syncs(&self) -> (u64, u64) {
+        let count = |level: SyncLevel| {
+            self.shared.syncs[level as usize].load(std::sync::atomic::Ordering::Relaxed)
+        };
+        (count(SyncLevel::Barrier), count(SyncLevel::Full))
+    }
+
+    /// The writers' longest wait for a full sync, shortened for a test.
+    #[cfg(test)]
+    pub(crate) fn full_sync_every(mut self, interval: std::time::Duration) -> Self {
+        self.full_sync_interval = interval;
+        self
+    }
+
+    /// A writer appending to `file`, the open log of one Thread.
+    fn writer_on(&self, file: File) -> ThreadWriter {
+        ThreadWriter {
+            file,
+            buffer: Vec::new(),
+            flush_interval: self.flush_interval,
+            buffered_since: None,
+            pending_flush: None,
+            full_sync_interval: self.full_sync_interval,
+            fully_synced: std::time::Instant::now(),
+            unsynced: false,
+            shared: self.shared.clone(),
+        }
     }
 
     /// Open one Thread's log for reading.
@@ -1534,17 +1636,8 @@ impl Store {
             effort: None,
         };
         file.write_all(line(&header)?.as_bytes())?;
-        file.sync_data()?;
-        Ok((
-            id,
-            ThreadWriter {
-                file,
-                buffer: Vec::new(),
-                flush_interval: self.flush_interval,
-                buffered_since: None,
-                pending_flush: None,
-            },
-        ))
+        self.shared.sync(&file, SyncLevel::Full)?;
+        Ok((id, self.writer_on(file)))
     }
 
     /// Where the store keeps its files — what the registry binds to, so the
@@ -1584,15 +1677,24 @@ impl Store {
     /// conversation event.
     pub fn mark_open(&self, id: ThreadId) -> io::Result<()> {
         self.writable()?;
-        File::create(self.dir.join(OPEN_STATE_MARKER))?.sync_data()?;
-        File::create(self.dir.join(id.to_string()).join(OPEN_MARKER))?.sync_data()
+        self.shared.sync(
+            &File::create(self.dir.join(OPEN_STATE_MARKER))?,
+            SyncLevel::Barrier,
+        )?;
+        self.shared.sync(
+            &File::create(self.dir.join(id.to_string()).join(OPEN_MARKER))?,
+            SyncLevel::Barrier,
+        )
     }
 
     /// Remember an explicit park. Missing markers are also the legacy format,
     /// in which Threads were all considered parked on startup.
     pub fn mark_parked(&self, id: ThreadId) -> io::Result<()> {
         self.writable()?;
-        File::create(self.dir.join(OPEN_STATE_MARKER))?.sync_data()?;
+        self.shared.sync(
+            &File::create(self.dir.join(OPEN_STATE_MARKER))?,
+            SyncLevel::Barrier,
+        )?;
         match fs::remove_file(self.dir.join(id.to_string()).join(OPEN_MARKER)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -1750,13 +1852,7 @@ impl Store {
         snapshot.session_project_root = root;
         let file = self.rewrite(&snapshot)?;
         if let Some(w) = writer {
-            *w = ThreadWriter {
-                file,
-                buffer: Vec::new(),
-                flush_interval: self.flush_interval,
-                buffered_since: None,
-                pending_flush: None,
-            };
+            *w = self.writer_on(file);
         }
         Ok(())
     }
@@ -1785,13 +1881,7 @@ impl Store {
         snapshot.effort = effort;
         let file = self.rewrite(&snapshot)?;
         if let Some(w) = writer {
-            *w = ThreadWriter {
-                file,
-                buffer: Vec::new(),
-                flush_interval: self.flush_interval,
-                buffered_since: None,
-                pending_flush: None,
-            };
+            *w = self.writer_on(file);
         }
         Ok(())
     }
@@ -1817,13 +1907,7 @@ impl Store {
         snapshot.workspace = Some(PersistedBinding::from_live(binding));
         let file = self.rewrite(&snapshot)?;
         if let Some(w) = writer {
-            *w = ThreadWriter {
-                file,
-                buffer: Vec::new(),
-                flush_interval: self.flush_interval,
-                buffered_since: None,
-                pending_flush: None,
-            };
+            *w = self.writer_on(file);
         }
         Ok(())
     }
@@ -1851,13 +1935,7 @@ impl Store {
         snapshot.effort = None;
         let handover = snapshot.last_handover().expect("just added");
         let file = self.rewrite(&snapshot)?;
-        *writer = ThreadWriter {
-            file,
-            buffer: Vec::new(),
-            flush_interval: self.flush_interval,
-            buffered_since: None,
-            pending_flush: None,
-        };
+        *writer = self.writer_on(file);
         Ok(handover)
     }
 
@@ -1875,13 +1953,7 @@ impl Store {
         snapshot.title = Some(title);
         let file = self.rewrite(&snapshot)?;
         if let Some(w) = writer {
-            *w = ThreadWriter {
-                file,
-                buffer: Vec::new(),
-                flush_interval: self.flush_interval,
-                buffered_since: None,
-                pending_flush: None,
-            };
+            *w = self.writer_on(file);
         }
         Ok(())
     }
@@ -1907,13 +1979,7 @@ impl Store {
             } else {
                 OpenOptions::new().append(true).open(self.log_path(id))?
             };
-        Ok(ThreadWriter {
-            file,
-            buffer: Vec::new(),
-            flush_interval: self.flush_interval,
-            buffered_since: None,
-            pending_flush: None,
-        })
+        Ok(self.writer_on(file))
     }
 
     /// Recover one child's recent persisted content for an off-thread cache
@@ -1982,7 +2048,7 @@ impl Store {
         let tmp = temp_beside(&path);
         let mut file = File::create(&tmp)?;
         file.write_all(contents.as_bytes())?;
-        file.sync_data()?;
+        self.shared.sync(&file, SyncLevel::Full)?;
         let handle = OpenOptions::new().append(true).open(&tmp)?;
         #[cfg(test)]
         if self
@@ -2350,6 +2416,13 @@ pub struct ThreadWriter {
     /// An unsuccessful append retains both its records and exact byte offset.
     /// A retry writes only bytes not accepted yet and retries a failed sync.
     pending_flush: Option<PendingFlush>,
+    /// The longest written records wait for a full sync.
+    full_sync_interval: std::time::Duration,
+    /// When the log last had one.
+    fully_synced: std::time::Instant,
+    /// Whether anything was written since.
+    unsynced: bool,
+    shared: std::sync::Arc<Shared>,
 }
 
 struct PendingFlush {
@@ -2361,12 +2434,12 @@ struct PendingFlush {
 /// The private durability seam lets failures exercise the same retry path as
 /// a file, including partial writes followed by errors and failed syncs.
 trait DurableWrite: Write {
-    fn sync_data(&self) -> io::Result<()>;
+    fn sync(&self, level: SyncLevel) -> io::Result<()>;
 }
 
 impl DurableWrite for File {
-    fn sync_data(&self) -> io::Result<()> {
-        File::sync_data(self)
+    fn sync(&self, level: SyncLevel) -> io::Result<()> {
+        sync_file(self, level)
     }
 }
 
@@ -2374,6 +2447,7 @@ fn flush_records(
     file: &mut impl DurableWrite,
     buffer: &mut Vec<Record>,
     pending: &mut Option<PendingFlush>,
+    level: SyncLevel,
 ) -> io::Result<()> {
     while !buffer.is_empty() {
         if pending.is_none() {
@@ -2396,7 +2470,7 @@ fn flush_records(
                 Err(error) => return Err(error),
             }
         }
-        file.sync_data()?;
+        file.sync(level)?;
         buffer.drain(..append.records);
         *pending = None;
     }
@@ -2475,11 +2549,51 @@ impl ThreadWriter {
         self.push(Record::Handover { from, to, model })
     }
 
-    /// Everything buffered, durably on disk. The caller's lever for the
-    /// moments the writer cannot see: parking a Thread, quitting the app.
+    /// Everything buffered, on disk in order behind a barrier: it survives
+    /// a crash of Ferrite or the OS. A full sync instead, once the log has
+    /// waited `FULL_SYNC_INTERVAL` for one.
     pub fn flush(&mut self) -> io::Result<()> {
-        flush_records(&mut self.file, &mut self.buffer, &mut self.pending_flush)?;
+        let level = if self.fully_synced.elapsed() >= self.full_sync_interval {
+            SyncLevel::Full
+        } else {
+            SyncLevel::Barrier
+        };
+        self.flush_at(level)
+    }
+
+    /// Everything buffered, and everything written before it, through the
+    /// drive's own cache: it survives a power cut. The lever for the moments
+    /// the writer cannot see: parking a Thread, quitting the app.
+    pub fn flush_fully(&mut self) -> io::Result<()> {
+        self.flush_at(SyncLevel::Full)?;
+        if self.unsynced {
+            // Earlier flushes only reached a barrier; this one wrote nothing.
+            self.shared.sync(&self.file, SyncLevel::Full)?;
+            self.fully_synced = std::time::Instant::now();
+            self.unsynced = false;
+        }
+        Ok(())
+    }
+
+    fn flush_at(&mut self, level: SyncLevel) -> io::Result<()> {
+        let wrote = !self.buffer.is_empty();
+        flush_records(
+            &mut self.file,
+            &mut self.buffer,
+            &mut self.pending_flush,
+            level,
+        )?;
         self.buffered_since = None;
+        if wrote {
+            self.shared.synced(level);
+            match level {
+                SyncLevel::Full => {
+                    self.fully_synced = std::time::Instant::now();
+                    self.unsynced = false;
+                }
+                SyncLevel::Barrier => self.unsynced = true,
+            }
+        }
         Ok(())
     }
 
