@@ -13,7 +13,7 @@
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTION`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
-//! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat; no dot breathes |
+//! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
@@ -51,7 +51,7 @@
 //!
 //! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
 //! one-shot to its end state, a loop to its start) and every kit spring. The
-//! clocks here follow the same rule: [`pulse_phase`] returns 0 and leases
+//! clocks here follow the same rule: [`loop_phase`] returns 0 and declares
 //! nothing, a [`Tween`] reads its target, and a hover snaps. [`init`] sets
 //! the flag from the system setting at launch.
 
@@ -59,6 +59,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use ferrite_core::cadence;
 use gpui::{
     px, Animation, AnimationElement, AnimationExt, App, ElementId, EntityId, Global, Hsla,
     IntoElement, Rgba, SharedString, Styled, Window,
@@ -536,91 +537,133 @@ where
 // A `with_animation(...repeat())` loop asks for a frame on every display
 // frame for as long as it is mounted: one working Thread held the whole
 // cockpit at the display's refresh rate. The clock replaces that with one
-// ~30fps tick. A loop reads its phase from [`pulse_phase`], which also
-// leases the painting view onto the clock; each tick notifies the leased
-// views, and a view that stops painting a loop stops renewing, lapses, and
-// drops off. With no lease left the clock parks: no timer, no frame. All
-// loops share one epoch, so two marks on screen stay phase-locked.
+// timer on a ~30fps grid. A loop reads its phase from [`loop_phase`] (or
+// [`pulse_phase`], [`css_phase`], [`script_phase`]), which also declares
+// when the loop's picture next changes (`ferrite_core::cadence`): the
+// caret's fades and not its plateaus, a spinner's steps and not the
+// instants between them. The timer wakes at the earliest declared change,
+// snapped to the grid from the clock's epoch, and notifies only the views
+// due then. A view that stops painting a loop declares nothing more and
+// lapses after its last wake; with nothing declared the clock parks: no
+// timer, no frame. All loops share one epoch, so two marks on screen stay
+// phase-locked, and every frame drawn is the one the fixed rate drew at
+// that instant.
 
 fn pulse_tick() -> Duration {
     Duration::from_millis(theme::MOTION_PULSE_TICK_MS)
 }
 
-fn pulse_lease() -> Duration {
-    Duration::from_millis(theme::MOTION_PULSE_LEASE_MS)
-}
-
-/// The clock's bookkeeping, pure over an explicit `now` so the lease and
-/// park rules are testable without a window.
-#[derive(Debug, Default)]
-struct PulseLeases {
-    until: HashMap<EntityId, Instant>,
-}
-
-impl PulseLeases {
-    fn renew(&mut self, view: EntityId, now: Instant) {
-        self.until.insert(view, now + pulse_lease());
-    }
-
-    /// One tick: drop lapsed leases, then the views to notify — `None` when
-    /// nothing is leased and the clock should park.
-    fn tick(&mut self, now: Instant) -> Option<Vec<EntityId>> {
-        self.until.retain(|_, until| *until > now);
-        (!self.until.is_empty()).then(|| self.until.keys().copied().collect())
-    }
-}
-
 #[derive(Default)]
 struct PulseClock {
     epoch: Option<Instant>,
-    leases: PulseLeases,
-    running: bool,
+    schedule: cadence::Schedule<EntityId>,
+    /// The armed wake and its timer; `None` when parked.
+    timer: Option<(Instant, gpui::Task<()>)>,
 }
 
 impl Global for PulseClock {}
 
-/// The phase `[0, 1)` of a loop with this `period`, leasing `view` onto the
-/// clock so it re-renders on the next tick. Call it only while painting the
-/// loop. Reduced motion returns the loop's start (0) and leases nothing.
+impl PulseClock {
+    fn grid(&mut self, now: Instant) -> cadence::Grid {
+        cadence::Grid {
+            epoch: *self.epoch.get_or_insert(now),
+            tick: pulse_tick(),
+        }
+    }
+}
+
+/// How a loop's picture moves through its turn (`cadence::Motion`).
+pub use ferrite_core::cadence::Motion;
+
+/// The phase `[0, 1)` of a loop with this `period` and `motion`, on the
+/// shared epoch, declaring `view`'s next draw for the instant its picture
+/// next changes. Call it only while painting the loop. Reduced motion
+/// returns the loop's start (0) and declares nothing.
+pub fn loop_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
+    run_loop(None, period, motion, view, cx)
+}
+
+/// [`loop_phase`] from the loop's own `origin` rather than the shared
+/// epoch: the caret's blink restarts solid on every focus and edit.
+pub fn loop_phase_from(
+    origin: Instant,
+    period: Duration,
+    motion: Motion,
+    view: EntityId,
+    cx: &mut App,
+) -> f32 {
+    run_loop(Some(origin), period, motion, view, cx)
+}
+
+/// A loop whose picture moves at every instant ([`loop_phase`] with
+/// `Motion::Continuous`): `view` is drawn on every tick of the grid. (The
+/// app's loops name their motion; the clock's own tests drive this one.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+    loop_phase(period, Motion::Continuous, view, cx)
+}
+
+fn run_loop(
+    origin: Option<Instant>,
+    period: Duration,
+    motion: Motion,
+    view: EntityId,
+    cx: &mut App,
+) -> f32 {
     if reduced_motion(cx) || period.is_zero() {
         return 0.0;
     }
     let now = cx.background_executor().now();
     let clock = cx.default_global::<PulseClock>();
-    let epoch = *clock.epoch.get_or_insert(now);
-    clock.leases.renew(view, now);
-    if !clock.running {
-        cx.default_global::<PulseClock>().running = true;
-        cx.spawn(async move |cx| loop {
-            cx.background_executor().timer(pulse_tick()).await;
-            let parked = cx.update(|cx| {
-                let now = cx.background_executor().now();
-                let clock = cx.default_global::<PulseClock>();
-                match clock.leases.tick(now) {
-                    Some(views) => {
-                        #[cfg(test)]
-                        testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
-                        for view in views {
-                            cx.notify(view);
-                        }
-                        false
-                    }
-                    None => {
-                        clock.running = false;
-                        true
-                    }
-                }
-            });
-            if parked {
-                break;
-            }
-        })
-        .detach();
+    let grid = clock.grid(now);
+    let looped = cadence::Loop {
+        origin: origin.unwrap_or(grid.epoch),
+        period,
+        motion,
+    };
+    if let Some(change) = looped.next_change(now) {
+        clock.schedule.declare(view, grid.wake(change, now), now);
+        arm(now, cx);
     }
-    let elapsed = now.saturating_duration_since(epoch);
-    let period = period.as_nanos();
-    (elapsed.as_nanos() % period) as f32 / period as f32
+    looped.phase(now)
+}
+
+/// Arm the one timer for the schedule's earliest wake, unless it is armed
+/// for that or sooner. Nothing declared: it stays parked.
+fn arm(now: Instant, cx: &mut App) {
+    let clock = cx.default_global::<PulseClock>();
+    let Some(wake) = clock.schedule.next_wake() else {
+        return;
+    };
+    if clock
+        .timer
+        .as_ref()
+        .is_some_and(|(armed, _)| *armed <= wake)
+    {
+        return;
+    }
+    let delay = wake.saturating_duration_since(now);
+    let timer = cx.spawn(async move |cx| {
+        cx.background_executor().timer(delay).await;
+        cx.update(fire);
+    });
+    cx.default_global::<PulseClock>().timer = Some((wake, timer));
+}
+
+/// The timer's wake: notify each view due, then arm for the next.
+fn fire(cx: &mut App) {
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    clock.timer = None;
+    let due = clock.schedule.take_due(now);
+    if !due.is_empty() {
+        #[cfg(test)]
+        testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
+        for view in due {
+            cx.notify(view);
+        }
+    }
+    arm(now, cx);
 }
 
 /// The two clocks a browser runs its loops on, held at a fixed time: a
@@ -653,33 +696,32 @@ pub fn held_loops() -> Option<HeldLoops> {
 }
 
 fn phase_at(elapsed: Duration, period: Duration) -> f32 {
-    let period = period.as_nanos().max(1);
-    (elapsed.as_nanos() % period) as f32 / period as f32
+    cadence::phase_after(elapsed, period)
 }
 
 /// A CSS loop's phase (the caret's blink, the shimmer): the held capture
-/// time's, else the pulse clock's (`pulse_phase`).
-pub fn css_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+/// time's, else the pulse clock's (`loop_phase`).
+pub fn css_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
     match held_loops() {
         Some(held) if !reduced_motion(cx) => phase_at(held.css, period),
-        _ => pulse_phase(period, view, cx),
+        _ => loop_phase(period, motion, view, cx),
     }
 }
 
 /// A scripted loop's phase (the spinners' frames): the held capture time's,
-/// else the pulse clock's (`pulse_phase`).
-pub fn script_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+/// else the pulse clock's (`loop_phase`).
+pub fn script_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
     match held_loops() {
         Some(held) if !reduced_motion(cx) => phase_at(held.script, period),
-        _ => pulse_phase(period, view, cx),
+        _ => loop_phase(period, motion, view, cx),
     }
 }
 
-/// The clock is parked: no view holds a lease and no timer is armed.
+/// The clock is parked: nothing is declared and no timer is armed.
 #[cfg(test)]
 pub fn pulse_parked(cx: &App) -> bool {
     cx.try_global::<PulseClock>()
-        .is_none_or(|clock| !clock.running)
+        .is_none_or(|clock| clock.timer.is_none())
 }
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1030,12 @@ pub mod testing {
                 .collect()
         })
     }
+
+    /// The pulse clock's grid: its epoch and tick, once anything declared.
+    pub fn grid(cx: &gpui::App) -> Option<(std::time::Instant, std::time::Duration)> {
+        let epoch = cx.try_global::<super::PulseClock>()?.epoch?;
+        Some((epoch, super::pulse_tick()))
+    }
 }
 
 /// Launch: adopt the system's Reduce Motion setting. gpui reads no platform
@@ -1290,20 +1338,6 @@ mod tests {
         close(half.r, h.r, 1e-3, "the wash keeps its colour");
     }
 
-    #[test]
-    fn a_lease_lapses_unless_renewed_and_an_empty_clock_parks() {
-        let mut leases = PulseLeases::default();
-        let view = EntityId::from(1u64);
-        let t0 = Instant::now();
-        let ms = |m: u64| t0 + Duration::from_millis(m);
-        assert_eq!(leases.tick(t0), None, "nothing leased: park");
-        leases.renew(view, t0);
-        assert_eq!(leases.tick(ms(33)), Some(vec![view]));
-        leases.renew(view, ms(200));
-        assert_eq!(leases.tick(ms(450)), Some(vec![view]), "renewed at 200");
-        assert_eq!(leases.tick(ms(500)), None, "unpainted: lapses and parks");
-    }
-
     struct Loop {
         painting: bool,
         renders: usize,
@@ -1356,8 +1390,8 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
-        cx.executor()
-            .advance_clock(pulse_lease() + pulse_tick() * 2);
+        // Its last declared wake (the next tick) passes undeclared.
+        cx.executor().advance_clock(pulse_tick() * 2);
         cx.run_until_parked();
         assert!(
             cx.update(|_, cx| pulse_parked(cx)),

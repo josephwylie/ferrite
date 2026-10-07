@@ -189,6 +189,9 @@ pub struct Composer {
     /// How the caret was last drawn, for the tests.
     #[cfg(test)]
     last_caret: Option<Caret>,
+    /// Every caret drawn, and when, for the tests of its cadence.
+    #[cfg(test)]
+    caret_draws: Vec<(Instant, Option<Caret>)>,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -217,6 +220,8 @@ impl Composer {
             role: Role::Prompt,
             #[cfg(test)]
             last_caret: None,
+            #[cfg(test)]
+            caret_draws: Vec::new(),
         }
     }
 
@@ -1261,10 +1266,10 @@ impl Element for LineElement {
         let blinks = holds || under_float;
         let focused = focused || lit;
         let selected = self.composer.read(cx).line.selection();
-        // The soft blink rides the shared pulse clock (theme rule 8),
-        // leasing it to keep the frames coming; while this line holds the
-        // keyboard the phase is the line's own, from its last focus or
-        // edit. Still and solid under reduced motion.
+        // The soft blink rides the shared pulse clock (theme rule 8), which
+        // draws it again through its fades and holds its plateaus; while
+        // this line holds the keyboard the phase is the line's own, from its
+        // last focus or edit. Still and solid under reduced motion.
         let alpha = (focused && selected.is_empty()).then(|| {
             if crate::motion::reduced_motion(cx) || !blinks {
                 return 1.0;
@@ -1274,11 +1279,13 @@ impl Element for LineElement {
                 return caret_alpha(held.css);
             }
             let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
-            let shared = crate::motion::pulse_phase(turn, window.current_view(), cx);
-            match blink_from.filter(|_| holds) {
-                Some(from) => caret_alpha(now.saturating_duration_since(from)),
-                None => crate::components::caret_blink(shared),
-            }
+            let fades = crate::components::CARET_FADES;
+            let view = window.current_view();
+            let phase = match blink_from.filter(|_| holds) {
+                Some(from) => crate::motion::loop_phase_from(from, turn, fades, view, cx),
+                None => crate::motion::loop_phase(turn, fades, view, cx),
+            };
+            crate::components::caret_blink(phase)
         });
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
@@ -1377,8 +1384,10 @@ impl Element for LineElement {
             (quads, None, None)
         };
         #[cfg(test)]
-        self.composer
-            .update(cx, |composer, _| composer.last_caret = caret);
+        self.composer.update(cx, |composer, _| {
+            composer.last_caret = caret;
+            composer.caret_draws.push((now, caret));
+        });
         #[cfg(not(test))]
         let _ = caret;
 
@@ -1874,6 +1883,123 @@ mod tests {
         cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
         cx.run_until_parked();
         assert_eq!(caret(cx), Some(Caret::Hollow));
+    }
+
+    /// The block's alpha on screen at `at`: the last draw at or before it.
+    fn shown_at(draws: &[(Instant, Option<Caret>)], at: Instant) -> Option<f32> {
+        draws
+            .iter()
+            .rev()
+            .find(|(drawn, _)| *drawn <= at)
+            .and_then(|(_, caret)| match caret {
+                Some(Caret::Block(alpha)) => Some(*alpha),
+                _ => None,
+            })
+    }
+
+    /// The soft blink on the pulse clock's declared cadence keeps its look:
+    /// at every instant of the clock's 33ms grid, the caret on screen is
+    /// the blink's value there (what the fixed ~30fps rate drew); the fades
+    /// are drawn on every grid instant, land on solid and on
+    /// `CARET_BLINK_MIN`, and the plateaus between them draw nothing new —
+    /// yet the clock stays armed across them.
+    #[gpui::test]
+    fn the_blink_draws_only_its_fades_and_keeps_its_look(cx: &mut TestAppContext) {
+        crate::motion::testing::drive();
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let from = composer
+            .read_with(cx, |c, _| c.blink_from)
+            .expect("focus restarts the blink");
+        composer.update(cx, |c, _| c.caret_draws.clear());
+        let turn = crate::theme::MOTION_CARET_BLINK_MS;
+        let mut armed = true;
+        for _ in 0..3 * turn {
+            cx.executor().advance_clock(Duration::from_millis(1));
+            cx.run_until_parked();
+            armed &= !cx.update(|_, cx| crate::motion::pulse_parked(cx));
+        }
+        assert!(armed, "the clock stays armed across the plateaus");
+        let end = cx.update(|_, cx| cx.background_executor().now());
+        let draws = composer.read_with(cx, |c, _| c.caret_draws.clone());
+        let (epoch, tick) = cx
+            .update(|_, cx| crate::motion::testing::grid(cx))
+            .expect("the blink declared on the clock");
+        let low = crate::theme::CARET_BLINK_MIN;
+
+        // Every grid instant shows what the fixed rate drew there.
+        let first = draws.first().map(|(at, _)| *at).unwrap_or(end);
+        let mut at = epoch;
+        while at <= end {
+            if at >= first {
+                assert_eq!(
+                    shown_at(&draws, at),
+                    Some(caret_alpha(at.saturating_duration_since(from))),
+                    "at {:?} into the blink",
+                    at.saturating_duration_since(from)
+                );
+            }
+            at += tick;
+        }
+        // Fades are drawn a tick apart; each lands on its plateau.
+        let alphas: Vec<(Instant, f32)> = draws
+            .iter()
+            .filter_map(|(at, caret)| match caret {
+                Some(Caret::Block(alpha)) => Some((*at, *alpha)),
+                _ => None,
+            })
+            .collect();
+        for pair in alphas.windows(2) {
+            let ((was, before), (now, _)) = (pair[0], pair[1]);
+            if before > low && before < 1.0 {
+                assert!(now - was <= tick, "a fade frame waited {:?}", now - was);
+            }
+        }
+        let landings = |value: f32| {
+            alphas
+                .windows(2)
+                .filter(|pair| pair[0].1 != value && pair[1].1 == value)
+                .count()
+        };
+        assert!(landings(low) >= 3, "every fall lands on the dim plateau");
+        assert!(landings(1.0) >= 2, "every rise lands solid");
+        // The plateaus repaint nothing: a handful of draws per turn.
+        assert!(
+            draws.len() <= 3 * 8,
+            "{} caret draws in three turns; the fades need at most 8 a turn",
+            draws.len()
+        );
+    }
+
+    /// Reduced motion: the block is solid and still, and nothing ticks.
+    #[gpui::test]
+    fn reduced_motion_holds_the_caret_solid_and_ticks_nothing(cx: &mut TestAppContext) {
+        crate::motion::testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        composer.update(cx, |c, _| c.caret_draws.clear());
+        composer.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let ticks = crate::motion::testing::pulse_ticks();
+        for _ in 0..200 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+        }
+        assert_eq!(crate::motion::testing::pulse_ticks(), ticks, "no tick");
+        assert!(cx.update(|_, cx| crate::motion::pulse_parked(cx)));
+        let draws = composer.read_with(cx, |c, _| c.caret_draws.clone());
+        assert!(!draws.is_empty());
+        assert!(
+            draws
+                .iter()
+                .all(|(_, caret)| *caret == Some(Caret::Block(1.0))),
+            "solid and still: {draws:?}"
+        );
     }
 
     #[gpui::test]

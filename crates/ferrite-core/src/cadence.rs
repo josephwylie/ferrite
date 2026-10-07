@@ -27,9 +27,13 @@ use std::time::{Duration, Instant};
 /// The phase `[0, 1)` of a loop `period` long at `now`, counted from
 /// `origin` (an `origin` after `now` reads its start).
 pub fn phase(origin: Instant, period: Duration, now: Instant) -> f32 {
+    phase_after(now.saturating_duration_since(origin), period)
+}
+
+/// The phase `[0, 1)` of a loop `period` long, `elapsed` into it.
+pub fn phase_after(elapsed: Duration, period: Duration) -> f32 {
     let period = period.as_nanos().max(1);
-    let elapsed = now.saturating_duration_since(origin).as_nanos();
-    (elapsed % period) as f32 / period as f32
+    (elapsed.as_nanos() % period) as f32 / period as f32
 }
 
 /// Which of `frames` a stepped loop shows at `phase` `[0, 1)` of its turn.

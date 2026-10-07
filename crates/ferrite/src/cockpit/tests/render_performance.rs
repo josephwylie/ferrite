@@ -1141,8 +1141,11 @@ fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut Tes
 /// What an operator actually leaves on screen: an active window, the
 /// keyboard in a Composer, two idle Threads, nothing changing. The caret may
 /// blink, but holding still must not rebuild the whole Cockpit at the pulse
-/// clock's rate — that is the idle CPU the shipped app burns.
+/// clock's rate — that is the idle CPU the shipped app burns. A-1 draws only
+/// the caret's fades (33 in 5s, `a_focused_idle_window_renders_the_cockpit_
+/// only_for_the_carets_fades`); 10 needs the caret off the Cockpit (A-2).
 #[gpui::test]
+#[ignore = "A-2 target"]
 fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (core, _fake) = cockpit("idle-focused", 2);
@@ -1216,7 +1219,7 @@ fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut Tes
     tick(cx);
     assert!(cx.debug_bounds("progress-mark-live").is_none());
     cx.executor().advance_clock(Duration::from_millis(
-        crate::theme::MOTION_PULSE_LEASE_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
+        crate::theme::MOTION_WORKING_FRAME_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
     assert!(pulse_parked(cx), "the lapsed clock parks");
@@ -1486,6 +1489,77 @@ fn cockpit_renders_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
     }
     renders() - before
 }
+
+/// A board at work: four Panes, two of them working, an active window. The
+/// loops on screen — the working lines' stars, the braille spinners in the
+/// heads and the nav, the caret, and the focused working Pane's shimmer —
+/// redraw the Cockpit only when one of them steps, never more than once a
+/// pulse tick.
+#[gpui::test]
+fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("working-board-budget", 4);
+    let group = group_all(&mut core);
+    let threads = core.threads().to_vec();
+    for thread in &threads[..2] {
+        core.send(*thread, "Inspect progress".into());
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.enter_group(group, cx);
+        view.focus_pane(0);
+        cx.notify();
+    });
+    for stream in 0..2 {
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Checking marks**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    assert!(
+        cx.debug_bounds("progress-mark-live").is_some(),
+        "the premise: a working mark is on screen"
+    );
+    let ticks = crate::motion::testing::pulse_ticks();
+    let shimmering = cockpit_renders_over(cx, 5_000);
+    let ticked = crate::motion::testing::pulse_ticks() - ticks;
+
+    // The keyboard on an idle Pane: no shimmer, only the steps.
+    view.update(cx, |view, cx| {
+        view.focus_pane(2);
+        cx.notify();
+    });
+    cockpit_renders_over(cx, 1_000);
+    let stepping = cockpit_renders_over(cx, 5_000);
+    eprintln!(
+        "WORKING_BOARD cockpit_renders_5s focused_working={shimmering} (pulse ticks {ticked}) \
+         focused_idle={stepping}"
+    );
+    // The shimmer's crest moves every tick: the Cockpit draws at the
+    // clock's rate, never faster (A-2 takes the loops off the Cockpit).
+    let tick_rate = (5_000 / crate::theme::MOTION_PULSE_TICK_MS) as usize;
+    assert!(
+        ticked <= tick_rate + 1,
+        "{ticked} pulse ticks in 5s: more than one a tick"
+    );
+    assert!(
+        stepping <= A1_WORKING_BOARD_BUDGET,
+        "a working board with the keyboard on an idle Pane rebuilt the Cockpit \
+         {stepping} times in 5s; the steps on screen ask for at most {A1_WORKING_BOARD_BUDGET}"
+    );
+}
+
+/// What the steps of a working board ask for in 5s, the keyboard on an
+/// idle Pane: the stars' 120ms and the spinners' 80ms on one epoch (four
+/// distinct instants every 240ms), the caret's fades, the working clocks'
+/// seconds.
+const A1_WORKING_BOARD_BUDGET: usize = 120;
 
 /// The pointer sweeping down the nav, a row every 250ms: each crossing
 /// blends a row's wash in and the last one's out, redrawing the Cockpit

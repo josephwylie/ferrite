@@ -236,9 +236,10 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
 /// Ferrite's two shards pull apart and snap home on the supplied logo's
 /// three-second timeline. GPUI rasterizes SVG rather than running its CSS, so
 /// the two paths are embedded separately and translated by hand. The phase
-/// comes from the shared pulse clock (`motion::pulse_phase`), not a
+/// comes from the shared pulse clock (`motion::loop_phase`), not a
 /// per-frame `with_animation` loop: the painting view re-renders at ~30fps
-/// while the mark is mounted and nothing is scheduled once it is gone. Every
+/// while the shards move, not at all while they rest, and nothing is
+/// scheduled once the mark is gone. Every
 /// mark reads the same clock, so no per-element state keys it and `_id` is
 /// kept for callers only. Reduced motion holds the assembled mark.
 pub fn animated_ferrite_icon(size: f32, _id: impl Into<ElementId>) -> AnyElement {
@@ -253,7 +254,13 @@ struct FerriteSnap {
 impl RenderOnce for FerriteSnap {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let period = Duration::from_millis(theme::FERRITE_SNAP_MS);
-        let displacement = ferrite_snap(motion::pulse_phase(period, window.current_view(), cx));
+        // Drawn again only while the shards pull apart and snap home.
+        let moves = motion::Motion::Spans(&[
+            (theme::FERRITE_PULL_START, theme::FERRITE_PULL_END),
+            (theme::FERRITE_HOLD_END, theme::FERRITE_SNAP_END),
+        ]);
+        let displacement =
+            ferrite_snap(motion::loop_phase(period, moves, window.current_view(), cx));
         let size = self.size;
         let shard = |path, x: f32, y: f32| {
             svg()
