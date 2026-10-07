@@ -236,6 +236,11 @@ fn pump_interval() -> Duration {
 const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
+
+/// How many frames a card waits for its Pane's geometry (`card_corner`).
+/// A Pane laid out for the first time has it by the next frame; a few more
+/// cover a layout that settles over two.
+const CARD_GEOMETRY_FRAMES: u8 = 3;
 const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
 
 pub struct CockpitView {
@@ -394,6 +399,9 @@ pub struct CockpitView {
     /// Each card trigger's bounds as last laid out (`usage-…`,
     /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
     float_triggers: FloatTriggers,
+    /// Frames each open card has waited for its Pane's geometry, by trigger
+    /// key (`card_corner`); none once it has some.
+    card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
     /// A seam being dragged: the board, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
@@ -1284,6 +1292,7 @@ impl CockpitView {
             context_checks: None,
             changed_files_card: None,
             float_triggers: FloatTriggers::default(),
+            card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_auto_rail: std::cell::Cell::new(false),
             nav_forced_open: false,
@@ -10484,7 +10493,11 @@ impl CockpitView {
 
     /// Where a card opened from trigger `key` in Pane `identity` hangs
     /// (`FloatPlace::card_corner`). Until the Pane has been laid out once,
-    /// it waits a frame rather than guess.
+    /// it waits a frame rather than guess — `CARD_GEOMETRY_FRAMES` of them
+    /// at most, then hangs from the board's corner: a Pane with nothing to
+    /// give (an L3 tile draws no Composer, a Pane gone from the roster
+    /// draws nothing) would have the card ask for every frame for as long
+    /// as it stayed open.
     fn card_corner(
         &self,
         key: String,
@@ -10515,13 +10528,40 @@ impl CockpitView {
         // A card opened with no chip on screen (a slash command, a scene)
         // hangs off the Composer's right edge, or the card's top.
         let trigger = trigger.or(if up { geometry.composer } else { geometry.card });
+        let mut waits = self.card_waits.borrow_mut();
         match (trigger, place) {
-            (Some(trigger), Some(place)) => Some(place.card_corner(trigger, up)),
+            (Some(trigger), Some(place)) => {
+                waits.remove(&key);
+                Some(place.card_corner(trigger, up))
+            }
             _ => {
-                window.request_animation_frame();
-                None
+                let waited = waits.entry(key).or_default();
+                if *waited < CARD_GEOMETRY_FRAMES {
+                    *waited += 1;
+                    window.request_animation_frame();
+                    return None;
+                }
+                Some(self.board_card_corner(up, window))
             }
         }
+    }
+
+    /// Where a card hangs with no Pane geometry to hang from: off the
+    /// board as though it were the Pane — from its foot (where a Composer
+    /// would be) for a card opening up, its head for one opening down.
+    fn board_card_corner(&self, up: bool, window: &Window) -> Point<Pixels> {
+        let board = self.board_bounds(window);
+        let right = board.x + board.w;
+        let bottom = board.y + board.h;
+        let place = crate::components::FloatPlace {
+            floor: bottom,
+            limit_right: right - crate::theme::PANE_PAD_X,
+        };
+        let edge = if up { bottom } else { board.y };
+        place.card_corner(
+            gpui::Bounds::new(gpui::point(px(right), px(edge)), gpui::Size::default()),
+            up,
+        )
     }
 
     fn run_session_control(
@@ -16828,6 +16868,82 @@ mod tests {
                 .any(|line| line.contains("a quick turn")),
             "the turn's end refolds the card at once: {:?}",
             wall_text(&view, cx, thread)
+        );
+    }
+
+    /// A card hangs from its Pane's laid-out geometry and waits a frame or
+    /// two for it. One whose Pane has nothing it can hang from — the
+    /// changed-files card the palette opens on an L3 wall tile, which draws
+    /// no Composer to rest above — must not wait for ever, asking the
+    /// display for every frame: after a few it hangs from the board's
+    /// corner instead.
+    #[gpui::test]
+    fn a_card_with_nothing_to_hang_from_stops_asking_for_frames(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("card-corner-wall", 24);
+        let group = group_all(&mut core);
+        core.enter_group(group).unwrap();
+        let thread = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        let stream = view.read_with(cx, |view, _| view.pane_for(thread).unwrap());
+        for event in [
+            SessionEvent::ToolStarted {
+                id: "edit".into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "src/lib.rs" }),
+            },
+            SessionEvent::ToolCompleted {
+                id: "edit".into(),
+                output: "updated".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "src/lib.rs".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 0,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["+pub fn changed() {}".into()],
+                        section: None,
+                    }],
+                },
+            },
+        ] {
+            fake.streams.borrow()[stream].send(event).unwrap();
+        }
+        tick(cx);
+        assert_eq!(
+            cx.update(|window, cx| view.read(cx).level_now(window)),
+            Level::Wall,
+            "the premise: wall tiles, no Composer"
+        );
+
+        // What the palette's `show changes` does.
+        view.update(cx, |view, cx| {
+            view.focus_pane(stream);
+            view.changed_files_card = Some(thread);
+            cx.notify();
+        });
+        let mut asked = Vec::new();
+        for _ in 0..8 {
+            asked.push(cx.update(|window, cx| window.simulate_next_frame(cx)));
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            asked.last(),
+            Some(&0),
+            "the open card asks for a frame every frame: {asked:?}"
+        );
+        let card = cx
+            .debug_bounds("changed-files-card")
+            .expect("the card is up");
+        let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
+        assert!(
+            f32::from(card.left()) >= board.x
+                && f32::from(card.right()) <= board.x + board.w
+                && f32::from(card.top()) >= board.y
+                && f32::from(card.bottom()) <= board.y + board.h,
+            "it hangs inside the board: {card:?} in {board:?}"
         );
     }
 
