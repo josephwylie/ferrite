@@ -453,6 +453,9 @@ impl TranscriptView {
         };
         view.register_scope(cx);
         view.sync_members(cx);
+        let owner = cx.entity_id();
+        cx.on_release(move |view: &mut Self, cx| view.forget_namespace(owner, cx))
+            .detach();
         view
     }
 
@@ -462,6 +465,7 @@ impl TranscriptView {
         let weak = cx.entity().downgrade();
         crate::file_links::register_scope(
             self.input.namespace.clone(),
+            cx.entity_id(),
             Rc::new(move |path, line, _window, cx| {
                 let _ = weak.update(cx, |_, cx| {
                     cx.emit(TranscriptEvent::OpenReader { path, line });
@@ -469,6 +473,17 @@ impl TranscriptView {
             }),
             cx,
         );
+    }
+
+    /// Nothing under this transcript's namespace can be drawn again: the
+    /// transcript was released, or its history regenerated under a new
+    /// namespace. Release its ⌘-click route, its laid-out targets and its
+    /// native text, unless another transcript has taken the namespace.
+    /// A Subject switch keeps both transcripts and their namespaces.
+    fn forget_namespace(&self, owner: gpui::EntityId, cx: &mut App) {
+        if crate::file_links::release_scope(&self.input.namespace, owner, cx) {
+            self.rich.forget_namespace(&self.input.namespace);
+        }
     }
 
     /// Whether this view already shows `key` (the cockpit compares it every
@@ -497,6 +512,9 @@ impl TranscriptView {
         let shape_changed = self.input.shape() != input.shape();
         let display_changed = before != after || disclosure_changed;
         let workspace_changed = before.workspace != after.workspace;
+        if namespace_changed {
+            self.forget_namespace(cx.entity_id(), cx);
+        }
         self.input = input;
         self.selection_source = selection_source;
         if namespace_changed {

@@ -689,8 +689,7 @@ fn read_stdout(
         let mut menu = menu::McpMenu::default();
         let mut shells = shell_output::ShellOutputs::default();
         loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
+            match super::read_line(&mut reader, &mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }

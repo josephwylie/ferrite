@@ -7880,6 +7880,90 @@ mod tests {
         assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
     }
 
+    /// The displayed history is bounded and trims its oldest turns; the
+    /// agent's context is not. However much the Transcript trims, the log
+    /// keeps every event in order, the resume id persists, and a provider
+    /// switch hands over every exchange, read from disk.
+    #[test]
+    fn trimming_the_displayed_history_never_loses_agent_context() {
+        let (mut cockpit, fake) = cockpit("retention-context");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let mut streamed = Vec::new();
+        // Six turns of 1 MiB answers: past the 4 MiB the display keeps.
+        for turn in 0..6 {
+            cockpit.send(thread, format!("prompt {turn}"));
+            let stream = fake.streams.borrow()[0].clone();
+            if turn == 0 {
+                stream
+                    .send(SessionEvent::Init {
+                        session_id: "sess-1".into(),
+                        model: "claude-opus-5".into(),
+                    })
+                    .unwrap();
+            }
+            let mut answer = String::new();
+            for delta in 0..64 {
+                let delta = format!("turn {turn} delta {delta} {}\n\n", "w".repeat(16 * 1024));
+                answer.push_str(&delta);
+                stream.send(text(&delta)).unwrap();
+            }
+            stream.send(ended()).unwrap();
+            for _ in 0..4 {
+                cockpit.pump();
+            }
+            streamed.push((format!("prompt {turn}"), answer));
+        }
+        let shown = cockpit.thread(thread).unwrap().transcript().blocks();
+        assert!(
+            !shown
+                .iter()
+                .any(|block| matches!(&block.body, Body::Prompt(line) if line == "prompt 0")),
+            "the display trimmed its oldest turns"
+        );
+
+        // (1) Every event is in the log, in order.
+        let log = cockpit.store.load(thread).unwrap();
+        let mut prompts = Vec::new();
+        let mut answers = String::new();
+        for input in log.inputs() {
+            match input {
+                Input::Prompt(line) => prompts.push(line),
+                Input::Event(SessionEvent::TextDelta { text }) => answers.push_str(&text),
+                _ => {}
+            }
+        }
+        let expected: String = streamed.iter().map(|(_, answer)| answer.as_str()).collect();
+        assert_eq!(
+            prompts,
+            (0..6)
+                .map(|turn| format!("prompt {turn}"))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            answers == expected,
+            "the log holds every streamed delta, in order"
+        );
+        // (2) The resume id persists.
+        assert_eq!(log.resume_target(), Some("sess-1"));
+
+        // (3) A provider switch hands over every exchange, from disk.
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: Some("gpt-5.6-sol".into()),
+                },
+            )
+            .unwrap();
+        let handover = cockpit.store.load(thread).unwrap().last_handover().unwrap();
+        assert_eq!(handover.exchanges.len(), streamed.len());
+        assert!(
+            handover.exchanges == streamed,
+            "every exchange, the trimmed ones too, reaches the handover"
+        );
+    }
+
     #[test]
     fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
         let (mut cockpit, fake) = cockpit("handover-live-effort");

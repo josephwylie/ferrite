@@ -892,8 +892,7 @@ fn read_stdout(
         // is announced before the frame goes on to its other readers.
         let mut background = background::BackgroundTerminals::default();
         loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
+            match super::read_line(&mut reader, &mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }

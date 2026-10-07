@@ -12810,6 +12810,7 @@ mod tests {
     mod provider_forms;
     mod provider_navigation;
     mod render_performance;
+    mod retention;
     mod stab;
     mod subagents;
     mod ui_a;
