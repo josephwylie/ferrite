@@ -300,3 +300,59 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
     let text = std::fs::read_to_string(&log).unwrap();
     assert!(text.find("before").unwrap() < text.find("held").unwrap());
 }
+
+/// Quitting writes every record accepted (E1): a turn still streaming is
+/// in the log, which ends in a mark and stays open for the next launch.
+#[test]
+fn quitting_writes_every_accepted_record() {
+    let (mut cockpit, fake) = cockpit("quit-writes");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(text("still streaming")).unwrap();
+    cockpit.pump();
+    let (_, full) = cockpit.store.syncs();
+    cockpit.halt_sessions();
+    let log = cockpit.store.dir().join(thread.to_string()).join("log.jsonl");
+    let written = std::fs::read_to_string(&log).unwrap();
+    assert!(written.contains("still streaming"), "lost at quit");
+    assert!(written.lines().last().unwrap().starts_with(r#"{"type":"mark""#));
+    assert!(cockpit.store.syncs().1 > full, "synced through the drive's cache");
+    assert_eq!(cockpit.store.open_threads().unwrap(), vec![thread], "reopened next launch");
+}
+
+/// A writer that cannot write at quit keeps what it holds beside its log,
+/// and the next revive of that Thread says where.
+#[test]
+fn what_quitting_cannot_write_is_kept_and_reported() {
+    let (mut cockpit, fake) = cockpit("quit-pending");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(text("unsaved words")).unwrap();
+    cockpit.pump();
+    // A descriptor that cannot write: every append fails.
+    cockpit.threads[&thread].writer.break_writes();
+    cockpit.halt_sessions();
+    let kept = cockpit.store.pending_records(thread);
+    assert_eq!(kept.len(), 1);
+    assert!(std::fs::read_to_string(&kept[0]).unwrap().contains("unsaved words"));
+
+    let dir = cockpit.store.dir().to_path_buf();
+    drop(cockpit);
+    let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+    relaunched.revive(thread).unwrap();
+    let notices: Vec<String> = relaunched
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Notice(line) => Some(line.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        notices.iter().any(|line| line.contains("log.pending-")),
+        "{notices:?}"
+    );
+}

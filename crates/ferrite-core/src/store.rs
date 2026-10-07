@@ -1652,8 +1652,7 @@ impl Shared {
     /// The one `Shared` for `dir` in this process, keyed by what the
     /// directory is rather than how it is spelled.
     fn of(dir: &Path) -> io::Result<std::sync::Arc<Self>> {
-        use std::sync::{Arc, Mutex, PoisonError, Weak};
-        static OPEN: Mutex<BTreeMap<DirKey, Weak<Shared>>> = Mutex::new(BTreeMap::new());
+        use std::sync::{Arc, PoisonError, Weak};
         let key = dir_key(dir)?;
         let mut open = OPEN.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(shared) = open.get(&key).and_then(Weak::upgrade) {
@@ -1663,6 +1662,48 @@ impl Shared {
         let shared = Arc::new(Self::new(claim(dir, &key)?));
         open.insert(key, Arc::downgrade(&shared));
         Ok(shared)
+    }
+}
+
+/// Every store this process has open, by what its directory is.
+static OPEN: std::sync::Mutex<BTreeMap<DirKey, std::sync::Weak<Shared>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// What a panic must not lose: every record any open store has accepted
+/// and not yet written goes into its log now, on the panicking thread. A
+/// writer that thread holds is left as it is. Install with
+/// `install_panic_rescue`.
+pub fn rescue_after_panic() {
+    rescue(None);
+}
+
+/// `rescue_after_panic` before whatever panic hook was installed.
+pub fn install_panic_rescue() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        rescue_after_panic();
+        previous(info);
+    }));
+}
+
+/// Write what every writer of the stores in `only` (all, for `None`) holds.
+fn rescue(only: Option<&Path>) {
+    let only = only.and_then(|dir| dir_key(dir).ok());
+    let stores: Vec<_> = worker::lock(&OPEN)
+        .iter()
+        .filter(|(key, _)| only.as_ref().is_none_or(|only| only == *key))
+        .filter_map(|(_, shared)| shared.upgrade())
+        .collect();
+    for shared in stores {
+        let Some(worker) = shared.worker.get() else {
+            continue;
+        };
+        let writers = worker.queue().writers();
+        for writer in writers {
+            if let Ok(mut state) = writer.try_lock() {
+                let _ = state.flush();
+            }
+        }
     }
 }
 
@@ -2002,6 +2043,63 @@ impl Store {
             }
             worker.wait_pass(std::time::Duration::from_millis(50));
         }
+    }
+
+    /// The process is quitting (E1): write every record any writer of this
+    /// store has accepted — always, however long the disk takes — then end
+    /// each log in a mark and sync it through the drive's cache, waiting at
+    /// most `deadline` for those syncs. Open markers stay: the next launch
+    /// reopens what was open. A writer that cannot write keeps what it holds
+    /// in `log.pending-<pid>-<n>.jsonl` beside its log, which the next
+    /// revive reports.
+    pub fn quit(&self, deadline: std::time::Duration) {
+        let Some(worker) = self.shared.worker.get() else {
+            return;
+        };
+        let writers = worker.queue().writers();
+        for writer in &writers {
+            let mut state = worker::lock(writer);
+            if state.flush().is_err() {
+                state.keep_pending();
+                continue;
+            }
+            if !state.parking {
+                state.park(false);
+            }
+        }
+        worker.poke();
+        let until = std::time::Instant::now() + deadline;
+        while std::time::Instant::now() < until
+            && writers
+                .iter()
+                .any(|writer| !worker::lock(writer).finished())
+        {
+            worker.wait_pass(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Records a writer could not write before Ferrite last quit, kept
+    /// beside this Thread's log (`quit`).
+    pub fn pending_records(&self, id: ThreadId) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(self.dir.join(id.to_string())) else {
+            return Vec::new();
+        };
+        let mut pending: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("log.pending-"))
+            })
+            .collect();
+        pending.sort();
+        pending
+    }
+
+    /// Write what the writers of this store hold, as a panic would.
+    #[cfg(test)]
+    pub(crate) fn rescue(&self) {
+        rescue(Some(&self.dir));
     }
 
     /// Wait until every park's open marker is gone: what the open state
@@ -2614,9 +2712,9 @@ impl Store {
             Some(writer) => writer.lock().amend(change)?,
             None => {
                 let writer = self.writer(id)?;
-                let mut writer = writer.lock();
-                writer.amend(change)?;
-                writer.flush_fully()?;
+                writer.lock().amend(change)?;
+                // Parked: the worker marks the log and syncs it fully.
+                writer.close();
             }
         }
         Ok(())
@@ -3536,6 +3634,14 @@ impl ThreadWriter {
         self.lock()
     }
 
+    /// Make every later write fail, for a test: the descriptor becomes one
+    /// opened for reading.
+    #[cfg(test)]
+    pub(crate) fn break_writes(&self) {
+        let mut state = self.lock();
+        state.file = File::open(&state.path).expect("the log opens for reading");
+    }
+
     /// Buffer one Session event, converted to the persisted schema. Flushes
     /// when the event is a boundary (turn end, close). `duration` is the
     /// wall clock a settled tool call took, where the caller measured one.
@@ -3611,10 +3717,19 @@ impl ThreadWriter {
     /// written (`flush`). A sync that fails is retried, and a revive waits
     /// for it (`Store::settle`).
     pub fn park(self) {
+        self.release(true);
+    }
+
+    /// Done with the log, its Thread still parked: the worker ends it in a
+    /// mark and syncs it through the drive's cache. Returns at once.
+    pub fn close(self) {
+        self.release(false);
+    }
+
+    fn release(self, parked: bool) {
         let worker = {
             let mut state = self.lock();
-            state.park();
-            state.park_marked = state.since_mark() == 0;
+            state.park(parked);
             state.shared.worker()
         };
         worker.hold(self.state.clone());
@@ -3967,8 +4082,8 @@ impl WriterState {
         self.commit(Record::Facts { facts })
     }
 
-    /// Append one record now, outside the buffer, and sync it: an amendment
-    /// or a handover its caller waits on. Everything buffered goes first.
+    /// Append one record now, outside the buffer: an amendment or a handover
+    /// its caller waits on. Everything buffered goes first.
     /// On failure the line is taken back off the log, so a change reported
     /// as failed never lands later; if even that fails, the writer refuses
     /// every append until the Thread is reopened (and repaired).
@@ -3977,8 +4092,8 @@ impl WriterState {
         let written = line(&record)?;
         let at = self.len;
         self.append_now(written.as_bytes())?;
-        self.shared.sync(&self.file, SyncLevel::Barrier)?;
-        self.synced = self.len;
+        // Written; the worker syncs it like any other line.
+        self.shared.worker().poke();
         if let Some(tracker) = self.tracker.as_mut() {
             tracker.observe(at, &record);
         }

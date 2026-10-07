@@ -814,6 +814,45 @@ fn a_mark_never_reaches_the_log_before_its_barrier() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A panic must not lose what a writer accepted and had not yet written.
+#[test]
+fn a_panic_rescue_writes_what_writers_hold() {
+    let dir = scratch("rescue");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer
+        .record_event(&SessionEvent::TextDelta { text: "mid-turn".into() }, None)
+        .unwrap();
+    assert!(store.load(id).unwrap().inputs().is_empty(), "only buffered");
+    store.rescue();
+    assert_eq!(
+        store.load(id).unwrap().inputs(),
+        vec![Input::Event(SessionEvent::TextDelta { text: "mid-turn".into() })]
+    );
+    drop(writer);
+}
+
+/// Renaming a Thread — live or parked — never waits on the drive: the
+/// line is written at once, the worker syncs it.
+#[test]
+fn an_amendment_never_waits_for_the_drive() {
+    let dir = scratch("amend-async");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    let (parked, parked_writer) = store.create(Provider::Codex, None, main()).unwrap();
+    drop(parked_writer);
+    store.settle_all();
+    *worker::lock(&store.faults().sync_delay) = std::time::Duration::from_millis(400);
+    let started = std::time::Instant::now();
+    store.set_title(id, "live".into(), Some(&mut writer)).unwrap();
+    store.set_title(parked, "parked".into(), None).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_millis(250));
+    assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("live"));
+    assert_eq!(store.peek(parked).unwrap().title.as_deref(), Some("parked"));
+    *worker::lock(&store.faults().sync_delay) = std::time::Duration::ZERO;
+    store.settle_all();
+}
+
 /// A parked-row lookup reads on a background thread while the UI thread
 /// writes: the two never wait on each other's locks.
 #[test]
@@ -839,4 +878,5 @@ fn reads_on_another_thread_never_deadlock_with_writes() {
     }
     done.store(true, std::sync::atomic::Ordering::Relaxed);
     reading.join().unwrap();
+    store.rescue();
 }

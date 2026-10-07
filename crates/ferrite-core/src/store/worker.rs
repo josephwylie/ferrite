@@ -41,6 +41,15 @@ impl Queue {
     pub(super) fn live_writers(&self) -> Vec<Arc<Mutex<WriterState>>> {
         self.live.iter().filter_map(Weak::upgrade).collect()
     }
+
+    /// Every writer, live or held.
+    pub(super) fn writers(&self) -> Vec<Arc<Mutex<WriterState>>> {
+        self.live
+            .iter()
+            .filter_map(Weak::upgrade)
+            .chain(self.held.iter().cloned())
+            .collect()
+    }
 }
 
 impl Worker {
@@ -215,14 +224,45 @@ impl WriterState {
             && (!self.parking || self.park_marked && self.full_synced >= self.len)
     }
 
-    /// Hand this parked Thread's writer to the worker: remove its open
-    /// marker, mark the log, sync it through the drive's cache.
-    pub(super) fn park(&mut self) {
-        let thread = self.path.parent().map(std::path::Path::to_path_buf);
-        if let Some(thread) = thread {
-            let store = thread.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-            self.unmark = Some((thread.join(OPEN_MARKER), store.join(OPEN_STATE_MARKER)));
+    /// Hand this writer to the worker to finish: mark the log and sync it
+    /// through the drive's cache — and, for a parked Thread, remove its
+    /// open marker first.
+    pub(super) fn park(&mut self, parked: bool) {
+        if parked {
+            if let Some(thread) = self.path.parent() {
+                let store = thread.parent().unwrap_or(thread);
+                self.unmark = Some((thread.join(OPEN_MARKER), store.join(OPEN_STATE_MARKER)));
+            }
         }
         self.parking = true;
+        self.park_marked = self.since_mark() == 0;
+    }
+
+    /// What this writer holds and cannot write, kept beside the log for the
+    /// next revive to report (`Store::quit`).
+    pub(super) fn keep_pending(&mut self) {
+        let mut bytes = self
+            .pending_flush
+            .as_ref()
+            .map(|append| append.bytes[append.written..].to_vec())
+            .unwrap_or_default();
+        let frozen = self.pending_flush.as_ref().map_or(0, |append| append.records);
+        for record in &self.buffer[frozen..] {
+            if let Ok(line) = super::line(record) {
+                bytes.extend_from_slice(line.as_bytes());
+            }
+        }
+        if bytes.is_empty() {
+            return;
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let kept = self
+            .path
+            .with_file_name(format!("log.pending-{}-{n}.jsonl", std::process::id()));
+        if std::fs::write(&kept, bytes).is_ok() {
+            self.pending_flush = None;
+            self.buffer.clear();
+        }
     }
 }

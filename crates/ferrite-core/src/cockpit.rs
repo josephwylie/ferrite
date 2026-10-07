@@ -580,6 +580,10 @@ pub struct Cockpit {
     refuse_park: std::collections::HashSet<ThreadId>,
 }
 
+/// How long quitting waits for the drive to take every log's final sync.
+/// The writes themselves are always waited for.
+const QUIT_SYNC_DEADLINE: Duration = Duration::from_millis(500);
+
 impl Cockpit {
     pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
@@ -1574,6 +1578,13 @@ impl Cockpit {
             state.activity.apply(input);
         }
         state.apply(Input::Revived);
+        for kept in self.store.pending_records(thread) {
+            state.apply(Input::Notice(format!(
+                "history from before Ferrite last quit could not be saved in the log; \
+                 it is kept in {}",
+                kept.display()
+            )));
+        }
         if let Some(notice) = state.native_queue.disconnect(provider == Provider::Codex) {
             state.apply(Input::Notice(notice));
         }
@@ -2031,6 +2042,9 @@ impl Cockpit {
             state.replacement = None;
             state.session = None;
         }
+        // Every record accepted is written before Ferrite goes (E1); only
+        // the final syncs are bounded.
+        self.store.quit(QUIT_SYNC_DEADLINE);
     }
 
     /// The durable operator title, whether this Thread is live or parked.
