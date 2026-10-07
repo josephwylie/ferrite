@@ -172,8 +172,8 @@ Line 1 is written once, by `create` or by the one-time upgrade below. After
 that, the facts change by appending a record:
 
 ```json
-{"type":"facts","provider":"claude","workspace":{"kind":"main","checkout":"/r"},
- "session_project_root":null,"model":null,"project_id":14,"title":"Fix nav","effort":"high"}
+{"type":"facts","facts":{"provider":"claude","workspace":{"kind":"main","checkout":"/r"},
+ "session_project_root":null,"model":null,"project_id":14,"title":"Fix nav","effort":"high"}}
 ```
 
 A `facts` record restates every fact, not a delta, so the newest one alone is
@@ -575,29 +575,73 @@ disk:
 13. `queue.json`: a barrier before its rename, and a Notice when it is
     unreadable.
 
-## Revision during implementation: the worker syncs, the caller writes
+## As built (2026-10-07)
 
-The worker described in §1 was to perform the writes too. As built, a
-record is still written (`write(2)`) where it is accepted, into the page
-cache. The store's worker owns everything that waits on a drive:
+The decisions above held. These points differ from the text above or make
+it precise.
+
+**The worker syncs; the caller writes.** The worker described in §1 was to
+perform the writes too. As built, a record is still written (`write(2)`)
+where it is accepted, into the page cache, and the store's worker owns
+everything that waits on a drive:
 
 - every sync: barriers at boundaries, and the 30 s full sync on its own
   timer;
-- the marks, which follow a barrier;
+- the marks, which are appended only once a sync covers what precedes
+  them (a flush may also place one when that already holds);
 - a park: removing the open marker, writing the final mark, and a full
   sync.
 
-Every stall this ADR set out to remove was a sync: F_FULLFSYNC ran up to
-2.6 s under load. A write into the page cache does not wait on the drive.
-Keeping writes on the caller brings three benefits:
+Every stall this ADR set out to remove was a sync; a write into the page
+cache does not wait on the drive. Keeping writes on the caller means every
+reader sees what was accepted at once, the write-retry contract
+(`PendingFlush`) is unchanged, and a write failure reaches its caller
+exactly as before. So there is no `Backlogged` state. A failed sync is
+reported through `ThreadWriter::failure`, and the pump holds the Session's
+events while it says anything.
 
-- every reader sees what was accepted at once;
-- the write-retry contract (`PendingFlush`) is unchanged;
-- a write failure is reported to its caller exactly as before.
+**The locks have one order.** A writer's owner holds the writer's lock
+and takes the worker's queue lock to wake it. So nothing ever locks a
+writer while holding the queue lock.
 
-A failed sync is reported through `ThreadWriter::failure`, and the pump
-then holds the Session's events. The quit, `log.pending-*` and panic-hook
-items in §1 apply to the writes that remain buffered.
+**Amendments.**
+
+- They write their line at once and leave the sync to the worker.
+- A failed write is taken back off the log, so a refused change never
+  lands later.
+- A parked Thread's amendment hands its writer back to the worker to
+  mark and sync.
+- `set_tuning` changes model and effort without restating the provider.
+
+**Peek.** There is no meta cache. Every amendment is in the page cache as
+soon as it is made, so `peek` reads the header and then the tail back to
+the newest mark.
+
+**Hand-over.** A log of at most 2 MiB has its exchanges read on the
+caller's thread. A larger one is read on a thread of its own: the
+replacement stays pending, the pump holds the old Session's events, and
+the switch commits when the read is done.
+
+**Quit.** `Store::quit` writes every buffer and asks the worker to end
+each log in a mark and fully sync it, waiting at most 500 ms for the
+syncs. `install_panic_rescue` writes every buffer when a panic begins.
+
+**The commits** on `perf/store` land as:
+
+1. test harness;
+2. the store claim, plus a fix that keeps it for the life of the process;
+3. barriers;
+4. repair in place;
+5. byte-verbatim crash-safe rewrite;
+6. schema 13 with amendments and marks;
+7. summaries;
+8. replay bases and `Revival`;
+9. the worker, plus a fix for the lock order;
+10. quit, pending files and the panic rescue;
+11. the off-thread hand-over read;
+12. `delete` lets go of a parking log (the "sync thread" slot is the
+    worker of step 9);
+13. `queue.json`.
 
 ## Review (2026-10-07)
 
