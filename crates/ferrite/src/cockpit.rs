@@ -3916,7 +3916,13 @@ impl CockpitView {
         use crate::cli_updates::{name, Toast};
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        for toast in self.cli_updates.take_toasts() {
+        let toasts = self.cli_updates.take_toasts();
+        if toasts.is_empty() {
+            // Called every render: a notify here with nothing to show would
+            // rebuild the Cockpit on every frame anything else draws.
+            return;
+        }
+        for toast in toasts {
             let notification = match toast {
                 Toast::Offer { provider, latest } => {
                     let view = cx.entity().downgrade();
