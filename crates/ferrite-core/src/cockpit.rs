@@ -445,7 +445,7 @@ impl Thread {
         let generation = next_generation();
         let mut activity = Activity::default();
         activity.apply(ActivityInput::Connect { generation });
-        Self {
+        let mut state = Self {
             activity,
             generation,
             store_error: None,
@@ -474,7 +474,11 @@ impl Thread {
             suggestion: None,
             suggestion_revision: 0,
             permission_mode: None,
+        };
+        if let Some(notice) = state.native_queue.take_unreadable() {
+            state.apply(Input::Notice(notice));
         }
+        state
     }
 }
 

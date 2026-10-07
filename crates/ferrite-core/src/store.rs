@@ -1441,6 +1441,12 @@ enum SyncLevel {
     Full,
 }
 
+/// Sync a file behind a barrier: its writes reach the drive before any
+/// that follow (ADR 0008). For files beside the logs, like the queue.
+pub(crate) fn sync_ordered(file: &File) -> io::Result<()> {
+    sync_file(file, SyncLevel::Barrier)
+}
+
 /// Sync one file to `level`. Plain `fsync` is never used on macOS: it does
 /// not order writes, so a power cut could persist a later block without an
 /// earlier one.

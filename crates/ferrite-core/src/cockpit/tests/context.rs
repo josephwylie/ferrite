@@ -411,3 +411,30 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
     assert!(!log.contains("late-claude"), "no old word after the switch's line");
     let _ = std::fs::remove_dir_all(cockpit.store.dir());
 }
+
+/// A saved queue that cannot be read starts empty — and says so.
+#[test]
+fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
+    let (mut cockpit, fake) = cockpit("queue-unreadable");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "one".into());
+    live(&fake).send(ended()).unwrap();
+    cockpit.pump();
+    cockpit.park(thread).unwrap();
+    std::fs::write(
+        cockpit.store.dir().join(thread.to_string()).join("queue.json"),
+        "{ not json",
+    )
+    .unwrap();
+    cockpit.revive(thread).unwrap();
+    assert!(cockpit
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .any(|block| matches!(
+            &block.body,
+            Body::Notice(line) if line.contains("queued prompts saved for this Thread could not be read")
+        )));
+}
