@@ -368,7 +368,8 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
     cockpit
         .store
         .faults()
-        .fail_replace_at(Some(crate::store::ReplaceStep::Rename));
+        .fail_commit
+        .store(true, Ordering::SeqCst);
     replacement.ready();
     until(|| {
         cockpit.pump();

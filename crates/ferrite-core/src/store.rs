@@ -8,7 +8,7 @@
 //! per delta is impossible by interface shape.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -70,7 +70,18 @@ mod durability_tests;
 ///   after its prompt), a turn's token counts on its completion
 ///   observation, and a hunk's section. A v1–v11 log loads with none of
 ///   them: its prompts draw no time and its stamps no tokens.
-const SCHEMA_VERSION: u32 = 12;
+/// - **13** — header facts change by appending, never by rewriting the log
+///   (ADR 0008): a `facts` record restates them all after a change, a
+///   `handover` carries the facts it switched to, and the store's own
+///   `mark` restates them every megabyte or so, so a peek reads the tail
+///   instead of the whole log. The newest record carrying facts wins. A
+///   v1–v12 log's header is its only facts record; its handovers carry
+///   none, their effect already in the header rewritten with them.
+const SCHEMA_VERSION: u32 = 13;
+
+/// How far apart the store's marks sit, at least: what a peek or a reopen
+/// reads back from the end of a log to find its facts.
+const MARK_SPACING: u64 = 1024 * 1024;
 
 /// How far `peek_first_prompt` reads before giving up: the first prompt
 /// is normally the second line, and a log whose first prompt sits past
@@ -184,6 +195,67 @@ struct Header {
     /// every v1–v7 header — means the provider's default.
     #[serde(default)]
     effort: Option<String>,
+}
+
+impl Header {
+    fn facts(&self) -> Facts {
+        Facts {
+            provider: self.provider,
+            workspace: self.workspace.clone(),
+            session_project_root: self.session_project_root.clone(),
+            model: self.model.clone(),
+            project_id: self.project_id,
+            title: self.title.clone(),
+            effort: self.effort.clone(),
+        }
+    }
+
+    fn of(facts: Facts) -> Self {
+        Header {
+            schema: SCHEMA_VERSION,
+            provider: facts.provider,
+            workspace: facts.workspace,
+            session_project_root: facts.session_project_root,
+            model: facts.model,
+            project_id: facts.project_id,
+            title: facts.title,
+            effort: facts.effort,
+        }
+    }
+}
+
+/// A Thread's header facts (schema 13): what its first line says, and what
+/// every record that changes them restates in full — never a delta, so the
+/// newest one alone is the truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Facts {
+    provider: Provider,
+    #[serde(default)]
+    workspace: Option<PersistedBinding>,
+    #[serde(default)]
+    session_project_root: Option<PathBuf>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    project_id: Option<ProjectId>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+}
+
+impl Facts {
+    fn meta(self) -> ThreadMeta {
+        ThreadMeta {
+            provider: self.provider,
+            workspace: self.workspace.as_ref().map(PersistedBinding::live),
+            session_project_root: self.session_project_root,
+            model: self.model,
+            project_id: self.project_id,
+            title: self.title,
+            effort: self.effort,
+        }
+    }
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -352,7 +424,42 @@ enum Record {
         from: Provider,
         to: Provider,
         model: Option<String>,
+        /// Schema 13: the facts the switch commits, in the same line as the
+        /// switch itself. Absent from older logs, whose header rewrite
+        /// already holds them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        facts: Option<Facts>,
     },
+    /// Schema 13: the header facts after a change, restated whole.
+    Facts { facts: Facts },
+    /// Schema 13: a bookmark the store writes for itself. It restates the
+    /// facts at this point, so a peek or a reopen reads back from the end
+    /// to the newest one instead of the whole log, and certifies that every
+    /// line before it was readable when it was written. Derived: a reader
+    /// that ignores marks reads exactly the same Thread.
+    Mark {
+        facts: Facts,
+        /// The offset of the mark before this one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prev: Option<u64>,
+    },
+}
+
+impl Record {
+    /// The facts this record restates, when it carries them.
+    fn facts(&self) -> Option<&Facts> {
+        match self {
+            Record::Facts { facts } | Record::Mark { facts, .. } => Some(facts),
+            Record::Handover { facts, .. } => facts.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The store's own bookkeeping, folded into the facts when a log is
+    /// read and never part of the conversation.
+    fn is_bookkeeping(&self) -> bool {
+        matches!(self, Record::Facts { .. } | Record::Mark { .. })
+    }
 }
 
 /// The Notice a provider switch leaves in the transcript, live and on
@@ -1163,6 +1270,9 @@ impl Record {
             Record::Handover { to, model, .. } => {
                 Input::Notice(handover_notice(*to, model.as_deref()))
             }
+            Record::Facts { .. } | Record::Mark { .. } => {
+                unreachable!("the store's bookkeeping is folded when a log is read")
+            }
         }
     }
 
@@ -1352,6 +1462,11 @@ impl Shared {
 pub(crate) struct Faults {
     /// Fail replacing a log at this step.
     pub(crate) replace_fails_at: std::sync::Mutex<Option<ReplaceStep>>,
+    /// Fail an amendment or handover after its line is written, before
+    /// it is synced.
+    pub(crate) fail_commit: std::sync::atomic::AtomicBool,
+    /// And then fail taking it back off the log.
+    pub(crate) fail_rollback: std::sync::atomic::AtomicBool,
 }
 
 /// The steps of putting a rewritten log in place, for fault injection.
@@ -1550,6 +1665,60 @@ impl Read for LogRead {
     }
 }
 
+impl Seek for LogRead {
+    fn seek(&mut self, to: io::SeekFrom) -> io::Result<u64> {
+        self.file.seek(to)
+    }
+}
+
+/// A log's lines read from its end backwards (`Store::backwards`).
+struct Backwards {
+    file: LogRead,
+    floor: u64,
+    /// Where the bytes in `pending` begin in the file.
+    start: u64,
+    /// Bytes read but not yet yielded: the tail of an unfinished line.
+    pending: Vec<u8>,
+    done: bool,
+}
+
+impl Iterator for Backwards {
+    type Item = (u64, Vec<u8>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        const CHUNK: u64 = 64 * 1024;
+        if self.done {
+            return None;
+        }
+        loop {
+            if let Some(at) = self.pending.iter().rposition(|byte| *byte == b'\n') {
+                let line = self.pending.split_off(at + 1);
+                self.pending.pop(); // the newline before it
+                return Some((self.start + at as u64 + 1, line));
+            }
+            if self.start <= self.floor {
+                self.done = true;
+                return Some((self.floor, std::mem::take(&mut self.pending)));
+            }
+            // Read the chunk before what is pending; a line longer than any
+            // chunk just takes more of them.
+            let from = self.start.saturating_sub(CHUNK).max(self.floor);
+            let mut chunk = vec![0; (self.start - from) as usize];
+            let read = self
+                .file
+                .seek(io::SeekFrom::Start(from))
+                .and_then(|_| self.file.read_exact(&mut chunk));
+            if read.is_err() {
+                self.done = true;
+                return None;
+            }
+            chunk.extend_from_slice(&self.pending);
+            self.pending = chunk;
+            self.start = from;
+        }
+    }
+}
+
 impl Store {
     /// Bind a store to `dir`, creating it if it does not exist.
     pub fn open(dir: impl AsRef<Path>) -> io::Result<Self> {
@@ -1622,10 +1791,12 @@ impl Store {
         self
     }
 
-    /// A writer appending to `file`, the open log of one Thread.
-    fn writer_on(&self, file: File) -> ThreadWriter {
+    /// A writer appending to `file`, the open log of Thread `id`, which ends
+    /// as `tail` says.
+    fn writer_on(&self, id: ThreadId, file: File, tail: Tail) -> ThreadWriter {
         ThreadWriter {
             file,
+            path: self.log_path(id),
             buffer: Vec::new(),
             flush_interval: self.flush_interval,
             buffered_since: None,
@@ -1633,6 +1804,11 @@ impl Store {
             full_sync_interval: self.full_sync_interval,
             fully_synced: std::time::Instant::now(),
             unsynced: false,
+            facts: tail.facts,
+            len: tail.len,
+            last_mark: tail.last_mark,
+            mark_len: tail.mark_len,
+            broken: None,
             shared: self.shared.clone(),
         }
     }
@@ -1718,9 +1894,16 @@ impl Store {
             // And on its default effort.
             effort: None,
         };
-        file.write_all(line(&header)?.as_bytes())?;
+        let written = line(&header)?;
+        file.write_all(written.as_bytes())?;
         self.shared.sync(&file, SyncLevel::Full)?;
-        Ok((id, self.writer_on(file)))
+        let tail = Tail {
+            facts: header.facts(),
+            len: written.len() as u64,
+            last_mark: None,
+            mark_len: 0,
+        };
+        Ok((id, self.writer_on(id, file, tail)))
     }
 
     /// Where the store keeps its files — what the registry binds to, so the
@@ -1828,14 +2011,44 @@ impl Store {
                 supported: SCHEMA_VERSION,
             });
         }
-        Ok(ThreadMeta {
-            provider: header.provider,
-            workspace: header.workspace.as_ref().map(PersistedBinding::live),
-            session_project_root: header.session_project_root,
-            model: header.model,
-            project_id: header.project_id,
-            title: header.title,
-            effort: header.effort,
+        if header.schema < 13 {
+            // Before amendments, the header was the only place facts lived.
+            return Ok(header.facts().meta());
+        }
+        let newest = self.backwards(id, first.len() as u64)?.find_map(|(_, line)| {
+            let carrier = [r#"{"type":"facts""#, r#"{"type":"mark""#, r#"{"type":"handover""#];
+            carrier
+                .iter()
+                .any(|kind| line.starts_with(kind.as_bytes()))
+                .then(|| serde_json::from_slice::<Record>(&line).ok())
+                .flatten()
+                .and_then(|record| record.facts().cloned())
+        });
+        Ok(newest.unwrap_or_else(|| header.facts()).meta())
+    }
+
+    /// One log's lines from its end back to `floor` (the end of its header),
+    /// newest first, each with its offset. What a peek or a reopen reads
+    /// instead of the whole log: it stops as soon as its caller does.
+    fn backwards(&self, id: ThreadId, floor: u64) -> io::Result<Backwards> {
+        let mut file = self.read_log(id)?;
+        let len = file.file.metadata()?.len();
+        let mut end = len;
+        if len > floor {
+            // A final newline ends the last line; it does not start one.
+            let mut last = [0u8];
+            file.file.seek(io::SeekFrom::Start(len - 1))?;
+            file.read_exact(&mut last)?;
+            if last[0] == b'\n' {
+                end = len - 1;
+            }
+        }
+        Ok(Backwards {
+            file,
+            floor,
+            start: end.max(floor),
+            pending: Vec::new(),
+            done: len <= floor,
         })
     }
 
@@ -1895,17 +2108,9 @@ impl Store {
         &self,
         id: ThreadId,
         root: Option<PathBuf>,
-        mut writer: Option<&mut ThreadWriter>,
+        writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
-        self.writable()?;
-        if let Some(w) = writer.as_mut() {
-            w.flush()?;
-        }
-        let (file, _) = self.rewrite(id, |snapshot| snapshot.session_project_root = root, None)?;
-        if let Some(w) = writer {
-            *w = self.writer_on(file);
-        }
-        Ok(())
+        self.amend(id, writer, |facts| facts.session_project_root = root)
     }
 
     /// Record which provider serves this Thread, and the model and effort
@@ -1920,25 +2125,13 @@ impl Store {
         provider: Provider,
         model: Option<String>,
         effort: Option<String>,
-        mut writer: Option<&mut ThreadWriter>,
+        writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
-        self.writable()?;
-        if let Some(w) = writer.as_mut() {
-            w.flush()?;
-        }
-        let (file, _) = self.rewrite(
-            id,
-            |snapshot| {
-                snapshot.provider = provider;
-                snapshot.model = model;
-                snapshot.effort = effort;
-            },
-            None,
-        )?;
-        if let Some(w) = writer {
-            *w = self.writer_on(file);
-        }
-        Ok(())
+        self.amend(id, writer, |facts| {
+            facts.provider = provider;
+            facts.model = model;
+            facts.effort = effort;
+        })
     }
 
     /// Record the checkout this Thread now works in — the binding moving
@@ -1952,21 +2145,11 @@ impl Store {
         &self,
         id: ThreadId,
         binding: &WorkspaceBinding,
-        mut writer: Option<&mut ThreadWriter>,
+        writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
-        self.writable()?;
-        if let Some(w) = writer.as_mut() {
-            w.flush()?;
-        }
-        let (file, _) = self.rewrite(
-            id,
-            |snapshot| snapshot.workspace = Some(PersistedBinding::from_live(binding)),
-            None,
-        )?;
-        if let Some(w) = writer {
-            *w = self.writer_on(file);
-        }
-        Ok(())
+        self.amend(id, writer, |facts| {
+            facts.workspace = Some(PersistedBinding::from_live(binding));
+        })
     }
 
     /// Commit the new header and its Handover together. Before the rename,
@@ -1981,40 +2164,70 @@ impl Store {
     ) -> Result<Handover, LoadError> {
         self.writable()?;
         writer.flush()?;
-        let from = self.peek(id)?.provider;
-        let (file, snapshot) = self.rewrite(
-            id,
-            |snapshot| {
-                snapshot.provider = provider;
-                snapshot.model = model.clone();
-                snapshot.effort = None;
-            },
-            Some(Record::Handover {
-                from,
-                to: provider,
-                model: model.clone(),
-            }),
-        )?;
-        let handover = snapshot.last_handover().expect("just added");
-        *writer = self.writer_on(file);
-        Ok(handover)
+        // Every exchange the log holds, read whole (ADR 0008, invariant 3).
+        let mut snapshot = self.load(id)?;
+        let from = writer.facts.provider;
+        let mut facts = writer.facts.clone();
+        facts.provider = provider;
+        facts.model = model.clone();
+        facts.effort = None;
+        let switch = |facts: Option<Facts>| Record::Handover {
+            from,
+            to: provider,
+            model: model.clone(),
+            facts,
+        };
+        writer.commit(switch(Some(facts)))?;
+        snapshot.records.push(switch(None));
+        Ok(snapshot.last_handover().expect("just added"))
+    }
+
+    /// Record the model and effort this Thread runs with, leaving its
+    /// provider as the log has it: a caller's stale view of the provider
+    /// (a switch committed a moment ago) can never be written back over it.
+    pub fn set_tuning(
+        &self,
+        id: ThreadId,
+        model: Option<String>,
+        effort: Option<String>,
+        writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        self.amend(id, writer, |facts| {
+            facts.model = model;
+            facts.effort = effort;
+        })
+    }
+
+    /// Change a Thread's facts by `change` (a delta, applied to the facts
+    /// the writer holds — never a whole restatement from the caller) and
+    /// append the result. Through the Thread's open writer when it has
+    /// one; otherwise through one opened for the purpose, which leaves the
+    /// parked log synced through the drive's cache.
+    fn amend(
+        &self,
+        id: ThreadId,
+        writer: Option<&mut ThreadWriter>,
+        change: impl FnOnce(&mut Facts),
+    ) -> Result<(), LoadError> {
+        self.writable()?;
+        match writer {
+            Some(writer) => writer.amend(change)?,
+            None => {
+                let mut writer = self.writer(id)?;
+                writer.amend(change)?;
+                writer.flush_fully()?;
+            }
+        }
+        Ok(())
     }
 
     pub fn set_title(
         &self,
         id: ThreadId,
         title: String,
-        mut writer: Option<&mut ThreadWriter>,
+        writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
-        self.writable()?;
-        if let Some(w) = writer.as_mut() {
-            w.flush()?;
-        }
-        let (file, _) = self.rewrite(id, |snapshot| snapshot.title = Some(title), None)?;
-        if let Some(w) = writer {
-            *w = self.writer_on(file);
-        }
-        Ok(())
+        self.amend(id, writer, |facts| facts.title = Some(title))
     }
 
     /// Reopen one Thread's log for appending — how a revived Thread's next
@@ -2027,17 +2240,116 @@ impl Store {
     ///
     /// A log a crash left torn is repaired first (`repair`).
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
+        use std::io::BufRead;
         self.writable()?;
         self.sweep_temps(id);
-        let bytes = self.read_whole_log(id)?;
-        let parsed = parse(id, &bytes)?;
-        let file = if parsed.snapshot.schema < SCHEMA_VERSION {
-            self.rewrite_from(id, &bytes, parsed, |_| {}, None)?.0
-        } else {
-            self.repair(id, &bytes, parsed.readable)?;
-            OpenOptions::new().append(true).open(self.log_path(id))?
+        let mut first = Vec::new();
+        io::BufReader::new(self.read_log(id)?).read_until(b'\n', &mut first)?;
+        let schema = serde_json::from_slice::<Header>(&first)
+            .map(|header| header.schema)
+            .unwrap_or(0);
+        if schema > SCHEMA_VERSION {
+            return Err(LoadError::FutureSchema {
+                found: schema,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        if schema < SCHEMA_VERSION {
+            let bytes = self.read_whole_log(id)?;
+            let parsed = parse(id, &bytes)?;
+            return self.upgrade(id, &bytes, parsed);
+        }
+        self.reopen(id, &first)
+    }
+
+    /// Reopen a current log for appending, reading only its tail: from the
+    /// newest mark that parses — which vouches for every line before it —
+    /// to the end. Every line in that stretch must parse; the first that
+    /// does not, and everything after it, is repaired away (`repair`).
+    fn reopen(&self, id: ThreadId, first: &[u8]) -> Result<ThreadWriter, LoadError> {
+        let header_end = first.len() as u64;
+        let header: Header = serde_json::from_slice(first).map_err(|_| LoadError::Corrupt {
+            detail: format!("thread {id} has no readable header"),
+        })?;
+        let mark = self.backwards(id, header_end)?.find_map(|(at, line)| {
+            if !line.starts_with(br#"{"type":"mark""#) {
+                return None;
+            }
+            match serde_json::from_slice::<Record>(&line) {
+                Ok(Record::Mark { facts, .. }) => Some((at, line.len() as u64 + 1, facts)),
+                _ => None,
+            }
+        });
+        let (from, mut facts) = match &mark {
+            Some((at, _, facts)) => (*at, facts.clone()),
+            None => (header_end, header.facts()),
         };
-        Ok(self.writer_on(file))
+        let mut tail = Vec::new();
+        let mut file = self.read_log(id)?;
+        file.seek(io::SeekFrom::Start(from))?;
+        file.read_to_end(&mut tail)?;
+        let mut readable = 0;
+        while readable < tail.len() {
+            let end = tail[readable..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(tail.len(), |at| readable + at);
+            let Ok(record) = serde_json::from_slice::<Record>(&tail[readable..end]) else {
+                break;
+            };
+            if let Some(restated) = record.facts() {
+                facts = restated.clone();
+            }
+            readable = (end + 1).min(tail.len());
+        }
+        self.repair_tail(id, from, &tail, readable)?;
+        let file = OpenOptions::new().append(true).open(self.log_path(id))?;
+        let len = file.metadata()?.len();
+        let (last_mark, mark_len) = match mark {
+            Some((at, mark_len, _)) => (Some(at), mark_len as usize),
+            None => (None, 0),
+        };
+        Ok(self.writer_on(
+            id,
+            file,
+            Tail {
+                facts,
+                len,
+                last_mark,
+                mark_len,
+            },
+        ))
+    }
+
+    /// Upgrade an older log to the current schema before anything is
+    /// appended (`rewrite_from`), ending it with a mark.
+    fn upgrade(&self, id: ThreadId, bytes: &[u8], parsed: Parsed) -> Result<ThreadWriter, LoadError> {
+        let facts = parsed.snapshot.facts();
+        let mark = line(&Record::Mark {
+            facts: facts.clone(),
+            prev: None,
+        })?;
+        let (file, _) = self.rewrite_from(
+            id,
+            bytes,
+            parsed,
+            |_| {},
+            Some(Record::Mark {
+                facts: facts.clone(),
+                prev: None,
+            }),
+        )?;
+        let len = file.metadata()?.len();
+        Ok(self.writer_on(
+            id,
+            file,
+            Tail {
+                facts,
+                len,
+                last_mark: Some(len - mark.len() as u64),
+                mark_len: mark.len(),
+            },
+        ))
     }
 
     /// Remove temp files a crash left beside one Thread's log. Only this
@@ -2060,12 +2372,12 @@ impl Store {
 
     /// Keep every byte past `readable` in `log.damaged-<readable>.jsonl`,
     /// synced, before anything cuts it off the log.
-    fn keep_damage(&self, id: ThreadId, bytes: &[u8], readable: usize) -> io::Result<()> {
+    fn keep_damage(&self, id: ThreadId, at: u64, damaged: &[u8]) -> io::Result<()> {
         let kept = self
             .log_path(id)
-            .with_file_name(format!("log.damaged-{readable}.jsonl"));
+            .with_file_name(format!("log.damaged-{at}.jsonl"));
         let mut copy = File::create(&kept)?;
-        copy.write_all(&bytes[readable..])?;
+        copy.write_all(damaged)?;
         self.shared.sync(&copy, SyncLevel::Full)
     }
 
@@ -2080,21 +2392,24 @@ impl Store {
     /// a crash's fragment was never a record, but damage inside the log
     /// may hide records after it, and those must never be lost. If keeping
     /// them fails, nothing is cut and the log stays closed to appends.
-    fn repair(&self, id: ThreadId, bytes: &[u8], readable: usize) -> io::Result<()> {
+    ///
+    /// `tail` is the log from byte `from` on; `readable` is where, within
+    /// it, the readable records end.
+    fn repair_tail(&self, id: ThreadId, from: u64, tail: &[u8], readable: usize) -> io::Result<()> {
         let path = self.log_path(id);
-        if readable == bytes.len() {
-            if !bytes.ends_with(b"\n") {
+        if readable == tail.len() {
+            if !tail.is_empty() && !tail.ends_with(b"\n") {
                 let mut log = OpenOptions::new().append(true).open(&path)?;
                 log.write_all(b"\n")?;
                 self.shared.sync(&log, SyncLevel::Full)?;
             }
             return Ok(());
         }
-        self.keep_damage(id, bytes, readable)?;
+        self.keep_damage(id, from + readable as u64, &tail[readable..])?;
         // Not the append handle: Windows truncates only through a handle
         // opened for writing.
         let log = OpenOptions::new().write(true).open(&path)?;
-        log.set_len(readable as u64)?;
+        log.set_len(from + readable as u64)?;
         self.shared.sync(&log, SyncLevel::Full)
     }
 
@@ -2146,17 +2461,7 @@ impl Store {
     /// writer wrote is normalised away — then `extra`. Anything unreadable
     /// past the records is kept beside the log first (`keep_damage`).
     /// Answers an append handle on the new log, and what it now holds.
-    fn rewrite(
-        &self,
-        id: ThreadId,
-        amend: impl FnOnce(&mut ThreadSnapshot),
-        extra: Option<Record>,
-    ) -> Result<(File, ThreadSnapshot), LoadError> {
-        let bytes = self.read_whole_log(id)?;
-        let parsed = parse(id, &bytes)?;
-        self.rewrite_from(id, &bytes, parsed, amend, extra)
-    }
-
+    /// Only an upgrade rewrites a log; every other change appends.
     fn rewrite_from(
         &self,
         id: ThreadId,
@@ -2175,17 +2480,7 @@ impl Store {
             .position(|byte| *byte == b'\n')
             .map_or(bytes.len(), |at| at + 1)
             .min(readable);
-        let mut contents = line(&Header {
-            schema: SCHEMA_VERSION,
-            provider: snapshot.provider,
-            workspace: snapshot.workspace.clone(),
-            session_project_root: snapshot.session_project_root.clone(),
-            model: snapshot.model.clone(),
-            project_id: snapshot.project_id,
-            title: snapshot.title.clone(),
-            effort: snapshot.effort.clone(),
-        })?
-        .into_bytes();
+        let mut contents = line(&Header::of(snapshot.facts()))?.into_bytes();
         contents.extend_from_slice(&bytes[header_end..readable]);
         if !contents.ends_with(b"\n") {
             // The last record lost only its newline to a crash.
@@ -2193,10 +2488,12 @@ impl Store {
         }
         if let Some(record) = extra {
             contents.extend_from_slice(line(&record)?.as_bytes());
-            snapshot.records.push(record);
+            if !record.is_bookkeeping() {
+                snapshot.records.push(record);
+            }
         }
         if readable < bytes.len() {
-            self.keep_damage(id, bytes, readable)?;
+            self.keep_damage(id, readable as u64, &bytes[readable..])?;
         }
         let file = self.replace(id, &contents)?;
         snapshot.schema = SCHEMA_VERSION;
@@ -2368,6 +2665,18 @@ impl AnswerText {
 }
 
 impl ThreadSnapshot {
+    fn facts(&self) -> Facts {
+        Facts {
+            provider: self.provider,
+            workspace: self.workspace.clone(),
+            session_project_root: self.session_project_root.clone(),
+            model: self.model.clone(),
+            project_id: self.project_id,
+            title: self.title.clone(),
+            effort: self.effort.clone(),
+        }
+    }
+
     pub fn provider(&self) -> Provider {
         self.provider
     }
@@ -2616,7 +2925,27 @@ pub struct ThreadWriter {
     fully_synced: std::time::Instant,
     /// Whether anything was written since.
     unsynced: bool,
+    path: PathBuf,
+    /// The Thread's facts as this log now has them: what every amendment
+    /// changes and every mark restates.
+    facts: Facts,
+    /// The log's length, as far as this writer has written it.
+    len: u64,
+    /// Where the newest mark starts, and how long it is.
+    last_mark: Option<u64>,
+    mark_len: usize,
+    /// Why this writer may no longer append: a failed amendment could not
+    /// be taken back off the log. Reopening the Thread repairs it.
+    broken: Option<String>,
     shared: std::sync::Arc<Shared>,
+}
+
+/// How a log ends, for the writer that appends to it.
+struct Tail {
+    facts: Facts,
+    len: u64,
+    last_mark: Option<u64>,
+    mark_len: usize,
 }
 
 struct PendingFlush {
@@ -2740,7 +3069,12 @@ impl ThreadWriter {
         to: Provider,
         model: Option<String>,
     ) -> io::Result<()> {
-        self.push(Record::Handover { from, to, model })
+        self.push(Record::Handover {
+            from,
+            to,
+            model,
+            facts: None,
+        })
     }
 
     /// Everything buffered, on disk in order behind a barrier: it survives
@@ -2760,6 +3094,11 @@ impl ThreadWriter {
     /// the writer cannot see: parking a Thread, quitting the app.
     pub fn flush_fully(&mut self) -> io::Result<()> {
         self.flush_at(SyncLevel::Full)?;
+        if self.since_mark() > 0 {
+            // A parked log ends in a mark: its next peek reads one line.
+            self.mark()?;
+            self.unsynced = true;
+        }
         if self.unsynced {
             // Earlier flushes only reached a barrier; this one wrote nothing.
             self.shared.sync(&self.file, SyncLevel::Full)?;
@@ -2770,6 +3109,7 @@ impl ThreadWriter {
     }
 
     fn flush_at(&mut self, level: SyncLevel) -> io::Result<()> {
+        self.usable()?;
         let wrote = !self.buffer.is_empty();
         flush_records(
             &mut self.file,
@@ -2787,8 +3127,118 @@ impl ThreadWriter {
                 }
                 SyncLevel::Barrier => self.unsynced = true,
             }
+            self.len = self.file.metadata()?.len();
+            if self.since_mark() >= MARK_SPACING.max(16 * self.mark_len as u64) {
+                // Behind the barrier just taken: never ahead of what it vouches for.
+                self.mark()?;
+                self.shared.sync(&self.file, SyncLevel::Barrier)?;
+            }
         }
         Ok(())
+    }
+
+    /// Bytes written since the newest mark (or the header).
+    fn since_mark(&self) -> u64 {
+        let marked = self
+            .last_mark
+            .map_or(0, |at| at + self.mark_len as u64);
+        self.len.saturating_sub(marked)
+    }
+
+    /// Append a mark restating the facts as they are now.
+    fn mark(&mut self) -> io::Result<()> {
+        let mark = line(&Record::Mark {
+            facts: self.facts.clone(),
+            prev: self.last_mark,
+        })?;
+        let at = self.len;
+        self.append_now(mark.as_bytes())?;
+        self.last_mark = Some(at);
+        self.mark_len = mark.len();
+        Ok(())
+    }
+
+    /// Change the Thread's facts by `change` and append the result: an
+    /// amendment (`Store::amend`).
+    fn amend(&mut self, change: impl FnOnce(&mut Facts)) -> io::Result<()> {
+        let mut facts = self.facts.clone();
+        change(&mut facts);
+        if facts == self.facts {
+            return Ok(());
+        }
+        self.commit(Record::Facts { facts })
+    }
+
+    /// Append one record now, outside the buffer, and sync it: an amendment
+    /// or a handover its caller waits on. Everything buffered goes first.
+    /// On failure the line is taken back off the log, so a change reported
+    /// as failed never lands later; if even that fails, the writer refuses
+    /// every append until the Thread is reopened (and repaired).
+    fn commit(&mut self, record: Record) -> io::Result<()> {
+        self.flush()?;
+        let written = line(&record)?;
+        self.append_now(written.as_bytes())?;
+        self.shared.sync(&self.file, SyncLevel::Barrier)?;
+        self.unsynced = true;
+        if let Some(facts) = record.facts() {
+            self.facts = facts.clone();
+        }
+        Ok(())
+    }
+
+    /// Write `bytes` at the end of the log now, or not at all.
+    fn append_now(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.usable()?;
+        let before = self.len;
+        let written = (|| {
+            self.file.write_all(bytes)?;
+            #[cfg(test)]
+            if self
+                .shared
+                .faults
+                .fail_commit
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(io::Error::other("injected failure after the write"));
+            }
+            Ok(())
+        })();
+        if let Err(error) = written {
+            let rolled_back = (|| {
+                #[cfg(test)]
+                if self
+                    .shared
+                    .faults
+                    .fail_rollback
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    return Err(io::Error::other("injected failure rolling back"));
+                }
+                // Not the append handle: Windows truncates only through a
+                // handle opened for writing.
+                let log = OpenOptions::new().write(true).open(&self.path)?;
+                log.set_len(before)?;
+                sync_file(&log, SyncLevel::Barrier)
+            })();
+            if let Err(rollback) = rolled_back {
+                self.broken = Some(format!(
+                    "{error}; taking it back off the log failed too: {rollback}"
+                ));
+            }
+            return Err(error);
+        }
+        self.len = before + bytes.len() as u64;
+        Ok(())
+    }
+
+    /// Refuse to append while broken (`commit`).
+    fn usable(&self) -> io::Result<()> {
+        match &self.broken {
+            Some(why) => Err(io::Error::other(format!(
+                "history is closed until the Thread is reopened: {why}"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Flush all accepted facts and freeze the readable byte boundary for
@@ -2854,26 +3304,32 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             supported: SCHEMA_VERSION,
         });
     }
+    let mut facts = header.facts();
     let mut records = Vec::new();
     while readable < bytes.len() {
         let (body_line, next) = line_at(readable);
-        let Ok(record) = serde_json::from_slice(body_line) else {
+        let Ok(record) = serde_json::from_slice::<Record>(body_line) else {
             break;
         };
-        records.push(record);
+        if let Some(restated) = record.facts() {
+            facts = restated.clone();
+        }
+        if !record.is_bookkeeping() {
+            records.push(record);
+        }
         readable = next;
     }
     Ok(Parsed {
         snapshot: ThreadSnapshot {
             id,
-            provider: header.provider,
+            provider: facts.provider,
             schema: header.schema,
-            workspace: header.workspace,
-            session_project_root: header.session_project_root,
-            model: header.model,
-            project_id: header.project_id,
-            title: header.title,
-            effort: header.effort,
+            workspace: facts.workspace,
+            session_project_root: facts.session_project_root,
+            model: facts.model,
+            project_id: facts.project_id,
+            title: facts.title,
+            effort: facts.effort,
             records,
         },
         readable,

@@ -957,13 +957,10 @@ impl Cockpit {
         // The chosen effort goes into the header beside the model, so a
         // revive spawns on it too.
         if effort.is_some() {
-            if let Err(e) = self.store.set_provider(
-                id,
-                provider,
-                model.clone(),
-                effort.clone(),
-                Some(&mut writer),
-            ) {
+            if let Err(e) =
+                self.store
+                    .set_tuning(id, model.clone(), effort.clone(), Some(&mut writer))
+            {
                 let _ = self.store.delete(id);
                 return Err(io::Error::other(e.to_string()));
             }
@@ -2895,10 +2892,9 @@ impl Cockpit {
     ) -> Result<(), ProvisionError> {
         let effort = self.tuning(thread)?.1;
         let Some(state) = self.threads.get_mut(&thread) else {
-            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, model, effort, None)
+                .set_tuning(thread, model, effort, None)
                 .map_err(ProvisionError::Store);
         };
         if state.busy()
@@ -2929,13 +2925,10 @@ impl Cockpit {
             }
         }
         state.history.clear();
-        if let Err(error) = self.store.set_provider(
-            thread,
-            state.provider,
-            model.clone(),
-            effort,
-            Some(&mut state.writer),
-        ) {
+        if let Err(error) =
+            self.store
+                .set_tuning(thread, model.clone(), effort, Some(&mut state.writer))
+        {
             if let Some(session) = state
                 .session
                 .as_mut()
@@ -2965,7 +2958,7 @@ impl Cockpit {
             let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, meta.model, effort, None)
+                .set_tuning(thread, meta.model, effort, None)
                 .map_err(ProvisionError::Store);
         };
         if state.busy()
@@ -2995,9 +2988,8 @@ impl Cockpit {
             return Ok(());
         }
         state.history.clear();
-        if let Err(error) = self.store.set_provider(
+        if let Err(error) = self.store.set_tuning(
             thread,
-            state.provider,
             state.model.clone(),
             effort.clone(),
             Some(&mut state.writer),
@@ -3041,10 +3033,9 @@ impl Cockpit {
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
         let Some(state) = self.threads.get(&thread) else {
-            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, model, effort, None)
+                .set_tuning(thread, model, effort, None)
                 .map_err(ProvisionError::Store);
         };
         if state.model == model && state.effort == effort {

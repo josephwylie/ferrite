@@ -175,7 +175,7 @@ fn inode(path: &Path) -> u64 {
 }
 
 /// A crash's fragment is cut off where it lies: the log keeps its inode and
-/// every byte before the tear, is read once rather than parsed twice, and
+/// every byte before the tear, is not parsed whole twice, and
 /// the fragment itself is kept beside it.
 #[test]
 fn a_torn_tail_is_cut_off_in_place_and_read_once() {
@@ -191,8 +191,8 @@ fn a_torn_tail_is_cut_off_in_place_and_read_once() {
     let mut writer = store.writer(ThreadId::new(4)).unwrap();
 
     assert!(
-        store.bytes_read() - read <= planted.len() as u64,
-        "the log was read more than once"
+        store.bytes_read() - read <= 2 * planted.len() as u64,
+        "the log was parsed whole more than once"
     );
     #[cfg(unix)]
     assert_eq!(inode(&log), before, "the log was rewritten, not repaired");
@@ -334,4 +334,305 @@ fn an_interrupted_upgrade_never_loses_a_record() {
             let _ = fs::remove_dir_all(&dir);
         }
     }
+}
+
+/// A Thread whose log runs to about `megabytes`, in turns of ~10 KB — long
+/// enough that the writer has marked it every megabyte or so.
+fn long_thread(store: &Store, megabytes: usize) -> (ThreadId, ThreadWriter) {
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    for turn in 0..megabytes * 100 {
+        writer.record_prompt(&format!("turn {turn}")).unwrap();
+        writer
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "w".repeat(10_000),
+                },
+                None,
+            )
+            .unwrap();
+        writer.record_event(&turn_end(), None).unwrap();
+    }
+    (id, writer)
+}
+
+fn lines(log: &Path) -> Vec<String> {
+    fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Renaming a Thread appends one line. The log keeps its inode and every
+/// byte it had — live or parked.
+#[test]
+fn an_amendment_appends_and_moves_no_earlier_byte() {
+    let dir = scratch("amend-append");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_prompt("hello").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    let log = dir.join(id.to_string()).join("log.jsonl");
+    let before = fs::read(&log).unwrap();
+    #[cfg(unix)]
+    let inode_before = inode(&log);
+
+    store.set_title(id, "live".into(), Some(&mut writer)).unwrap();
+    drop(writer);
+    store.set_title(id, "parked".into(), None).unwrap();
+
+    assert!(fs::read(&log).unwrap().starts_with(&before));
+    #[cfg(unix)]
+    assert_eq!(inode(&log), inode_before);
+    assert!(lines(&log)
+        .iter()
+        .any(|line| line.starts_with(r#"{"type":"facts""#) && line.contains(r#""title":"live""#)));
+    assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("parked"));
+    assert_eq!(store.load(id).unwrap().title(), Some("parked"));
+    assert_eq!(
+        lines(&log)[0],
+        before.split(|b| *b == b'\n').next().map(|l| String::from_utf8_lossy(l).into_owned()).unwrap(),
+        "the header line is never rewritten"
+    );
+}
+
+/// On a long log, a peek, a parked rename and a reopen read back only to
+/// the newest mark — never the whole log.
+#[test]
+fn peeks_amendments_and_reopens_read_only_the_tail_of_a_long_log() {
+    let dir = scratch("amend-tail");
+    let store = Store::open(&dir).unwrap();
+    let (id, writer) = long_thread(&store, 4);
+    drop(writer);
+    let size = fs::metadata(dir.join(id.to_string()).join("log.jsonl"))
+        .unwrap()
+        .len();
+    assert!(size > 4_000_000);
+    let bound = 2 * MARK_SPACING + 256 * 1024;
+    let peek = || drop(store.peek(id).unwrap());
+    let rename = || store.set_title(id, "renamed".into(), None).unwrap();
+    let reopen = || drop(store.writer(id).unwrap());
+    let acts: [(&str, &dyn Fn()); 3] = [
+        ("peek", &peek),
+        ("parked rename", &rename),
+        ("reopen", &reopen),
+    ];
+    for (what, act) in acts {
+        let start = store.bytes_read();
+        act();
+        let read = store.bytes_read() - start;
+        assert!(read <= bound, "{what} read {read} bytes of a {size} byte log");
+    }
+    assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("renamed"));
+}
+
+/// Setters send changes, not restatements: whatever the caller believes
+/// the provider is, a model change or a rename after a provider switch
+/// keeps the switch (ADR 0008, review finding 3).
+#[test]
+fn a_change_after_a_provider_switch_never_undoes_it() {
+    let dir = scratch("amend-after-switch");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_prompt("hello").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    store
+        .hand_over(id, Provider::Codex, Some("gpt-5.4".into()), &mut writer)
+        .unwrap();
+    store
+        .set_title(id, "after the switch".into(), Some(&mut writer))
+        .unwrap();
+    drop(writer);
+    store
+        .set_tuning(id, Some("gpt-5.5".into()), Some("high".into()), None)
+        .unwrap();
+
+    let meta = store.peek(id).unwrap();
+    assert_eq!(meta.provider, Provider::Codex);
+    assert_eq!(meta.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(meta.title.as_deref(), Some("after the switch"));
+    let snapshot = store.load(id).unwrap();
+    assert_eq!(snapshot.provider(), Provider::Codex);
+    assert_eq!(snapshot.resume_target(), None, "the switch's carry is owed");
+}
+
+/// A switch commits in one line: the header still names the old provider,
+/// and a log cut right after the switch already names the new one.
+#[test]
+fn a_handover_line_alone_commits_the_switch() {
+    let dir = scratch("handover-line");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_prompt("hello").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    store
+        .hand_over(id, Provider::Codex, None, &mut writer)
+        .unwrap();
+    drop(writer);
+    let log = dir.join(id.to_string()).join("log.jsonl");
+    let all = lines(&log);
+    assert!(all[0].contains(r#""provider":"claude""#), "the header is never rewritten");
+    let switch = all
+        .iter()
+        .position(|line| line.starts_with(r#"{"type":"handover""#))
+        .unwrap();
+    assert!(all[switch].contains(r#""facts":{"provider":"codex""#));
+    fs::write(&log, all[..=switch].join("\n") + "\n").unwrap();
+    assert_eq!(store.peek(id).unwrap().provider, Provider::Codex);
+    assert_eq!(store.load(id).unwrap().provider(), Provider::Codex);
+}
+
+/// An amendment reported as failed is taken back off the log, so it can
+/// never land later with some other flush.
+#[test]
+fn a_failed_amendment_never_lands_later() {
+    use std::sync::atomic::Ordering;
+    let dir = scratch("amend-failed");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_prompt("hello").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    let log = dir.join(id.to_string()).join("log.jsonl");
+    let before = fs::read(&log).unwrap();
+
+    store.faults().fail_commit.store(true, Ordering::SeqCst);
+    assert!(store
+        .set_title(id, "refused".into(), Some(&mut writer))
+        .is_err());
+    store.faults().fail_commit.store(false, Ordering::SeqCst);
+    assert_eq!(fs::read(&log).unwrap(), before, "taken back off the log");
+
+    writer.record_prompt("later").unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    writer.flush_fully().unwrap();
+    assert!(!fs::read_to_string(&log).unwrap().contains("refused"));
+    assert_eq!(store.peek(id).unwrap().title, None);
+}
+
+/// When even taking a failed amendment back fails, the writer refuses to
+/// append after it until the Thread is reopened — and repaired.
+#[test]
+fn a_failed_rollback_closes_the_writer_until_reopened() {
+    use std::sync::atomic::Ordering;
+    let dir = scratch("amend-rollback-failed");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    store.faults().fail_commit.store(true, Ordering::SeqCst);
+    store.faults().fail_rollback.store(true, Ordering::SeqCst);
+    assert!(store
+        .set_title(id, "stuck".into(), Some(&mut writer))
+        .is_err());
+    store.faults().fail_commit.store(false, Ordering::SeqCst);
+    store.faults().fail_rollback.store(false, Ordering::SeqCst);
+    writer.record_prompt("after").unwrap();
+    assert!(writer.flush().is_err(), "closed to appends");
+    drop(writer);
+    let mut reopened = store.writer(id).unwrap();
+    reopened.record_prompt("after the reopen").unwrap();
+    reopened.flush().unwrap();
+    assert_eq!(store.load(id).unwrap().prompt_texts(), vec!["after the reopen"]);
+}
+
+/// Marks are bookkeeping: each restates the facts as the log has them at
+/// that point, and a log with every mark removed reads exactly the same.
+#[test]
+fn marks_restate_the_facts_and_change_nothing_a_reader_sees() {
+    use super::compat_tests::observed;
+    let dir = scratch("marks-derived");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = long_thread(&store, 2);
+    store.set_title(id, "midway".into(), Some(&mut writer)).unwrap();
+    for turn in 0..150 {
+        writer.record_prompt(&format!("more {turn}")).unwrap();
+        writer
+            .record_event(&SessionEvent::TextDelta { text: "m".repeat(10_000) }, None)
+            .unwrap();
+        writer.record_event(&turn_end(), None).unwrap();
+    }
+    writer.flush_fully().unwrap();
+    drop(writer);
+    let log = dir.join(id.to_string()).join("log.jsonl");
+    let all = lines(&log);
+    let mut facts = serde_json::from_str::<Header>(&all[0]).unwrap().facts();
+    let mut marks = 0;
+    for line in &all[1..] {
+        let record: Record = serde_json::from_str(line).unwrap();
+        if let Record::Mark { facts: restated, .. } = &record {
+            assert_eq!(restated, &facts, "a mark restates the fold");
+            marks += 1;
+        } else if let Some(changed) = record.facts() {
+            facts = changed.clone();
+        }
+    }
+    assert!(marks >= 3, "{marks} marks in a 3.5 MB log");
+
+    let unmarked: Vec<&String> = all
+        .iter()
+        .filter(|line| !line.starts_with(r#"{"type":"mark""#))
+        .collect();
+    let bare = scratch("marks-derived-bare");
+    super::compat_tests::plant(
+        &bare,
+        id.get(),
+        &(unmarked.iter().map(|line| line.as_str()).collect::<Vec<_>>().join("\n") + "\n"),
+    );
+    assert_eq!(observed(&Store::open(&bare).unwrap(), id), observed(&store, id));
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&bare);
+}
+
+/// After a crash, what follows the newest mark is all that is in doubt: a
+/// hole there is kept and cut away, reading no further back than the mark.
+#[test]
+fn a_reopen_repairs_what_follows_the_newest_mark() {
+    let dir = scratch("repair-after-mark");
+    let store = Store::open(&dir).unwrap();
+    let (id, writer) = long_thread(&store, 3);
+    drop(writer);
+    let log = dir.join(id.to_string()).join("log.jsonl");
+    let good = fs::read(&log).unwrap();
+    let damage = "\0\0\0\0 a hole a power cut left\n{\"type\":\"prompt\",\"text\":\"after the hole\"}\n";
+    let mut file = OpenOptions::new().append(true).open(&log).unwrap();
+    file.write_all(damage.as_bytes()).unwrap();
+    drop(file);
+
+    let start = store.bytes_read();
+    drop(store.writer(id).unwrap());
+    assert!(store.bytes_read() - start <= 2 * MARK_SPACING + 256 * 1024);
+    assert_eq!(fs::read(&log).unwrap(), good);
+    assert_eq!(
+        fs::read_to_string(
+            dir.join(id.to_string())
+                .join(format!("log.damaged-{}.jsonl", good.len()))
+        )
+        .unwrap(),
+        damage
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An old log is upgraded once, ends in a mark of its facts, and is never
+/// rewritten again.
+#[test]
+fn an_old_log_upgrades_once_and_ends_in_a_mark() {
+    let dir = scratch("upgrade-mark");
+    let (_, v8, _, _) = super::compat_tests::FIXTURES[1];
+    plant(&dir, 6, v8);
+    let store = Store::open(&dir).unwrap();
+    let id = ThreadId::new(6);
+    drop(store.writer(id).unwrap());
+    let log = dir.join("6").join("log.jsonl");
+    let all = lines(&log);
+    assert!(all[0].starts_with(&format!(r#"{{"schema":{SCHEMA_VERSION},"#)));
+    let last: Record = serde_json::from_str(all.last().unwrap()).unwrap();
+    let Record::Mark { facts, .. } = last else {
+        panic!("the upgrade ends in a mark: {}", all.last().unwrap());
+    };
+    assert_eq!(facts.provider, Provider::Codex);
+    assert_eq!(facts.model.as_deref(), Some("gpt-5.4"), "the old handover is not refolded");
+    #[cfg(unix)]
+    let before = inode(&log);
+    drop(store.writer(id).unwrap());
+    #[cfg(unix)]
+    assert_eq!(inode(&log), before, "upgraded once");
 }
