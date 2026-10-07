@@ -8064,7 +8064,18 @@ mod tests {
                 },
             )
             .unwrap();
-        let handover = cockpit.store.load(thread).unwrap().last_handover().unwrap();
+        // Past 2 MiB the exchanges are read off the UI thread, and the
+        // switch commits on the pump that finds them read.
+        let mut handover = None;
+        for _ in 0..500 {
+            cockpit.pump();
+            handover = cockpit.store.load(thread).unwrap().last_handover();
+            if handover.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let handover = handover.expect("the switch commits once its exchanges are read");
         assert_eq!(handover.exchanges.len(), streamed.len());
         assert!(
             handover.exchanges == streamed,
