@@ -432,8 +432,9 @@ pub(crate) fn capture(output: String) {
             let view =
                 cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));
             entity = Some(view.clone());
+            let content = cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx));
             cx.new(|cx| {
-                gpui::component::Root::new(view, window, cx)
+                gpui::component::Root::new(content, window, cx)
                     .bordered(false)
                     .bg(crate::theme::paint::WINDOW)
             })

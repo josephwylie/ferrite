@@ -8794,6 +8794,8 @@ impl CockpitView {
     }
 
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The loops this render lays out go to the loops overlay afresh.
+        crate::loops_overlay::begin(window, cx.entity_id());
         self.measure();
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
@@ -12751,6 +12753,7 @@ mod tests {
     mod floats_parity;
     mod frame_parity;
     mod layout_polish;
+    mod loops_overlay;
     mod nav_parity;
     mod provider_controls;
     mod provider_forms;
@@ -14441,10 +14444,14 @@ mod tests {
     ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| build(window, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         (view, cx)
     }
@@ -18215,10 +18222,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let stream = fake.streams.borrow();
@@ -21738,10 +21749,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -21803,10 +21818,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         tick(cx);
         let size = |cx: &mut gpui::VisualTestContext| {
@@ -21838,10 +21857,14 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -22116,10 +22139,15 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui::component::Root::new(view, window, cx).bordered(false)
+            gpui::component::Root::new(
+                cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+                window,
+                cx,
+            )
+            .bordered(false)
         });
-        let view = root.read_with(cx, |root, _| {
-            root.view().clone().downcast::<CockpitView>().unwrap()
+        let view = root.read_with(cx, |root, cx| {
+            crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
         cx.simulate_resize(gpui::size(px(1200.), px(700.)));
         let files = vec![

@@ -436,14 +436,17 @@ mod loops {
     /// Thread's status dot, in the sidebar and in Pane heads, so a board of
     /// them shares one tick. Under reduced motion it is the still dot.
     pub fn braille_spinner(ink: u32) -> AnyElement {
-        let mut spinner = div().child(Spinner {
+        let spinner = Spinner {
             frames: &BRAILLE_FRAMES,
             frame_ms: theme::MOTION_BRAILLE_FRAME_MS,
             still: '\u{25cf}',
             ink,
             weight: theme::W_STRONG,
             selector: "braille-spinner",
-        });
+        };
+        let mut spinner = div().child(crate::loops_overlay::hosted(move || {
+            spinner.into_any_element()
+        }));
         spinner.text_style().font_fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![
             BRAILLE_FACE.to_string(),
         ]));
@@ -461,18 +464,18 @@ mod loops {
     /// clock. Under reduced motion it holds `✻` (`WORKED`), the mark a
     /// finished turn wears.
     pub fn working_spinner(ink: u32) -> AnyElement {
-        Spinner {
+        let spinner = Spinner {
             frames: &WORKING_FRAMES,
             frame_ms: theme::MOTION_WORKING_FRAME_MS,
             still: WORKED,
             ink,
             weight: theme::W_BODY,
             selector: "working-spinner",
-        }
-        .into_any_element()
+        };
+        crate::loops_overlay::hosted(move || spinner.into_any_element()).into_any_element()
     }
 
-    #[derive(IntoElement)]
+    #[derive(IntoElement, Clone, Copy)]
     struct Spinner {
         frames: &'static [char],
         frame_ms: u64,
@@ -530,14 +533,14 @@ mod loops {
     /// wears it; under reduced motion it is plain `base`. The caller sets
     /// the face, size and line height.
     pub fn shimmer(text: impl Into<SharedString>, base: u32) -> AnyElement {
-        Shimmer {
+        let shimmer = Shimmer {
             text: text.into(),
             base,
-        }
-        .into_any_element()
+        };
+        crate::loops_overlay::hosted(move || shimmer.clone().into_any_element()).into_any_element()
     }
 
-    #[derive(IntoElement)]
+    #[derive(IntoElement, Clone)]
     struct Shimmer {
         text: SharedString,
         base: u32,
@@ -666,6 +669,7 @@ mod loops {
             let right = f32::from(bounds.right()).min(left + width);
             let baseline =
                 bounds.top() + (line_height - line.ascent - line.descent) / 2. + line.ascent;
+
             let glyphs: Vec<_> = line
                 .runs
                 .iter()

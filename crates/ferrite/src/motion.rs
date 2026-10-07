@@ -621,11 +621,29 @@ fn run_loop(
         period,
         motion,
     };
-    if let Some(change) = looped.next_change(now) {
+    if let Some(change) = looped.next_change(now).filter(|_| !quiet()) {
         clock.schedule.declare(view, grid.wake(change, now), now);
         arm(now, cx);
     }
     looped.phase(now)
+}
+
+thread_local! {
+    static QUIET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Lay `f`'s loops out at their phase now without declaring them on the
+/// clock: their view is not drawn again for them, because something else
+/// draws them (the loops overlay, `loops_overlay::hosted`).
+pub fn quietly<R>(f: impl FnOnce() -> R) -> R {
+    QUIET.with(|quiet| quiet.set(quiet.get() + 1));
+    let result = f();
+    QUIET.with(|quiet| quiet.set(quiet.get() - 1));
+    result
+}
+
+fn quiet() -> bool {
+    QUIET.with(|quiet| quiet.get() > 0)
 }
 
 /// Text in `view` that changes with time but is no loop (a working clock's

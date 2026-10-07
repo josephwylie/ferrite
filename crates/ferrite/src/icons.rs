@@ -243,7 +243,7 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
 /// mark reads the same clock, so no per-element state keys it and `_id` is
 /// kept for callers only. Reduced motion holds the assembled mark.
 pub fn animated_ferrite_icon(size: f32, _id: impl Into<ElementId>) -> AnyElement {
-    FerriteSnap { size }.into_any_element()
+    crate::loops_overlay::hosted(move || FerriteSnap { size }.into_any_element()).into_any_element()
 }
 
 #[derive(IntoElement)]

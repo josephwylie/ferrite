@@ -465,7 +465,9 @@ fn render(
             |window, cx| {
                 let view = cx.new(|cx| CockpitView::new_with_provider(core, Provider::Claude, cx));
                 entity = Some(view.clone());
-                cx.new(|cx| gpui::component::Root::new(view, window, cx))
+                let content =
+                    cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx));
+                cx.new(|cx| gpui::component::Root::new(content, window, cx))
             },
         )
         .unwrap();
@@ -1826,3 +1828,209 @@ fn prose() -> Scene {
 
 // ---- WP-G scene builders (append above the end line)
 // (end WP-G)
+
+/// The loops overlay's pixel parity (`loops_overlay`): one scene — a
+/// working Thread focused in an active window, its working line's star and
+/// shimmer, the nav's braille spinner, the Composer's caret blinking over a
+/// character of typed text — drawn with the overlay and without it, at the
+/// same instants every 20ms across more than a blink, must give the same
+/// framebuffer. Writes `loops-parity.json` and, for any instant that
+/// differs, both shots.
+pub fn loops_parity(output: String) {
+    let output = PathBuf::from(output);
+    std::fs::create_dir_all(&output).expect("create artifact directory");
+    let platform = gpui::platform::current_platform(true);
+    let steps = std::env::var("FERRITE_PARITY_STEPS")
+        .ok()
+        .and_then(|steps| steps.parse().ok())
+        .unwrap_or(65u64);
+    let instants: Vec<u64> = (0..=steps).map(|step| step * 20).collect();
+    let mut on = Vec::new();
+    let on_hosted = loops_frames(&platform, true, &instants, |cx, window| {
+        on.push(cx.capture_screenshot(window).unwrap())
+    });
+    let mut off = Vec::new();
+    let off_hosted = loops_frames(&platform, false, &instants, |cx, window| {
+        off.push(cx.capture_screenshot(window).unwrap())
+    });
+    // The premise: the loops moved — the instants show different pictures.
+    let distinct = {
+        let mut frames: Vec<&[u8]> = on.iter().map(|frame| frame.as_raw().as_slice()).collect();
+        frames.sort_unstable();
+        frames.dedup();
+        frames.len()
+    };
+    let mut differing = Vec::new();
+    for ((at, with), without) in instants.iter().zip(&on).zip(&off) {
+        if with.as_raw() == without.as_raw() {
+            continue;
+        }
+        let mut pixels = 0usize;
+        let mut worst = 0u8;
+        let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
+        for (x, y, a) in with.enumerate_pixels() {
+            let b = without.get_pixel(x, y);
+            let delta =
+                a.0.iter()
+                    .zip(b.0.iter())
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap_or(0);
+            if delta > 0 {
+                pixels += 1;
+                worst = worst.max(delta);
+                left = left.min(x);
+                top = top.min(y);
+                right = right.max(x);
+                bottom = bottom.max(y);
+            }
+        }
+        with.save(output.join(format!("loops-{at:04}ms-overlay.png")))
+            .unwrap();
+        without
+            .save(output.join(format!("loops-{at:04}ms-in-place.png")))
+            .unwrap();
+        differing.push(serde_json::json!({
+            "ms": at, "pixels": pixels, "max_channel_delta": worst,
+            "bounds": [left, top, right, bottom],
+        }));
+    }
+    let report = serde_json::json!({
+        "instants": instants.len(),
+        "distinct_frames": distinct,
+        "overlay_hosted_marks": on_hosted,
+        "in_place_hosted_marks": off_hosted,
+        "differing": differing,
+    });
+    std::fs::write(
+        output.join("loops-parity.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+    eprintln!(
+        "LOOPS_PARITY instants={} distinct_frames={distinct} differing={} overlay_marks={on_hosted:?} in_place_marks={off_hosted:?}",
+        instants.len(),
+        report["differing"].as_array().map_or(0, Vec::len),
+    );
+}
+
+/// The parity scene drawn at each of `instants` (ms from its first frame),
+/// with or without the overlay, each frame handed to `shot`; answers how
+/// many loops the overlay drew.
+fn loops_frames(
+    platform: &std::rc::Rc<dyn gpui::Platform>,
+    overlay: bool,
+    instants: &[u64],
+    mut shot: impl FnMut(&mut HeadlessAppContext, gpui::AnyWindowHandle),
+) -> Vec<usize> {
+    // One frozen wall clock and one store path for both passes: the clock
+    // text and the checkout's path read the same in each.
+    let clock = crate::demo::parity::Fixture::install(
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_791_400_000),
+    );
+    let mut scene = Scene::new("loops-parity");
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Caret parity");
+    scene
+        .core
+        .send(thread, "Find out why the caret blinks.".into());
+    feed.boot(Provider::Claude, 64_000)
+        .ev(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking the blink**".into(),
+            summary_index: 0,
+        });
+    let (other, other_feed) = scene.open(Provider::Claude, &ferrite, "Spinner in the nav");
+    scene.core.send(other, "Keep going.".into());
+    other_feed
+        .boot(Provider::Claude, 32_000)
+        .text("Working on it.");
+    scene.core.pump();
+    let Scene {
+        core,
+        feeds,
+        root,
+        hold,
+    } = scene;
+    let mut cx = HeadlessAppContext::with_platform(
+        platform.text_system(),
+        std::sync::Arc::new(crate::icons::Assets),
+        gpui::platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        crate::theme::init_components(cx);
+        crate::register_fonts(cx);
+    });
+    let mut entity = None;
+    let window = cx
+        .open_window(gpui::size(gpui::px(1200.), gpui::px(750.)), |window, cx| {
+            let view = cx.new(|cx| CockpitView::new_with_provider(core, Provider::Claude, cx));
+            entity = Some(view.clone());
+            let content = cx.new(|cx| {
+                crate::loops_overlay::CockpitWindow::with_overlay(view, overlay, window, cx)
+            });
+            cx.new(|cx| gpui::component::Root::new(content, window, cx))
+        })
+        .unwrap();
+    let view = entity.expect("the window built its view");
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        let _ = window.draw(cx);
+        window.activate_window();
+        view.update(cx, |view, cx| {
+            let index = view
+                .panes
+                .iter()
+                .position(|pane| pane.thread() == Some(thread))
+                .expect("the working Thread's Pane");
+            view.focus_pane(index);
+            let composer = view.panes[index].composer.clone();
+            composer.update(cx, |composer, cx| {
+                composer.insert("blink over this text", cx);
+            });
+            window.focus(&gpui::Focusable::focus_handle(composer.read(cx), cx), cx);
+            cx.notify();
+        });
+    })
+    .unwrap();
+    // Wall-clock entrances (toasts, popovers) settle before the shots.
+    for _ in 0..4 {
+        cx.advance_clock(std::time::Duration::from_millis(150));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.simulate_next_frame(cx);
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    // The caret one character back from the end: it stands on a glyph.
+    cx.update_window(window.into(), |_, window, cx| {
+        window.dispatch_action(Box::new(crate::composer::Left), cx);
+        let _ = window.draw(cx);
+    })
+    .unwrap();
+    let mut hosted = Vec::new();
+    let mut at = 0;
+    for instant in instants {
+        cx.advance_clock(std::time::Duration::from_millis(instant - at));
+        at = *instant;
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            let _ = window.draw(cx);
+            hosted.push(crate::loops_overlay::hosted_marks(window));
+        })
+        .unwrap();
+        shot(&mut cx, window.into());
+    }
+    drop(view);
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cx)));
+    std::panic::set_hook(hook);
+    drop(feeds);
+    drop(hold);
+    std::fs::remove_dir_all(root).expect("remove disposable reference store");
+    drop(clock);
+    hosted.dedup();
+    hosted
+}
