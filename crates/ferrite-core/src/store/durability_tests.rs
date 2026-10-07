@@ -266,3 +266,72 @@ fn a_repair_that_cannot_keep_the_damage_cuts_nothing() {
     assert!(store.writer(ThreadId::new(4)).is_err());
     assert_eq!(fs::read_to_string(dir.join("4").join("log.jsonl")).unwrap(), planted);
 }
+
+fn temps(dir: &Path) -> Vec<String> {
+    fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("log.jsonl.tmp-"))
+        .collect()
+}
+
+/// An upgrade cut short at any step — a crash mid-write included — leaves
+/// one whole log or the other, never a lost record; the next open finishes
+/// it, sweeps what the crash left, and keeps every record byte for byte.
+#[test]
+fn an_interrupted_upgrade_never_loses_a_record() {
+    use super::compat_tests::{history_of, observed, record_bytes, FIXTURES};
+    for step in [
+        ReplaceStep::Write,
+        ReplaceStep::Sync,
+        ReplaceStep::Rename,
+        ReplaceStep::Durable,
+    ] {
+        for (name, fixture, _, _) in FIXTURES {
+            let schema = parse(ThreadId::new(0), fixture.as_bytes())
+                .unwrap()
+                .snapshot
+                .schema;
+            if schema == SCHEMA_VERSION {
+                continue; // Nothing to upgrade.
+            }
+            let dir = scratch(&format!("upgrade-fault-{step:?}-{name}"));
+            plant(&dir, 5, fixture);
+            let id = ThreadId::new(5);
+            let thread_dir = dir.join("5");
+            let log = thread_dir.join("log.jsonl");
+            let store = Store::open(&dir).unwrap();
+            let before = observed(&store, id);
+
+            store.faults().fail_replace_at(Some(step));
+            assert!(store.writer(id).is_err(), "{step:?} {name}");
+            match step {
+                ReplaceStep::Write => {
+                    assert_eq!(temps(&thread_dir).len(), 1, "a crash leaves its temp");
+                    assert_eq!(fs::read_to_string(&log).unwrap(), *fixture);
+                }
+                ReplaceStep::Sync | ReplaceStep::Rename => {
+                    assert!(temps(&thread_dir).is_empty());
+                    assert_eq!(fs::read_to_string(&log).unwrap(), *fixture);
+                }
+                ReplaceStep::Durable => assert!(temps(&thread_dir).is_empty()),
+            }
+            // Whichever log is in place shows exactly what the old one did.
+            let reopened = Store::open(&dir).unwrap();
+            assert_eq!(
+                history_of(&observed(&reopened, id)),
+                history_of(&before),
+                "{step:?} {name}"
+            );
+
+            store.faults().fail_replace_at(None);
+            drop(reopened.writer(id).unwrap());
+            assert!(temps(&thread_dir).is_empty(), "the crash's temp is swept");
+            assert_eq!(observed(&reopened, id), before, "{step:?} {name}");
+            assert!(record_bytes(&fs::read(&log).unwrap())
+                .starts_with(&record_bytes(fixture.as_bytes())));
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+}

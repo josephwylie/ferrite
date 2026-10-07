@@ -131,7 +131,7 @@ pub(crate) fn observed(store: &Store, id: ThreadId) -> String {
 }
 
 /// Only the conversation, not the header: what an amendment must leave alone.
-fn history_of(observed: &str) -> String {
+pub(crate) fn history_of(observed: &str) -> String {
     observed
         .lines()
         .filter(|line| !line.starts_with("facts ") && !line.starts_with("peek "))
@@ -288,7 +288,7 @@ const V12_TORN: &str = concat!(
 
 /// Each fixture: its log, how many records it must load (every whole line
 /// after the header), and the fingerprint of what it shows.
-const FIXTURES: &[(&str, &str, usize, u64)] = &[
+pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     ("v1", V1, 5, 9959750768830046166),
     ("v8-handover", V8_HANDOVER, 13, 17518645202087855028),
     ("v11-activity", V11_ACTIVITY, 31, 13604963610014101423),
@@ -488,9 +488,18 @@ fn invariant_hand_over_receives_every_exchange() {
     assert!(handover.exchanges == expected, "an exchange was lost or changed");    let _ = fs::remove_dir_all(&dir);
 }
 
+/// The bytes of every record a log holds, as written: what no rewrite may
+/// change.
+pub(crate) fn record_bytes(log: &[u8]) -> Vec<u8> {
+    let readable = parse(ThreadId::new(0), log).unwrap().readable;
+    let header_end = log.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+    log[header_end.min(readable)..readable].to_vec()
+}
+
 /// Invariant 4 (ADR 0008): nothing the store does to an existing log loses
 /// what it held. Every reopen, repair, upgrade and amendment leaves every
-/// earlier record readable, in order.
+/// earlier record readable, in order — and byte for byte as its writer
+/// wrote it: no record is ever decoded and encoded again.
 #[test]
 fn invariant_no_existing_log_is_rewritten_lossily() {
     for (name, log, _, _) in FIXTURES {
@@ -499,6 +508,7 @@ fn invariant_no_existing_log_is_rewritten_lossily() {
         let store = Store::open(&dir).unwrap();
         let id = ThreadId::new(5);
         let before = history_of(&observed(&store, id));
+        let records = record_bytes(log.as_bytes());
 
         let mut writer = store.writer(id).unwrap();
         store
@@ -528,6 +538,12 @@ fn invariant_no_existing_log_is_rewritten_lossily() {
         let meta = after.peek(id).unwrap();
         assert_eq!(meta.title.as_deref(), Some("renamed"), "{name}");
         assert_eq!(meta.model.as_deref(), Some("m"), "{name}");
+        let now = fs::read(dir.join("5").join("log.jsonl")).unwrap();
+        assert!(
+            record_bytes(&now).starts_with(&records),
+            "{name}: a record's bytes changed"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

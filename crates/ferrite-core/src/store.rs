@@ -1350,8 +1350,32 @@ impl Shared {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Faults {
-    /// Refuse to rename a rewritten log over the original.
-    pub(crate) refuse_replace: std::sync::atomic::AtomicBool,
+    /// Fail replacing a log at this step.
+    pub(crate) replace_fails_at: std::sync::Mutex<Option<ReplaceStep>>,
+}
+
+/// The steps of putting a rewritten log in place, for fault injection.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplaceStep {
+    /// Mid-write of the new file: a crash leaves half of it behind.
+    Write,
+    /// Syncing the new file.
+    Sync,
+    /// Renaming it over the log.
+    Rename,
+    /// Making the rename durable.
+    Durable,
+}
+
+#[cfg(test)]
+impl Faults {
+    pub(crate) fn fail_replace_at(&self, step: Option<ReplaceStep>) {
+        *self
+            .replace_fails_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = step;
+    }
 }
 
 /// Take the claim on `dir` for this process, or say why another holds it.
@@ -1446,6 +1470,65 @@ fn temp_beside(path: &Path) -> PathBuf {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     path.with_file_name(format!("{name}.tmp-{}-{n}", std::process::id()))
+}
+
+/// Rename `from` over `to` and make the rename itself survive a crash: the
+/// directory is synced after it.
+#[cfg(not(windows))]
+fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
+}
+
+/// Windows has no directory sync; the move itself is written through.
+#[cfg(windows)]
+fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<u16>>()
+    };
+    let (from, to) = (wide(from), wide(to));
+    // SAFETY: both paths are NUL-terminated wide strings alive for the call.
+    if unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Make a rename inside `dir` durable: sync the directory itself.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    extern "C" {
+        fn fsync(fd: std::ffi::c_int) -> std::ffi::c_int;
+    }
+    let dir = File::open(dir)?;
+    // SAFETY: fsync only reads the descriptor, which `dir` keeps open.
+    if unsafe { fsync(dir.as_raw_fd()) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Windows renames write through (`rename_over`); there is nothing to sync.
+#[cfg(not(unix))]
+fn sync_dir(_: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// A log opened for reading. Every read of a log goes through one, so
@@ -1818,9 +1901,7 @@ impl Store {
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
-        let mut snapshot = self.load(id)?;
-        snapshot.session_project_root = root;
-        let file = self.rewrite(&snapshot)?;
+        let (file, _) = self.rewrite(id, |snapshot| snapshot.session_project_root = root, None)?;
         if let Some(w) = writer {
             *w = self.writer_on(file);
         }
@@ -1845,11 +1926,15 @@ impl Store {
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
-        let mut snapshot = self.load(id)?;
-        snapshot.provider = provider;
-        snapshot.model = model;
-        snapshot.effort = effort;
-        let file = self.rewrite(&snapshot)?;
+        let (file, _) = self.rewrite(
+            id,
+            |snapshot| {
+                snapshot.provider = provider;
+                snapshot.model = model;
+                snapshot.effort = effort;
+            },
+            None,
+        )?;
         if let Some(w) = writer {
             *w = self.writer_on(file);
         }
@@ -1873,9 +1958,11 @@ impl Store {
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
-        let mut snapshot = self.load(id)?;
-        snapshot.workspace = Some(PersistedBinding::from_live(binding));
-        let file = self.rewrite(&snapshot)?;
+        let (file, _) = self.rewrite(
+            id,
+            |snapshot| snapshot.workspace = Some(PersistedBinding::from_live(binding)),
+            None,
+        )?;
         if let Some(w) = writer {
             *w = self.writer_on(file);
         }
@@ -1894,17 +1981,21 @@ impl Store {
     ) -> Result<Handover, LoadError> {
         self.writable()?;
         writer.flush()?;
-        let mut snapshot = self.load(id)?;
-        snapshot.records.push(Record::Handover {
-            from: snapshot.provider,
-            to: provider,
-            model: model.clone(),
-        });
-        snapshot.provider = provider;
-        snapshot.model = model;
-        snapshot.effort = None;
+        let from = self.peek(id)?.provider;
+        let (file, snapshot) = self.rewrite(
+            id,
+            |snapshot| {
+                snapshot.provider = provider;
+                snapshot.model = model.clone();
+                snapshot.effort = None;
+            },
+            Some(Record::Handover {
+                from,
+                to: provider,
+                model: model.clone(),
+            }),
+        )?;
         let handover = snapshot.last_handover().expect("just added");
-        let file = self.rewrite(&snapshot)?;
         *writer = self.writer_on(file);
         Ok(handover)
     }
@@ -1919,9 +2010,7 @@ impl Store {
         if let Some(w) = writer.as_mut() {
             w.flush()?;
         }
-        let mut snapshot = self.load(id)?;
-        snapshot.title = Some(title);
-        let file = self.rewrite(&snapshot)?;
+        let (file, _) = self.rewrite(id, |snapshot| snapshot.title = Some(title), None)?;
         if let Some(w) = writer {
             *w = self.writer_on(file);
         }
@@ -1936,21 +2025,48 @@ impl Store {
     /// and a reader of that older schema would stop dead at the first record
     /// it cannot know.
     ///
-    /// A log a crash left torn is likewise rewritten from what `load`
-    /// recovers: appending straight after the tear would concatenate the
-    /// first new record onto the fragment — one unreadable line where the
-    /// loader stops, hiding every turn after the crash.
+    /// A log a crash left torn is repaired first (`repair`).
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
         self.writable()?;
+        self.sweep_temps(id);
         let bytes = self.read_whole_log(id)?;
         let parsed = parse(id, &bytes)?;
         let file = if parsed.snapshot.schema < SCHEMA_VERSION {
-            self.rewrite(&parsed.snapshot)?
+            self.rewrite_from(id, &bytes, parsed, |_| {}, None)?.0
         } else {
             self.repair(id, &bytes, parsed.readable)?;
             OpenOptions::new().append(true).open(self.log_path(id))?
         };
         Ok(self.writer_on(file))
+    }
+
+    /// Remove temp files a crash left beside one Thread's log. Only this
+    /// process writes the store (its claim), and it is not mid-rewrite of a
+    /// Thread it is opening, so every one of them is stale.
+    fn sweep_temps(&self, id: ThreadId) {
+        let Ok(entries) = fs::read_dir(self.dir.join(id.to_string())) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("log.jsonl.tmp-")
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    /// Keep every byte past `readable` in `log.damaged-<readable>.jsonl`,
+    /// synced, before anything cuts it off the log.
+    fn keep_damage(&self, id: ThreadId, bytes: &[u8], readable: usize) -> io::Result<()> {
+        let kept = self
+            .log_path(id)
+            .with_file_name(format!("log.damaged-{readable}.jsonl"));
+        let mut copy = File::create(&kept)?;
+        copy.write_all(&bytes[readable..])?;
+        self.shared.sync(&copy, SyncLevel::Full)
     }
 
     /// Make the log end in whole, readable records before anything is
@@ -1974,10 +2090,7 @@ impl Store {
             }
             return Ok(());
         }
-        let kept = path.with_file_name(format!("log.damaged-{readable}.jsonl"));
-        let mut copy = File::create(&kept)?;
-        copy.write_all(&bytes[readable..])?;
-        self.shared.sync(&copy, SyncLevel::Full)?;
+        self.keep_damage(id, bytes, readable)?;
         // Not the append handle: Windows truncates only through a handle
         // opened for writing.
         let log = OpenOptions::new().write(true).open(&path)?;
@@ -2027,14 +2140,41 @@ impl Store {
         )
     }
 
-    /// Replace a Thread's log with the loaded snapshot at the current
-    /// schema. Written beside and renamed over, so a crash mid-rewrite
-    /// leaves the original log untouched. Answers an append handle to the
-    /// new log — taken on the file before the rename and riding it, so any
-    /// failure here happens while the original log (and every handle on it)
-    /// is still the real one.
-    fn rewrite(&self, snapshot: &ThreadSnapshot) -> io::Result<File> {
-        let path = self.log_path(snapshot.id);
+    /// Replace a Thread's log: a header at the current schema saying what
+    /// `amend` leaves in its facts, then every record it already holds,
+    /// byte for byte — never decoded and encoded again, so nothing an old
+    /// writer wrote is normalised away — then `extra`. Anything unreadable
+    /// past the records is kept beside the log first (`keep_damage`).
+    /// Answers an append handle on the new log, and what it now holds.
+    fn rewrite(
+        &self,
+        id: ThreadId,
+        amend: impl FnOnce(&mut ThreadSnapshot),
+        extra: Option<Record>,
+    ) -> Result<(File, ThreadSnapshot), LoadError> {
+        let bytes = self.read_whole_log(id)?;
+        let parsed = parse(id, &bytes)?;
+        self.rewrite_from(id, &bytes, parsed, amend, extra)
+    }
+
+    fn rewrite_from(
+        &self,
+        id: ThreadId,
+        bytes: &[u8],
+        parsed: Parsed,
+        amend: impl FnOnce(&mut ThreadSnapshot),
+        extra: Option<Record>,
+    ) -> Result<(File, ThreadSnapshot), LoadError> {
+        let Parsed {
+            mut snapshot,
+            readable,
+        } = parsed;
+        amend(&mut snapshot);
+        let header_end = bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |at| at + 1)
+            .min(readable);
         let mut contents = line(&Header {
             schema: SCHEMA_VERSION,
             provider: snapshot.provider,
@@ -2044,27 +2184,78 @@ impl Store {
             project_id: snapshot.project_id,
             title: snapshot.title.clone(),
             effort: snapshot.effort.clone(),
-        })?;
-        for record in &snapshot.records {
-            contents.push_str(&line(record)?);
+        })?
+        .into_bytes();
+        contents.extend_from_slice(&bytes[header_end..readable]);
+        if !contents.ends_with(b"\n") {
+            // The last record lost only its newline to a crash.
+            contents.push(b'\n');
         }
+        if let Some(record) = extra {
+            contents.extend_from_slice(line(&record)?.as_bytes());
+            snapshot.records.push(record);
+        }
+        if readable < bytes.len() {
+            self.keep_damage(id, bytes, readable)?;
+        }
+        let file = self.replace(id, &contents)?;
+        snapshot.schema = SCHEMA_VERSION;
+        Ok((file, snapshot))
+    }
+
+    /// Put `contents` in place of a Thread's log so that a crash at any
+    /// moment leaves one whole log or the other: written beside under a
+    /// name of its own, synced through the drive's cache, renamed over, and
+    /// the rename itself made durable. Answers an append handle taken on
+    /// the new file before the rename, so every failure here happens while
+    /// the original log (and every handle on it) is still the real one.
+    fn replace(&self, id: ThreadId, contents: &[u8]) -> io::Result<File> {
+        let path = self.log_path(id);
         let tmp = temp_beside(&path);
         let mut file = File::create(&tmp)?;
-        file.write_all(contents.as_bytes())?;
-        self.shared.sync(&file, SyncLevel::Full)?;
-        let handle = OpenOptions::new().append(true).open(&tmp)?;
         #[cfg(test)]
-        if self
+        if self.injected(ReplaceStep::Write) {
+            // A crash mid-write: half the file, and the temp left behind.
+            file.write_all(&contents[..contents.len() / 2])?;
+            return Err(io::Error::other("injected failure while writing"));
+        }
+        let handle = (|| -> io::Result<File> {
+            file.write_all(contents)?;
+            #[cfg(test)]
+            if self.injected(ReplaceStep::Sync) {
+                return Err(io::Error::other("injected failure while syncing"));
+            }
+            self.shared.sync(&file, SyncLevel::Full)?;
+            let handle = OpenOptions::new().append(true).open(&tmp)?;
+            #[cfg(test)]
+            if self.injected(ReplaceStep::Rename) {
+                return Err(io::Error::other("injected failure while renaming"));
+            }
+            rename_over(&tmp, &path)?;
+            Ok(handle)
+        })()
+        .inspect_err(|_: &io::Error| {
+            let _ = fs::remove_file(&tmp);
+        })?;
+        #[cfg(test)]
+        if self.injected(ReplaceStep::Durable) {
+            return Err(io::Error::other(
+                "injected failure making the rename durable",
+            ));
+        }
+        sync_dir(self.dir.join(id.to_string()).as_path())?;
+        Ok(handle)
+    }
+
+    #[cfg(test)]
+    fn injected(&self, step: ReplaceStep) -> bool {
+        *self
             .shared
             .faults
-            .refuse_replace
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let _ = fs::remove_file(&tmp);
-            return Err(io::Error::other("stub refused to replace the log"));
-        }
-        fs::rename(&tmp, &path)?;
-        Ok(handle)
+            .replace_fails_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            == Some(step)
     }
 
     fn log_path(&self, id: ThreadId) -> PathBuf {
