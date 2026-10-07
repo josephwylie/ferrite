@@ -695,20 +695,33 @@ pub fn pulse_parked(cx: &App) -> bool {
 //
 // The store is a main-thread `thread_local`, so row builders without a `cx`
 // can blend; the root view stamps each frame's time on it first
-// ([`hover_frame_start`]). An element that unmounts mid-hover never hears its leave, so
-// every read stamps the entry with the frame counter and
-// [`hover_fades_active`] (once per frame, at the root view's tail) prunes
-// an entry a full frame goes unread.
+// ([`hover_frame_start`]). The pointer's flip notifies only the view that
+// painted the listener (`Window::hover_listener_view`), so a hover in the
+// nav leaves every cached transcript as it is; while a blend is mid-flight
+// that view is drawn again each frame ([`hover_fades_active`]).
+//
+// A blend read by a cached view goes unread for as long as that view is
+// reused, so frames say nothing about whether its element is still
+// mounted: an entry is forgotten once it is unread for `HOVER_FORGET` (an
+// element that unmounted mid-hover never hears its leave), or once it has
+// faded back to rest.
+
+/// How long a blend nobody draws is kept: past any cached view's quiet
+/// spell while it streams, short of a hover anyone would see come back.
+const HOVER_FORGET: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy)]
 struct FadeEntry {
     origin: f32,
     target: f32,
     started: Instant,
-    seen: u64,
+    /// When a draw last read it, or the pointer set it.
+    read: Instant,
     /// The blend's timing: `HOVER_FADE`, unless the surface names its own
     /// ([`hover_listener_with`]).
     spec: MotionSpec,
+    /// The view whose listener set it: drawn again while it fades.
+    view: Option<EntityId>,
 }
 
 impl FadeEntry {
@@ -730,19 +743,20 @@ impl FadeEntry {
 #[derive(Default)]
 pub struct HoverFades {
     entries: HashMap<SharedString, FadeEntry>,
-    frame: u64,
+    /// The views painting a blend still mid-flight, as of the last tick.
+    fading: Vec<EntityId>,
 }
 
 impl HoverFades {
-    /// `set_with` on the one 150ms blend.
+    /// `set_with` on the one 150ms blend, from no view.
     #[cfg(test)]
     pub fn set_at(&mut self, key: &SharedString, hovered: bool, reduced: bool, now: Instant) {
-        self.set_with(key, hovered, reduced, now, HOVER_FADE);
+        self.set_with(key, hovered, reduced, now, HOVER_FADE, None);
     }
 
     /// The pointer entered (`hovered`) or left the element behind `key`,
-    /// blending on `spec` (`HOVER_FADE`, or a surface's own timing).
-    /// Reduced motion snaps to the endpoint.
+    /// painted by `view`, blending on `spec` (`HOVER_FADE`, or a surface's
+    /// own timing). Reduced motion snaps to the endpoint.
     pub fn set_with(
         &mut self,
         key: &SharedString,
@@ -750,18 +764,19 @@ impl HoverFades {
         reduced: bool,
         now: Instant,
         spec: MotionSpec,
+        view: Option<EntityId>,
     ) {
         let target = if hovered { 1.0 } else { 0.0 };
         let Some(current) = self.entries.get(key).map(|entry| entry.value(now)) else {
             if hovered {
                 let origin = if reduced { target } else { 0.0 };
-                self.insert(key, origin, target, now, spec);
+                self.insert(key, origin, target, now, spec, view);
             }
             // A leave for a key never entered: nothing to fade.
             return;
         };
         let origin = if reduced { target } else { current };
-        self.insert(key, origin, target, now, spec);
+        self.insert(key, origin, target, now, spec, view);
     }
 
     fn insert(
@@ -771,40 +786,47 @@ impl HoverFades {
         target: f32,
         now: Instant,
         spec: MotionSpec,
+        view: Option<EntityId>,
     ) {
         let entry = FadeEntry {
             origin,
             target,
             started: now,
-            seen: self.frame,
+            read: now,
             spec,
+            view,
         };
         self.entries.insert(key.clone(), entry);
     }
 
-    /// Hover progress (0..1) for `key` at `now`; stamps it as mounted.
+    /// Hover progress (0..1) for `key` at `now`; stamps it as drawn.
     pub fn value_at(&mut self, key: &str, now: Instant) -> f32 {
-        let frame = self.frame;
         self.entries.get_mut(key).map_or(0.0, |entry| {
-            entry.seen = frame;
+            entry.read = now;
             entry.value(now)
         })
     }
 
-    /// Once per frame: advance the counter, drop entries at rest or unread
-    /// for a whole frame, and say whether a fade is still mid-flight.
+    /// Once per frame: drop entries back at rest or unread for
+    /// `HOVER_FORGET`, note the views whose blend is mid-flight, and say
+    /// whether any is.
     pub fn tick_at(&mut self, now: Instant) -> bool {
-        self.frame += 1;
-        let frame = self.frame;
         let mut active = false;
+        let fading = &mut self.fading;
+        fading.clear();
         self.entries.retain(|_, entry| {
-            if entry.seen + 1 < frame {
+            if now.saturating_duration_since(entry.read) > HOVER_FORGET {
                 return false;
             }
             let settled = entry.settled(now);
-            active |= !settled;
+            if !settled {
+                active = true;
+                fading.extend(entry.view);
+            }
             !(settled && entry.target == 0.0)
         });
+        fading.sort_unstable();
+        fading.dedup();
         active
     }
 }
@@ -848,24 +870,36 @@ pub fn hover_listener_with(
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
         let now = cx.background_executor().now();
+        let view = window.hover_listener_view();
         HOVER_FADES.with(|fades| {
             fades
                 .borrow_mut()
-                .set_with(&key, *hovered, reduced, now, spec)
+                .set_with(&key, *hovered, reduced, now, spec, view)
         });
-        // Dispatch runs outside any view's draw, so `request_animation_frame`
-        // cannot name a view here: refresh (what a gpui `.hover()` style does
-        // on the same event), and the root's tail keeps frames coming.
-        window.refresh();
+        // Only the view that painted the blend draws it: notifying that
+        // view redraws it and its ancestors, and reuses every other cached
+        // view (the transcripts). Called from outside a painted listener,
+        // refresh, as a gpui `.hover()` style does on the same event.
+        match view {
+            Some(view) => cx.notify(view),
+            None => window.refresh(),
+        }
     }
 }
 
 /// The frame hook's second half: call once per window frame, at the root
 /// view's render tail. True while a blend is mid-flight and frames must keep
-/// coming.
+/// coming; the views painting one are [`hover_fading_views`].
 pub fn hover_fades_active() -> bool {
     let now = hover_now();
     HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now))
+}
+
+/// The views painting a blend still mid-flight, as of the last
+/// [`hover_fades_active`]: the root draws them again with its next frame (a
+/// cached view would otherwise be reused, its blend frozen).
+pub fn hover_fading_views() -> Vec<EntityId> {
+    HOVER_FADES.with(|fades| fades.borrow().fading.clone())
 }
 
 /// Blend two colours the way a browser transitions them: sRGB components
@@ -939,6 +973,20 @@ pub mod testing {
     /// This test (its thread) runs the motion kit live.
     pub fn drive() {
         DRIVE.with(|drive| drive.set(true));
+    }
+
+    /// Every hover blend held now, and its value this frame (read without
+    /// stamping it as drawn).
+    pub fn hover_values() -> Vec<(gpui::SharedString, f32)> {
+        let now = super::hover_now();
+        super::HOVER_FADES.with(|fades| {
+            fades
+                .borrow()
+                .entries
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.value(now)))
+                .collect()
+        })
     }
 }
 
@@ -1138,7 +1186,7 @@ mod tests {
         let key = SharedString::from("seam");
         let t0 = Instant::now();
         let ms = |m: u64| t0 + Duration::from_millis(m);
-        fades.set_with(&key, true, false, t0, SEAM_FADE);
+        fades.set_with(&key, true, false, t0, SEAM_FADE, None);
         assert!(fades.value_at("seam", ms(60)) < 1.0);
         assert_eq!(fades.value_at("seam", ms(120)), 1.0);
     }
@@ -1180,12 +1228,53 @@ mod tests {
         assert!(!fades.tick_at(ms(450)));
         assert!(fades.entries.is_empty(), "rest entries are pruned");
 
-        // Unmounted mid-hover: its leave never comes; one unread frame
-        // drops it.
+        // Unmounted mid-hover: its leave never comes; unread past
+        // `HOVER_FORGET`, it is forgotten.
         fades.set_at(&key, true, false, ms(500));
         fades.tick_at(ms(516));
-        fades.tick_at(ms(532));
+        assert_eq!(fades.entries.len(), 1, "a frame unread is no unmount");
+        fades.tick_at(ms(500) + HOVER_FORGET + Duration::from_millis(16));
         assert!(fades.entries.is_empty(), "unread entry evicted");
+    }
+
+    /// A hovered link in a cached transcript goes unread while the rest of
+    /// the window draws: frames pass without it, and when the transcript
+    /// draws again (the next streamed line) it still reads hovered.
+    #[test]
+    fn a_hovered_blend_survives_frames_its_cached_view_skips() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("link");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        fades.set_with(&key, true, false, t0, HOVER_FADE, None);
+        assert_eq!(fades.value_at("link", ms(150)), 1.0);
+        for frame in 1..=30 {
+            fades.tick_at(ms(150 + frame * 33));
+        }
+        assert_eq!(
+            fades.value_at("link", ms(1_200)),
+            1.0,
+            "still under the pointer, still underlined"
+        );
+    }
+
+    /// The views that painted a blend still mid-flight are named, once each,
+    /// so the root can draw them again with its next frame.
+    #[test]
+    fn the_hover_tick_names_the_views_mid_flight() {
+        let mut fades = HoverFades::default();
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let (a, b) = (EntityId::from(1u64), EntityId::from(2u64));
+        fades.set_with(&"one".into(), true, false, t0, HOVER_FADE, Some(a));
+        fades.set_with(&"two".into(), true, false, t0, HOVER_FADE, Some(a));
+        fades.set_with(&"three".into(), true, false, ms(100), HOVER_FADE, Some(b));
+        assert!(fades.tick_at(ms(50)));
+        assert_eq!(fades.fading, [a, b]);
+        assert!(fades.tick_at(ms(200)), "b is still fading");
+        assert_eq!(fades.fading, [b]);
+        assert!(!fades.tick_at(ms(300)));
+        assert!(fades.fading.is_empty());
     }
 
     #[test]

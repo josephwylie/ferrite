@@ -8702,6 +8702,20 @@ impl Render for CockpitView {
             .is_some_and(|tween| tween.running(now, reduced));
         if crate::motion::hover_fades_active() | nav_moving {
             window.request_animation_frame();
+            // A blend fading inside a cached view (a transcript's link)
+            // is drawn by that view: it comes with the next frame too.
+            let root = cx.entity_id();
+            let fading: Vec<_> = crate::motion::hover_fading_views()
+                .into_iter()
+                .filter(|view| *view != root)
+                .collect();
+            if !fading.is_empty() {
+                window.on_next_frame(move |_, cx| {
+                    for view in &fading {
+                        cx.notify(*view);
+                    }
+                });
+            }
         }
         root
     }

@@ -1472,3 +1472,112 @@ fn a_nav_row_hover_fades_and_then_asks_for_no_frames(cx: &mut TestAppContext) {
     display_frames(cx);
     assert_eq!(display_frames(cx), 0, "back at rest: no more frames");
 }
+
+/// Root Cockpit renders while `ms` pass on a 60Hz display: the clock moves
+/// a display frame at a time, and each frame the window asked for is
+/// delivered.
+fn cockpit_renders_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let before = renders();
+    for _ in 0..ms / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        display_frames(cx);
+    }
+    renders() - before
+}
+
+/// The pointer sweeping down the nav, a row every 250ms: each crossing
+/// blends a row's wash in and the last one's out, redrawing the Cockpit
+/// while a blend moves — and never the transcript beside it, which the
+/// pointer did not touch.
+#[gpui::test]
+fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, fake) = cockpit("nav-hover-sweep", 4);
+    let threads = core.threads().to_vec();
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let focused = view.read_with(cx, |view, _| view.focused());
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[focused].text_namespace())
+    });
+    assert!(
+        mounted_native_texts(&prefix, cx) > 0,
+        "the premise: the transcript's native text is mounted"
+    );
+    let rows: Vec<_> = threads
+        .iter()
+        .map(|thread| debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("a nav row"))
+        .collect();
+    reset_native_text_renders(cx);
+    let mut rendered = 0;
+    for crossing in 0..20 {
+        let row = rows[crossing % rows.len()];
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+        rendered += cockpit_renders_over(cx, 250);
+    }
+    let transcript = native_text_renders(&prefix, cx);
+    eprintln!("NAV_HOVER_SWEEP cockpit_renders_5s={rendered} transcript_text_renders={transcript}");
+    assert_eq!(
+        transcript, 0,
+        "a hover in the nav rebuilt the transcript's native text"
+    );
+}
+
+/// A path the pointer rests on keeps its underline while its transcript
+/// streams: the Cockpit around the cached transcript redraws on every step
+/// of the working Thread's loops without drawing the transcript, and the
+/// hover must outlive those frames.
+#[gpui::test]
+fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake, workspace) = bound_cockpit("hovered-link-streams", Provider::Claude);
+    let file = workspace.join("docs").join("guide.md");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "guide\n").unwrap();
+    let thread = core.threads()[0];
+    core.send(thread, "Read the guide".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "See [guide](docs/guide.md:12) for the notes.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    tick(cx);
+    // The loops redraw the Cockpit and reuse the cached transcript, whose
+    // selectors a test window keeps only for a frame that drew it.
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let link = debug_bounds(cx, format!("file-attachment-{}", file.display()))
+        .or_else(|| debug_bounds(cx, "inline-file".to_string()))
+        .expect("the transcript draws the link");
+    cx.simulate_mouse_move(link.center(), None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cockpit_renders_over(cx, 300);
+    let underlined = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, _| crate::motion::testing::hover_values())
+            .into_iter()
+            .any(|(_, value)| value == 1.0)
+    };
+    assert!(underlined(cx), "the premise: the link is underlined");
+    // The working loops redraw the Cockpit; the cached transcript is reused.
+    cockpit_renders_over(cx, 600);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "One more streamed line.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        underlined(cx),
+        "the transcript drew again under the pointer and lost the link's underline"
+    );
+}
