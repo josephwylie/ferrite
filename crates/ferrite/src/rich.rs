@@ -84,8 +84,27 @@ struct CachedText {
 /// (`select.rs`): `{kind}{namespace}-…`.
 const TEXT_KINDS: [&str; 4] = ["markdown-", "literal-", "thinking-", "output-"];
 
+/// What a Pane's cache may hold of native text, by `held`, and in entries.
+const TEXT_BUDGET: usize = 32 * 1024 * 1024;
+const TEXT_ENTRIES: usize = 256;
+
+/// The most recent lookups belong to texts being drawn together; none of
+/// them is evicted for another, or a frame showing more than the budget
+/// would rebuild them all every frame. A frame looks up fewer than this.
+const DRAWN_TOGETHER: u64 = 64;
+
+/// What a cached native text holds, its parsed document and laid-out lines
+/// with them: measured in Sep 2026 by the memory freed as entries dropped,
+/// about 59 KiB for a 317-byte paragraph, 317 KiB for 2 KB and 3.4 MiB for
+/// 25 KB of drawn Markdown. Its source bytes alone understate it a
+/// hundredfold.
+fn held(source: &str) -> usize {
+    32 * 1024 + source.len() * 144
+}
+
 /// Pane-owned native text entities survive temporarily hidden Subjects. The
-/// least recently used run is discarded only at this explicit cache limit.
+/// least recently used run is discarded only at this explicit cache limit:
+/// `TEXT_ENTRIES`, or `TEXT_BUDGET` of what the texts hold.
 #[derive(Clone, Default)]
 pub struct TextCache(
     Rc<RefCell<(u64, HashMap<SharedString, CachedText>, usize)>>,
@@ -169,7 +188,7 @@ impl TextCache {
                 .iter()
                 .any(|prefix| id.starts_with(prefix.as_str()));
             if stale {
-                freed += text.source.len();
+                freed += held(&text.source);
             }
             !stale
         });
@@ -191,7 +210,7 @@ impl TextCache {
         for (from, to) in keys {
             if let Some(state) = cache.1.remove(&from) {
                 if let Some(replaced) = cache.1.insert(to, state) {
-                    cache.2 -= replaced.source.len();
+                    cache.2 -= held(&replaced.source);
                 }
             }
         }
@@ -210,29 +229,30 @@ impl TextCache {
         // be updated in place, so it is rebuilt.
         if cache.1.get(&id).is_some_and(|text| !text.state.is(kind)) {
             if let Some(old) = cache.1.remove(&id) {
-                cache.2 -= old.source.len();
+                cache.2 -= held(&old.source);
             }
         }
         cache.0 += 1;
         let touched = cache.0;
-        let prior_bytes = cache.1.get(&id).map_or(0, |text| text.source.len());
-        while (!cache.1.contains_key(&id) && cache.1.len() >= 256)
-            || cache.2.saturating_sub(prior_bytes) + source.len() > 8 * 1024 * 1024
+        let prior = cache.1.get(&id).map_or(0, |text| held(&text.source));
+        let holds = held(source);
+        while (!cache.1.contains_key(&id) && cache.1.len() >= TEXT_ENTRIES)
+            || cache.2.saturating_sub(prior) + holds > TEXT_BUDGET
         {
             let Some(oldest) = cache
                 .1
                 .iter()
-                .filter(|(key, _)| *key != &id)
+                .filter(|(key, text)| *key != &id && text.touched + DRAWN_TOGETHER < touched)
                 .min_by_key(|(_, text)| text.touched)
                 .map(|(id, _)| id.clone())
             else {
                 break;
             };
             if let Some(old) = cache.1.remove(&oldest) {
-                cache.2 -= old.source.len();
+                cache.2 -= held(&old.source);
             }
         }
-        cache.2 = cache.2.saturating_sub(prior_bytes) + source.len();
+        cache.2 = cache.2.saturating_sub(prior) + holds;
         let text = cache.1.entry(id).or_insert_with(|| CachedText {
             source: source.to_string(),
             state: match kind {
@@ -2789,6 +2809,60 @@ mod style_tests {
                 "{class:?}"
             );
             assert_eq!(style.background_color, None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cache_cost_tests {
+    use super::*;
+
+    /// A native text holds far more than its source: a 2 KB answer run
+    /// freed about 317 KB when dropped (Sep 2026 probe, drawn once).
+    const HELD_BY_A_2KB_RUN: usize = 317 * 1024;
+
+    fn draw(cache: &TextCache, id: String, source: &str, cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, cx| {
+            cache.state(id.into(), source, window, cx);
+        });
+    }
+
+    /// A long-lived Pane draws one new answer run after another. Charged
+    /// only its source bytes, its cache held 256 runs, ~80 MB for runs of
+    /// 2 KB; what it holds is now bounded by what its texts really hold.
+    #[gpui::test]
+    fn a_panes_text_cache_holds_a_bounded_amount_of_native_text(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::init_components);
+        let cx = cx.add_empty_window();
+        let cache = TextCache::default();
+        let source = "words ".repeat(2048 / 6);
+        for run in 0..256 {
+            draw(&cache, format!("markdown-pane-{run}"), &source, cx);
+        }
+        let ids = cache.cached_ids();
+        assert!(
+            ids.len() * HELD_BY_A_2KB_RUN <= TEXT_BUDGET,
+            "{} runs of 2 KB held, ~{} MB",
+            ids.len(),
+            ids.len() * HELD_BY_A_2KB_RUN / (1024 * 1024)
+        );
+        assert!(ids.iter().any(|id| id.as_ref() == "markdown-pane-255"));
+    }
+
+    /// Texts drawn together never evict each other, whatever they hold:
+    /// a frame showing more than the budget would otherwise rebuild them
+    /// all on every frame.
+    #[gpui::test]
+    fn texts_drawn_together_stay_cached_past_the_budget(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::init_components);
+        let cx = cx.add_empty_window();
+        let cache = TextCache::default();
+        let source = "words ".repeat(50_000 / 6);
+        for frame in 0..3 {
+            for run in 0..12 {
+                draw(&cache, format!("markdown-big-{run}"), &source, cx);
+            }
+            assert_eq!(cache.cached_ids().len(), 12, "frame {frame}");
         }
     }
 }
