@@ -1,7 +1,7 @@
 //! ADR 0008's mechanics: one writing process per store, how syncs order
 //! the log, and how repair and upgrade keep every committed byte.
 
-use super::compat_tests::scratch;
+use super::compat_tests::{plant, scratch};
 use super::*;
 
 fn main() -> WorkspaceBinding {
@@ -24,16 +24,23 @@ fn claimed_elsewhere(dir: &Path) -> File {
 }
 
 /// A dev build beside the installed app: the second Ferrite reads every
-/// Thread and changes none of them, and says why.
+/// Thread and changes none of them, and says why. Once the other lets go,
+/// a later open may write.
 #[test]
 fn a_second_process_reads_the_store_but_never_writes_it() {
     let dir = scratch("claim-second");
-    let store = Store::open(&dir).unwrap();
-    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
-    writer.record_prompt("hello").unwrap();
-    writer.flush().unwrap();
-    drop((writer, store));
-    let log = dir.join(id.to_string()).join("log.jsonl");
+    plant(
+        &dir,
+        4,
+        concat!(
+            r#"{"schema":12,"provider":"claude","workspace":null,"session_project_root":null,"model":null,"project_id":null,"title":null,"effort":null}"#,
+            "\n",
+            r#"{"type":"prompt","text":"hello"}"#,
+            "\n",
+        ),
+    );
+    let id = ThreadId::new(4);
+    let log = dir.join("4").join("log.jsonl");
     let before = fs::read(&log).unwrap();
 
     let other = claimed_elsewhere(&dir);

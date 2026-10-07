@@ -1269,8 +1269,6 @@ pub struct Store {
 /// its appends behind a rename. The first to open holds the claim; any other
 /// reads and refuses to write.
 struct Shared {
-    /// The lock file, held open for as long as any handle lives.
-    _claim: Option<File>,
     /// Why this process may not write here, or `None` when it may.
     read_only: Option<String>,
     /// Every byte read off a log, so tests can bound what a read costs.
@@ -1288,32 +1286,47 @@ pub(crate) struct Faults {
     pub(crate) refuse_replace: std::sync::atomic::AtomicBool,
 }
 
+/// Take the claim on `dir` for this process, or say why another holds it.
+/// A claim once taken is kept until the process exits: if it lapsed when
+/// the last handle dropped, a reopen racing that drop (or a second Ferrite)
+/// could find it taken, or take it, in between.
+fn claim(dir: &Path, key: &DirKey) -> io::Result<Option<String>> {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, PoisonError};
+    static CLAIMED: Mutex<BTreeMap<DirKey, File>> = Mutex::new(BTreeMap::new());
+    let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);
+    if claimed.contains_key(key) {
+        return Ok(None);
+    }
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(CLAIM))?;
+    match lock.try_lock() {
+        Ok(()) => {
+            claimed.insert(key.clone(), lock);
+            Ok(None)
+        }
+        Err(fs::TryLockError::WouldBlock) => Ok(Some(READ_ONLY.to_string())),
+        // A filesystem without locks cannot hold the claim; this process
+        // writes as Ferrite always did there.
+        Err(fs::TryLockError::Error(error)) if error.kind() == io::ErrorKind::Unsupported => {
+            Ok(None)
+        }
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 impl Shared {
-    /// Take the claim, or note that another process holds it.
-    fn claim(dir: &Path) -> io::Result<Self> {
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(dir.join(CLAIM))?;
-        let (claim, read_only) = match lock.try_lock() {
-            Ok(()) => (Some(lock), None),
-            Err(fs::TryLockError::WouldBlock) => (None, Some(READ_ONLY.to_string())),
-            // A filesystem without locks cannot hold the claim; this process
-            // writes as Ferrite always did there.
-            Err(fs::TryLockError::Error(error)) if error.kind() == io::ErrorKind::Unsupported => {
-                (None, None)
-            }
-            Err(fs::TryLockError::Error(error)) => return Err(error),
-        };
-        Ok(Self {
-            _claim: claim,
+    fn new(read_only: Option<String>) -> Self {
+        Self {
             read_only,
             #[cfg(test)]
             read_bytes: Default::default(),
             #[cfg(test)]
             faults: Faults::default(),
-        })
+        }
     }
 
     /// The one `Shared` for `dir` in this process, keyed by what the
@@ -1328,7 +1341,7 @@ impl Shared {
             return Ok(shared);
         }
         open.retain(|_, shared| shared.strong_count() > 0);
-        let shared = Arc::new(Self::claim(dir)?);
+        let shared = Arc::new(Self::new(claim(dir, &key)?));
         open.insert(key, Arc::downgrade(&shared));
         Ok(shared)
     }
