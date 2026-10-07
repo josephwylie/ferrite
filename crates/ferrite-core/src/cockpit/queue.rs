@@ -224,7 +224,7 @@ impl Queue {
     }
     /// Saved beside and renamed over, behind a barrier: the queue is whole
     /// on disk before the rename can be, without waiting on the drive's
-    /// cache for every prompt queued (ADR 0008).
+    /// cache for every prompt queued (ADR 0009).
     fn save(&self) -> io::Result<()> {
         let temporary = self.path.with_extension("queue.tmp");
         let mut file = std::fs::File::create(&temporary)?;

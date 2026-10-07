@@ -1542,7 +1542,7 @@ impl Cockpit {
     /// Reopen a parked Thread: its history is replayed from the log into a
     /// fresh Transcript, and the new Session is told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        // Bounded: what Activity retains, not the whole log (ADR 0008).
+        // Bounded: what Activity retains, not the whole log (ADR 0009).
         let mut revival = self.store.revive(thread)?;
         let snapshot = revival.snapshot();
         let provider = snapshot.provider();
@@ -1957,7 +1957,7 @@ impl Cockpit {
     }
 
     /// Why this Ferrite may only read its store — another one holds the
-    /// store's claim — or `None` when it may change it (ADR 0008).
+    /// store's claim — or `None` when it may change it (ADR 0009).
     pub fn store_read_only(&self) -> Option<&str> {
         self.store.read_only()
     }

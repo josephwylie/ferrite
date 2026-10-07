@@ -1,4 +1,4 @@
-//! A bounded revive shows what a full replay shows (ADR 0008): the same
+//! A bounded revive shows what a full replay shows (ADR 0009): the same
 //! Main transcript and runtime, the same children (those known from before
 //! the replay base evicted, their content left on disk), the same resume
 //! target, recall and provider lock — from a read that stops at the base.

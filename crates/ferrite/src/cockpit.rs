@@ -468,7 +468,7 @@ pub struct CockpitView {
     pub(crate) shown_version: SharedString,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
-    /// Whether the window has said the store is read-only (ADR 0008).
+    /// Whether the window has said the store is read-only (ADR 0009).
     read_only_told: bool,
     group_error: Option<SharedString>,
     /// The bell: whether its list is down, its cursor, and which Notices
@@ -4005,7 +4005,7 @@ impl CockpitView {
     }
 
     /// A second Ferrite on one store reads it and changes nothing (ADR
-    /// 0008). Said once, and kept on screen: every refused act would
+    /// 0009). Said once, and kept on screen: every refused act would
     /// otherwise look like a fault of its own.
     fn present_read_only(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui::component::notification::{Notification, NotificationType};

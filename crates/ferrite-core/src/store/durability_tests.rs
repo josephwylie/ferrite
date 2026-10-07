@@ -1,4 +1,4 @@
-//! ADR 0008's mechanics: one writing process per store, how syncs order
+//! ADR 0009's mechanics: one writing process per store, how syncs order
 //! the log, and how repair and upgrade keep every committed byte.
 
 use super::compat_tests::{plant, scratch};
@@ -439,7 +439,7 @@ fn peeks_amendments_and_reopens_read_only_the_tail_of_a_long_log() {
 
 /// Setters send changes, not restatements: whatever the caller believes
 /// the provider is, a model change or a rename after a provider switch
-/// keeps the switch (ADR 0008, review finding 3).
+/// keeps the switch (ADR 0009, review finding 3).
 #[test]
 fn a_change_after_a_provider_switch_never_undoes_it() {
     let dir = scratch("amend-after-switch");

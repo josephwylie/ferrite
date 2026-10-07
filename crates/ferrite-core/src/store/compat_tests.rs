@@ -1,7 +1,7 @@
 //! What a log means must never depend on which Ferrite last touched it.
 //! Real-shaped logs from older schemas load to one pinned observable —
 //! what a revive would show — before and after anything reopens them, and
-//! the four agent-context invariants (ADR 0008) are each tested by name.
+//! the four agent-context invariants (ADR 0009) are each tested by name.
 
 use super::*;
 use crate::activity::{Activity, ActivityInput};
@@ -324,7 +324,7 @@ fn old_format_fixtures_load_identically_before_and_after_reopening() {
     }
 }
 
-/// Invariant 1 (ADR 0008): every event logged today is still logged, in
+/// Invariant 1 (ADR 0009): every event logged today is still logged, in
 /// order, byte for byte. Records the store adds for itself (`facts`,
 /// `mark`) are allowed between them; nothing else is.
 #[test]
@@ -440,7 +440,7 @@ fn invariant_every_logged_event_is_still_logged_in_order() {
     assert_eq!(logged, expected);
 }
 
-/// Invariant 3 (ADR 0008): a hand-over receives every exchange the log
+/// Invariant 3 (ADR 0009): a hand-over receives every exchange the log
 /// holds since the last reset, however long the Thread — not a window.
 #[test]
 fn invariant_hand_over_receives_every_exchange() {
@@ -496,7 +496,7 @@ pub(crate) fn record_bytes(log: &[u8]) -> Vec<u8> {
     log[header_end.min(readable)..readable].to_vec()
 }
 
-/// Invariant 4 (ADR 0008): nothing the store does to an existing log loses
+/// Invariant 4 (ADR 0009): nothing the store does to an existing log loses
 /// what it held. Every reopen, repair, upgrade and amendment leaves every
 /// earlier record readable, in order — and byte for byte as its writer
 /// wrote it: no record is ever decoded and encoded again.

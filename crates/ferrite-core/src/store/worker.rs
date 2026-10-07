@@ -1,4 +1,4 @@
-//! The store's worker (ADR 0008): every sync of every log runs here, on a
+//! The store's worker (ADR 0009): every sync of every log runs here, on a
 //! cloned handle and outside the writer's lock, so no keystroke ever waits
 //! on a drive. Records are written where they are accepted — into the page
 //! cache, which every reader sees at once — and synced here: behind a

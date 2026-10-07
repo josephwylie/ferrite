@@ -1,5 +1,5 @@
 //! Agent context lives in the provider CLI (resumed by id) and in the log
-//! (carried on a hand-over). ADR 0008's invariants 2 and 3, end to end
+//! (carried on a hand-over). ADR 0009's invariants 2 and 3, end to end
 //! through park and revive.
 
 use super::*;

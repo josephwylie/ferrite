@@ -80,7 +80,7 @@ mod revive_tests;
 ///   observation, and a hunk's section. A v1–v11 log loads with none of
 ///   them: its prompts draw no time and its stamps no tokens.
 /// - **13** — header facts change by appending, never by rewriting the log
-///   (ADR 0008): a `facts` record restates them all after a change, a
+///   (ADR 0009): a `facts` record restates them all after a change, a
 ///   `handover` carries the facts it switched to, and the store's own
 ///   `mark` restates them every megabyte or so, so a peek reads the tail
 ///   instead of the whole log. The newest record carrying facts wins. A
@@ -103,7 +103,7 @@ const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 const OPEN_MARKER: &str = ".open";
 const OPEN_STATE_MARKER: &str = ".open-state-v1";
 
-/// The store's single-writer claim (ADR 0008): the process holding an
+/// The store's single-writer claim (ADR 0009): the process holding an
 /// exclusive lock on this file is the only one that changes any log.
 const CLAIM: &str = ".lock";
 
@@ -304,7 +304,7 @@ impl Summary {
     }
 }
 
-/// What a parked Thread's row says without replaying its log (ADR 0008).
+/// What a parked Thread's row says without replaying its log (ADR 0009).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadSummary {
     /// Prompts since the last conversation reset.
@@ -1424,12 +1424,12 @@ impl Record {
 /// short turns never reach it, flushing on their boundary instead.
 const DEFAULT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The longest a written record waits for a full sync (ADR 0008). Barriers
+/// The longest a written record waits for a full sync (ADR 0009). Barriers
 /// at every boundary already survive a crash of Ferrite or the OS; this
 /// bounds what a power cut can cost.
 const FULL_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// How far a sync reaches (ADR 0008).
+/// How far a sync reaches (ADR 0009).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SyncLevel {
     /// The log's writes so far reach the drive before any that follow:
@@ -1442,7 +1442,7 @@ enum SyncLevel {
 }
 
 /// Sync a file behind a barrier: its writes reach the drive before any
-/// that follow (ADR 0008). For files beside the logs, like the queue.
+/// that follow (ADR 0009). For files beside the logs, like the queue.
 pub(crate) fn sync_ordered(file: &File) -> io::Result<()> {
     sync_file(file, SyncLevel::Barrier)
 }
@@ -2672,7 +2672,7 @@ impl Store {
     ) -> Result<Handover, LoadError> {
         self.writable()?;
         writer.flush()?;
-        // Every exchange the log holds, read whole (ADR 0008, invariant 3).
+        // Every exchange the log holds, read whole (ADR 0009, invariant 3).
         let exchanges = self.load(id)?.exchanges_so_far();
         self.commit_handover(provider, model, writer, exchanges)
     }
@@ -2997,7 +2997,7 @@ impl Store {
 
     /// Reopen a parked Thread for a revive: its writer, and what to replay,
     /// read in time proportional to what Activity retains rather than to
-    /// the log (ADR 0008). The newest mark names a base — a turn start far
+    /// the log (ADR 0009). The newest mark names a base — a turn start far
     /// enough back that Activity's window lies wholly after it — and the
     /// records before it that a replay from there needs first; those are
     /// read by offset, then the log from the base on. Children known from
@@ -3856,7 +3856,7 @@ pub struct CompletionFacts {
 
 /// Appends one Thread's records. Buffered: nothing reaches the disk until a
 /// boundary (turn end, close), a timeout, or an explicit `flush`. A handle:
-/// the store's worker shares what it appends to, to sync it (ADR 0008).
+/// the store's worker shares what it appends to, to sync it (ADR 0009).
 pub struct ThreadWriter {
     state: std::sync::Arc<std::sync::Mutex<WriterState>>,
 }
@@ -4068,7 +4068,7 @@ impl WriterState {
     /// Everything buffered, written: in the page cache, where every reader
     /// sees it and a crash of Ferrite cannot lose it. The worker syncs it,
     /// behind a barrier at once and through the drive's cache within
-    /// `FULL_SYNC_INTERVAL` — never this caller (ADR 0008).
+    /// `FULL_SYNC_INTERVAL` — never this caller (ADR 0009).
     pub fn flush(&mut self) -> io::Result<()> {
         self.usable()?;
         let wrote = !self.buffer.is_empty();

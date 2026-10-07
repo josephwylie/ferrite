@@ -1,4 +1,4 @@
-//! Replay bases (ADR 0008): where a revive may start reading a log, and the
+//! Replay bases (ADR 0009): where a revive may start reading a log, and the
 //! earlier records it must still replay first. A base is a turn start far
 //! enough back that Activity's retained window lies wholly after it; the
 //! carry is what a full replay would know from before it — the newest of

@@ -69,7 +69,7 @@ prefix, and replay the separately buffered live tail once. Generation, request
 identity, and header changes invalidate obsolete loads. Disk reads stay off
 the paint path. Each scan retains one encoded line and decoded record; an
 individual line has no hard size cap. A revive reads only from a replay
-base onward ([ADR 0008](0008-store-off-the-ui-thread.md)). Children known from
+base onward ([ADR 0009](0009-store-off-the-ui-thread.md)). Children known from
 before the base come back with identity, status and outcome but no content,
 and this worker restores them when shown. Omitted saved content remains on
 disk and is marked Partial.

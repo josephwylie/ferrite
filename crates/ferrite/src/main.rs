@@ -112,7 +112,7 @@ pub(crate) fn register_fonts(cx: &App) {
 
 fn main() {
     // A panic must not take accepted history with it: whatever a writer
-    // holds goes into its log before the process unwinds (ADR 0008).
+    // holds goes into its log before the process unwinds (ADR 0009).
     ferrite_core::store::install_panic_rescue();
     // Before the first glyph is rasterised (gpui caches the answer once):
     // the product draws text as macOS does; only the parity captures turn
