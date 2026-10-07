@@ -1142,6 +1142,13 @@ const TAIL_SLACK: Pixels = px(2.);
 /// sweep per frame would spawn a `ps`/`tasklist` per Session per tick.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
+#[cfg(test)]
+thread_local! {
+    /// Root Cockpit renders on this (test) thread: the unit the idle frame
+    /// budget is measured in.
+    pub(crate) static RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The panes24 instrument, kept behind an env var: frames actually painted,
 /// and what the process is holding while it paints them.
 struct Perf {
@@ -8703,6 +8710,8 @@ impl Render for CockpitView {
 impl CockpitView {
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
+        #[cfg(test)]
+        RENDERS.with(|renders| renders.set(renders.get() + 1));
         // The board rides the sidebar's width every frame of a cmd-B fold
         // (F-12); a Solo pair lasts while focus stays on one of its Panes.
         self.nav_ride.set(self.nav_ride_now(cx));

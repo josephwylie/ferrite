@@ -1138,6 +1138,45 @@ fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut Tes
     assert!(pulse_parked(cx));
 }
 
+/// What an operator actually leaves on screen: an active window, the
+/// keyboard in a Composer, two idle Threads, nothing changing. The caret may
+/// blink, but holding still must not rebuild the whole Cockpit at the pulse
+/// clock's rate — that is the idle CPU the shipped app burns.
+#[gpui::test]
+fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("idle-focused", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    let frames = |cx: &mut gpui::VisualTestContext, ms: u64| {
+        for _ in 0..ms / 16 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+        }
+    };
+    // First paint settles: measurement passes, springs arriving at rest.
+    frames(cx, 1_000);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (before, ticks) = (renders(), crate::motion::testing::pulse_ticks());
+    frames(cx, 5_000);
+    let (rendered, ticked) = (
+        renders() - before,
+        crate::motion::testing::pulse_ticks() - ticks,
+    );
+    eprintln!("IDLE_FOCUSED cockpit_renders_5s={rendered} pulse_ticks_5s={ticked}");
+    assert!(
+        rendered <= 10,
+        "an untouched focused window rebuilt the Cockpit {rendered} times in 5s \
+         ({ticked} pulse ticks); budget is 10 (2/s)"
+    );
+}
+
 /// A working Thread's loops — the working line's mark, the nav's breathing
 /// dot — ride the shared pulse clock instead of asking for every display
 /// frame, and the clock parks once the turn ends and its lease lapses.
