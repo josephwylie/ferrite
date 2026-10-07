@@ -4365,6 +4365,7 @@ impl LogReader {
 
 #[cfg(test)]
 mod tests {
+    mod context;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;

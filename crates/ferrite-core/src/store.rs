@@ -8,7 +8,7 @@
 //! per delta is impossible by interface shape.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -23,6 +23,8 @@ mod activity;
 use activity::{Execution as PersistedExecution, PersistedActivity};
 #[cfg(test)]
 mod activity_tests;
+#[cfg(test)]
+pub(crate) mod compat_tests;
 
 /// The schema this store writes. Every log names the schema it was written
 /// at in its header line; `load` accepts this version and every version
@@ -1248,6 +1250,27 @@ pub struct Store {
     fail_create: bool,
     #[cfg(test)]
     fail_delete: bool,
+    /// Every byte read off a log, so tests can bound what a read costs.
+    #[cfg(test)]
+    read_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// A log opened for reading. Every read of a log goes through one, so
+/// tests can count what a peek or a revive actually pulls off the disk.
+struct LogRead {
+    file: File,
+    #[cfg(test)]
+    read_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Read for LogRead {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.file.read(buf)?;
+        #[cfg(test)]
+        self.read_bytes
+            .fetch_add(read as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(read)
+    }
 }
 
 impl Store {
@@ -1270,7 +1293,31 @@ impl Store {
             fail_create: false,
             #[cfg(test)]
             fail_delete: false,
+            #[cfg(test)]
+            read_bytes: Default::default(),
         })
+    }
+
+    /// Bytes this store (and its clones) has read off logs so far.
+    #[cfg(test)]
+    pub(crate) fn bytes_read(&self) -> u64 {
+        self.read_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Open one Thread's log for reading.
+    fn read_log(&self, id: ThreadId) -> io::Result<LogRead> {
+        Ok(LogRead {
+            file: File::open(self.log_path(id))?,
+            #[cfg(test)]
+            read_bytes: self.read_bytes.clone(),
+        })
+    }
+
+    /// One Thread's whole log, as bytes.
+    fn read_whole_log(&self, id: ThreadId) -> io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.read_log(id)?.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 
     #[cfg(test)]
@@ -1434,7 +1481,7 @@ impl Store {
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
         use std::io::BufRead;
         let mut first = Vec::new();
-        io::BufReader::new(File::open(self.log_path(id))?).read_until(b'\n', &mut first)?;
+        io::BufReader::new(self.read_log(id)?).read_until(b'\n', &mut first)?;
         let header: Header = serde_json::from_slice(&first).map_err(|_| LoadError::Corrupt {
             detail: format!("thread {id} has no readable header"),
         })?;
@@ -1461,7 +1508,7 @@ impl Store {
     /// that much and no more. `None` when no prompt was found in reach.
     pub fn peek_first_prompt(&self, id: ThreadId) -> Result<Option<String>, LoadError> {
         use std::io::BufRead;
-        let mut reader = io::BufReader::new(File::open(self.log_path(id))?);
+        let mut reader = io::BufReader::new(self.read_log(id)?);
         let mut line = Vec::new();
         let mut read = 0usize;
         // The header first; it is not a record.
@@ -1494,7 +1541,7 @@ impl Store {
         // Bytes, not a String: a crash can tear the tail mid-character, and
         // a loader that insists the whole file is UTF-8 would lose the
         // Thread over its last three bytes.
-        let bytes = fs::read(self.log_path(id))?;
+        let bytes = self.read_whole_log(id)?;
         let mut lines = bytes.split(|byte| *byte == b'\n');
         let header: Header = lines
             .next()
@@ -1697,7 +1744,7 @@ impl Store {
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
         let snapshot = self.load(id)?;
         let file =
-            if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&fs::read(self.log_path(id))?) {
+            if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&self.read_whole_log(id)?) {
                 self.rewrite(&snapshot)?
             } else {
                 OpenOptions::new().append(true).open(self.log_path(id))?
