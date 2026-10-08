@@ -14,3 +14,7 @@ target/
 
 # Agent worktrees the harness parks inside the checkout
 /.claude/
+
+# agent instructions (local only)
+CLAUDE.md
+AGENTS.md
