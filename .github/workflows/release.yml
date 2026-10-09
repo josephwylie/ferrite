@@ -31,6 +31,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Visuals (ADR 0013): the bundle ships Chromium Embedded Framework.
+      # Building its C++ wrapper needs cmake and ninja; CEF itself is a
+      # ~130 MB download, cached by the CEF version in Cargo.lock.
+      - name: Install CEF build tools
+        run: brew install cmake ninja
+      - name: CEF version
+        id: cef
+        run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: Detect macOS signing credentials
         id: macos-signing
         env:

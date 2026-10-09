@@ -2489,6 +2489,7 @@ pub(crate) fn tail_text(body: &Body, docked: bool) -> Option<String> {
         Body::TurnEnd(end) if end.outcome == TurnOutcome::Completed => return None,
         Body::TurnEnd(end) => end.text(),
         Body::Thinking(text) => ferrite_core::progress::headline(text).to_string(),
+        Body::Visual(visual) => format!("Visual  {}", visual.title.trim()),
     };
     (!text.is_empty()).then_some(text)
 }
@@ -5501,6 +5502,9 @@ pub(crate) fn render_block(
     let selection = row_cx.selection;
     let row = div().w_full().min_w_0().flex_shrink_0();
     match &block.body {
+        // A visual's row owns a live page, so the transcript's `Shelf`
+        // draws it (`TranscriptView::render_row`); it never reaches here.
+        Body::Visual(_) => row.into_any_element(),
         Body::Prompt(line) => prompt_row(block, line, row_cx, false),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
@@ -9696,6 +9700,7 @@ mod tests {
                 Body::Notice(_) => "notice",
                 Body::Meta(_) => "meta",
                 Body::TurnEnd(_) => "turn-end",
+                Body::Visual(_) => "visual",
             })
             .collect();
         for wanted in [

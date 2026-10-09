@@ -120,6 +120,12 @@ pub struct CodexConfig {
     /// `Init`) instead of starting a fresh thread: the server reloads the
     /// conversation from its own rollout files.
     pub resume: Option<String>,
+    /// Ferrite's own `show_visual` tool (`crate::visual`): the operator's
+    /// level and the app's renderer. `None`, or Off, offers nothing. Codex
+    /// fixes a thread's tools when it starts — a resumed thread keeps the
+    /// tool (and description) it began with — so the level only shapes new
+    /// threads; the renderer still answers a resumed thread's calls.
+    pub visuals: Option<crate::visual::Visuals>,
 }
 
 impl Default for CodexConfig {
@@ -133,6 +139,7 @@ impl Default for CodexConfig {
             approval_policy: None,
             sandbox: None,
             resume: None,
+            visuals: None,
         }
     }
 }
@@ -335,6 +342,7 @@ impl CodexSession {
             queue.clone(),
             config.cwd.clone(),
             config.resume.is_some(),
+            config.visuals.clone(),
         );
 
         let mut session = Self {
@@ -468,6 +476,11 @@ impl CodexSession {
         if let Some(sandbox) = &config.sandbox {
             params["sandbox"] = serde_json::json!(sandbox);
         }
+        wire::offer_visuals(
+            &mut params,
+            config.visuals.as_ref(),
+            config.resume.is_none(),
+        );
         // Capture the CLI's default independently of Ferrite's override;
         // turn/start carries the chosen effort.
         self.write_line(&serde_json::json!({
@@ -869,6 +882,7 @@ fn read_stdout(
     queue: Arc<Mutex<queue::Queue>>,
     cwd: Option<PathBuf>,
     resumed: bool,
+    visuals: Option<crate::visual::Visuals>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -995,7 +1009,12 @@ fn read_stdout(
                 }
             }
             turns.observe(text);
-            if let Ok(frame) = serde_json::from_str(text) {
+            if let Ok(frame) = serde_json::from_str::<serde_json::Value>(text) {
+                if let Some(stdin) = stdin.upgrade() {
+                    if wire::answer_visual(&frame, visuals.as_ref(), stdin) {
+                        continue;
+                    }
+                }
                 if let Some(event) = background.observe(&frame, turns.main_thread_id.as_deref()) {
                     if sender.send(event).is_err() {
                         return;

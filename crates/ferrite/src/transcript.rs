@@ -62,7 +62,7 @@ impl Speaker {
             | Body::Bullet { .. }
             | Body::Heading { .. }
             | Body::Code { .. } => Some(Self::Agent),
-            Body::Prompt(_) | Body::Tool(_) => Some(Self::Other),
+            Body::Prompt(_) | Body::Tool(_) | Body::Visual(_) => Some(Self::Other),
             Body::Thinking(_) | Body::Notice(_) | Body::Meta(_) | Body::TurnEnd(_) => None,
         }
     }
@@ -335,6 +335,11 @@ pub(crate) struct TranscriptView {
     /// of a transcript shorter than that (a board Pane with its banner
     /// scrolled away, R2): see `Runway`.
     runway: Rc<Cell<Runway>>,
+    /// The agents' visuals in these rows: their live pages (ADR 0013).
+    visuals: crate::visual::Shelf,
+    /// The list's width as of the last layout (rows can't ask the list
+    /// while it lays them out).
+    list_w: Rc<Cell<f32>>,
 }
 
 /// The scroll room a band jump adds under the last row: the jump's row and
@@ -423,6 +428,14 @@ impl TranscriptView {
         })
         .detach();
         let targets = target_context(&input);
+        // Chromium came up (the first visual asked for it): draw the
+        // visuals that were waiting.
+        cx.observe_global::<crate::visual::engine::Visuals>(|_, cx| cx.notify())
+            .detach();
+        let weak = cx.entity().downgrade();
+        let visuals = crate::visual::Shelf::new(Rc::new(move |id: &str, cx: &mut App| {
+            let _ = weak.update(cx, |view: &mut Self, cx| view.visual_height_changed(id, cx));
+        }));
         let mut view = Self {
             input,
             rows,
@@ -445,6 +458,8 @@ impl TranscriptView {
             hover_card: None,
             glide: None,
             runway: Rc::default(),
+            visuals,
+            list_w: Rc::default(),
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -531,6 +546,13 @@ impl TranscriptView {
             );
             self.scroll.reconcile(&delta);
             self.note_arrivals(tail, cx);
+            let live: HashSet<&str> = self
+                .input
+                .blocks
+                .iter()
+                .filter_map(|block| crate::visual::visual_of(block).map(|v| v.id.as_str()))
+                .collect();
+            self.visuals.retain(&|id| live.contains(id));
         }
         if content_changed || display_changed {
             if disclosure_changed || reading_changed {
@@ -964,6 +986,16 @@ impl TranscriptView {
         if matches!(&block.body, Body::Thinking(text) if text.trim().is_empty()) {
             return div().into_any_element();
         }
+        if let Some(visual) = crate::visual::visual_of(block) {
+            return self.visuals.row(
+                block.id,
+                visual,
+                self.content_width(),
+                self.input.reading_size,
+                selection,
+                cx,
+            );
+        }
         let row_cx = self.row_cx(selection);
         if row.kind() == RowKind::Group {
             return self.render_group(row, &row_cx, view);
@@ -998,6 +1030,27 @@ impl TranscriptView {
                     }),
                 )
             }
+        }
+    }
+
+    /// A row's width (the list's, less the row insets), once laid out.
+    fn content_width(&self) -> Option<f32> {
+        let width = self.list_w.get();
+        (width > 0.).then(|| width - theme::TX_PAD_L - theme::TX_PAD_R)
+    }
+
+    /// A visual's page changed height: the list re-measures its row (off
+    /// screen too, so it never changes height under the reader).
+    fn visual_height_changed(&mut self, id: &str, cx: &mut Context<Self>) {
+        let index = self.rows.rows().iter().position(|row| {
+            row.blocks()
+                .first()
+                .and_then(crate::visual::visual_of)
+                .is_some_and(|visual| visual.id == id)
+        });
+        if let Some(index) = index {
+            self.scroll.list_state().remeasure_items(index..index + 1);
+            cx.notify();
         }
     }
 
@@ -1926,6 +1979,9 @@ impl Render for TranscriptView {
         let pinned_asked = self.pinned_asked.clone();
         let pinned_h = self.pinned_h.clone();
         let runway = self.runway.clone();
+        let shelf = self.visuals.clone();
+        let list_w = self.list_w.clone();
+        let reading = self.input.reading_size;
         let line = grid.line;
         let half = grid.half();
         let list = div()
@@ -2020,6 +2076,30 @@ impl Render for TranscriptView {
                         heights.retain(|id, _| live.contains(id));
                     }
                 }
+                // The visuals near the screen stay live (or open before
+                // they scroll in); the far ones may go. After the event: a
+                // view's open can wake the engine synchronously.
+                if !gaps.visual_rows().is_empty() {
+                    let shelf = shelf.clone();
+                    let state = scroll.list_state().clone();
+                    let measured = heights.clone();
+                    let rows = gaps.clone();
+                    window.defer(cx, move |window, cx| {
+                        let measured = measured.borrow();
+                        let height_of = |index: usize| {
+                            rows.get(index).and_then(|row| measured.get(row.id()).copied())
+                        };
+                        let visuals: Vec<(usize, &crate::visual::Visual)> = rows
+                            .visual_rows()
+                            .iter()
+                            .filter_map(|&index| {
+                                let block = rows.get(index)?.blocks().first()?;
+                                crate::visual::visual_of(block).map(|visual| (index, visual))
+                            })
+                            .collect();
+                        shelf.reach(&state, &visuals, &height_of, reading, window, cx);
+                    });
+                }
                 // The band pinned at render came from the previous layout:
                 // when this layout moves it, render again.
                 let drawn = pinned_drawn.get();
@@ -2039,6 +2119,17 @@ impl Render for TranscriptView {
                     });
                 }
                 let width = scroll.list_state().viewport_bounds().size.width;
+                if (f32::from(width) - list_w.get()).abs() >= 0.5 {
+                    // A visual row lays its page out from it: draw again.
+                    let had_visuals = !gaps.visual_rows().is_empty();
+                    list_w.set(f32::from(width));
+                    if had_visuals {
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
+                    }
+                }
                 let is_wide = width >= px(theme::SPLIT_DIFF_MIN_W);
                 if width > px(0.) && is_wide != wide.get() {
                     let weak = weak.clone();

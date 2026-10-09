@@ -42,6 +42,7 @@ mod status;
 mod theme;
 mod titlebar;
 mod transcript;
+mod visual;
 
 use ::gpui;
 use ::gpui as kit;
@@ -111,6 +112,11 @@ pub(crate) fn register_fonts(cx: &App) {
 }
 
 fn main() {
+    // First of all: a Chromium helper process is this same binary, started
+    // by Chromium with `--type=…`; it runs the helper and exits here, before
+    // any shell, store or window. In the app this only readies Chromium
+    // (ADR 0013); it starts on the first visual.
+    visual::boot();
     // A panic must not take accepted history with it: whatever a writer
     // holds goes into its log before the process unwinds (ADR 0009).
     ferrite_core::store::install_panic_rescue();
@@ -136,6 +142,16 @@ fn main() {
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--loops-parity") {
         cockpit::visual_reference::loops_parity(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
+    // Visuals' agent screenshots (`visual::shots::snapshots`).
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--visual-snapshots") {
+        visual::shots::snapshots(
             std::env::args()
                 .nth(2)
                 .expect("an output directory is required"),
@@ -205,6 +221,7 @@ fn main() {
             theme::init_components(cx);
             motion::init(cx);
             register_fonts(cx);
+            visual::init(cx);
 
             let bindings = load_bindings(keymap::PLATFORM, cx);
             cx.bind_keys(bindings);
@@ -231,7 +248,11 @@ fn main() {
             let spawner: Box<dyn ferrite_core::cockpit::Spawner> = if demo {
                 Box::new(demo::Spawn::new(load))
             } else {
-                Box::new(session::Spawn::new(defaults.clone()))
+                // Agents' `show_visual` calls are answered with a render
+                // from the app's off-screen browser (ADR 0013).
+                let renderer: std::sync::Arc<dyn ferrite_core::visual::Renderer> =
+                    std::sync::Arc::new(visual::renderer::start(cx));
+                Box::new(session::Spawn::new(defaults.clone(), Some(renderer)))
             };
             let mut core = if parity {
                 demo::parity_world()

@@ -1169,6 +1169,8 @@ impl Record {
                 details: details.clone(),
             },
             SessionEvent::DecisionRequested { .. } => return None,
+            // A streaming input is superseded by the start that follows it.
+            SessionEvent::ToolDraft { .. } => return None,
             // The command menu, the permission mode and the model menu are
             // the live Session's, like a Decision: a replay has no Session
             // to serve them and the next one announces its own.

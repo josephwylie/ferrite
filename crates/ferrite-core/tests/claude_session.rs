@@ -713,6 +713,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         name: Some("CI flake".into()),
         permission_mode: Some("default".into()),
         resume: None,
+        visuals: None,
     })
     .unwrap();
     session.send("hi").unwrap();

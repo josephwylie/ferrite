@@ -356,6 +356,13 @@ const STATES: &[(&str, &[&str])] = &[
     // ---- WP-F states (append above the end line)
     // (end WP-F)
 
+    // ---- visuals (ADR 0013): agents' pages inline. With `--features cef`
+    // (run from the bundle) the pages are Chromium's; without, the fallback.
+    ("visuals", &["app", "wide", "narrow"]),
+    ("visuals-top", &["app"]),
+    ("visuals-group", &["app"]),
+    // (end visuals)
+
     // ---- WP-G states (append above the end line)
     ("navrail", &["app"]),
     ("palettefilter", &["app"]),
@@ -457,6 +464,7 @@ fn render(
     cx.update(|cx| {
         crate::theme::init_components(cx);
         crate::register_fonts(cx);
+        crate::visual::init(cx);
     });
     let mut entity = None;
     let window = cx
@@ -495,6 +503,9 @@ fn render(
         })
         .unwrap();
     }
+    // Visuals' pages render in Chromium's own processes, on the wall clock:
+    // pump it until they have drawn (nothing without an engine).
+    crate::visual::shots::settle(&mut cx, window.into());
     // gpui's `with_animation` runs on the wall clock, not the executor's:
     // a toast's entrance fade is only settled once real time has passed.
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -564,6 +575,19 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         }
         "nav" => nav(),
         "group4" => group4(),
+        "visuals" => (visuals(label), none),
+        "visuals-top" => {
+            let scene = visuals("top");
+            let setup: Setup = Box::new(|view, _, cx| {
+                if let Some(transcript) = view.panes[0].transcript() {
+                    transcript.update(cx, |transcript, cx| {
+                        transcript.scroll_to(crate::transcript::ScrollTarget::Top, cx)
+                    });
+                }
+            });
+            (scene, setup)
+        }
+        "visuals-group" => visuals_group(),
         "group9" => group9(),
         "group12" => group12(false),
         "group12-dragged" => group12(true),
@@ -1356,6 +1380,101 @@ fn group4() -> (Scene, Setup) {
         ],
     );
     let group = scene.group(&threads, "Perf sweep");
+    scene.core.enter_group(group).expect("enter fixture Group");
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// An agent's visual: the tool call's input, as `show_visual` takes it.
+fn visual_input(title: &str, caption: &str, html: &str) -> serde_json::Value {
+    serde_json::json!({ "title": title, "caption": caption, "html": html })
+}
+
+const STATS_PAGE: &str = include_str!("cockpit/visual_reference/visuals/stats.html");
+const MOCKUPS_PAGE: &str = include_str!("cockpit/visual_reference/visuals/mockups.html");
+const TREEMAP_PAGE: &str = include_str!("cockpit/visual_reference/visuals/treemap.html");
+const VISUAL: &str = ferrite_core::visual::CLAUDE_NAME;
+
+/// A conversation with visuals in every state: one shown (a dashboard),
+/// one shown after a call (UI options), one the agent is still drawing
+/// (half a treemap), and one that failed.
+fn visuals(label: &str) -> Scene {
+    let mut scene = Scene::new(&format!("visuals-{label}"));
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Token spend, last month");
+    scene.core.send(
+        thread,
+        "Show me token usage and cost for the last 30 days.".into(),
+    );
+    feed.boot(Provider::Claude, 41_000)
+        .bash(
+            "usage",
+            "ferrite usage --days 30 --json",
+            "{\"days\":30,\"cost\":412.80}",
+            0,
+            900,
+        )
+        .text("Here is the last 30 days, by day and by model.")
+        .tool(
+            "v-stats",
+            VISUAL,
+            visual_input(
+                "Token usage, last 30 days",
+                "Daily cost with a 7-day average, split by model",
+                STATS_PAGE,
+            ),
+        )
+        .ok("v-stats", "Shown to the operator inline.")
+        .text("Spend peaks on the days the Group runs overnight; Opus is 71% of it.")
+        .end(0.2210);
+    scene.core.pump();
+    scene.core.send(
+        thread,
+        "Mock up two options for the settled notice, and show me where the repo's size is.".into(),
+    );
+    feed.tool(
+        "v-mock",
+        VISUAL,
+        visual_input(
+            "Settled notice: now, A and B",
+            "Each option with the vertical space it costs",
+            MOCKUPS_PAGE,
+        ),
+    )
+    .ok("v-mock", "Shown to the operator inline.")
+    .tool("v-bad", VISUAL, visual_input("Repo size by directory", "", "<p>"))
+    .done("v-bad", "The visual did not finish rendering within 45s.", true, ToolResult::Opaque)
+    .text("That one timed out; drawing it again as a treemap.");
+    // Half of the treemap's HTML has streamed in.
+    let half = &TREEMAP_PAGE[..TREEMAP_PAGE.len() / 2];
+    feed.ev(SessionEvent::ToolDraft {
+        id: "v-tree".into(),
+        name: VISUAL.into(),
+        input: visual_input("Repo size by directory", "Lines of code; click to zoom", half),
+    });
+    scene
+}
+
+/// Four Panes on a board, two with visuals: a visual at a Group Pane's
+/// width.
+fn visuals_group() -> (Scene, Setup) {
+    let mut scene = Scene::new("visuals-group");
+    let ferrite = scene.project("ferrite");
+    let threads = members(
+        &mut scene,
+        &ferrite,
+        &["Token spend", "Notice options", "Theme retune", "Fold regression"],
+    );
+    for (index, (title, page)) in [("Token usage", STATS_PAGE), ("Notice options", MOCKUPS_PAGE)]
+        .into_iter()
+        .enumerate()
+    {
+        let feed = Feed(scene.feeds.borrow()[index].clone());
+        feed.text("Here it is.")
+            .tool(&format!("v-{index}"), VISUAL, visual_input(title, "", page))
+            .ok(&format!("v-{index}"), "Shown to the operator inline.")
+            .end(0.01);
+    }
+    let group = scene.group(&threads, "Visuals");
     scene.core.enter_group(group).expect("enter fixture Group");
     (scene, Box::new(|_, _, _| {}))
 }

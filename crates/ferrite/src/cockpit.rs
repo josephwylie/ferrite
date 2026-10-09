@@ -13164,6 +13164,8 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
             Body::Thinking(_) => continue,
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
+            // The page is a picture; its words are its title and caption.
+            Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
         };
         if !out.is_empty() {
             out.push_str("\n\n");
@@ -13199,6 +13201,7 @@ mod tests {
     mod ui_e;
     mod ui_f;
     mod ui_g;
+    mod visuals;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;

@@ -891,6 +891,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         approval_policy: Some("on-request".into()),
         sandbox: Some("workspace-write".into()),
         resume: None,
+        visuals: None,
     })
     .unwrap();
     session.send("hi").unwrap();

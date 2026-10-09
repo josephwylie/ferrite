@@ -38,6 +38,7 @@ fn live_config() -> CodexConfig {
         approval_policy: Some("never".into()),
         sandbox: Some("read-only".into()),
         resume: None,
+        visuals: None,
     }
 }
 
