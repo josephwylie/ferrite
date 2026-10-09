@@ -1,0 +1,246 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ferrite-bg);color:var(--ferrite-fg);font:var(--ferrite-font-size)/var(--ferrite-line) var(--ferrite-font-mono);overflow:hidden;color-scheme:var(--ferrite-scheme);-webkit-font-smoothing:antialiased;user-select:none}
+#app{padding:0 0 10px}
+.bar{display:flex;align-items:center;gap:16px;height:30px;padding:0 12px;border-bottom:1px solid var(--ferrite-border);background:var(--ferrite-band)}
+.title{color:var(--ferrite-strong);font-weight:500}
+.title b{color:var(--ferrite-accent);font-weight:600;margin-right:8px}
+.crumbs{color:var(--ferrite-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.crumbs a{color:var(--ferrite-fg);cursor:pointer}
+.crumbs a:hover{color:var(--ferrite-accent);text-decoration:underline}
+.crumbs a.here{color:var(--ferrite-strong);cursor:default;text-decoration:none}
+.crumbs i{font-style:normal;color:var(--ferrite-faint);margin:0 6px}
+.tabs{display:flex;height:100%}
+.tab{display:flex;align-items:center;padding:0 12px;color:var(--ferrite-muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--ferrite-fg);background:var(--ferrite-band2)}
+.tab.on{color:var(--ferrite-strong);border-bottom-color:var(--ferrite-accent)}
+.tab kbd{font:inherit;color:var(--ferrite-faint);margin-right:6px}
+#map{position:relative;height:290px;margin:10px 12px 0;background:var(--ferrite-bg)}
+.node{position:absolute;overflow:hidden}
+.dir{outline:1px solid var(--ferrite-border2);outline-offset:-1px}
+.dir>.head{position:absolute;left:0;right:0;top:0;height:18px;padding:0 6px;font-size:11px;line-height:18px;color:var(--ferrite-muted);background:var(--ferrite-band);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:zoom-in}
+.dir:hover>.head{color:var(--ferrite-strong);background:var(--ferrite-band2)}
+.leaf{border:1px solid var(--ferrite-bg);padding:3px 6px;font-size:11px;line-height:15px;color:var(--ferrite-strong);white-space:nowrap;cursor:pointer;transition:filter .08s}
+.leaf .n{display:block;overflow:hidden;text-overflow:ellipsis}
+.leaf .v{display:block;color:color-mix(in oklab,var(--ferrite-strong) 62%,transparent)}
+.leaf:hover{outline:1px solid var(--ferrite-accent);outline-offset:-1px;filter:brightness(1.25);z-index:2}
+.foot{display:flex;gap:18px;align-items:center;height:28px;margin:8px 12px 0;color:var(--ferrite-muted)}
+.foot .sw{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:-1px}
+.ramp{display:inline-block;width:120px;height:8px;vertical-align:0;margin:0 8px;background:linear-gradient(90deg,color-mix(in oklab,var(--ferrite-red) 6%,var(--ferrite-band)),color-mix(in oklab,var(--ferrite-red) 85%,var(--ferrite-band)))}
+.foot .total{margin-left:auto;color:var(--ferrite-faint)}
+#tip{position:absolute;pointer-events:none;z-index:10;min-width:200px;padding:6px 10px;background:var(--ferrite-float);border:1px solid var(--ferrite-border2);box-shadow:0 4px 14px var(--ferrite-shadow);opacity:0;transition:opacity .06s}
+#tip.on{opacity:1}
+#tip .p{color:var(--ferrite-strong);font-weight:500;margin-bottom:2px}
+#tip .p i{font-style:normal;color:var(--ferrite-muted);font-weight:400}
+#tip .r{display:flex;justify-content:space-between;gap:16px;color:var(--ferrite-muted)}
+#tip .r b{color:var(--ferrite-fg);font-weight:400}
+#tip .hint{margin-top:4px;color:var(--ferrite-faint);font-size:11px}
+</style></head>
+<body><div id="app">
+  <div class="bar">
+    <span class="title"><b>&#x276F;</b>treemap</span>
+    <span class="crumbs" id="crumbs"></span>
+    <span class="tabs"><span class="tab on" data-mode="size"><kbd>1</kbd>Size</span><span class="tab" data-mode="churn"><kbd>2</kbd>Churn</span></span>
+  </div>
+  <div id="map"></div>
+  <div class="foot" id="foot"></div>
+  <div id="tip"></div>
+</div>
+<script>
+"use strict";
+// [name, lines, commits in the last 90 days] for files; [name, [children]] for directories.
+const REPO = ["ferrite", [
+  ["crates", [
+    ["ferrite", [["src", [
+      ["theme.rs", 3013, 41], ["rich.rs", 2620, 37], ["transcript.rs", 2410, 58], ["composer.rs", 1980, 33],
+      ["board.rs", 1720, 29], ["nav.rs", 1240, 22], ["titlebar.rs", 980, 17], ["sheet.rs", 860, 9],
+      ["palette.rs", 740, 12], ["attachment_preview.rs", 610, 6], ["settings.rs", 1310, 19], ["main.rs", 220, 4],
+    ]]]],
+    ["agent", [["src", [
+      ["session.rs", 1460, 26], ["claude.rs", 1180, 21], ["codex.rs", 940, 14], ["tools.rs", 820, 11],
+      ["permissions.rs", 690, 16], ["audit.rs", 410, 5], ["lib.rs", 120, 3],
+    ]]]],
+    ["store", [["src", [["db.rs", 980, 8], ["migrate.rs", 520, 4], ["memory.rs", 760, 13], ["lib.rs", 90, 1]]]]],
+    ["term", [["src", [["grid.rs", 1650, 18], ["parser.rs", 1220, 7], ["pty.rs", 540, 3], ["lib.rs", 80, 1]]]]],
+  ]],
+  ["vendor", [
+    ["gpui-pre", [["src", [
+      ["window.rs", 7830, 6], ["app.rs", 2640, 3], ["elements", [["div.rs", 3420, 2], ["list.rs", 1910, 4], ["img.rs", 820, 1], ["uniform_list.rs", 760, 0], ["canvas.rs", 140, 0]]],
+      ["text_system", [["line_layout.rs", 1130, 1], ["line_wrapper.rs", 640, 0]]], ["scene.rs", 1020, 1], ["geometry.rs", 3940, 0],
+    ]]]],
+    ["gpui-base", [["src", [["inline.rs", 1830, 5], ["text_view.rs", 1520, 4], ["markdown.rs", 1270, 3]]]]],
+    ["taffy", [["src", [["compute", [["flexbox.rs", 2400, 0], ["grid.rs", 2100, 0]]], ["style.rs", 980, 0]]]]],
+  ]],
+  ["spikes", [
+    ["inline-cef", [["src", [["element.rs", 520, 9], ["page.rs", 300, 6], ["web", [["mod.rs", 130, 2], ["fake.rs", 330, 4], ["cef.rs", 610, 8]]], ["main.rs", 260, 5]]]]],
+    ["panes24", [["src", [["main.rs", 480, 1]]]]],
+  ]],
+  ["docs", [["adr", [["0001-native-ui.md", 140, 1], ["0006-virtualized-transcript.md", 210, 2], ["0011-web-views.md", 180, 5]]], ["design", [["terminal-native.md", 420, 9], ["colour.md", 260, 3]]]]],
+  ["scripts", [["bundle-macos.sh", 160, 4], ["release.sh", 120, 2], ["visual-reference.sh", 90, 1]]],
+]];
+
+const HUES = ["blue", "green", "yellow", "magenta", "cyan", "orange", "red"];
+const $ = (id) => document.getElementById(id);
+const map = $("map"), tip = $("tip"), app = $("app");
+let mode = "size";
+
+function build(raw, parent) {
+  const [name, a, b] = raw;
+  const node = { name, parent, children: null, size: 0, churn: 0 };
+  if (Array.isArray(a)) {
+    node.children = a.map((c) => build(c, node)).sort((x, y) => y.size - x.size);
+    for (const c of node.children) { node.size += c.size; node.churn += c.churn; }
+  } else { node.size = a; node.churn = b; }
+  return node;
+}
+const root = build(REPO, null);
+let focus = root;
+const maxChurnDensity = (() => { let m = 0; (function walk(n) { if (n.children) n.children.forEach(walk); else m = Math.max(m, n.churn / Math.sqrt(n.size)); })(root); return m; })();
+
+const pathOf = (n) => { const p = []; for (let x = n; x; x = x.parent) p.unshift(x.name); return p; };
+// A chain of single-child directories reads as one: src/web, not src > web.
+const collapse = (n) => { while (n.children && n.children.length === 1 && n.children[0].children) n = n.children[0]; return n; };
+const label = (from, to) => pathOf(to).slice(pathOf(from).length).join("/");
+const fmt = (v) => v.toLocaleString("en-US");
+
+// Squarified treemap (Bruls, Huizing, van Wijk).
+function squarify(items, x, y, w, h) {
+  const total = items.reduce((s, it) => s + it.size, 0);
+  const scale = (w * h) / total, out = [];
+  let rest = items.slice();
+  while (rest.length) {
+    const side = Math.min(w, h);
+    let row = [], best = Infinity;
+    for (const it of rest) {
+      const trial = row.concat(it), areas = trial.map((t) => t.size * scale);
+      const sum = areas.reduce((a, b) => a + b, 0);
+      const worst = Math.max(...areas.map((a) => Math.max((side * side * a) / (sum * sum), (sum * sum) / (side * side * a))));
+      if (worst > best) break;
+      best = worst; row = trial;
+    }
+    rest = rest.slice(row.length);
+    const sum = row.reduce((s, it) => s + it.size * scale, 0);
+    if (w >= h) {
+      const cw = sum / h; let cy = y;
+      for (const it of row) { const ch = (it.size * scale) / cw; out.push([it, x, cy, cw, ch]); cy += ch; }
+      x += cw; w -= cw;
+    } else {
+      const rh = sum / w; let cx = x;
+      for (const it of row) { const cwid = (it.size * scale) / rh; out.push([it, cx, y, cwid, rh]); cx += cwid; }
+      y += rh; h -= rh;
+    }
+  }
+  return out;
+}
+
+function fillFor(leaf, hue) {
+  if (mode === "size") return `color-mix(in oklab, var(--ferrite-${hue}) 32%, var(--ferrite-bg))`;
+  const t = Math.min(1, Math.sqrt(leaf.churn / Math.sqrt(leaf.size) / maxChurnDensity));
+  return `color-mix(in oklab, var(--ferrite-red) ${Math.round(6 + 79 * t)}%, var(--ferrite-band))`;
+}
+
+function draw() {
+  map.textContent = "";
+  const W = map.clientWidth, H = map.clientHeight;
+  squarify(focus.children, 0, 0, W, H).forEach(([child, x, y, w, h], i) => {
+    place(child, x, y, w, h, HUES[i % HUES.length], 0, map);
+  });
+  crumbs(); foot();
+}
+
+function place(n, x, y, w, h, hue, depth, into) {
+  const el = document.createElement("div");
+  el.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
+  into.appendChild(el);
+  const shown = collapse(n);
+  if (shown.children && depth < 2 && w > 56 && h > 44) {
+    el.className = "node dir";
+    const head = document.createElement("div");
+    head.className = "head";
+    head.textContent = label(n.parent, shown) + "/";
+    el.appendChild(head);
+    head.onclick = () => zoom(shown);
+    head.onmousemove = (e) => showTip(e, shown, hue);
+    head.onmouseleave = hideTip;
+    squarify(shown.children, 1, 18, w - 2, h - 19).forEach(([c, cx, cy, cw, ch]) => place(c, cx, cy, cw, ch, hue, depth + 1, el));
+    return;
+  }
+  el.className = "node leaf";
+  el.style.background = shown.children ? `color-mix(in oklab, ${fillFor(shown, hue)} 70%, var(--ferrite-band2))` : fillFor(shown, hue);
+  if (w > 46 && h > 20) {
+    const name = document.createElement("span");
+    name.className = "n";
+    name.textContent = shown.children ? label(n.parent, shown) + "/" : shown.name;
+    el.appendChild(name);
+    if (h > 38 && w > 70) {
+      const v = document.createElement("span");
+      v.className = "v";
+      v.textContent = mode === "size" ? fmt(shown.size) : shown.churn + " commits";
+      el.appendChild(v);
+    }
+  }
+  el.onmousemove = (e) => showTip(e, shown, hue);
+  el.onmouseleave = hideTip;
+  el.onclick = () => { const dir = shown.children ? shown : shown.parent; if (dir !== focus) zoom(dir); };
+}
+
+function zoom(n) { focus = collapse(n); hideTip(); draw(); }
+
+function crumbs() {
+  const c = $("crumbs");
+  c.textContent = "";
+  const chain = []; for (let x = focus; x; x = x.parent) chain.unshift(x);
+  chain.forEach((n, i) => {
+    if (i) { const s = document.createElement("i"); s.textContent = "/"; c.appendChild(s); }
+    const a = document.createElement("a");
+    a.textContent = n.name;
+    if (n === focus) a.className = "here"; else a.onclick = () => zoom(n);
+    c.appendChild(a);
+  });
+}
+
+function foot() {
+  const f = $("foot");
+  if (mode === "size") {
+    f.innerHTML = focus.children.slice(0, 5).map((c, i) => `<span><span class="sw" style="background:var(--ferrite-${HUES[i % HUES.length]})"></span>${label(focus, collapse(c))}</span>`).join("");
+  } else {
+    f.innerHTML = `<span>commits / 90d, per line</span><span>quiet<span class="ramp"></span>hot</span>`;
+  }
+  f.innerHTML += `<span class="total">${fmt(focus.size)} lines &middot; ${fmt(focus.churn)} commits</span>`;
+}
+
+function showTip(e, n, hue) {
+  e.stopPropagation();
+  const share = ((100 * n.size) / focus.size).toFixed(1);
+  const dir = n.children ? "/" : "";
+  const parent = label(root, n.parent);
+  tip.innerHTML =
+    `<div class="p"><i>${parent ? parent + "/" : ""}</i>${n.name}${dir}</div>` +
+    `<div class="r">lines<b>${fmt(n.size)}</b></div>` +
+    `<div class="r">share of ${focus.name}<b>${share}%</b></div>` +
+    `<div class="r">commits / 90d<b>${n.churn}</b></div>` +
+    (n.children ? `<div class="hint">click to open</div>` : "");
+  const box = app.getBoundingClientRect();
+  let x = e.clientX + 14, y = e.clientY + 16;
+  tip.classList.add("on");
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  if (x + tw > box.width - 4) x = e.clientX - tw - 12;
+  if (y + th > box.height - 4) y = e.clientY - th - 12;
+  tip.style.left = Math.max(4, x) + "px";
+  tip.style.top = Math.max(4, y) + "px";
+}
+function hideTip() { tip.classList.remove("on"); }
+
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
+  mode = t.dataset.mode;
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x === t));
+  draw();
+});
+addEventListener("keydown", (e) => { if (e.key === "1" || e.key === "2") document.querySelectorAll(".tab")[+e.key - 1].click(); });
+addEventListener("resize", draw);
+document.addEventListener("mouseleave", hideTip);
+draw();
+</script></body></html>
