@@ -42,6 +42,16 @@ pub enum SessionEvent {
         name: String,
         input: serde_json::Value,
     },
+    /// A tool call's input as far as it has streamed, before the call is
+    /// settled (`ToolStarted` follows with the whole input). Only for tools
+    /// whose row draws its input live — today Ferrite's own `show_visual`
+    /// (see `visual`), whose page builds up as it arrives. Live only: never
+    /// recorded, since the start that follows carries all of it.
+    ToolDraft {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// A tool call finished. `output` is exactly what the provider fed back to
     /// the model — text as text, anything else as its compact JSON.
     ///

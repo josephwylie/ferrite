@@ -62,6 +62,9 @@ pub enum Body {
         tokens: Option<Vec<Token>>,
     },
     Tool(ToolBlock),
+    /// An agent's `show_visual` page (see `crate::visual`): a tool call the
+    /// Pane draws as the page itself, live while its input streams.
+    Visual(crate::visual::Visual),
     /// A line the operator sent.
     Prompt(String),
     /// Extended thinking, kept apart from the answer.
@@ -1780,6 +1783,18 @@ impl Transcript {
                 id,
                 output,
                 is_error,
+                ..
+            }) if self.visual_index(&id).is_some() => {
+                self.progress.finish_tool(&id);
+                Update {
+                    dirty: self.settle_visual(&id, &output, is_error),
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ToolCompleted {
+                id,
+                output,
+                is_error,
                 result,
             }) => {
                 self.progress.finish_tool(&id);
@@ -1826,6 +1841,33 @@ impl Transcript {
                 Update {
                     dirty: self
                         .settle_tool(&id, state, diffs, structured_result, result_line, output)
+                        .into_iter()
+                        .collect(),
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ToolDraft { id, name, input }) => {
+                if !crate::visual::is_tool(&name) {
+                    return Update::default();
+                }
+                self.status = Status::Streaming;
+                self.progress.phase(Phase::Working);
+                Update {
+                    dirty: self
+                        .draw_visual(&id, &input, crate::visual::Status::Drawing)
+                        .into_iter()
+                        .collect(),
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ToolStarted { id, name, input })
+                if crate::visual::is_tool(&name) =>
+            {
+                self.status = Status::Streaming;
+                self.progress.phase(Phase::Working);
+                Update {
+                    dirty: self
+                        .draw_visual(&id, &input, crate::visual::Status::Checking)
                         .into_iter()
                         .collect(),
                     ..Update::default()
@@ -2030,6 +2072,15 @@ impl Transcript {
                     tool.state = ToolState::Unavailable;
                     Some(block.id)
                 }
+                Body::Visual(visual)
+                    if matches!(
+                        visual.status,
+                        crate::visual::Status::Drawing | crate::visual::Status::Checking
+                    ) =>
+                {
+                    visual.status = crate::visual::Status::Failed(VISUAL_UNFINISHED.into());
+                    Some(block.id)
+                }
                 _ => None,
             })
             .collect()
@@ -2178,6 +2229,78 @@ impl Transcript {
         Some(block.id)
     }
 
+    /// Where the visual for call `id` is, newest first.
+    fn visual_index(&self, id: &str) -> Option<usize> {
+        self.blocks
+            .iter()
+            .rposition(|block| matches!(&block.body, Body::Visual(visual) if visual.id == id))
+    }
+
+    /// A `show_visual` call's input, as far as it has arrived (`Drawing`) or
+    /// whole (`Checking`), into its Block — begun by the first of them. A
+    /// visual that has already settled is not drawn back: a completed
+    /// message repeating the call changes nothing.
+    fn draw_visual(
+        &mut self,
+        id: &str,
+        input: &serde_json::Value,
+        status: crate::visual::Status,
+    ) -> Option<BlockId> {
+        let next = crate::visual::Visual::from_input(id, input, status);
+        let Some(index) = self.visual_index(id) else {
+            return Some(self.push(Body::Visual(next)));
+        };
+        let block = &mut self.blocks[index];
+        let Body::Visual(visual) = &mut block.body else {
+            return None;
+        };
+        let open = matches!(
+            visual.status,
+            crate::visual::Status::Drawing | crate::visual::Status::Checking
+        );
+        if !open || *visual == next {
+            return None;
+        }
+        *visual = next;
+        Some(block.id)
+    }
+
+    /// The call's result: shown, or why not. A shown visual that asked to
+    /// replace the one before it folds that one away.
+    fn settle_visual(&mut self, id: &str, output: &str, is_error: bool) -> Vec<BlockId> {
+        let mut dirty = Vec::new();
+        let Some(index) = self.visual_index(id) else {
+            return dirty;
+        };
+        let Body::Visual(visual) = &mut self.blocks[index].body else {
+            return dirty;
+        };
+        let status = if is_error {
+            crate::visual::Status::Failed(trim(output, ERROR_CHARS))
+        } else {
+            crate::visual::Status::Shown
+        };
+        let replaces = !is_error && visual.replace;
+        if visual.status != status {
+            visual.status = status;
+            dirty.push(self.blocks[index].id);
+        }
+        if replaces {
+            let previous = self.blocks[..index]
+                .iter_mut()
+                .rev()
+                .find_map(|block| match &mut block.body {
+                    Body::Visual(visual) if !visual.replaced => Some((block.id, visual)),
+                    _ => None,
+                });
+            if let Some((block, visual)) = previous {
+                visual.replaced = true;
+                dirty.push(block);
+            }
+        }
+        dirty
+    }
+
     /// Append a Block that no further text can join.
     fn push(&mut self, body: Body) -> BlockId {
         self.thinking_open = false;
@@ -2206,6 +2329,10 @@ impl Transcript {
 
 /// How much of a tool failure a row carries; the model got all of it.
 const ERROR_CHARS: usize = 200;
+
+/// Why a visual that never got its result failed: its turn ended (or its
+/// Session closed) while it was still drawing or being checked.
+pub const VISUAL_UNFINISHED: &str = "not shown: the turn ended before it finished";
 
 /// How much of a tool's output its `⎿` continuation row carries: one line
 /// the row cuts by width, never wrapping.
@@ -3047,6 +3174,7 @@ mod tests {
             Body::Thinking(thought) => thought.clone(),
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
+            Body::Visual(visual) => visual.text(),
         }
     }
 
@@ -4417,6 +4545,188 @@ mod tests {
                 assert_eq!(tokens.as_deref().unwrap()[0].class, Class::Keyword)
             }
             other => panic!("expected code, got {other:?}"),
+        }
+    }
+
+    mod visuals {
+        use super::super::*;
+        use crate::visual::{Status as Shown, CLAUDE_NAME, CODEX_NAME};
+        use serde_json::json;
+
+        fn draft(t: &mut Transcript, id: &str, input: serde_json::Value) -> Update {
+            t.apply(Input::Event(SessionEvent::ToolDraft {
+                id: id.into(),
+                name: CLAUDE_NAME.into(),
+                input,
+            }))
+        }
+
+        fn start(t: &mut Transcript, id: &str, input: serde_json::Value) -> Update {
+            t.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: CLAUDE_NAME.into(),
+                input,
+            }))
+        }
+
+        fn complete(t: &mut Transcript, id: &str, output: &str, is_error: bool) -> Update {
+            t.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: output.into(),
+                is_error,
+                result: ToolResult::Opaque,
+            }))
+        }
+
+        fn visuals(t: &Transcript) -> Vec<(BlockId, crate::visual::Visual)> {
+            t.blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Visual(visual) => Some((block.id, visual.clone())),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn a_visual_draws_checks_and_shows_in_one_row() {
+            let mut t = Transcript::default();
+            t.apply(Input::Prompt("show me".into()));
+            let first = draft(&mut t, "v1", json!({"title": "Sal"}));
+            let [(row, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(first.dirty, vec![row]);
+            assert_eq!(visual.status, Shown::Drawing);
+            assert_eq!(visual.title, "Sal");
+
+            let grown = draft(&mut t, "v1", json!({"title": "Sales", "html": "<p>"}));
+            assert_eq!(grown.dirty, vec![row]);
+            let again = draft(&mut t, "v1", json!({"title": "Sales", "html": "<p>"}));
+            assert!(again.dirty.is_empty(), "an unchanged draft changes nothing");
+
+            let full = json!({"title": "Sales", "caption": "Q3", "html": "<p>done</p>"});
+            assert_eq!(start(&mut t, "v1", full.clone()).dirty, vec![row]);
+            let [(_, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(visual.status, Shown::Checking);
+            assert_eq!(visual.caption.as_deref(), Some("Q3"));
+            assert_eq!(visual.html, "<p>done</p>");
+
+            assert_eq!(
+                complete(&mut t, "v1", "Shown.\n[image]", false).dirty,
+                vec![row]
+            );
+            // A completed message repeating the call draws nothing back.
+            assert!(start(&mut t, "v1", full).dirty.is_empty());
+            let [(_, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(visual.status, Shown::Shown);
+            assert!(
+                !t.blocks()
+                    .iter()
+                    .any(|block| matches!(block.body, Body::Tool(_))),
+                "never a tool row as well"
+            );
+        }
+
+        #[test]
+        fn a_codex_call_arrives_whole_and_starts_checking() {
+            let mut t = Transcript::default();
+            t.apply(Input::Event(SessionEvent::ToolStarted {
+                id: "call_1".into(),
+                name: CODEX_NAME.into(),
+                input: json!({"title": "Map", "html": "<svg/>"}),
+            }));
+            let [(_, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(visual.status, Shown::Checking);
+            assert_eq!(visual.id, "call_1");
+        }
+
+        #[test]
+        fn a_failed_call_says_why() {
+            let mut t = Transcript::default();
+            start(&mut t, "v1", json!({"title": "T", "html": "<p>"}));
+            complete(
+                &mut t,
+                "v1",
+                "The visual could not be rendered: engine crashed",
+                true,
+            );
+            let [(_, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(
+                visual.status,
+                Shown::Failed("The visual could not be rendered: engine crashed".into())
+            );
+        }
+
+        #[test]
+        fn a_shown_replacement_folds_the_previous_visual_away() {
+            let mut t = Transcript::default();
+            start(&mut t, "v1", json!({"title": "A", "html": "<p>1</p>"}));
+            complete(&mut t, "v1", "ok", false);
+            start(&mut t, "other", json!({"title": "B", "html": "<p>b</p>"}));
+            complete(&mut t, "other", "ok", false);
+            // A replacement that fails replaces nothing.
+            start(
+                &mut t,
+                "v2",
+                json!({"title": "B2", "html": "<p>", "replace": true}),
+            );
+            complete(&mut t, "v2", "bad", true);
+            assert!(visuals(&t).iter().all(|(_, visual)| !visual.replaced));
+            // One that shows replaces the visual before it, not older ones.
+            start(
+                &mut t,
+                "v3",
+                json!({"title": "B3", "html": "<p>3</p>", "replace": true}),
+            );
+            let update = complete(&mut t, "v3", "ok", false);
+            let rows = visuals(&t);
+            let replaced: Vec<&str> = rows
+                .iter()
+                .filter(|(_, visual)| visual.replaced)
+                .map(|(_, visual)| visual.id.as_str())
+                .collect();
+            assert_eq!(replaced, vec!["v2"]);
+            assert_eq!(update.dirty.len(), 2, "the new row and the one it replaced");
+            // The next replacement skips what is already replaced.
+            start(
+                &mut t,
+                "v4",
+                json!({"title": "B4", "html": "<p>4</p>", "replace": true}),
+            );
+            complete(&mut t, "v4", "ok", false);
+            let replaced: Vec<String> = visuals(&t)
+                .into_iter()
+                .filter(|(_, visual)| visual.replaced)
+                .map(|(_, visual)| visual.id)
+                .collect();
+            assert_eq!(replaced, vec!["v2".to_string(), "v3".to_string()]);
+        }
+
+        #[test]
+        fn a_turn_that_ends_first_leaves_the_visual_failed() {
+            let mut t = Transcript::default();
+            draft(&mut t, "v1", json!({"title": "T", "html": "<p"}));
+            t.apply(Input::Event(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Interrupted,
+                cost_usd: None,
+            }));
+            let [(_, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(visual.status, Shown::Failed(VISUAL_UNFINISHED.into()));
+            // A result arriving after that is still honoured.
+            complete(&mut t, "v1", "ok", false);
+            let [(_, visual)] = visuals(&t).try_into().unwrap();
+            assert_eq!(visual.status, Shown::Shown);
+        }
+
+        #[test]
+        fn other_tools_never_draft() {
+            let mut t = Transcript::default();
+            let update = t.apply(Input::Event(SessionEvent::ToolDraft {
+                id: "b".into(),
+                name: "Bash".into(),
+                input: json!({"command": "ls"}),
+            }));
+            assert!(update.dirty.is_empty());
+            assert!(t.blocks().is_empty());
         }
     }
 }

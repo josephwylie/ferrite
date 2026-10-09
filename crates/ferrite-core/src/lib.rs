@@ -28,6 +28,7 @@ pub mod store;
 pub mod suggest;
 pub mod titler;
 pub mod transcript;
+pub mod visual;
 pub mod workspace;
 
 mod session_event;

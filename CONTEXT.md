@@ -134,6 +134,14 @@ the same repo its agent makes, enters, or works in for a run of tool calls,
 and back to the main checkout when it leaves or the worktree is gone. The
 Pane's checkout label reads the binding; nothing else moves it.
 
+**Visual**
+An interactive page an agent shows inline in its transcript through
+Ferrite's own `show_visual` tool: a mockup, chart, diagram or timeline.
+It builds up while the agent writes it, and the agent is answered with a
+screenshot so it can check its work. Offered at the operator's level —
+Off, When asked, or Automatic — and never a Decision.
+_Avoid_: artifact, widget, web view (that is how it is drawn).
+
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread

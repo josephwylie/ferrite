@@ -84,8 +84,13 @@ impl Session for DemoSession {
         &self.rx
     }
 
-    fn send(&mut self, _text: &str) -> io::Result<()> {
-        self.play_reply();
+    fn send(&mut self, text: &str) -> io::Result<()> {
+        if asks_for_a_visual(text) {
+            self.cancel.store(false, Ordering::Relaxed);
+            play(self.tx.clone(), self.cancel.clone(), visual_reply());
+        } else {
+            self.play_reply();
+        }
         Ok(())
     }
 
@@ -197,7 +202,16 @@ impl DemoSession {
     pub fn seeded(variant: usize) -> Self {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        play(tx.clone(), cancel.clone(), seed(variant));
+        // FERRITE_DEMO_VISUAL=1: the first Pane plays the visual reply at
+        // once, so visuals can be checked in a real window without typing.
+        let steps = if variant == 0 && std::env::var_os("FERRITE_DEMO_VISUAL").is_some() {
+            let mut steps = boot("demo-visual");
+            steps.extend(visual_reply());
+            steps
+        } else {
+            seed(variant)
+        };
+        play(tx.clone(), cancel.clone(), steps);
         Self { rx, tx, cancel }
     }
 
@@ -966,6 +980,63 @@ pub fn script() -> Vec<Step> {
 /// The canned answer to a prompt sent from the Composer.
 pub fn reply() -> Vec<Step> {
     turn(&[], REPLY, 0.0091)
+}
+
+/// A prompt that asks to see something (`show me…`, `…visualise…`): the demo
+/// agent answers with a visual.
+fn asks_for_a_visual(prompt: &str) -> bool {
+    let prompt = prompt.to_lowercase();
+    ["show me", "visual", "chart", "mock up"].iter().any(|ask| prompt.contains(ask))
+}
+
+/// The demo agent's visual (ADR 0013): one line, then a `show_visual` call
+/// whose HTML streams in (the page builds up while it is drawn), the
+/// screenshot's answer, and a closing line.
+fn visual_reply() -> Vec<Step> {
+    const PAGE: &str = include_str!("cockpit/visual_reference/visuals/stats.html");
+    const ID: &str = "demo_visual";
+    let name = ferrite_core::visual::CLAUDE_NAME;
+    let input = |html: &str| {
+        serde_json::json!({
+            "title": "Token usage, last 30 days",
+            "caption": "Daily cost with a 7-day average, split by model",
+            "html": html,
+        })
+    };
+    let mut steps = Vec::new();
+    prose(&mut steps, "Here is the last 30 days, by day and by model.");
+    // As Claude streams a tool's input: a draft every chunk or so.
+    let chunk = PAGE.len() / 12;
+    let mut end = chunk;
+    while end < PAGE.len() {
+        while !PAGE.is_char_boundary(end) {
+            end += 1;
+        }
+        steps.push(Step::new(
+            160,
+            SessionEvent::ToolDraft { id: ID.into(), name: name.into(), input: input(&PAGE[..end]) },
+        ));
+        end += chunk;
+    }
+    steps.push(Step::new(
+        120,
+        SessionEvent::ToolStarted { id: ID.into(), name: name.into(), input: input(PAGE) },
+    ));
+    steps.push(Step::new(
+        900,
+        SessionEvent::ToolCompleted {
+            id: ID.into(),
+            output: "Shown to the operator inline.".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+    prose(&mut steps, "Spend peaks on the nights the Group runs; Opus is most of it.");
+    steps.push(Step::new(
+        30,
+        SessionEvent::TurnEnded { outcome: TurnOutcome::Completed, cost_usd: Some(0.0124) },
+    ));
+    steps
 }
 
 /// One turn: thinking lines, then word-by-word text, then TurnEnded.

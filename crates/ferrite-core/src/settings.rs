@@ -79,6 +79,11 @@ pub struct Settings {
     /// many Sessions at once. Toggled from Settings or the ⌘K palette.
     /// Default: false.
     pub smart_filtering: bool,
+    /// Whether agents may show interactive visuals inline (Ferrite's own
+    /// `show_visual` tool), and how readily: Off (not offered), When asked,
+    /// or Automatic. Applies to Sessions started after it changes; a Codex
+    /// thread keeps the tool it started with. Default: When asked.
+    pub visuals: crate::visual::Level,
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -162,6 +167,7 @@ impl Default for Settings {
             auto_update_clis: true,
             show_thinking: false,
             smart_filtering: false,
+            visuals: crate::visual::Level::WhenAsked,
         }
     }
 }
@@ -285,6 +291,7 @@ mod tests {
             auto_update_clis: false,
             show_thinking: true,
             smart_filtering: true,
+            visuals: crate::visual::Level::Automatic,
         }
     }
 

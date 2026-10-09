@@ -398,7 +398,7 @@ pub(crate) fn capture(output: String) {
     ));
     let mut core = Cockpit::try_new(
         Store::open(store_dir.clone()).expect("open the throwaway store"),
-        Box::new(crate::session::Spawn::new(defaults.clone())),
+        Box::new(crate::session::Spawn::new(defaults.clone(), None)),
     )
     .expect("open the throwaway registry");
     core.set_suggestions_enabled(false);

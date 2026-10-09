@@ -56,6 +56,10 @@ pub(crate) enum RowKind {
     TurnEnd {
         hangs: bool,
     },
+    /// An agent's visual: its call line and the page. It spaces as a
+    /// diffed call does: a line above and below it, so the page never sits
+    /// flush against the calls around it.
+    Visual,
     /// The tail row (the Decision), a line under the row before it.
     Tail,
     /// A fallback prose or code block.
@@ -69,6 +73,7 @@ impl RowKind {
             Body::Tool(tool) => Self::Activity {
                 diff_shown: !tool.diffs.is_empty(),
             },
+            Body::Visual(_) => Self::Visual,
             Body::Thinking(_) => Self::Reasoning,
             Body::Notice(_) => Self::Notice,
             Body::Meta(_) => Self::Meta,
@@ -200,6 +205,8 @@ impl TranscriptRow {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TranscriptRows {
     rows: Rc<[Rc<TranscriptRow>]>,
+    /// The indices of the visual rows, for the per-layout reach pass.
+    visuals: Rc<[usize]>,
 }
 
 impl TranscriptRows {
@@ -207,7 +214,12 @@ impl TranscriptRows {
     /// for answers at `reading` px.
     pub(crate) fn new(blocks: &[Block], shape: &RowShape, reading: f32) -> Self {
         let rows = project(blocks, shape, reading);
-        Self { rows: rows.into() }
+        Self { visuals: visual_indices(&rows), rows: rows.into() }
+    }
+
+    /// The indices of the rows that are visuals.
+    pub(crate) fn visual_rows(&self) -> &[usize] {
+        &self.visuals
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -252,9 +264,18 @@ impl TranscriptRows {
             })
             .collect();
         let delta = RowDelta::between(&previous, &next);
+        self.visuals = visual_indices(&next);
         self.rows = next.into();
         delta
     }
+}
+
+fn visual_indices(rows: &[Rc<TranscriptRow>]) -> Rc<[usize]> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.kind == RowKind::Visual)
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// One structural replacement in a [`gpui::ListState`].

@@ -8,7 +8,9 @@
 
 mod activity;
 pub(super) mod discovery;
+mod drafts;
 mod file_search;
+mod mcp;
 mod menu;
 mod queue;
 mod shell_output;
@@ -93,6 +95,10 @@ pub struct ClaudeConfig {
     /// announces the *same* session id in its init line, so the target stays
     /// stable across any number of resumes.
     pub resume: Option<String>,
+    /// Ferrite's own `show_visual` tool (`crate::visual`): the operator's
+    /// level and the app's renderer. `None`, or a level of Off, offers
+    /// nothing. Fixed for the Session: the CLI lists its tools once.
+    pub visuals: Option<crate::visual::Visuals>,
 }
 
 impl Default for ClaudeConfig {
@@ -107,6 +113,7 @@ impl Default for ClaudeConfig {
             name: None,
             permission_mode: None,
             resume: None,
+            visuals: None,
         }
     }
 }
@@ -270,6 +277,12 @@ impl ClaudeSession {
         for directory in &config.additional_directories {
             command.arg("--add-dir").arg(directory);
         }
+        let visuals = mcp::Server::offered(config.visuals.as_ref());
+        if visuals {
+            // Ferrite's own tool is never a Decision: pre-allowed, so no
+            // permission mode asks for it (verified on 2.1.292 in `default`).
+            command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -305,6 +318,7 @@ impl ClaudeSession {
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
+        let server = mcp::Server::new(config.visuals.clone(), Arc::clone(&stdin));
         let capabilities = read_stdout(
             stdout,
             sender,
@@ -318,6 +332,7 @@ impl ClaudeSession {
             queue.clone(),
             suggestions.clone(),
             file_search.clone(),
+            server,
         );
 
         let mut session = Self {
@@ -343,10 +358,16 @@ impl ClaudeSession {
         // back a Session so that reason reaches the Pane.
         let id = session.take_request_id();
         debug_assert_eq!(id, HANDSHAKE_REQUEST_ID);
+        let mut initialize = serde_json::json!({"subtype": "initialize"});
+        if visuals {
+            // The in-band server (`mcp`): the CLI tunnels its MCP traffic
+            // back over this pipe, starting before it answers this request.
+            initialize["sdkMcpServers"] = serde_json::json!([crate::visual::SERVER]);
+        }
         let _ = session.write_line(&serde_json::json!({
             "type": "control_request",
             "request_id": id,
-            "request": {"subtype": "initialize"},
+            "request": initialize,
         }));
         session.capabilities = capabilities
             .recv_timeout(HANDSHAKE_TIMEOUT)
@@ -680,6 +701,7 @@ fn read_stdout(
     queue: Arc<Mutex<queue::Queue>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
     file_search: Arc<Mutex<file_search::Requests>>,
+    server: mcp::Server,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -700,6 +722,9 @@ fn read_stdout(
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
                 shells.observe(&value, &sender);
                 if lock(&file_search).observe(&value) {
+                    continue;
+                }
+                if server.observe(&value) {
                     continue;
                 }
                 let queue_events = lock(&queue).observe(&value);
@@ -932,7 +957,7 @@ fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<
     }
 }
 
-fn write_stdin_line(stdin: &Arc<Mutex<ChildStdin>>, value: &serde_json::Value) -> io::Result<()> {
+fn write_stdin_line(stdin: &Mutex<ChildStdin>, value: &serde_json::Value) -> io::Result<()> {
     let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
     line.push('\n');
     let mut stdin = lock(stdin);

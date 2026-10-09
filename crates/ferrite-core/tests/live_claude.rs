@@ -25,6 +25,7 @@ fn live_config() -> ClaudeConfig {
         name: None,
         permission_mode: None,
         resume: None,
+        visuals: None,
     }
 }
 

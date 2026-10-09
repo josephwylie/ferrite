@@ -29,6 +29,8 @@ pub struct SessionDefaults {
     pub claude_effort: Option<String>,
     pub codex_effort: Option<String>,
     pub placeholder_suggestions: bool,
+    /// How readily agents are offered `show_visual` (Settings).
+    pub visuals: ferrite_core::visual::Level,
 }
 
 impl SessionDefaults {
@@ -41,6 +43,7 @@ impl SessionDefaults {
             claude_effort: settings.claude_effort.clone(),
             codex_effort: settings.codex_effort.clone(),
             placeholder_suggestions: settings.placeholder_suggestions,
+            visuals: settings.visuals,
         }
     }
 
@@ -57,11 +60,23 @@ impl SessionDefaults {
 /// provider CLI process working in its binding.
 pub struct Spawn {
     pub defaults: Arc<Mutex<SessionDefaults>>,
+    /// What answers an agent's `show_visual` with a screenshot (the app's
+    /// off-screen browser, `visual::renderer`). `None`: the tool isn't offered.
+    pub renderer: Option<Arc<dyn ferrite_core::visual::Renderer>>,
 }
 
 impl Spawn {
-    pub fn new(defaults: Arc<Mutex<SessionDefaults>>) -> Self {
-        Self { defaults }
+    pub fn new(
+        defaults: Arc<Mutex<SessionDefaults>>,
+        renderer: Option<Arc<dyn ferrite_core::visual::Renderer>>,
+    ) -> Self {
+        Self { defaults, renderer }
+    }
+
+    /// The tool as this spawn offers it: the operator's level and the
+    /// renderer (none without one).
+    fn visuals(&self, level: ferrite_core::visual::Level) -> Option<ferrite_core::visual::Visuals> {
+        self.renderer.clone().map(|renderer| ferrite_core::visual::Visuals { level, renderer })
     }
 }
 
@@ -336,6 +351,7 @@ impl Spawn {
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
                 additional_directories,
+                visuals: self.visuals(defaults.visuals),
                 ..Default::default()
             }),
             Provider::Codex => SessionConfig::Codex(CodexConfig {
@@ -349,6 +365,7 @@ impl Spawn {
                 sandbox: defaults.codex_sandbox,
                 resume,
                 additional_directories,
+                visuals: self.visuals(defaults.visuals),
                 ..Default::default()
             }),
         }

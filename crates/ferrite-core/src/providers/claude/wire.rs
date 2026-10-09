@@ -676,11 +676,7 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
     let block = content_block(value, "tool_result")?;
     Some(SessionEvent::ToolCompleted {
         id: block.get("tool_use_id")?.as_str()?.to_string(),
-        output: match block.get("content") {
-            Some(Value::String(text)) => text.clone(),
-            Some(other) => other.to_string(),
-            None => String::new(),
-        },
+        output: tool_result_text(block.get("content")),
         // Absent on a successful result; only failures say so.
         is_error: block
             .get("is_error")
@@ -688,6 +684,32 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
             .unwrap_or(false),
         result: parse_tool_result(value.get("tool_use_result")),
     })
+}
+
+/// What a `tool_result` block fed back to the model, as text: a string as
+/// it is; a list of content blocks as their text, an image standing as
+/// `[image]` (an MCP tool's screenshot is base64 the transcript and the log
+/// have no use for); anything else as its compact JSON.
+pub(super) fn tool_result_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks))
+            if blocks
+                .iter()
+                .all(|block| matches!(block["type"].as_str(), Some("text" | "image"))) =>
+        {
+            blocks
+                .iter()
+                .map(|block| match block["text"].as_str() {
+                    Some(text) => text,
+                    None => "[image]",
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
 }
 
 /// The CLI hangs its structured result off the same line as the prose one.
@@ -1548,6 +1570,9 @@ mod tests {
             SessionEvent::TokenUsage { .. } => return None,
             // Parsed alongside the ordinary event path by the reader.
             SessionEvent::RateLimits { .. } => return None,
+            // A stateful stream read by the activity decoder (`drafts`),
+            // proved by the show-visual capture in tests/claude_session.rs.
+            SessionEvent::ToolDraft { .. } => return None,
         })
     }
 

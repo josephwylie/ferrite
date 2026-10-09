@@ -11,6 +11,12 @@ visual-reference = ["gpui/test-support", "dep:gpui-reference-platform"]
 # The opaque greys on macOS too (`theme::GLASS`): what the headless parity
 # captures render, since a capture cannot show the desktop blur.
 opaque = []
+# Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013). macOS only for
+# now, and only inside the app bundle `scripts/install-app.sh` builds (it
+# turns this on). Off by default so a plain `cargo build` needs no cmake,
+# ninja or 128 MB CEF download; without it a visual shows its title, caption
+# and an open-in-browser fallback instead of the live page.
+cef = ["dep:cef"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
@@ -30,6 +36,19 @@ percent-encoding = "2"
 # GPUI's default HTTP client refuses every request, so Markdown images with
 # http(s) URLs never load. GPUI Kit already builds this client; Ferrite wires it.
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.3" }
+# Visuals: a rendered frame becomes a gpui RenderImage (which holds
+# image::Frames), and the agent's screenshot is a PNG. Already in the tree
+# via gpui.
+image = { version = "0.25.1", default-features = false, features = ["png"] }
+# The visual engine's wake -> cx.notify bridge (a channel a foreground task
+# drains). Already in the tree via gpui.
+futures = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Chromium Embedded Framework bindings (tauri-apps/cef-rs), the `cef`
+# feature's engine. Only the sandbox feature: the bundling helpers
+# (`build-util`) pull in clap/cargo_metadata, and install-app.sh does that job.
+cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

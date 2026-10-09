@@ -55,6 +55,8 @@ pub(super) struct Decoder {
     /// background task. A task the CLI backgrounds later leaves the set.
     foreground_shells: HashSet<String>,
     main_stream_message: Option<String>,
+    /// Main's streaming `show_visual` inputs, drawn as they arrive.
+    visual_drafts: super::drafts::Drafts,
     main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
     main_stream_order: VecDeque<(String, u64)>,
     seen_main_frames: HashSet<String>,
@@ -809,11 +811,7 @@ impl Decoder {
                     let Some(tool_id) = string(block, "tool_use_id") else {
                         continue;
                     };
-                    let output = match block.get("content") {
-                        Some(Value::String(text)) => text.clone(),
-                        Some(other) => other.to_string(),
-                        None => String::new(),
-                    };
+                    let output = wire::tool_result_text(block.get("content"));
                     let is_error = block["is_error"].as_bool().unwrap_or(false);
                     let structured = structured_result;
                     let result = wire::parse_tool_result(structured);
@@ -930,6 +928,9 @@ impl Decoder {
     /// block can replace the live stream. A full frame with no observed stream
     /// still keeps its outer delivery UUID.
     fn main_stream(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if let Some(draft) = self.visual_drafts.observe(value) {
+            events.push(draft);
+        }
         match value["event"]["type"].as_str() {
             Some("message_start") => {
                 self.main_stream_message = value["event"]["message"]["id"]

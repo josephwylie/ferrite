@@ -39,6 +39,87 @@ const TOOL_ITEM_TYPES: [&str; 10] = [
     "collabToolCall",
 ];
 
+/// Offer `show_visual` on a thread/start (`start`) or thread/resume.
+///
+/// Verified against 0.160.1 (fixture `codex-show-visual-0.160.1`): the tool
+/// is a `dynamicTools` namespace `ferrite` on thread/start, persisted with the
+/// thread so a resume carries it without being told. Both also carry a
+/// per-thread config making the namespace a direct call: a model in
+/// `code_mode_only` otherwise calls every tool from inside a JavaScript
+/// `exec` cell, where the screenshot never reached it.
+pub(super) fn offer_visuals(
+    params: &mut Value,
+    visuals: Option<&crate::visual::Visuals>,
+    start: bool,
+) {
+    let Some(definition) = visuals.and_then(crate::visual::Visuals::definition) else {
+        return;
+    };
+    if start {
+        params["dynamicTools"] = serde_json::json!([{
+            "type": "namespace",
+            "name": crate::visual::SERVER,
+            "description": "Ferrite, the app the operator watches this conversation in.",
+            "tools": [{
+                "type": "function",
+                "name": definition.name,
+                "description": definition.description,
+                "inputSchema": definition.input_schema,
+            }],
+        }]);
+    }
+    params["config"] = serde_json::json!({
+        "features": {"code_mode": {"direct_only_tool_namespaces": [crate::visual::SERVER]}}
+    });
+}
+
+/// Answer the server's `item/tool/call` for `show_visual`, off this thread:
+/// the render's text and screenshot as the call's content items. Returns
+/// whether `frame` was that call. Any other dynamic call is not Ferrite's.
+pub(super) fn answer_visual(
+    frame: &Value,
+    visuals: Option<&crate::visual::Visuals>,
+    stdin: std::sync::Arc<std::sync::Mutex<std::process::ChildStdin>>,
+) -> bool {
+    if frame["method"] != "item/tool/call" {
+        return false;
+    }
+    let params = &frame["params"];
+    if params["namespace"] != crate::visual::SERVER || params["tool"] != crate::visual::TOOL {
+        return false;
+    }
+    let Some(id) = frame.get("id").cloned() else {
+        return false;
+    };
+    let respond = move |answer: crate::visual::Answer| {
+        let mut items = vec![serde_json::json!({"type": "inputText", "text": answer.text})];
+        if let Some(png) = answer.png_base64() {
+            items.push(serde_json::json!({
+                "type": "inputImage",
+                "imageUrl": format!("data:image/png;base64,{png}"),
+            }));
+        }
+        let _ = super::write_request(
+            &stdin,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {"success": !answer.is_error, "contentItems": items},
+            }),
+        );
+    };
+    match visuals {
+        Some(visuals) => crate::visual::answer(
+            visuals,
+            params["callId"].as_str().unwrap_or_default(),
+            &params["arguments"],
+            respond,
+        ),
+        None => respond(crate::visual::Answer::unavailable()),
+    }
+    true
+}
+
 /// What the thread/start (or thread/resume) response said: the identity the
 /// Session announces and the capabilities the operator may rely on.
 #[derive(Debug, Clone, PartialEq)]
@@ -408,6 +489,12 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
         return None;
     }
     let id = item.get("id")?.as_str()?.to_string();
+    if kind == "dynamicToolCall"
+        && item["namespace"] == crate::visual::SERVER
+        && item["tool"] == crate::visual::TOOL
+    {
+        return Some(visual_item(id, item, completed));
+    }
     if !completed {
         return Some(SessionEvent::ToolStarted {
             id,
@@ -507,6 +594,32 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
                 .is_some_and(|code| code != 0),
         result,
     })
+}
+
+/// A `show_visual` item: its own input (the call's arguments, as Claude's
+/// call carries it), and a result read as text — the screenshot the answer
+/// carried is base64 the transcript and the log have no use for.
+fn visual_item(id: String, item: &Value, completed: bool) -> SessionEvent {
+    if !completed {
+        return SessionEvent::ToolStarted {
+            id,
+            name: crate::visual::CODEX_NAME.into(),
+            input: item["arguments"].clone(),
+        };
+    }
+    let output = item["contentItems"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|content| content["text"].as_str().unwrap_or("[image]"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    SessionEvent::ToolCompleted {
+        id,
+        output,
+        is_error: item["status"] != "completed" || item["success"] == false,
+        result: ToolResult::Opaque,
+    }
 }
 
 /// Decode Codex's per-file unified diff without assigning a tool identity or
@@ -1227,6 +1340,8 @@ mod tests {
             // when the process exits, so no capture can contain it. Proved by
             // the session tests instead.
             SessionEvent::Closed { .. } => return None,
+            // Codex streams no tool input: a dynamic call arrives whole.
+            SessionEvent::ToolDraft { .. } => return None,
         })
     }
 

@@ -1,0 +1,220 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ferrite-bg);color:var(--ferrite-fg);font:var(--ferrite-font-size)/var(--ferrite-line) var(--ferrite-font-mono);overflow:hidden;color-scheme:var(--ferrite-scheme);-webkit-font-smoothing:antialiased;user-select:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+#app{padding:0 0 14px}
+.bar{display:flex;align-items:center;gap:16px;height:30px;padding:0 12px;border-bottom:1px solid var(--ferrite-border);background:var(--ferrite-band)}
+.title{color:var(--ferrite-strong);font-weight:500;white-space:nowrap}
+.title b{color:var(--ferrite-accent);font-weight:600;margin-right:8px}
+.sub{color:var(--ferrite-muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg{display:flex;align-items:center;gap:8px;color:var(--ferrite-faint)}
+.seg .opts{display:flex;border:1px solid var(--ferrite-border2)}
+.seg button{padding:0 9px;height:20px;line-height:20px;color:var(--ferrite-muted)}
+.seg button:hover{color:var(--ferrite-fg);background:var(--ferrite-band2)}
+.seg button.on{color:var(--ferrite-on-accent);background:var(--ferrite-accent)}
+
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:14px 12px 0}
+.variant{display:flex;flex-direction:column;min-width:0}
+.vhead{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+.tag{font-size:11px;line-height:18px;padding:0 7px;border:1px solid var(--ferrite-border2);color:var(--ferrite-muted);letter-spacing:.06em}
+.variant.pick .tag{border-color:var(--ferrite-accent);color:var(--ferrite-accent)}
+.vname{color:var(--ferrite-strong);font-weight:500}
+.cost{margin-left:auto;color:var(--ferrite-faint);font-size:11px;white-space:nowrap}
+.cost b{font-weight:400;color:var(--ferrite-muted)}
+.caption{color:var(--ferrite-muted);min-height:40px;margin-bottom:8px}
+
+/* The mock: a slice of the app, pinned to its own scheme by data-ferrite-scheme. */
+.mock{position:relative;background:var(--ferrite-bg);color:var(--ferrite-fg);border:1px solid var(--ferrite-border2);box-shadow:0 6px 20px var(--ferrite-shadow);font-size:11.5px;line-height:18px;overflow:hidden}
+.mock .tb{display:flex;align-items:center;gap:6px;height:24px;padding:0 9px;background:var(--ferrite-band);border-bottom:1px solid var(--ferrite-border);color:var(--ferrite-muted);font-size:11px}
+.mock .dots{display:flex;gap:5px;margin-right:6px}
+.mock .dots i{width:8px;height:8px;border-radius:50%;background:var(--ferrite-border2)}
+.mock .tb .thread{color:var(--ferrite-fg);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .tb .badge{color:var(--ferrite-ok)}
+.mock .log{padding:8px 10px 6px;height:112px;overflow:hidden;position:relative}
+.mock .log::after{content:"";position:absolute;left:0;right:0;top:0;height:30px;background:linear-gradient(var(--ferrite-bg),transparent)}
+.mock .ln{display:flex;gap:7px;white-space:nowrap;overflow:hidden}
+.mock .ln span:last-child{overflow:hidden;text-overflow:ellipsis}
+.mock .g{flex:none;width:9px}
+.mock .ln.user{color:var(--ferrite-strong)}
+.mock .ln.user .g{color:var(--ferrite-accent)}
+.mock .ln.say .g{color:var(--ferrite-green)}
+.mock .ln.tool{color:var(--ferrite-muted)}
+.mock .ln.done{color:var(--ferrite-faint)}
+
+.notice{display:flex;align-items:center;gap:8px;margin:0 8px 6px;padding:5px 6px 5px 9px;border:1px solid var(--ferrite-border2);background:var(--ferrite-band);min-height:32px}
+.notice .ic{flex:none;width:14px;text-align:center}
+.notice .tx{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ferrite-fg)}
+.notice .tx em{font-style:normal;color:var(--ferrite-muted)}
+.notice.ok{border-color:color-mix(in oklab,var(--ferrite-ok) 45%,var(--ferrite-border2))}
+.notice.ok .ic{color:var(--ferrite-ok)}
+.notice.warn{border-color:color-mix(in oklab,var(--ferrite-warn) 50%,var(--ferrite-border2));background:color-mix(in oklab,var(--ferrite-warn) 7%,var(--ferrite-band))}
+.notice.warn .ic{color:var(--ferrite-warn)}
+.btn{flex:none;height:22px;padding:0 8px;border:1px solid var(--ferrite-border2);background:var(--ferrite-bg);color:var(--ferrite-fg);white-space:nowrap;transition:background .08s,border-color .08s}
+.btn:hover{background:var(--ferrite-band2);border-color:var(--ferrite-faint);color:var(--ferrite-strong)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--ferrite-accent);border-color:var(--ferrite-accent);color:var(--ferrite-on-accent)}
+.btn.primary:hover{background:color-mix(in oklab,var(--ferrite-accent) 85%,var(--ferrite-strong));color:var(--ferrite-on-accent)}
+.btn.ghost{border-color:transparent;background:none;color:var(--ferrite-muted);padding:0 5px}
+.btn.ghost:hover{color:var(--ferrite-strong);background:var(--ferrite-band2)}
+.notice .ctx{flex:none;display:flex;align-items:center;color:var(--ferrite-warn);white-space:nowrap}
+.notice .ctx em{font-style:normal;color:var(--ferrite-muted);margin-right:4px}
+.meter{flex:none;display:inline-block;width:46px;height:5px;background:var(--ferrite-border2);vertical-align:1px;margin:0 6px 0 2px;position:relative}
+.meter i{position:absolute;left:0;top:0;bottom:0;background:var(--ferrite-warn)}
+
+.composer{margin:0 8px 8px;border:1px solid var(--ferrite-border2);background:var(--ferrite-band)}
+.composer:focus-within,.composer:hover{border-color:var(--ferrite-faint)}
+.composer .input{padding:7px 9px 4px;height:44px;color:var(--ferrite-faint)}
+.composer .input .caret{display:inline-block;width:1px;height:13px;background:var(--ferrite-accent);vertical-align:-2px;margin-right:2px}
+.composer .row{display:flex;align-items:center;gap:5px;padding:0 5px 5px}
+.chip{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 7px;border:1px solid var(--ferrite-border);color:var(--ferrite-muted);background:var(--ferrite-bg);white-space:nowrap}
+.chip:hover{color:var(--ferrite-strong);border-color:var(--ferrite-border2);background:var(--ferrite-band2)}
+.chip .k{color:var(--ferrite-faint)}
+.picker{position:relative}
+.picker .chip b{font-weight:400;color:var(--ferrite-fg)}
+.menu{position:absolute;bottom:26px;left:0;z-index:5;min-width:170px;padding:4px 0;background:var(--ferrite-float);border:1px solid var(--ferrite-border2);box-shadow:0 8px 22px var(--ferrite-shadow);display:none}
+.picker.open .menu{display:block}
+.menu div{display:flex;justify-content:space-between;gap:12px;padding:2px 10px;color:var(--ferrite-fg);cursor:pointer;white-space:nowrap}
+.menu div span{color:var(--ferrite-faint)}
+.menu div:hover{background:var(--ferrite-band2);color:var(--ferrite-strong)}
+.menu div.sel{color:var(--ferrite-accent)}
+.spacer{flex:1}
+.send{flex:none;width:26px;height:22px;display:grid;place-items:center;background:var(--ferrite-accent);color:var(--ferrite-on-accent);font-weight:700;transition:background .08s}
+.send:hover{background:color-mix(in oklab,var(--ferrite-accent) 82%,var(--ferrite-strong))}
+
+/* Option B: state lives in a status row under the composer. */
+.status{display:flex;align-items:center;height:24px;margin:-2px 8px 6px;padding:0 2px;color:var(--ferrite-faint);font-size:11px;white-space:nowrap;overflow:hidden}
+.status .it{display:inline-flex;align-items:center;gap:5px;padding:0 6px;height:20px;cursor:pointer;color:var(--ferrite-muted)}
+.status .it:hover{background:var(--ferrite-band2);color:var(--ferrite-strong)}
+.status .it .act{display:none;color:var(--ferrite-accent)}
+.status .it:hover .act{display:inline}
+.status .dot{color:var(--ferrite-ok)}
+.status .sep{color:var(--ferrite-border2)}
+.status .warn{color:var(--ferrite-warn)}
+
+.hidden{display:none !important}
+.foot{display:flex;align-items:center;gap:18px;margin:12px 12px 0;color:var(--ferrite-faint)}
+.foot a{color:var(--ferrite-muted);cursor:pointer;text-decoration:underline;text-decoration-color:var(--ferrite-border2);text-underline-offset:3px}
+.foot a:hover{color:var(--ferrite-accent)}
+.foot .r{margin-left:auto}
+.foot .kbd{color:var(--ferrite-muted)}
+</style></head>
+<body><div id="app">
+  <div class="bar">
+    <span class="title"><b>&#x276F;</b>mockups</span>
+    <span class="sub">composer notices: “thread settled” + “compact context”</span>
+    <span class="seg">app<span class="opts" id="scheme"><button data-s="dark">dark</button><button data-s="light">light</button></span></span>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="foot">
+    <span>buttons are live: <span class="kbd">Dismiss</span> hides a notice, the model chip opens a menu</span>
+    <a id="reset">reset</a>
+    <span class="r">all three at 1:1 in a 330px-wide pane</span>
+  </div>
+</div>
+<script>
+"use strict";
+const LOG = [
+  ["user", "❯", "make the composer's status line match the titlebar"],
+  ["say", "●", "Both now read FS_UI on LH_UI; the composer had a stray 14px override."],
+  ["tool", " ", "⎿ Edit crates/ferrite/src/composer.rs (+3 −5)"],
+  ["tool", " ", "⎿ Bash cargo test -p ferrite --lib — 412 passed"],
+  ["say", "●", "Done. Status line and titlebar share one size and line height now."],
+  ["done", " ", "· settled 2m ago · 18 turns · 142k tokens"],
+];
+
+const VARIANTS = [
+  {
+    tag: "NOW", name: "Two banners", cost: "<b>+76px</b> over input",
+    caption: "Both notices stack over the composer; together they push the input down by 76px.",
+    notices: `
+      <div class="notice ok" data-n="settled"><span class="ic">✓</span><span class="tx">Thread settled</span><button class="btn">Archive</button><button class="btn ghost" data-dismiss>Dismiss</button></div>
+      <div class="notice warn" data-n="ctx"><span class="ic">!</span><span class="tx">Context 86% full</span><button class="btn primary">Compact</button><button class="btn ghost" data-dismiss>×</button></div>`,
+    status: "",
+  },
+  {
+    tag: "OPTION A", name: "One merged line", cost: "<b>+38px</b> over input",
+    caption: "One line carries both states; the actions sit together on the right.",
+    notices: `
+      <div class="notice" data-n="merged"><span class="ic" style="color:var(--ferrite-ok)">✓</span><span class="tx">Settled</span><span class="ctx"><em>ctx</em><span class="meter" style="width:34px"><i style="width:86%"></i></span>86%</span><button class="btn primary">Compact</button><button class="btn ghost" data-dismiss title="Archive">×</button></div>`,
+    status: "",
+  },
+  {
+    tag: "OPTION B", name: "Status row", cost: "<b>+0px</b> over input",
+    caption: "No banners. State moves into a status row under the input; hover shows the action.",
+    notices: "",
+    status: `
+      <div class="status"><span class="it"><span class="dot">●</span>settled<span class="act">archive</span></span><span class="sep">│</span><span class="it"><span class="warn">ctx 86%</span><span class="meter" style="width:34px;margin:0"><i style="width:86%"></i></span><span class="act">compact</span></span><span class="sep">│</span><span class="it">142k tok</span></div>`,
+  },
+];
+
+const MODELS = [["opus-5.5", "max"], ["sonnet-5", "fast"], ["haiku-4.5", "cheap"]];
+
+function mock(v, i) {
+  const log = LOG.map(([k, g, t]) => `<div class="ln ${k}"><span class="g">${g}</span><span>${t}</span></div>`).join("");
+  return `
+  <div class="variant${i === 2 ? " pick" : ""}">
+    <div class="vhead"><span class="tag">${v.tag}</span><span class="vname">${v.name}</span><span class="cost">${v.cost}</span></div>
+    <div class="caption">${v.caption}</div>
+    <div class="mock" data-ferrite-scheme="dark">
+      <div class="tb"><span class="dots"><i></i><i></i><i></i></span><span class="thread">composer status line</span><span class="badge">● settled</span></div>
+      <div class="log">${log}</div>
+      ${v.notices}
+      <div class="composer">
+        <div class="input"><span class="caret"></span>Reply to reopen the thread…</div>
+        <div class="row">
+          <button class="chip" title="Attach">+</button>
+          <button class="chip"><span class="k">@</span>files</button>
+          <span class="picker"><button class="chip model"><b>opus-5.5</b><span class="k">▾</span></button>
+            <div class="menu">${MODELS.map(([m, n], j) => `<div class="${j ? "" : "sel"}" data-m="${m}">${m}<span>${n}</span></div>`).join("")}</div></span>
+          <button class="chip"><span class="k">effort</span>high</button>
+          <span class="spacer"></span>
+          <button class="send" title="Send">↑</button>
+        </div>
+      </div>
+      ${v.status}
+    </div>
+  </div>`;
+}
+
+const grid = document.getElementById("grid");
+function render() { grid.innerHTML = VARIANTS.map(mock).join(""); setScheme(scheme); }
+
+let scheme = "dark";
+function setScheme(s) {
+  scheme = s;
+  document.querySelectorAll(".mock").forEach((m) => m.dataset.ferriteScheme = s);
+  document.querySelectorAll("#scheme button").forEach((b) => b.classList.toggle("on", b.dataset.s === s));
+}
+document.querySelectorAll("#scheme button").forEach((b) => b.onclick = () => setScheme(b.dataset.s));
+
+grid.addEventListener("click", (e) => {
+  const t = e.target;
+  const dismiss = t.closest("[data-dismiss]");
+  if (dismiss) { dismiss.closest(".notice").classList.add("hidden"); return; }
+  const model = t.closest(".model");
+  if (model) {
+    const p = model.closest(".picker"), was = p.classList.contains("open");
+    document.querySelectorAll(".picker.open").forEach((x) => x.classList.remove("open"));
+    p.classList.toggle("open", !was);
+    return;
+  }
+  const item = t.closest(".menu div");
+  if (item) {
+    const p = item.closest(".picker");
+    p.querySelector(".model b").textContent = item.dataset.m;
+    p.querySelectorAll(".menu div").forEach((d) => d.classList.toggle("sel", d === item));
+    p.classList.remove("open");
+    return;
+  }
+  document.querySelectorAll(".picker.open").forEach((x) => x.classList.remove("open"));
+});
+// Any click outside a picker closes its menu.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".picker")) document.querySelectorAll(".picker.open").forEach((x) => x.classList.remove("open"));
+}, true);
+document.getElementById("reset").onclick = render;
+render();
+</script></body></html>
