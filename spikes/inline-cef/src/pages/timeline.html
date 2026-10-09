@@ -1,0 +1,267 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ferrite-bg);color:var(--ferrite-fg);font:var(--ferrite-font-size)/var(--ferrite-line) var(--ferrite-font-mono);overflow:hidden;color-scheme:var(--ferrite-scheme);-webkit-font-smoothing:antialiased;user-select:none;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+#app{position:relative;padding:0 0 12px}
+.bar{display:flex;align-items:center;gap:16px;height:30px;padding:0 12px;border-bottom:1px solid var(--ferrite-border);background:var(--ferrite-band)}
+.title{color:var(--ferrite-strong);font-weight:500;white-space:nowrap}
+.title b{color:var(--ferrite-accent);font-weight:600;margin-right:8px}
+.sub{color:var(--ferrite-muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub em{font-style:normal;color:var(--ferrite-fg)}
+.pill{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border:1px solid color-mix(in oklab,var(--ferrite-danger) 55%,var(--ferrite-border2));color:var(--ferrite-danger);background:color-mix(in oklab,var(--ferrite-danger) 10%,var(--ferrite-band));white-space:nowrap}
+.dur{color:var(--ferrite-muted);white-space:nowrap}
+
+.summary{display:flex;gap:0;margin:12px 12px 0;border:1px solid var(--ferrite-border)}
+.summary>div{flex:1 1 0;padding:6px 12px;border-right:1px solid var(--ferrite-border);min-width:0}
+.summary>div:last-child{border-right:0}
+.summary .lb{color:var(--ferrite-muted);font-size:11px}
+.summary .v{color:var(--ferrite-strong);font-size:14px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.summary .v span{font-size:12px}
+.ok{color:var(--ferrite-ok)}
+.bad{color:var(--ferrite-danger)}
+.skip{color:var(--ferrite-faint)}
+
+.panel{border:1px solid var(--ferrite-border);margin:10px 12px 0;position:relative}
+.ph{display:flex;align-items:center;gap:14px;height:28px;padding:0 10px;border-bottom:1px solid var(--ferrite-border);color:var(--ferrite-muted);white-space:nowrap}
+.ph .t{color:var(--ferrite-strong)}
+.ph .r{margin-left:auto;display:flex;gap:14px;align-items:center}
+.sw{display:inline-block;width:12px;height:8px;margin-right:6px;vertical-align:0}
+.sw.q{background:repeating-linear-gradient(135deg,var(--ferrite-border2) 0 2px,transparent 2px 4px)}
+
+.gantt{position:relative;--label:250px}
+.axis{position:relative;height:22px;margin-left:var(--label);border-bottom:1px solid var(--ferrite-border);color:var(--ferrite-faint);font-size:11px}
+.axis span{position:absolute;top:2px;transform:translateX(-50%)}
+.axis span:first-child{transform:none}
+.axis span:last-child{transform:translateX(-100%)}
+.seg{z-index:1}
+.gridl{position:absolute;top:22px;bottom:0;width:1px;background:var(--ferrite-grid);pointer-events:none}
+.job{position:relative;display:flex;height:26px;cursor:pointer}
+.job:hover{background:var(--ferrite-band)}
+.job.open{background:var(--ferrite-band)}
+.job .lab{flex:none;width:var(--label);display:flex;align-items:center;gap:8px;padding:0 10px;border-right:1px solid var(--ferrite-border);white-space:nowrap}
+.job .lab .chev{width:8px;color:var(--ferrite-faint);font-size:10px}
+.job .lab .ic{width:12px;text-align:center}
+.job .lab .nm{flex:1;overflow:hidden;text-overflow:ellipsis;color:var(--ferrite-fg)}
+.job .lab .d{color:var(--ferrite-muted)}
+.job .track{position:relative;flex:1}
+.seg{position:absolute;top:7px;height:12px}
+.seg.q{background:repeating-linear-gradient(135deg,var(--ferrite-border2) 0 2px,transparent 2px 4px)}
+.seg.run{border-radius:1px;transition:filter .08s}
+.seg.run.pass{background:color-mix(in oklab,var(--ferrite-ok) 70%,var(--ferrite-bg))}
+.seg.run.fail{background:var(--ferrite-danger)}
+.seg.run.skipped{background:none;border:1px dashed var(--ferrite-faint)}
+.seg.run i{position:absolute;top:0;bottom:0;width:1px;background:var(--ferrite-bg);opacity:.55}
+.job:hover .seg.run{filter:brightness(1.15)}
+.seg .after{position:absolute;left:100%;top:-4px;margin-left:6px;white-space:nowrap;color:var(--ferrite-muted);font-size:11px}
+.step{display:flex;height:20px;font-size:11px;color:var(--ferrite-muted)}
+.step .lab{flex:none;width:var(--label);display:flex;gap:8px;padding:0 10px 0 36px;border-right:1px solid var(--ferrite-border);white-space:nowrap}
+.step .lab .nm{flex:1;overflow:hidden;text-overflow:ellipsis}
+.step .track{position:relative;flex:1}
+.step .seg{top:6px;height:8px;background:color-mix(in oklab,var(--ferrite-muted) 45%,var(--ferrite-bg))}
+.step.fail .seg{background:var(--ferrite-danger)}
+.step.fail .lab{color:var(--ferrite-danger)}
+.cp{position:absolute;top:22px;bottom:0;width:0;border-left:1px dashed var(--ferrite-danger);pointer-events:none;opacity:.6}
+
+.fail-row{border-top:1px solid var(--ferrite-border)}
+.fail-row:first-of-type{border-top:0}
+.fh{display:flex;align-items:center;gap:10px;height:30px;padding:0 10px;cursor:pointer;white-space:nowrap}
+.fh:hover{background:var(--ferrite-band)}
+.fh .chev{width:10px;color:var(--ferrite-muted);transition:transform .12s}
+.fail-row.open .fh .chev{transform:rotate(90deg)}
+.fh .nm{color:var(--ferrite-strong);overflow:hidden;text-overflow:ellipsis}
+.fh .nm i{font-style:normal;color:var(--ferrite-muted)}
+.fh .tags{margin-left:auto;display:flex;gap:8px;align-items:center;color:var(--ferrite-muted)}
+.tag{font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--ferrite-border2);color:var(--ferrite-muted)}
+.tag.flaky{border-color:color-mix(in oklab,var(--ferrite-warn) 55%,var(--ferrite-border2));color:var(--ferrite-warn)}
+.fb{display:none;padding:2px 10px 12px 30px}
+.fail-row.open .fb{display:block}
+.msg{border-left:2px solid var(--ferrite-danger);background:color-mix(in oklab,var(--ferrite-danger) 7%,var(--ferrite-bg));padding:6px 10px;color:var(--ferrite-fg);white-space:pre;overflow:hidden}
+.msg b{font-weight:400;color:var(--ferrite-danger)}
+.msg .l{color:var(--ferrite-muted)}
+pre{font:11.5px/18px var(--ferrite-font-mono);margin-top:8px;padding:6px 10px;background:var(--ferrite-band);border:1px solid var(--ferrite-border);color:var(--ferrite-faint);white-space:pre;overflow:hidden}
+pre .own{color:var(--ferrite-fg)}
+pre .own .at{color:var(--ferrite-accent)}
+pre .n{color:var(--ferrite-faint);display:inline-block;width:28px;text-align:right;margin-right:8px}
+.acts{display:flex;gap:8px;align-items:center;margin-top:8px;color:var(--ferrite-faint)}
+.btn{height:22px;padding:0 9px;border:1px solid var(--ferrite-border2);background:var(--ferrite-bg);color:var(--ferrite-fg)}
+.btn:hover{background:var(--ferrite-band2);color:var(--ferrite-strong);border-color:var(--ferrite-faint)}
+.btn.primary{background:var(--ferrite-accent);border-color:var(--ferrite-accent);color:var(--ferrite-on-accent)}
+.btn.primary:hover{background:color-mix(in oklab,var(--ferrite-accent) 85%,var(--ferrite-strong))}
+.acts .r{margin-left:auto}
+
+#tip{position:absolute;pointer-events:none;z-index:10;min-width:220px;padding:6px 10px;background:var(--ferrite-float);border:1px solid var(--ferrite-border2);box-shadow:0 4px 14px var(--ferrite-shadow);display:none}
+#tip.on{display:block}
+#tip .h{color:var(--ferrite-strong);font-weight:500;margin-bottom:2px;display:flex;gap:8px}
+#tip .r{display:flex;justify-content:space-between;gap:16px;color:var(--ferrite-muted)}
+#tip .r b{font-weight:400;color:var(--ferrite-fg)}
+#tip .hint{margin-top:4px;color:var(--ferrite-faint);font-size:11px}
+</style></head>
+<body><div id="app">
+  <div class="bar">
+    <span class="title"><b>&#x276F;</b>ci</span>
+    <span class="sub">run <em>#4182</em> · feat/inline-cef · <em>a1c9e02</em> “spike: more inline demo pages”</span>
+    <span class="dur">3m 52s · 6 min ago</span>
+    <span class="pill">✗ failed</span>
+  </div>
+  <div class="summary" id="summary"></div>
+  <div class="panel">
+    <div class="ph"><span class="t">Jobs</span><span>click a job for its steps</span>
+      <span class="r"><span><span class="sw q"></span>queued</span><span><span class="sw" style="background:color-mix(in oklab,var(--ferrite-ok) 70%,var(--ferrite-bg))"></span>passed</span><span><span class="sw" style="background:var(--ferrite-danger)"></span>failed</span><span><span class="sw" style="border:1px dashed var(--ferrite-faint)"></span>skipped</span></span></div>
+    <div class="gantt" id="gantt"></div>
+  </div>
+  <div class="panel">
+    <div class="ph"><span class="t">Failures</span><span id="failSub"></span><span class="r">click to expand</span></div>
+    <div id="fails"></div>
+  </div>
+  <div id="tip"></div>
+</div>
+<script>
+"use strict";
+// [name, runner, queuedAt, start, end, status, steps[[name, seconds, failed?]]]
+const JOBS = [
+  ["setup", "ubuntu-24.04", 0, 3, 14, "pass", [["checkout", 2], ["restore cargo cache", 7], ["toolchain 1.92", 2]]],
+  ["fmt", "ubuntu-24.04", 14, 16, 22, "pass", [["cargo fmt --check", 6]]],
+  ["clippy", "ubuntu-24.04", 14, 17, 71, "pass", [["cargo clippy -D warnings", 54]]],
+  ["build (linux)", "ubuntu-24.04", 14, 16, 102, "pass", [["cargo build --tests", 79], ["upload target", 7]]],
+  ["build (macos)", "macos-15-arm64", 14, 25, 118, "pass", [["cargo build --tests", 81], ["fetch CEF 154 (cached)", 4], ["upload target", 8]]],
+  ["test (linux)", "ubuntu-24.04", 102, 105, 196, "pass", [["download target", 6], ["cargo test --workspace", 82], ["junit report", 3]]],
+  ["test (macos)", "macos-15-arm64", 118, 124, 232, "fail", [["download target", 7], ["cargo test --workspace", 96, true], ["junit report", 5]]],
+  ["bundle (macos)", "macos-15-arm64", 118, 131, 201, "pass", [["bundle-macos.sh --release", 61], ["notarize (dry run)", 9]]],
+  ["e2e cef_smoke", "macos-15-arm64", 232, 232, 240, "skipped", [["needs test (macos)", 0]]],
+];
+const TOTAL = 240;  // the axis; the run took 232 s
+const FAILS = [
+  {
+    name: "element::tests::", leaf: "window_resizes_resize_the_view", job: "test (macos)", time: "0.42s", flaky: false,
+    msg: `<b>assertion \`left == right\` failed</b>: the view is resized to the window's new width
+<span class="l"> left:</span> Viewport { width: 799, scale: 2.0 }
+<span class="l">right:</span> Viewport { width: 800, scale: 2.0 }`,
+    trace: [
+      ["thread 'element::tests::window_resizes_resize_the_view' panicked at src/element.rs:612:9", false],
+      ["stack backtrace:", false],
+      ["   0: rust_begin_unwind", false],
+      ["   1: core::panicking::panic_fmt", false],
+      ["   2: core::panicking::assert_failed_inner", false],
+      ["   3: core::panicking::assert_failed::&lt;Viewport, Viewport&gt;", false],
+      ["   4: inline_cef::element::tests::window_resizes_resize_the_view", true],
+      ["             at ./src/element.rs:612:9", true],
+      ["   5: inline_cef::element::tests::window_resizes_resize_the_view::{{closure}}", true],
+      ["             at ./src/element.rs:349:5", true],
+      ["   6: gpui::test::run_test::{{closure}}", false],
+      ["             at vendor/gpui-pre/src/test.rs:88:17", false],
+      ["note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.", false],
+    ],
+    hint: "Width is rounded from 799.5 logical px on this runner's 2.0 scale; Linux passes at 1.0.",
+  },
+  {
+    name: "web::cef::tests::", leaf: "idle_page_sends_no_frames", job: "test (macos)", time: "1.08s", flaky: true,
+    msg: `<b>expected no frames during 1 s idle, got 1</b>
+<span class="l">frame 1:</span> 800×300 @2x, 6 ms after the resize settled`,
+    trace: [
+      ["thread 'web::cef::tests::idle_page_sends_no_frames' panicked at src/web/cef.rs:571:5", false],
+      ["stack backtrace:", false],
+      ["   0: rust_begin_unwind", false],
+      ["   1: core::panicking::panic_fmt", false],
+      ["   2: inline_cef::web::cef::tests::idle_page_sends_no_frames", true],
+      ["             at ./src/web/cef.rs:571:5", true],
+      ["   3: core::ops::function::FnOnce::call_once", false],
+    ],
+    hint: "Failed 2 of the last 20 runs on macos; never on linux. A trailing frame after the resize.",
+  },
+];
+
+const $ = (id) => document.getElementById(id);
+const tip = $("tip"), app = $("app");
+const secs = (s) => s >= 60 ? `${Math.floor(s / 60)}m` + (s % 60 ? ` ${String(Math.round(s % 60)).padStart(2, "0")}s` : "") : `${s}s`;
+const ICON = { pass: ["✓", "ok"], fail: ["✗", "bad"], skipped: ["⊘", "skip"] };
+const open = new Set();
+
+$("summary").innerHTML = `
+  <div style="flex-grow:.8"><div class="lb">trigger</div><div class="v">push <span class="skip">· 6 min ago</span></div></div>
+  <div style="flex-grow:1.35"><div class="lb">jobs</div><div class="v"><span class="ok">7 passed</span> · <span class="bad">1 failed</span> · <span class="skip">1 skipped</span></div></div>
+  <div><div class="lb">tests</div><div class="v">1,284 <span class="ok">passed</span> · 2 <span class="bad">failed</span></div></div>
+  <div><div class="lb">wall time</div><div class="v">3m 52s <span class="skip">· 43s queued</span></div></div>`;
+$("failSub").textContent = `${FAILS.length} tests in test (macos)`;
+
+function gantt() {
+  const g = $("gantt");
+  const pct = (s) => (100 * s) / TOTAL;
+  let html = `<div class="axis">`;
+  for (let s = 0; s <= TOTAL; s += 30) html += `<span style="left:${pct(s)}%">${s ? secs(s) : "0s"}</span>`;
+  html += `</div>`;
+  JOBS.forEach(([name, runner, q, st, en, status, steps], i) => {
+    const [ic, cls] = ICON[status];
+    const dur = status === "skipped" ? "—" : secs(en - st);
+    let ticks = "", acc = 0;
+    if (status !== "skipped") for (const [, s] of steps.slice(0, -1)) { acc += s; ticks += `<i style="left:${(100 * acc) / (en - st)}%"></i>`; }
+    const endX = Math.min(en, TOTAL);
+    html += `<div class="job${open.has(i) ? " open" : ""}" data-i="${i}">
+      <div class="lab"><span class="chev">${open.has(i) ? "▾" : "▸"}</span><span class="ic ${cls}">${ic}</span><span class="nm">${name}</span><span class="d">${dur}</span></div>
+      <div class="track">
+        ${st > q ? `<div class="seg q" style="left:${pct(q)}%;width:${pct(st - q)}%"></div>` : ""}
+        <div class="seg run ${status}" style="left:${pct(st)}%;width:${pct(endX - st)}%">${ticks}${status === "fail" ? "" : ""}</div>
+      </div></div>`;
+    if (open.has(i)) {
+      let t = st;
+      for (const [sn, s, failed] of steps) {
+        html += `<div class="step${failed ? " fail" : ""}"><div class="lab"><span class="nm">${sn}</span><span>${status === "skipped" ? "" : secs(s)}</span></div>
+          <div class="track">${s ? `<div class="seg" style="left:${pct(t)}%;width:${pct(s)}%"></div>` : ""}</div></div>`;
+        t += s;
+      }
+    }
+  });
+  g.innerHTML = html;
+  for (let s = 30; s < TOTAL; s += 30) {
+    const l = document.createElement("div");
+    l.className = "gridl";
+    l.style.left = `calc(var(--label) + (100% - var(--label)) * ${s / TOTAL})`;
+    g.appendChild(l);
+  }
+  g.querySelectorAll(".job").forEach((row) => {
+    const i = +row.dataset.i;
+    row.onclick = () => { open.has(i) ? open.delete(i) : open.add(i); hideTip(); gantt(); };
+    row.onmousemove = (e) => showTip(e, i);
+    row.onmouseleave = hideTip;
+  });
+}
+
+function showTip(e, i) {
+  const [name, runner, q, st, en, status, steps] = JOBS[i];
+  const [ic, cls] = ICON[status];
+  tip.innerHTML = `<div class="h"><span class="${cls}">${ic}</span>${name}</div>` +
+    `<div class="r">runner<b>${runner}</b></div>` +
+    (status === "skipped" ? `<div class="r">reason<b>needs test (macos)</b></div>` :
+      `<div class="r">queued<b>${secs(st - q)}</b></div><div class="r">started<b>+${secs(st)}</b></div><div class="r">duration<b>${secs(en - st)}</b></div>` +
+      `<div class="r">slowest step<b>${steps.slice().sort((a, b) => b[1] - a[1])[0][0]}</b></div>`) +
+    `<div class="hint">click for steps</div>`;
+  const box = app.getBoundingClientRect();
+  tip.classList.add("on");
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = e.clientX - box.left + 14, y = e.clientY - box.top + 16;
+  if (x + tw > box.width - 6) x = e.clientX - box.left - tw - 14;
+  if (y + th > box.height - 6) y = e.clientY - box.top - th - 12;
+  tip.style.left = Math.max(6, x) + "px"; tip.style.top = Math.max(6, y) + "px";
+}
+function hideTip() { tip.classList.remove("on"); }
+
+function fails() {
+  $("fails").innerHTML = FAILS.map((f, i) => `
+    <div class="fail-row" data-i="${i}">
+      <div class="fh"><span class="chev">▸</span><span class="bad">✗</span><span class="nm"><i>${f.name}</i>${f.leaf}</span>
+        <span class="tags">${f.flaky ? `<span class="tag flaky">flaky · 2/20</span>` : ""}<span class="tag">${f.job}</span><span>${f.time}</span></span></div>
+      <div class="fb">
+        <div class="msg">${f.msg}</div>
+        <pre>${f.trace.map(([l, own], n) => `<span class="${own ? "own" : ""}">${own ? l.replace(/(at \.\/\S+)/, '<span class="at">$1</span>') : l}</span>`).join("\n")}</pre>
+        <div class="acts"><button class="btn primary">Re-run failed</button><button class="btn">Open src/${f.trace[0][0].match(/at (\S+?):/)[1].replace("src/", "")}</button><button class="btn">Copy</button><span class="r">${f.hint}</span></div>
+      </div>
+    </div>`).join("");
+  document.querySelectorAll(".fail-row .fh").forEach((h) => h.onclick = () => h.parentElement.classList.toggle("open"));
+}
+
+gantt();
+fails();
+document.addEventListener("mouseleave", hideTip);
+</script></body></html>

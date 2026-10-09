@@ -1,0 +1,234 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ferrite-bg);color:var(--ferrite-fg);font:var(--ferrite-font-size)/var(--ferrite-line) var(--ferrite-font-mono);overflow:hidden;color-scheme:var(--ferrite-scheme);-webkit-font-smoothing:antialiased;user-select:none}
+#app{padding:0 0 12px}
+.bar{display:flex;align-items:center;gap:16px;height:30px;padding:0 12px;border-bottom:1px solid var(--ferrite-border);background:var(--ferrite-band)}
+.title{color:var(--ferrite-strong);font-weight:500;white-space:nowrap}
+.title b{color:var(--ferrite-accent);font-weight:600;margin-right:8px}
+.sub{color:var(--ferrite-muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.legend{display:flex;gap:14px;color:var(--ferrite-muted);white-space:nowrap}
+.legend i{display:inline-block;width:3px;height:11px;margin-right:6px;vertical-align:-1px}
+.body{display:flex;gap:0;margin:10px 12px 0;border:1px solid var(--ferrite-border)}
+#stage{position:relative;flex:1;min-width:0;height:336px;background:var(--ferrite-bg)}
+#edges{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.col{position:absolute;top:8px;font-size:11px;color:var(--ferrite-faint);letter-spacing:.06em;text-transform:uppercase}
+.edge{fill:none;stroke:var(--ferrite-border2);stroke-width:1.25;transition:opacity .1s,stroke .1s}
+.edge.out{stroke:var(--ferrite-accent);stroke-width:2}
+.edge.in{stroke:var(--ferrite-magenta);stroke-width:2}
+.dim .edge:not(.out):not(.in){opacity:.18}
+.node{position:absolute;width:var(--w);height:42px;padding:3px 8px 0 11px;background:var(--ferrite-band);border:1px solid var(--ferrite-border2);cursor:pointer;transition:opacity .1s,border-color .1s,background .1s}
+.node::before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:3px;background:var(--kind)}
+.node .n{color:var(--ferrite-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:18px}
+.node .m{color:var(--ferrite-faint);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node:hover,.node.focus{border-color:var(--ferrite-strong);background:var(--ferrite-band2)}
+.node.pinned{box-shadow:0 0 0 1px var(--ferrite-accent);border-color:var(--ferrite-accent)}
+.node.dep{border-color:var(--ferrite-accent)}
+.node.user{border-color:var(--ferrite-magenta)}
+.dimn .node:not(.focus):not(.dep):not(.user){opacity:.35}
+#panel{width:248px;flex:none;border-left:1px solid var(--ferrite-border);background:var(--ferrite-band);padding:10px 12px;overflow:hidden}
+#panel .h{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+#panel .h .name{color:var(--ferrite-strong);font-weight:500;font-size:13px}
+#panel .kind{font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--ferrite-border2);color:var(--ferrite-muted)}
+#panel .path{color:var(--ferrite-faint);font-size:11px;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#panel .desc{color:var(--ferrite-fg);margin-bottom:10px}
+#panel .facts{display:grid;grid-template-columns:auto 1fr;gap:0 14px;margin-bottom:10px;color:var(--ferrite-muted)}
+#panel .facts b{font-weight:400;color:var(--ferrite-fg);text-align:right}
+#panel .lbl{color:var(--ferrite-faint);font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
+#panel .lbl.dep{color:var(--ferrite-accent)}
+#panel .lbl.user{color:var(--ferrite-magenta)}
+#panel .list{display:flex;flex-wrap:wrap;gap:4px 6px;margin:2px 0 6px}
+#panel .list span{padding:0 6px;border:1px solid var(--ferrite-border2);color:var(--ferrite-fg);font-size:11px;line-height:18px;background:var(--ferrite-bg)}
+#panel .none{color:var(--ferrite-faint);font-size:11px}
+#panel .hint{color:var(--ferrite-faint);font-size:11px;margin-top:8px}
+.foot{display:flex;gap:18px;margin:8px 12px 0;color:var(--ferrite-faint)}
+.foot .k{display:inline-block;width:16px;height:2px;vertical-align:3px;margin-right:6px}
+.foot .r{margin-left:auto}
+</style></head>
+<body><div id="app">
+  <div class="bar">
+    <span class="title"><b>&#x276F;</b>diagram</span>
+    <span class="sub">crate &amp; module dependencies · ferrite @ feat/inline-cef</span>
+    <span class="legend" id="legend"></span>
+  </div>
+  <div class="body">
+    <div id="stage"><svg id="edges"><defs id="defs"></defs></svg></div>
+    <div id="panel"></div>
+  </div>
+  <div class="foot">
+    <span><span class="k" style="background:var(--ferrite-accent)"></span>depends on</span>
+    <span><span class="k" style="background:var(--ferrite-magenta)"></span>used by</span>
+    <span class="r" id="count"></span>
+  </div>
+</div>
+<script>
+"use strict";
+const KINDS = {
+  app: ["binary", "var(--ferrite-chart-1)"],
+  ui: ["view", "var(--ferrite-chart-2)"],
+  core: ["domain", "var(--ferrite-chart-3)"],
+  svc: ["service", "var(--ferrite-chart-4)"],
+  ext: ["external", "var(--ferrite-chart-6)"],
+};
+const COLS = ["binary", "views", "domain", "services", "platform"];
+// [id, column, kind, lines, path, description]
+const NODES = [
+  ["ferrite", 0, "app", 1420, "crates/ferrite/src/main.rs", "The app: windows, panes, keymap, and the wiring between views and the agent."],
+  ["transcript", 1, "ui", 2410, "crates/ferrite/src/transcript.rs", "Virtualized list of turns. Streams deltas, re-measures rows, hosts inline web views."],
+  ["composer", 1, "ui", 1980, "crates/ferrite/src/composer.rs", "The input: attachments, @-mentions, model picker, status line and notices."],
+  ["board", 1, "ui", 1720, "crates/ferrite/src/board.rs", "Kanban of threads across projects; persists its scroll and filters."],
+  ["webview", 1, "ui", 520, "spikes/inline-cef/src/element.rs", "Draws an off-screen page as an image and forwards input. This spike."],
+  ["agent", 2, "core", 1460, "crates/agent/src/session.rs", "A session: turns, tool calls, permissions, and the event stream the views read."],
+  ["theme", 2, "core", 3013, "crates/ferrite/src/theme.rs", "Tokens and type scale; the CSS variables web views get are generated from it."],
+  ["markdown", 2, "core", 1270, "vendor/gpui-base/src/markdown.rs", "Incremental markdown → styled text runs for the transcript."],
+  ["claude", 3, "svc", 1180, "crates/agent/src/claude.rs", "Anthropic provider: streaming, prompt caching, tool use."],
+  ["codex", 3, "svc", 940, "crates/agent/src/codex.rs", "Second provider behind the same session trait."],
+  ["tools", 3, "svc", 820, "crates/agent/src/tools.rs", "Read, Edit, Grep, Bash. Runs through permissions; Bash gets a PTY."],
+  ["store", 3, "svc", 1850, "crates/store/src/db.rs", "Threads, memory, settings. One SQLite file per profile, migrated on start."],
+  ["gpui", 4, "ext", 21300, "vendor/gpui-pre", "UI framework: elements, layout (taffy), text, Metal renderer."],
+  ["cef", 4, "ext", 0, "Chromium Embedded Framework 154", "Off-screen Chromium. Separate GPU, renderer and utility processes."],
+  ["pty", 4, "ext", 540, "crates/term/src/pty.rs", "Pseudo-terminals for tool commands, with a VT parser and grid."],
+  ["sqlite", 4, "ext", 0, "rusqlite 0.33 (bundled)", "Embedded database. WAL mode, one writer."],
+];
+const EDGES = [
+  ["ferrite", "transcript"], ["ferrite", "composer"], ["ferrite", "board"],
+  ["transcript", "agent"], ["transcript", "theme"], ["transcript", "markdown"], ["transcript", "webview"],
+  ["composer", "agent"], ["composer", "theme"],
+  ["board", "agent"], ["board", "theme"],
+  ["webview", "cef"], ["webview", "theme"],
+  ["agent", "claude"], ["agent", "codex"], ["agent", "tools"], ["agent", "store"],
+  ["theme", "gpui"], ["markdown", "gpui"],
+  ["tools", "pty"], ["store", "sqlite"],
+];
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage"), svg = $("edges"), panel = $("panel");
+const NSVG = "http://www.w3.org/2000/svg";
+const nodes = new Map(NODES.map(([id, col, kind, lines, path, desc]) => [id, { id, col, kind, lines, path, desc, out: [], in: [] }]));
+for (const [a, b] of EDGES) { nodes.get(a).out.push(b); nodes.get(b).in.push(a); }
+let pinned = null;
+
+$("legend").innerHTML = Object.values(KINDS).map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("");
+$("count").textContent = `${nodes.size} modules · ${EDGES.length} dependencies · click a node to pin it`;
+
+function layout() {
+  stage.querySelectorAll(".node,.col").forEach((e) => e.remove());
+  svg.querySelectorAll("path.edge").forEach((e) => e.remove());
+  const W = stage.clientWidth, H = stage.clientHeight, top = 36, padX = 18;
+  const nw = Math.min(150, Math.max(104, (W - 2 * padX) / COLS.length - 40));
+  const gap = (W - 2 * padX - nw * COLS.length) / (COLS.length - 1);
+  const byCol = COLS.map((_, c) => NODES.filter((n) => n[1] === c).map((n) => nodes.get(n[0])));
+  COLS.forEach((name, c) => {
+    const x = padX + c * (nw + gap);
+    const h = document.createElement("div");
+    h.className = "col"; h.style.left = x + "px"; h.textContent = name;
+    stage.appendChild(h);
+    const list = byCol[c], rowH = 58, total = list.length * rowH - 16;
+    list.forEach((n, i) => {
+      n.x = x; n.y = top + (H - top - total) / 2 + i * rowH; n.w = nw; n.h = 42;
+      const el = document.createElement("div");
+      el.className = "node"; el.dataset.id = n.id;
+      el.style.cssText = `left:${n.x}px;top:${n.y}px;--w:${nw}px;--kind:${KINDS[n.kind][1]}`;
+      el.innerHTML = `<div class="n">${n.id}</div><div class="m">${n.lines ? n.lines.toLocaleString("en-US") + " lines" : KINDS[n.kind][0]}</div>`;
+      el.onmouseenter = () => focus(n.id);
+      el.onmouseleave = () => focus(pinned);
+      el.onclick = (e) => { e.stopPropagation(); pinned = pinned === n.id ? null : n.id; focus(n.id); };
+      n.el = el;
+      stage.appendChild(el);
+    });
+  });
+  // Ports: spread a node's edges along its side, ordered by the other end's y.
+  const port = (n, list, side) => {
+    const sorted = list.slice().sort((a, b) => nodes.get(a).y - nodes.get(b).y);
+    return (other) => {
+      const k = sorted.indexOf(other), m = sorted.length;
+      return n.y + n.h / 2 + (m > 1 ? (k / (m - 1) - 0.5) * Math.min(26, 8 * (m - 1)) : 0);
+    };
+  };
+  // Edges that skip a column run along a bus above or below the nodes, so
+  // they never cross one: out into the gap after the source column, along
+  // the bus, down the gap before the target column.
+  const ys = [...nodes.values()].map((n) => n.y);
+  const busTop = Math.min(...ys) - 14, busBottom = Math.max(...ys) + 42 + 14, mid = (busTop + busBottom) / 2;
+  let lanes = { top: 0, bottom: 0 };
+  const gapX = (c) => padX + (c + 1) * (nw + gap) - gap / 2;
+  for (const n of nodes.values()) {
+    n.outPort = port(n, n.out.filter((t) => nodes.get(t).col > n.col)); n.inPort = port(n, n.in.filter((s) => nodes.get(s).col < n.col));
+  }
+  for (const [a, b] of EDGES) {
+    const s = nodes.get(a), t = nodes.get(b);
+    let d;
+    if (s.col === t.col) {
+      // same column: loop out to the right and back in
+      const x = s.x + s.w, y1 = s.y + s.h - 6, y2 = t.y + 6, bulge = 22;
+      d = `M${x},${y1} C${x + bulge},${y1} ${x + bulge},${y2} ${x + 6},${y2}`;
+    } else if (t.col - s.col > 1) {
+      const x1 = s.x + s.w, y1 = s.outPort(b), x2 = t.x - 6, y2 = t.inPort(a);
+      const top = (y1 + y2) / 2 < mid, lane = top ? lanes.top++ : lanes.bottom++;
+      const by = top ? busTop - lane * 6 : busBottom + lane * 6;
+      const ga = gapX(s.col) - 4 + lane * 6, gb = gapX(t.col - 1) + 4 - lane * 6, r = 8, sy = top ? -1 : 1;
+      d = `M${x1},${y1} L${ga - r},${y1} Q${ga},${y1} ${ga},${y1 + sy * r} L${ga},${by - sy * r} Q${ga},${by} ${ga + r},${by} ` +
+          `L${gb - r},${by} Q${gb},${by} ${gb},${by - sy * r} L${gb},${y2 + sy * r} Q${gb},${y2} ${gb + r},${y2} L${x2},${y2}`;
+    } else {
+      const x1 = s.x + s.w, y1 = s.outPort(b), x2 = t.x - 6, y2 = t.inPort(a), dx = Math.max(30, (x2 - x1) * 0.5);
+      d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+    }
+    const p = document.createElementNS(NSVG, "path");
+    p.setAttribute("d", d); p.setAttribute("class", "edge"); p.setAttribute("marker-end", "url(#m-base)");
+    p.dataset.a = a; p.dataset.b = b;
+    svg.appendChild(p);
+  }
+  focus(pinned);
+}
+
+// Arrowheads, one per edge state (markers don't inherit the stroke colour).
+$("defs").innerHTML = [["base", "--ferrite-border2"], ["out", "--ferrite-accent"], ["in", "--ferrite-magenta"]]
+  .map(([k, c]) => `<marker id="m-${k}" viewBox="0 0 8 8" refX="1" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" style="fill:var(${c})"/></marker>`).join("");
+
+function focus(id) {
+  const n = id && nodes.get(id);
+  stage.classList.toggle("dimn", !!n); svg.classList.toggle("dim", !!n);
+  for (const m of nodes.values()) {
+    m.el.classList.toggle("focus", m.id === id);
+    m.el.classList.toggle("dep", !!n && n.out.includes(m.id));
+    m.el.classList.toggle("user", !!n && n.in.includes(m.id));
+    m.el.classList.toggle("pinned", m.id === pinned);
+  }
+  svg.querySelectorAll("path.edge").forEach((p) => {
+    const out = !!n && p.dataset.a === id, inn = !!n && p.dataset.b === id;
+    p.classList.toggle("out", out); p.classList.toggle("in", inn);
+    p.setAttribute("marker-end", `url(#m-${out ? "out" : inn ? "in" : "base"})`);
+    if (out || inn) svg.appendChild(p);   // draw highlighted edges on top
+  });
+  panel.innerHTML = n ? detail(n) : overview();
+}
+
+function chips(list) { return list.length ? `<div class="list">${list.map((x) => `<span>${x}</span>`).join("")}</div>` : `<div class="list"><span class="none" style="border:0;background:none;padding:0">none</span></div>`; }
+function reach(n) { const seen = new Set(); const walk = (x) => nodes.get(x).out.forEach((y) => { if (!seen.has(y)) { seen.add(y); walk(y); } }); walk(n.id); return seen.size; }
+function detail(n) {
+  return `<div class="h"><span class="name">${n.id}</span><span class="kind" style="border-color:${KINDS[n.kind][1]}">${KINDS[n.kind][0]}</span></div>
+    <div class="path">${n.path}</div>
+    <div class="desc">${n.desc}</div>
+    <div class="facts"><span>lines</span><b>${n.lines ? n.lines.toLocaleString("en-US") : "—"}</b><span>transitive deps</span><b>${reach(n)}</b></div>
+    <div class="lbl dep">depends on · ${n.out.length}</div>${chips(n.out)}
+    <div class="lbl user">used by · ${n.in.length}</div>${chips(n.in)}
+    ${pinned === n.id ? `<div class="hint">pinned · click again to release</div>` : ""}`;
+}
+function overview() {
+  const hubs = [...nodes.values()].sort((a, b) => b.in.length - a.in.length).slice(0, 3);
+  const leaves = [...nodes.values()].filter((n) => !n.out.length).length;
+  return `<div class="h"><span class="name">ferrite</span><span class="kind">workspace</span></div>
+    <div class="path">5 layers · arrows point at deps</div>
+    <div class="desc">Hover a module to trace what it depends on and what depends on it.</div>
+    <div class="facts"><span>modules</span><b>${nodes.size}</b><span>dependencies</span><b>${EDGES.length}</b><span>leaf modules</span><b>${leaves}</b></div>
+    <div class="lbl">most depended on</div>${chips(hubs.map((h) => `${h.id} ${h.in.length}`))}
+    <div class="lbl">cycles</div><div class="list"><span class="none" style="border:0;background:none;padding:0;color:var(--ferrite-ok)">✓ none</span></div>`;
+}
+
+stage.onclick = () => { pinned = null; focus(null); };
+let lastWidth = innerWidth;
+addEventListener("resize", () => { if (innerWidth !== lastWidth) { lastWidth = innerWidth; layout(); } });
+layout();
+</script></body></html>
