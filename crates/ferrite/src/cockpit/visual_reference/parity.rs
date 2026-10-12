@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::groups::{GroupChange, GroupId};
 use ferrite_core::progress::{Phase, ProgressEvent};
-use ferrite_core::providers::Session;
+use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
@@ -187,8 +187,8 @@ impl Session for Scripted {
     /// model stays unsupported: chosen before the first prompt it respawns
     /// the Session fresh, which is how Nav rows gets `opus[1m]` and
     /// `medium` without a notice in its transcript.
-    fn set_effort(&mut self, _: Option<&str>) -> io::Result<()> {
-        Ok(())
+    fn set_effort(&mut self, _: Option<&str>) -> io::Result<SettingAck> {
+        Ok(applied())
     }
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         let modes: &[(&str, &str)] = match self.provider {

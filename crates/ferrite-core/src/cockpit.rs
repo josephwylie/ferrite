@@ -21,7 +21,7 @@ use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId,
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
-use crate::providers::Session;
+use crate::providers::{Session, SettingAck};
 use crate::roster::{DraftId, DraftScope, PaneIdentity, Roster, View};
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
@@ -229,6 +229,8 @@ pub enum ProvisionError {
     Locked,
     /// A turn is running: changing the Session now would cut it short.
     Busy,
+    /// The last model or effort change waits on the provider's answer.
+    Tuning,
     /// The new provider's CLI would not spawn. The words are the
     /// provider's own.
     Spawn(io::Error),
@@ -248,6 +250,7 @@ impl std::fmt::Display for ProvisionError {
                 )
             }
             ProvisionError::Busy => write!(f, "a turn is running; change the model when it ends"),
+            ProvisionError::Tuning => write!(f, "the last change is waiting on the provider"),
             ProvisionError::Spawn(e) => write!(f, "{e}"),
             ProvisionError::Tune(e) => write!(f, "{e}"),
             ProvisionError::Store(e) => write!(f, "{e}"),
@@ -329,6 +332,34 @@ struct Replacement {
     /// waits for them, and the old Session's events wait with it.
     exchanges: Option<crate::store::ExchangeRead>,
 }
+
+/// A model or effort change the live Session has asked its provider for.
+/// The Thread's choice and its header move only once the provider accepts
+/// it (`settle_tuning`).
+struct Tuning {
+    change: Tune,
+    ack: SettingAck,
+    asked: Instant,
+}
+
+enum Tune {
+    Model(Option<String>),
+    Effort(Option<String>),
+}
+
+impl Tune {
+    /// What the change is to, as the transcript names it.
+    fn noun(&self) -> &'static str {
+        match self {
+            Tune::Model(_) => "model",
+            Tune::Effort(_) => "effort",
+        }
+    }
+}
+
+/// How long a provider has to accept a setting change before it counts as
+/// refused.
+const TUNE_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct PendingBootstrap {
     prompt: String,
@@ -426,6 +457,10 @@ struct Thread {
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
     permission_mode: Option<String>,
+    /// A model or effort change waiting on the provider. Session state: a
+    /// replacement Session drops it, since its answer would be the old
+    /// Session's.
+    tuning: Option<Tuning>,
 }
 
 impl Thread {
@@ -474,6 +509,7 @@ impl Thread {
             suggestion: None,
             suggestion_revision: 0,
             permission_mode: None,
+            tuning: None,
         };
         if let Some(notice) = state.native_queue.take_unreadable() {
             state.apply(Input::Notice(notice));
@@ -511,6 +547,24 @@ impl Thread {
     fn busy(&self) -> bool {
         self.activity.view().main().busy()
     }
+    /// Whether the model and effort can change now: not mid-turn, not
+    /// while the Session starts or is being replaced, and not while the
+    /// last change waits on the provider.
+    fn tunable(&self) -> Result<(), ProvisionError> {
+        if self.tuning.is_some() {
+            return Err(ProvisionError::Tuning);
+        }
+        if self.busy()
+            || self.replacement.is_some()
+            || self
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        {
+            return Err(ProvisionError::Busy);
+        }
+        Ok(())
+    }
     fn invalidate_suggestion(&mut self) {
         self.suggestion = None;
         self.suggestion_revision = self.suggestion_revision.wrapping_add(1);
@@ -522,6 +576,12 @@ impl Thread {
             .disconnect(self.provider == Provider::Codex)
         {
             self.apply(Input::Notice(notice));
+        }
+        if let Some(tuning) = self.tuning.take() {
+            self.apply(Input::Notice(format!(
+                "{} unchanged: the session restarted before accepting it",
+                tuning.change.noun()
+            )));
         }
         self.invalidate_suggestion();
         self.history.clear();
@@ -852,6 +912,7 @@ impl Cockpit {
             let view = state.activity.view();
             let settled = !session.is_starting()
                 && state.replacement.is_none()
+                && state.tuning.is_none()
                 && !state.busy()
                 && !view.main_operator_turn()
                 && view.working_descendants() == 0
@@ -1267,6 +1328,9 @@ impl Cockpit {
     ) -> Result<(), ProvisionError> {
         let project = self.project_id(thread);
         let state = self.threads.get(&thread).expect("checked by caller");
+        if state.tuning.is_some() {
+            return Err(ProvisionError::Tuning);
+        }
         if state.native_queue.pending()
             || (state.busy() && !matches!(kind, ReplacementKind::Fresh))
             || state.replacement.is_some()
@@ -2634,6 +2698,9 @@ impl Cockpit {
                 frame.push(update);
             }
         }
+        // After the walk: whatever the provider said before its answer to a
+        // setting change is in the transcript ahead of the change's line.
+        frame.extend(self.settle_tuning());
         // A landed prediction changes only the Composer's idle line, so it
         // owes its Pane a repaint and nothing else.
         for id in landed {
@@ -2990,6 +3057,8 @@ impl Cockpit {
     /// Change an idle Thread's model through its live native Session control.
     /// Unsupported controls fall back to resuming the same conversation;
     /// provider refusals preserve the current Session and durable choice.
+    /// A provider that answers later holds the change pending
+    /// (`settle_tuning`): nothing moves until it accepts.
     pub fn set_model(
         &mut self,
         thread: ThreadId,
@@ -3002,52 +3071,22 @@ impl Cockpit {
                 .set_tuning(thread, model, effort, None)
                 .map_err(ProvisionError::Store);
         };
-        if state.busy()
-            || state.replacement.is_some()
-            || state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        {
-            return Err(ProvisionError::Busy);
-        }
+        state.tunable()?;
         if state.model == model && model.is_some() {
             return Ok(());
         }
-        let previous = state.model.clone();
         let native = state
             .session
             .as_mut()
             .and_then(SessionLifecycle::session_mut)
             .map(|session| session.set_model(model.as_deref()));
         match native {
-            Some(Ok(())) => {}
+            Some(Ok(ack)) => self.await_tuning(thread, Tune::Model(model), ack),
             Some(Err(error)) if error.kind() != io::ErrorKind::Unsupported => {
-                return Err(ProvisionError::Tune(error));
+                Err(ProvisionError::Tune(error))
             }
-            None | Some(Err(_)) => {
-                return self.retune(thread, model, effort);
-            }
+            None | Some(Err(_)) => self.retune(thread, model, effort),
         }
-        state.history.clear();
-        if let Err(error) =
-            self.store
-                .set_tuning(thread, model.clone(), effort, Some(&mut state.writer))
-        {
-            if let Some(session) = state
-                .session
-                .as_mut()
-                .and_then(SessionLifecycle::session_mut)
-            {
-                let _ = session.set_model(previous.as_deref());
-            }
-            return Err(ProvisionError::Store(error));
-        }
-        let label =
-            crate::providers::models::label(model.as_deref().unwrap_or("default"), &state.models);
-        state.apply(Input::Notice(format!("model changed to {label}")));
-        state.model = model;
-        Ok(())
     }
 
     /// Change the next turn's effort on the existing Session. A turn or
@@ -3066,36 +3105,69 @@ impl Cockpit {
                 .set_tuning(thread, meta.model, effort, None)
                 .map_err(ProvisionError::Store);
         };
-        if state.busy()
-            || state.replacement.is_some()
-            || state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        {
-            return Err(ProvisionError::Busy);
-        }
+        state.tunable()?;
         if state.effort == effort && effort.is_some() {
             return Ok(());
         }
-        if let Some(session) = state
+        match state
             .session
             .as_mut()
             .and_then(SessionLifecycle::session_mut)
         {
-            session
-                .set_effort(effort.as_deref())
-                .map_err(ProvisionError::Tune)?;
+            Some(session) => {
+                let ack = session
+                    .set_effort(effort.as_deref())
+                    .map_err(ProvisionError::Tune)?;
+                self.await_tuning(thread, Tune::Effort(effort), ack)
+            }
+            None => self.commit_tuning(thread, Tune::Effort(effort)),
         }
-        // Re-selecting Default reapplies the latest Settings even when the
-        // durable choice was already None; there is no header change then.
-        if state.effort == effort {
-            return Ok(());
+    }
+
+    /// Commit `change` once the provider accepts it: now, when it already
+    /// has, else on the pump that finds its answer.
+    fn await_tuning(
+        &mut self,
+        thread: ThreadId,
+        change: Tune,
+        ack: SettingAck,
+    ) -> Result<(), ProvisionError> {
+        match ack.try_recv() {
+            Ok(answer) => {
+                answer.map_err(ProvisionError::Tune)?;
+                self.commit_tuning(thread, change)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                let state = self.threads.get_mut(&thread).expect("checked by caller");
+                state.tuning = Some(Tuning {
+                    change,
+                    ack,
+                    asked: crate::clock::instant(),
+                });
+                Ok(())
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(ProvisionError::Tune(
+                io::Error::other(format!("{} change was not acknowledged", change.noun())),
+            )),
         }
+    }
+
+    /// The provider took `change`: the Thread's choice and header follow,
+    /// and the transcript says so. A header that cannot be written puts
+    /// the Session back as it was.
+    fn commit_tuning(&mut self, thread: ThreadId, change: Tune) -> Result<(), ProvisionError> {
+        let state = self.threads.get_mut(&thread).expect("checked by caller");
+        let (model, effort) = match &change {
+            Tune::Model(model) => (model.clone(), state.effort.clone()),
+            // Re-selecting Default reapplies the latest Settings even when
+            // the durable choice was already None; the header stays.
+            Tune::Effort(effort) if *effort == state.effort => return Ok(()),
+            Tune::Effort(effort) => (state.model.clone(), effort.clone()),
+        };
         state.history.clear();
         if let Err(error) = self.store.set_tuning(
             thread,
-            state.model.clone(),
+            model.clone(),
             effort.clone(),
             Some(&mut state.writer),
         ) {
@@ -3104,16 +3176,72 @@ impl Cockpit {
                 .as_mut()
                 .and_then(SessionLifecycle::session_mut)
             {
-                let _ = session.set_effort(state.effort.as_deref());
+                // Put back, unanswered: the header still names the old.
+                let _ = match change {
+                    Tune::Model(_) => session.set_model(state.model.as_deref()),
+                    Tune::Effort(_) => session.set_effort(state.effort.as_deref()),
+                };
             }
             return Err(ProvisionError::Store(error));
         }
-        state.apply(Input::Notice(format!(
-            "effort changed to {}",
-            effort.as_deref().unwrap_or("default")
-        )));
+        let notice = match change {
+            Tune::Model(_) => format!(
+                "model changed to {}",
+                crate::providers::models::label(
+                    model.as_deref().unwrap_or("default"),
+                    &state.models
+                )
+            ),
+            Tune::Effort(_) => format!(
+                "effort changed to {}",
+                effort.as_deref().unwrap_or("default")
+            ),
+        };
+        state.apply(Input::Notice(notice));
+        state.model = model;
         state.effort = effort;
         Ok(())
+    }
+
+    /// Settle the setting changes their providers have answered, or have
+    /// left unanswered too long: committed, or refused in the transcript.
+    fn settle_tuning(&mut self) -> Vec<PaneUpdate> {
+        let waiting: Vec<ThreadId> = self
+            .threads
+            .iter()
+            .filter(|(_, state)| state.tuning.is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        let mut settled = Vec::new();
+        for id in waiting {
+            let state = self.threads.get_mut(&id).expect("listed above");
+            let tuning = state.tuning.as_ref().expect("listed above");
+            let answer = match tuning.ack.try_recv() {
+                Ok(answer) => answer,
+                Err(std::sync::mpsc::TryRecvError::Empty)
+                    if crate::clock::instant().duration_since(tuning.asked) < TUNE_TIMEOUT =>
+                {
+                    continue;
+                }
+                Err(_) => Err(io::Error::other(format!(
+                    "{} change was not acknowledged",
+                    tuning.change.noun()
+                ))),
+            };
+            let change = state.tuning.take().expect("listed above").change;
+            let noun = change.noun();
+            let result = answer
+                .map_err(ProvisionError::Tune)
+                .and_then(|()| self.commit_tuning(id, change));
+            let state = self.threads.get_mut(&id).expect("listed above");
+            if let Err(error) = result {
+                state.apply(Input::Notice(format!("{noun} unchanged: {error}")));
+            }
+            let mut update = PaneUpdate::new(id);
+            update.activity_changed = true;
+            settled.push(update);
+        }
+        settled
     }
 
     /// A Thread's current model and effort, live or off the header.
@@ -3420,6 +3548,12 @@ impl<'a> ThreadView<'a> {
 
     pub fn busy(&self) -> bool {
         self.state.busy() || self.starting()
+    }
+
+    /// Whether a model or effort change waits on the provider's answer:
+    /// the pickers hold until it lands.
+    pub fn tuning(&self) -> bool {
+        self.state.tuning.is_some()
     }
 
     pub fn needs_queue(&self) -> bool {
@@ -4501,6 +4635,8 @@ mod tests {
         named: Rc<RefCell<Vec<String>>>,
         tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
         fail_effort: Rc<RefCell<bool>>,
+        answer_later: Rc<RefCell<bool>>,
+        answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
         native_suggestion: Rc<RefCell<Option<String>>>,
     }
 
@@ -4533,14 +4669,19 @@ mod tests {
             self.native_suggestion.borrow_mut().take()
         }
 
-        fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
             if *self.fail_effort.borrow() {
                 return Err(io::Error::other("stub refused effort"));
             }
             self.tuned_efforts
                 .borrow_mut()
                 .push(effort.map(str::to_string));
-            Ok(())
+            if *self.answer_later.borrow() {
+                let (answer, ack) = mpsc::sync_channel(1);
+                self.answers.borrow_mut().push(answer);
+                return Ok(ack);
+            }
+            Ok(crate::providers::applied())
         }
         fn events(&self) -> &Receiver<SessionEvent> {
             &self.rx
@@ -4584,6 +4725,10 @@ mod tests {
         efforts: Rc<RefCell<Vec<Option<String>>>>,
         tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
         fail_effort: Rc<RefCell<bool>>,
+        /// While set, the provider answers effort changes when the test
+        /// sends on `answers`, not at once.
+        answer_later: Rc<RefCell<bool>>,
+        answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
         additional_directories: Rc<RefCell<Vec<Vec<std::path::PathBuf>>>>,
@@ -4662,6 +4807,8 @@ mod tests {
                 named: self.named.clone(),
                 tuned_efforts: self.tuned_efforts.clone(),
                 fail_effort: self.fail_effort.clone(),
+                answer_later: self.answer_later.clone(),
+                answers: self.answers.clone(),
                 native_suggestion: self.native_suggestion.clone(),
             }))
         }
@@ -8550,6 +8697,83 @@ mod tests {
         assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
         assert_eq!(cockpit.peek(fresh).unwrap().effort, None);
         assert_eq!(cockpit.thread(fresh).and_then(|open| open.effort()), None);
+    }
+
+    /// The last Notice in a Thread's transcript.
+    fn last_notice(cockpit: &Cockpit, thread: ThreadId) -> String {
+        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
+        match &blocks.last().unwrap().body {
+            Body::Notice(line) => line.clone(),
+            body => panic!("the last block is not a Notice: {body:?}"),
+        }
+    }
+
+    /// A provider that answers a setting change later holds it pending:
+    /// the Thread's effort and its header move on the pump that finds the
+    /// answer, and another change waits for it.
+    #[test]
+    fn an_effort_change_commits_when_the_provider_accepts_it() {
+        let (mut cockpit, fake) = cockpit("effort-answered-later");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        *fake.answer_later.borrow_mut() = true;
+
+        cockpit.set_effort(thread, Some("high".into())).unwrap();
+        let open = cockpit.thread(thread).unwrap();
+        assert!(open.tuning());
+        assert_eq!(open.effort(), None, "not before the provider accepts it");
+        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+        assert!(matches!(
+            cockpit.set_effort(thread, Some("max".into())),
+            Err(ProvisionError::Tuning)
+        ));
+        cockpit.pump();
+        assert!(cockpit.thread(thread).unwrap().tuning(), "still unanswered");
+
+        fake.answers.borrow_mut().remove(0).send(Ok(())).unwrap();
+        let frame = cockpit.pump();
+        assert!(frame.iter().any(|update| update.thread == thread));
+        let open = cockpit.thread(thread).unwrap();
+        assert!(!open.tuning());
+        assert_eq!(open.effort(), Some("high"));
+        assert_eq!(
+            cockpit.peek(thread).unwrap().effort.as_deref(),
+            Some("high")
+        );
+        assert_eq!(last_notice(&cockpit, thread), "effort changed to high");
+    }
+
+    /// A change the provider refuses, or never answers, changes nothing,
+    /// and the transcript says why.
+    #[test]
+    fn an_effort_change_refused_after_the_fact_changes_nothing() {
+        let (mut cockpit, fake) = cockpit("effort-refused-later");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        *fake.answer_later.borrow_mut() = true;
+
+        cockpit.set_effort(thread, Some("max".into())).unwrap();
+        fake.answers
+            .borrow_mut()
+            .remove(0)
+            .send(Err(io::Error::other("unsupported effort")))
+            .unwrap();
+        cockpit.pump();
+        assert!(!cockpit.thread(thread).unwrap().tuning());
+        assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
+        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+        assert_eq!(
+            last_notice(&cockpit, thread),
+            "effort unchanged: unsupported effort"
+        );
+
+        cockpit.set_effort(thread, Some("max".into())).unwrap();
+        // The provider went away without answering.
+        fake.answers.borrow_mut().clear();
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
+        assert_eq!(
+            last_notice(&cockpit, thread),
+            "effort unchanged: effort change was not acknowledged"
+        );
     }
 
     /// The Thread's title reaches its Session: a rename is told to the live

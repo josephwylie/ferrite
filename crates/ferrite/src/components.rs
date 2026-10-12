@@ -1598,10 +1598,6 @@ pub struct ChoiceMenu {
     pub return_focus: gpui::FocusHandle,
     pub on_open: OpenChanged,
     pub on_pick: Picked,
-    /// Where the menu may rest (`FloatPlace`): its foot `FLOAT_OFFSET`
-    /// above the Composer's edge, its right edge inside the Pane's. `None`
-    /// hangs it off the trigger alone.
-    pub place: Option<FloatPlace>,
 }
 
 #[derive(Default)]
@@ -1609,12 +1605,6 @@ struct ChoiceMenuState {
     menu: Option<gpui::Entity<gpui::component::menu::PopupMenu>>,
     steps: usize,
     initialized: bool,
-    /// How far the menu is lifted and pulled left of where the kit hangs
-    /// it, and whether that has been measured yet (unmeasured, it is
-    /// drawn at zero opacity for its one frame).
-    lift: f32,
-    shift: f32,
-    placed: bool,
 }
 
 /// The limits a summoned surface rests within (rule 2.4.3): `floor` is the
@@ -1646,14 +1636,6 @@ impl FloatPlace {
         };
         point(px(x), px(y))
     }
-
-    /// How far a surface laid out at `natural` must lift (up is positive)
-    /// and shift left to rest on its floor inside the Pane.
-    fn offsets(&self, natural: gpui::Bounds<gpui::Pixels>) -> (f32, f32) {
-        let lift = f32::from(natural.bottom()) - (self.floor - theme::FLOAT_OFFSET);
-        let shift = (f32::from(natural.right()) - self.limit_right).max(0.);
-        (lift, shift)
-    }
 }
 
 impl gpui::RenderOnce for ChoiceMenu {
@@ -1669,9 +1651,6 @@ impl gpui::RenderOnce for ChoiceMenu {
             retained.update(cx, |state, _| {
                 state.menu = None;
                 state.initialized = false;
-                state.placed = false;
-                state.lift = 0.;
-                state.shift = 0.;
             });
         } else if retained.read(cx).menu.is_none() {
             let steps = cursor_steps(&self.choices);
@@ -1745,11 +1724,7 @@ impl gpui::RenderOnce for ChoiceMenu {
                 state.steps = steps;
             });
         }
-        let (menu, lift, shift, placed) = {
-            let state = retained.read(cx);
-            (state.menu.clone(), state.lift, state.shift, state.placed)
-        };
-        let place = self.place;
+        let menu = retained.read(cx).menu.clone();
         let on_open = self.on_open;
         let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
             .appearance(false)
@@ -1758,14 +1733,6 @@ impl gpui::RenderOnce for ChoiceMenu {
             .trigger(self.trigger)
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx));
-        if place.is_some() {
-            // The kit hangs the menu off the chip; the measured offsets move
-            // it onto the Composer's edge and inside the Pane.
-            popover = popover
-                .bottom(px(lift))
-                .left(px(-shift))
-                .when(!placed, |popover| popover.opacity(0.));
-        }
         if let Some(menu) = menu {
             popover = popover
                 .track_focus(&menu.focus_handle(cx))
@@ -1780,35 +1747,7 @@ impl gpui::RenderOnce for ChoiceMenu {
                         .debug_selector(|| "choice-menu".into())
                         .p(px(0.))
                         .child(div().overflow_hidden().child(menu.clone()));
-                    on_bounds(surface, move |bounds, window, cx| {
-                        if let Some(place) = place {
-                            // Inside the surface's 1px edge: add it back.
-                            let bounds = bounds.dilate(px(1.));
-                            let moved = retained.update(cx, |state, _| {
-                                // Undo the offsets in force to find where
-                                // the kit laid it, then solve from there.
-                                let natural = gpui::Bounds {
-                                    origin: point(
-                                        bounds.origin.x + px(state.shift),
-                                        bounds.origin.y + px(state.lift),
-                                    ),
-                                    size: bounds.size,
-                                };
-                                let (lift, shift) = place.offsets(natural);
-                                let moved = (lift - state.lift).abs() > 0.5
-                                    || (shift - state.shift).abs() > 0.5
-                                    || !state.placed;
-                                state.placed = true;
-                                if moved {
-                                    state.lift = lift;
-                                    state.shift = shift;
-                                }
-                                moved
-                            });
-                            if moved {
-                                window.refresh();
-                            }
-                        }
+                    on_bounds(surface, move |_, window, cx| {
                         let steps = retained.update(cx, |state, _| {
                             if state.initialized {
                                 return None;

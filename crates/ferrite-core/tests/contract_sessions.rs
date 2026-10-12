@@ -35,12 +35,15 @@ fn claude_model_change_waits_for_native_acceptance_and_reports_rejection() {
     let mut r = Replay::new("claude", vec![]);
     r.drain();
     let pid = r.session.pid();
-    r.session.set_model(Some("next-model")).unwrap();
+    let answer = |ack: ferrite_core::providers::SettingAck| {
+        ack.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the CLI answered the model change")
+    };
+    let accepted = r.session.set_model(Some("next-model")).unwrap();
     let request = r.wait_host(|v| v["request"]["subtype"] == "set_model");
     assert_eq!(request["request"]["model"], "next-model");
-    assert!(r
-        .session
-        .set_model(Some("rejected-model"))
+    answer(accepted).unwrap();
+    assert!(answer(r.session.set_model(Some("rejected-model")).unwrap())
         .unwrap_err()
         .to_string()
         .contains("model unavailable"));

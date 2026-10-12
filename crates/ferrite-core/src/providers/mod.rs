@@ -5,7 +5,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{sync_channel, Receiver};
 
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
@@ -83,6 +83,19 @@ fn cmd_shim(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     None
 }
 
+/// A setting change's answer: `Ok` once the change holds for the next
+/// turn. A Session that keeps the setting itself has answered by the time
+/// it hands this back; one whose provider must accept it answers when the
+/// provider does, and nobody waits on it.
+pub type SettingAck = Receiver<io::Result<()>>;
+
+/// The answer to a change the Session applied itself.
+pub fn applied() -> SettingAck {
+    let (answer, ack) = sync_channel(1);
+    let _ = answer.send(Ok(()));
+    ack
+}
+
 /// A live provider Session, whatever backend serves it. Each provider
 /// implements this end to end — process, protocol and quirks — and nothing
 /// above this line knows which one it is holding.
@@ -128,14 +141,14 @@ pub trait Session {
     }
     /// Change effort for the next turn without replacing this Session or
     /// its conversation. `None` restores the provider's configured default.
-    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
+    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<SettingAck> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "this Session cannot change effort",
         ))
     }
     /// Select the model for subsequent turns on this Session.
-    fn set_model(&mut self, _model: Option<&str>) -> io::Result<()> {
+    fn set_model(&mut self, _model: Option<&str>) -> io::Result<SettingAck> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "this Session cannot change model",
@@ -207,10 +220,10 @@ impl Session for ClaudeSession {
         ClaudeSession::take_suggestion(self)
     }
 
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
         ClaudeSession::set_effort(self, effort)
     }
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
         ClaudeSession::set_model(self, model)
     }
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
@@ -264,11 +277,11 @@ impl Session for CodexSession {
     fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
         CodexSession::cancel_queued(self, id)
     }
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
-        CodexSession::set_effort(self, effort)
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
+        CodexSession::set_effort(self, effort).map(|()| applied())
     }
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
-        CodexSession::set_model(self, model)
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
+        CodexSession::set_model(self, model).map(|()| applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         CodexSession::events(self)

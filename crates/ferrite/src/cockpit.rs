@@ -23,7 +23,7 @@ pub(crate) mod visual_reference;
 
 use std::time::Duration;
 
-use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
+use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice, ThreadView};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
@@ -243,6 +243,26 @@ const PUMP_MS: u64 = 8;
 /// cover a layout that settles over two.
 const CARD_GEOMETRY_FRAMES: u8 = 3;
 const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
+const TUNING_PENDING_HINT: &str = "Available once the last change is accepted";
+
+/// Why a Thread's model and effort cannot change now, in the words the
+/// pickers show; `None` while they can.
+fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
+    if open.busy() {
+        Some(TUNING_BUSY_HINT)
+    } else if open.tuning() {
+        Some(TUNING_PENDING_HINT)
+    } else {
+        None
+    }
+}
+
+/// The hold a picker's rows were built under: its inert first row.
+fn shown_hold(rows: &[Row]) -> Option<&str> {
+    rows.first()
+        .map(|row| row.name.as_ref())
+        .filter(|name| [TUNING_BUSY_HINT, TUNING_PENDING_HINT].contains(name))
+}
 
 pub struct CockpitView {
     cockpit: Cockpit,
@@ -1483,7 +1503,7 @@ impl CockpitView {
             let pane = PaneView::new(thread, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             self.panes.push(pane);
-            self.facts.opened(&self.cockpit, thread);
+            self.thread_opened(thread, cx);
             opened = true;
         }
         self.panes
@@ -1509,6 +1529,19 @@ impl CockpitView {
     /// background executor — the rows fill in when it answers.
     fn parked_changed(&mut self, cx: &mut Context<Self>) {
         let lookups = self.facts.parked_changed(&self.cockpit);
+        self.look_up(lookups, cx);
+    }
+
+    /// A Thread's Pane opened: its facts afresh, what only git can say
+    /// read off the UI thread.
+    fn thread_opened(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let lookups = self.facts.opened(&self.cockpit, thread);
+        self.look_up(lookups, cx);
+    }
+
+    /// Run the facts' slow reads in the background and adopt what they
+    /// find.
+    fn look_up(&mut self, lookups: crate::facts::Lookups, cx: &mut Context<Self>) {
         if lookups.is_empty() {
             return;
         }
@@ -1519,7 +1552,7 @@ impl CockpitView {
                 .spawn(async move { lookups.run(&logs) })
                 .await;
             this.update(cx, |view, cx| {
-                view.facts.parked_looked_up(&view.cockpit, answers);
+                view.facts.looked_up(&view.cockpit, answers);
                 cx.notify();
             })
             .ok();
@@ -1860,11 +1893,8 @@ impl CockpitView {
                 && open.pane.thread().is_some_and(|thread| {
                     self.cockpit
                         .thread(thread)
-                        .is_some_and(|thread| thread.busy())
-                        != open
-                            .rows
-                            .first()
-                            .is_some_and(|row| row.name == TUNING_BUSY_HINT)
+                        .and_then(|thread| tuning_hold(&thread))
+                        != shown_hold(&open.rows)
                 })
         });
         if models_changed || tuning_availability_changed {
@@ -5167,7 +5197,7 @@ impl CockpitView {
             match self.cockpit.wake(thread) {
                 Ok(()) => {
                     self.sync_panes(cx);
-                    self.facts.opened(&self.cockpit, thread);
+                    self.thread_opened(thread, cx);
                     self.parked_changed(cx);
                 }
                 Err(error) => {
@@ -6210,14 +6240,16 @@ impl CockpitView {
     /// pickers) is a fresh popover in its place.
     fn pick(&mut self, at: usize, cx: &mut Context<Self>) {
         // The native menu can outlive the frame in which it opened. A turn
-        // that started meanwhile must not turn a visible choice into a
-        // guaranteed refusal in the transcript.
+        // that started meanwhile, or a change still waiting on the
+        // provider, must not turn a visible choice into a guaranteed
+        // refusal in the transcript.
         if let Some(open) = self.popover.as_ref() {
             if matches!(open.kind, Kind::Provider | Kind::Effort)
                 && open.pane.thread().is_some_and(|thread| {
                     self.cockpit
                         .thread(thread)
-                        .is_some_and(|thread| thread.busy())
+                        .and_then(|thread| tuning_hold(&thread))
+                        .is_some()
                 })
             {
                 self.refresh_model_picker(cx);
@@ -6584,7 +6616,7 @@ impl CockpitView {
         let chosen = open.model().map(str::to_string);
         let serving = open.transcript().model().map(str::to_string);
         let locked = open.first_prompt_sent();
-        let busy = open.busy();
+        let hold = tuning_hold(&open);
         let (mut rows, mut selected) = self.provider_rows(
             current,
             chosen.as_deref(),
@@ -6592,8 +6624,8 @@ impl CockpitView {
             locked,
             |choice| Consequence::Provision(choice),
         );
-        if busy {
-            Self::unavailable_tuning_rows(&mut rows, &mut selected);
+        if let Some(hold) = hold {
+            Self::unavailable_tuning_rows(&mut rows, &mut selected, hold);
         }
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
@@ -6609,8 +6641,8 @@ impl CockpitView {
     }
 
     /// Keep the current checkmark and catalog inspectable while choices
-    /// cannot be applied. The reason is a visible, inert menu row.
-    fn unavailable_tuning_rows(rows: &mut Vec<Row>, selected: &mut usize) {
+    /// cannot be applied. The reason (`hold`) is a visible, inert menu row.
+    fn unavailable_tuning_rows(rows: &mut Vec<Row>, selected: &mut usize, hold: &'static str) {
         for row in rows.iter_mut() {
             row.row.inert = true;
         }
@@ -6619,7 +6651,7 @@ impl CockpitView {
             Row {
                 row: pane::MenuRow {
                     insert: SharedString::default(),
-                    name: TUNING_BUSY_HINT.into(),
+                    name: hold.into(),
                     matched: Vec::new(),
                     detail: SharedString::default(),
                     prose_detail: true,
@@ -6785,7 +6817,7 @@ impl CockpitView {
                 if adopted.not_opened.is_some() {
                     self.parked_changed(cx);
                 } else if from.draft().is_some() {
-                    self.facts.opened(&self.cockpit, adopted.thread);
+                    self.thread_opened(adopted.thread, cx);
                 }
             }
             Err(e) => self.say_to(from, format!("cannot import {}: {e}", path.display())),
@@ -7632,7 +7664,7 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.facts.opened(&self.cockpit, done.thread);
+                self.thread_opened(done.thread, cx);
                 self.refresh_names();
                 self.start_titling(done.thread, text.to_string(), cx);
                 self.scroll_transcript_to_bottom(index, cx);
@@ -11703,7 +11735,7 @@ impl CockpitView {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
         let provider = open.provider();
-        let busy = open.busy();
+        let hold = tuning_hold(&open);
         // The standing choice names the chip; else what the Session's own
         // Init said is serving; until either, the Provider's own name —
         // and always the name a person says, never the id on the wire.
@@ -11734,8 +11766,13 @@ impl CockpitView {
             index,
             Kind::Provider,
             pane::composer_control(("model-picker", thread.get() as usize), cx)
-                .tip(if busy { TUNING_BUSY_HINT } else { "Model" })
-                .child(pane::model_picker(Some(provider), label, effort, busy)),
+                .tip(hold.unwrap_or("Model"))
+                .child(pane::model_picker(
+                    Some(provider),
+                    label,
+                    effort,
+                    hold.is_some(),
+                )),
             cx,
         );
         Some(
@@ -11815,8 +11852,10 @@ impl CockpitView {
                             // What a row resolves to (`Opus 5.5 (1M) · from
                             // Settings`); a section's handover note too.
                             detail: (!row.detail.is_empty()).then(|| row.detail.clone()),
-                            // Why every row is dead while the turn runs.
-                            note: row.inert && row.name == TUNING_BUSY_HINT,
+                            // Why every row is dead for now.
+                            note: row.inert
+                                && [TUNING_BUSY_HINT, TUNING_PENDING_HINT]
+                                    .contains(&row.name.as_ref()),
                             icon: provider.map(|provider| match provider {
                                 Provider::Claude => {
                                     (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE)
@@ -11832,10 +11871,10 @@ impl CockpitView {
             .unwrap_or_default();
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
-        let busy = identity.thread().is_some_and(|thread| {
+        let hold = identity.thread().and_then(|thread| {
             self.cockpit
                 .thread(thread)
-                .is_some_and(|thread| thread.busy())
+                .and_then(|thread| tuning_hold(&thread))
         });
         crate::menu::ChoiceMenu {
             head: Some((head.0.into(), head.1.into())),
@@ -11851,7 +11890,7 @@ impl CockpitView {
                 0.
             },
             // Rebuild the retained menu when availability changes.
-            id: format!("choice-{identity:?}-{effort}-{busy}").into(),
+            id: format!("choice-{identity:?}-{effort}-{}", hold.unwrap_or_default()).into(),
             // The model and effort chips lead the status line (and a
             // draft's band starts its own): the picker hangs right from the
             // chip and the measured shift keeps it inside the Pane.
@@ -11948,7 +11987,7 @@ impl CockpitView {
             return;
         };
         let provider = open.provider();
-        let busy = open.busy();
+        let hold = tuning_hold(&open);
         let chosen = open.effort().map(str::to_string);
         let default = self.prefs.settings.effort_for(provider).map(str::to_string);
         let ladder =
@@ -11984,8 +12023,8 @@ impl CockpitView {
             });
         }
         let mut selected = rows.iter().position(|row| row.active).unwrap_or(0);
-        if busy {
-            Self::unavailable_tuning_rows(&mut rows, &mut selected);
+        if let Some(hold) = hold {
+            Self::unavailable_tuning_rows(&mut rows, &mut selected, hold);
         }
         self.popover = Some(Popover {
             scroll: ScrollHandle::new(),
@@ -13261,7 +13300,12 @@ mod tests {
             >,
         >,
         native_files: Rc<RefCell<bool>>,
+        effort_answers: EffortAnswers,
     }
+
+    /// While `Some`, the provider answers each effort change when the test
+    /// sends on its answer, not at once.
+    type EffortAnswers = Rc<RefCell<Option<Vec<mpsc::SyncSender<std::io::Result<()>>>>>>;
 
     impl Session for Scripted {
         fn search_files(
@@ -13317,8 +13361,18 @@ mod tests {
             Ok(())
         }
 
-        fn set_effort(&mut self, _effort: Option<&str>) -> std::io::Result<()> {
-            Ok(())
+        fn set_effort(
+            &mut self,
+            _effort: Option<&str>,
+        ) -> std::io::Result<ferrite_core::providers::SettingAck> {
+            match self.effort_answers.borrow_mut().as_mut() {
+                Some(answers) => {
+                    let (answer, ack) = mpsc::sync_channel(1);
+                    answers.push(answer);
+                    Ok(ack)
+                }
+                None => Ok(ferrite_core::providers::applied()),
+            }
         }
         fn events(&self) -> &Receiver<SessionEvent> {
             &self.rx
@@ -13369,6 +13423,7 @@ mod tests {
             >,
         >,
         native_files: Rc<RefCell<bool>>,
+        effort_answers: EffortAnswers,
     }
 
     impl Spawner for Fake {
@@ -13420,6 +13475,7 @@ mod tests {
                 native_controls: self.native_controls.clone(),
                 file_searches: self.file_searches.clone(),
                 native_files: self.native_files.clone(),
+                effort_answers: self.effort_answers.clone(),
             }))
         }
     }

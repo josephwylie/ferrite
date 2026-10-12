@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
+use ferrite_core::providers::{
+    ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError, SettingAck,
+};
 use ferrite_core::{
     activity::{Activity, ActivityInput, ExecutionEvent},
     transcript::{Body, Input},
@@ -134,6 +136,12 @@ fn prose(events: &[SessionEvent]) -> String {
             _ => None,
         })
         .collect()
+}
+
+/// A setting change's answer, once the CLI gives it.
+fn answer(ack: std::io::Result<SettingAck>) -> std::io::Result<()> {
+    ack?.recv_timeout(Duration::from_secs(5))
+        .expect("the CLI answered the setting change")
 }
 
 fn spawn_failure(program: String) -> ClaudeSpawnError {
@@ -820,9 +828,9 @@ cat >> '{log}'"#,
     );
     let mut session = ClaudeSession::spawn(config(program)).unwrap();
     let pid = session.pid();
-    session.set_effort(Some("max")).unwrap();
-    session.set_effort(Some("low")).unwrap();
-    session.set_effort(None).unwrap();
+    answer(session.set_effort(Some("max"))).unwrap();
+    answer(session.set_effort(Some("low"))).unwrap();
+    answer(session.set_effort(None)).unwrap();
     session.send("next").unwrap();
     assert_eq!(session.pid(), pid);
     let recorded = read_lines(&log, 5);
@@ -860,7 +868,7 @@ cat >> '{log}'"#,
         ),
     );
     let mut session = ClaudeSession::spawn(config(program)).unwrap();
-    let error = session.set_effort(Some("max")).unwrap_err();
+    let error = answer(session.set_effort(Some("max"))).unwrap_err();
     assert!(error.to_string().contains("unsupported effort"));
     session.send("still here").unwrap();
     let recorded = read_lines(&log, 3);
@@ -869,13 +877,12 @@ cat >> '{log}'"#,
 }
 
 /// The UI thread both drains the event channel and changes settings, so a
-/// reader parked on a full channel must not be holding anything a setting
-/// change waits on. Here the reader parks while delivering a control's
-/// answer; the change then fails at its acknowledgement deadline (its ack is
-/// queued behind the full channel) instead of hanging the UI for good, and
-/// nothing the CLI said is lost once the channel drains.
+/// setting change must never wait on the reader. Here the reader parks on a
+/// full channel while delivering a control's answer: the change is asked at
+/// once, its answer waits behind the channel, and lands, accepted, once the
+/// channel drains — with nothing the CLI said lost.
 #[test]
-fn a_setting_change_while_the_reader_is_parked_fails_instead_of_hanging() {
+fn a_setting_change_while_the_reader_is_parked_is_answered_once_it_drains() {
     // Channel capacity: the reader parks on whichever event comes next.
     const CAPACITY: usize = 1024;
     // Several answered controls straddle the full mark, so the reader parks
@@ -926,18 +933,17 @@ cat >> '{log}'"#,
     // Long enough for the reader to fill the channel and park on it.
     std::thread::sleep(Duration::from_millis(300));
 
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = session.set_effort(Some("max"));
-        let _ = done.send((session, result));
-    });
-    let (mut session, result) = finished
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the setting change hung behind the parked reader");
-    // Its acknowledgement never arrived in time: it must not look applied.
+    let asked = Instant::now();
+    let ack = session.set_effort(Some("max")).unwrap();
     assert!(
-        result.is_err(),
-        "an unacknowledged change looked successful"
+        asked.elapsed() < Duration::from_millis(500),
+        "the setting change waited on the parked reader"
+    );
+    // Behind the full channel: not answered, so it must not look applied.
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        ack.try_recv().is_err(),
+        "an unacknowledged change was answered"
     );
 
     let mut deltas = 0;
@@ -953,6 +959,9 @@ cat >> '{log}'"#,
         }
     }
     assert_eq!(deltas, DELTAS, "the parked reader lost events");
+    ack.recv_timeout(Duration::from_secs(5))
+        .expect("the change was answered once the channel drained")
+        .expect("the CLI accepted it");
     session.send("still here").unwrap();
     let recorded = read_lines(&log, 2);
     let setting: Value = serde_json::from_str(&recorded[0]).unwrap();

@@ -9,7 +9,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use ferrite_core::cockpit::{RssSampler, SpawnRequest, Spawner};
-use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
+use ferrite_core::providers::{
+    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session, SettingAck,
+};
 use ferrite_core::session::SessionLifecycle;
 use ferrite_core::settings::Settings;
 use ferrite_core::store::Provider;
@@ -249,7 +251,7 @@ impl Session for SessionWithDefaults {
         self.inner.permission_modes()
     }
 
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
         self.inner.set_model(model)
     }
 
@@ -281,7 +283,7 @@ impl Session for SessionWithDefaults {
         self.inner.send(text)
     }
 
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
         let effort = match effort {
             Some(effort) => Some(effort.to_string()),
             None => self
@@ -463,6 +465,7 @@ pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::providers::applied;
 
     #[derive(Default)]
     struct NativeCalls {
@@ -510,7 +513,7 @@ mod tests {
         ) -> io::Result<()> {
             Ok(())
         }
-        fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
             if model == Some("unavailable") {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -518,7 +521,7 @@ mod tests {
                 ));
             }
             self.calls.lock().unwrap().model = model.map(str::to_owned);
-            Ok(())
+            Ok(applied())
         }
         fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
             kind != ferrite_core::ControlKind::LoginMcp
@@ -714,9 +717,9 @@ mod tests {
             ) -> io::Result<()> {
                 Ok(())
             }
-            fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+            fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
                 self.efforts.lock().unwrap().push(effort.map(str::to_owned));
-                Ok(())
+                Ok(applied())
             }
         }
         for provider in [Provider::Claude, Provider::Codex] {

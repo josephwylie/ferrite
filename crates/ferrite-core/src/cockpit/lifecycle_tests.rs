@@ -1,6 +1,7 @@
 //! Delayed provider adapters cross the same startup seam as production.
 //! Gates decide readiness; no CLI, timing assumptions, or worker-side sends.
 use super::*;
+use crate::providers::applied;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -18,9 +19,9 @@ impl Drop for Scripted {
     }
 }
 impl Session for Scripted {
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
         self.efforts.lock().unwrap().push(effort.map(str::to_owned));
-        Ok(())
+        Ok(applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.events
