@@ -1483,7 +1483,7 @@ impl CockpitView {
             let pane = PaneView::new(thread, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             self.panes.push(pane);
-            self.facts.opened(&self.cockpit, thread);
+            self.thread_opened(thread, cx);
             opened = true;
         }
         self.panes
@@ -1509,6 +1509,19 @@ impl CockpitView {
     /// background executor — the rows fill in when it answers.
     fn parked_changed(&mut self, cx: &mut Context<Self>) {
         let lookups = self.facts.parked_changed(&self.cockpit);
+        self.look_up(lookups, cx);
+    }
+
+    /// A Thread's Pane opened: its facts afresh, what only git can say
+    /// read off the UI thread.
+    fn thread_opened(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let lookups = self.facts.opened(&self.cockpit, thread);
+        self.look_up(lookups, cx);
+    }
+
+    /// Run the facts' slow reads in the background and adopt what they
+    /// find.
+    fn look_up(&mut self, lookups: crate::facts::Lookups, cx: &mut Context<Self>) {
         if lookups.is_empty() {
             return;
         }
@@ -5167,7 +5180,7 @@ impl CockpitView {
             match self.cockpit.wake(thread) {
                 Ok(()) => {
                     self.sync_panes(cx);
-                    self.facts.opened(&self.cockpit, thread);
+                    self.thread_opened(thread, cx);
                     self.parked_changed(cx);
                 }
                 Err(error) => {
@@ -6785,7 +6798,7 @@ impl CockpitView {
                 if adopted.not_opened.is_some() {
                     self.parked_changed(cx);
                 } else if from.draft().is_some() {
-                    self.facts.opened(&self.cockpit, adopted.thread);
+                    self.thread_opened(adopted.thread, cx);
                 }
             }
             Err(e) => self.say_to(from, format!("cannot import {}: {e}", path.display())),
@@ -7632,7 +7645,7 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.facts.opened(&self.cockpit, done.thread);
+                self.thread_opened(done.thread, cx);
                 self.refresh_names();
                 self.start_titling(done.thread, text.to_string(), cx);
                 self.scroll_transcript_to_bottom(index, cx);

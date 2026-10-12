@@ -138,9 +138,10 @@ const WALL_REFOLD: Duration = Duration::from_millis(250);
 
 pub struct Facts {
     threads: HashMap<ThreadId, ThreadFacts>,
-    /// Each Project's default branch, read once (a `git` call or two) the
-    /// first time a Thread of it is refreshed, never from a frame.
-    default_branches: HashMap<ProjectId, SharedString>,
+    /// Each Project's default branch, read once (a `git` call or two, off
+    /// the UI thread) the first time a Thread of it is refreshed: `None`
+    /// while that read is out.
+    default_branches: HashMap<ProjectId, Option<SharedString>>,
     /// The nav's parked Threads, in the Cockpit's stable park order (#21).
     parked: Vec<ThreadId>,
     /// Whether an untitled Thread is named from its first prompt (a
@@ -180,10 +181,28 @@ impl Facts {
         &self.parked
     }
 
-    /// A Thread's Pane opened: everything about it, from scratch.
-    pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        self.refresh_slow(cockpit, thread);
+    /// A Thread's Pane opened: everything about it, from scratch, but what
+    /// only git can say — its checkout, when no label is known yet, and its
+    /// Project's default branch. Those are returned for the caller to run
+    /// off the UI thread (`looked_up`); the branch refresh then keeps the
+    /// label current, with its status.
+    pub fn opened(&mut self, cockpit: &Cockpit, thread: ThreadId) -> Lookups {
+        self.refresh_metadata(cockpit, thread);
         self.refresh_wall(cockpit, thread, None);
+        let open = cockpit.thread(thread);
+        let cwd = ferrite_core::workspace::effective_cwd(
+            open.and_then(|open| open.session_project_root()),
+            open.and_then(|open| open.workspace()),
+        );
+        let mut lookups = Lookups::default();
+        let facts = self.threads.entry(thread).or_default();
+        facts.default_branch =
+            default_branch_of(&mut self.default_branches, facts.project, cwd, &mut lookups);
+        facts.branch_asked = true;
+        if let (None, Some(cwd)) = (&facts.branch, cwd) {
+            lookups.branches.push((thread, cwd.to_path_buf()));
+        }
+        lookups
     }
 
     /// The pump streamed into a Thread at `now`: the wall card refolds —
@@ -323,14 +342,15 @@ impl Facts {
     /// a nav that hides it would hide the problem — it just claims nothing
     /// it cannot know.
     ///
-    /// What costs more than a peek — a `git` call for the checkout, a replay
-    /// of the whole log for the subagent count — is not done here: it is
-    /// returned, once per Thread, for the caller to run off the UI thread
-    /// and hand back through `parked_looked_up`. A launch with dozens of
-    /// parked Threads would otherwise hold the first frame for seconds.
-    pub fn parked_changed(&mut self, cockpit: &Cockpit) -> ParkedLookups {
+    /// What costs more than a peek — a `git` call for the checkout or the
+    /// Project's default branch, a replay of the whole log for the subagent
+    /// count — is not done here: it is returned, once per Thread (and
+    /// Project), for the caller to run off the UI thread and hand back
+    /// through `looked_up`. A launch with dozens of parked Threads would
+    /// otherwise hold the first frame for seconds.
+    pub fn parked_changed(&mut self, cockpit: &Cockpit) -> Lookups {
         let ordered = cockpit.parked_in_order().unwrap_or_default();
-        let mut lookups = ParkedLookups::default();
+        let mut lookups = Lookups::default();
         for thread in &ordered {
             let last_used = cockpit.last_used(*thread);
             let facts = self.threads.entry(*thread).or_default();
@@ -349,8 +369,12 @@ impl Facts {
                 Some(WorkspaceBinding::Main { checkout }) => Some(checkout.as_path()),
                 None => None,
             };
-            facts.default_branch =
-                default_branch_of(&mut self.default_branches, meta.project_id, checkout);
+            facts.default_branch = default_branch_of(
+                &mut self.default_branches,
+                meta.project_id,
+                checkout,
+                &mut lookups,
+            );
             facts.project_label = project_label(cockpit, meta.project_id, meta.workspace.as_ref());
             if !facts.subagents_known {
                 facts.subagents_known = true;
@@ -385,10 +409,19 @@ impl Facts {
         lookups
     }
 
-    /// The answers to `parked_changed`'s lookups, back from off the UI
-    /// thread. A Thread opened meanwhile keeps what its open Pane read —
-    /// that answer is the newer one.
-    pub fn parked_looked_up(&mut self, cockpit: &Cockpit, answers: ParkedAnswers) {
+    /// The answers to `parked_changed`'s and `opened`'s lookups, back from
+    /// off the UI thread. A Thread opened meanwhile keeps what its open
+    /// Pane read — that answer is the newer one.
+    pub fn looked_up(&mut self, cockpit: &Cockpit, answers: Answers) {
+        for (project, branch) in answers.default_branches {
+            let branch = SharedString::from(branch);
+            for facts in self.threads.values_mut() {
+                if facts.project == Some(project) {
+                    facts.default_branch = Some(branch.clone());
+                }
+            }
+            self.default_branches.insert(project, Some(branch));
+        }
         for (thread, branch) in answers.branches {
             let facts = self.threads.entry(thread).or_default();
             if facts.branch.is_none() {
@@ -405,39 +438,6 @@ impl Facts {
                 self.threads.entry(thread).or_default().turns = turns;
             }
         }
-    }
-
-    /// The checkout label and the Project — a `git` call and a peek —
-    /// nowhere near a frame.
-    fn refresh_slow(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        let open = cockpit.thread(thread);
-        let cwd = ferrite_core::workspace::effective_cwd(
-            open.and_then(|open| open.session_project_root()),
-            open.and_then(|open| open.workspace()),
-        )
-        .map(std::path::Path::to_path_buf);
-        let branch = cwd
-            .as_deref()
-            .and_then(ferrite_core::workspace::checkout_branch)
-            .map(SharedString::from);
-        let (project, project_label) = match cockpit.peek(thread) {
-            Ok(meta) => (
-                meta.project_id,
-                project_label(cockpit, meta.project_id, meta.workspace.as_ref()),
-            ),
-            Err(_) => (None, None),
-        };
-        let default_branch = default_branch_of(&mut self.default_branches, project, cwd.as_deref());
-        let name = display_name(cockpit, thread, self.auto_title);
-        let last_used = cockpit.last_used(thread);
-        let facts = self.threads.entry(thread).or_default();
-        facts.last_used = last_used;
-        facts.branch = branch;
-        facts.default_branch = default_branch;
-        facts.branch_asked = true;
-        facts.project = project;
-        facts.project_label = project_label;
-        facts.name = name;
     }
 
     /// Refresh everything except the checkout label (and the Project's
@@ -565,20 +565,24 @@ impl Facts {
     }
 }
 
-/// A Project's default branch from the cache, read from `checkout` the
-/// first time the Project is seen. A Thread no Project claims has none.
+/// A Project's default branch from the cache. The first time the Project
+/// is seen, its read from `checkout` joins `lookups`, and the branch is
+/// unknown until it comes back. A Thread no Project claims has none.
 fn default_branch_of(
-    cache: &mut HashMap<ProjectId, SharedString>,
+    cache: &mut HashMap<ProjectId, Option<SharedString>>,
     project: Option<ProjectId>,
     checkout: Option<&std::path::Path>,
+    lookups: &mut Lookups,
 ) -> Option<SharedString> {
     let project = project?;
     if let Some(known) = cache.get(&project) {
-        return Some(known.clone());
+        return known.clone();
     }
-    let read = SharedString::from(ferrite_core::workspace::default_branch(checkout?));
-    cache.insert(project, read.clone());
-    Some(read)
+    cache.insert(project, None);
+    lookups
+        .default_branches
+        .push((project, checkout?.to_path_buf()));
+    None
 }
 
 fn changed_files(open: ferrite_core::cockpit::ThreadView<'_>) -> Vec<FileChange> {
@@ -736,25 +740,36 @@ fn at_word_boundary(title: &str) -> String {
     }
 }
 
-/// The parked-row reads too slow for the UI thread (`Facts::parked_changed`).
+/// The reads too slow for the UI thread (`Facts::parked_changed`,
+/// `Facts::opened`).
 #[derive(Default)]
-pub struct ParkedLookups {
-    /// Parked Threads whose checkout branch only `git` can say.
+pub struct Lookups {
+    /// Threads whose checkout branch only `git` can say.
     pub branches: Vec<(ThreadId, std::path::PathBuf)>,
     /// Parked Threads whose subagent count (and turn count) needs a read
     /// of their log.
     pub subagents: Vec<ThreadId>,
+    /// Projects whose default branch only `git` can say, each with a
+    /// checkout of it.
+    pub default_branches: Vec<(ProjectId, std::path::PathBuf)>,
 }
 
-impl ParkedLookups {
+impl Lookups {
     pub fn is_empty(&self) -> bool {
-        self.branches.is_empty() && self.subagents.is_empty()
+        self.branches.is_empty() && self.subagents.is_empty() && self.default_branches.is_empty()
     }
 
     /// Run the lookups: blocking `git` calls and whole-log reads, so call
     /// this from a background task.
-    pub fn run(self, logs: &ferrite_core::cockpit::LogReader) -> ParkedAnswers {
-        ParkedAnswers {
+    pub fn run(self, logs: &ferrite_core::cockpit::LogReader) -> Answers {
+        Answers {
+            default_branches: self
+                .default_branches
+                .into_iter()
+                .map(|(project, checkout)| {
+                    (project, ferrite_core::workspace::default_branch(&checkout))
+                })
+                .collect(),
             branches: self
                 .branches
                 .into_iter()
@@ -776,8 +791,9 @@ impl ParkedLookups {
     }
 }
 
-/// What `ParkedLookups::run` found, for `Facts::parked_looked_up`.
-pub struct ParkedAnswers {
+/// What `Lookups::run` found, for `Facts::looked_up`.
+pub struct Answers {
+    default_branches: Vec<(ProjectId, String)>,
     branches: Vec<(ThreadId, Option<String>)>,
     subagents: Vec<(ThreadId, usize)>,
     turns: Vec<(ThreadId, Option<usize>)>,
@@ -919,10 +935,61 @@ mod tests {
         );
 
         let answers = lookups.run(&cockpit.log_reader());
-        facts.parked_looked_up(&cockpit, answers);
+        facts.looked_up(&cockpit, answers);
         assert_eq!(
             facts.get(thread).unwrap().branch,
             ferrite_core::workspace::checkout_branch(&checkout).map(SharedString::from),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Opening a Pane ran `git` on the UI thread — the checkout, and the
+    /// first time its Project was seen, the default branch. Both now come
+    /// back as lookups, the default branch asked once per Project.
+    #[test]
+    fn an_opened_pane_hands_back_its_git_reads() {
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-facts-{}-opened-lookups",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = ferrite_core::store::Store::open(&dir).unwrap();
+        let checkout = std::env::current_dir().unwrap();
+        let project: ProjectId = serde_json::from_str("7").unwrap();
+        let (thread, writer) = store
+            .create(
+                Provider::Claude,
+                Some(project),
+                WorkspaceBinding::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        drop(writer);
+        let mut cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
+        cockpit.revive(thread).unwrap();
+        let mut facts = Facts::default();
+
+        let lookups = facts.opened(&cockpit, thread);
+        assert_eq!(lookups.branches, vec![(thread, checkout.clone())]);
+        assert_eq!(lookups.default_branches, vec![(project, checkout.clone())]);
+        let opened = facts.get(thread).unwrap();
+        assert_eq!(opened.branch, None, "no git ran here");
+        assert_eq!(opened.default_branch, None, "no git ran here");
+        assert!(
+            facts.opened(&cockpit, thread).default_branches.is_empty(),
+            "a Project's default branch is asked once"
+        );
+
+        facts.looked_up(&cockpit, lookups.run(&cockpit.log_reader()));
+        let opened = facts.get(thread).unwrap();
+        assert_eq!(
+            opened.branch,
+            ferrite_core::workspace::checkout_branch(&checkout).map(SharedString::from),
+        );
+        assert_eq!(
+            opened.default_branch.as_deref(),
+            Some(ferrite_core::workspace::default_branch(&checkout).as_str()),
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
