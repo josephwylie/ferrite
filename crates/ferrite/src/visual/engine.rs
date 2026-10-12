@@ -3,8 +3,8 @@
 //!
 //! - [`boot`] runs first in `main`. In a Chromium helper process it runs the
 //!   helper and exits; in the app it only notes whether Chromium is here
-//!   (macOS, the `cef` feature, inside the bundle) and readies it — no
-//!   Chromium process exists yet.
+//!   (the `cef` feature, inside Ferrite.app or beside ferrite.exe) and
+//!   readies it — no Chromium process exists yet.
 //! - [`init`] installs the [`Visuals`] global once GPUI is up.
 //! - [`Visuals::engine`] is what everything else asks. The first ask starts
 //!   Chromium (in a foreground task, outside any update: CEF may spin the
@@ -29,9 +29,9 @@ pub(crate) enum Availability {
     Unavailable(SharedString),
 }
 
-#[cfg_attr(not(all(target_os = "macos", feature = "cef")), allow(dead_code))]
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
 enum State {
-    #[cfg(all(target_os = "macos", feature = "cef"))]
+    #[cfg(feature = "cef")]
     Dormant(super::web::cef::Dormant),
     Starting,
     Ready(Rc<dyn Engine>),
@@ -54,13 +54,15 @@ thread_local! {
     static STARTED: RefCell<Option<Rc<dyn Engine>>> = const { RefCell::new(None) };
 }
 
-/// Visuals aren't drawn on this platform yet.
-pub(crate) const NOT_ON_THIS_PLATFORM: &str = "Visuals aren't available on Windows yet";
 /// A build without the engine (`cargo run` without `--features cef`).
 pub(crate) const NOT_IN_THIS_BUILD: &str = "Visuals aren't available in this build";
 /// The engine is built in but Chromium isn't beside the binary.
-#[cfg_attr(not(all(target_os = "macos", feature = "cef")), allow(dead_code))]
-pub(crate) const NOT_OUTSIDE_THE_BUNDLE: &str = "Visuals need Ferrite.app (Chromium isn't here)";
+#[cfg(feature = "cef")]
+const CHROMIUM_MISSING: &str = if cfg!(windows) {
+    "Visuals need Chromium beside ferrite.exe (it isn't here)"
+} else {
+    "Visuals need Ferrite.app (Chromium isn't here)"
+};
 
 /// Call first thing in `main`, before anything else runs. A Chromium helper
 /// process (this same binary, started by Chromium) runs and exits here.
@@ -69,23 +71,24 @@ pub(crate) fn boot() {
     BOOTED.with(|booted| *booted.borrow_mut() = Some(state));
 }
 
-#[cfg(all(target_os = "macos", feature = "cef"))]
+#[cfg(feature = "cef")]
 fn boot_state() -> State {
     use super::web::cef;
     match cef::boot() {
         Ok(cef::Boot::Subprocess(code)) => std::process::exit(code),
         Ok(cef::Boot::Dormant(dormant)) => State::Dormant(dormant),
         Err(error) => {
-            // Expected under `cargo run`; worth one line, never a failure.
+            // Expected under `cargo run` on macOS; worth one line, never a
+            // failure.
             eprintln!("ferrite: visuals off: {error}");
-            State::Unavailable(NOT_OUTSIDE_THE_BUNDLE.into())
+            State::Unavailable(CHROMIUM_MISSING.into())
         }
     }
 }
 
-#[cfg(not(all(target_os = "macos", feature = "cef")))]
+#[cfg(not(feature = "cef"))]
 fn boot_state() -> State {
-    State::Unavailable(if cfg!(target_os = "macos") { NOT_IN_THIS_BUILD } else { NOT_ON_THIS_PLATFORM }.into())
+    State::Unavailable(NOT_IN_THIS_BUILD.into())
 }
 
 /// Install the global from what [`boot`] found (nothing found: unavailable).
@@ -96,12 +99,19 @@ pub(crate) fn init(cx: &mut App) {
     }
     let state = BOOTED
         .with(|booted| booted.borrow_mut().take())
-        .unwrap_or_else(boot_state_unbooted);
+        .unwrap_or_else(|| State::Unavailable(NOT_IN_THIS_BUILD.into()));
     cx.set_global(Visuals { state });
 }
 
-fn boot_state_unbooted() -> State {
-    State::Unavailable(if cfg!(target_os = "windows") { NOT_ON_THIS_PLATFORM } else { NOT_IN_THIS_BUILD }.into())
+/// Start Chromium now, on this thread and without GPUI, from what [`boot`]
+/// found: the headless smoke test's way in (`visual::smoke`).
+#[cfg(feature = "cef")]
+pub(crate) fn start_now() -> Result<Rc<dyn Engine>, String> {
+    match BOOTED.with(|booted| booted.borrow_mut().take()) {
+        Some(State::Dormant(dormant)) => Ok(Rc::new(dormant.start()?)),
+        Some(State::Unavailable(why)) => Err(why.into()),
+        _ => Err("visual::boot() hasn't run".into()),
+    }
 }
 
 impl Visuals {
@@ -124,10 +134,10 @@ impl Visuals {
             State::Ready(engine) => return Availability::Ready(engine.clone()),
             State::Starting => return Availability::Starting,
             State::Unavailable(why) => return Availability::Unavailable(why.clone()),
-            #[cfg(all(target_os = "macos", feature = "cef"))]
+            #[cfg(feature = "cef")]
             State::Dormant(_) => {}
         }
-        #[cfg(all(target_os = "macos", feature = "cef"))]
+        #[cfg(feature = "cef")]
         {
             let visuals = cx.global_mut::<Visuals>();
             let State::Dormant(dormant) = std::mem::replace(&mut visuals.state, State::Starting) else {

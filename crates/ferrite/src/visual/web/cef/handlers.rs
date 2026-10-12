@@ -17,6 +17,13 @@ use cef::*;
 use super::{document, input, Global, PageDoc, ViewState, MAX_HEIGHT, SCHEME};
 use crate::visual::web::Frame as WebFrame;
 
+/// The native cursor `on_cursor_change` is handed (unused: the view reports
+/// the cursor's kind, and the host draws its own).
+#[cfg(target_os = "macos")]
+type NativeCursor = *mut u8;
+#[cfg(windows)]
+type NativeCursor = CursorHandle;
+
 // ---------------------------------------------------------------------------
 // App (every process) and the browser-process handler.
 
@@ -269,7 +276,7 @@ wrap_display_handler! {
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
-            _cursor: *mut u8,
+            _cursor: NativeCursor,
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> ::std::os::raw::c_int {

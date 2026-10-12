@@ -3,14 +3,13 @@
 //! Everything CEF-specific stays in here; the host only sees [`Engine`] and
 //! [`View`]. In short:
 //!
-//! - **Processes.** CEF is multi-process and on macOS spawns its renderer, GPU
-//!   and utility processes from `<App> Helper*.app` bundles inside the main
-//!   bundle. This binary is its own helper: [`boot`] detects a `--type=`
-//!   switch and runs `cef_execute_process` instead of the app
-//!   ([`Boot::Subprocess`]). `scripts/install-app.sh` builds the `.app`.
-//! - **NSApp.** `cef_initialize` requires `NSApp` to implement
-//!   `CefAppProtocol`; [`boot`] retrofits that onto GPUI's `GPUIApplication`
-//!   class before GPUI starts (see `nsapp`).
+//! - **Processes.** CEF is multi-process: its renderer, GPU and utility
+//!   processes are this same binary, started again with a `--type=` switch.
+//!   [`boot`] detects that and runs `cef_execute_process` instead of the app
+//!   ([`Boot::Subprocess`]).
+//! - **Platforms.** What differs between macOS and Windows (where Chromium
+//!   lives and how it is loaded, the sandbox, `NSApp`, process liveness)
+//!   sits behind `platform`, one module per OS; everything else is shared.
 //! - **Message loop.** GPUI owns the run loop, so CEF runs with
 //!   `external_message_pump`: the host calls [`Engine::pump`], which runs
 //!   `cef_do_message_loop_work` and returns the delay CEF last asked for.
@@ -32,7 +31,17 @@
 mod document;
 mod handlers;
 mod input;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
 mod nsapp;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(target_os = "macos")]
+use macos as platform;
+#[cfg(windows)]
+use windows as platform;
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -77,81 +86,44 @@ pub const RELEASE_AFTER: Duration = Duration::from_secs(2);
 pub enum Boot {
     /// A CEF helper process ran to completion: exit with this code, now.
     Subprocess(i32),
-    /// The browser process, inside a bundle that ships Chromium: the
-    /// framework is loaded and `NSApp` made CEF-compatible, but nothing is
+    /// The browser process, where Chromium ships beside the app: its
+    /// library is loaded and the process readied for it, but nothing is
     /// running yet. [`Dormant::start`] starts Chromium when the first page
     /// is wanted.
     Dormant(Dormant),
 }
 
 /// Chromium, ready to start. Holding it costs nothing but the mapped
-/// framework: no CEF process exists until [`Dormant::start`].
+/// library: no CEF process exists until [`Dormant::start`].
 pub struct Dormant {
     global: Arc<Global>,
-    library: cef::library_loader::LibraryLoader,
+    library: platform::Library,
 }
 
 /// Check how this process was started. Call it first thing in `main`, before
 /// anything else runs (a helper must not spawn shells or open stores) and
 /// before GPUI is created (and anything touches `NSApp`). In a helper process
 /// this runs the helper and returns [`Boot::Subprocess`]; `main` must exit
-/// with that code. `Err` means Chromium isn't available here (not running
-/// from a bundle that ships it); the app runs without visuals.
+/// with that code. `Err` means Chromium isn't available here (not shipped
+/// beside this binary); the app runs without visuals.
 pub fn boot() -> Result<Boot, String> {
-    use cef::library_loader::LibraryLoader;
-
     let is_subprocess = std::env::args().any(|arg| arg.starts_with("--type="));
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let exe_dir = exe.parent().ok_or("executable has no parent directory")?;
-
-    // CEF's loader aborts the process if the framework is missing, so check
-    // first: `cargo run` outside the bundle should get an error, not a crash.
-    let frameworks = if is_subprocess { exe_dir.join("../../..") } else { exe_dir.join("../Frameworks") };
-    let framework = frameworks.join("Chromium Embedded Framework.framework");
-    if !framework.join("Chromium Embedded Framework").exists() {
-        return Err(format!(
-            "Chromium Embedded Framework not found at {} (visuals need the app bundle \
-             scripts/install-app.sh builds)",
-            framework.display()
-        ));
-    }
 
     let global = Arc::new(Global::default());
     global.trace.store(std::env::var_os("FERRITE_CEF_TRACE").is_some(), Ordering::SeqCst);
 
     if is_subprocess {
-        let args = Args::new();
-        // cef-dll-sys is built with the sandbox on: a helper must enter it
-        // before loading the framework, or the GPU/network children die with
-        // exit code 5. Skipped when the browser was started with --no-sandbox.
-        let sandbox = (!std::env::args().any(|a| a == "--no-sandbox")).then(|| {
-            let mut sandbox = cef::sandbox::Sandbox::new();
-            sandbox.initialize(args.as_main_args());
-            sandbox
-        });
-        let loader = LibraryLoader::new(&exe, true);
-        if !loader.load() {
-            return Err("failed to load the CEF framework (helper)".into());
-        }
+        let helper = platform::Helper::enter(&exe)?;
         let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
         let mut app = handlers::InlineApp::new(global);
-        let code = execute_process(Some(args.as_main_args()), Some(&mut app), std::ptr::null_mut());
-        drop(app);
-        drop(loader);
-        drop(sandbox);
+        let code = execute_process(Some(helper.args()), Some(&mut app), std::ptr::null_mut());
+        // `app` drops first, then `helper` (what CEF ran on).
         return Ok(Boot::Subprocess(code));
     }
 
-    let library = LibraryLoader::new(&exe, false);
-    if !library.load() {
-        return Err("failed to load the CEF framework".into());
-    }
+    let library = platform::Library::load(&exe)?;
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
-
-    // Before GPUI's first `+sharedApplication`: NSApp must be GPUI's class
-    // with CEF's protocol retrofitted, whenever Chromium starts later.
-    nsapp::adopt_cef_app_protocol()?;
-
     Ok(Boot::Dormant(Dormant { global, library }))
 }
 
@@ -169,9 +141,10 @@ impl Dormant {
         }
 
         let profile = profile_dir();
+        // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
+        let no_sandbox = !platform::SANDBOXED || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some();
         let settings = Settings {
-            // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
-            no_sandbox: std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some() as i32,
+            no_sandbox: no_sandbox as i32,
             windowless_rendering_enabled: 1,
             // GPUI owns the run loop; CEF is driven from Engine::pump.
             multi_threaded_message_loop: 0,
@@ -211,22 +184,14 @@ fn profile_dir() -> PathBuf {
             let Some(pid) = name.to_str().and_then(|n| n.strip_prefix("ferrite-cef-profile-")) else {
                 continue;
             };
-            if pid.parse::<i32>().map(|pid| !process_alive(pid)).unwrap_or(false) {
+            if pid.parse::<u32>().map(|pid| !platform::process_alive(pid)).unwrap_or(false) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
     }
     let dir = base.join(format!("ferrite-cef-profile-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    dir.canonicalize().unwrap_or(dir)
-}
-
-fn process_alive(pid: i32) -> bool {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    // SAFETY: signal 0 only checks that the process exists.
-    unsafe { kill(pid, 0) == 0 }
+    platform::real_path(dir)
 }
 
 fn path_string(path: &Path) -> CefString {
@@ -370,7 +335,7 @@ struct EngineInner {
     pumping: Cell<bool>,
     profile: PathBuf,
     _app: cef::App,
-    _library: cef::library_loader::LibraryLoader,
+    _library: platform::Library,
 }
 
 impl Engine for CefEngine {

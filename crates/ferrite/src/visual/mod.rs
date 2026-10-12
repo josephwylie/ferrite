@@ -16,8 +16,8 @@
 //! - [`renderer`]: the screenshot an agent gets back, for core's
 //!   `VisualRenderer` seam.
 //!
-//! Inside: the engine seam ([`web`]: `Engine`/`View`, the Chromium adapter on
-//! macOS and a fake), the element that draws a view ([`element::WebView`]),
+//! Inside: the engine seam ([`web`]: `Engine`/`View`, the Chromium adapter
+//! on macOS and Windows, and a fake), the element that draws a view ([`element::WebView`]),
 //! the theme tokens a page is styled with ([`tokens`]), the engine's lazy
 //! lifecycle ([`engine`]) and the row's look ([`card`]).
 
@@ -28,6 +28,8 @@ pub(crate) mod renderer;
 mod shelf;
 #[cfg(feature = "visual-reference")]
 pub(crate) mod shots;
+#[cfg(feature = "cef")]
+pub(crate) mod smoke;
 pub(crate) mod tokens;
 pub(crate) mod web;
 

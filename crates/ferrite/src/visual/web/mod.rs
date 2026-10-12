@@ -1,6 +1,6 @@
 // The seam is whole (wheel, keys, every cursor) though only Chromium uses all
 // of it; without the engine, parts of it stand unused.
-#![cfg_attr(not(all(target_os = "macos", feature = "cef")), allow(dead_code))]
+#![cfg_attr(not(feature = "cef"), allow(dead_code))]
 
 //! Web views drawn inline: a page rendered off-screen by an engine, handed back
 //! as frames for the host to draw like any other image.
@@ -13,8 +13,8 @@
 //!
 //! This module is GPUI-free: frames are plain BGRA pixels, and engines are
 //! adapters at the [`Engine`] seam. [`fake::FakeEngine`] draws synthetic
-//! frames for tests and for running without Chromium; `cef` (macOS, behind
-//! the `cef` feature) is the real thing.
+//! frames for tests and for running without Chromium; `cef` (macOS and
+//! Windows, behind the `cef` feature) is the real thing.
 //!
 //! Ported from `spikes/inline-cef/src/web/` (measurements and design notes in
 //! that spike's NOTES-cef.md and NOTES-host.md); `View::set_html` is new.
@@ -23,8 +23,10 @@
 // nothing.
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod fake;
-#[cfg(all(target_os = "macos", feature = "cef"))]
+#[cfg(feature = "cef")]
 pub mod cef;
+#[cfg(all(feature = "cef", not(any(target_os = "macos", windows))))]
+compile_error!("the `cef` feature (visuals) is built for macOS and Windows only");
 
 use std::time::Duration;
 

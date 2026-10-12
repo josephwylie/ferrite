@@ -117,6 +117,11 @@ fn main() {
     // any shell, store or window. In the app this only readies Chromium
     // (ADR 0013); it starts on the first visual.
     visual::boot();
+    // Chromium's headless check, run by CI where it ships (`visual::smoke`).
+    #[cfg(feature = "cef")]
+    if std::env::args().nth(1).as_deref() == Some("--visual-smoke") {
+        std::process::exit(visual::smoke::run());
+    }
     // A panic must not take accepted history with it: whatever a writer
     // holds goes into its log before the process unwinds (ADR 0009).
     ferrite_core::store::install_panic_rescue();

@@ -1,8 +1,8 @@
 #ifndef MyAppVersion
   #error MyAppVersion must be provided by package-windows.ps1
 #endif
-#ifndef MyAppBinary
-  #error MyAppBinary must be provided by package-windows.ps1
+#ifndef MyAppStage
+  #error MyAppStage must be provided by package-windows.ps1
 #endif
 #ifndef MyAppRoot
   #error MyAppRoot must be provided by package-windows.ps1
@@ -54,7 +54,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#MyAppBinary}"; DestDir: "{app}"; DestName: "ferrite.exe"; Flags: ignoreversion
+; ferrite.exe and, beside it, Chromium for visuals (libcef.dll, resources,
+; locales\): the directory package-windows.ps1 staged.
+Source: "{#MyAppStage}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Ferrite"; Filename: "{app}\ferrite.exe"
