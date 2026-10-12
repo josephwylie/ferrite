@@ -765,7 +765,6 @@ impl CockpitView {
                         });
                     }
                 }),
-                place: None,
             });
         }
         let weak = cx.entity().downgrade();
