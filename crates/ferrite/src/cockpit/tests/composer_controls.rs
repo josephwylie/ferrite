@@ -217,6 +217,46 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     });
 }
 
+/// An effort change waiting on the provider holds the pickers, saying so,
+/// and lets go of them when the provider answers.
+#[gpui::test]
+fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("composer-pending-tuning", 1);
+    let thread = core.threads()[0];
+    *fake.effort_answers.borrow_mut() = Some(Vec::new());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.pick_effort(thread, Some("high".into()), cx);
+        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), None);
+        view.open_effort_picker(thread, cx);
+        let menu = view.popover.as_ref().unwrap();
+        assert_eq!(menu.rows[0].name, TUNING_PENDING_HINT);
+        assert!(menu.rows.iter().all(|row| row.inert));
+    });
+    fake.effort_answers
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .remove(0)
+        .send(Ok(()))
+        .unwrap();
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        let menu = view
+            .popover
+            .as_ref()
+            .expect("the answer keeps the picker open");
+        assert_ne!(menu.rows[0].name, TUNING_PENDING_HINT);
+        assert!(menu.rows.iter().any(|row| !row.inert));
+        assert_eq!(
+            menu.rows.iter().find(|row| row.active).unwrap().name,
+            "High"
+        );
+    });
+}
+
 /// Draft growth follows each actual split's height, including semantic-zoom
 /// boundaries; the full draft survives shrinking and returns when expanded.
 #[gpui::test]

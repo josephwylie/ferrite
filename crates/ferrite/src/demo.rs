@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::groups::GroupChange;
-use ferrite_core::providers::Session;
+use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
@@ -77,8 +77,8 @@ pub struct DemoSession {
 }
 
 impl Session for DemoSession {
-    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
-        Ok(())
+    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<SettingAck> {
+        Ok(applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.rx

@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::FileSuggestion;
+use super::{FileSuggestion, SettingAck};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -373,34 +373,35 @@ impl ClaudeSession {
             .recv_timeout(HANDSHAKE_TIMEOUT)
             .unwrap_or_default();
         // Use the same override layer at startup and later: a CLI --effort
-        // flag would survive clearing effortLevel back to Default.
+        // flag would survive clearing effortLevel back to Default. Startup
+        // is off the UI thread, so it waits for the CLI to accept it.
         if config.effort.is_some() {
             session
                 .set_effort(config.effort.as_deref())
+                .and_then(|ack| {
+                    ack.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e| {
+                        io::Error::other(format!("effort change was not acknowledged: {e}"))
+                    })?
+                })
                 .map_err(ClaudeSpawnError::Io)?;
         }
         Ok(session)
     }
 
     /// The SDK's applyFlagSettings control, effective from the next turn.
-    /// Wait for acceptance so a rejected setting cannot look successful.
-    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
-        self.set_setting(
-            serde_json::json!({
-                "subtype": "apply_flag_settings",
-                "settings": {"effortLevel": effort},
-            }),
-            "effort change was not acknowledged",
-        )
+    /// It holds once the CLI accepts it, so a rejected setting cannot look
+    /// successful.
+    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
+        self.set_setting(serde_json::json!({
+            "subtype": "apply_flag_settings",
+            "settings": {"effortLevel": effort},
+        }))
     }
 
-    /// Select a model through Claude's native control protocol and wait for
-    /// its acknowledgement before reporting success.
-    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
-        self.set_setting(
-            serde_json::json!({"subtype": "set_model", "model": model}),
-            "model change was not acknowledged",
-        )
+    /// Select a model through Claude's native control protocol; it holds
+    /// once the CLI acknowledges it.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
+        self.set_setting(serde_json::json!({"subtype": "set_model", "model": model}))
     }
 
     pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
@@ -492,22 +493,22 @@ impl ClaudeSession {
         Ok(())
     }
 
-    fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
+    /// Ask the CLI for a setting change; the reader thread answers the
+    /// ack with the CLI's reply. A newer change takes the reply slot, and
+    /// the older ack then reads as never answered.
+    fn set_setting(&mut self, request: serde_json::Value) -> io::Result<SettingAck> {
         let request_id = self.take_request_id();
         let (tx, rx) = sync_channel(1);
         *lock(&self.setting_reply) = Some((request_id.clone(), tx));
-        let result = self
-            .write_line(&serde_json::json!({
-                "type": "control_request",
-                "request_id": request_id,
-                "request": request,
-            }))
-            .and_then(|()| {
-                rx.recv_timeout(HANDSHAKE_TIMEOUT)
-                    .map_err(|e| io::Error::other(format!("{timeout_message}: {e}")))?
-            });
-        *lock(&self.setting_reply) = None;
-        result
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": request,
+        })) {
+            *lock(&self.setting_reply) = None;
+            return Err(error);
+        }
+        Ok(rx)
     }
 
     /// Rename the live native session so the CLI's own session list carries
