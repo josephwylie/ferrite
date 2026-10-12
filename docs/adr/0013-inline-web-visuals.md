@@ -43,12 +43,17 @@ cockpit its feel. It can:
 - Size: the `.app` grows by the framework, **~323 MB** (128 MB download,
   fetched once at build time). The five helper apps are hard links to the
   main binary in an ad-hoc build.
+- Windows (added 2026-10-12, CEF 154.0.34 x64): the same adapter, with the
+  runtime beside `ferrite.exe` — **~400 MB** installed (`libcef.dll` alone is
+  290 MB, `locales\` 49 MB), adding **~130 MB** to the installer (LZMA2 of
+  those files; 173 MB download, fetched once at build time).
 
 ## Decision
 
 1. **One engine seam, app-side.** `crates/ferrite/src/visual/web` keeps the
    spike's `Engine`/`View` seam (GPUI-free), with two real adapters: Chromium
-   (macOS) and a fake that draws synthetic frames (tests, and every build
+   (macOS and Windows: one adapter, its OS differences — where CEF lives,
+   how it loads, the sandbox, `NSApp` — behind a per-OS module) and a fake that draws synthetic frames (tests, and every build
    without Chromium). `View::set_html` was added so a page builds up while
    the agent's input streams: each new draft reloads the page, coalesced (one
    load in flight, ≥ 250 ms apart), the previous frame staying up until the
@@ -61,14 +66,21 @@ cockpit its feel. It can:
    underneath. All pages share one renderer process (`process-per-site`).
    Browser creation is staggered one per pump so a scroll that brings several
    back never costs one long frame.
-3. **Chromium is behind the `cef` cargo feature, macOS only.** A plain
-   `cargo build -p ferrite` (CI, Windows, everyday development) has no CEF:
-   no cmake/ninja, no 128 MB download, no 323 MB framework. A visual there
-   shows its title, caption, the reason (`Visuals aren't available on Windows
-   yet`, `…in this build`) and two fallbacks: open in browser (the same page,
-   theme and Content-Security-Policy, as a file) and copy HTML.
-   `scripts/install-app.sh` (and so the release DMG) builds with the feature
-   and bundles the framework and the five `ferrite Helper*.app`s.
+3. **Chromium is behind the `cef` cargo feature, on macOS and Windows.** A
+   plain `cargo build -p ferrite` (everyday development) has no CEF: no
+   cmake/ninja, no CEF download, no 320–400 MB runtime. A visual there shows
+   its title, caption, the reason (`Visuals aren't available in this build`)
+   and two fallbacks: open in browser (the same page, theme and
+   Content-Security-Policy, as a file) and copy HTML. The release packaging
+   builds with the feature: `scripts/install-app.sh` (the DMG) bundles the
+   framework and the five `ferrite Helper*.app`s;
+   `scripts/package-windows.ps1` (the setup.exe) puts `libcef.dll`, its
+   resources and `locales\` beside `ferrite.exe`
+   (`scripts/copy-chromium-windows.ps1`, which CI uses too). On Windows
+   `libcef.dll` is delay-loaded, so an exe without it still starts, without
+   visuals. CI builds the feature on both platforms and, on Windows, runs
+   `ferrite --visual-smoke`: the engine headless on a GPU-less runner,
+   checking a page's pixels, content height and hover.
 4. **Chromium starts lazily.** `visual::boot()` is the first line of `main`:
    a CEF helper process (the same binary, started with `--type=`) runs and
    exits there, before any shell, store or window; the app only loads the
@@ -79,7 +91,8 @@ cockpit its feel. It can:
 5. **Pages are sealed.** Served from memory under `ferrite-view://`, with a
    strict CSP (inline script and style only; no network, frames or workers
    from elsewhere); every other request, navigation, popup, dialog and context
-   menu is refused; a throwaway profile per process; Chromium's sandbox on.
+   menu is refused; a throwaway profile per process; Chromium's sandbox on
+   (macOS; see Consequences for Windows).
    The only thing a page can reach besides itself is Ferrite's bundled face
    (`/font/*.ttf`), so visuals are set in Geist Mono like the transcript.
 6. **Pages are styled by Ferrite's theme.** The `--ferrite-*` token names
@@ -100,10 +113,23 @@ cockpit its feel. It can:
   a sort order) and reloads from scratch when it comes back.
 - One shared renderer: a page that spins or crashes the renderer freezes or
   drops every live visual until each reloads (no watchdog yet).
-- Windows has no engine yet; the fallback card is its whole story until a
-  Windows adapter lands behind the same seam.
+- **No sandbox on Windows.** Since CEF 138 the Windows sandbox exists only
+  inside CEF's `bootstrap.exe`, which would have to be `ferrite.exe` itself
+  and load the app as a DLL (cef-rs's own example refuses to run sandboxed
+  otherwise). That would change how Ferrite is built, launched and signed on
+  Windows for one surface, so Chromium's processes run there with the user's
+  rights. Weighed: a page is written by an agent that already runs commands
+  as the user, and pages stay sealed (no network, navigation, popups or
+  files; CSP; the request filter), so an escape gains a hostile page little
+  the agent couldn't do directly. The bootstrap is the follow-up if visuals
+  ever show content an agent didn't write.
+- The Windows installer is ~130 MB bigger, and the release build needs
+  cmake and ninja there too.
 - Known gaps, inherited from the spike: `<select>` popups aren't composited,
   no IME, no copy shortcut inside a page, the wheel always scrolls the
-  transcript (pages never scroll themselves).
+  transcript (pages never scroll themselves). On Windows the spike's
+  measurements (latency, memory, scrolling) haven't been repeated: CI's smoke
+  proves the engine renders, takes input and sizes pages there, not how it
+  feels at fractional display scales (125/150%) or with keyboard focus.
 - ADR 0001's argument still holds for the app itself: there is no IPC tier
   and no web UI; Chromium only ever draws pixels the agent asked for.

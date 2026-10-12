@@ -60,7 +60,8 @@ pub(super) fn mouse_event(x: f32, y: f32, flags: u32) -> MouseEvent {
 /// `KEYUP`.
 pub(super) fn key_events(key: &str, text: Option<&str>, down: bool, modifiers: Modifiers) -> Vec<KeyEvent> {
     let flags = modifier_flags(modifiers);
-    let (windows_key_code, native_key_code) = key_codes(key);
+    let (windows_key_code, mac_key_code) = key_codes(key);
+    let native_key_code = native_key_code(windows_key_code, mac_key_code, down);
     let unmodified = first_utf16(key);
     let character = text.map(first_utf16).unwrap_or(unmodified);
     let physical = KeyEvent {
@@ -75,7 +76,8 @@ pub(super) fn key_events(key: &str, text: Option<&str>, down: bool, modifiers: M
     let mut events = vec![physical];
     if down {
         for unit in text.unwrap_or_default().encode_utf16() {
-            // AppKit reports Return as LF; Chromium's CHAR path wants CR.
+            // AppKit reports Return as LF; Chromium's CHAR path wants CR
+            // (as Windows' own WM_CHAR has it).
             let unit = if unit == b'\n' as u16 { b'\r' as u16 } else { unit };
             events.push(KeyEvent {
                 type_: KeyEventType::CHAR,
@@ -98,8 +100,29 @@ fn first_utf16(text: &str) -> u16 {
     text.encode_utf16().next().unwrap_or(0)
 }
 
+/// The platform's own code for the key, which Chromium reads the DOM `code`
+/// from: macOS's virtual key code.
+#[cfg(target_os = "macos")]
+fn native_key_code(_windows_key_code: i32, mac_key_code: i32, _down: bool) -> i32 {
+    mac_key_code
+}
+
+/// The platform's own code for the key, which Chromium reads the DOM `code`
+/// from: on Windows the key message's `lParam`, i.e. a repeat count of 1, the
+/// scan code (in the current keyboard layout) and its extended-key bit, and
+/// for a release the previous-state and transition bits.
+#[cfg(windows)]
+fn native_key_code(windows_key_code: i32, _mac_key_code: i32, down: bool) -> i32 {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC_EX};
+    // SAFETY: a lookup in the thread's keyboard layout; 0 for unknown keys.
+    let scan = unsafe { MapVirtualKeyW(windows_key_code as u32, MAPVK_VK_TO_VSC_EX) };
+    let extended = matches!(scan >> 8, 0xE0 | 0xE1) as u32;
+    let released: u32 = if down { 0 } else { 0b11 << 30 };
+    (1 | (scan & 0xFF) << 16 | extended << 24 | released) as i32
+}
+
 /// GPUI key name → (Windows virtual key code, macOS virtual key code). CEF
-/// speaks VK_* codes on every platform; on macOS it also wants the native one.
+/// speaks VK_* codes on every platform; each also wants its native one.
 fn key_codes(key: &str) -> (i32, i32) {
     let named = match key {
         "backspace" => Some((0x08, 51)),

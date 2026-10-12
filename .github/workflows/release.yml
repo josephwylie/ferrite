@@ -127,6 +127,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Visuals (ADR 0013): the installer ships Chromium (CEF) beside
+      # ferrite.exe. Its C++ wrapper needs ninja (cmake is on the runner);
+      # CEF itself is a ~170 MB download, cached by the CEF version in
+      # Cargo.lock under the path package-windows.ps1 defaults CEF_PATH to.
+      - name: Install CEF build tools
+        shell: pwsh
+        run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
+      - name: CEF version
+        id: cef
+        shell: bash
+        run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: Detect Windows signing credentials
         id: windows-signing
         shell: pwsh
