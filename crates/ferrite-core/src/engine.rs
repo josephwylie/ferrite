@@ -597,6 +597,24 @@ fn next_generation() -> u64 {
     NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
+/// What every window shares, as the Engine last told its clients.
+#[derive(Default)]
+struct PublishedShared {
+    groups: Option<serde_json::Value>,
+    registry: Option<serde_json::Value>,
+    notices: Option<Vec<protocol::WireNotice>>,
+    providers: Option<Vec<protocol::ProviderState>>,
+}
+
+/// `now`, when it is not what was last published: it is from here on.
+fn changed<T: Clone + PartialEq>(published: &mut Option<T>, now: T) -> Option<T> {
+    if published.as_ref() == Some(&now) {
+        return None;
+    }
+    *published = Some(now.clone());
+    Some(now)
+}
+
 /// What a Thread's clients were last told.
 #[derive(Default)]
 struct Published {
@@ -785,6 +803,7 @@ pub struct Engine {
     outbox: Vec<ServerMessage>,
     published: BTreeMap<ThreadId, Published>,
     published_open: Vec<ThreadId>,
+    published_shared: PublishedShared,
     revision: u64,
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
@@ -843,6 +862,7 @@ impl Engine {
             outbox: Vec::new(),
             published: BTreeMap::new(),
             published_open: Vec::new(),
+            published_shared: PublishedShared::default(),
             revision: 0,
             spawner,
             model_discovery,
@@ -3708,11 +3728,24 @@ impl Engine {
                         .collect::<Vec<_>>()
                 })
                 .collect(),
-            groups: None,
-            registry: None,
-            notices: None,
-            providers: None,
+            groups: self.published_shared.groups.clone(),
+            registry: self.published_shared.registry.clone(),
+            notices: self.published_shared.notices.clone(),
+            providers: self.published_shared.providers.clone(),
         }
+    }
+
+    /// What a window shows of each provider.
+    fn provider_states(&self) -> Vec<protocol::ProviderState> {
+        [Provider::Claude, Provider::Codex]
+            .into_iter()
+            .map(|provider| protocol::ProviderState {
+                provider,
+                live_sessions: self.live_sessions(provider),
+                models: self.announced_models(provider),
+                limits: Some(self.account_limits(provider).into()),
+            })
+            .collect()
     }
 
     /// A Thread's history for a watcher that has none of it: its log as a
@@ -3863,6 +3896,36 @@ impl Engine {
                     open: self.open.clone(),
                     parked: self.parked().unwrap_or_default(),
                 },
+            });
+        }
+        let shared = &mut self.published_shared;
+        if let Some(groups) = changed(&mut shared.groups, self.groups.to_wire()) {
+            self.revision += 1;
+            self.outbox.push(ServerMessage::Groups {
+                revision: self.revision,
+                groups,
+            });
+        }
+        if let Some(registry) = changed(&mut shared.registry, self.registry.to_wire()) {
+            self.revision += 1;
+            self.outbox.push(ServerMessage::Registry {
+                revision: self.revision,
+                registry,
+            });
+        }
+        if let Some(notices) = changed(&mut shared.notices, self.notifications.to_wire()) {
+            self.revision += 1;
+            self.outbox.push(ServerMessage::Notices {
+                revision: self.revision,
+                notices,
+            });
+        }
+        let providers = self.provider_states();
+        if let Some(providers) = changed(&mut self.published_shared.providers, providers) {
+            self.revision += 1;
+            self.outbox.push(ServerMessage::Providers {
+                revision: self.revision,
+                providers,
             });
         }
     }

@@ -691,6 +691,23 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     read: false,
                     at_ms: 1_760_000_000_000,
                     seq: 1,
+                    dismissed: false,
+                }],
+            }),
+        ),
+        (
+            "notices_dismissed",
+            Sample::Server(ServerMessage::Notices {
+                revision: 14,
+                notices: vec![WireNotice::Request {
+                    thread,
+                    handle: handle(),
+                    subject: None,
+                    question: true,
+                    read: true,
+                    at_ms: 1_760_000_000_000,
+                    seq: 2,
+                    dismissed: true,
                 }],
             }),
         ),

@@ -135,6 +135,8 @@ pub(crate) struct Mirrors {
     updates: Vec<PaneUpdate>,
     /// Threads whose Activity started over: every Block is new to the Pane.
     restarted: Vec<ThreadId>,
+    /// A Session announced other models since the window last asked.
+    models_changed: bool,
 }
 
 impl Mirrors {
@@ -195,7 +197,12 @@ impl Mirrors {
             ServerMessage::Thread { state, .. } => {
                 let thread = state.thread;
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
-                mirror.facts = Some(state.into());
+                let facts = Facts::from(state);
+                self.models_changed |= mirror
+                    .facts
+                    .as_ref()
+                    .is_none_or(|before| before.models != facts.models);
+                mirror.facts = Some(facts);
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Roster { roster, .. } => {
@@ -212,6 +219,10 @@ impl Mirrors {
             let update = updated(&mut self.updates, thread);
             mirror.apply(ActivityInput::DrainHighlights, update);
         }
+    }
+
+    pub(crate) fn take_models_changed(&mut self) -> bool {
+        std::mem::take(&mut self.models_changed)
     }
 
     /// What changed for each Pane since the last call.

@@ -27,6 +27,7 @@ use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
 pub use mirror::ThreadView;
 
 pub(crate) mod mirror;
+mod shared;
 
 pub struct Cockpit {
     pub(crate) engine: Engine,
@@ -39,6 +40,8 @@ pub struct Cockpit {
     /// Each open Thread as the Engine's messages built it: what `thread`
     /// reads and `pump` reports.
     mirrors: mirror::Mirrors,
+    /// What every window shares, as the Engine's messages left it.
+    shared: shared::Shared,
     bootstrap_results: Vec<BootstrapResult>,
     /// Whether the window has the operator's focus: what is on screen is
     /// seen only while it does (`acknowledge_seen`), so a finish or a
@@ -55,6 +58,7 @@ impl Cockpit {
             roster: Roster::default(),
             synced: Vec::new(),
             mirrors: mirror::Mirrors::default(),
+            shared: shared::Shared::default(),
             bootstrap_results: Vec::new(),
             window_active: true,
         })
@@ -103,6 +107,7 @@ impl Cockpit {
                 crate::protocol::decode(&line[..line.len() - 1])
                     .expect("every message decodes as it encoded")
             };
+            self.shared.receive(&message);
             self.mirrors.receive(message, boot);
         }
         #[cfg(test)]
@@ -135,7 +140,9 @@ impl Cockpit {
     /// survivor is the one Thread still on screen, so that is where they
     /// land — never the Thread that left, and never a blank Cockpit.
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        let applied = self.engine.apply_group(change)?;
+        let applied = self.engine.apply_group(change);
+        self.settle();
+        let applied = applied?;
         if let View::Group(active) = self.roster.view() {
             if let Some(dissolved) = applied
                 .dissolved
@@ -146,7 +153,7 @@ impl Cockpit {
                 self.roster.focus(PaneIdentity::Thread(dissolved.survivor));
             }
         }
-        self.roster.heal_focus(self.engine.groups());
+        self.roster.heal_focus(&self.shared.groups);
         Ok(applied)
     }
 
@@ -271,6 +278,29 @@ impl Cockpit {
     }
 
     fn assert_mirrors_match(&self) {
+        assert_eq!(self.shared.groups.to_wire(), self.engine.groups().to_wire());
+        assert_eq!(
+            self.shared.registry.to_wire(),
+            self.engine.registry().to_wire()
+        );
+        assert_eq!(
+            self.shared.notifications.to_wire(),
+            self.engine.notifications().to_wire()
+        );
+        for provider in [Provider::Claude, Provider::Codex] {
+            assert_eq!(
+                self.shared.announced_models(provider),
+                self.engine.announced_models(provider)
+            );
+            assert_eq!(
+                self.shared.live_sessions(provider),
+                self.engine.live_sessions(provider)
+            );
+            assert_eq!(
+                self.shared.account_limits(provider),
+                self.engine.account_limits(provider)
+            );
+        }
         for &thread in self.engine.open_threads() {
             let engine = self.engine.thread(thread).expect("open in the Engine");
             let mirror = self
@@ -380,15 +410,15 @@ mod parity {
 /// What the Engine answers, as this window asks it.
 impl Cockpit {
     pub fn registry(&self) -> &Registry {
-        self.engine.registry()
+        &self.shared.registry
     }
 
     pub fn groups(&self) -> &Groups {
-        self.engine.groups()
+        &self.shared.groups
     }
 
     pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
-        self.engine.plan_group_drop(drag, target)
+        self.shared.groups.preview_drop(drag, target)
     }
 
     pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
@@ -435,7 +465,7 @@ impl Cockpit {
         group: GroupId,
         bounds: crate::layout::Rect,
     ) -> Option<crate::layout::Tree> {
-        self.engine.group_layout(group, bounds)
+        self.shared.groups.layout(group, bounds)
     }
 
     pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
@@ -737,9 +767,7 @@ impl Cockpit {
     }
 
     pub fn take_models_changed(&mut self) -> bool {
-        let result = self.engine.take_models_changed();
-        self.settle();
-        result
+        self.shared.take_models_changed() | self.mirrors.take_models_changed()
     }
 
     pub fn rediscover_models(&mut self) {
@@ -748,15 +776,15 @@ impl Cockpit {
     }
 
     pub fn live_sessions(&self, provider: Provider) -> usize {
-        self.engine.live_sessions(provider)
+        self.shared.live_sessions(provider)
     }
 
     pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
-        self.engine.announced_models(provider)
+        self.shared.announced_models(provider)
     }
 
     pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
-        self.engine.account_limits(provider)
+        self.shared.account_limits(provider)
     }
 
     pub fn set_allowance_thresholds(&mut self, thresholds: Vec<u8>) {
@@ -781,7 +809,7 @@ impl Cockpit {
     }
 
     pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
-        self.engine.model_catalog(provider)
+        crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
 
     pub fn set_model(
@@ -821,7 +849,7 @@ impl Cockpit {
     }
 
     pub fn notifications(&self) -> &Notifications {
-        self.engine.notifications()
+        &self.shared.notifications
     }
 
     pub fn set_notification_grace(&mut self, grace: Duration) {
@@ -911,7 +939,7 @@ impl Cockpit {
 
     /// The Panes on screen, in order — see `Roster::visible`.
     pub fn visible(&self) -> Vec<PaneIdentity> {
-        self.roster.visible(self.engine.groups())
+        self.roster.visible(&self.shared.groups)
     }
 
     /// The one door to focus: every move — keys, clicks, nav rows — lands
@@ -944,16 +972,16 @@ impl Cockpit {
         match self.roster.view() {
             View::Group(group)
                 if self
-                    .engine
-                    .groups()
+                    .shared
+                    .groups
                     .get(group)
                     .is_some_and(|group| group.members.contains(&thread)) =>
             {
                 View::Group(group)
             }
             _ => self
-                .engine
-                .groups()
+                .shared
+                .groups
                 .home(thread)
                 .map_or(View::Solo, |group| View::Group(group.id)),
         }
@@ -969,7 +997,7 @@ impl Cockpit {
 
     /// cmd-] / cmd-[: walk the visible Panes, wrapping.
     pub fn step_focus(&mut self, delta: isize) {
-        self.roster.step(delta, self.engine.groups());
+        self.roster.step(delta, &self.shared.groups);
     }
 
     /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
@@ -995,8 +1023,8 @@ impl Cockpit {
     /// rows does not jump them.
     pub fn enter_group(&mut self, group: GroupId) -> Result<(), ReviveGroupError> {
         let members = self
-            .engine
-            .groups()
+            .shared
+            .groups
             .get(group)
             .ok_or(ReviveGroupError::MissingGroup)?
             .members
@@ -1149,7 +1177,7 @@ impl Cockpit {
             .expect("draft retained during startup");
         self.roster.draft_became(draft, thread);
         if scope.new_group_with.is_some() {
-            if let Some(group) = self.engine.groups().home(thread).map(|group| group.id) {
+            if let Some(group) = self.shared.groups.home(thread).map(|group| group.id) {
                 self.roster.set_view(View::Group(group));
                 self.roster.focus(PaneIdentity::Thread(thread));
             }
@@ -1234,14 +1262,14 @@ impl Cockpit {
     /// in a pair), then parks: it lands in the parked rows at once, never
     /// as a loose open Thread that needs a second park.
     pub fn park_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
-        if self.engine.groups().of(thread).is_some() {
+        if self.shared.groups.of(thread).is_some() {
             // Leave takes the Thread out of every Group; when the Group on
             // screen held it, its ordinal survivor takes focus.
             let on_screen = matches!(
                 self.roster.view(),
                 View::Group(group) if self
-                    .engine
-            .groups()
+                    .shared
+            .groups
                     .get(group)
                     .is_some_and(|group| group.members.contains(&thread))
             );
@@ -1261,8 +1289,8 @@ impl Cockpit {
     fn close_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
         if let View::Group(group) = self.roster.view() {
             let members = self
-                .engine
-                .groups()
+                .shared
+                .groups
                 .get(group)
                 .map(|group| group.members.clone())
                 .unwrap_or_default();
@@ -1283,7 +1311,7 @@ impl Cockpit {
                 .map_err(CloseError::Group)?;
             // A dissolved Group already landed on its survivor.
             if !applied.dissolved.iter().any(|item| item.group == group) {
-                if let Some(group) = self.engine.groups().get(group) {
+                if let Some(group) = self.shared.groups.get(group) {
                     let next = group.members[ordinal.min(group.members.len() - 1)];
                     self.roster.focus(PaneIdentity::Thread(next));
                 }
@@ -1317,7 +1345,7 @@ impl Cockpit {
     /// ordinal-preserving focus. A refused or empty plan changes nothing.
     pub fn drop(&mut self, drag: Drag, origin: View, target: DropTarget) -> Result<(), ApplyError> {
         self.roster.set_view(origin);
-        let outcome = match self.engine.groups().preview_drop(drag, target) {
+        let outcome = match self.shared.groups.preview_drop(drag, target) {
             Plan::Change(GroupChange::Leave { thread })
                 if matches!(drag, Drag::Thread { group: Some(_), .. }) =>
             {
@@ -1336,7 +1364,7 @@ impl Cockpit {
                 // it is parked on a draft. Either way the dragged Thread is
                 // no longer a member, so the operator follows it to Solo.
                 if self.roster.pending_leave(group) == Some(thread)
-                    || self.engine.groups().of(thread).is_none()
+                    || self.shared.groups.of(thread).is_none()
                 {
                     self.roster.set_view(View::Solo);
                     self.roster.focus(PaneIdentity::Thread(thread));
@@ -1346,7 +1374,7 @@ impl Cockpit {
             Plan::Change(change) => self.apply_group(change).map(|_| ()),
             Plan::Refused(_) | Plan::Nothing => Ok(()),
         };
-        self.roster.heal_focus(self.engine.groups());
+        self.roster.heal_focus(&self.shared.groups);
         outcome
     }
 

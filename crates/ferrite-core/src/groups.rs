@@ -283,6 +283,17 @@ pub struct Groups {
     next_id: u64,
 }
 
+/// No Groups, bound to no file: a window's copy before the Server's lands.
+impl Default for Groups {
+    fn default() -> Self {
+        Self {
+            dir: PathBuf::new(),
+            groups: Vec::new(),
+            next_id: 1,
+        }
+    }
+}
+
 impl Groups {
     pub fn load(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
@@ -734,8 +745,43 @@ impl Groups {
         Ok(())
     }
 
+    /// The Groups as their file spells them: what a window's copy is
+    /// built from (ADR 0025).
+    pub fn to_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.persisted()).expect("the groups serialize")
+    }
+
+    /// A window's read-only copy of the Server's Groups, taken as the
+    /// Server healed them. It is never written: every change is the
+    /// Server's.
+    pub fn from_wire(value: serde_json::Value) -> io::Result<Self> {
+        let persisted = serde_json::from_value::<PersistedGroups>(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let groups: Vec<Group> = persisted
+            .groups
+            .into_iter()
+            .map(|stored| Group {
+                id: stored.id,
+                title: stored.title,
+                members: stored.members.into_iter().map(ThreadId::new).collect(),
+                guests: stored.guests.into_iter().map(ThreadId::new).collect(),
+                layout: stored.layout,
+            })
+            .collect();
+        Ok(Self {
+            next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
+            groups,
+            ..Self::default()
+        })
+    }
+
     fn persist(&self) -> io::Result<()> {
-        let value = PersistedGroups {
+        let bytes = serde_json::to_vec_pretty(&self.persisted()).map_err(io::Error::other)?;
+        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
+    }
+
+    fn persisted(&self) -> PersistedGroups {
+        PersistedGroups {
             version: SCHEMA_VERSION,
             groups: self
                 .groups
@@ -748,9 +794,7 @@ impl Groups {
                     layout: group.layout.clone(),
                 })
                 .collect(),
-        };
-        let bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
-        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
+        }
     }
 }
 

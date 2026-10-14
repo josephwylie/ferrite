@@ -706,6 +706,10 @@ pub enum WireNotice {
         read: bool,
         at_ms: u64,
         seq: u64,
+        /// Hidden from the bell until it resolves; it still orders the
+        /// Needs-you queue.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dismissed: bool,
     },
     #[serde(other)]
     Unknown,
