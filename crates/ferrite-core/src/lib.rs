@@ -16,6 +16,7 @@ pub mod followup;
 pub mod groups;
 pub mod import;
 pub mod layout;
+pub mod link;
 pub mod login_shell;
 pub mod notifications;
 pub mod progress;

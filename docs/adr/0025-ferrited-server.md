@@ -76,11 +76,13 @@ app test run `Engine` in-process over the in-process link.
 socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
 stale socket (nothing answers a connect) is removed before binding; a live
 one means a Server already runs. On Windows, the pipe
-`\\.\pipe\ferrite-server-<user SID>`, created with
+`\\.\pipe\ferrite-server-<user SID>-<Store hash>`, created with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS` and a DACL
 granting only the user; the client checks the pipe server's process owner
 is itself before sending anything. Both use blocking I/O and a thread per
-connection direction, like the rest of core: no async runtime.
+connection direction, like the rest of core: no async runtime (the pipe
+is opened overlapped, each transfer waited for, so a connection's two
+threads never serialize on its handle).
 `FERRITE_STORE` moves the socket with the Store so tests and a second
 install never meet the operator's Server.
 
@@ -224,19 +226,21 @@ messages carry it so a client drops one older than its snapshot.
 by the difference measured at `welcome`, so working timers agree across
 clients.
 
-**Lanes.** One connection, one outbox, two queues. Streaming text goes
-on the reliable queue, not a latest-wins one as the plan sketched: Herdr's
-latest-wins lane carries whole screen states, but a delta is not a state,
-and dropping one loses text. Coalescing gives the same effect losslessly.
-The reliable queue keeps order and never drops: adjacent text, thinking
-and tool-output deltas of one Thread are concatenated while they wait
-(the merged `input` carries the last `seq`), and a
-connection whose reliable queue passes 32 MiB is closed with
-`error.code = lagged`; the client reconnects and resumes, usually from
-`history`, since 32 MiB outruns the ring. The latest-wins
-queue holds one pending message per key and replaces it in place. The
-writer interleaves them, so a state change never waits behind more than
-one reliable batch.
+**Lanes.** One connection, one outbox. Streaming text is never dropped,
+not sent latest-wins as the plan sketched: Herdr's latest-wins lane
+carries whole screen states, but a delta is not a state, and dropping one
+loses text. Coalescing gives the same effect losslessly: adjacent text,
+thinking and tool-output deltas of one Thread are concatenated while they
+wait (the merged `input` carries the last `seq`). The latest-wins kinds
+(`thread`, `tool_draft` per tool, `roster`, `groups`, `registry`,
+`notices`, `providers`) take a keyed slot: a newer one replaces the one of
+its kind still waiting, in place. They share the one ordered queue
+rather than a second one, as first written here, because order carries
+meaning between them: a `roster` that closes a Thread must not overtake
+that Thread's last inputs, nor a tool draft the start that settles it. A
+connection whose queue passes 32 MiB is closed with a `reply {id: 0,
+error.code = lagged}`; the client reconnects and resumes, usually from
+`history`, since 32 MiB outruns the ring.
 
 **Decisions.** The Engine is their only owner. `answer` names the
 `DecisionHandle` the client drew (generation, serial and the provider's

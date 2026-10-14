@@ -562,6 +562,12 @@ impl LogRecord {
         }))
     }
 
+    /// Extend this line with the next when the log would keep the two as
+    /// one (a run of deltas): what lets a waiting client take one line.
+    pub fn coalesce(&mut self, next: &LogRecord) -> bool {
+        self.0.coalesce(&next.0)
+    }
+
     /// What this line replays as; `None` for the store's own bookkeeping
     /// (facts and marks), which a reader skips.
     pub fn input(&self) -> Option<Input> {
