@@ -283,6 +283,7 @@ pub struct Groups {
     next_id: u64,
 }
 
+
 impl Groups {
     pub fn load(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
@@ -707,8 +708,10 @@ impl Groups {
         }
     }
 
+    // Validation only reads the Store: a window's copy validates a drop
+    // without ever taking the Store's claim.
     fn thread_project(&self, thread: ThreadId) -> Result<Option<ProjectId>, ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         store
             .peek(thread)
             .map(|meta| meta.project_id)
@@ -721,7 +724,7 @@ impl Groups {
     }
 
     fn validate_all(&self) -> Result<(), ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         let known: BTreeSet<_> = store.thread_ids()?.into_iter().collect();
         for thread in self.groups.iter().flat_map(|group| &group.members) {
             if !known.contains(thread) {
@@ -734,8 +737,53 @@ impl Groups {
         Ok(())
     }
 
+    /// The Groups as their file spells them: what a window's copy is
+    /// built from (ADR 0025).
+    pub fn to_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.persisted()).expect("the groups serialize")
+    }
+
+    /// No Groups: a window's copy of the Store in `dir` before the Server's
+    /// lands.
+    pub(crate) fn empty(dir: &Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            groups: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// A window's read-only copy of the Server's Groups for the Store in
+    /// `dir`, taken as the Server healed them. It is never written: every
+    /// change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Self> {
+        let persisted = serde_json::from_value::<PersistedGroups>(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let groups: Vec<Group> = persisted
+            .groups
+            .into_iter()
+            .map(|stored| Group {
+                id: stored.id,
+                title: stored.title,
+                members: stored.members.into_iter().map(ThreadId::new).collect(),
+                guests: stored.guests.into_iter().map(ThreadId::new).collect(),
+                layout: stored.layout,
+            })
+            .collect();
+        Ok(Self {
+            next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
+            groups,
+            ..Self::empty(dir)
+        })
+    }
+
     fn persist(&self) -> io::Result<()> {
-        let value = PersistedGroups {
+        let bytes = serde_json::to_vec_pretty(&self.persisted()).map_err(io::Error::other)?;
+        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
+    }
+
+    fn persisted(&self) -> PersistedGroups {
+        PersistedGroups {
             version: SCHEMA_VERSION,
             groups: self
                 .groups
@@ -748,9 +796,7 @@ impl Groups {
                     layout: group.layout.clone(),
                 })
                 .collect(),
-        };
-        let bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
-        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
+        }
     }
 }
 

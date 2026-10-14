@@ -72,21 +72,27 @@ app test run `Engine` in-process over the in-process link.
 
 ### Process lifecycle
 
-**Where it listens.** `~/.ferrite/server.sock` (the directory 0700, the
-socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
+**Where it listens.** `server.sock` in the Store's directory,
+`~/.ferrite/threads/server.sock` (the directory 0700, the socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
 stale socket (nothing answers a connect) is removed before binding; a live
 one means a Server already runs. On Windows, the pipe
-`\\.\pipe\ferrite-server-<user SID>`, created with
+`\\.\pipe\ferrite-server-<user SID>-<Store hash>` (FNV-1a of the
+Store's path: a hash no toolchain changes, since an app and a Server from
+different builds must find one pipe), created with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS` and a DACL
 granting only the user; the client checks the pipe server's process owner
 is itself before sending anything. Both use blocking I/O and a thread per
-connection direction, like the rest of core: no async runtime.
+connection direction, like the rest of core: no async runtime (the pipe
+is opened overlapped, each transfer waited for, so a connection's two
+threads never serialize on its handle).
 `FERRITE_STORE` moves the socket with the Store so tests and a second
 install never meet the operator's Server.
 
 **Starting.** The app calls `server::agent::ensure_running`: connect; if
 nothing answers, on macOS `launchctl kickstart gui/<uid>/<label>` when the
-LaunchAgent is installed, otherwise (and always on Windows) start
+LaunchAgent is installed and the Store is the operator's own
+(`~/.ferrite/threads`: a dev or test Store never starts the operator's
+Server), otherwise (and always on Windows) start
 `<current_exe> server` detached: a new process group with null stdio on
 Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW |
 CREATE_BREAKAWAY_FROM_JOB` on Windows. Then it waits up to 5 s for the
@@ -96,8 +102,9 @@ have launchd respawn it every 10 s for as long as the first one runs).
 
 **LaunchAgent (macOS).** Settings › Server › "Start at login", on by
 default, installed at the first launch of a bundled app before
-`ensure_running`, so the first Server is already launchd's (not for a bare
-`target/` binary, which uses the detached start). It writes
+`ensure_running`, so the first Server is already launchd's (not for a
+development build, which uses the detached start and does not offer the
+setting: it would point the operator's LaunchAgent at `target/`). It writes
 `~/Library/LaunchAgents/com.github.josephwylie.ferrite.server.plist` —
 `ProgramArguments` = the bundle's executable and `server`, `RunAtLoad`,
 `KeepAlive { SuccessfulExit = false }` (restarted after a crash, not after
@@ -106,7 +113,10 @@ builds) — then `launchctl bootstrap gui/<uid>` (a label already loaded
 counts as done). Turning it off only deletes the plist: `bootout` would
 SIGTERM the running Server, so the job stays loaded until logout and
 nothing starts it at the next login. Each launch rewrites the plist if
-the bundle moved. Provider CLIs stay in the Server's process group, so when a crashed
+the bundle moved; a job already loaded keeps the old path until logout
+(re-bootstrapping it would SIGTERM a Server that may be running), so
+when a kickstarted Server does not answer within 5 s, `ensure_running`
+starts the detached one and waits again. Provider CLIs stay in the Server's process group, so when a crashed
 Server's job ends launchd kills what it left (its default, no
 `AbandonProcessGroup`) before starting the next one: an orphaned Codex
 app-server would otherwise hold its thread's lock against the resume. A
@@ -127,8 +137,11 @@ messages into outboxes. At boot it revives every Thread marked open (the
 existing `.open` markers, staggered as in ADR 0018), so after a crash or
 reboot the Threads resume without a window.
 
-**Stopping.** SIGTERM and SIGINT (and `CTRL_CLOSE_EVENT` /
-`CTRL_SHUTDOWN_EVENT` on Windows) set a flag the pump sees. The pump flushes
+**Stopping.** SIGTERM and SIGINT set a flag the pump sees. On Windows so
+do a console's Ctrl+C and close (a Server run by hand) and `WM_ENDSESSION`
+at logout and shutdown: the Server the app starts has no console, so it
+keeps a hidden top-level window for that message, and holds the process
+up while the pump flushes. The pump flushes
 every writer, ends every Session without parking it (the open markers
 stay, so the next boot resumes the same Threads; resume ids are already in
 the log as `init` records), and runs `Store::quit` with the existing
@@ -181,31 +194,35 @@ Client → Server:
 |---|---|
 | `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capability: `render_visual` (this client can draw Visuals). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` is always sent. |
-| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt), `send`, `queue`, `unqueue`, `cancel_queued`, `interrupt`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `delete`, `import`, `group`, `layout`, `project`, `notice` (open, dismiss, read, seen), `settings_changed`, `search_files`, `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
+| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `search_files`, `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
 
 Server → Client:
 
 | Message | Lane | Meaning |
 |---|---|---|
-| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. |
+| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. |
 | `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
-| `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`; then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
+| `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`, in pieces of about 1 MiB (`after` counts the inputs before each; `0` starts the Thread over); then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
-| `decision {thread, subject?, decision}` / `decision_closed {thread, decision, by}` | reliable | `by`: `answered {client}`, `cancelled`, `session_ended`, `server_restart`. |
+| `decision {thread, subject?, handle, decision}` / `decision_closed {thread, handle, by}` | reliable | To every client, watching or not. `by`: `answered {client}`, `cancelled` (the provider withdrew it), `session_ended`, `server_restart` (the Server restarts or stops). A watcher also reads each Decision from its Thread's inputs. |
 | `reply {id, ok?, error?:{code, message}}` | reliable | Codes: `already_answered`, `invalid_answer`, `unknown_thread`, `unsupported`, `restarting`, `failed`. |
 | `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus, permission modes, supported controls, store error, generation. |
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
+| `allowance_warning {provider, window, threshold, used_fraction}` | reliable | A provider's allowance rose past one of the operator's thresholds. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |
 
-An `input` carries either `{"record": …}`, a Store `Record` exactly as
-the log spells it, or `{"live": …}`, a gen-1 DTO for what the Store never
-keeps: notices, answers, revival, Activity connect/disconnect, queue
-acknowledgements, MCP servers and authorizations, rate limits. Durable
-history is therefore the log's own lines, and `history` is read from the
-log without decoding on the Server. The Store's on-disk rule is
+An `input` carries `{"record": …}`, a Store `Record` exactly as the log
+spells it and applied live; `{"replay": …}`, the same line replayed (a
+revive's history, a Subagent's history loading); or `{"live": …}`, a
+gen-1 DTO for what the Store never keeps: notices, answers, revival,
+Decisions, Activity connect/disconnect, menus, MCP servers and
+authorizations, rate limits, restored tool clocks. Queue
+acknowledgements are `ThreadState`, not inputs. Durable
+history is therefore the log's own lines, replayed as a reopen replays
+them. The Store's on-disk rule is
 unchanged: a log from a newer schema is refused whole. On the wire, a
 record kind this client does not know decodes to `Unknown` and is
 skipped, and the window says it is older than its Server.
@@ -221,27 +238,39 @@ messages carry it so a client drops one older than its snapshot.
 by the difference measured at `welcome`, so working timers agree across
 clients.
 
-**Lanes.** One connection, one outbox, two queues. Streaming text goes
-on the reliable queue, not a latest-wins one as the plan sketched: Herdr's
-latest-wins lane carries whole screen states, but a delta is not a state,
-and dropping one loses text. Coalescing gives the same effect losslessly.
-The reliable queue keeps order and never drops: adjacent text, thinking
-and tool-output deltas of one Thread are concatenated while they wait
-(the merged `input` carries the last `seq`), and a
-connection whose reliable queue passes 32 MiB is closed with
-`error.code = lagged`; the client reconnects and resumes, usually from
-`history`, since 32 MiB outruns the ring. The latest-wins
-queue holds one pending message per key and replaces it in place. The
-writer interleaves them, so a state change never waits behind more than
-one reliable batch.
+**Lanes.** One connection, one outbox. Streaming text is never dropped,
+not sent latest-wins as the plan sketched: Herdr's latest-wins lane
+carries whole screen states, but a delta is not a state, and dropping one
+loses text. Coalescing gives the same effect losslessly: adjacent text,
+thinking and tool-output deltas of one Thread are concatenated while they
+wait (the merged `input` carries the last `seq`). The latest-wins kinds
+(`thread`, `tool_draft` per tool, `roster`, `groups`, `registry`,
+`notices`, `providers`) take a keyed slot: a newer one drops the one of
+its kind still waiting and joins the back of the queue, so it is never
+delivered ahead of anything queued before it. They share the one ordered queue
+rather than a second one, as first written here, because order carries
+meaning between them: a `roster` that closes a Thread must not overtake
+that Thread's last inputs, nor a tool draft the start that settles it. A
+connection whose queue passes 32 MiB is closed with a `reply {id: 0,
+error.code = lagged}`; the client reconnects and resumes, usually from
+`history`, since 32 MiB outruns the ring. A history is not queued as
+messages: it waits in the queue as one entry that the connection's writer
+thread reads from the log and sends as it goes, so a log of any size (the
+Store holds logs past 100 MB) neither trips the limit nor stalls the pump.
+A connection the Server lets go sends what it already queued, then closes
+and ends both its threads.
 
 **Decisions.** The Engine is their only owner. `answer` names the
 `DecisionHandle` the client drew (generation, serial and the provider's
 request id), because a request id is unique only within one provider
 process, and a replaced Session may reuse one. It is checked on the pump
 thread: the Decision must be pending and not already submitting, the
-answer must fit its kind (`validate_form` for forms and questions), and
-the handle's generation must be the Session's. The first that passes is
+answer must fit its kind (`DecisionKind::validate_answer`: the variants
+each kind takes, a form's values and each question's picks), and the
+whole handle must match, so a replaced Session's Decision never matches
+its successor's. What only the provider's adapter can judge (a choice it
+never offered) is refused there, before anything is sent, and replied
+`invalid_answer` too. The first that passes is
 delivered to the provider, recorded, flushed, replied `ok`, and broadcast as
 `decision_closed {by: answered}` with the answering client. Every later
 answer is replied `already_answered`; an invalid one `invalid_answer`,
@@ -255,7 +284,24 @@ still pending means the operator answers again.
 - `Cockpit` holds a `Link` instead of a Store and a Spawner. Its mirrors
   apply exactly the `ActivityInput`s the Engine applied, so the window draws
   what it draws now. `PaneUpdate` is computed from the mirror, as the pump
-  does today.
+  does today. Groups, the registry, Notices and the providers' state are
+  read-only copies built from their latest-wins messages.
+- The link is one of two. Attached (`Cockpit::attach`), an act is a
+  command whose reply the window waits for, reading what arrives before it
+  into an inbox, so the window is up to date when the act returns; a
+  first send (`bootstrap`, answered once the Thread has started, and taken
+  back by `cancel_bootstrap`) and a file search answer later. In-process
+  (`--demo`, `--load`, the tests) an act stays a direct call, keeping its
+  typed error; both read the same mirrors and copies. Acts only fixtures
+  and tests use (injected inputs, fixture Notices, the launch-time revival
+  the Server does itself) exist in-process only.
+- What a parked Thread says (titles, its Project, last use, the parked
+  list, Subagent counts) the window reads itself, through a Store handle
+  that never takes the claim (`Store::reader`), so a Server started after
+  the window still finds it free. So do the derived reads — Needs-you
+  order, display titles, the last Project worked in. Discovery of CLI
+  session files and workspace commands reads the operator's own files and
+  stays in the window too.
 - Per window: focus, View (Solo or a Group), fullscreen, Drafts, the
   Composer's prompt history, find. Shared through the Server: which
   Threads are open, Groups and Layouts, projects, Notices and whether they
@@ -264,12 +310,21 @@ still pending means the operator answers again.
   getting a read-only Store, so `Store::read_only` and its banner leave
   the app. Several windows in one app are not built here.
 - Quitting or closing the window ends nothing, so ⌘Q no longer asks.
-  Settings › Server shows the Server's version, uptime and live Sessions,
-  with "Start at login", "Restart" and "Stop" (stop asks first while an
-  agent works or a Decision waits — the question ⌘Q asks today).
-- Without a Server the window shows a band with the reason and Retry, and
-  keeps reconnecting with backoff. It never falls back to running agents
-  itself: two pumps on one Store is the bug the claim exists to stop.
+  Settings › About's Server group shows the Server's version, uptime and
+  live Sessions, with "Start at login", "Restart" and "Stop" (both ask
+  first while an agent works or a Decision waits — the question ⌘Q asks
+  today).
+- Without a Server the window shows a band — a notification that stays
+  up, with the reason; clicking it retries now — and keeps reconnecting
+  with backoff (from 250 ms to 5 s; 2 s after `restarting`, so a Server
+  coming back from `exec` is not raced by a second one). It never falls
+  back to running agents itself: two pumps on one Store is the bug the
+  claim exists to stop.
+- The window still lists each Thread's worktrees (it runs git for its
+  branch labels anyway) and sends the list as `worktrees_listed`, with
+  how long ago it was read, so the Server judges it against its own clock.
+  A focused window reports a Thread seen only when looking at it would
+  read something, since the check runs every frame.
 - Settings stay a file the window writes. `settings_changed` makes the
   Engine reread it; it applies to the next Session, as today.
 
@@ -295,8 +350,8 @@ over live processes.
   the agents off each time they idle. Such an app shows the mismatch in
   Settings › Server instead.
 - On idle (or now), the Engine checks its executable still exists (else
-  it replies `failed` and keeps running), broadcasts `restarting`, closes
-  pending Decisions (`server_restart`), flushes and ends Sessions as on
+  it replies `failed` and keeps running), closes pending Decisions
+  (`server_restart`), broadcasts `restarting`, flushes and ends Sessions as on
   SIGTERM,
   then restarts itself: `exec` of its own executable on Unix (same pid,
   so launchd sees no exit; the claim's file is close-on-exec, so the new
@@ -310,14 +365,17 @@ over live processes.
   running Server, and the restart above follows. On Windows the setup
   cannot replace a running executable (and Inno's silent
   `CloseApplications` would kill the Server unflushed), so "restart to
-  update" sends `stop {when: idle}` (or `now`), and the detached
-  PowerShell waits for the Server's pid as well as the app's before it
-  runs the setup; the relaunched app starts the new Server, which resumes
-  the Threads. The update band says it waits for the agents.
+  update", which already waits for every agent to be idle (or asks, for
+  "now"), sends `stop {when: now}` and waits (up to 5 s) for the
+  Server to let its windows go and its pipe to vanish with its process
+  before the app quits; the relaunched
+  app installs before it starts a Server, and the new Server resumes the
+  Threads.
 - ADR 0023's gate, "only the Ferrite holding the Store's claim updates",
   has no holder once the Server owns the Store: the app instead takes the
-  same kind of lock on `~/.ferrite/update/claim` for its lifetime, and
-  only its holder checks, downloads and installs.
+  same kind of lock on `~/.ferrite/update.claim` for its lifetime, and
+  only its holder checks, downloads and installs. It sits beside the
+  staging directory `update/`, which a download replaces whole.
 - An app older than its Server (two installs, a downgrade) attaches; the
   contract allows it. It never asks for a restart.
 
@@ -347,8 +405,12 @@ Each step is one commit and leaves the app working.
 6. `engine` carved out of `Cockpit` in-process: `Cockpit` owns an `Engine` and
    calls it directly. A move; behaviour and API unchanged.
 7. `Cockpit` becomes a mirror: the Engine emits protocol messages into an
-   in-process outbox, `Cockpit` applies them and sends commands back.
-   Still one process.
+   in-process outbox, and `Cockpit` builds each open Thread's Activity and
+   `ThreadState` from them; every Cockpit test asserts the mirrors equal
+   the Engine after each message. Still one process, and an act is still
+   a direct call: the same acts become `command`s when the socket link
+   carries them (step 9). Each Engine input's instant is rounded up to
+   the millisecond the wire carries, so a mirror applies exactly it.
 8. `link`: framing, outbox lanes, the Unix socket and the named pipe,
    handshake, replay ring, reconnect.
 9. `server::run` and the `ferrite server` mode: claim, listen, pump loop,
@@ -404,8 +466,11 @@ Never the `live_*` tests. Scripted Sessions throughout.
 - **Windows**: the pipe, the Run key and the detached start are
   `cfg(windows)`; Windows CI runs the link tests on the pipe.
 - **App**: the existing `CockpitView` tests run unchanged over the
-  in-process Engine; one test drops the link and sees the band and the
-  resume.
+  in-process Engine; one test starts a window with no Server and sees the
+  band, and that quitting asks nothing. A Cockpit attached over the socket
+  to a Server with scripted Sessions (server tests) opens, sends, reads the
+  stream, registers a Project, answers a Decision a second window then
+  finds answered, and parks.
 - **By hand** before step 12 ships: quit mid-turn and relaunch; `kill -9`
   the Server mid-turn; log out and in; update with a working agent, both
   "when idle" and "now".

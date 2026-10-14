@@ -1,6 +1,8 @@
 //! Delayed provider adapters cross the same startup seam as production.
 //! Gates decide readiness; no CLI, timing assumptions, or worker-side sends.
 use super::*;
+use crate::cockpit::Cockpit;
+use crate::roster::PaneIdentity;
 use crate::providers::applied;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -173,7 +175,7 @@ fn delayed_draft_success_delivers_once_and_preserves_unrelated_roster_actions() 
     assert!(!cockpit.thread(provisional).unwrap().first_prompt_sent());
     assert!(!cockpit.thread(provisional).unwrap().has_prompt_history());
     assert!(cockpit
-        .store
+        .engine().store
         .load(provisional)
         .unwrap()
         .prompt_texts()
@@ -241,7 +243,7 @@ fn delayed_draft_startup_and_first_send_failures_restore_the_original_draft() {
         assert_eq!(completed.prompt, "keep my prompt");
         assert!(completed.result.is_err());
         assert!(cockpit.threads().is_empty());
-        assert!(cockpit.store.thread_ids().unwrap().is_empty());
+        assert!(cockpit.engine().store.thread_ids().unwrap().is_empty());
         assert_eq!(cockpit.roster().panes(), &[PaneIdentity::Draft(draft)]);
         assert!(provider.sent().is_empty());
     }
@@ -270,7 +272,7 @@ fn discard_and_park_before_ready_cannot_deliver_even_without_another_pump() {
         provider.ready();
         until(|| provider.dropped.load(Ordering::SeqCst) == 1);
         assert!(provider.sent().is_empty());
-        assert!(cockpit.store.thread_ids().unwrap().is_empty());
+        assert!(cockpit.engine().store.thread_ids().unwrap().is_empty());
     }
 }
 
@@ -311,7 +313,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
         .unwrap();
     cockpit.send(thread, "after".into());
     assert!(cockpit
-        .store
+        .engine().store
         .load(thread)
         .unwrap()
         .last_handover()
@@ -327,7 +329,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
     assert!(
         !cockpit
-            .store
+            .engine().store
             .load(thread)
             .unwrap()
             .last_handover()
@@ -345,7 +347,7 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     cockpit.park(thread).unwrap();
     assert!(
         cockpit
-            .store
+            .engine().store
             .load(thread)
             .unwrap()
             .last_handover()
@@ -367,7 +369,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
     cockpit
-        .store
+        .engine().store
         .faults()
         .fail_commit
         .store(true, Ordering::SeqCst);
@@ -376,7 +378,7 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
         cockpit.pump();
         !cockpit.thread(thread).unwrap().starting()
     });
-    let snapshot = cockpit.store.load(thread).unwrap();
+    let snapshot = cockpit.engine().store.load(thread).unwrap();
     assert_eq!(snapshot.provider(), Provider::Claude);
     assert!(snapshot.last_handover().is_none());
     assert_eq!(original.dropped.load(Ordering::SeqCst), 0);
@@ -477,7 +479,7 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     assert_eq!(*replacement.efforts.lock().unwrap(), [Some("high".into())]);
     assert!(
         !cockpit
-            .store
+            .engine().store
             .load(thread)
             .unwrap()
             .last_handover()
@@ -522,7 +524,7 @@ fn halting_sessions_drops_ready_and_starting_sessions_alike() {
 
     assert_eq!(ready.dropped.load(Ordering::SeqCst), 1);
     assert!(!cockpit.thread(live).unwrap().starting());
-    assert!(cockpit.threads[&live].session.is_none());
+    assert!(cockpit.engine().threads[&live].session.is_none());
     // A startup still in flight is abandoned: its worker drops the late
     // process on its own, and nothing waits for it.
     assert!(!cockpit.thread(pending).unwrap().starting());

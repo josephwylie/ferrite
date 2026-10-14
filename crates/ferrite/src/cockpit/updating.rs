@@ -80,6 +80,7 @@ impl CockpitView {
             return;
         }
         if self.in_flight().is_none() {
+            self.release_executable();
             restart(cx);
             return;
         }
@@ -92,6 +93,7 @@ impl CockpitView {
             let idle = this.update(cx, |view, cx| {
                 let idle = view.in_flight().is_none();
                 if idle {
+                    view.release_executable();
                     restart(cx);
                 }
                 idle
@@ -123,7 +125,21 @@ impl CockpitView {
             State::Ready {
                 when_idle: true, ..
             } => {
-                if self.confirm_leaving("Restart", window, cx, |_, cx| restart(cx)) {
+                // On Windows the update stops the Server too, so it asks
+                // even when the window's going alone would end nothing.
+                let warning = if cfg!(windows) {
+                    self.in_flight()
+                        .map(|what| format!("{what}. The update stops them."))
+                } else {
+                    self.leaving_warning()
+                };
+                let view = cx.entity().downgrade();
+                let leave = move |_: &mut Window, cx: &mut gpui::App| {
+                    view.update(cx, |view, _| view.release_executable()).ok();
+                    restart(cx);
+                };
+                if self.confirm_leaving("Restart", warning, window, cx, leave) {
+                    self.release_executable();
                     restart(cx);
                 }
             }

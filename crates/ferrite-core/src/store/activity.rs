@@ -7,7 +7,7 @@ use crate::activity::{
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PersistedActivity {
     Discovered {
@@ -69,7 +69,7 @@ pub(super) enum PersistedActivity {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PersistedSubject {
     Main,
@@ -86,7 +86,7 @@ impl PersistedSubject {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Coverage {
     Unavailable,
@@ -96,7 +96,7 @@ pub(super) enum Coverage {
     Complete,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Status {
     Unknown,
@@ -112,7 +112,7 @@ pub(super) enum Status {
     NotLoaded,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Execution {
     FileChanges {
@@ -200,12 +200,12 @@ pub(super) enum Execution {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct StoredFileEdit {
     path: String,
     hunks: Vec<StoredHunk>,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct StoredHunk {
     old_start: u32,
     old_lines: u32,

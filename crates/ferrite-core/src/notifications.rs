@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::activity::{ActivityView, AgentStatus, DecisionHandle, Subject};
+use crate::protocol::WireNotice;
 use crate::{DecisionKind, ThreadId, TurnOutcome};
 
 /// How long Main may sit idle after its last child settles before the
@@ -467,6 +468,90 @@ impl Notifications {
         changed
     }
 
+    /// Every Notice and live request, as a window's copy is built from
+    /// them (ADR 0025).
+    pub fn to_wire(&self) -> Vec<WireNotice> {
+        let finished = self.notices.iter().map(|notice| WireNotice::Finished {
+            id: notice.id.0,
+            thread: notice.thread,
+            outcome: (&notice.outcome).into(),
+            at_ms: epoch_ms(notice.at),
+            read: notice.read,
+        });
+        let requests = self.decisions.values().map(|notice| WireNotice::Request {
+            thread: notice.id.thread,
+            handle: (&notice.id.handle).into(),
+            subject: notice.subject.as_ref().map(Into::into),
+            question: notice.kind == RequestKind::Question,
+            read: notice.read,
+            at_ms: epoch_ms(notice.at),
+            seq: notice.seq,
+            dismissed: notice.dismissed,
+        });
+        finished.chain(requests).collect()
+    }
+
+    /// A window's read-only copy of the Server's Notices: it answers every
+    /// question the bell and the Needs-you queue ask, and folds nothing.
+    pub fn from_wire(wire: &[WireNotice]) -> Self {
+        let mut notifications = Self::default();
+        for notice in wire {
+            match notice {
+                WireNotice::Finished {
+                    id,
+                    thread,
+                    outcome,
+                    at_ms,
+                    read,
+                } => {
+                    let Ok(outcome) = outcome.try_into() else {
+                        continue;
+                    };
+                    notifications.notices.push_back(Notice {
+                        id: NoticeId(*id),
+                        thread: *thread,
+                        outcome,
+                        at: at_epoch_ms(*at_ms),
+                        read: *read,
+                    });
+                }
+                WireNotice::Request {
+                    thread,
+                    handle,
+                    subject,
+                    question,
+                    read,
+                    at_ms,
+                    seq,
+                    dismissed,
+                } => {
+                    let id = DecisionNoticeId {
+                        thread: *thread,
+                        handle: handle.into(),
+                    };
+                    notifications.decisions.insert(
+                        id.clone(),
+                        DecisionNotice {
+                            id,
+                            subject: subject.as_ref().and_then(|subject| subject.try_into().ok()),
+                            kind: if *question {
+                                RequestKind::Question
+                            } else {
+                                RequestKind::Permission
+                            },
+                            read: *read,
+                            at: at_epoch_ms(*at_ms),
+                            seq: *seq,
+                            dismissed: *dismissed,
+                        },
+                    );
+                }
+                WireNotice::Unknown => {}
+            }
+        }
+        notifications
+    }
+
     /// The live Session ended: discard any deferred finish, but keep its
     /// existing Notices so the operator can still open the parked Thread.
     pub fn disconnect(&mut self, thread: ThreadId) {
@@ -479,6 +564,15 @@ impl Notifications {
         self.notices.retain(|notice| notice.thread != thread);
         self.disconnect(thread);
     }
+}
+
+fn epoch_ms(at: SystemTime) -> u64 {
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as u64)
+}
+
+fn at_epoch_ms(ms: u64) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
 }
 
 #[cfg(test)]

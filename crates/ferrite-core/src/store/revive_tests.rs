@@ -412,6 +412,43 @@ fn a_long_thread_revives_from_its_tail() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A log that ends inside a turn — the Server crashed, was killed, or
+/// restarted "now" — revives as an interrupted turn, and the log is left
+/// as the provider said it: no outcome is written for it.
+#[test]
+fn a_log_ending_mid_turn_revives_as_interrupted() {
+    let dir = scratch("revive-mid-turn");
+    let store = Store::open(&dir).unwrap();
+    let binding = WorkspaceBinding::Main {
+        checkout: "/fixture/repo".into(),
+    };
+    let (id, mut writer) = store.create(Provider::Claude, None, binding).unwrap();
+    writer.record_prompt("cut off").unwrap();
+    writer
+        .record_event(&SessionEvent::TextDelta { text: "half a thou".into() }, None)
+        .unwrap();
+    writer.flush_fully().unwrap();
+    drop(writer);
+    let log = dir.join(id.to_string()).join("log.jsonl");
+    let before = fs::read(&log).unwrap();
+
+    let mut activity = replayed(store.revive(id).unwrap().activity_inputs());
+    activity.apply(ActivityInput::Main {
+        input: crate::transcript::Input::Revived,
+        at: crate::clock::instant(),
+    });
+
+    let main = activity.view().main().transcript();
+    assert_eq!(main.turn_outcome(), Some(&crate::TurnOutcome::Interrupted));
+    assert_eq!(main.status(), crate::transcript::Status::Idle);
+    assert!(main.blocks().iter().any(|block| matches!(
+        &block.body,
+        crate::transcript::Body::TurnEnd(end) if end.outcome == crate::TurnOutcome::Interrupted
+    )));
+    assert_eq!(fs::read(&log).unwrap(), before, "the revive wrote nothing");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The property on a real log: set `LAB_LOG` to a log to copy (an APFS
 /// clone). Its first revive upgrades it, and the upgrade's mark names the
 /// base the bounded read starts from.

@@ -1,6 +1,6 @@
-//! How the app starts Sessions: the production `Spawner` adapter over the
+//! How Ferrite starts Sessions: the production `Spawner` adapter over the
 //! two provider CLIs, and the process-memory sampler the watchdog reads.
-//! The scripted demo Sessions are their own adapter, in `crate::demo` —
+//! The app's scripted demo Sessions are their own adapter, in its `demo` —
 //! both hand the pump the same `Receiver<SessionEvent>`.
 
 use std::collections::{HashMap, HashSet};
@@ -8,14 +8,18 @@ use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use ferrite_core::cockpit::{Preparation, RssSampler, SpawnRequest, Spawner};
-use ferrite_core::providers::{
+use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
+use crate::providers::{
     ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session, SettingAck,
 };
-use ferrite_core::session::SessionLifecycle;
-use ferrite_core::settings::Settings;
-use ferrite_core::store::Provider;
-use ferrite_core::ThreadId;
+use crate::session::SessionLifecycle;
+use crate::settings::Settings;
+use crate::store::Provider;
+use crate::ThreadId;
+
+/// One Session may hold this much before the watchdog replaces it. Generous:
+/// a busy agent legitimately grows, and a restart costs the operator context.
+pub const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 /// What every new Session is started with beyond the Thread's own choice:
 /// the operator's permission, sandbox and effort defaults, read from
@@ -32,7 +36,7 @@ pub struct SessionDefaults {
     pub codex_effort: Option<String>,
     pub placeholder_suggestions: bool,
     /// How readily agents are offered `show_visual` (Settings).
-    pub visuals: ferrite_core::visual::Level,
+    pub visuals: crate::visual::Level,
 }
 
 impl SessionDefaults {
@@ -64,21 +68,21 @@ pub struct Spawn {
     pub defaults: Arc<Mutex<SessionDefaults>>,
     /// What answers an agent's `show_visual` with a screenshot (the app's
     /// off-screen browser, `visual::renderer`). `None`: the tool isn't offered.
-    pub renderer: Option<Arc<dyn ferrite_core::visual::Renderer>>,
+    pub renderer: Option<Arc<dyn crate::visual::Renderer>>,
 }
 
 impl Spawn {
     pub fn new(
         defaults: Arc<Mutex<SessionDefaults>>,
-        renderer: Option<Arc<dyn ferrite_core::visual::Renderer>>,
+        renderer: Option<Arc<dyn crate::visual::Renderer>>,
     ) -> Self {
         Self { defaults, renderer }
     }
 
     /// The tool as this spawn offers it: the operator's level and the
     /// renderer (none without one).
-    fn visuals(&self, level: ferrite_core::visual::Level) -> Option<ferrite_core::visual::Visuals> {
-        self.renderer.clone().map(|renderer| ferrite_core::visual::Visuals { level, renderer })
+    fn visuals(&self, level: crate::visual::Level) -> Option<crate::visual::Visuals> {
+        self.renderer.clone().map(|renderer| crate::visual::Visuals { level, renderer })
     }
 }
 
@@ -87,7 +91,7 @@ impl Spawner for Spawn {
         &mut self,
         roots: Vec<(Provider, std::path::PathBuf)>,
         cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<ferrite_core::import::Candidate>>>> {
+    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("ferrite-session-discovery".into())
@@ -95,17 +99,17 @@ impl Spawner for Spawn {
                 let mut rows = Vec::new();
                 for (provider, root) in roots {
                     let discovered = match provider {
-                        Provider::Claude => ferrite_core::providers::claude_sessions(&root, cap),
+                        Provider::Claude => crate::providers::claude_sessions(&root, cap),
                         Provider::Codex => {
-                            let program = ferrite_core::providers::discover::program(provider);
-                            ferrite_core::providers::codex_sessions(&program, cap)
+                            let program = crate::providers::discover::program(provider);
+                            crate::providers::codex_sessions(&program, cap)
                         }
                     };
                     match discovered {
                         Ok(found) => rows.extend(found),
                         Err(error) => {
-                            ferrite_core::log!("native session discovery failed: {error}");
-                            rows.extend(ferrite_core::import::candidates(&[(provider, root)], cap));
+                            crate::log!("native session discovery failed: {error}");
+                            rows.extend(crate::import::candidates(&[(provider, root)], cap));
                         }
                     }
                 }
@@ -119,25 +123,25 @@ impl Spawner for Spawn {
 
     fn suggest(
         &mut self,
-        request: ferrite_core::suggest::Request,
-        replies: std::sync::mpsc::Sender<ferrite_core::suggest::Suggestion>,
+        request: crate::suggest::Request,
+        replies: std::sync::mpsc::Sender<crate::suggest::Suggestion>,
     ) {
-        ferrite_core::suggest::spawn(request, replies);
+        crate::suggest::spawn(request, replies);
     }
 
     fn discover_commands(
         &mut self,
         provider: Provider,
         cwd: &std::path::Path,
-    ) -> Option<ferrite_core::providers::commands::Discovery> {
+    ) -> Option<crate::providers::commands::Discovery> {
         let (tx, rx) = mpsc::channel();
         let failures = tx.clone();
         let cwd = cwd.to_path_buf();
         if let Err(error) = std::thread::Builder::new()
             .name("ferrite-command-discovery".into())
             .spawn(move || {
-                let program = ferrite_core::providers::discover::program(provider);
-                let _ = tx.send(ferrite_core::providers::commands::list(
+                let program = crate::providers::discover::program(provider);
+                let _ = tx.send(crate::providers::commands::list(
                     &program, provider, &cwd,
                 ));
             })
@@ -149,7 +153,7 @@ impl Spawner for Spawn {
 
     fn discover_models(
         &mut self,
-    ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
+    ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<crate::ModelInfo>)>> {
         let (tx, rx) = std::sync::mpsc::channel();
         // Claude announces its menu only at initialize, so without this a
         // new Claude model reached the pickers only once some Thread's
@@ -158,28 +162,28 @@ impl Spawner for Spawn {
         std::thread::Builder::new()
             .name("ferrite-claude-model-discovery".into())
             .spawn(move || {
-                let program = ferrite_core::providers::discover::program(Provider::Claude);
+                let program = crate::providers::discover::program(Provider::Claude);
                 let cwd = std::env::var_os("HOME")
                     .or_else(|| std::env::var_os("USERPROFILE"))
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(std::env::temp_dir);
-                match ferrite_core::providers::commands::claude_models(&program, &cwd) {
+                match crate::providers::commands::claude_models(&program, &cwd) {
                     Ok(models) => {
                         let _ = claude.send((Provider::Claude, models));
                     }
-                    Err(error) => ferrite_core::log!("could not discover Claude models: {error}"),
+                    Err(error) => crate::log!("could not discover Claude models: {error}"),
                 }
             })
             .ok()?;
         std::thread::Builder::new()
             .name("ferrite-model-discovery".into())
             .spawn(move || {
-                let program = ferrite_core::providers::discover::program(Provider::Codex);
-                match ferrite_core::providers::codex_models(&program) {
+                let program = crate::providers::discover::program(Provider::Codex);
+                match crate::providers::codex_models(&program) {
                     Ok(models) => {
                         let _ = tx.send((Provider::Codex, models));
                     }
-                    Err(error) => ferrite_core::log!("could not discover Codex models: {error}"),
+                    Err(error) => crate::log!("could not discover Codex models: {error}"),
                 }
             })
             .ok()?;
@@ -252,15 +256,15 @@ struct SessionWithDefaults {
 }
 
 impl Session for SessionWithDefaults {
-    fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
+    fn supports_control(&self, kind: crate::ControlKind) -> bool {
         self.inner.supports_control(kind)
     }
 
-    fn control(&mut self, action: ferrite_core::SessionControl) -> io::Result<()> {
+    fn control(&mut self, action: crate::SessionControl) -> io::Result<()> {
         self.inner.control(action)
     }
 
-    fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
+    fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
         self.inner.permission_modes()
     }
 
@@ -271,7 +275,7 @@ impl Session for SessionWithDefaults {
     fn search_files(
         &mut self,
         query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>> {
+    ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
         self.inner.search_files(query)
     }
     fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
@@ -288,7 +292,7 @@ impl Session for SessionWithDefaults {
         self.inner.take_suggestion()
     }
 
-    fn events(&self) -> &std::sync::mpsc::Receiver<ferrite_core::SessionEvent> {
+    fn events(&self) -> &std::sync::mpsc::Receiver<crate::SessionEvent> {
         self.inner.events()
     }
 
@@ -315,7 +319,7 @@ impl Session for SessionWithDefaults {
     fn respond_to_decision(
         &mut self,
         id: &str,
-        answer: ferrite_core::DecisionAnswer,
+        answer: crate::DecisionAnswer,
     ) -> io::Result<()> {
         self.inner.respond_to_decision(id, answer)
     }
@@ -354,7 +358,7 @@ impl Spawn {
             .or_else(|| defaults.effort_for(request.provider));
         // The newest installed copy of the CLI, wherever it is — not
         // whichever a bare name happens to hit on this launch's PATH.
-        let program = ferrite_core::providers::discover::program(request.provider);
+        let program = crate::providers::discover::program(request.provider);
         match request.provider {
             Provider::Claude => SessionConfig::Claude(ClaudeConfig {
                 program: program.clone(),
@@ -442,7 +446,7 @@ impl RssSampler for ProcessRss {
 
 /// One process's resident bytes, the way the panes24 spike reads it.
 #[cfg(not(windows))]
-pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
+pub fn rss_bytes(pid: u32) -> Option<u64> {
     let out = std::process::Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
@@ -453,7 +457,7 @@ pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
 
 /// One process's resident bytes through the native Windows process API.
 #[cfg(windows)]
-pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
+pub fn rss_bytes(pid: u32) -> Option<u64> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
@@ -478,23 +482,23 @@ pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::providers::applied;
+    use crate::providers::applied;
 
     #[derive(Default)]
     struct NativeCalls {
         spawns: usize,
         model: Option<String>,
-        controls: Vec<ferrite_core::SessionControl>,
+        controls: Vec<crate::SessionControl>,
     }
 
     struct NativeProvider {
         calls: Arc<Mutex<NativeCalls>>,
-        events: Receiver<ferrite_core::SessionEvent>,
-        sender: Sender<ferrite_core::SessionEvent>,
+        events: Receiver<crate::SessionEvent>,
+        sender: Sender<crate::SessionEvent>,
     }
 
     impl Session for NativeProvider {
-        fn events(&self) -> &Receiver<ferrite_core::SessionEvent> {
+        fn events(&self) -> &Receiver<crate::SessionEvent> {
             &self.events
         }
         fn send(&mut self, _: &str) -> io::Result<()> {
@@ -506,11 +510,11 @@ mod tests {
                 .clone()
                 .unwrap_or("default".into());
             self.sender
-                .send(ferrite_core::SessionEvent::TextDelta { text: model })
+                .send(crate::SessionEvent::TextDelta { text: model })
                 .unwrap();
             self.sender
-                .send(ferrite_core::SessionEvent::TurnEnded {
-                    outcome: ferrite_core::TurnOutcome::Completed,
+                .send(crate::SessionEvent::TurnEnded {
+                    outcome: crate::TurnOutcome::Completed,
                     cost_usd: None,
                 })
                 .unwrap();
@@ -522,7 +526,7 @@ mod tests {
         fn respond_to_decision(
             &mut self,
             _: &str,
-            _: ferrite_core::DecisionAnswer,
+            _: crate::DecisionAnswer,
         ) -> io::Result<()> {
             Ok(())
         }
@@ -536,17 +540,17 @@ mod tests {
             self.calls.lock().unwrap().model = model.map(str::to_owned);
             Ok(applied())
         }
-        fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
-            kind != ferrite_core::ControlKind::LoginMcp
+        fn supports_control(&self, kind: crate::ControlKind) -> bool {
+            kind != crate::ControlKind::LoginMcp
         }
-        fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
-            vec![ferrite_core::PermissionModeChoice {
+        fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
+            vec![crate::PermissionModeChoice {
                 value: "native-mode".into(),
                 label: "Provider mode".into(),
             }]
         }
-        fn control(&mut self, action: ferrite_core::SessionControl) -> io::Result<()> {
-            if matches!(action, ferrite_core::SessionControl::LoginMcp { .. }) {
+        fn control(&mut self, action: crate::SessionControl) -> io::Result<()> {
+            if matches!(action, crate::SessionControl::LoginMcp { .. }) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "native login refused",
@@ -563,7 +567,7 @@ mod tests {
             let (sender, events) = mpsc::channel();
             self.0.lock().unwrap().spawns += 1;
             sender
-                .send(ferrite_core::SessionEvent::Init {
+                .send(crate::SessionEvent::Init {
                     session_id: "same-native-conversation".into(),
                     model: "initial".into(),
                 })
@@ -582,7 +586,7 @@ mod tests {
 
     #[test]
     fn production_wrapper_changes_model_without_replacing_the_conversation() {
-        use ferrite_core::{cockpit::Cockpit, store::Store, workspace::WorkspaceChoice};
+        use crate::{cockpit::Cockpit, store::Store, workspace::WorkspaceChoice};
         for provider in [Provider::Claude, Provider::Codex] {
             let path = std::env::temp_dir().join(format!(
                 "ferrite-wrapped-model-{}-{provider:?}",
@@ -644,7 +648,7 @@ mod tests {
 
     #[test]
     fn production_wrapper_exposes_native_modes_and_routes_controls() {
-        use ferrite_core::{ControlKind as K, SessionControl as C};
+        use crate::{ControlKind as K, SessionControl as C};
         let calls = Arc::new(Mutex::new(NativeCalls::default()));
         let (sender, events) = mpsc::channel();
         let mut session: Box<dyn Session> = Box::new(SessionWithDefaults {
@@ -673,7 +677,7 @@ mod tests {
         assert!(!session.supports_control(K::LoginMcp));
         assert_eq!(
             session.permission_modes(),
-            vec![ferrite_core::PermissionModeChoice {
+            vec![crate::PermissionModeChoice {
                 value: "native-mode".into(),
                 label: "Provider mode".into()
             }]
@@ -710,11 +714,11 @@ mod tests {
     fn default_effort_reads_current_settings_for_the_ready_sessions_provider() {
         use std::sync::mpsc::{channel, Receiver};
         struct Recording {
-            events: Receiver<ferrite_core::SessionEvent>,
+            events: Receiver<crate::SessionEvent>,
             efforts: Arc<Mutex<Vec<Option<String>>>>,
         }
         impl Session for Recording {
-            fn events(&self) -> &Receiver<ferrite_core::SessionEvent> {
+            fn events(&self) -> &Receiver<crate::SessionEvent> {
                 &self.events
             }
             fn send(&mut self, _: &str) -> io::Result<()> {
@@ -726,7 +730,7 @@ mod tests {
             fn respond_to_decision(
                 &mut self,
                 _: &str,
-                _: ferrite_core::DecisionAnswer,
+                _: crate::DecisionAnswer,
             ) -> io::Result<()> {
                 Ok(())
             }

@@ -103,19 +103,44 @@ impl Registry {
     /// returned: silently treating protected, damaged, or newer data as an
     /// empty registry would let the next mutation overwrite it.
     pub fn open(dir: &Path) -> io::Result<Registry> {
-        let mut registry = Registry {
-            dir: dir.to_path_buf(),
-            projects: Vec::new(),
-            worktrees: BTreeMap::new(),
-            next_project: 1,
-        };
         let bytes = match fs::read(dir.join(FILE_NAME)) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(registry),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Registry::empty(dir))
+            }
             Err(error) => return Err(error),
         };
         let persisted = serde_json::from_slice::<PersistedRegistry>(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Registry::from_persisted(dir, persisted)
+    }
+
+    /// The registry as its file spells it: what a window's copy is built
+    /// from (ADR 0025).
+    pub fn to_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.persisted()).expect("the registry serializes")
+    }
+
+    /// A window's read-only copy of the Server's registry for the Store in
+    /// `dir`. It is never written: every change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Registry> {
+        let persisted = serde_json::from_value::<PersistedRegistry>(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Registry::from_persisted(dir, persisted)
+    }
+
+    /// No projects: also a window's copy before the Server's lands.
+    pub(crate) fn empty(dir: &Path) -> Registry {
+        Registry {
+            dir: dir.to_path_buf(),
+            projects: Vec::new(),
+            worktrees: BTreeMap::new(),
+            next_project: 1,
+        }
+    }
+
+    fn from_persisted(dir: &Path, persisted: PersistedRegistry) -> io::Result<Registry> {
+        let mut registry = Registry::empty(dir);
         if !(1..=SCHEMA_VERSION).contains(&persisted.schema) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -592,7 +617,14 @@ impl Registry {
     /// file whole — the store's own rewrite discipline.
     fn persist(&self) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
-        let persisted = PersistedRegistry {
+        crate::store::replace_file(
+            &self.dir.join(FILE_NAME),
+            &serde_json::to_vec(&self.persisted()).map_err(io::Error::other)?,
+        )
+    }
+
+    fn persisted(&self) -> PersistedRegistry {
+        PersistedRegistry {
             schema: SCHEMA_VERSION,
             next_project: self.next_project,
             projects: self
@@ -617,11 +649,7 @@ impl Registry {
                     path: entry.path.clone(),
                 })
                 .collect(),
-        };
-        crate::store::replace_file(
-            &self.dir.join(FILE_NAME),
-            &serde_json::to_vec(&persisted).map_err(io::Error::other)?,
-        )
+        }
     }
 }
 

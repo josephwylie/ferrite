@@ -220,6 +220,32 @@ fn staging(dir: &Path) -> PathBuf {
     dir.join("update")
 }
 
+/// Take the update claim in `dir` for as long as this process runs: only
+/// its holder checks, downloads and installs (ADR 0023). With the agents in
+/// the Server no window holds the Store, so this lock says which window
+/// updates. Beside the staging directory, which a download replaces whole.
+/// False when another Ferrite holds it.
+pub fn claim(dir: &Path) -> io::Result<bool> {
+    static HELD: std::sync::OnceLock<fs::File> = std::sync::OnceLock::new();
+    if HELD.get().is_some() {
+        return Ok(true);
+    }
+    fs::create_dir_all(dir)?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("update.claim"))?;
+    match lock.try_lock() {
+        Ok(()) => {
+            let _ = HELD.set(lock);
+            Ok(true)
+        }
+        Err(fs::TryLockError::WouldBlock) => Ok(false),
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 /// Fetch `release`'s installer into `dir`'s staging directory, verify it
 /// against its checksum and record it for the next launch, replacing
 /// whatever was staged before. A release already staged is answered as it

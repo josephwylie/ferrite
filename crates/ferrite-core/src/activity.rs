@@ -269,6 +269,7 @@ impl ToolTiming {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum ActivityInput {
     Main {
         input: Input,

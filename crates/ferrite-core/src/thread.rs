@@ -6,7 +6,10 @@
 
 /// A Thread's identity. The store numbers Threads as it creates them; tests
 /// mint their own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct ThreadId(u64);
 
 impl ThreadId {

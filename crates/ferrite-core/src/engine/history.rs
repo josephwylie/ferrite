@@ -1,6 +1,6 @@
 //! A single bounded disk worker restores evicted child projections. The log
 //! prefix is frozen before reading; subsequent accepted facts are held by the
-//! Cockpit and replayed once after that prefix, without writing them again.
+//! Engine and replayed once after that prefix, without writing them again.
 
 use super::*;
 use std::sync::mpsc::{self, SyncSender};
@@ -106,7 +106,7 @@ impl Thread {
     }
 }
 
-impl Cockpit {
+impl Engine {
     /// Restore an evicted child from Ferrite's log. Viewing never starts or
     /// resumes a provider child. Returns true only when a read was queued.
     pub fn ensure_subject_history(

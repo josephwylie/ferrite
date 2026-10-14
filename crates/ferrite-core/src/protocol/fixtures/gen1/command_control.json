@@ -1,0 +1,1 @@
+{"type":"command","id":10,"op":"control","thread":4,"control":{"kind":"reconnect_mcp","server":"github"}}

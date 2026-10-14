@@ -111,6 +111,9 @@ const CLAIM: &str = ".lock";
 const READ_ONLY: &str = "another Ferrite has this store open, so this window can read \
      its Threads but not open, create or change them";
 
+/// Why a window's handle may not write: its Server does (ADR 0025).
+const READER: &str = "this window reads its Threads; the Ferrite server writes them";
+
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,7 +359,7 @@ impl PersistedBinding {
 /// event vocabulary may grow any day, and this one changes only with a
 /// schema bump. Text deltas are coalesced into one record per run: the log
 /// stores what was said, not how the wire chopped it.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Record {
     SummaryPart {
@@ -525,6 +528,57 @@ impl Record {
     }
 }
 
+/// One log line as the client protocol carries it (ADR 0025): everything
+/// durable crosses the wire in the log's own schema, so the Server never
+/// re-encodes history and a client reads exactly what a reopen would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LogRecord(Record);
+
+impl LogRecord {
+    /// The line a live transcript input is logged as, or `None` for what
+    /// the log never keeps. `duration` is as `ThreadWriter::record_event`'s.
+    pub fn of(input: &Input, duration: Option<std::time::Duration>) -> Option<Self> {
+        Some(Self(match input {
+            Input::Event(event) => Record::from_event(event, duration)?,
+            Input::Prompt(text) => Record::Prompt { text: text.clone() },
+            Input::PromptObservation { sent_at } => Record::PromptObservation {
+                sent_at: sent_at.clone(),
+            },
+            Input::CompletionObservation {
+                elapsed_ms,
+                completed_at,
+                input_tokens,
+                output_tokens,
+            } => Record::CompletionObservation {
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
+            },
+            Input::Notice(_)
+            | Input::Answered { .. }
+            | Input::Revived
+            | Input::Highlighted { .. } => return None,
+        }))
+    }
+
+    /// Extend this line with the next when the log would keep the two as
+    /// one (a run of deltas): what lets a waiting client take one line.
+    pub fn coalesce(&mut self, next: &LogRecord) -> bool {
+        self.0.coalesce(&next.0)
+    }
+
+    /// What this line replays as; `None` for the store's own bookkeeping
+    /// (facts and marks), which a reader skips.
+    pub fn input(&self) -> Option<Input> {
+        match &self.0 {
+            Record::Facts { .. } | Record::Mark { .. } => None,
+            record => Some(record.input()),
+        }
+    }
+}
+
 /// The Notice a provider switch leaves in the transcript, live and on
 /// replay alike.
 pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
@@ -534,7 +588,7 @@ pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
 
 /// How a persisted turn ended: `"completed"`, `"interrupted"`, or
 /// `{"error":"…"}`.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Outcome {
     Completed,
@@ -569,7 +623,7 @@ impl StoredRunState {
 /// The structured half of a persisted tool result, mirroring
 /// `crate::ToolResult` shape for shape — but its own type, so the live model
 /// can change without rewriting anyone's history.
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PersistedToolResult {
     #[default]
@@ -594,13 +648,13 @@ enum PersistedToolResult {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PersistedFileEdit {
     path: String,
     hunks: Vec<PersistedHunk>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PersistedHunk {
     old_start: u32,
     old_lines: u32,
@@ -1866,6 +1920,23 @@ fn sync_dir(_: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// A Thread's log up to a checkpoint, opened and not yet read
+/// (`Store::log_at`).
+pub struct LogAt {
+    thread: ThreadId,
+    file: File,
+    through: u64,
+}
+
+impl LogAt {
+    /// What a reopen would load, from the log's first `through` bytes.
+    pub fn load(self) -> Result<ThreadSnapshot, LoadError> {
+        let mut bytes = Vec::new();
+        self.file.take(self.through).read_to_end(&mut bytes)?;
+        Ok(parse(self.thread, &bytes)?.snapshot)
+    }
+}
+
 /// A log opened for reading. Every read of a log goes through one, so
 /// tests can count what a peek or a revive actually pulls off the disk.
 struct LogRead {
@@ -1953,7 +2024,25 @@ impl Store {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let shared = Shared::of(&dir)?;
-        Ok(Self {
+        Ok(Self::with_shared(dir, flush_interval, shared))
+    }
+
+    /// A window's handle on the Store its Server writes (ADR 0025): it
+    /// reads the Threads, and never takes the claim — a Server that starts
+    /// after the window must find it free.
+    pub fn reader(dir: impl AsRef<Path>) -> io::Result<Self> {
+        let dir = dir.as_ref().to_path_buf();
+        fs::create_dir_all(&dir)?;
+        let shared = std::sync::Arc::new(Shared::new(Some(READER.to_string())));
+        Ok(Self::with_shared(dir, DEFAULT_FLUSH_INTERVAL, shared))
+    }
+
+    fn with_shared(
+        dir: PathBuf,
+        flush_interval: std::time::Duration,
+        shared: std::sync::Arc<Shared>,
+    ) -> Self {
+        Self {
             dir,
             flush_interval,
             full_sync_interval: FULL_SYNC_INTERVAL,
@@ -1964,7 +2053,7 @@ impl Store {
             fail_create: false,
             #[cfg(test)]
             fail_delete: false,
-        })
+        }
     }
 
     /// Why this process may only read the store — another Ferrite holds its
@@ -3207,6 +3296,17 @@ impl Store {
             through,
             crate::activity::ActivityLimits::default(),
         )
+    }
+
+    /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),
+    /// to be read on another thread. The file is opened now, so a header
+    /// rewrite in between replaces the path but not what this reads.
+    pub fn log_at(&self, thread: ThreadId, through: u64) -> io::Result<LogAt> {
+        Ok(LogAt {
+            thread,
+            file: File::open(self.log_path(thread))?,
+            through,
+        })
     }
 
     /// Replace a Thread's log: a header at the current schema saying what
@@ -5701,7 +5801,7 @@ mod tests {
                 writer.flush().unwrap();
                 let mut active = restore(&reopened.load(id).unwrap());
                 active.apply(Input::Revived);
-                assert_eq!(active.turn_outcome(), None);
+                assert_eq!(active.turn_outcome(), Some(&TurnOutcome::Interrupted));
                 assert!(!active.turn_completed());
                 assert_eq!(active.status(), crate::transcript::Status::Idle);
                 assert!(
