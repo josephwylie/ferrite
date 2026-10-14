@@ -25,6 +25,7 @@ use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use crate::store::Store;
 use crate::ThreadId;
 
+pub mod agent;
 mod render;
 mod signals;
 

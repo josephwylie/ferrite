@@ -81,3 +81,33 @@ fn the_server_says_hello_and_stops_on_request() {
     assert!(root.join("logs").join("server.log").exists());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The window's door: nothing answers, so a Server is started detached and
+/// waited for; asked again, the running one is enough.
+#[test]
+fn ensure_running_starts_one_server_and_finds_it_again() {
+    let root = std::env::temp_dir().join(format!("ferrite-ensure-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = root.join("threads");
+    std::fs::create_dir_all(&store).unwrap();
+    std::env::set_var("FERRITE_STORE", &store);
+    std::env::set_var("TERM", "dumb");
+    let executable = Path::new(env!("CARGO_BIN_EXE_ferrite"));
+    ferrite_core::server::agent::ensure_running(&store, executable).unwrap();
+    ferrite_core::server::agent::ensure_running(&store, executable).unwrap();
+
+    let mut attached = attach(&link::address(&store));
+    attached
+        .client
+        .send(&ClientMessage::Command(protocol::Command {
+            id: 1,
+            op: Op::Stop { when: When::Now },
+        }))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while link::connect(&link::address(&store)).is_ok() {
+        assert!(Instant::now() < deadline, "the server did not stop");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
