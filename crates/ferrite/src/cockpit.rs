@@ -7583,22 +7583,28 @@ impl CockpitView {
         for (slot, (chip, label)) in chips.into_iter().enumerate() {
             let focused = draft.band_focus == Some(chip);
             let chip_composer = composer.clone();
-            band = band.child(pane::band_chip(slot, label, false, focused).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    // The chip is this Pane's: land on it first, then
-                    // toggle — and stop the press so the root's dismissal
-                    // cannot close what this just opened.
-                    cx.stop_propagation();
-                    if let Some(at) = view
-                        .panes
-                        .iter()
-                        .position(|pane| pane.composer == chip_composer)
-                    {
-                        view.focus_pane(at);
-                    }
-                    view.open_band_popover(chip, cx);
-                }),
+            let chip_element = pane::band_chip(slot, label, false, focused)
+                .relative()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        // The chip is this Pane's: land on it first, then
+                        // toggle — and stop the press so the root's dismissal
+                        // cannot close what this just opened.
+                        cx.stop_propagation();
+                        if let Some(at) = view
+                            .panes
+                            .iter()
+                            .position(|pane| pane.composer == chip_composer)
+                        {
+                            view.focus_pane(at);
+                        }
+                        view.open_band_popover(chip, cx);
+                    }),
+                );
+            band = band.child(crate::components::on_bounds(
+                chip_element,
+                self.record_trigger(band_trigger(chip)),
             ));
         }
         band.into_any_element()
@@ -7684,16 +7690,60 @@ impl CockpitView {
         }
     }
 
-    /// The open popover for this Pane, rows wired to their picks —
-    /// assembled here so its clicks land beside every other pointer wire
-    /// (the root selector's precedent); the Pane hangs it above the line.
-    /// Every row is the one menu row: `/`, `@` and import rows through
-    /// `pane::menu_row` (slash descriptions in one aligned column), band rows
-    /// through `pane::picker_row` with the accent check on the standing
-    /// choice; an inert explanation ("Searching files…", a refusal) is a
-    /// `menu_note`. The rows scroll inside the popover's cap; the footer
-    /// stays.
+    /// The open popover for this Pane, which hangs it above the line.
     fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self
+            .popover
+            .as_ref()
+            .filter(|open| open.pane == self.panes[index].identity)?;
+        // The pickers are `ChoiceMenu`s, and a draft's band menus hang off
+        // their chips in the bar (`band_menu_element`).
+        if open.kind.picker_slot().is_some() || matches!(open.kind, Kind::Band(_)) {
+            return None;
+        }
+        Some(self.menu_surface(open, cx))
+    }
+
+    /// A draft's Project or Workspace menu, hung off its chip in the bar
+    /// (ADR 0014): its left edge at the chip's, its foot `FLOAT_OFFSET`
+    /// over the bar, kept inside the window's margin. The chip has been
+    /// drawn before it can be pressed, so its bounds are always recorded.
+    fn band_menu_element(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::theme::{FLOAT_OFFSET, GRID_PAD, SLASH_MENU_W};
+        let open = self.popover.as_ref()?;
+        let Kind::Band(chip @ (pane::BandChip::Project | pane::BandChip::Workspace)) = open.kind
+        else {
+            return None;
+        };
+        let trigger = self
+            .float_triggers
+            .borrow()
+            .get(band_trigger(chip).as_ref())
+            .copied()?;
+        let floor = self.bar_place().floor - FLOAT_OFFSET;
+        let width = SLASH_MENU_W.min(f32::from(window.viewport_size().width) - 2. * GRID_PAD);
+        Some(
+            deferred(
+                anchored()
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .position(gpui::point(trigger.left(), px(floor)))
+                    .snap_to_window_with_margin(px(GRID_PAD))
+                    .child(div().w(px(width)).child(self.menu_surface(open, cx))),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+
+    /// The open popover's surface, rows wired to their picks — assembled
+    /// here so its clicks land beside every other pointer wire (the root
+    /// selector's precedent). Every row is the one menu row: `/`, `@` and
+    /// import rows through `pane::menu_row` (slash descriptions in one
+    /// aligned column), band rows through `pane::picker_row` with the
+    /// accent check on the standing choice; an inert explanation
+    /// ("Searching files…", a refusal) is a `menu_note`. The rows scroll
+    /// inside the popover's cap; the footer stays.
+    fn menu_surface(&self, open: &Popover, cx: &mut Context<Self>) -> AnyElement {
         fn wire<E: InteractiveElement + IntoElement + 'static>(
             drawn: E,
             at: usize,
@@ -7720,13 +7770,6 @@ impl CockpitView {
                     }),
                 )
                 .into_any_element()
-        }
-        let open = self
-            .popover
-            .as_ref()
-            .filter(|open| open.pane == self.panes[index].identity)?;
-        if open.kind.picker_slot().is_some() {
-            return None;
         }
         // Slash commands align their descriptions in one column sized to
         // the longest name shown (clamped, so a long `mcp__…` name cuts).
@@ -7802,10 +7845,8 @@ impl CockpitView {
             )
             .child(rows)
             .child(pane::popover_footer(open.kind.hints()));
-        Some(
-            crate::motion::menu_in("composer-menu-in", popover, crate::motion::Opens::Up)
-                .into_any_element(),
-        )
+        crate::motion::menu_in("composer-menu-in", popover, crate::motion::Opens::Up)
+            .into_any_element()
     }
 
     /// The nav's per-frame state, from caches and O(1) reads only. Nothing
@@ -8866,6 +8907,12 @@ fn effort_chip_label(effort: &str) -> SharedString {
     SharedString::from(effort_title(effort).to_lowercase())
 }
 
+/// The key a draft's band chip records its bounds under, for the menu it
+/// opens (`band_menu_element`).
+fn band_trigger(chip: pane::BandChip) -> SharedString {
+    format!("band-{chip:?}").into()
+}
+
 /// The effort a chip shows (rule 2.6.5): the Thread's or draft's own
 /// choice, else the operator's saved default, else the model row's own
 /// default (`medium` for Codex). `None` when nothing resolves: a Thread's
@@ -9671,6 +9718,7 @@ impl CockpitView {
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
             .children(self.changed_files_element(window, cx))
+            .children(self.band_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
             .children(self.notices_float(cx))
@@ -9798,7 +9846,7 @@ impl CockpitView {
                 }),
             );
         let cell = self.slot_drop_target(cell, pane_leaf(pane.identity), cx);
-        // A draft Pane (#29): the band and its popover instead of a
+        // A draft Pane (#29): the Composer and its menu instead of a
         // transcript — nothing in core exists to read yet.
         let Some(thread) = pane.thread() else {
             let draft_id = pane.identity.draft().expect("this is a Draft Pane");
@@ -15034,6 +15082,47 @@ mod tests {
         assert!(
             (menu.left() - (chip.left() - px(crate::theme::MODEL_PICKER_NUDGE))).abs() <= px(1.5),
             "the picker stands its nudge left of its chip: {menu:?} / {chip:?}"
+        );
+    }
+
+    /// A draft's Project menu hangs off its chip in the bar, not off the
+    /// draft's Composer (ADR 0014): its left edge at the chip's, resting
+    /// on the bar.
+    #[gpui::test]
+    fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("band-menu-place", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+        tick(cx);
+        let chip = cx.debug_bounds("band-chip-0").expect("the Project chip");
+        cx.simulate_mouse_down(chip.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(chip.center(), MouseButton::Left, gpui::Modifiers::none());
+        for _ in 0..3 {
+            cx.executor().advance_clock(Duration::from_millis(300));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| {
+            assert!(view
+                .popover
+                .as_ref()
+                .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))));
+        });
+        let bar = cx.debug_bounds("bottom-bar").unwrap();
+        let composer = cx.debug_bounds("composer-block").unwrap();
+        let rows = cx
+            .debug_bounds("composer-menu-rows")
+            .expect("the menu is drawn");
+        assert!(
+            (rows.left() - chip.left()).abs() <= px(1.5),
+            "the menu stands on its chip: {rows:?} / {chip:?}"
+        );
+        assert!(rows.bottom() <= bar.top() - px(crate::theme::FLOAT_OFFSET));
+        assert!(
+            rows.bottom() > composer.bottom(),
+            "it rests on the bar, not over the draft's Composer: {rows:?} / {composer:?}"
         );
     }
 

@@ -1692,7 +1692,7 @@ pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
     /// The draft-only close control in the Pane header.
     pub discard: AnyElement,
-    /// The open band popover, hung above the Composer like every menu.
+    /// The open `/` or `@` menu, hung above the Composer like every menu.
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
     /// How many files wait in the draft (`PaneFacts::composer_files`).
