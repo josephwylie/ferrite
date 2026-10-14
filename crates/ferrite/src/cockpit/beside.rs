@@ -16,7 +16,45 @@
 //! a member.
 
 use super::*;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+/// Find in the reader (⌘F when the reader took the last press or holds the
+/// keyboard; the bar is the transcript's, `crate::find`): a file's lines, or
+/// a rendered Markdown document's text. A compare is not searched — ⌘F there
+/// finds in the transcript.
+pub(crate) struct ReaderFind {
+    bar: crate::find::Find,
+    /// The document it searches; another one opening in the reader leaves
+    /// it behind.
+    path: PathBuf,
+    /// Where the active occurrence of a Markdown document painted.
+    revealed: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
+    /// Frames left to settle a Markdown occurrence into view.
+    reveal: Cell<u8>,
+}
+
+impl ReaderFind {
+    /// Whether the bar's line holds the keyboard.
+    pub(crate) fn holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.bar.holds_focus(window, cx)
+    }
+}
+
+#[cfg(test)]
+impl ReaderFind {
+    /// What the bar reads, and where a Markdown occurrence last painted.
+    pub(crate) fn state(&self) -> (Option<SharedString>, Option<gpui::Bounds<Pixels>>) {
+        (self.bar.count(), self.revealed.get())
+    }
+}
+
+/// Whether the reader renders `document` as Markdown (a file opened at a
+/// line reads as numbered lines, to mark it).
+fn renders_markdown(document: &crate::attachment_preview::Document) -> bool {
+    document.is_markdown() && document.line.is_none()
+}
 
 /// What `open_beside` opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +227,92 @@ impl CockpitView {
         .then_some((owner, companion))
     }
 
+    /// ⌘F in Pane `index`'s reader: the bar over the reader (or the keyboard
+    /// back to it). False when the reader shows nothing to search.
+    pub(super) fn open_reader_find(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(pane) = self.panes.get_mut(index) else {
+            return false;
+        };
+        let Some(document) = pane.preview.document().filter(|doc| doc.compare.is_none()) else {
+            return false;
+        };
+        let owner = pane.identity;
+        if pane
+            .reader_find
+            .as_ref()
+            .is_none_or(|find| find.path != document.path)
+        {
+            pane.reader_find = Some(ReaderFind {
+                bar: crate::find::Find::new(cx, move |view: &mut Self, cx| {
+                    view.refind_reader(owner, cx)
+                }),
+                path: document.path,
+                revealed: Rc::default(),
+                reveal: Cell::new(0),
+            });
+            cx.notify();
+        }
+        if let Some(find) = &pane.reader_find {
+            find.bar.focus(window, cx);
+        }
+        true
+    }
+
+    /// Search the reader's document again (its line changed): a new query
+    /// starts on its first occurrence from the top line in view.
+    fn refind_reader(&mut self, owner: PaneIdentity, cx: &mut Context<Self>) {
+        let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) else {
+            return;
+        };
+        let (Some(document), Some(find)) = (pane.preview.document(), pane.reader_find.as_mut())
+        else {
+            return;
+        };
+        let changed = if renders_markdown(&document) {
+            let text = gpui::base::text::TextView::markdown_plain_text(&document.source);
+            find.bar.search([text.as_str()], 0, cx)
+        } else {
+            let top = -pane.reader_scroll.0.borrow().base_handle.offset().y;
+            let from = (f32::from(top) / crate::theme::LH_UI) as usize;
+            find.bar.search(document.source.lines(), from, cx)
+        };
+        if changed {
+            reveal_in_reader(pane, &document);
+        }
+        cx.notify();
+    }
+
+    /// ⏎ / ⇧⏎ in the reader's bar.
+    fn step_reader_find(&mut self, owner: PaneIdentity, forward: bool, cx: &mut Context<Self>) {
+        let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) else {
+            return;
+        };
+        let Some(document) = pane.preview.document() else {
+            return;
+        };
+        if pane
+            .reader_find
+            .as_mut()
+            .is_some_and(|find| find.bar.step(forward).is_some())
+        {
+            reveal_in_reader(pane, &document);
+            cx.notify();
+        }
+    }
+
+    /// Esc in the reader's bar: it closes, the reader stays.
+    fn close_reader_find(&mut self, owner: PaneIdentity, cx: &mut Context<Self>) {
+        if let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) {
+            pane.reader_find = None;
+            cx.notify();
+        }
+    }
+
     /// Close the reader beside `index` (escape in it, ⌘W while it holds
     /// focus): its slot closes and the board is as it was.
     pub(super) fn close_reader(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -209,11 +333,19 @@ impl CockpitView {
         &self,
         owner: PaneIdentity,
         leaf: ThreadId,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let index = self.index_of(owner)?;
         let pane = &self.panes[index];
         let document = pane.preview.document()?;
+        let find = pane
+            .reader_find
+            .as_ref()
+            .filter(|find| find.path == document.path);
+        if let Some(find) = find {
+            settle_markdown_found(find, &pane.reader_markdown_scroll, window);
+        }
         let face = GhostFace {
             title: document.title.clone().into(),
             detail: Some(SharedString::from(document.kind())),
@@ -232,25 +364,50 @@ impl CockpitView {
                     self.slot_size(leaf).0 >= crate::theme::SPLIT_DIFF_MIN_W,
                 ))
                 .into_any_element(),
-            None if document.is_markdown() && document.line.is_none() => {
+            None if renders_markdown(&document) => {
                 pane.document_rich
                     .file_context(document.path.parent(), &pane.preview);
+                let marks = find.and_then(|find| find.bar.marks(0, &find.revealed));
                 div()
                     .id(("markdown-reader-scroll", leaf.get() as usize))
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&pane.reader_markdown_scroll)
                     .px(px(crate::theme::TX_PAD_L))
                     .pt(px(crate::theme::BODY_PAD_T))
                     .pb(px(crate::theme::HALF_ROW))
                     .child(crate::rich::document_body(
                         document.clone(),
                         pane.document_rich.clone(),
+                        marks,
                     ))
                     .into_any_element()
             }
-            None => numbered_lines(leaf, &document, pane.reader_scroll.clone()),
+            None => numbered_lines(
+                leaf,
+                &document,
+                pane.reader_scroll.clone(),
+                find.map(|find| &find.bar),
+            ),
         };
+        // The bar hangs over the body's top right.
+        let body = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(body)
+            .children(find.map(|find| {
+                div()
+                    .absolute()
+                    .top(px(crate::theme::FLOAT_OFFSET))
+                    .right(px(crate::theme::TX_PAD_R))
+                    .child(find.bar.bar())
+            }))
+            .into_any_element();
         let preview = pane.preview.clone();
         let slot = pane
             .preview
@@ -260,9 +417,19 @@ impl CockpitView {
                     preview.close_document(window);
                 }
             })
+            .on_action(cx.listener(move |view, _: &crate::find::Next, _, cx| {
+                view.step_reader_find(owner, true, cx)
+            }))
+            .on_action(cx.listener(move |view, _: &crate::find::Previous, _, cx| {
+                view.step_reader_find(owner, false, cx)
+            }))
+            .on_action(cx.listener(move |view, _: &crate::find::Close, _, cx| {
+                view.close_reader_find(owner, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    view.reader_pressed = Some(owner);
                     if let Some(index) = view.index_of(owner) {
                         view.focus_pane(index);
                         cx.notify();
@@ -295,6 +462,7 @@ fn numbered_lines(
     leaf: ThreadId,
     document: &crate::attachment_preview::Document,
     scroll: gpui::UniformListScrollHandle,
+    find: Option<&crate::find::Find>,
 ) -> AnyElement {
     use crate::theme::*;
     let lines: std::rc::Rc<Vec<String>> =
@@ -302,6 +470,13 @@ fn numbered_lines(
     let language = ferrite_core::transcript::language_for_path(&document.path);
     let target = document.line;
     let count = lines.len();
+    // A find's occurrences: its query, and the line and ordinal it is on.
+    let find = find.map(|find| {
+        (
+            find.query().clone(),
+            find.active().map(|hit| (hit.unit, hit.ordinal)),
+        )
+    });
     gpui::uniform_list(
         ("reader-lines", leaf.get() as usize),
         count,
@@ -311,6 +486,21 @@ fn numbered_lines(
                     let text = lines[at].clone();
                     let tokens = ferrite_core::transcript::highlight_tokens(language, &text);
                     let highlights = pane::code(&text, Some(tokens.as_slice()));
+                    let highlights = match &find {
+                        Some((query, active)) => {
+                            let washes: Vec<_> = query
+                                .matches(&text)
+                                .into_iter()
+                                .enumerate()
+                                .map(|(ordinal, range)| {
+                                    let on = *active == Some((at, ordinal));
+                                    (range, if on { FIND_ACTIVE_WASH } else { FIND_WASH })
+                                })
+                                .collect();
+                            crate::find::washed(highlights, &washes)
+                        }
+                        None => highlights,
+                    };
                     let number = at + 1;
                     let marked = target == Some(number as u32);
                     div()
@@ -350,6 +540,51 @@ fn numbered_lines(
     .w_full()
     .py(px(HALF_ROW))
     .into_any_element()
+}
+
+/// Bring the reader's active occurrence into view: a file's line centred
+/// (the list scrolls itself), or a Markdown occurrence once it has painted
+/// (`settle_markdown_found`).
+fn reveal_in_reader(pane: &PaneView, document: &crate::attachment_preview::Document) {
+    let Some(find) = &pane.reader_find else {
+        return;
+    };
+    let Some(hit) = find.bar.active() else {
+        return;
+    };
+    if renders_markdown(document) {
+        find.revealed.set(None);
+        find.reveal.set(crate::find::REVEAL_FRAMES);
+    } else {
+        pane.reader_scroll
+            .scroll_to_item(hit.unit, gpui::ScrollStrategy::Center);
+    }
+}
+
+/// Each render while a Markdown reveal is due: once the active occurrence
+/// has painted outside the reader's view, scroll it a third of the way
+/// down.
+fn settle_markdown_found(find: &ReaderFind, scroll: &gpui::ScrollHandle, window: &mut Window) {
+    let left = find.reveal.get();
+    if left == 0 {
+        return;
+    }
+    let Some(found) = find.revealed.get() else {
+        find.reveal.set(left - 1);
+        if left > 1 {
+            window.request_animation_frame();
+        }
+        return;
+    };
+    find.reveal.set(0);
+    let view = scroll.bounds();
+    if found.top() < view.top() || found.bottom() > view.bottom() {
+        let goal = view.top() + view.size.height / 3.;
+        let offset = scroll.offset();
+        let lowest = -scroll.max_offset().y;
+        let y = (offset.y - (found.top() - goal)).clamp(lowest, px(0.));
+        scroll.set_offset(gpui::point(offset.x, y));
+    }
 }
 
 /// `git diff --no-color base...HEAD` in `workspace`; empty when git is not

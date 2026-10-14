@@ -156,6 +156,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::CopySelection" => Row(Transcript, "copy selection"),
         "cockpit::ToggleTool" => Row(Transcript, "open or fold a tool call"),
         "cockpit::ToolCyclePrevious" => Row(Transcript, "previous tool call"),
+        "find::Open" => Row(Transcript, "find"),
+        "find::Next" => Row(Transcript, "find: next"),
+        "find::Previous" => Row(Transcript, "find: previous"),
+        "find::Close" => Row(Transcript, "find: close"),
         // The floats' own keys live in their footers.
         "palette::SelectNext"
         | "palette::SelectPrevious"

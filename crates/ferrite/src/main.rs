@@ -14,6 +14,7 @@ mod decision;
 mod demo;
 mod facts;
 mod file_links;
+mod find;
 mod float;
 mod fuzzy;
 mod hover_card;
@@ -564,6 +565,8 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
                 MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+                MenuItem::separator(),
+                MenuItem::action("Find\u{2026}", find::Open),
             ],
         },
         Menu {

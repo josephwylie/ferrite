@@ -595,6 +595,81 @@ impl Inline {
         }
     }
 
+    /// Ferrite: a wash under each occurrence of the enclosing view's find
+    /// needle (`TextFind`), one quad per wrapped line. Occurrences are found
+    /// in the whole source run (`root`) and this inline paints the part of
+    /// each inside its own slice, `offset` into the run, so one split by a
+    /// wrap or an inline card is still found whole. The active occurrence
+    /// reports its bounds. Runs count even when clipped: the ordinals must
+    /// not depend on what is on screen.
+    fn paint_find(
+        &self,
+        text_layout: &TextLayout,
+        root: &Weak<Mutex<InlineState>>,
+        offset: usize,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        let Some(view) = GlobalState::global(cx).text_view_state() else {
+            return;
+        };
+        let view = view.read(cx);
+        let Some(find) = &view.find else {
+            return;
+        };
+        let source = if std::ptr::eq(root.as_ptr(), Arc::as_ptr(&self.state)) {
+            self.text.clone()
+        } else {
+            let Some(text) = root
+                .upgrade()
+                .and_then(|root| root.try_lock().ok().map(|root| root.text.clone()))
+            else {
+                return;
+            };
+            text
+        };
+        let found = super::find_matches(&source, &find.needle, find.case_sensitive);
+        let base = view
+            .find_tally
+            .borrow_mut()
+            .base(root.as_ptr() as usize, found.len());
+        let own = offset..offset + self.text.len();
+        let line_height = text_layout.line_height();
+        let clip = text_layout
+            .bounds()
+            .intersect(&window.content_mask().bounds);
+        let clipped = clip.size.width <= px(0.) || clip.size.height <= px(0.);
+        for (ordinal, range) in found.into_iter().enumerate() {
+            let start = range.start.max(own.start);
+            let end = range.end.min(own.end);
+            let active = find.active == Some(base + ordinal);
+            // The active occurrence reports its place even off screen.
+            if start >= end || (clipped && !active) {
+                continue;
+            }
+            let lines = code_line_bounds(
+                &self.text,
+                text_layout,
+                start - offset..end - offset,
+                line_height,
+            );
+            for line in &lines {
+                window.paint_quad(quad(
+                    *line,
+                    px(0.),
+                    if active { find.active_wash } else { find.wash },
+                    Edges::default(),
+                    gpui::transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+            if active {
+                find.revealed
+                    .set(lines.into_iter().reduce(|union, line| union.union(&line)));
+            }
+        }
+    }
+
     /// Ferrite: each underline, one stroke per wrapped line, from its first
     /// glyph to the right edge of its last non-whitespace glyph, on the
     /// baseline offset gpui's own line painter uses.
@@ -861,6 +936,8 @@ impl Element for Inline {
         if let Some(wash) = self.code_wash {
             self.paint_code_wash(&text_layout, wash, window);
         }
+        // Ferrite: a find bar's occurrences, under the text.
+        self.paint_find(&text_layout, &source_root, source_offset, window, cx);
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
         let hover_only = GlobalState::global(cx)

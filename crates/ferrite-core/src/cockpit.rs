@@ -3742,7 +3742,7 @@ impl Cockpit {
         self.roster.step(delta, &self.groups);
     }
 
-    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
     /// restores the grid.
     pub fn toggle_fullscreen(&mut self) {
         self.roster.toggle_fullscreen();

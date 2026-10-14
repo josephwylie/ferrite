@@ -88,7 +88,7 @@ pub struct Roster {
     panes: Vec<PaneIdentity>,
     focused: usize,
     view: View,
-    /// The Pane cmd-f fullscreened, if any: it takes the whole grid area at
+    /// The Pane ⌘⇧⏎ fullscreened, if any: it takes the whole grid area at
     /// Level::Transcript while every other Session keeps streaming (#20).
     /// Deliberate moves re-aim it through `focus` — cmd-w's survivor fills
     /// the screen like the next browser tab — and a Pane removed by a path
@@ -249,7 +249,7 @@ impl Roster {
         self.view = view;
     }
 
-    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
     /// restores the grid.
     pub(crate) fn toggle_fullscreen(&mut self) {
         self.fullscreen = match self.fullscreen {

@@ -421,6 +421,12 @@ pub const ACCENT_EDGE: u32 = 0x8eb1f066;
 pub const ACCENT_WASH: u32 = 0x8eb1f024;
 /// `#8eb1f040` (25%) — native text selection, painted over glyphs.
 pub const TEXT_SELECTION_WASH: u32 = 0x8eb1f040;
+/// `#e6c47c33` (20%) — every occurrence a find (⌘F) marks, under its
+/// glyphs: find's conventional yellow, kept apart from the accent's
+/// selection.
+pub const FIND_WASH: u32 = 0xe6c47c33;
+/// `#e6c47c80` (50%) — the occurrence the find is on.
+pub const FIND_ACTIVE_WASH: u32 = 0xe6c47c80;
 /// The caret: the soft block in the focused Composer.
 pub const CARET: u32 = ACCENT;
 
@@ -1887,6 +1893,10 @@ pub const PALETTE_TOP: f32 = 56.0;
 pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
 pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
 pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
+/// **The find bar** (⌘F): a one-row float 40 cells wide, hung
+/// `FLOAT_OFFSET` under the top right of the text it searches — `❯`, the
+/// query, the count.
+pub const FIND_W: f32 = 40.0 * CH;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,

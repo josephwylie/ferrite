@@ -10,6 +10,7 @@ use gpui::{
 
 use crate::StyledExt;
 use crate::text::TextViewFormat;
+use crate::text::find::TextFind;
 use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
 use crate::text::node::{CodeBlock, NodeContext, TableData};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
@@ -140,6 +141,7 @@ pub struct TextView {
     link_renderer: Option<Arc<LinkRendererFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
     selection_document: Option<(TextSelectionDocument, SharedString)>,
+    find: Option<TextFind>,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -194,6 +196,7 @@ impl TextView {
             link_renderer: None,
             markdown_extensions: Arc::default(),
             selection_document: None,
+            find: None,
         }
     }
 
@@ -217,6 +220,7 @@ impl TextView {
             link_renderer: None,
             markdown_extensions: Arc::default(),
             selection_document: None,
+            find: None,
         }
     }
 
@@ -240,6 +244,7 @@ impl TextView {
             link_renderer: None,
             markdown_extensions: Arc::default(),
             selection_document: None,
+            find: None,
         }
     }
 
@@ -262,6 +267,12 @@ impl TextView {
         key: impl Into<SharedString>,
     ) -> Self {
         self.selection_document = Some((document, key.into()));
+        self
+    }
+
+    /// Ferrite: mark a find bar's occurrences in this view's text.
+    pub fn find(mut self, find: Option<TextFind>) -> Self {
+        self.find = find;
         self
     }
 
@@ -613,6 +624,7 @@ impl Element for TextView {
             state.selection_format = self.selection_format;
             state.scrollable = self.scrollable;
             state.max_lines = max_lines;
+            state.find = self.find.clone();
             if state.text_view_style != text_view_style {
                 state.selection_revision = state.selection_revision.wrapping_add(1);
             }
@@ -749,6 +761,8 @@ impl Element for TextView {
         if self.selectable {
             state.update(cx, |state, _| state.selection_adapter.begin_frame());
         }
+        // Ferrite: the occurrences count afresh in this frame's paint order.
+        state.read(cx).find_tally.borrow_mut().clear();
 
         GlobalState::global_mut(cx)
             .text_view_state_stack

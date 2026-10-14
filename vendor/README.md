@@ -27,6 +27,15 @@ selection calculation and copying of offscreen text remain unchanged.
   text run, including wrapped text. Remove this extension when upstream offers
   equivalent inline link rendering and selection support.
 
+- `TextView::find` (`text/find.rs`) marks a find bar's occurrences: every
+  `Inline` washes each occurrence of the needle under its glyphs, the active
+  one more strongly, and the active one reports where it painted so Ferrite
+  can scroll it into view. Occurrences are found in the whole source run (a
+  run split by wraps or inline cards keeps one count) and numbered in paint
+  order, which is document order, so Ferrite names the active one by its
+  ordinal in the view's plain text (`find_matches`). Remove when upstream
+  offers search highlighting in `TextView`.
+
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
 tables, rules and custom blocks, including nested siblings and virtualized

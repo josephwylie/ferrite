@@ -5,8 +5,12 @@ use ferrite_core::{
     ThreadId,
 };
 use gpui::base::{TextSelectionDocument, TextSelectionDocumentMember};
-use gpui::{HighlightStyle, SharedString};
-use std::{cell::RefCell, ops::Range};
+use gpui::{Bounds, HighlightStyle, Pixels, SharedString};
+use std::{
+    cell::{Cell, RefCell},
+    ops::Range,
+    rc::Rc,
+};
 
 #[cfg(test)]
 type Registry =
@@ -33,6 +37,7 @@ impl TranscriptText {
             block: RefCell::new(None),
             next_ordinal: RefCell::new(0),
             document: None,
+            find: None,
             members: RefCell::new(None),
             #[cfg(test)]
             registry: self.registry.clone(),
@@ -48,6 +53,36 @@ impl TranscriptText {
     }
 }
 
+/// One native text as copy and find read it: its id (the selection
+/// member's key) and its source as drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunText {
+    pub key: SharedString,
+    pub source: SharedString,
+    markdown: bool,
+}
+
+impl RunText {
+    /// The text as rendered: Markdown without its markup, a literal exact.
+    pub fn plain(&self) -> String {
+        if self.markdown {
+            gpui::base::text::TextView::markdown_plain_text(&self.source)
+        } else {
+            gpui::base::text::TextView::markdown_plain_text(&crate::rich::literal_source(
+                &self.source,
+            ))
+        }
+    }
+}
+
+/// What a find marks in these runs: its query, and the run (by key) and
+/// ordinal of the occurrence it is on, which reports where it painted.
+pub struct FindMarks {
+    pub query: crate::find::Query,
+    pub active: Option<(SharedString, usize)>,
+    pub revealed: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
 pub struct TextRuns {
     #[cfg(test)]
     thread: ThreadId,
@@ -56,7 +91,8 @@ pub struct TextRuns {
     block: RefCell<Option<BlockId>>,
     next_ordinal: RefCell<u32>,
     document: Option<TextSelectionDocument>,
-    members: RefCell<Option<Vec<TextSelectionDocumentMember>>>,
+    find: Option<FindMarks>,
+    members: RefCell<Option<(Vec<TextSelectionDocumentMember>, Vec<RunText>)>>,
     #[cfg(test)]
     registry: Registry,
 }
@@ -66,19 +102,36 @@ impl TextRuns {
         self
     }
 
+    pub fn with_find(mut self, find: Option<FindMarks>) -> Self {
+        self.find = find;
+        self
+    }
+
     /// Reuse the presentation's text identities to describe logical membership.
     /// The caller collects text without constructing or mounting UI elements.
     /// It runs when content or disclosure changes, never for an ordinary frame.
-    pub fn capture_members(&self, build: impl FnOnce()) -> Vec<TextSelectionDocumentMember> {
+    /// The texts, in order, are what a find searches.
+    pub fn capture_members(
+        &self,
+        build: impl FnOnce(),
+    ) -> (Vec<TextSelectionDocumentMember>, Vec<RunText>) {
         assert!(
             self.members.borrow().is_none(),
             "nested transcript text capture"
         );
         #[cfg(test)]
         self.registry.borrow_mut().insert(self.thread, Vec::new());
-        *self.members.borrow_mut() = Some(Vec::new());
+        *self.members.borrow_mut() = Some(Default::default());
         build();
         self.members.borrow_mut().take().unwrap_or_default()
+    }
+
+    /// How many texts the capture in progress holds.
+    pub fn captured(&self) -> usize {
+        self.members
+            .borrow()
+            .as_ref()
+            .map_or(0, |(_, texts)| texts.len())
     }
 
     /// A lazy list may measure the same row more than once in one frame.
@@ -88,22 +141,30 @@ impl TextRuns {
     }
 
     fn collect(&self, id: &SharedString, source: &str, markdown: bool) {
-        if let Some(members) = self.members.borrow_mut().as_mut() {
-            let source: SharedString = source.to_owned().into();
-            let version = source.clone();
+        if let Some((members, texts)) = self.members.borrow_mut().as_mut() {
+            let text = RunText {
+                key: id.clone(),
+                source: source.to_owned().into(),
+                markdown,
+            };
+            let version = text.source.clone();
+            let copy = text.clone();
             members.push(
-                TextSelectionDocumentMember::new(id.clone(), move |_| {
-                    if markdown {
-                        gpui::base::text::TextView::markdown_plain_text(&source)
-                    } else {
-                        gpui::base::text::TextView::markdown_plain_text(
-                            &crate::rich::literal_source(&source),
-                        )
-                    }
-                })
-                .with_content_version(version),
+                TextSelectionDocumentMember::new(id.clone(), move |_| copy.plain())
+                    .with_content_version(version),
             );
+            texts.push(text);
         }
+    }
+
+    fn marks(&self, id: &SharedString) -> Option<gpui::base::text::TextFind> {
+        let find = self.find.as_ref()?;
+        let active = find
+            .active
+            .as_ref()
+            .filter(|(key, _)| key == id)
+            .map(|(_, ordinal)| *ordinal);
+        crate::find::marks(&find.query, active, &find.revealed)
     }
 
     pub fn answer(&self, first: BlockId, source: String) -> crate::rich::Markdown {
@@ -117,8 +178,10 @@ impl TextRuns {
         }
         let id: SharedString = format!("markdown-{}-{first:?}", self.namespace).into();
         self.collect(&id, &source, true);
+        let find = self.marks(&id);
         crate::rich::Markdown::new(id, source, self.cache.clone())
             .selection_document(self.document.clone())
+            .find(find)
     }
 
     pub fn output(&self, block: BlockId, part: &str, text: &str) -> crate::rich::Output {
@@ -150,8 +213,10 @@ impl TextRuns {
         }
         let id: SharedString = format!("thinking-{}-{block:?}", self.namespace).into();
         self.collect(&id, &source, true);
+        let find = self.marks(&id);
         crate::rich::Markdown::new(id, source, self.cache.clone())
             .selection_document(self.document.clone())
+            .find(find)
     }
 
     pub fn line(
@@ -179,6 +244,7 @@ impl TextRuns {
         let id: SharedString = format!("literal-{}-{block:?}-{ordinal}", self.namespace).into();
         self.collect(&id, &text, false);
         crate::rich::Literal {
+            find: self.marks(&id),
             id,
             text,
             highlights,
