@@ -32,7 +32,7 @@ use crate::nav;
 /// A part of the Cockpit drawn as a cached view of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Part {
-    /// The nav's rows: the needs-you strip, the tree and the parked fold.
+    /// The nav's rows: the tree and the parked fold.
     Nav,
     /// One Pane's cell, wherever the board lays it out.
     Pane(PaneIdentity),

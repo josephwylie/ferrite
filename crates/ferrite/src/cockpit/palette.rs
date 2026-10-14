@@ -9,7 +9,7 @@
 use super::*;
 use crate::float::{self, FloatPlace};
 use crate::palette::{
-    Act, Command, Dot, Palette, PaletteScope, Row as PaletteRow, Section as PaletteSection,
+    Act, Command, Palette, PaletteScope, Row as PaletteRow, Section as PaletteSection,
 };
 use crate::shortcuts::Shortcuts;
 
@@ -31,21 +31,20 @@ impl Floats {
     }
 }
 
-/// A Thread's state as the palette's dot and its context word read it.
-fn dot_and_word(row: &nav::ThreadRow, age: SharedString) -> (Dot, SharedString) {
+/// A Thread's state as the palette's context word reads it: the lexicon's
+/// word for every state that has one, a parked Thread's age, nothing for
+/// idle.
+fn state_word(row: &nav::ThreadRow, age: SharedString) -> SharedString {
+    use crate::theme::words;
     match row.status {
-        nav::RowStatus::Working => (Dot::Working, crate::theme::words::WORKING.into()),
-        nav::RowStatus::NeedsYou => (Dot::NeedsYou, crate::theme::words::NEEDS_YOU.into()),
-        nav::RowStatus::Failing => (Dot::Failing, crate::theme::words::FAILING.into()),
-        nav::RowStatus::Failed => (Dot::Failing, crate::theme::words::FAILED.into()),
-        nav::RowStatus::Idle => (
-            Dot::Done,
-            match row.tail {
-                nav::NavTail::Done => crate::theme::words::DONE.into(),
-                _ => SharedString::default(),
-            },
-        ),
-        nav::RowStatus::Parked => (Dot::Parked, age),
+        nav::RowStatus::Working => words::WORKING.into(),
+        nav::RowStatus::Background => words::BACKGROUND.into(),
+        nav::RowStatus::NeedsYou => words::NEEDS_YOU.into(),
+        nav::RowStatus::Failing => words::FAILING.into(),
+        nav::RowStatus::Failed => words::FAILED.into(),
+        nav::RowStatus::Done => words::DONE.into(),
+        nav::RowStatus::Idle => SharedString::default(),
+        nav::RowStatus::Parked => age,
     }
 }
 
@@ -89,6 +88,19 @@ impl CockpitView {
             view.palette_confirm(true, window, cx)
         }))
         .on_action(cx.listener(|view, _: &palette::Dismiss, _, cx| view.close_palette(cx)))
+        .on_action(cx.listener(|view, _: &palette::FilterBlocked, _, cx| {
+            view.filter_palette(Some(Attention::Blocked), cx)
+        }))
+        .on_action(cx.listener(|view, _: &palette::FilterWorking, _, cx| {
+            view.filter_palette(Some(Attention::Working), cx)
+        }))
+        .on_action(cx.listener(|view, _: &palette::FilterIdle, _, cx| {
+            view.filter_palette(Some(Attention::Idle), cx)
+        }))
+        .on_action(cx.listener(|view, _: &palette::FilterDone, _, cx| {
+            view.filter_palette(Some(Attention::Done), cx)
+        }))
+        .on_action(cx.listener(|view, _: &palette::FilterAll, _, cx| view.filter_palette(None, cx)))
         .on_action(
             cx.listener(|view, _: &shortcuts::Toggle, window, cx| {
                 view.toggle_shortcuts(window, cx)
@@ -152,9 +164,9 @@ impl CockpitView {
         }
     }
 
-    /// Open the palette over the board (FL-1): every Thread then every
-    /// command (`All`), or the Groups alone (⌘G), its line seeded with
-    /// `query` and holding the keyboard.
+    /// Open the palette over the board (FL-1): every Thread, the Projects
+    /// and Groups to jump to, then every command (`All`), or the Groups
+    /// alone (⌘G), its line seeded with `query` and holding the keyboard.
     pub(crate) fn open_palette(
         &mut self,
         scope: PaletteScope,
@@ -165,6 +177,8 @@ impl CockpitView {
         let rows = match scope {
             PaletteScope::All => {
                 let mut rows = self.palette_thread_rows(window);
+                rows.extend(self.palette_project_rows());
+                rows.extend(self.palette_group_rows());
                 rows.extend(self.palette_command_rows(window, cx));
                 rows
             }
@@ -183,6 +197,14 @@ impl CockpitView {
     pub(super) fn close_palette(&mut self, cx: &mut Context<Self>) {
         if self.floats.palette.take().is_some() {
             cx.notify();
+        }
+    }
+
+    /// The palette's status filter (`palette::FilterBlocked` …), bound on
+    /// its empty line.
+    fn filter_palette(&mut self, filter: Option<Attention>, cx: &mut Context<Self>) {
+        if let Some(palette) = self.floats.palette.clone() {
+            palette.update(cx, |palette, cx| palette.set_filter(filter, cx));
         }
     }
 
@@ -224,6 +246,11 @@ impl CockpitView {
             }
             Act::Thread(thread) => self.land_on_thread(thread, cx),
             Act::Group(group) => self.enter_group(group, cx),
+            Act::Project(project) => {
+                if let Some(thread) = self.project_lead(project) {
+                    self.land_on_thread(thread, cx);
+                }
+            }
             Act::Command(command) => self.run_command(command, window, cx),
         }
     }
@@ -355,7 +382,7 @@ impl CockpitView {
                     .last_used(thread)
                     .map(|at| crate::facts::since_label(at, now))
                     .unwrap_or_default();
-                let (dot, word) = dot_and_word(&row, age);
+                let word = state_word(&row, age);
                 let on_board = board.iter().position(|shown| *shown == thread);
                 let scope = match (&shown_group, on_board) {
                     (Some(group), Some(_)) => Some(group.clone()),
@@ -365,7 +392,7 @@ impl CockpitView {
                         .and_then(|facts| facts.project_label.clone())
                         .map(|label| SharedString::from(label.to_lowercase())),
                 };
-                let name = if dot == Dot::Parked {
+                let name = if row.status == nav::RowStatus::Parked {
                     SharedString::from(format!("Parked \u{b7} {}", row.name))
                 } else {
                     row.name.clone()
@@ -378,7 +405,10 @@ impl CockpitView {
                     section: PaletteSection::Threads,
                     name,
                     context: context_words(scope, word),
-                    dot: Some(dot),
+                    status: Some(row.status),
+                    detail: self
+                        .thread_path(thread)
+                        .map(|path| SharedString::from(home_relative(&path))),
                     keys,
                     act: Act::Thread(thread),
                 });
@@ -387,8 +417,58 @@ impl CockpitView {
         rows
     }
 
-    /// ⌘G's rows: every Group in creation order, named, with `<project |
-    /// all projects> · N threads` after it.
+    /// The Projects to jump to (`Act::Project`), in the registry's order,
+    /// each with its open Threads' roll-up and how many there are. A
+    /// Project with no open Thread has nowhere to land.
+    fn palette_project_rows(&self) -> Vec<PaletteRow> {
+        self.cockpit
+            .registry()
+            .projects()
+            .iter()
+            .filter_map(|project| {
+                let rows = self.project_rows(project.id);
+                let count = rows.len();
+                let status = nav::RowStatus::roll_up(&rows)?;
+                let noun = if count == 1 { "thread" } else { "threads" };
+                Some(PaletteRow {
+                    section: PaletteSection::Projects,
+                    name: project.title.to_lowercase().into(),
+                    context: format!("{count} {noun}").into(),
+                    status: Some(status),
+                    detail: None,
+                    keys: None,
+                    act: Act::Project(project.id),
+                })
+            })
+            .collect()
+    }
+
+    /// A Project's open Threads' rows, in creation order.
+    fn project_rows(&self, project: ProjectId) -> Vec<nav::ThreadRow> {
+        let mut threads = self.cockpit.threads();
+        threads.sort();
+        threads
+            .into_iter()
+            .filter(|thread| {
+                self.facts.get(*thread).and_then(|facts| facts.project) == Some(project)
+            })
+            .map(|thread| self.thread_row(thread))
+            .collect()
+    }
+
+    /// Where jumping to a Project lands: its open Thread that most needs
+    /// the operator, the first made among equals.
+    fn project_lead(&self, project: ProjectId) -> Option<ThreadId> {
+        self.project_rows(project)
+            .into_iter()
+            .rev()
+            .max_by_key(|row| row.status.attention())
+            .map(|row| row.thread)
+    }
+
+    /// The Groups' rows (⌘G's, and ⌘K's jumps): every Group in creation
+    /// order, named, with its members' roll-up and `<project | all
+    /// projects> · N threads` after it.
     fn palette_group_rows(&self) -> Vec<PaletteRow> {
         self.cockpit
             .groups()
@@ -414,11 +494,17 @@ impl CockpitView {
                 };
                 let count = group.members.len();
                 let noun = if count == 1 { "thread" } else { "threads" };
+                let members: Vec<nav::ThreadRow> = group
+                    .members
+                    .iter()
+                    .map(|thread| self.thread_row(*thread))
+                    .collect();
                 PaletteRow {
                     section: PaletteSection::Groups,
                     name: group.display_title().into(),
                     context: format!("{scope} \u{b7} {count} {noun}").into(),
-                    dot: None,
+                    status: nav::RowStatus::roll_up(&members),
+                    detail: None,
                     keys: None,
                     act: Act::Group(group.id),
                 }
@@ -474,7 +560,8 @@ impl CockpitView {
                         section: PaletteSection::Commands,
                         name: name.into(),
                         context: SharedString::from(detail.to_string()),
-                        dot: None,
+                        status: None,
+                        detail: None,
                         keys,
                         act: Act::Command(command),
                     });
@@ -595,6 +682,13 @@ impl CockpitView {
             "",
             None,
             Command::SortRecent,
+        );
+        add(
+            order != ThreadListOrder::Attention,
+            "sort: attention".into(),
+            "what needs you first",
+            None,
+            Command::SortAttention,
         );
         add(true, "new project".into(), "", None, Command::NewProject);
         for (project, title) in &projects {
@@ -819,6 +913,7 @@ impl CockpitView {
             Command::FilterProject(project) => self.choose_nav_filter(Some(project), cx),
             Command::SortCreated => self.set_thread_order(ThreadListOrder::Created, cx),
             Command::SortRecent => self.set_thread_order(ThreadListOrder::Recent, cx),
+            Command::SortAttention => self.set_thread_order(ThreadListOrder::Attention, cx),
             Command::NewProject => self.open_project_creator(cx),
             Command::EditProject(project) => self.open_project_editor(project, cx),
             Command::Settings => self.open_settings(&OpenSettings, window, cx),

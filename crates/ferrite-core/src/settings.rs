@@ -147,6 +147,9 @@ pub enum ThreadListOrder {
     /// Most recently used first (the palette's `sort: recent`).
     #[serde(rename = "last-used")]
     Recent,
+    /// What needs the operator first — blocked, done, working, idle — and
+    /// creation order within each (the palette's `sort: attention`).
+    Attention,
 }
 
 impl Default for Settings {
@@ -321,7 +324,8 @@ mod tests {
     }
 
     /// The retired orders (one activity stream, Project sections) load as
-    /// creation order, which replaced both; `sort: recent` round-trips.
+    /// creation order, which replaced both; `sort: recent` and `sort:
+    /// attention` round-trip.
     #[test]
     fn retired_thread_orders_load_as_creation_order() {
         for (stored, order) in [
@@ -329,6 +333,7 @@ mod tests {
             ("\"by-project\"", ThreadListOrder::Created),
             ("\"created\"", ThreadListOrder::Created),
             ("\"last-used\"", ThreadListOrder::Recent),
+            ("\"attention\"", ThreadListOrder::Attention),
         ] {
             assert_eq!(
                 serde_json::from_str::<ThreadListOrder>(stored).unwrap(),

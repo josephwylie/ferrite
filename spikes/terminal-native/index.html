@@ -102,12 +102,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .nrow .s{margin-left:1ch;color:var(--dim)}
 .nrow.head{color:var(--dim)}
 .nrow.head .t{color:var(--dim)}
-.nrow.proj .t{color:var(--hi);font-weight:600}
+.nrow.proj .t{color:var(--dim)}
 .nav .fill{flex:1}
 .dot{flex:none;width:2ch}
 .d-run{color:var(--green)}
 .dot.d-run{font-weight:600}
-.d-attn{color:var(--yellow)} .d-fail{color:var(--red)} .d-done{color:var(--dim)} .d-park{color:var(--faint)}
+.d-attn{color:var(--yellow)} .d-fail{color:var(--red)} .d-done{color:var(--cyan)} .d-park{color:var(--faint)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 svg.logo{width:11px;height:11px;flex:none;margin-left:1ch;vertical-align:-1px}
 svg.logo.claude{color:var(--claude)} svg.logo.codex{color:var(--codex)}
@@ -451,22 +451,18 @@ table.t .num{text-align:right}
   <div class="main">
     <!-- ========================================================== nav -->
     <div class="nav" id="nav">
-      <div class="nrow head"><span class="t">needs you 2</span><span class="s">⌘D</span></div>
-      <div class="nrow" data-for="group"><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s warn">approval</span><svg class="logo codex"><use href="#codex"/></svg></div>
-      <div class="nrow"><span class="dot d-attn">●</span><span class="t">Flaky provider test</span><span class="s warn">question</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="half"></div>
-      <div class="nrow proj"><span class="tr">▾ </span><span class="t">ferrite</span><span class="s">dev</span></div>
-      <div class="nrow" id="n-solo"><span class="cur"></span><span class="dot d-done">●</span><span class="t">Nav rows jitter on stream start</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow" id="n-group"><span class="cur"></span><span class="tr">▾ </span><span class="t">Perf sweep</span><span class="s">4</span></div>
+      <div class="nrow proj"><span class="tr">▾ </span><span class="dot d-attn">●</span><span class="t">ferrite</span><span class="s">dev</span></div>
+      <div class="nrow" id="n-solo"><span class="cur"></span><span class="dot d-done">✓</span><span class="t">Nav rows jitter on stream start</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow" id="n-group"><span class="cur"></span><span class="tr">▾ </span><span class="dot d-attn">●</span><span class="t">Perf sweep</span><span class="s">4</span></div>
       <div class="nrow"><span class="tr">  ├ </span><span class="dot d-run">●</span><span class="t">Perf: layout cache</span><span class="s">1m04s</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s warn">needs you</span><svg class="logo codex"><use href="#codex"/></svg></div>
-      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-done">●</span><span class="t">Theme retune</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s">approval</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-done">✓</span><span class="t">Theme retune</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
       <div class="nrow"><span class="tr">  └ </span><span class="dot d-fail">●</span><span class="t">Fold regression</span><span class="s bad">failing 2</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow" id="n-wall"><span class="cur"></span><span class="tr">▸ </span><span class="t">Everything</span><span class="s">9</span></div>
+      <div class="nrow" id="n-wall"><span class="cur"></span><span class="tr">▸ </span><span class="dot d-attn">●</span><span class="t">Everything</span><span class="s">9</span></div>
       <div class="half"></div>
-      <div class="nrow proj"><span class="tr">▾ </span><span class="t">zeron</span><span class="s">main</span></div>
+      <div class="nrow proj"><span class="tr">▾ </span><span class="dot d-done">✓</span><span class="t">zeron</span><span class="s">main</span></div>
       <div class="nrow"><span class="cur"></span><span class="dot d-run">●</span><span class="t">Port onboarding flow</span><span class="s">12s</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow"><span class="cur"></span><span class="dot d-done">●</span><span class="t">Bump deps</span><span class="s">done</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="cur"></span><span class="dot d-done">✓</span><span class="t">Bump deps</span><span class="s">done</span><svg class="logo codex"><use href="#codex"/></svg></div>
       <div class="nrow"><span class="cur"></span><span class="dot d-run">●</span><span class="t">Docs: ADR 0008</span><span class="s">3s</span><svg class="logo codex"><use href="#codex"/></svg></div>
       <div class="fill"></div>
       <div class="nrow head"><span class="tr">▸ </span><span class="t">parked 3</span></div>

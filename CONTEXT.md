@@ -150,10 +150,19 @@ reads as code. Not a Visual: nobody asked for it, and it is not live.
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread
-until they land on the Thread; shown by the bell, a toast, and the Pane's
-pulsing ring. A Subagent finishing, an interrupt, or a held prompt going
-out is never a Notice.
+until it is **seen** — its Thread on screen while the window has focus —
+or opened from the bell; shown by the bell, a toast, and the Thread's done
+mark. A Subagent finishing, an interrupt, or a held prompt going out is
+never a Notice.
 _Avoid_: alert, ping, notification (the bell's whole surface is that).
+
+**Attention**
+Which of four states a Thread is in, most urgent first: **blocked** (a
+Decision waits, or it failed), **done** (a Notice not yet seen),
+**working** (Main, or only its Subagents or background tasks), **idle**.
+What the nav sorts and rolls up by and the palette filters by; Ferrite's
+finer states (failing, parked, background) are faces within these.
+_Avoid_: status (too broad), unread (that is the Notice's).
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its

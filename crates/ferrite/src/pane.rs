@@ -587,10 +587,9 @@ pub struct PaneFacts<'a> {
     /// Queue viewport derived from this Pane's actual available height.
     pub composer_queue_height: f32,
     pub focused: bool,
-    /// This Thread finished while the operator looked elsewhere and they
-    /// have not landed on it since (an unread Notice): the focus ring
-    /// pulses in its place until they do. Never true with `focused`.
-    pub attention: bool,
+    /// This Thread finished and the operator has not seen it since (an
+    /// unread Notice): its head's mark is the done check until they do.
+    pub unread: bool,
     /// The wall cell's folded reading, cached by the cockpit's facts —
     /// everything the L3 recipe needs that is not an O(1) transcript read.
     /// None for a Thread the facts have not met, which draws as empty.
@@ -1180,7 +1179,7 @@ pub fn render_pane(
         composer_files,
         composer_queue_height,
         focused,
-        attention,
+        unread,
         wall,
         reduce_motion,
         editing,
@@ -1262,6 +1261,7 @@ pub fn render_pane(
             let (dot, working) = head_dot(
                 view.is_main(),
                 dot_state(state, state_word(state, kind, wall, transcript).as_ref()),
+                unread,
                 status,
             );
             let head = group_head(GroupHead {
@@ -1320,7 +1320,7 @@ pub fn render_pane(
         editing,
         drop_target,
         starting: thread.is_some_and(|thread| thread.starting()),
-        unread: attention,
+        unread,
         grid: show_focus,
         attachments,
         background,
@@ -2151,13 +2151,14 @@ pub(crate) fn cell_dot(state: WallState, unread: bool) -> Div {
     crate::cockpit::thread_status(state, unread).dot()
 }
 
-/// The Pane head's dot, and whether it is a working Thread's (drawn as the
+/// The Pane head's mark, and whether it is a working Thread's (drawn as the
 /// braille spinner). The main Thread's is the status truth the nav and the
-/// cells share (`thread_status`); a subagent tab's is that agent's own
-/// transcript state. Unread is the title's ink, never the dot's.
+/// cells share (`thread_status`), the done check while its finish is
+/// `unread`; a subagent tab's is that agent's own transcript state.
 fn head_dot(
     main: bool,
     state: WallState,
+    unread: bool,
     subject: Option<Status>,
 ) -> (crate::cockpit::ThreadStatus, bool) {
     let state = if main {
@@ -2171,15 +2172,18 @@ fn head_dot(
         }
     };
     (
-        crate::cockpit::thread_status(state, false),
+        crate::cockpit::thread_status(state, main && unread),
         state == WallState::Working,
     )
 }
 
-/// What a pending request asks of the operator, as the lexicon names it.
+/// What a pending request asks of the operator, as the lexicon names it:
+/// a Question, a plan to approve (Claude's `ExitPlanMode`), or an approval.
 fn request_kind(decision: &Decision) -> &'static str {
     if questions_of(decision).is_some() {
         theme::words::QUESTION
+    } else if decision.tool_name == "ExitPlanMode" {
+        theme::words::PLAN
     } else {
         theme::words::APPROVAL
     }

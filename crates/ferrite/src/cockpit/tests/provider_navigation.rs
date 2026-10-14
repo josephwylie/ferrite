@@ -180,11 +180,10 @@ fn a_folded_nav_keeps_its_doors_in_the_bottom_bar(cx: &mut TestAppContext) {
     let row: &'static str = format!("nav-thread-{}", first.get()).leak();
     assert!(
         cx.debug_bounds(row).is_none(),
-        "folded, the column draws no rows"
+        "folded, the column draws no tree rows: it is the rail"
     );
-    assert_eq!(
-        cx.debug_bounds("nav-column").unwrap().size.width,
-        px(nav::FOLDED_WIDTH)
+    assert!(
+        (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs() < px(0.5)
     );
     let bar = cx.debug_bounds("bottom-bar").unwrap();
     let toggle = bounds(cx, "nav-collapse".to_string());

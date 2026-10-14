@@ -29,6 +29,10 @@ pub const PLATFORM: Platform = Platform::Windows;
 /// a Composer nor a kit input is on the focus path.
 pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
 
+/// The palette's line while it holds nothing: where its single-key status
+/// filters answer (`composer::key_context`'s `FieldEmpty`).
+pub const PALETTE_EMPTY: &str = "Palette && FieldEmpty";
+
 /// Every key the cockpit binds: (keystroke, action name, key context).
 /// Action names are the registered `namespace::Action` strings, so the
 /// table stays buildable without touching gpui.
@@ -328,6 +332,13 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("enter".into(), "palette::Confirm", Some("Palette")),
         ("tab".into(), "palette::Preview", Some("Palette")),
         ("escape".into(), "palette::Dismiss", Some("Palette")),
+        // The palette's status filters, on its empty line only: once it
+        // holds text, every key types.
+        ("b".into(), "palette::FilterBlocked", Some(PALETTE_EMPTY)),
+        ("w".into(), "palette::FilterWorking", Some(PALETTE_EMPTY)),
+        ("i".into(), "palette::FilterIdle", Some(PALETTE_EMPTY)),
+        ("d".into(), "palette::FilterDone", Some(PALETTE_EMPTY)),
+        ("a".into(), "palette::FilterAll", Some(PALETTE_EMPTY)),
         (
             "up".into(),
             "notifications::SelectPrevious",
@@ -590,6 +601,11 @@ mod tests {
                 ("enter", "palette::Confirm", "Palette"),
                 ("tab", "palette::Preview", "Palette"),
                 ("escape", "palette::Dismiss", "Palette"),
+                ("b", "palette::FilterBlocked", PALETTE_EMPTY),
+                ("w", "palette::FilterWorking", PALETTE_EMPTY),
+                ("i", "palette::FilterIdle", PALETTE_EMPTY),
+                ("d", "palette::FilterDone", PALETTE_EMPTY),
+                ("a", "palette::FilterAll", PALETTE_EMPTY),
                 ("up", "notifications::SelectPrevious", "Notifications"),
                 ("down", "notifications::SelectNext", "Notifications"),
                 ("enter", "notifications::Open", "Notifications"),

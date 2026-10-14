@@ -386,6 +386,11 @@ pub fn status_ring(ink: u32) -> Div {
     glyph("\u{25cb}", ink)
 }
 
+/// A status check (a finish not yet seen, `✓`), set as text.
+pub fn status_check(ink: u32) -> Div {
+    glyph("\u{2713}", ink)
+}
+
 // ------------------------------------------------------------------ loops
 //
 // The few loops the terminal grammar allows (theme rule 8). Each rides the

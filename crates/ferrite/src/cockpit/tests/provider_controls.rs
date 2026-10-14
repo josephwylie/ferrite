@@ -103,7 +103,8 @@ fn contract_session_controls_use_shared_native_handles(cx: &mut TestAppContext) 
         .contains(&ferrite_core::SessionControl::RefreshMcp));
     cx.simulate_keystrokes("cmd-k");
     cx.run_until_parked();
-    cx.simulate_input("background");
+    // `background` alone also finds the Thread whose word it is now.
+    cx.simulate_input("background tasks");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     tick(cx);

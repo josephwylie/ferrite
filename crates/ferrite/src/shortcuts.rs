@@ -71,6 +71,12 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::ReopenThread" => Row(Threads, "reopen last"),
         "palette::ShowParked" => Row(Threads, "show parked"),
         "palette::CompareWithMain" => Row(Threads, "compare with main"),
+        // The palette's status filters: the one door to them, so listed.
+        "palette::FilterBlocked" => Row(Threads, "palette: only blocked"),
+        "palette::FilterWorking" => Row(Threads, "palette: only working"),
+        "palette::FilterIdle" => Row(Threads, "palette: only idle"),
+        "palette::FilterDone" => Row(Threads, "palette: only done"),
+        "palette::FilterAll" => Row(Threads, "palette: every state"),
         "cockpit::NextDecision" => Row(Threads, "next request"),
         "cockpit::ToggleNotifications" => Row(Threads, "notifications"),
         "cockpit::OpenSettings" => Row(Threads, "settings"),
