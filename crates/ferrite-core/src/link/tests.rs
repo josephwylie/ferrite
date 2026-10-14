@@ -29,6 +29,14 @@ fn text(thread: u64, seq: u64, text: &str) -> ServerMessage {
     }
 }
 
+/// The next message an outbox sends, which is no deferred one.
+fn sent(outbox: &mut Outbox) -> Option<ServerMessage> {
+    match outbox.pop()? {
+        Next::Message(message) => Some(message),
+        Next::Deferred(_) => panic!("a deferred entry where a message was due"),
+    }
+}
+
 fn roster(open: &[u64], revision: u64) -> ServerMessage {
     ServerMessage::Roster {
         revision,
@@ -77,7 +85,7 @@ fn waiting_deltas_of_one_thread_merge_without_loss() {
     outbox.push(text(2, 2, " thread")).unwrap();
     outbox.push(text(1, 3, "the parser")).unwrap();
 
-    let sent: Vec<_> = std::iter::from_fn(|| outbox.pop()).collect();
+    let sent: Vec<_> = std::iter::from_fn(|| sent(&mut outbox)).collect();
     assert_eq!(
         sent,
         vec![
@@ -98,9 +106,9 @@ fn a_state_message_supersedes_its_waiting_kind_without_overtaking() {
     outbox.push(text(1, 9, "last words")).unwrap();
     outbox.push(roster(&[], 2)).unwrap();
 
-    assert_eq!(outbox.pop(), Some(text(1, 9, "last words")));
-    assert_eq!(outbox.pop(), Some(roster(&[], 2)));
-    assert_eq!(outbox.pop(), None);
+    assert_eq!(sent(&mut outbox), Some(text(1, 9, "last words")));
+    assert_eq!(sent(&mut outbox), Some(roster(&[], 2)));
+    assert_eq!(sent(&mut outbox), None);
 }
 
 #[test]
@@ -119,7 +127,7 @@ fn a_client_too_far_behind_is_lagged_and_nothing_more_is_queued() {
     assert_eq!(lagged, Lagged);
     assert!(seq as usize * chunk.len() >= LAGGED_BYTES);
     assert!(outbox.lagged());
-    assert_eq!(outbox.pop(), None);
+    assert_eq!(sent(&mut outbox), None);
     assert_eq!(outbox.push(roster(&[1], 1)), Err(Lagged));
 }
 
@@ -271,7 +279,13 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
 
     attached
         .client
-        .resume("b-1", &[(ThreadId::new(4), 41)].into_iter().collect())
+        .send(&ClientMessage::Watch {
+            thread: ThreadId::new(4),
+            resume: Some(protocol::Resume {
+                boot_id: "b-1".into(),
+                after: 41,
+            }),
+        })
         .unwrap();
     assert!(matches!(
         hear.recv().unwrap(),
@@ -344,6 +358,46 @@ fn a_live_input_never_merges() {
     outbox.push(text(1, 1, "a")).unwrap();
     outbox.push(live.clone()).unwrap();
     outbox.push(text(1, 3, "b")).unwrap();
-    let sent: Vec<_> = std::iter::from_fn(|| outbox.pop()).collect();
+    let sent: Vec<_> = std::iter::from_fn(|| sent(&mut outbox)).collect();
     assert_eq!(sent, vec![text(1, 1, "a"), live, text(1, 3, "b")]);
+}
+
+/// A deferred entry keeps its place: nothing merges across it, and the
+/// bytes it will send never count toward the lag limit.
+#[test]
+fn a_deferred_entry_waits_its_turn_outside_the_lag_limit() {
+    let mut outbox = Outbox::default();
+    outbox.push(text(1, 1, "a")).unwrap();
+    outbox.defer(Box::new(|_| Ok(()))).unwrap();
+    outbox.push(text(1, 2, "b")).unwrap();
+    assert_eq!(sent(&mut outbox), Some(text(1, 1, "a")));
+    assert!(matches!(outbox.pop(), Some(Next::Deferred(_))));
+    assert_eq!(sent(&mut outbox), Some(text(1, 2, "b")));
+}
+
+/// A connection the Server lets go ends its threads and closes its
+/// stream, even while the client stays connected: a long-running Server
+/// leaks neither a thread nor a descriptor per window.
+#[cfg(unix)]
+#[test]
+fn a_connection_let_go_closes_its_stream() {
+    let dir = scratch("dropped");
+    let path = address(&dir);
+    let listener = listen(&path).unwrap();
+    let mut client = connect(&path).unwrap();
+    let (heard, hear) = mpsc::channel();
+    Connection::serve(1, listener.accept().unwrap(), heard).unwrap();
+    let Ok(Heard::Joined(1, connection)) = hear.recv() else {
+        panic!("joined first");
+    };
+    connection.send(roster(&[1], 1)).unwrap();
+    drop(connection);
+    let mut received = Vec::new();
+    client.read_to_end(&mut received).unwrap();
+    assert_eq!(received, protocol::encode(&roster(&[1], 1)));
+    assert!(matches!(
+        hear.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(Heard::Gone(1))
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
 }

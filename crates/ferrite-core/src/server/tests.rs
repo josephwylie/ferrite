@@ -119,6 +119,8 @@ struct Window {
     boot_id: String,
     mirrors: Mirrors,
     replies: Vec<ServerMessage>,
+    /// The `decision` and `decision_closed` messages, in order.
+    decisions: Vec<ServerMessage>,
 }
 
 fn attach(address: &Path) -> Window {
@@ -141,6 +143,7 @@ fn attach(address: &Path) -> Window {
         boot_id: snapshot.boot_id.clone(),
         mirrors: Mirrors::default(),
         replies: Vec::new(),
+        decisions: Vec::new(),
     };
     for state in snapshot.threads {
         window.receive(ServerMessage::Thread { revision: 0, state });
@@ -150,11 +153,24 @@ fn attach(address: &Path) -> Window {
 
 impl Window {
     fn receive(&mut self, message: ServerMessage) {
-        if matches!(message, ServerMessage::Reply { .. }) {
-            self.replies.push(message);
-        } else {
-            self.mirrors.receive(message, Instant::now());
+        match message {
+            ServerMessage::Reply { .. } => self.replies.push(message),
+            ServerMessage::Decision { .. } | ServerMessage::DecisionClosed { .. } => {
+                self.decisions.push(message)
+            }
+            message => self.mirrors.receive(message, Instant::now()),
         }
+    }
+
+    /// Why each Decision this window was told of closed.
+    fn closed(&self) -> Vec<ClosedBy> {
+        self.decisions
+            .iter()
+            .filter_map(|message| match message {
+                ServerMessage::DecisionClosed { by, .. } => Some(by.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Take what arrives until `done` holds, for at most five seconds.
@@ -296,6 +312,78 @@ fn the_first_answer_wins_and_the_second_hears_already_answered() {
     );
     first.until(|window| !pending(window));
     second.until(|window| !pending(window));
+    for window in [&mut first, &mut second] {
+        window.until(|window| !window.closed().is_empty());
+        assert!(matches!(
+            &window.decisions[0],
+            ServerMessage::Decision { handle: asked, .. } if *asked == handle
+        ));
+        // The first window to attach is the Server's client 1.
+        assert_eq!(window.closed(), vec![ClosedBy::Answered { client: 1 }]);
+    }
+}
+
+/// A Decision pending when its Session ends closes for every window as
+/// `session_ended`; one pending when the Server stops, as `server_restart`.
+#[test]
+fn a_decision_closes_for_every_window_with_why() {
+    let harness = start("closes");
+    let mut window = attach(&harness.address);
+    let (_, provider) = open(&mut window, &harness);
+    provider.send(decision()).unwrap();
+    window.until(|window| window.decisions.len() == 1);
+    drop(provider);
+    window.until(|window| !window.closed().is_empty());
+    assert_eq!(window.closed(), vec![ClosedBy::SessionEnded]);
+
+    let (_, provider) = open(&mut window, &harness);
+    provider.send(decision()).unwrap();
+    window.until(|window| window.decisions.len() == 3);
+    window.command(3, Op::Stop { when: When::Now });
+    window.until(|window| window.closed().len() == 2);
+    assert_eq!(window.closed()[1], ClosedBy::ServerRestart);
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
+
+/// A Thread whose log outweighs how far a window may fall behind still
+/// reaches a window that starts watching it: the history is read on the
+/// connection's own thread and crosses in pieces that never count as lag.
+#[test]
+fn a_history_larger_than_the_lag_limit_still_arrives() {
+    let harness = start("large");
+    let mut steady = attach(&harness.address);
+    let (thread, provider) = open(&mut steady, &harness);
+    steady.watch(thread, None);
+    let ends_with = |said: String| {
+        move |window: &Window| {
+            window.mirrors.view(thread).is_some_and(|view| {
+                view.transcript()
+                    .blocks()
+                    .last()
+                    .is_some_and(|block| format!("{:?}", block.body).contains(&said))
+            })
+        }
+    };
+    let turn = "x".repeat(1 << 20);
+    let turns = link::LAGGED_BYTES / turn.len() + 4;
+    for nth in 0..turns {
+        provider.send(text(&format!("{turn} turn {nth}"))).unwrap();
+        provider
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        // One turn at a time, so the steady window never lags either.
+        steady.until(ends_with(format!("turn {nth}")));
+    }
+
+    let mut late = attach(&harness.address);
+    late.watch(thread, None);
+    late.until(ends_with(format!("turn {}", turns - 1)));
+    assert!(late.replies.is_empty(), "{:?}", late.replies);
+    let reply = late.command(4, Op::SettingsChanged);
+    assert!(matches!(reply, ServerMessage::Reply { error: None, .. }));
 }
 
 /// A window that drops mid-turn and comes back within this boot resumes

@@ -8,11 +8,12 @@
 //! a state message (a Thread's state, the Roster, the Groups …) supersedes
 //! the one of its kind still waiting and joins the back; and a client that
 //! falls more than [`LAGGED_BYTES`] behind is closed `lagged` and
-//! reconnects.
+//! reconnects. What is too large to queue — a Thread's history — waits as a
+//! [`Deferred`] that the writer thread produces as it sends.
 //! A reconnecting client resumes each Thread from the [`Ring`], the last
 //! [`RING_BYTES`] of its inputs, or rebuilds it from history.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -110,11 +111,35 @@ pub struct Outbox {
     queue: VecDeque<Waiting>,
     bytes: usize,
     lagged: bool,
+    /// The Server let the connection go: the writer stops.
+    closed: bool,
+}
+
+/// Messages made only as they are sent, on the connection's writer thread:
+/// a Thread's whole history, read from its log and sent in pieces. What it
+/// sends never counts against [`LAGGED_BYTES`]; it is handed each message
+/// to send in turn.
+pub type Deferred =
+    Box<dyn FnOnce(&mut dyn FnMut(ServerMessage) -> io::Result<()>) -> io::Result<()> + Send>;
+
+/// What waits to be sent.
+pub enum Next {
+    Message(ServerMessage),
+    Deferred(Deferred),
 }
 
 struct Waiting {
-    message: ServerMessage,
+    next: Next,
     bytes: usize,
+}
+
+impl Waiting {
+    fn message(&self) -> Option<&ServerMessage> {
+        match &self.next {
+            Next::Message(message) => Some(message),
+            Next::Deferred(_) => None,
+        }
+    }
 }
 
 /// The connection fell more than [`LAGGED_BYTES`] behind.
@@ -160,23 +185,43 @@ impl Outbox {
             if let Some(stale) = self
                 .queue
                 .iter()
-                .position(|waiting| self::slot(&waiting.message).as_ref() == Some(&slot))
+                .position(|waiting| waiting.message().and_then(self::slot).as_ref() == Some(&slot))
             {
                 let stale = self.queue.remove(stale).expect("found just now");
                 self.bytes -= stale.bytes;
             }
         }
-        if let Some(last) = self.queue.back_mut() {
-            if merge(&mut last.message, &message) {
-                let merged = protocol::encode(&last.message).len();
-                self.bytes = self.bytes - last.bytes + merged;
-                last.bytes = merged;
+        if let Some(Waiting {
+            next: Next::Message(last),
+            bytes: last_bytes,
+        }) = self.queue.back_mut()
+        {
+            if merge(last, &message) {
+                let merged = protocol::encode(last).len();
+                self.bytes = self.bytes - *last_bytes + merged;
+                *last_bytes = merged;
                 return self.check();
             }
         }
         self.bytes += bytes;
-        self.queue.push_back(Waiting { message, bytes });
+        self.queue.push_back(Waiting {
+            next: Next::Message(message),
+            bytes,
+        });
         self.check()
+    }
+
+    /// Queue what the writer thread will make as it sends: in order with
+    /// everything else, but outside the lag limit.
+    pub fn defer(&mut self, deferred: Deferred) -> Result<(), Lagged> {
+        if self.lagged {
+            return Err(Lagged);
+        }
+        self.queue.push_back(Waiting {
+            next: Next::Deferred(deferred),
+            bytes: 0,
+        });
+        Ok(())
     }
 
     fn check(&mut self) -> Result<(), Lagged> {
@@ -189,14 +234,10 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn pop(&mut self) -> Option<ServerMessage> {
+    pub fn pop(&mut self) -> Option<Next> {
         let waiting = self.queue.pop_front()?;
         self.bytes -= waiting.bytes;
-        Some(waiting.message)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+        Some(waiting.next)
     }
 
     pub fn lagged(&self) -> bool {
@@ -328,23 +369,37 @@ impl Connection {
             .spawn(move || {
                 let (lock, ready) = &*outbox;
                 loop {
-                    let message = {
+                    let next = {
                         let mut waiting = lock.lock().unwrap_or_else(|e| e.into_inner());
                         loop {
-                            if let Some(message) = waiting.pop() {
-                                break Some(message);
+                            if let Some(next) = waiting.pop() {
+                                break Some(next);
                             }
                             if waiting.lagged() {
+                                break Some(Next::Message(lagged()));
+                            }
+                            if waiting.closed {
                                 break None;
                             }
                             waiting = ready.wait(waiting).unwrap_or_else(|e| e.into_inner());
                         }
                     };
-                    let message = message.unwrap_or_else(lagged);
-                    let closing = matches!(message, ServerMessage::Welcome { error: Some(_), .. })
-                        || matches!(&message, ServerMessage::Reply { error: Some(error), .. }
-                            if error.code == ErrorCode::Lagged);
-                    if send(&mut writer, &message).is_err() || closing {
+                    // Whether to keep sending.
+                    let sent = match next {
+                        None => Ok(false),
+                        Some(Next::Message(message)) => {
+                            let closing = matches!(
+                                message,
+                                ServerMessage::Welcome { error: Some(_), .. }
+                            ) || matches!(&message, ServerMessage::Reply { error: Some(error), .. }
+                                        if error.code == ErrorCode::Lagged);
+                            send(&mut writer, &message).map(|()| !closing)
+                        }
+                        Some(Next::Deferred(deferred)) => {
+                            deferred(&mut |message| send(&mut writer, &message)).map(|()| true)
+                        }
+                    };
+                    if !matches!(sent, Ok(true)) {
                         let _ = writer.shutdown();
                         return;
                     }
@@ -370,10 +425,30 @@ impl Connection {
     /// Queue a message for this client. `Err(Lagged)`: it is too far
     /// behind, and its connection is closing.
     pub fn send(&self, message: ServerMessage) -> Result<(), Lagged> {
+        self.queue(|outbox| outbox.push(message))
+    }
+
+    /// Queue what the writer thread makes as it sends ([`Deferred`]).
+    pub fn defer(&self, deferred: Deferred) -> Result<(), Lagged> {
+        self.queue(|outbox| outbox.defer(deferred))
+    }
+
+    fn queue(&self, push: impl FnOnce(&mut Outbox) -> Result<(), Lagged>) -> Result<(), Lagged> {
         let (lock, ready) = &*self.shared;
-        let pushed = lock.lock().unwrap_or_else(|e| e.into_inner()).push(message);
+        let pushed = push(&mut lock.lock().unwrap_or_else(|e| e.into_inner()));
         ready.notify_one();
         pushed
+    }
+}
+
+/// The Server let the client go: its writer thread sends what is already
+/// queued (a lagged client's last word), then closes the stream and ends,
+/// which ends the reader too.
+impl Drop for Connection {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.shared;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        ready.notify_one();
     }
 }
 
@@ -485,21 +560,6 @@ impl Client {
 
     pub fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
         send(&mut self.writer, message)
-    }
-
-    /// Watch these Threads again after a reconnect: from where this window
-    /// left each one when the Server is the same boot, or from history.
-    pub fn resume(&mut self, boot_id: &str, threads: &BTreeMap<ThreadId, u64>) -> io::Result<()> {
-        for (&thread, &after) in threads {
-            self.send(&ClientMessage::Watch {
-                thread,
-                resume: Some(protocol::Resume {
-                    boot_id: boot_id.into(),
-                    after,
-                }),
-            })?;
-        }
-        Ok(())
     }
 }
 

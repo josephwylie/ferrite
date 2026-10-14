@@ -18,8 +18,8 @@ use crate::engine::Engine;
 use crate::link::{self, ClientId, Connection, Heard, Ring};
 use crate::roster::DraftId;
 use crate::protocol::{
-    self, Capability, ClientMessage, Command, Done, ErrorCode, Op, ServerInfo, ServerMessage, When,
-    WireError, WireFile,
+    self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
+    ServerMessage, When, WireError, WireFile, WireHandle,
 };
 use crate::settings::Settings;
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
@@ -182,6 +182,10 @@ struct Server {
     clients: BTreeMap<ClientId, Client>,
     /// Each open Thread's recent inputs, for a client that reconnects.
     rings: HashMap<ThreadId, Ring>,
+    /// The pending Decisions the clients were told of.
+    decisions: BTreeSet<(ThreadId, WireHandle)>,
+    /// Who answered each of them that an answer was delivered for.
+    answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
     searches: Vec<Search>,
     /// First sends still starting, by the tag the Engine knows them by:
@@ -213,6 +217,8 @@ impl Server {
             info,
             clients: BTreeMap::new(),
             rings: HashMap::new(),
+            decisions: BTreeSet::new(),
+            answered: BTreeMap::new(),
             renders,
             searches: Vec::new(),
             starting: HashMap::new(),
@@ -343,32 +349,35 @@ impl Server {
     }
 
     /// Stream a Thread to a client: from the ring when it resumes this boot
-    /// within it, otherwise its history first.
+    /// within it, otherwise its history first, which the client's writer
+    /// thread reads from the log and sends in pieces.
     fn watch(&mut self, id: ClientId, thread: ThreadId, resume: Option<protocol::Resume>) {
         self.broadcast();
         let missed = resume
             .filter(|resume| resume.boot_id == self.boot_id)
             .and_then(|resume| self.rings.get(&thread)?.since(resume.after));
-        let opening = match missed {
-            Some(missed) => missed,
-            None => match self.engine.history(thread) {
-                Some(history) => vec![
-                    ServerMessage::History {
-                        thread,
-                        after: 0,
-                        inputs: history.inputs,
-                    },
-                    ServerMessage::HistoryEnd {
-                        thread,
-                        seq: history.seq,
-                        live: history.live,
-                    },
-                ],
-                None => return,
-            },
-        };
-        for message in opening {
-            self.send(id, message);
+        match missed {
+            Some(missed) => {
+                for message in missed {
+                    self.send(id, message);
+                }
+            }
+            None => {
+                let Some(history) = self.engine.history(thread) else {
+                    return;
+                };
+                let Some(client) = self.clients.get(&id) else {
+                    return;
+                };
+                if client
+                    .connection
+                    .defer(Box::new(move |send| history.send(send)))
+                    .is_err()
+                {
+                    self.lagged(id);
+                    return;
+                }
+            }
         }
         if let Some(client) = self.clients.get_mut(&id) {
             client.watching.insert(thread);
@@ -433,7 +442,13 @@ impl Server {
                 }
                 Err(error) => Err(failed(error)),
             },
-            op => self.engine.execute(op),
+            op => {
+                let executed = self.engine.execute(op);
+                if let (Op::Answer { thread, handle, .. }, Ok(_)) = (op, &executed) {
+                    self.answered.insert((*thread, handle.clone()), id);
+                }
+                executed
+            }
         };
         self.reply(id, request, executed);
     }
@@ -544,7 +559,9 @@ impl Server {
     /// Hand every message the Engine published to the clients that want
     /// it: a Thread's stream to its watchers, the rest to everyone.
     fn broadcast(&mut self) {
-        for message in self.engine.take_messages() {
+        let mut messages = self.engine.take_messages();
+        messages.extend(self.decision_changes());
+        for message in messages {
             match &message {
                 ServerMessage::Input { thread, seq, .. } => {
                     self.rings
@@ -587,6 +604,60 @@ impl Server {
         }
     }
 
+    /// Each Decision asked since the last pass, and each that closed, and
+    /// why: the answer one client delivered, the provider withdrawing it,
+    /// or its Session ending.
+    fn decision_changes(&mut self) -> Vec<ServerMessage> {
+        let pending = self.engine.pending_decisions();
+        let now: BTreeSet<_> = pending
+            .iter()
+            .map(|entry| (entry.thread, entry.handle.clone()))
+            .collect();
+        let mut changes = Vec::new();
+        for (thread, handle) in self.decisions.difference(&now) {
+            let session_lives = self.engine.thread(*thread).is_some_and(|open| {
+                open.generation() == handle.generation && open.activity().connected()
+            });
+            let by = match self.answered.get(&(*thread, handle.clone())) {
+                Some(&client) => ClosedBy::Answered { client },
+                None if session_lives => ClosedBy::Cancelled,
+                None => ClosedBy::SessionEnded,
+            };
+            changes.push(ServerMessage::DecisionClosed {
+                thread: *thread,
+                handle: handle.clone(),
+                by,
+            });
+        }
+        for entry in pending {
+            if !self
+                .decisions
+                .contains(&(entry.thread, entry.handle.clone()))
+            {
+                changes.push(ServerMessage::Decision {
+                    thread: entry.thread,
+                    subject: entry.subject,
+                    handle: entry.handle,
+                    decision: entry.decision,
+                });
+            }
+        }
+        self.answered.retain(|asked, _| now.contains(asked));
+        self.decisions = now;
+        changes
+    }
+
+    /// Close every pending Decision for the clients: this Server is going.
+    fn close_decisions(&mut self) {
+        for (thread, handle) in std::mem::take(&mut self.decisions) {
+            self.say(ServerMessage::DecisionClosed {
+                thread,
+                handle,
+                by: ClosedBy::ServerRestart,
+            });
+        }
+    }
+
     /// Queue a message for one client; one too far behind is let go, and
     /// reconnects.
     fn send(&mut self, id: ClientId, message: ServerMessage) {
@@ -594,20 +665,32 @@ impl Server {
             return;
         };
         if client.connection.send(message).is_err() {
-            crate::log!("server: client {id} fell too far behind");
-            self.clients.remove(&id);
+            self.lagged(id);
         }
+    }
+
+    fn lagged(&mut self, id: ClientId) {
+        crate::log!("server: client {id} fell too far behind");
+        self.clients.remove(&id);
     }
 
     /// Flush every writer and end every Session without parking it: the
     /// open markers stay, so the next Server resumes the same Threads.
     fn stop(&mut self) {
+        self.close_decisions();
         self.say(ServerMessage::Stopping);
         self.halt();
     }
 
+    /// Tell every client that said hello.
     fn say(&mut self, message: ServerMessage) {
-        for id in self.clients.keys().copied().collect::<Vec<_>>() {
+        let welcomed: Vec<ClientId> = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.welcomed)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in welcomed {
             self.send(id, message.clone());
         }
     }
@@ -649,6 +732,7 @@ impl Server {
             }
         };
         crate::log!("server: restarting ({when:?})");
+        self.close_decisions();
         self.say(ServerMessage::Restarting { when });
         self.halt();
         match (self.relaunch)(&executable) {

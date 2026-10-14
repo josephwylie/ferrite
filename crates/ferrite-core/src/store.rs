@@ -528,8 +528,6 @@ impl Record {
     }
 }
 
-/// The Notice a provider switch leaves in the transcript, live and on
-/// replay alike.
 /// One log line as the client protocol carries it (ADR 0025): everything
 /// durable crosses the wire in the log's own schema, so the Server never
 /// re-encodes history and a client reads exactly what a reopen would.
@@ -581,6 +579,8 @@ impl LogRecord {
     }
 }
 
+/// The Notice a provider switch leaves in the transcript, live and on
+/// replay alike.
 pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
     let label = crate::providers::models::label(model.unwrap_or("default"), &[]);
     format!("continued on {to} · {label} — the earlier conversation is handed over as context")
@@ -1918,6 +1918,23 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 fn sync_dir(_: &Path) -> io::Result<()> {
     Ok(())
+}
+
+/// A Thread's log up to a checkpoint, opened and not yet read
+/// (`Store::log_at`).
+pub struct LogAt {
+    thread: ThreadId,
+    file: File,
+    through: u64,
+}
+
+impl LogAt {
+    /// What a reopen would load, from the log's first `through` bytes.
+    pub fn load(self) -> Result<ThreadSnapshot, LoadError> {
+        let mut bytes = Vec::new();
+        self.file.take(self.through).read_to_end(&mut bytes)?;
+        Ok(parse(self.thread, &bytes)?.snapshot)
+    }
 }
 
 /// A log opened for reading. Every read of a log goes through one, so
@@ -3279,6 +3296,17 @@ impl Store {
             through,
             crate::activity::ActivityLimits::default(),
         )
+    }
+
+    /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),
+    /// to be read on another thread. The file is opened now, so a header
+    /// rewrite in between replaces the path but not what this reads.
+    pub fn log_at(&self, thread: ThreadId, through: u64) -> io::Result<LogAt> {
+        Ok(LogAt {
+            thread,
+            file: File::open(self.log_path(thread))?,
+            through,
+        })
     }
 
     /// Replace a Thread's log: a header at the current schema saying what

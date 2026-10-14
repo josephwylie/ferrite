@@ -76,7 +76,9 @@ app test run `Engine` in-process over the in-process link.
 `~/.ferrite/threads/server.sock` (the directory 0700, the socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
 stale socket (nothing answers a connect) is removed before binding; a live
 one means a Server already runs. On Windows, the pipe
-`\\.\pipe\ferrite-server-<user SID>-<Store hash>`, created with
+`\\.\pipe\ferrite-server-<user SID>-<Store hash>` (FNV-1a of the
+Store's path: a hash no toolchain changes, since an app and a Server from
+different builds must find one pipe), created with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS` and a DACL
 granting only the user; the client checks the pipe server's process owner
 is itself before sending anything. Both use blocking I/O and a thread per
@@ -100,8 +102,9 @@ have launchd respawn it every 10 s for as long as the first one runs).
 
 **LaunchAgent (macOS).** Settings › Server › "Start at login", on by
 default, installed at the first launch of a bundled app before
-`ensure_running`, so the first Server is already launchd's (not for a bare
-`target/` binary, which uses the detached start). It writes
+`ensure_running`, so the first Server is already launchd's (not for a
+development build, which uses the detached start and does not offer the
+setting: it would point the operator's LaunchAgent at `target/`). It writes
 `~/Library/LaunchAgents/com.github.josephwylie.ferrite.server.plist` —
 `ProgramArguments` = the bundle's executable and `server`, `RunAtLoad`,
 `KeepAlive { SuccessfulExit = false }` (restarted after a crash, not after
@@ -131,8 +134,11 @@ messages into outboxes. At boot it revives every Thread marked open (the
 existing `.open` markers, staggered as in ADR 0018), so after a crash or
 reboot the Threads resume without a window.
 
-**Stopping.** SIGTERM and SIGINT (and `CTRL_CLOSE_EVENT` /
-`CTRL_SHUTDOWN_EVENT` on Windows) set a flag the pump sees. The pump flushes
+**Stopping.** SIGTERM and SIGINT set a flag the pump sees. On Windows so
+do a console's Ctrl+C and close (a Server run by hand) and `WM_ENDSESSION`
+at logout and shutdown: the Server the app starts has no console, so it
+keeps a hidden top-level window for that message, and holds the process
+up while the pump flushes. The pump flushes
 every writer, ends every Session without parking it (the open markers
 stay, so the next boot resumes the same Threads; resume ids are already in
 the log as `init` records), and runs `Store::quit` with the existing
@@ -194,9 +200,9 @@ Server → Client:
 |---|---|---|
 | `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. |
 | `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
-| `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`; then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
+| `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`, in pieces of about 1 MiB (`after` counts the inputs before each; `0` starts the Thread over); then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
-| `decision {thread, subject?, decision}` / `decision_closed {thread, decision, by}` | reliable | `by`: `answered {client}`, `cancelled`, `session_ended`, `server_restart`. |
+| `decision {thread, subject?, handle, decision}` / `decision_closed {thread, handle, by}` | reliable | To every client, watching or not. `by`: `answered {client}`, `cancelled` (the provider withdrew it), `session_ended`, `server_restart` (the Server restarts or stops). A watcher also reads each Decision from its Thread's inputs. |
 | `reply {id, ok?, error?:{code, message}}` | reliable | Codes: `already_answered`, `invalid_answer`, `unknown_thread`, `unsupported`, `restarting`, `failed`. |
 | `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus, permission modes, supported controls, store error, generation. |
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
@@ -212,8 +218,8 @@ gen-1 DTO for what the Store never keeps: notices, answers, revival,
 Decisions, Activity connect/disconnect, menus, MCP servers and
 authorizations, rate limits, restored tool clocks. Queue
 acknowledgements are `ThreadState`, not inputs. Durable
-history is therefore the log's own lines, and `history` is read from the
-log without decoding on the Server. The Store's on-disk rule is
+history is therefore the log's own lines, replayed as a reopen replays
+them. The Store's on-disk rule is
 unchanged: a log from a newer schema is refused whole. On the wire, a
 record kind this client does not know decodes to `Unknown` and is
 skipped, and the window says it is older than its Server.
@@ -244,7 +250,12 @@ meaning between them: a `roster` that closes a Thread must not overtake
 that Thread's last inputs, nor a tool draft the start that settles it. A
 connection whose queue passes 32 MiB is closed with a `reply {id: 0,
 error.code = lagged}`; the client reconnects and resumes, usually from
-`history`, since 32 MiB outruns the ring.
+`history`, since 32 MiB outruns the ring. A history is not queued as
+messages: it waits in the queue as one entry that the connection's writer
+thread reads from the log and sends as it goes, so a log of any size (the
+Store holds logs past 100 MB) neither trips the limit nor stalls the pump.
+A connection the Server lets go sends what it already queued, then closes
+and ends both its threads.
 
 **Decisions.** The Engine is their only owner. `answer` names the
 `DecisionHandle` the client drew (generation, serial and the provider's
@@ -332,8 +343,8 @@ over live processes.
   the agents off each time they idle. Such an app shows the mismatch in
   Settings › Server instead.
 - On idle (or now), the Engine checks its executable still exists (else
-  it replies `failed` and keeps running), broadcasts `restarting`, closes
-  pending Decisions (`server_restart`), flushes and ends Sessions as on
+  it replies `failed` and keeps running), closes pending Decisions
+  (`server_restart`), broadcasts `restarting`, flushes and ends Sessions as on
   SIGTERM,
   then restarts itself: `exec` of its own executable on Unix (same pid,
   so launchd sees no exit; the claim's file is close-on-exec, so the new

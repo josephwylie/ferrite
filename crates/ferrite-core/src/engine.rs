@@ -3560,29 +3560,33 @@ impl Engine {
                 open: self.open.clone(),
                 parked: self.parked().unwrap_or_default(),
             },
-            decisions: self
-                .threads
-                .iter()
-                .flat_map(|(&thread, state)| {
-                    state
-                        .activity
-                        .view()
-                        .decisions()
-                        .iter()
-                        .map(move |pending| protocol::PendingEntry {
-                            thread,
-                            subject: pending.subject.as_ref().map(Into::into),
-                            handle: (&pending.handle).into(),
-                            decision: (&pending.decision).into(),
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect(),
+            decisions: self.pending_decisions(),
             groups: self.published_shared.groups.clone(),
             registry: self.published_shared.registry.clone(),
             notices: self.published_shared.notices.clone(),
             providers: self.published_shared.providers.clone(),
         }
+    }
+
+    /// Every open Thread's pending Decisions.
+    pub fn pending_decisions(&self) -> Vec<protocol::PendingEntry> {
+        self.threads
+            .iter()
+            .flat_map(|(&thread, state)| {
+                state
+                    .activity
+                    .view()
+                    .decisions()
+                    .iter()
+                    .map(move |pending| protocol::PendingEntry {
+                        thread,
+                        subject: pending.subject.as_ref().map(Into::into),
+                        handle: (&pending.handle).into(),
+                        decision: (&pending.decision).into(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     fn thread_state(&self, id: ThreadId) -> protocol::ThreadState {
@@ -3605,26 +3609,29 @@ impl Engine {
     }
 
     /// A Thread's history for a watcher that has none of it: its log as a
-    /// reopen would replay it, then the live state the log never holds —
+    /// reopen would replay it, read later off the pump thread up to a
+    /// checkpoint taken now, then the live state the log never holds —
     /// the Session's connection, pending Decisions, MCP state, limits.
     /// Everything published so far is in it; inputs continue after `seq`.
-    pub fn history(&mut self, thread: ThreadId) -> Option<protocol::History> {
+    pub fn history(&mut self, thread: ThreadId) -> Option<History> {
         use protocol::{Live, WireInput};
         self.publish();
         let state = self.threads.get_mut(&thread)?;
-        if let Err(error) = state.writer.flush() {
-            state.report_store_error(error);
-            return None;
-        }
-        let snapshot = self.store.load(thread).ok()?;
+        let through = match state.writer.checkpoint() {
+            Ok(through) => through,
+            Err(error) => {
+                state.report_store_error(error);
+                return None;
+            }
+        };
+        let log = match self.store.log_at(thread, through) {
+            Ok(log) => log,
+            Err(error) => {
+                crate::log!("thread {thread}: its log could not be opened: {error}");
+                return None;
+            }
+        };
         let state = &self.threads[&thread];
-        let inputs = std::iter::once(ActivityInput::Disconnect)
-            .chain(snapshot.activity_inputs())
-            .filter_map(|input| match protocol::outgoing(&input, None) {
-                Outgoing::Input(input) => Some(input),
-                _ => None,
-            })
-            .collect();
         let view = state.activity.view();
         let transcript = view.main().transcript();
         let mut live = vec![WireInput::Live(Live::Connect {
@@ -3647,8 +3654,9 @@ impl Engine {
         live.push(WireInput::Live(Live::RateLimits {
             limits: transcript.rate_limits().into(),
         }));
-        Some(protocol::History {
-            inputs,
+        Some(History {
+            thread,
+            log,
             live,
             seq: self.published.get(&thread).map_or(0, |published| published.seq),
         })
@@ -3886,6 +3894,71 @@ impl Engine {
 
     pub fn take_bootstrap_results(&mut self) -> Vec<BootstrapResult> {
         std::mem::take(&mut self.bootstrap_results)
+    }
+}
+
+/// How much of a history one `history` message carries, encoded: a log of
+/// any size crosses the link in pieces no reader refuses.
+const HISTORY_CHUNK: usize = 1 << 20;
+
+/// A watched Thread rebuilt from its log (`history` … `history_end`),
+/// read and sent off the pump thread (`Engine::history`).
+pub struct History {
+    thread: ThreadId,
+    log: crate::store::LogAt,
+    live: Vec<protocol::WireInput>,
+    seq: u64,
+}
+
+impl History {
+    /// Read the log and hand `send` its `history` pieces, then
+    /// `history_end`. A log that cannot be read leaves the history empty:
+    /// the watcher still gets the live state and what follows.
+    pub fn send(self, send: &mut dyn FnMut(ServerMessage) -> io::Result<()>) -> io::Result<()> {
+        let thread = self.thread;
+        let replay = match self.log.load() {
+            Ok(snapshot) => snapshot.activity_inputs(),
+            Err(error) => {
+                crate::log!("thread {thread}: its history could not be read: {error:?}");
+                Vec::new()
+            }
+        };
+        let inputs = std::iter::once(ActivityInput::Disconnect)
+            .chain(replay)
+            .filter_map(|input| match protocol::outgoing(&input, None) {
+                Outgoing::Input(input) => Some(input),
+                _ => None,
+            });
+        let mut chunk = Vec::new();
+        let mut bytes = 0;
+        let mut after = 0;
+        for input in inputs {
+            bytes += protocol::encode(&input).len();
+            chunk.push(input);
+            if bytes >= HISTORY_CHUNK {
+                let inputs = std::mem::take(&mut chunk);
+                let sent = inputs.len() as u64;
+                send(ServerMessage::History {
+                    thread,
+                    after,
+                    inputs,
+                })?;
+                after += sent;
+                bytes = 0;
+            }
+        }
+        if after == 0 || !chunk.is_empty() {
+            send(ServerMessage::History {
+                thread,
+                after,
+                inputs: chunk,
+            })?;
+        }
+        send(ServerMessage::HistoryEnd {
+            thread,
+            seq: self.seq,
+            live: self.live,
+        })
     }
 }
 
