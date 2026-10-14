@@ -600,8 +600,6 @@ pub struct ThreadState {
     pub workspace: Option<WireBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_project_root: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<ProjectId>,
     pub first_prompt_sent: bool,
     pub has_prompt_history: bool,
     /// A Session is starting or being replaced.
@@ -766,9 +764,12 @@ impl<'de> Deserialize<'de> for WireRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Live {
-    /// Something Ferrite itself says in the transcript.
+    /// Something Ferrite itself says in the transcript. `replayed`: read
+    /// back from the log (a provider switch's line says it this way).
     Notice {
         text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        replayed: bool,
     },
     /// The Thread's history was replayed into a fresh Session.
     Revived,
@@ -1061,6 +1062,21 @@ pub enum WireMcpStatus {
     Unknown,
 }
 
+// --------------------------------------------------------------- clock
+
+/// An instant as the wire carries it: milliseconds since `boot`, rounded
+/// up, so a clock read from it never runs ahead of the one it stands for.
+pub fn ms_since(at: std::time::Instant, boot: std::time::Instant) -> u64 {
+    at.saturating_duration_since(boot)
+        .as_nanos()
+        .div_ceil(1_000_000) as u64
+}
+
+/// The instant `ms` milliseconds after `boot`.
+pub fn instant_at(ms: u64, boot: std::time::Instant) -> std::time::Instant {
+    boot + Duration::from_millis(ms)
+}
+
 // ------------------------------------------------------------- framing
 
 /// One message as one line: its JSON and a newline.
@@ -1125,7 +1141,11 @@ pub fn outgoing(input: &ActivityInput, duration: Option<Duration>) -> Outgoing {
                 None => live_activity(event).map_or(Outgoing::Local, live),
             }
         }
-        // A replay is of the log, so it is always a line of it.
+        // A replay is of the log: a line of it, or what a line said.
+        ActivityInput::Replay(Input::Notice(text)) => live(Live::Notice {
+            text: text.clone(),
+            replayed: true,
+        }),
         ActivityInput::Replay(input) => LogRecord::of(input, None)
             .map_or(Outgoing::Local, |record| {
                 Outgoing::Input(WireInput::Replay(WireRecord::Known(record)))
@@ -1172,7 +1192,10 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
         return Outgoing::Input(WireInput::Record(WireRecord::Known(record)));
     }
     let live = match input {
-        Input::Notice(text) => Live::Notice { text: text.clone() },
+        Input::Notice(text) => Live::Notice {
+            text: text.clone(),
+            replayed: false,
+        },
         Input::Revived => Live::Revived,
         Input::Event(SessionEvent::ToolDraft { id, name, input }) => {
             return Outgoing::ToolDraft {
@@ -1269,7 +1292,11 @@ pub fn incoming(
                 at,
             };
             match live {
-                Live::Notice { text } => ActivityInput::Main {
+                Live::Notice {
+                    text,
+                    replayed: true,
+                } => ActivityInput::Replay(Input::Notice(text.clone())),
+                Live::Notice { text, .. } => ActivityInput::Main {
                     input: Input::Notice(text.clone()),
                     at,
                 },

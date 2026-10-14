@@ -2500,7 +2500,6 @@ fn the_first_prompt_of_a_session_carries_the_hidden_context_and_the_second_does_
     );
     let root = existing_root("preface-root");
     cockpit
-        .engine
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
     assert_eq!(
@@ -2551,7 +2550,6 @@ fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_pref
     let first_root = existing_root("root-change-first");
     let second_root = existing_root("root-change-second");
     cockpit
-        .engine
         .set_session_project_root(thread, Some(first_root.clone()))
         .unwrap();
     cockpit.send(thread, "one".into());
@@ -2570,7 +2568,6 @@ fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_pref
     let spawns = fake.streams.borrow().len();
 
     cockpit
-        .engine
         .set_session_project_root(thread, Some(second_root.clone()))
         .unwrap();
     // The Session ended; nothing respawns until the operator speaks.
@@ -2607,7 +2604,6 @@ fn a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again() {
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let root = existing_root("root-revive-root");
     cockpit
-        .engine
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
     cockpit.send(thread, "before the park".into());
@@ -2639,7 +2635,6 @@ fn a_sweep_respawned_session_prefaces_its_next_prompt() {
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let root = existing_root("root-sweep-root");
     cockpit
-        .engine
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
     cockpit.send(thread, "one".into()); // consumes the first preface
@@ -2663,7 +2658,6 @@ fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let root = existing_root("root-vanished-root");
     cockpit
-        .engine
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
@@ -2697,7 +2691,6 @@ fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
     assert!(cockpit.queue(thread, "pending text".into()));
     cockpit.pump();
     cockpit
-        .engine
         .set_session_project_root(thread, Some(existing_root("native-replacement-root")))
         .unwrap();
     cockpit.send(thread, "new input".into());
@@ -3862,7 +3855,6 @@ fn the_carry_rides_between_the_preface_and_the_prompt() {
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let root = existing_root("handover-preface-root");
     cockpit
-        .engine
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
     cockpit.send(thread, "hello".into());

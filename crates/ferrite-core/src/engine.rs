@@ -34,6 +34,7 @@ use crate::transcript::{BlockId, Input, Transcript, Update};
 use crate::workspace::follow::{self, Follow, Move};
 use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
+use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 mod history;
@@ -176,7 +177,7 @@ pub struct SubjectUpdate {
 }
 
 impl PaneUpdate {
-    fn new(thread: ThreadId) -> Self {
+    pub(crate) fn new(thread: ThreadId) -> Self {
         Self {
             thread,
             dirty: Vec::new(),
@@ -187,7 +188,7 @@ impl PaneUpdate {
         }
     }
 
-    fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
+    pub(crate) fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
         self.activity_changed |=
             !applied.changed.is_empty() || applied.attention_changed || applied.order_changed;
         self.redirects.extend(applied.redirects);
@@ -396,8 +397,58 @@ pub struct BootstrapResult {
     pub result: io::Result<Bootstrapped>,
 }
 
-struct Thread {
+/// A Thread's Activity, and every input applied to it since the Engine
+/// last published: what its clients' mirrors apply, in the same order.
+/// Each input's instant is put on the millisecond grid of the Engine's boot,
+/// the precision the wire carries, so a mirror applies exactly it.
+struct Journaled {
     activity: Activity,
+    boot: Instant,
+    applied: Vec<ActivityInput>,
+    /// The Activity was replaced since the last publish: mirrors start over.
+    reset: bool,
+}
+
+impl Journaled {
+    /// A new Activity: its mirrors start from nothing.
+    fn new(boot: Instant) -> Self {
+        Self {
+            activity: Activity::default(),
+            boot,
+            applied: Vec::new(),
+            reset: true,
+        }
+    }
+
+    fn apply(&mut self, mut input: ActivityInput) -> ActivityUpdate {
+        if let ActivityInput::Main { at, .. }
+        | ActivityInput::Observe { at, .. }
+        | ActivityInput::Answered { at, .. } = &mut input
+        {
+            *at = crate::protocol::instant_at(crate::protocol::ms_since(*at, self.boot), self.boot);
+        }
+        let update = self.activity.apply(input.clone());
+        // The highlighter is each side's own: a mirror drains its own.
+        if !matches!(input, ActivityInput::DrainHighlights) {
+            self.applied.push(input);
+        }
+        update
+    }
+
+    fn view(&self) -> ActivityView<'_> {
+        self.activity.view()
+    }
+
+    /// A fresh Activity, for a Session that starts the conversation over.
+    fn replace(&mut self) {
+        self.activity = Activity::default();
+        self.applied.clear();
+        self.reset = true;
+    }
+}
+
+struct Thread {
+    activity: Journaled,
     generation: u64,
     store_error: Option<String>,
     history: HashMap<AgentKey, history::Pending>,
@@ -487,6 +538,7 @@ impl Thread {
     /// A Thread ready to serve: its own Lexer, a fresh Transcript, a live
     /// Session. Revival replays history into the Transcript afterwards.
     fn fresh(
+        boot: Instant,
         session: SessionLifecycle,
         writer: ThreadWriter,
         provider: Provider,
@@ -498,7 +550,7 @@ impl Thread {
         queue_path: PathBuf,
     ) -> Self {
         let generation = next_generation();
-        let mut activity = Activity::default();
+        let mut activity = Journaled::new(boot);
         activity.apply(ActivityInput::Connect { generation });
         let mut state = Self {
             activity,
@@ -544,7 +596,76 @@ fn next_generation() -> u64 {
     NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
+/// What a Thread's clients were last told.
+#[derive(Default)]
+struct Published {
+    seq: u64,
+    state: Option<protocol::ThreadState>,
+}
+
 impl Thread {
+    /// Everything a window reads of this Thread that is not its Activity.
+    fn wire_state(&self, id: ThreadId) -> protocol::ThreadState {
+        use crate::ControlKind as Kind;
+        let session = self.session.as_ref().and_then(SessionLifecycle::session);
+        protocol::ThreadState {
+            thread: id,
+            generation: self.generation,
+            provider: self.provider,
+            model: self.model.clone(),
+            effort: self.effort.clone(),
+            title: self.title.clone(),
+            workspace: self.workspace.as_ref().map(Into::into),
+            session_project_root: self.session_project_root.clone(),
+            first_prompt_sent: self.first_prompt_sent,
+            has_prompt_history: self.prompt_history.has_entries(),
+            starting: self.replacement.is_some()
+                || self
+                    .session
+                    .as_ref()
+                    .is_some_and(SessionLifecycle::is_starting),
+            working: self.busy(),
+            tuning: self.tuning.is_some(),
+            native_queue_pending: self.native_queue.pending(),
+            queued: self
+                .native_queue
+                .items
+                .iter()
+                .rev()
+                .map(|item| item.text.clone())
+                .chain(self.queued.clone())
+                .collect(),
+            suggestion: self.suggestion.clone(),
+            commands: self.commands.iter().map(Into::into).collect(),
+            models: self.models.clone(),
+            permission_mode: self.permission_mode.clone(),
+            permission_modes: session
+                .map(Session::permission_modes)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|mode| protocol::WirePermissionMode {
+                    value: mode.value,
+                    label: mode.label,
+                })
+                .collect(),
+            controls: [
+                Kind::RefreshContext,
+                Kind::RefreshMcp,
+                Kind::ReconnectMcp,
+                Kind::LoginMcp,
+                Kind::ReloadMcp,
+                Kind::StopTask,
+                Kind::BackgroundTasks,
+                Kind::SetPermissionMode,
+            ]
+            .iter()
+            .filter(|kind| session.is_some_and(|session| session.supports_control(**kind)))
+            .map(Into::into)
+            .collect(),
+            store_error: self.store_error.clone(),
+        }
+    }
+
     fn apply(&mut self, input: Input) -> Update {
         let applied = self.activity.apply(ActivityInput::Main {
             input,
@@ -634,6 +755,15 @@ pub struct Engine {
     /// The open Threads, in the order they opened: the shared half of the
     /// Roster, which each window follows (`open_threads`).
     open: Vec<ThreadId>,
+    /// When this Engine started: the zero of every `at_ms` it publishes.
+    boot: Instant,
+    /// What the Engine has told its clients and not yet handed over
+    /// (`take_messages`), and the state each Thread's last `thread`
+    /// message carried.
+    outbox: Vec<ServerMessage>,
+    published: BTreeMap<ThreadId, Published>,
+    published_open: Vec<ThreadId>,
+    revision: u64,
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
     model_cache: crate::providers::models::ModelCache,
@@ -687,6 +817,11 @@ impl Engine {
             registry,
             groups,
             open: Vec::new(),
+            boot: crate::clock::instant(),
+            outbox: Vec::new(),
+            published: BTreeMap::new(),
+            published_open: Vec::new(),
+            revision: 0,
             spawner,
             model_discovery,
             model_cache,
@@ -1077,6 +1212,7 @@ impl Engine {
         self.threads.insert(
             id,
             Thread::fresh(
+                self.boot,
                 session,
                 writer,
                 provider,
@@ -1220,7 +1356,7 @@ impl Engine {
     // Legacy #24 fixtures exercise persisted `session_project_root` loading.
     // No production writer exists after the #29 lock.
     #[cfg(test)]
-    fn set_session_project_root(
+    pub(crate) fn set_session_project_root(
         &mut self,
         thread: ThreadId,
         root: Option<PathBuf>,
@@ -1465,7 +1601,7 @@ impl Engine {
         };
         match kind {
             ReplacementKind::Fresh => {
-                state.activity = Activity::default();
+                state.activity.replace();
                 state.resume = None;
                 state.carry = None;
             }
@@ -1713,6 +1849,7 @@ impl Engine {
         let writer = revival.take_writer();
 
         let mut state = Thread::fresh(
+            self.boot,
             session,
             writer,
             provider,
@@ -3515,9 +3652,97 @@ impl Engine {
         read
     }
 
+    /// When this Engine started: the zero of the `at_ms` it publishes.
+    pub fn boot(&self) -> Instant {
+        self.boot
+    }
+
     /// The open Threads, in the order they opened.
     pub fn open_threads(&self) -> &[ThreadId] {
         &self.open
+    }
+
+    /// Everything the Engine has to tell its clients since it was last
+    /// asked, in order (ADR 0025): each open Thread's applied inputs, its
+    /// state when that changed, and the open Threads when they changed.
+    pub fn take_messages(&mut self) -> Vec<ServerMessage> {
+        self.publish();
+        std::mem::take(&mut self.outbox)
+    }
+
+    fn publish(&mut self) {
+        let now = protocol::ms_since(crate::clock::instant(), self.boot);
+        for (&id, thread) in &mut self.threads {
+            let published = self.published.entry(id).or_default();
+            if std::mem::take(&mut thread.activity.reset) {
+                self.outbox.push(ServerMessage::History {
+                    thread: id,
+                    after: 0,
+                    inputs: Vec::new(),
+                });
+                self.outbox.push(ServerMessage::HistoryEnd {
+                    thread: id,
+                    seq: published.seq,
+                    live: Vec::new(),
+                });
+            }
+            for input in thread.activity.applied.drain(..) {
+                let at_ms = match &input {
+                    ActivityInput::Main { at, .. }
+                    | ActivityInput::Observe { at, .. }
+                    | ActivityInput::Answered { at, .. } => protocol::ms_since(*at, self.boot),
+                    _ => now,
+                };
+                match protocol::outgoing(&input, None) {
+                    Outgoing::Input(input) => {
+                        published.seq += 1;
+                        self.outbox.push(ServerMessage::Input {
+                            thread: id,
+                            seq: published.seq,
+                            at_ms,
+                            input,
+                        });
+                    }
+                    Outgoing::ToolDraft { id: tool, name, input } => {
+                        self.outbox.push(ServerMessage::ToolDraft {
+                            thread: id,
+                            id: tool,
+                            name,
+                            input,
+                        })
+                    }
+                    Outgoing::Local => {}
+                }
+            }
+        }
+        let states: Vec<_> = self
+            .threads
+            .iter()
+            .map(|(&id, thread)| thread.wire_state(id))
+            .collect();
+        for state in states {
+            let published = self.published.entry(state.thread).or_default();
+            if published.state.as_ref() != Some(&state) {
+                self.revision += 1;
+                published.state = Some(state.clone());
+                self.outbox.push(ServerMessage::Thread {
+                    revision: self.revision,
+                    state,
+                });
+            }
+        }
+        if self.open != self.published_open {
+            self.published.retain(|id, _| self.threads.contains_key(id));
+            self.published_open = self.open.clone();
+            self.revision += 1;
+            self.outbox.push(ServerMessage::Roster {
+                revision: self.revision,
+                roster: SharedRoster {
+                    open: self.open.clone(),
+                    parked: self.parked().unwrap_or_default(),
+                },
+            });
+        }
     }
 
     fn note_open(&mut self, thread: ThreadId) {
@@ -4091,7 +4316,7 @@ fn changes_decisions(event: &SessionEvent) -> bool {
     )
 }
 
-fn event_changes_content(event: &SessionEvent) -> bool {
+pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
     use crate::activity::ExecutionEvent;
     match event {
         SessionEvent::Activity(

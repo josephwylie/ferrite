@@ -350,8 +350,12 @@ Each step is one commit and leaves the app working.
 6. `engine` carved out of `Cockpit` in-process: `Cockpit` owns an `Engine` and
    calls it directly. A move; behaviour and API unchanged.
 7. `Cockpit` becomes a mirror: the Engine emits protocol messages into an
-   in-process outbox, `Cockpit` applies them and sends commands back.
-   Still one process.
+   in-process outbox, and `Cockpit` builds each open Thread's Activity and
+   `ThreadState` from them; every Cockpit test asserts the mirrors equal
+   the Engine after each message. Still one process, and an act is still
+   a direct call: the same acts become `command`s when the socket link
+   carries them (step 9). Each Engine input's instant is rounded up to
+   the millisecond the wire carries, so a mirror applies exactly it.
 8. `link`: framing, outbox lanes, the Unix socket and the named pipe,
    handshake, replay ring, reconnect.
 9. `server::run` and the `ferrite server` mode: claim, listen, pump loop,

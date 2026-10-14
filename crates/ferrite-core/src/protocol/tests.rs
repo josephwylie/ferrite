@@ -176,7 +176,6 @@ fn state() -> ThreadState {
             path: "/src/ferrite-wt/4".into(),
         }),
         session_project_root: None,
-        project: Some(project_id()),
         first_prompt_sent: true,
         has_prompt_history: true,
         starting: false,
@@ -753,6 +752,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 5,
                 Live::Notice {
                     text: "send failed: broken pipe".into(),
+                    replayed: false,
+                },
+            ),
+        ),
+        (
+            "live_notice_replayed",
+            live(
+                24,
+                Live::Notice {
+                    text: "continued on Codex · default".into(),
+                    replayed: true,
                 },
             ),
         ),
@@ -1147,6 +1157,7 @@ fn applied_inputs_survive_the_wire() {
         }),
         observe(ActivityEvent::DecisionCancelled { id: "q".into() }),
         ActivityInput::Replay(Input::Prompt("before".into())),
+        ActivityInput::Replay(Input::Notice("continued on Codex".into())),
         ActivityInput::ReplayEvent(ActivityEvent::Status {
             key: AgentKey::from_stored("[\"claude\",\"r\",\"a\"]".into()),
             state: crate::activity::AgentStatus::Idle,

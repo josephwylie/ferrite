@@ -14,7 +14,7 @@ use crate::activity::{DecisionHandle, Subject};
 pub use crate::engine::{
     title_from_prompt, BootstrapResult, Bootstrapped, DeleteError, Engine, HistoryDirection,
     LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart, ReviveGroupError,
-    RssSampler, SpawnRequest, Spawner, SubjectUpdate, ThreadView, ToolTiming,
+    RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
@@ -24,6 +24,9 @@ use crate::transcript::Input;
 use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
 use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
+pub use mirror::ThreadView;
+
+mod mirror;
 
 pub struct Cockpit {
     pub(crate) engine: Engine,
@@ -33,6 +36,9 @@ pub struct Cockpit {
     pub(crate) roster: Roster,
     /// The Engine's open Threads as the Roster last followed them.
     synced: Vec<ThreadId>,
+    /// Each open Thread as the Engine's messages built it: what `thread`
+    /// reads and `pump` reports.
+    mirrors: mirror::Mirrors,
     bootstrap_results: Vec<BootstrapResult>,
     /// Whether the window has the operator's focus: what is on screen is
     /// seen only while it does (`acknowledge_seen`), so a finish or a
@@ -48,6 +54,7 @@ impl Cockpit {
             engine: Engine::try_new(store, spawner)?,
             roster: Roster::default(),
             synced: Vec::new(),
+            mirrors: mirror::Mirrors::default(),
             bootstrap_results: Vec::new(),
             window_active: true,
         })
@@ -75,16 +82,52 @@ impl Cockpit {
         self.synced = open;
     }
 
-    /// One frame: the Engine's pump, then what it settled for this window.
-    pub fn pump(&mut self) -> Vec<PaneUpdate> {
-        let frame = self.engine.pump();
-        self.collect_bootstraps();
+    /// Bring this window up to the Engine after one of its own acts. What
+    /// the act changed is the window's to show, as it always was: only the
+    /// pump reports Pane updates.
+    fn settle(&mut self) {
+        self.receive();
+        self.mirrors.take_updates();
+    }
+
+    /// Bring this window up to the Engine: its Roster, then its mirrors,
+    /// from the messages the Engine published. In debug builds each message
+    /// crosses as its encoded line, so nothing escapes the contract.
+    fn receive(&mut self) {
         self.sync_roster();
+        let boot = self.engine.boot();
+        for message in self.engine.take_messages() {
+            #[cfg(debug_assertions)]
+            let message = {
+                let line = crate::protocol::encode(&message);
+                crate::protocol::decode(&line[..line.len() - 1])
+                    .expect("every message decodes as it encoded")
+            };
+            self.mirrors.receive(message, boot);
+        }
+        #[cfg(test)]
+        self.assert_mirrors_match();
+    }
+
+    /// One frame: the Engine's pump, then what changed for each Pane of
+    /// this window, as its mirrors saw it.
+    pub fn pump(&mut self) -> Vec<PaneUpdate> {
+        // Fold highlighter answers from the previous frame first, as the
+        // Engine does for its own.
+        self.mirrors.drain_highlights();
+        self.engine.pump();
+        self.collect_bootstraps();
+        self.receive();
         // What is on screen while the window has focus is seen. Here
         // rather than only at the focus doors, so a Thread that finishes in
         // view, or a focus moved by a close or a Group entry, reads the same.
         self.acknowledge_seen();
-        frame
+        self.mirrors.take_updates()
+    }
+
+    /// An open Thread's facts, as this window's mirror holds them.
+    pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
+        self.mirrors.view(thread)
     }
 
     /// A Group change (#28), and what it does to the view: the Group the
@@ -113,7 +156,7 @@ impl Cockpit {
     /// again only takes the Pane away.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
         let parked = self.engine.park(thread);
-        self.sync_roster();
+        self.settle();
         if !self.engine.open_threads().contains(&thread) {
             self.roster.remove_thread(thread);
         }
@@ -125,7 +168,9 @@ impl Cockpit {
         thread: ThreadId,
         subject: &Subject,
     ) -> io::Result<bool> {
-        self.engine.ensure_subject_history(thread, subject)
+        let result = self.engine.ensure_subject_history(thread, subject);
+        self.settle();
+        result
     }
 
     pub fn subject_history_error(&self, thread: ThreadId, subject: &Subject) -> Option<&str> {
@@ -137,7 +182,9 @@ impl Cockpit {
         thread: ThreadId,
         subject: &Subject,
     ) -> io::Result<bool> {
-        self.engine.retry_subject_history(thread, subject)
+        let result = self.engine.retry_subject_history(thread, subject);
+        self.settle();
+        result
     }
 
     pub fn discover_sessions(
@@ -145,7 +192,9 @@ impl Cockpit {
         roots: Vec<(Provider, PathBuf)>,
         cap: usize,
     ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
-        self.engine.discover_sessions(roots, cap)
+        let result = self.engine.discover_sessions(roots, cap);
+        self.settle();
+        result
     }
 
     /// The operator opened a Notice — from a toast or the bell: it is
@@ -206,6 +255,128 @@ impl Cockpit {
     }
 }
 
+/// Mirror parity (ADR 0025): after every message, each open Thread's
+/// mirror reads exactly as the Engine's own Thread does. Every Cockpit
+/// test checks it as it runs.
+#[cfg(test)]
+impl Cockpit {
+    pub(crate) fn set_session_project_root(
+        &mut self,
+        thread: ThreadId,
+        root: Option<PathBuf>,
+    ) -> Result<(), LoadError> {
+        let set = self.engine.set_session_project_root(thread, root);
+        self.settle();
+        set
+    }
+
+    fn assert_mirrors_match(&self) {
+        for &thread in self.engine.open_threads() {
+            let engine = self.engine.thread(thread).expect("open in the Engine");
+            let mirror = self
+                .mirrors
+                .view(thread)
+                .unwrap_or_else(|| panic!("thread {thread} has no mirror"));
+            assert_eq!(
+                parity::seen!(mirror),
+                parity::seen!(engine),
+                "thread {thread}: the mirror drifted from the Engine"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod parity {
+    use std::fmt::Write;
+
+    use crate::activity::ActivityView;
+
+    /// What a window could read of one Thread, as text.
+    macro_rules! seen {
+        ($view:expr) => {{
+            let view = $view;
+            format!(
+                "generation={} provider={:?} model={:?} effort={:?} title={:?} \
+                 suggestion={:?} pending={:?} queued={:?} starting={} busy={} working={} \
+                 background={} tuning={} needs_queue={} workspace={:?} root={:?} \
+                 first_prompt={} history={} commands={:?} models={:?} mode={:?} modes={:?} \
+                 store_error={:?}\n{}",
+                view.generation(),
+                view.provider(),
+                view.model(),
+                view.effort(),
+                view.title(),
+                view.suggestion(),
+                view.pending(),
+                view.queued_all(),
+                view.starting(),
+                view.busy(),
+                view.working(),
+                view.background_work(),
+                view.tuning(),
+                view.needs_queue(),
+                view.workspace(),
+                view.session_project_root(),
+                view.first_prompt_sent(),
+                view.has_prompt_history(),
+                view.commands(),
+                view.models(),
+                view.permission_mode(),
+                view.permission_modes(),
+                view.store_error(),
+                crate::cockpit::parity::activity(view.activity()),
+            )
+        }};
+    }
+    pub(super) use seen;
+
+    pub(super) fn activity(view: ActivityView<'_>) -> String {
+        let main = view.main();
+        let transcript = main.transcript();
+        let mut out = String::new();
+        let mut timings: Vec<String> = main
+            .tool_timings()
+            .iter()
+            .map(|(id, timing)| format!("{id}={timing:?}"))
+            .collect();
+        timings.sort();
+        writeln!(
+            out,
+            "main status={:?} transcript={:?} outcome={:?} model={:?} session={:?} \
+             usage={:?} limits={:?} timings={timings:?}",
+            main.status(),
+            transcript.status(),
+            transcript.turn_outcome(),
+            transcript.model(),
+            transcript.session_id(),
+            transcript.usage(),
+            transcript.rate_limits(),
+        )
+        .unwrap();
+        for block in transcript.blocks() {
+            writeln!(out, "  {:?} {:?}", block.id, block.body).unwrap();
+        }
+        writeln!(out, "decisions={:?}", view.decisions()).unwrap();
+        for child in view.children() {
+            writeln!(
+                out,
+                "child {} {:?} status={:?} coverage={:?} retained={}",
+                child.key().as_str(),
+                child.info(),
+                child.status(),
+                child.coverage(),
+                child.retained(),
+            )
+            .unwrap();
+            for block in child.transcript().blocks() {
+                writeln!(out, "    {:?} {:?}", block.id, block.body).unwrap();
+            }
+        }
+        out
+    }
+}
+
 /// What the Engine answers, as this window asks it.
 impl Cockpit {
     pub fn registry(&self) -> &Registry {
@@ -221,11 +392,15 @@ impl Cockpit {
     }
 
     pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
-        self.engine.register_project(root)
+        let result = self.engine.register_project(root);
+        self.settle();
+        result
     }
 
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
-        self.engine.register_project_directories(roots)
+        let result = self.engine.register_project_directories(roots);
+        self.settle();
+        result
     }
 
     pub fn add_project_directories(
@@ -233,7 +408,9 @@ impl Cockpit {
         project: ProjectId,
         roots: &[PathBuf],
     ) -> io::Result<()> {
-        self.engine.add_project_directories(project, roots)
+        let result = self.engine.add_project_directories(project, roots);
+        self.settle();
+        result
     }
 
     pub fn replace_project_directory(
@@ -242,11 +419,15 @@ impl Cockpit {
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        self.engine.replace_project_directory(project, index, root)
+        let result = self.engine.replace_project_directory(project, index, root);
+        self.settle();
+        result
     }
 
     pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
-        self.engine.remove_project_directory(project, index)
+        let result = self.engine.remove_project_directory(project, index);
+        self.settle();
+        result
     }
 
     pub fn group_layout(
@@ -258,7 +439,9 @@ impl Cockpit {
     }
 
     pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
-        self.engine.reset_group_layout(group)
+        let result = self.engine.reset_group_layout(group);
+        self.settle();
+        result
     }
 
     pub fn set_group_layout(
@@ -266,35 +449,42 @@ impl Cockpit {
         group: GroupId,
         tree: crate::layout::Tree,
     ) -> Result<(), ApplyError> {
-        self.engine.set_group_layout(group, tree)
+        let result = self.engine.set_group_layout(group, tree);
+        self.settle();
+        result
     }
 
     pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
-        self.engine.remove_project(project)
+        let result = self.engine.remove_project(project);
+        self.settle();
+        result
     }
 
     pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
-        self.engine.rename_project(project, title)
+        let result = self.engine.rename_project(project, title);
+        self.settle();
+        result
     }
 
     pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
-        self.engine.watch_memory(sampler, limit)
+        self.engine.watch_memory(sampler, limit);
+        self.settle();
     }
 
     pub fn sweep(&mut self) -> Vec<Restart> {
         let result = self.engine.sweep();
-        self.sync_roster();
+        self.settle();
         result
     }
 
     pub fn restart_sessions(&mut self, provider: Provider) {
         self.engine.restart_sessions(provider);
-        self.sync_roster();
+        self.settle();
     }
 
     pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
         let result = self.engine.open(provider, workspace);
-        self.sync_roster();
+        self.settle();
         result
     }
 
@@ -305,7 +495,7 @@ impl Cockpit {
         prompt: &str,
     ) -> io::Result<ThreadId> {
         let result = self.engine.bootstrap(choice, workspace, prompt);
-        self.sync_roster();
+        self.settle();
         result
     }
 
@@ -319,7 +509,7 @@ impl Cockpit {
         let result = self
             .engine
             .bootstrap_in_group(choice, workspace, prompt, group);
-        self.sync_roster();
+        self.settle();
         result
     }
 
@@ -328,7 +518,9 @@ impl Cockpit {
         thread: ThreadId,
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
-        self.engine.set_provider(thread, choice)
+        let result = self.engine.set_provider(thread, choice);
+        self.settle();
+        result
     }
 
     pub fn project_id(&self, thread: ThreadId) -> Option<ProjectId> {
@@ -341,44 +533,47 @@ impl Cockpit {
 
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
         let result = self.engine.delete(thread);
-        self.sync_roster();
+        self.settle();
         result
     }
 
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         let result = self.engine.revive(thread);
-        self.sync_roster();
+        self.settle();
         result
     }
 
     pub fn revive_after(&mut self, thread: ThreadId, delay: Duration) -> Result<(), LoadError> {
         let result = self.engine.revive_after(thread, delay);
-        self.sync_roster();
+        self.settle();
         result
     }
 
     pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
         let result = self.engine.revive_group(group);
-        self.sync_roster();
+        self.settle();
         result
     }
 
     pub fn import(&mut self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
         let result = self.engine.import(path);
-        self.sync_roster();
+        self.settle();
         result
     }
 
     pub fn send(&mut self, thread: ThreadId, text: String) {
-        self.engine.send(thread, text)
+        self.engine.send(thread, text);
+        self.settle();
     }
 
     pub fn interrupt(&mut self, thread: ThreadId) {
-        self.engine.interrupt(thread)
+        self.engine.interrupt(thread);
+        self.settle();
     }
 
     pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
-        self.engine.respond(thread, decision, answer)
+        self.engine.respond(thread, decision, answer);
+        self.settle();
     }
 
     pub fn respond_decision(
@@ -387,15 +582,14 @@ impl Cockpit {
         handle: &DecisionHandle,
         answer: DecisionAnswer,
     ) -> io::Result<bool> {
-        self.engine.respond_decision(thread, handle, answer)
+        let result = self.engine.respond_decision(thread, handle, answer);
+        self.settle();
+        result
     }
 
     pub fn apply_input(&mut self, thread: ThreadId, input: Input) {
-        self.engine.apply_input(thread, input)
-    }
-
-    pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
-        self.engine.thread(thread)
+        self.engine.apply_input(thread, input);
+        self.settle();
     }
 
     pub fn search_files(
@@ -403,11 +597,15 @@ impl Cockpit {
         thread: ThreadId,
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
-        self.engine.search_files(thread, query)
+        let result = self.engine.search_files(thread, query);
+        self.settle();
+        result
     }
 
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
-        self.engine.control(thread, action)
+        let result = self.engine.control(thread, action);
+        self.settle();
+        result
     }
 
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
@@ -436,7 +634,9 @@ impl Cockpit {
         listed: Vec<PathBuf>,
         taken_at: Instant,
     ) -> bool {
-        self.engine.worktrees_listed(thread, listed, taken_at)
+        let result = self.engine.worktrees_listed(thread, listed, taken_at);
+        self.settle();
+        result
     }
 
     pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
@@ -464,7 +664,8 @@ impl Cockpit {
     }
 
     pub fn halt_sessions(&mut self) {
-        self.engine.halt_sessions()
+        self.engine.halt_sessions();
+        self.settle();
     }
 
     pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
@@ -476,27 +677,37 @@ impl Cockpit {
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
-        self.engine.rename_thread(thread, title)
+        let result = self.engine.rename_thread(thread, title);
+        self.settle();
+        result
     }
 
     pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
-        self.engine.queue(thread, text)
+        let result = self.engine.queue(thread, text);
+        self.settle();
+        result
     }
 
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
-        self.engine.unqueue(thread)
+        let result = self.engine.unqueue(thread);
+        self.settle();
+        result
     }
 
     pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
-        self.engine.cancel_queued(thread, restore)
+        self.engine.cancel_queued(thread, restore);
+        self.settle();
     }
 
     pub fn edit_queued(&mut self, thread: ThreadId) {
-        self.engine.edit_queued(thread)
+        self.engine.edit_queued(thread);
+        self.settle();
     }
 
     pub fn take_retrieved_prompt(&mut self, thread: ThreadId) -> Option<(String, bool)> {
-        self.engine.take_retrieved_prompt(thread)
+        let result = self.engine.take_retrieved_prompt(thread);
+        self.settle();
+        result
     }
 
     pub fn recall_prompt(
@@ -505,11 +716,15 @@ impl Cockpit {
         direction: HistoryDirection,
         current_draft: &str,
     ) -> Option<String> {
-        self.engine.recall_prompt(thread, direction, current_draft)
+        let result = self.engine.recall_prompt(thread, direction, current_draft);
+        self.settle();
+        result
     }
 
     pub fn answer(&mut self, thread: ThreadId, id: &str) -> bool {
-        self.engine.answer(thread, id)
+        let result = self.engine.answer(thread, id);
+        self.settle();
+        result
     }
 
     pub fn deliver_suggestion(&self, thread: ThreadId, text: String) {
@@ -517,15 +732,19 @@ impl Cockpit {
     }
 
     pub fn set_suggestions_enabled(&mut self, enabled: bool) {
-        self.engine.set_suggestions_enabled(enabled)
+        self.engine.set_suggestions_enabled(enabled);
+        self.settle();
     }
 
     pub fn take_models_changed(&mut self) -> bool {
-        self.engine.take_models_changed()
+        let result = self.engine.take_models_changed();
+        self.settle();
+        result
     }
 
     pub fn rediscover_models(&mut self) {
-        self.engine.rediscover_models()
+        self.engine.rediscover_models();
+        self.settle();
     }
 
     pub fn live_sessions(&self, provider: Provider) -> usize {
@@ -541,11 +760,14 @@ impl Cockpit {
     }
 
     pub fn set_allowance_thresholds(&mut self, thresholds: Vec<u8>) {
-        self.engine.set_allowance_thresholds(thresholds)
+        self.engine.set_allowance_thresholds(thresholds);
+        self.settle();
     }
 
     pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
-        self.engine.take_allowance_warnings()
+        let result = self.engine.take_allowance_warnings();
+        self.settle();
+        result
     }
 
     pub fn discover_commands(
@@ -553,7 +775,9 @@ impl Cockpit {
         provider: Provider,
         cwd: &std::path::Path,
     ) -> Option<crate::providers::commands::Discovery> {
-        self.engine.discover_commands(provider, cwd)
+        let result = self.engine.discover_commands(provider, cwd);
+        self.settle();
+        result
     }
 
     pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
@@ -565,7 +789,9 @@ impl Cockpit {
         thread: ThreadId,
         model: Option<String>,
     ) -> Result<(), ProvisionError> {
-        self.engine.set_model(thread, model)
+        let result = self.engine.set_model(thread, model);
+        self.settle();
+        result
     }
 
     pub fn set_effort(
@@ -573,7 +799,9 @@ impl Cockpit {
         thread: ThreadId,
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
-        self.engine.set_effort(thread, effort)
+        let result = self.engine.set_effort(thread, effort);
+        self.settle();
+        result
     }
 
     pub fn next_blocked(&self, from: Option<ThreadId>) -> Option<ThreadId> {
@@ -597,31 +825,40 @@ impl Cockpit {
     }
 
     pub fn set_notification_grace(&mut self, grace: Duration) {
-        self.engine.set_notification_grace(grace)
+        self.engine.set_notification_grace(grace);
+        self.settle();
     }
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
-        self.engine.dismiss_notice(id)
+        let result = self.engine.dismiss_notice(id);
+        self.settle();
+        result
     }
 
     pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
-        self.engine.dismiss_decision_notice(id)
+        let result = self.engine.dismiss_decision_notice(id);
+        self.settle();
+        result
     }
 
     pub fn clear_notices(&mut self) {
-        self.engine.clear_notices()
+        self.engine.clear_notices();
+        self.settle();
     }
 
     pub fn mark_notices_read(&mut self) {
-        self.engine.mark_notices_read()
+        self.engine.mark_notices_read();
+        self.settle();
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
-        self.engine.fixture_backdate_notices(thread, at)
+        self.engine.fixture_backdate_notices(thread, at);
+        self.settle();
     }
 
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
-        self.engine.fixture_notice(thread, outcome)
+        self.engine.fixture_notice(thread, outcome);
+        self.settle();
     }
 
     pub fn draft_starting(&self, draft: DraftId) -> bool {
@@ -901,7 +1138,7 @@ impl Cockpit {
         let started = self
             .engine
             .bootstrap_draft(draft, scope, choice, workspace, prompt, effort);
-        self.sync_roster();
+        self.settle();
         Ok(started?.map(|thread| self.complete_draft(draft, thread)))
     }
 
@@ -932,7 +1169,7 @@ impl Cockpit {
     /// draft slot and Composer remain; cancellation emits no completion.
     pub fn cancel_draft_start(&mut self, draft: DraftId) -> io::Result<bool> {
         let cancelled = self.engine.cancel_draft_start(draft);
-        self.sync_roster();
+        self.settle();
         cancelled
     }
 
