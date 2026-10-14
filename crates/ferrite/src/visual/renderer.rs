@@ -10,7 +10,8 @@
 //!
 //! A render opens a view of its own (never drawn; it isn't the transcript's
 //! live one), waits for the laid-out page, lets it settle (scripts that draw
-//! after load, fonts), and takes the last frame. Pages paint their own
+//! after load, fonts), and takes the last frame ([`settle`], which diagrams
+//! share). Pages paint their own
 //! background (`--ferrite-bg`); anything left transparent is composited over
 //! it, so the picture is what the operator sees.
 
@@ -62,7 +63,7 @@ fn page_width() -> u32 {
 /// Longest a render may take, start to answer.
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// A page that sends nothing new for this long has settled.
-pub(super) const SETTLE: Duration = Duration::from_millis(300);
+const SETTLE: Duration = Duration::from_millis(300);
 /// After the first frame, take what there is after this long even if the
 /// page keeps painting (an animation never settles).
 const SETTLE_MAX: Duration = Duration::from_secs(3);
@@ -79,26 +80,51 @@ pub(crate) async fn snapshot(
     cx: &AsyncApp,
 ) -> Result<Snapshot, String> {
     let theme_css = tokens::theme_css(scheme, ReadingSize::STANDARD);
-    let bg = background(scheme);
+    let page = Page { html, theme_css };
+    let Settled { frame, height } = settle(engine, page, Viewport { width: width.max(1), scale }, |_| true, cx).await?;
+    let height = height.unwrap_or_else(|| (frame.height as f32 / scale).round() as u32);
+    Ok(Snapshot { png: encode_png(&frame, background(scheme))?, width, height })
+}
+
+/// A page that has settled: its last frame, and the height it last reported.
+pub(super) struct Settled {
+    pub frame: Frame,
+    pub height: Option<u32>,
+}
+
+/// Open `page` off-screen at `viewport` (a view of its own, never drawn)
+/// and wait for it to settle: quiet for [`SETTLE`] while holding a frame of
+/// the page at its reported height, once `ready` accepts that height (a page
+/// may report a placeholder height before its script draws). Waits no more
+/// than [`SETTLE_MAX`] after the first ready frame, nor [`TIMEOUT`] in all;
+/// then the last frame is what there is.
+pub(super) async fn settle(
+    engine: Rc<dyn Engine>,
+    page: Page,
+    viewport: Viewport,
+    ready: impl Fn(Option<u32>) -> bool,
+    cx: &AsyncApp,
+) -> Result<Settled, String> {
+    let executor = cx.background_executor();
     let (tx, mut rx) = mpsc::unbounded::<()>();
     let view = engine.open(
-        Page { html, theme_css },
-        Viewport { width: width.max(1), scale },
+        page,
+        viewport,
         Box::new(move || {
             let _ = tx.unbounded_send(());
         }),
     );
-    let started = Instant::now();
-    let mut first_frame: Option<Instant> = None;
+    let started = executor.now();
+    let mut first_ready: Option<Instant> = None;
     let mut frame: Option<Frame> = None;
     let mut height: Option<u32> = None;
     loop {
-        let elapsed = started.elapsed();
+        let elapsed = executor.now() - started;
         if elapsed >= TIMEOUT {
             break;
         }
-        let quiet = if first_frame.is_some() { SETTLE } else { TIMEOUT - elapsed };
-        let timer = cx.background_executor().timer(quiet.min(TIMEOUT - elapsed));
+        let quiet = if first_ready.is_some() { SETTLE } else { TIMEOUT - elapsed };
+        let timer = executor.timer(quiet.min(TIMEOUT - elapsed));
         futures::select_biased! {
             woke = rx.next() => {
                 if woke.is_none() {
@@ -109,30 +135,31 @@ pub(crate) async fn snapshot(
                     height = Some(h);
                 }
                 if let Some(f) = updates.frame {
-                    first_frame.get_or_insert_with(Instant::now);
                     frame = Some(f);
+                }
+                if frame.is_some() && ready(height) {
+                    first_ready.get_or_insert_with(|| executor.now());
                 }
             }
             _ = timer.fuse() => {
-                // Quiet for SETTLE after the first frame: settled, if the
-                // frame we hold is the page at its reported height.
-                if first_frame.is_some() && frame_matches(frame.as_ref(), height, scale) {
+                // Quiet for SETTLE after the first ready frame: settled, if
+                // the frame we hold is the page at its reported height.
+                if first_ready.is_some() && ready(height) && frame_matches(frame.as_ref(), height, viewport.scale) {
                     break;
                 }
             }
         }
-        if first_frame.is_some_and(|t| t.elapsed() >= SETTLE_MAX) {
+        if first_ready.is_some_and(|t| executor.now() - t >= SETTLE_MAX) {
             break;
         }
     }
     drop(view);
     let frame = frame.ok_or_else(|| format!("the page didn't draw within {} s", TIMEOUT.as_secs()))?;
-    let height = height.unwrap_or_else(|| (frame.height as f32 / scale).round() as u32);
-    Ok(Snapshot { png: encode_png(&frame, bg)?, width, height })
+    Ok(Settled { frame, height })
 }
 
 /// The frame is the page at its reported height (a frame can lag a resize).
-pub(super) fn frame_matches(frame: Option<&Frame>, height: Option<u32>, scale: f32) -> bool {
+fn frame_matches(frame: Option<&Frame>, height: Option<u32>, scale: f32) -> bool {
     match (frame, height) {
         (Some(frame), Some(height)) => (frame.height as f32 - height as f32 * scale).abs() <= 1.0,
         (Some(_), None) => true,

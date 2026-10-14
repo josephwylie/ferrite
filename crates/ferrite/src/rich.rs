@@ -425,11 +425,11 @@ impl gpui::RenderOnce for Markdown {
         let link_cwd = cwd.clone();
         let hang = theme::tx_cell(f32::from(base));
         // A ```mermaid fence draws as its diagram (`visual::diagram`); the
-        // fence's Markdown says whether it has closed.
+        // fence's Markdown (the source, moved in) says whether it has closed.
         let diagrams = self
             .source
             .contains(crate::visual::diagram::LANGUAGE)
-            .then(|| std::sync::Arc::<str>::from(self.source.as_str()));
+            .then_some(self.source);
         let view = TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.

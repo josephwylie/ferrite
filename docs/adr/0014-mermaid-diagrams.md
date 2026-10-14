@@ -45,8 +45,17 @@ diagrams (a terminal can't draw them), and agents already write Mermaid.
 - The page carries the whole bundle, so each diagram's first draw parses
   it (a few hundred ms in the renderer, off the UI thread); a cached
   diagram costs nothing.
-- The page tells the host it refused a fence by laying itself out one pixel
-  tall (the engine seam carries only frames and heights). A fence that
-  never settles is given up on after 10 s and stays code.
+- The page tells the host it refused a fence by laying itself out two
+  pixels tall (the engine seam carries only frames and heights). The empty
+  page, measured before mermaid has drawn, reports one (the engine never
+  reports less), and is waited on as still drawing. The page is drawn by
+  the agent screenshot's settling loop (`renderer::settle`), told to wait
+  past that placeholder height.
+- Only a refusal (or no engine in this build) keeps a fence as code for the
+  process's life. A draw that fails for now (Chromium slow to start, a page
+  that drew nothing within 10 s) is forgotten and asked for again the next
+  time the fence is painted.
+- A diagram taller than the engine's page cap (`MAX_HEIGHT` in
+  `web/cef.rs`, 8000 logical px) is cut off at the cap.
 - A drawn diagram has no fence actions (Copy, the language tag); its source
   is copied by selecting it. A reading-size change draws it again.

@@ -7,6 +7,8 @@
 //! diagram is a picture, so no page stays live. Until it is drawn, and
 //! whenever it can't be (no engine in this build, visuals turned off, a
 //! fence mermaid refuses, a fence still streaming), the fence shows as code.
+//! A draw that fails for now (Chromium slow to start, a page that ran out of
+//! time) is asked for again the next time the fence is painted.
 //!
 //! - **Lazy.** A fence asks for its diagram only once its code is painted
 //!   on screen; a long document draws what the operator scrolls to.
@@ -22,16 +24,14 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use ferrite_core::settings::ReadingSize;
-use futures::channel::mpsc;
-use futures::{FutureExt, StreamExt};
 use gpui::prelude::*;
 use gpui::{canvas, div, img, px, AnyElement, App, AsyncApp, EntityId, Global, RenderImage, Window};
 use serde_json::{json, Value};
 
-use super::renderer;
+use super::engine::{Availability, Visuals};
+use super::renderer::{self, Settled};
 use super::tokens::{self, Scheme};
 use super::web::{Engine, Frame, Page, Viewport};
 use crate::theme;
@@ -46,13 +46,13 @@ const MERMAID_JS: &str = include_str!("../../assets/mermaid/mermaid.min.js");
 /// drawn are let go (a diagram at the Standard measure on a 2x display is
 /// a few MB).
 const BUDGET: usize = 64 * 1024 * 1024;
-/// Longest a diagram may take to draw, Chromium's start aside.
-const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The page's height while mermaid is still drawing (an empty page)...
-const DRAWING: u32 = 0;
-/// ...and once it refused the fence: the page sets itself one pixel tall.
-const REFUSED: u32 = 1;
+/// The page's height until mermaid has drawn: the empty page lays out 0 px
+/// tall, which the engine reports as 1 (it never reports less)...
+const EMPTY: u32 = 1;
+/// ...and once mermaid refused the fence: the page sets itself this tall,
+/// which neither the empty page nor a diagram is.
+const REFUSED: u32 = 2;
 
 /// The page's script: draw the fence, or say it can't be drawn (see
 /// [`REFUSED`]). `CONFIG` and `SOURCE` are JSON.
@@ -63,8 +63,8 @@ const DRAW_SCRIPT: &str = r#"(async () => {
     const { svg } = await mermaid.render("ferrite-diagram", SOURCE);
     out.innerHTML = svg;
   } catch (_) {
-    out.replaceChildren();
-    document.documentElement.style.height = "1px";
+    document.body.replaceChildren();
+    document.documentElement.style.height = "2px";
   }
 })();"#;
 
@@ -85,6 +85,15 @@ enum Entry {
     Drawn(Drawn),
     /// Mermaid refused it, or there is no engine: it stays code.
     Failed,
+}
+
+/// Why a fence wasn't drawn.
+#[derive(Debug, PartialEq)]
+enum Failure {
+    /// For good: mermaid refused the fence, or there is no engine.
+    Final,
+    /// For now: Chromium was slow to start, or the page ran out of time.
+    Passing,
 }
 
 #[derive(Clone)]
@@ -225,7 +234,11 @@ fn request(key: u64, code: String, reading: ReadingSize, scale: f32, view: Entit
     cx.spawn(async move |cx| {
         let drawn = match renderer::engine(cx).await {
             Ok(engine) => draw(engine, page(&code, reading), width(reading), scale, cx).await,
-            Err(why) => Err(why),
+            // No engine in this build is for good; one still starting isn't.
+            Err(_) => match cx.update(Visuals::engine) {
+                Availability::Unavailable(_) => Err(Failure::Final),
+                _ => Err(Failure::Passing),
+            },
         };
         cx.update(|cx| land(key, drawn, cx));
     })
@@ -234,12 +247,18 @@ fn request(key: u64, code: String, reading: ReadingSize, scale: f32, view: Entit
 
 /// A diagram finished drawing (or didn't): keep it, redraw the views that
 /// wait on it, and let the oldest go past the budget.
-fn land(key: u64, drawn: Result<Drawn, String>, cx: &mut App) {
+fn land(key: u64, drawn: Result<Drawn, Failure>, cx: &mut App) {
     let diagrams = cx.global_mut::<Diagrams>();
     diagrams.clock += 1;
     let entry = match drawn {
         Ok(drawn) => Entry::Drawn(Drawn { drawn_at: diagrams.clock, ..drawn }),
-        Err(_) => Entry::Failed,
+        Err(Failure::Final) => Entry::Failed,
+        // It stays code, so nothing to redraw: asked for again the next
+        // time it is painted.
+        Err(Failure::Passing) => {
+            diagrams.entries.remove(&key);
+            return;
+        }
     };
     let views = match diagrams.entries.insert(key, entry) {
         Some(Entry::Drawing(views)) => views,
@@ -364,61 +383,28 @@ fn theme_variables(scheme: Scheme, reading: ReadingSize) -> Value {
 }
 
 /// Load `page` off-screen and take the drawn diagram, cropped to what it
-/// drew. Fails when mermaid refuses the fence or nothing settles in time.
+/// drew.
 async fn draw(
     engine: Rc<dyn Engine>,
     page: Page,
     width: u32,
     scale: f32,
     cx: &AsyncApp,
-) -> Result<Drawn, String> {
-    let bg = background();
-    let (tx, mut rx) = mpsc::unbounded::<()>();
-    let view = engine.open(
-        page,
-        Viewport { width, scale },
-        Box::new(move || {
-            let _ = tx.unbounded_send(());
-        }),
-    );
-    let deadline = Instant::now() + TIMEOUT;
-    let mut frame: Option<Frame> = None;
-    let mut height = DRAWING;
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(format!("the diagram didn't draw within {} s", TIMEOUT.as_secs()));
-        }
-        let drawn = height > REFUSED && renderer::frame_matches(frame.as_ref(), Some(height), scale);
-        let wait = if drawn { renderer::SETTLE.min(left) } else { left };
-        futures::select_biased! {
-            woke = rx.next() => {
-                if woke.is_none() {
-                    return Err("the engine closed the page".into());
-                }
-                let updates = view.take();
-                if let Some(h) = updates.content_height {
-                    height = h;
-                }
-                if updates.frame.is_some() {
-                    frame = updates.frame;
-                }
-                if height == REFUSED {
-                    return Err("mermaid refused the diagram".into());
-                }
-            }
-            _ = cx.background_executor().timer(wait).fuse() => {
-                if drawn {
-                    break;
-                }
-            }
-        }
+) -> Result<Drawn, Failure> {
+    let drawing_done = |height: Option<u32>| height.is_some_and(|height| height > EMPTY);
+    let Settled { frame, height } = renderer::settle(engine, page, Viewport { width, scale }, drawing_done, cx)
+        .await
+        .map_err(|_| Failure::Passing)?;
+    if height == Some(REFUSED) {
+        return Err(Failure::Final);
     }
-    drop(view);
-    let frame = frame.and_then(|frame| crop(frame, bg)).ok_or("the diagram drew nothing")?;
+    if !drawing_done(height) {
+        // Out of time before mermaid drew.
+        return Err(Failure::Passing);
+    }
+    let frame = crop(frame, background()).ok_or(Failure::Passing)?;
     let (width, height) = (frame.width as f32 / scale, frame.height as f32 / scale);
-    let image = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
-        .ok_or("a frame is width × height × 4 bytes")?;
+    let image = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra).ok_or(Failure::Passing)?;
     Ok(Drawn {
         image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])),
         width,
@@ -448,7 +434,130 @@ fn crop(frame: Frame, bg: [u8; 3]) -> Option<Frame> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    use gpui::TestAppContext;
+
     use super::*;
+    use crate::visual::web::{Input, Updates, View, Wake};
+
+    /// An engine whose one page reports the heights the test gives it, when
+    /// the test gives them (the fake engine always reports a drawn page).
+    #[derive(Default)]
+    struct Scripted {
+        wake: RefCell<Option<Wake>>,
+        pending: Rc<RefCell<Updates>>,
+    }
+
+    /// The width the scripted page is opened at, logical px.
+    const PAGE: u32 = 8;
+
+    impl Scripted {
+        /// The page lays out `height` px tall, drawing something or nothing.
+        fn report(&self, height: u32, drawn: bool) {
+            let [b, g, r] = background();
+            let mut bgra = [b, g, r, 255].repeat((PAGE * height) as usize);
+            if drawn {
+                bgra[..4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+            *self.pending.borrow_mut() = Updates {
+                frame: Some(Frame { width: PAGE, height, bgra }),
+                content_height: Some(height),
+                cursor: None,
+            };
+            (self.wake.borrow().as_ref().expect("the page is open"))();
+        }
+    }
+
+    impl Engine for Scripted {
+        fn open(&self, _: Page, _: Viewport, wake: Wake) -> Box<dyn View> {
+            *self.wake.borrow_mut() = Some(wake);
+            Box::new(ScriptedView(self.pending.clone()))
+        }
+        fn pump(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+    }
+
+    struct ScriptedView(Rc<RefCell<Updates>>);
+
+    impl View for ScriptedView {
+        fn resize(&self, _: Viewport) {}
+        fn input(&self, _: Input) {}
+        fn set_theme(&self, _: &str) {}
+        fn set_html(&self, _: &str) {}
+        fn set_visible(&self, _: bool) {}
+        fn take(&self) -> Updates {
+            std::mem::take(&mut self.0.borrow_mut())
+        }
+    }
+
+    /// Draw a fence on a scripted engine; `script` drives the page.
+    fn draw_scripted(
+        cx: &mut TestAppContext,
+        script: impl FnOnce(&Scripted, &mut TestAppContext),
+    ) -> Result<Drawn, Failure> {
+        let engine = Rc::new(Scripted::default());
+        let page = page("graph TD", ReadingSize::STANDARD);
+        let task = cx.spawn({
+            let engine: Rc<dyn Engine> = engine.clone();
+            async move |cx| draw(engine, page, PAGE, 1.0, &cx).await
+        });
+        cx.run_until_parked();
+        script(&engine, cx);
+        cx.executor().advance_clock(Duration::from_secs(11));
+        cx.run_until_parked();
+        futures::executor::block_on(task)
+    }
+
+    #[gpui::test]
+    fn an_empty_page_is_still_drawing(cx: &mut TestAppContext) {
+        let drawn = draw_scripted(cx, |page, cx| {
+            // The page is measured before mermaid draws, for longer than any
+            // settling.
+            page.report(EMPTY, false);
+            cx.executor().advance_clock(Duration::from_secs(5));
+            cx.run_until_parked();
+            page.report(40, true);
+        });
+        let drawn = drawn.expect("drawn once mermaid has drawn");
+        assert_eq!((drawn.width, drawn.height), (1., 40.), "cropped to what it drew");
+    }
+
+    #[gpui::test]
+    fn a_refused_fence_stays_code_for_good(cx: &mut TestAppContext) {
+        let drawn = draw_scripted(cx, |page, _| {
+            page.report(EMPTY, false);
+            page.report(REFUSED, false);
+        });
+        assert_eq!(drawn.err(), Some(Failure::Final));
+    }
+
+    #[gpui::test]
+    fn a_page_that_never_draws_fails_for_now(cx: &mut TestAppContext) {
+        let drawn = draw_scripted(cx, |page, _| page.report(EMPTY, false));
+        assert_eq!(drawn.err(), Some(Failure::Passing));
+    }
+
+    #[gpui::test]
+    fn only_a_final_failure_is_kept(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(true, cx);
+            for (key, failure) in [(1, Failure::Final), (2, Failure::Passing)] {
+                cx.global_mut::<Diagrams>().entries.insert(key, Entry::Drawing(Vec::new()));
+                land(key, Err(failure), cx);
+            }
+            let entries = &cx.global::<Diagrams>().entries;
+            assert!(matches!(entries.get(&1), Some(Entry::Failed)));
+            assert!(entries.get(&2).is_none(), "asked for again when next painted");
+        });
+    }
+
+    #[test]
+    fn the_page_refuses_at_the_refused_height() {
+        assert!(DRAW_SCRIPT.contains(&format!("style.height = \"{REFUSED}px\"")));
+    }
 
     #[test]
     fn only_a_closed_fence_is_drawn() {
