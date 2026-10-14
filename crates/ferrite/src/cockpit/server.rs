@@ -203,9 +203,11 @@ impl CockpitView {
             }
         };
         let view = cx.entity().downgrade();
-        vec![
-            prefs::fact("Server", status),
-            prefs::toggle(
+        let mut rows = vec![prefs::fact("Server", status)];
+        // A development build never installs the LaunchAgent (main), and
+        // must not point the operator's at itself.
+        if !crate::titlebar::DEV {
+            rows.push(prefs::toggle(
                 "settings-start-at-login",
                 "Start at login",
                 "Your agents' server starts when you log in, so their Threads resume \
@@ -225,7 +227,9 @@ impl CockpitView {
                         });
                     }
                 },
-            ),
+            ));
+        }
+        rows.extend([
             prefs::action(
                 "settings-server-restart",
                 "Restart",
@@ -242,7 +246,8 @@ impl CockpitView {
                 Some("Stop".into()),
                 act(view, Self::stop_server),
             ),
-        ]
+        ]);
+        rows
     }
 }
 
