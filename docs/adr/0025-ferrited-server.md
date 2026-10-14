@@ -60,15 +60,15 @@ All new code is in `ferrite-core` (ADR 0001: no GPUI there).
 | Module | Owns |
 |---|---|
 | `protocol` | The frozen generation-1 client contract: message types, error codes, `Unknown` fallbacks, conversions to and from core types. No I/O. Fixtures in `protocol/fixtures/gen1/`. |
-| `host` | What `Cockpit` does today minus the window: the Store and its claim, every Session, writers, the queue, pending Decisions, Notices, Groups, the registry, the shared half of the Roster, and every policy (Handover, sweep, stale-CLI restart, titler, suggestions, deferred finish). Emits protocol messages into per-connection outboxes; takes protocol commands. Single-threaded, the pump's thread. |
+| `engine` | What `Cockpit` does today minus the window: the Store and its claim, every Session, writers, the queue, pending Decisions, Notices, Groups, the registry, the shared half of the Roster, and every policy (Handover, sweep, stale-CLI restart, titler, suggestions, deferred finish). Emits protocol messages into per-connection outboxes; takes protocol commands. Single-threaded, the pump's thread. |
 | `link` | Transport: newline-delimited JSON framing, the per-connection two-lane outbox, the Unix socket and Windows named pipe, the handshake, reconnect with replay, and an in-process pair for tests and `--demo`. |
-| `server` | `run`: adopt the login environment, open diagnostics (`logs/server.log`), claim the Store, build `Host` with the production spawner, listen, watch signals and macOS logout, drive the pump loop, restart itself. Also `agent`: LaunchAgent plist and `launchctl` calls, the Windows Run key, and `ensure_running` for the app. |
+| `server` | `run`: adopt the login environment, open diagnostics (`logs/server.log`), claim the Store, build `Engine` with the production spawner, listen, watch signals and macOS logout, drive the pump loop, restart itself. Also `agent`: LaunchAgent plist and `launchctl` calls, the Windows Run key, and `ensure_running` for the app. |
 | `cockpit` | The client. Keeps its public API so `CockpitView` changes little; acts become protocol commands on a `Link`, and each Thread is a mirror (Activity + `ThreadState`) fed from the stream. Keeps the per-window Roster and Drafts. |
 
 The production `Spawner` (`ferrite/src/session.rs`) and the login-shell
 environment (`ferrite/src/shell.rs`) move to core, since the Server spawns.
 The scripted demo spawner stays in the app; `--demo`, `--load` and every
-app test run `Host` in-process over the in-process link.
+app test run `Engine` in-process over the in-process link.
 
 ### Process lifecycle
 
@@ -91,28 +91,35 @@ LaunchAgent is installed, otherwise (and always on Windows) start
 Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW |
 CREATE_BREAKAWAY_FROM_JOB` on Windows. Then it waits up to 5 s for the
 socket. The Store's claim is the single-instance guarantee: a second
-Server that cannot claim it exits before binding.
+Server that cannot claim it exits 0 before binding (a failure exit would
+have launchd respawn it every 10 s for as long as the first one runs).
 
 **LaunchAgent (macOS).** Settings › Server › "Start at login", on by
-default, installed at the first launch of a bundled app (not for a bare
+default, installed at the first launch of a bundled app before
+`ensure_running`, so the first Server is already launchd's (not for a bare
 `target/` binary, which uses the detached start). It writes
 `~/Library/LaunchAgents/com.github.josephwylie.ferrite.server.plist` —
 `ProgramArguments` = the bundle's executable and `server`, `RunAtLoad`,
 `KeepAlive { SuccessfulExit = false }` (restarted after a crash, not after
 a clean stop), no `ProcessType` (Background would throttle the agents'
-builds) — then `launchctl bootstrap gui/<uid>`. Turning it off runs
-`launchctl bootout` and deletes the plist; the running Server is left
-alone. Each launch rewrites the plist if the bundle moved. A LaunchAgent
-runs in the login session, so `claude`/`codex` see the operator's
-keychain. `SMAppService` was rejected: it wants a signed bundle and an
-Objective-C bridge, and releases may be unsigned.
+builds) — then `launchctl bootstrap gui/<uid>` (a label already loaded
+counts as done). Turning it off only deletes the plist: `bootout` would
+SIGTERM the running Server, so the job stays loaded until logout and
+nothing starts it at the next login. Each launch rewrites the plist if
+the bundle moved. Provider CLIs stay in the Server's process group, so when a crashed
+Server's job ends launchd kills what it left (its default, no
+`AbandonProcessGroup`) before starting the next one: an orphaned Codex
+app-server would otherwise hold its thread's lock against the resume. A
+LaunchAgent runs in the login session, so `claude`/`codex` see the
+operator's keychain. `SMAppService` was rejected: it wants a signed
+bundle and an Objective-C bridge, and releases may be unsigned.
 
 **Windows.** The same setting writes or removes
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\FerriteServer` =
 `"<exe>" server`. A crashed Server is restarted by the next app launch or
 reconnect; there is no supervisor.
 
-**Running.** The pump loop owns `Host` on one thread. It waits on the
+**Running.** The pump loop owns `Engine` on one thread. It waits on the
 command channel with a 16 ms timeout while any Session is live, or
 indefinitely when none is. Each pass applies commands in arrival order,
 drains Session events exactly as `Cockpit::pump` does now, and pushes
@@ -129,13 +136,14 @@ deadline. On macOS a thread registered with `notify(3)` for loginwindow's
 `logoutNoReturn` / `shutdownNoReturn` does the flush first, because
 loginwindow kills the provider CLIs 15–20 s before launchd's SIGTERM
 (after Herdr's `platform/macos/shutdown.rs`; the keys are undocumented, so
-a missing key falls back to SIGTERM). After that point the Host freezes:
-Sessions that close are not recorded as ending or restarted. `stop` from a
-client does the same, then exits 0.
+a missing key falls back to SIGTERM). After that point the Engine freezes:
+Sessions that close are not recorded as ending or restarted. `stop {when}`
+from a client does the same, at once or when idle (as `restart` below),
+then exits 0.
 
 ### Durability
 
-- The Host flushes a Thread's writer at turn end (as now), when a Decision
+- The Engine flushes a Thread's writer at turn end (as now), when a Decision
   is requested, and when one is answered or closed. Everything an agent
   did before it blocked is on disk while it waits.
 - Decisions are never persisted (unchanged). A Decision pending when its
@@ -173,17 +181,17 @@ Client → Server:
 |---|---|
 | `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capability: `render_visual` (this client can draw Visuals). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` is always sent. |
-| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt), `send`, `queue`, `unqueue`, `cancel_queued`, `interrupt`, `answer {thread, decision, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `delete`, `import`, `group`, `layout`, `project`, `notice` (open, dismiss, read, seen), `settings_changed`, `search_files`, `restart {when}`, `stop`. Each gets exactly one `reply`. |
+| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt), `send`, `queue`, `unqueue`, `cancel_queued`, `interrupt`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `delete`, `import`, `group`, `layout`, `project`, `notice` (open, dismiss, read, seen), `settings_changed`, `search_files`, `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
 
 Server → Client:
 
 | Message | Lane | Meaning |
 |---|---|---|
-| `welcome {generation, server:{version}, boot_id, capabilities[], error?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. |
+| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. |
 | `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
-| `history {thread, after, inputs[]}` … `history_end {thread, seq}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint`; live inputs continue from `seq`. |
-| `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Host applied, in order. |
+| `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`; then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
+| `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
 | `decision {thread, subject?, decision}` / `decision_closed {thread, decision, by}` | reliable | `by`: `answered {client}`, `cancelled`, `session_ended`, `server_restart`. |
 | `reply {id, ok?, error?:{code, message}}` | reliable | Codes: `already_answered`, `invalid_answer`, `unknown_thread`, `unsupported`, `restarting`, `failed`. |
 | `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus, permission modes, supported controls, store error, generation. |
@@ -202,8 +210,9 @@ unchanged: a log from a newer schema is refused whole. On the wire, a
 record kind this client does not know decodes to `Unknown` and is
 skipped, and the window says it is older than its Server.
 
-`seq` counts a Thread's inputs within one `boot_id`. The Host keeps the
-last 8 MiB of each watched Thread's encoded inputs. A `watch` whose
+`seq` counts a Thread's inputs within one `boot_id`. The Engine keeps the
+last 8 MiB of each open Thread's encoded inputs, watched or not: a
+reconnecting client has, by then, stopped watching. A `watch` whose
 `resume` names this boot and a `seq` still held replays from there; any
 other starts again from `history` and the client rebuilds that Thread's
 mirror. `revision` counts the Server's committed changes; latest-wins
@@ -212,20 +221,28 @@ messages carry it so a client drops one older than its snapshot.
 by the difference measured at `welcome`, so working timers agree across
 clients.
 
-**Lanes.** One connection, one outbox, two queues. The reliable queue
-keeps order and never drops: adjacent text, thinking and tool-output
-deltas of one Thread are concatenated while they wait (lossless), and a
+**Lanes.** One connection, one outbox, two queues. Streaming text goes
+on the reliable queue, not a latest-wins one as the plan sketched: Herdr's
+latest-wins lane carries whole screen states, but a delta is not a state,
+and dropping one loses text. Coalescing gives the same effect losslessly.
+The reliable queue keeps order and never drops: adjacent text, thinking
+and tool-output deltas of one Thread are concatenated while they wait
+(the merged `input` carries the last `seq`), and a
 connection whose reliable queue passes 32 MiB is closed with
-`error.code = lagged`; the client reconnects and resumes. The latest-wins
+`error.code = lagged`; the client reconnects and resumes, usually from
+`history`, since 32 MiB outruns the ring. The latest-wins
 queue holds one pending message per key and replaces it in place. The
 writer interleaves them, so a state change never waits behind more than
 one reliable batch.
 
-**Decisions.** The Host is their only owner. `answer` is checked on the
-pump thread: the Decision must be pending, the answer must fit its kind
-(`validate_form` for forms and questions), and the Session must be the
-generation that asked. The first that passes is delivered to the
-provider, recorded, flushed, replied `ok`, and broadcast as
+**Decisions.** The Engine is their only owner. `answer` names the
+`DecisionHandle` the client drew (generation, serial and the provider's
+request id), because a request id is unique only within one provider
+process, and a replaced Session may reuse one. It is checked on the pump
+thread: the Decision must be pending and not already submitting, the
+answer must fit its kind (`validate_form` for forms and questions), and
+the handle's generation must be the Session's. The first that passes is
+delivered to the provider, recorded, flushed, replied `ok`, and broadcast as
 `decision_closed {by: answered}` with the answering client. Every later
 answer is replied `already_answered`; an invalid one `invalid_answer`,
 with the Decision still pending. No one retries an answer: a client that
@@ -236,7 +253,7 @@ still pending means the operator answers again.
 ### Clients
 
 - `Cockpit` holds a `Link` instead of a Store and a Spawner. Its mirrors
-  apply exactly the `ActivityInput`s the Host applied, so the window draws
+  apply exactly the `ActivityInput`s the Engine applied, so the window draws
   what it draws now. `PaneUpdate` is computed from the mirror, as the pump
   does today.
 - Per window: focus, View (Solo or a Group), fullscreen, Drafts, the
@@ -254,34 +271,53 @@ still pending means the operator answers again.
   keeps reconnecting with backoff. It never falls back to running agents
   itself: two pumps on one Store is the bug the claim exists to stop.
 - Settings stay a file the window writes. `settings_changed` makes the
-  Host reread it; it applies to the next Session, as today.
+  Engine reread it; it applies to the next Session, as today.
 
 ### Upgrading the Server
 
 The plan's decision stands: restart when idle and resume, never hand
 over live processes.
 
-- `welcome` names the Server's version. When the app's is higher
-  (semver; equal versions never restart on their own — a developer uses
-  Settings › Server › Restart), the app sends `restart {when: idle}` and
-  shows "Ferrite's server will update when your agents are idle ·
+- `welcome` names the Server's version and executable. When the app's
+  version is higher (semver; equal versions never restart on their own — a
+  developer uses Settings › Server › Restart) and the Server runs the
+  app's own executable, the app sends `restart {when: idle}`, once per app
+  run, and shows "Ferrite's server will update when your agents are idle ·
   Restart now". "Restart now" sends `restart {when: now}`.
 - Idle is the predicate `restart_idle_stale` already uses for a stale CLI:
   for every Thread no turn, no working Subagent or background task, no
   Decision and nothing queued. New prompts are not blocked while a
-  restart waits.
-- On idle (or now), the Host broadcasts `restarting`, closes pending
-  Decisions (`server_restart`), flushes and ends Sessions as on SIGTERM,
+  restart waits. "Restart now" asks first while that predicate is false,
+  as ⌘Q does today: queued prompts are not kept.
+- The executable check matters: a Server always restarts into its own
+  path, so a `cargo run` app attached to the installed Server (or one from
+  a moved bundle) would otherwise ask again after every restart, cutting
+  the agents off each time they idle. Such an app shows the mismatch in
+  Settings › Server instead.
+- On idle (or now), the Engine checks its executable still exists (else
+  it replies `failed` and keeps running), broadcasts `restarting`, closes
+  pending Decisions (`server_restart`), flushes and ends Sessions as on
+  SIGTERM,
   then restarts itself: `exec` of its own executable on Unix (same pid,
-  so launchd sees no exit), a detached start and exit on Windows. The new
+  so launchd sees no exit; the claim's file is close-on-exec, so the new
+  image takes it), on Windows a detached start of `server --after <pid>`
+  and exit; the new Server waits for that pid to end before it claims the
+  Store, or it would find the claim held and exit, leaving none. The new
   Server revives the open Threads (`claude --resume`, `thread/resume`);
   clients see a new `boot_id` and reload their mirrors. A turn cut off by
   "now" reads as interrupted.
 - With ADR 0023: on macOS the installer replaces the bundle under a
-  running Server, and the restart above follows. On Windows the
-  installer cannot replace a running executable, so the at-launch install
-  sends `stop` first and waits for the Server to stop on its own when
-  idle; the What's New sheet says the update waits for the agents.
+  running Server, and the restart above follows. On Windows the setup
+  cannot replace a running executable (and Inno's silent
+  `CloseApplications` would kill the Server unflushed), so "restart to
+  update" sends `stop {when: idle}` (or `now`), and the detached
+  PowerShell waits for the Server's pid as well as the app's before it
+  runs the setup; the relaunched app starts the new Server, which resumes
+  the Threads. The update band says it waits for the agents.
+- ADR 0023's gate, "only the Ferrite holding the Store's claim updates",
+  has no holder once the Server owns the Store: the app instead takes the
+  same kind of lock on `~/.ferrite/update/claim` for its lifetime, and
+  only its holder checks, downloads and installs.
 - An app older than its Server (two installs, a downgrade) attaches; the
   contract allows it. It never asks for a restart.
 
@@ -290,8 +326,8 @@ over live processes.
 | Event | Before | With the Server |
 |---|---|---|
 | App quit or crash | All agents stop | Agents keep running; Notices wait for the next window |
-| Client stalls | n/a | Closed as `lagged`, resumes from `seq` |
-| Server crash | n/a | launchd (or the next app launch on Windows) restarts it; open Threads resume; the cut-off turn reads interrupted; provider CLIs exit on stdin EOF, and the Windows Job Object kills its tree |
+| Client stalls | n/a | Closed as `lagged`, rebuilt from `history` (or `seq` if the ring still covers it) |
+| Server crash | n/a | launchd (or the next app launch on Windows) restarts it; open Threads resume; the cut-off turn reads interrupted; launchd kills the old process group, a detached Server's CLIs exit on stdin EOF, and the Windows Job Object kills its tree |
 | Logout, reboot | All agents stop | Flushed at loginwindow's point of no return; the LaunchAgent resumes them at login |
 | Answer races | n/a | First valid wins; others `already_answered`; never retried |
 | Ferrite update | Agents stop | Restart when idle (or now), then resume |
@@ -308,9 +344,9 @@ Each step is one commit and leaves the app working.
    fixtures and their tests. Nothing uses it yet.
 5. The production spawner and login-environment adoption move from the app
    to core, unchanged.
-6. `host` carved out of `Cockpit` in-process: `Cockpit` owns a `Host` and
+6. `engine` carved out of `Cockpit` in-process: `Cockpit` owns an `Engine` and
    calls it directly. A move; behaviour and API unchanged.
-7. `Cockpit` becomes a mirror: the Host emits protocol messages into an
+7. `Cockpit` becomes a mirror: the Engine emits protocol messages into an
    in-process outbox, `Cockpit` applies them and sends commands back.
    Still one process.
 8. `link`: framing, outbox lanes, the Unix socket and the named pipe,
@@ -322,8 +358,9 @@ Each step is one commit and leaves the app working.
     and Stop. Read-only Store handling leaves the app.
 11. The LaunchAgent and the Windows Run key: "Start at login",
     install/uninstall.
-12. Upgrade: version check at `welcome`, `restart {when}`, self-`exec`,
-    the update band; ADR 0023's Windows install waits for `stop`.
+12. Upgrade: version and executable check at `welcome`, `restart
+    {when}`, self-`exec` (`--after` on Windows), the update band, the
+    update claim; ADR 0023's Windows install waits for `stop {when}`.
 
 ## Test plan
 
@@ -337,18 +374,21 @@ Never the `live_*` tests. Scripted Sessions throughout.
   unknown enum value (`Unknown`), an unknown message type (ignored), an
   unknown command (`unsupported`), absent optional fields, a newer
   generation (`unsupported_generation`).
-- **Mirror parity** (`host` + in-process link): over every scripted
+- **Mirror parity** (`engine` + in-process link): over every scripted
   scenario the Cockpit tests already run (turns, Subagents, Decisions,
   Handover, queue, interrupts), the mirror's Activity and `ThreadState`
-  equal the Host's after every pass; and in debug builds the in-process
+  equal the Engine's after every pass; and in debug builds the in-process
   link encodes and decodes each message, so nothing escapes the contract.
 - **Replay**: disconnect mid-turn and resume after `seq` — the transcript
   equals an uninterrupted watcher's; a different `boot_id`, or a `seq`
-  past the ring, rebuilds from `history` to the same result; a stalled
+  past the ring, rebuilds from `history` to what a reopened Thread shows
+  plus the `live` state (connection, pending Decisions); a stalled
   reader is closed `lagged` and recovers; deltas coalesce without loss.
 - **Decisions**: two clients answer one Decision — one `ok`, one
   `already_answered`, both see `decision_closed`; an invalid answer leaves
-  it pending; an answer in flight across a disconnect is not resent.
+  it pending; an answer in flight across a disconnect is not resent; an
+  answer to a replaced Session's Decision is refused even when the new
+  Session asks with the same request id.
 - **Durability** (`store` durability tests): after a `DecisionRequested`
   with no turn end the log holds everything before it; a log ending
   mid-turn revives as interrupted; SIGTERM-path shutdown leaves open
@@ -358,11 +398,13 @@ Never the `live_*` tests. Scripted Sessions throughout.
   binary smoke test starts `ferrite server` on a temporary
   `FERRITE_STORE`, says hello, gets a snapshot, sends `stop` and sees exit
   0; the idle predicate and the restart sequence with the relaunch
-  injected; the plist is snapshot-tested (no `launchctl` in tests).
+  injected, including the executable check and once-per-run rule; a
+  second Server exits 0; the plist is snapshot-tested (no `launchctl` in
+  tests).
 - **Windows**: the pipe, the Run key and the detached start are
   `cfg(windows)`; Windows CI runs the link tests on the pipe.
 - **App**: the existing `CockpitView` tests run unchanged over the
-  in-process Host; one test drops the link and sees the band and the
+  in-process Engine; one test drops the link and sees the band and the
   resume.
 - **By hand** before step 12 ships: quit mid-turn and relaunch; `kill -9`
   the Server mid-turn; log out and in; update with a working agent, both
@@ -370,8 +412,8 @@ Never the `live_*` tests. Scripted Sessions throughout.
 
 ## Consequences
 
-- Transcripts are held twice, by the Host and by each window's mirror.
-  Acceptable at today's sizes (ADR 0008 trims both); a leaner Host model
+- Transcripts are held twice, by the Engine and by each window's mirror.
+  Acceptable at today's sizes (ADR 0008 trims both); a leaner Engine model
   is a later optimisation, not a contract change.
 - The window no longer owns the Store, so every write it made is now a
   command; a client cannot corrupt a log.
