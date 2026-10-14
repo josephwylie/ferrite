@@ -5701,7 +5701,7 @@ mod tests {
                 writer.flush().unwrap();
                 let mut active = restore(&reopened.load(id).unwrap());
                 active.apply(Input::Revived);
-                assert_eq!(active.turn_outcome(), None);
+                assert_eq!(active.turn_outcome(), Some(&TurnOutcome::Interrupted));
                 assert!(!active.turn_completed());
                 assert_eq!(active.status(), crate::transcript::Status::Idle);
                 assert!(
