@@ -356,7 +356,7 @@ impl PersistedBinding {
 /// event vocabulary may grow any day, and this one changes only with a
 /// schema bump. Text deltas are coalesced into one record per run: the log
 /// stores what was said, not how the wire chopped it.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Record {
     SummaryPart {
@@ -527,6 +527,51 @@ impl Record {
 
 /// The Notice a provider switch leaves in the transcript, live and on
 /// replay alike.
+/// One log line as the client protocol carries it (ADR 0025): everything
+/// durable crosses the wire in the log's own schema, so the Server never
+/// re-encodes history and a client reads exactly what a reopen would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LogRecord(Record);
+
+impl LogRecord {
+    /// The line a live transcript input is logged as, or `None` for what
+    /// the log never keeps. `duration` is as `ThreadWriter::record_event`'s.
+    pub fn of(input: &Input, duration: Option<std::time::Duration>) -> Option<Self> {
+        Some(Self(match input {
+            Input::Event(event) => Record::from_event(event, duration)?,
+            Input::Prompt(text) => Record::Prompt { text: text.clone() },
+            Input::PromptObservation { sent_at } => Record::PromptObservation {
+                sent_at: sent_at.clone(),
+            },
+            Input::CompletionObservation {
+                elapsed_ms,
+                completed_at,
+                input_tokens,
+                output_tokens,
+            } => Record::CompletionObservation {
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
+            },
+            Input::Notice(_)
+            | Input::Answered { .. }
+            | Input::Revived
+            | Input::Highlighted { .. } => return None,
+        }))
+    }
+
+    /// What this line replays as; `None` for the store's own bookkeeping
+    /// (facts and marks), which a reader skips.
+    pub fn input(&self) -> Option<Input> {
+        match &self.0 {
+            Record::Facts { .. } | Record::Mark { .. } => None,
+            record => Some(record.input()),
+        }
+    }
+}
+
 pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
     let label = crate::providers::models::label(model.unwrap_or("default"), &[]);
     format!("continued on {to} · {label} — the earlier conversation is handed over as context")
@@ -534,7 +579,7 @@ pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
 
 /// How a persisted turn ended: `"completed"`, `"interrupted"`, or
 /// `{"error":"…"}`.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Outcome {
     Completed,
@@ -569,7 +614,7 @@ impl StoredRunState {
 /// The structured half of a persisted tool result, mirroring
 /// `crate::ToolResult` shape for shape — but its own type, so the live model
 /// can change without rewriting anyone's history.
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PersistedToolResult {
     #[default]
@@ -594,13 +639,13 @@ enum PersistedToolResult {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PersistedFileEdit {
     path: String,
     hunks: Vec<PersistedHunk>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PersistedHunk {
     old_start: u32,
     old_lines: u32,

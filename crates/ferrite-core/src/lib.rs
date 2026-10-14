@@ -17,6 +17,7 @@ pub mod import;
 pub mod layout;
 pub mod notifications;
 pub mod progress;
+pub mod protocol;
 pub mod prompt_files;
 mod prompt_history;
 pub mod providers;

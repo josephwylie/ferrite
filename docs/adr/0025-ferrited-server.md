@@ -200,10 +200,13 @@ Server → Client:
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |
 
-An `input` carries either `{"record": …}`, a Store `Record` exactly as
-the log spells it, or `{"live": …}`, a gen-1 DTO for what the Store never
-keeps: notices, answers, revival, Activity connect/disconnect, queue
-acknowledgements, MCP servers and authorizations, rate limits. Durable
+An `input` carries `{"record": …}`, a Store `Record` exactly as the log
+spells it and applied live; `{"replay": …}`, the same line replayed (a
+revive's history, a Subagent's history loading); or `{"live": …}`, a
+gen-1 DTO for what the Store never keeps: notices, answers, revival,
+Decisions, Activity connect/disconnect, menus, MCP servers and
+authorizations, rate limits, restored tool clocks. Queue
+acknowledgements are `ThreadState`, not inputs. Durable
 history is therefore the log's own lines, and `history` is read from the
 log without decoding on the Server. The Store's on-disk rule is
 unchanged: a log from a newer schema is refused whole. On the wire, a
