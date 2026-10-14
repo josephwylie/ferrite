@@ -34,10 +34,9 @@ fn the_composer_block_shares_the_reading_column(cx: &mut TestAppContext) {
             "{editor:?} / {block:?}"
         );
         let meta = cx.debug_bounds("composer-meta").expect("the status line");
-        assert!(meta.top() >= block.bottom());
         assert!(
-            px(pane.y + pane.h) - meta.bottom() >= px(crate::theme::COMPOSER_STATUS_PAD_B),
-            "the status line stands clear of the Pane's foot"
+            meta.top() >= px(pane.y + pane.h),
+            "the status line rides the bar, under the Pane (ADR 0014)"
         );
     }
 }

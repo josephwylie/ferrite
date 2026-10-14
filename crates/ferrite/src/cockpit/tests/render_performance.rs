@@ -1919,9 +1919,9 @@ fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
 }
 
 /// The arrows in an open model picker move its cursor by rebuilding the
-/// picker's Pane, not its siblings.
+/// status line it rides in the bottom bar (ADR 0014), not any Pane.
 #[gpui::test]
-fn a_pickers_arrows_rebuild_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
+fn a_pickers_arrows_rebuild_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("picker-parts", &[], cx);
     bind_production_keys(cx);
     // The window moves from pointer to keyboard first (see the typing
@@ -1941,6 +1941,5 @@ fn a_pickers_arrows_rebuild_its_pane_and_not_its_siblings(cx: &mut TestAppContex
         .map(|(after, before)| after - before)
         .collect();
     eprintln!("PICKER_ARROWS_4 pane_builds={built:?}");
-    assert!(built[0] >= 4, "the picker's Pane redraws its cursor");
-    assert_eq!(&built[1..], [0, 0, 0], "an arrow rebuilt a sibling Pane");
+    assert_eq!(built, [0, 0, 0, 0], "an arrow rebuilt a Pane");
 }

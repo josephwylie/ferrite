@@ -38,9 +38,8 @@
 //! and the wall's `1`/`2`/`3` act on.
 //!
 //! **Folding** (cmd-B) rides the column to nothing while its content fades
-//! on its own clock; the titlebar cell over it (`chrome_band`) rides to the
-//! folded cell that keeps the traffic lights, the sidebar toggle and the
-//! bell, cross-fading from the chrome to the reading plane.
+//! on its own clock; the sidebar toggle and the bell wait in the bottom bar
+//! (ADR 0014).
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
@@ -51,8 +50,7 @@ use ferrite_core::ThreadId;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, relative, rgb, rgba, AnyElement, Div, FontWeight, Hsla, ScrollHandle, SharedString,
-    Stateful,
+    div, px, relative, rgb, rgba, AnyElement, Div, FontWeight, ScrollHandle, SharedString, Stateful,
 };
 
 use crate::cockpit::thread_status;
@@ -87,15 +85,11 @@ const COLLAPSE_KEY: &str = "nav-collapse";
 
 /// A nav row's hover wash (the prototype's `.nrow`'s `.08s`).
 pub(crate) const ROW_HOVER: MotionSpec = MotionSpec::new(MOTION_NAV_HOVER_MS, motion::EASE);
-/// A titlebar door's hover, ground and glyph (`.ib`'s `.1s`).
+/// The sidebar toggle's hover, ground and glyph (`.ib`'s `.1s`).
 pub(crate) const DOOR_HOVER: MotionSpec = MotionSpec::new(MOTION_NAV_DOOR_MS, motion::EASE);
 /// The column's content fading as it folds or opens (`.nav > *`'s `.15s
 /// ease`), on its own clock apart from the width's ride.
 pub(crate) const CONTENT_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_FADE_MS, motion::EASE);
-/// The titlebar cell's cross-fade between the chrome and the plane
-/// (`.tbl`'s `.2s ease`).
-pub(crate) const BAND_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_BAND_MS, motion::EASE);
-
 /// What a triangle in the nav folds (N-4): a Project section shut to its
 /// heading, a Group shut to its row (its count kept), or the Parked section
 /// shut to its header. Held in memory by the cockpit
@@ -559,8 +553,7 @@ fn dot_face(row: &ThreadRow) -> Div {
 
 /// The nav column itself: full height, `width` wide (the caller rides it
 /// on cmd-B), clipped, so its content keeps `WIDTH` (`content`) and nothing
-/// reflows while it moves. It paints no ground of its own: `body` lays the
-/// chrome under the titlebar band, which paints its own (`chrome_band`).
+/// reflows while it moves. It paints no ground of its own: `body` does.
 pub fn shell(width: f32) -> Div {
     div()
         .debug_selector(|| "nav-column".into())
@@ -577,21 +570,23 @@ pub fn shell(width: f32) -> Div {
         .text_color(rgb(TEXT))
 }
 
-/// The column's ground: `paint::CHROME` from the titlebar band down — the
-/// band over it paints its own, so the two never stack two layers of glass.
+/// The column's ground: `paint::CHROME`, top to bottom. The titlebar band
+/// over the column draws nothing (ADR 0014), so the column's own chrome is
+/// what the host's traffic lights sit on.
 pub fn body() -> Div {
     div()
         .debug_selector(|| "nav-body".into())
         .absolute()
-        .top(px(WIN_CHROME_H))
+        .top_0()
         .bottom_0()
         .left_0()
         .right_0()
         .bg(paint::CHROME)
 }
 
-/// The column's content at its own width, under the titlebar band and a
-/// half row of air, a half row clear of the foot.
+/// The column's content at its own width, under the titlebar band (the
+/// traffic lights' row) and a half row of air, a half row clear of the
+/// foot.
 pub fn content() -> Div {
     div()
         .flex()
@@ -621,71 +616,11 @@ pub fn seam(folded: bool) -> Div {
         })
 }
 
-/// How wide the titlebar cell over the column is while the column is
-/// `column` wide: the column itself when open (36ch), riding down to the
-/// folded cell (`NAV_CHROME_FOLDED_W`, 20ch, plus `extra_doors` icon doors)
-/// as it folds. The titlebar strip over the board starts where it ends.
-pub fn chrome_width(column: f32, extra_doors: usize) -> f32 {
-    let folded = NAV_CHROME_FOLDED_W + extra_doors as f32 * ICON_BUTTON;
-    let open = (column / WIDTH).clamp(0.0, 1.0);
-    folded + (WIDTH - folded) * open
-}
-
-/// The ground of the titlebar cell `t` of the way from open to folded: the
-/// chrome cross-fading as one colour to the reading plane (`.tbl`'s
-/// background transition) — never a positional wipe.
-pub fn band_ground(t: f32) -> Hsla {
-    motion::mix(paint::CHROME.into(), paint::PLANE.into(), t)
-}
-
-/// The titlebar cell over the column: `width` wide (`chrome_width`), one
-/// band of `WIN_CHROME_H` at the window's top-left, laid over everything
-/// under it, on `ground` (`band_ground`), with the 1px seam carried up
-/// through the titlebar row at its right edge (`seam`'s colours; `folded`
-/// paints it the plane).
-///
-/// On macOS the traffic lights are the **host's**, positioned by
-/// `TitlebarOptions`, so the band reserves their room rather than drawing
-/// fakes: a `NAV_CHROME_LEAD`-wide spacer that holds nothing — anything
-/// drawn or hit-testable in that strip kills AppKit's drag region. Where
-/// the app draws its own titlebar, the lead is one cell. The caller hangs
-/// the doors after it: a stretch, then the sidebar toggle and the bell (and
-/// the gear off macOS), 1ch clear of the cell's right edge.
-pub fn chrome_band(width: f32, ground: Hsla, folded: bool) -> Div {
-    div()
-        .debug_selector(|| "nav-chrome".into())
-        .absolute()
-        .top_0()
-        .left_0()
-        .w(px(width))
-        .h(px(WIN_CHROME_H))
-        .flex()
-        .flex_row()
-        .items_center()
-        .pr(px(NAV_PAD_X))
-        .font_family(FONT_UI)
-        .bg(ground)
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(width))
-                .w(px(CHROME_SEAM_W))
-                .bg(if folded {
-                    paint::PLANE
-                } else {
-                    paint::CHROME_SEAM
-                }),
-        )
-        .child(div().flex_shrink_0().w(px(NAV_CHROME_LEAD)))
-}
-
 /// The sidebar toggle (the prototype's `#b-side`): the sidebar glyph at
-/// `ICON_BUTTON_GLYPH` in a 28×24 titlebar door, centred in the band — the
-/// same door open or folded; the cell rides, the door does not change.
-/// Under the pointer the ground takes `paint::HOVER` and the glyph `TEXT`,
-/// both over 100ms (`.ib:hover`).
+/// `ICON_BUTTON_GLYPH` in a door `ICON_BUTTON` wide at the bottom bar's
+/// left (`titlebar::bottom_bar`), the full height of the bar — the same
+/// door open or folded. Under the pointer the ground takes `paint::HOVER`
+/// and the glyph `TEXT`, both over 100ms (`.ib:hover`).
 pub fn collapse_button() -> Stateful<Div> {
     let key = SharedString::from(COLLAPSE_KEY);
     let t = motion::hover_t(&key);
@@ -697,7 +632,7 @@ pub fn collapse_button() -> Stateful<Div> {
         .items_center()
         .justify_center()
         .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON_H))
+        .h_full()
         .rounded(px(R_CONTROL))
         .cursor_pointer()
         .when(t > 0.0, |door| {
@@ -1669,14 +1604,15 @@ mod tests {
         assert_eq!(ring.style().text.color, Some(rgb(CHROME_FAINT).into()));
     }
 
-    /// N-8: the column paints no ground over the titlebar band — its chrome
-    /// starts under it — and has no hairline; the one seam is its own
-    /// column right of the nav: the dark seam open, the plane folded.
+    /// N-8: the column is chrome from the window's top — the titlebar band
+    /// over it draws nothing (ADR 0014) — and has no hairline; the one seam
+    /// is its own column right of the nav: the dark seam open, the plane
+    /// folded.
     #[test]
-    fn the_column_is_chrome_under_the_band_with_one_seam_beside_it() {
+    fn the_column_is_chrome_from_the_top_with_one_seam_beside_it() {
         let mut column = shell(WIDTH);
         let style = column.style();
-        assert_eq!(style.background, None, "the band paints its own ground");
+        assert_eq!(style.background, None, "the body paints the ground");
         let edges = &style.border_widths;
         assert!(edges.top.is_none() && edges.right.is_none());
         assert!(edges.bottom.is_none() && edges.left.is_none());
@@ -1688,7 +1624,7 @@ mod tests {
             style.background,
             Some(gpui::Hsla::from(paint::CHROME).into())
         );
-        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H).into()));
+        assert_eq!(style.inset.top, Some(px(0.).into()));
         let mut open = seam(false);
         assert_eq!(open.style().size.width, Some(px(CHROME_SEAM_W).into()));
         assert_eq!(
@@ -1701,60 +1637,6 @@ mod tests {
             Some(gpui::Hsla::from(paint::PLANE).into()),
             "folded at rest, nothing darker than the plane at x = 0"
         );
-    }
-
-    /// N-16: the titlebar cell rides with the column — 36ch open, 20ch
-    /// folded (the lights, the toggle and the bell, and the gear off macOS)
-    /// — and cross-fades as one colour from the chrome to the plane. Its
-    /// doors are 28×24 at its right, 1ch clear of its edge: open, the
-    /// toggle spans 217–245 and the bell 245–273; folded, 92.2–120.2 and
-    /// 120.2–148.2.
-    #[test]
-    fn the_titlebar_cell_rides_with_the_column() {
-        assert_eq!(chrome_width(WIDTH, 0), WIDTH);
-        assert_eq!(chrome_width(FOLDED_WIDTH, 0), NAV_CHROME_FOLDED_W);
-        assert_eq!(
-            chrome_width(FOLDED_WIDTH, 1),
-            NAV_CHROME_FOLDED_W + ICON_BUTTON,
-            "a waiting update adds its door"
-        );
-        let mid = chrome_width(WIDTH / 2.0, 0);
-        assert!(mid > NAV_CHROME_FOLDED_W && mid < WIDTH);
-        if cfg!(target_os = "macos") {
-            assert!((NAV_CHROME_FOLDED_W - 156.0).abs() < 1e-3, "20ch");
-            let doors = |cell: f32| {
-                let bell_right = cell - NAV_PAD_X;
-                (
-                    bell_right - 2.0 * ICON_BUTTON,
-                    bell_right - ICON_BUTTON,
-                    bell_right,
-                )
-            };
-            let (toggle, bell, end) = doors(WIDTH);
-            assert!((toggle - 217.0).abs() < 1e-3 && (bell - 245.0).abs() < 1e-3);
-            assert!((end - 273.0).abs() < 1e-3);
-            let (toggle, bell, end) = doors(NAV_CHROME_FOLDED_W);
-            assert!((toggle - 92.2).abs() < 1e-3 && (bell - 120.2).abs() < 1e-3);
-            assert!((end - 148.2).abs() < 1e-3);
-            assert!(toggle >= NAV_CHROME_LEAD, "clear of the host's lights");
-        }
-        let mut open = chrome_band(WIDTH, band_ground(0.0), false);
-        assert_eq!(
-            open.style().background,
-            Some(gpui::Hsla::from(paint::CHROME).into()),
-            "over the open column, the column's chrome"
-        );
-        assert_eq!(open.style().size.height, Some(px(WIN_CHROME_H).into()));
-        assert_eq!(band_ground(1.0), gpui::Hsla::from(paint::PLANE));
-        let half = band_ground(0.5);
-        assert_ne!(half, gpui::Hsla::from(paint::CHROME));
-        assert_ne!(half, gpui::Hsla::from(paint::PLANE));
-        let mut door = collapse_button();
-        let style = door.style();
-        assert_eq!(style.size.width, Some(px(ICON_BUTTON).into()));
-        assert_eq!(style.size.height, Some(px(ICON_BUTTON_H).into()));
-        assert_eq!(style.background, None, "clear at rest");
-        assert_eq!(ICON_BUTTON_GLYPH, 15.0);
     }
 
     /// The ⌘ digits are bound: each names the action its key is bound to.
@@ -1802,17 +1684,15 @@ mod tests {
         );
     }
 
-    /// The nav's own clocks: the row wash reaches full in 80ms, a titlebar
-    /// door in 100ms, the content fades over 150ms and the titlebar cell
-    /// cross-fades over 200ms, each on CSS `ease` (the prototype's
-    /// transitions).
+    /// The nav's own clocks: the row wash reaches full in 80ms, the
+    /// sidebar toggle in 100ms and the content fades over 150ms, each on
+    /// CSS `ease` (the prototype's transitions).
     #[test]
     fn the_nav_keeps_the_prototypes_clocks() {
         assert_eq!(ROW_HOVER.duration_ms, 80);
         assert_eq!(DOOR_HOVER.duration_ms, 100);
         assert_eq!(CONTENT_FADE.duration_ms, 150);
-        assert_eq!(BAND_FADE.duration_ms, 200);
-        for spec in [ROW_HOVER, DOOR_HOVER, CONTENT_FADE, BAND_FADE] {
+        for spec in [ROW_HOVER, DOOR_HOVER, CONTENT_FADE] {
             assert_eq!(spec.curve, motion::EASE);
         }
     }

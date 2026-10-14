@@ -188,16 +188,8 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
-    // At rest the only key on screen is the titlebar's trailing door,
-    // `⌘K commands` (F-11).
-    let door = cx
-        .debug_bounds("titlebar-commands")
-        .expect("the titlebar door");
-    let glyph = cx.debug_bounds("command-key").expect("the door's key");
-    assert!(
-        door.contains(&glyph.center()),
-        "only the titlebar door shows keys: {glyph:?} / {door:?}"
-    );
+    // At rest no key is on screen: `?` is the way in (ADR 0014).
+    assert!(cx.debug_bounds("command-key").is_none());
 
     view.update(cx, |view, cx| {
         view.open_context_menu(
@@ -439,12 +431,10 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     );
 }
 
-/// A Pane head's title keeps its floor beside a full agent strip: at a
-/// width where everything cannot fit, the title still shows at least
-/// `HEAD_TITLE_MIN_W` of itself while the checkout gives way and the tabs
-/// fold into `+N`; with room, it shows whole (up to its cap).
+/// A Solo Pane's agent strip stands at every width, and with room it fits
+/// every tab without folding them into `+N`.
 #[gpui::test]
-fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext) {
+fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
     use ferrite_core::activity::{
         ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
     };
@@ -476,11 +466,7 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
                 .unwrap();
         }
     }
-    // Solo has no head (C2): the tabs keep a strip of their own and the
-    // title rides the titlebar, where it keeps its floor and, with room,
-    // shows whole — there is no cap.
-    let title = "titlebar-title";
-    let mut widths = Vec::new();
+    // Solo has no head (C2): the tabs keep a strip of their own.
     for width in [900., 1800., 2400.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
@@ -490,17 +476,7 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
             cx.debug_bounds("pane-tabs-1").is_some(),
             "the tabs keep a strip"
         );
-        let bounds = cx.debug_bounds(title).expect("the titlebar title");
-        assert!(
-            bounds.size.width >= px(crate::theme::HEAD_TITLE_MIN_W),
-            "{width}: the title keeps its floor: {bounds:?}"
-        );
-        widths.push(bounds.size.width);
     }
-    assert_eq!(
-        widths[1], widths[2],
-        "with room the long title shows whole, and more room adds nothing"
-    );
     assert!(
         cx.debug_bounds("subject-overflow-1").is_none(),
         "the wide strip fits every tab"
@@ -794,16 +770,15 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     let ghost = cx.debug_bounds("prompt-placeholder").expect("the ghost");
     assert!(ghost.top() >= block.top(), "the guidance is the Composer's");
     assert!(
-        cx.debug_bounds("prompt-placeholder-hint").is_some(),
-        "the draft's ghost carries its one hint"
+        cx.debug_bounds("prompt-placeholder-hint").is_none(),
+        "the draft's ghost names no keys (ADR 0014)"
     );
 }
 
-/// On the empty board the titlebar has no location: it reads `Ferrite`
-/// at the right cell's inset (theme WP-C), and no build badge follows it
-/// (F-10: Settings › About keeps that).
+/// On the empty board the titlebar says nothing either (ADR 0014): no
+/// name, no build badge (F-10: Settings › About keeps that).
 #[gpui::test]
-fn the_empty_board_titlebar_reads_ferrite_on_the_inset(cx: &mut TestAppContext) {
+fn the_empty_board_titlebar_says_nothing(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("empty-titlebar", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -812,16 +787,12 @@ fn the_empty_board_titlebar_reads_ferrite_on_the_inset(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("cmd-w");
     tick(cx);
     assert!(cx.debug_bounds("empty-board").is_some());
-    let name = cx.debug_bounds("titlebar-word-0").expect("the app's name");
-    let inset =
-        px(crate::theme::NAV_WIDTH + crate::theme::CHROME_SEAM_W + crate::theme::TITLE_PAD_X);
+    for gone in ["titlebar-location", "titlebar-word-0", "titlebar-dev-badge"] {
+        assert!(cx.debug_bounds(gone).is_none(), "{gone}");
+    }
     assert!(
-        (name.left() - inset).abs() <= px(0.5),
-        "{name:?} at {inset:?}"
-    );
-    assert!(
-        cx.debug_bounds("titlebar-dev-badge").is_none(),
-        "no build badge on the band"
+        cx.debug_bounds("composer-meta").is_none(),
+        "no Pane's status line on the empty board"
     );
 }
 
@@ -1155,11 +1126,11 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
 }
 
 /// Terminal-native (WP-D, FL-10): the Composer is one input row on its band
-/// — no box, no send control, no verb hint — with the status line under the
-/// band's rule, whose right end carries `⇧⇥ mode · ? shortcuts` in Solo.
-/// Enter sends and Esc interrupts.
+/// — no box, no send control, no verb hint. Its status line is the
+/// window's, in the bottom bar (ADR 0014), and no key hint rides it: `?`
+/// is the one way in. Enter sends and Esc interrupts.
 #[gpui::test]
-fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
+fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
     let thread = core.threads()[0];
     bind_production_keys(cx);
@@ -1168,27 +1139,23 @@ fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     tick(cx);
     let block = cx.debug_bounds("composer-block").unwrap();
     let meta = cx.debug_bounds("composer-meta").expect("the meta row");
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
     assert_eq!(
         block.size.height,
         px(2. * crate::theme::COMPOSER_PAD_Y + crate::theme::COMPOSER_ROW_H),
         "one row on the band"
     );
-    assert_eq!(
-        meta.top(),
-        block.bottom() + px(crate::theme::COMPOSER_RULE + crate::theme::COMPOSER_STATUS_GAP),
-        "band, rule, 2px, the status line"
+    assert!(
+        meta.top() >= bar.top() && meta.bottom() <= bar.bottom(),
+        "the status line rides the bar: {meta:?} in {bar:?}"
     );
     assert!(
         cx.debug_bounds("prompt-placeholder").is_some(),
-        "the resting line carries its one hint in the placeholder"
+        "the resting line says what to do"
     );
-    let keys = cx
-        .debug_bounds("status-keys")
-        .expect("Solo's keys at the right");
-    assert!(
-        keys.top() >= meta.top() - px(0.5) && keys.right() <= block.right() + px(0.5),
-        "the keys ride the status line's right: {keys:?} / {meta:?}"
-    );
+    assert!(cx.debug_bounds("prompt-placeholder-hint").is_none());
+    assert!(cx.debug_bounds("status-keys").is_none(), "no key hints");
+    assert!(cx.debug_bounds("bottom-bar-help").is_some(), "`?` instead");
     for verb in ["send", "stop"] {
         let hint: &'static str = Box::leak(
             format!("composer-{verb}-{:?}", PaneIdentity::Thread(thread)).into_boxed_str(),
@@ -1394,9 +1361,9 @@ fn an_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
     );
 }
 
-/// The Solo status line is always present at one `LH_UI` line, so the
-/// Composer's top never moves: not when a mode is announced, not under a
-/// Decision (rule 2.6.6).
+/// The status line rides the bottom bar (ADR 0014), so the Composer's top
+/// never moves: not when a mode is announced, not under a Decision (rule
+/// 2.6.6).
 #[gpui::test]
 fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("solo-status-line", 1);
@@ -1404,8 +1371,6 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let rest = cx.debug_bounds("composer-block").expect("the Composer");
-    let line = cx.debug_bounds("composer-meta").expect("the status line");
-    assert_eq!(line.size.height, px(crate::theme::LH_UI));
     fake.streams.borrow()[0]
         .send(SessionEvent::PermissionMode {
             mode: "acceptEdits".into(),
@@ -1422,7 +1387,6 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
         Some(rest),
         "a Decision never moves the Composer"
     );
-    assert_eq!(cx.debug_bounds("composer-meta"), Some(line));
 }
 
 /// A second Ferrite on the same store (a dev build beside the installed

@@ -116,27 +116,16 @@ impl std::fmt::Debug for TranscriptTail {
 }
 
 /// What the banner says about its Thread (filled by `sync_transcript`):
-/// `Nav rows jitter on stream start`, `claude · opus 5.5 (1M) · medium ·
-/// ~/ferrite on dev`, `started 7:18 pm · 2 turns · 41s working`.
+/// `~/ferrite on dev · started 7:18 pm`. The title, provider and model are
+/// the nav row's, the head's and the status line's to say.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BannerFacts {
-    pub title: SharedString,
-    /// The provider, lowercase: `claude`, `codex`.
-    pub provider_word: SharedString,
-    /// The model as the status line names it (`opus 5.5 (1M)`).
-    pub model: Option<SharedString>,
-    /// The effort, only when one resolves (R3).
-    pub effort: Option<SharedString>,
     /// The checkout, `~`-abbreviated.
     pub workspace: SharedString,
     pub workspace_path: PathBuf,
     pub branch: Option<SharedString>,
     /// The first prompt's send time.
     pub started_at: Option<SharedString>,
-    /// How many turns have ended.
-    pub turns: usize,
-    /// The latest completed turn's settled time (R17).
-    pub working: Option<Duration>,
 }
 
 /// Where a scene (or a command) asks a transcript to scroll.
@@ -833,9 +822,7 @@ impl TranscriptView {
         match row.kind() {
             RowKind::Banner => {
                 if let Some(facts) = &self.input.banner {
-                    for line in banner_lines(facts) {
-                        let _ = selection.line(BlockId::BANNER, line.text, Vec::new());
-                    }
+                    let _ = selection.line(BlockId::BANNER, banner_line(facts).text, Vec::new());
                 }
                 return;
             }
@@ -1188,78 +1175,49 @@ impl TranscriptView {
         stops
     }
 
-    /// The banner (the prototype's `.banner`): the steel mark three rows
-    /// tall two cells in, a three-cell gap, the title, the Thread's facts —
-    /// its checkout a path target — and its time. Its text is selectable.
+    /// The banner (ADR 0014): one muted line — the checkout, a path target,
+    /// on its branch, and when the Thread started. Its text is selectable.
     fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
         let grid = Grid::of(self.input.reading_size);
-        let mut column = div().flex().flex_col().min_w_0();
-        for (ordinal, line) in banner_lines(facts).into_iter().enumerate() {
-            let strong = ordinal == 0;
-            let highlights = line
-                .path
-                .map(|(start, len)| {
-                    let from = line
-                        .text
-                        .char_indices()
-                        .nth(start)
-                        .map_or(line.text.len(), |(at, _)| at);
-                    let to = line
-                        .text
-                        .char_indices()
-                        .nth(start + len)
-                        .map_or(line.text.len(), |(at, _)| at);
-                    vec![(
-                        from..to,
-                        gpui::HighlightStyle {
-                            color: Some(gpui::rgb(theme::PATH_INK).into()),
-                            ..Default::default()
-                        },
-                    )]
-                })
-                .unwrap_or_default();
-            let overlay = line.path.map(|(start, len)| {
-                crate::file_links::path_overlay(
-                    PathTarget::new(facts.workspace_path.clone())
-                        .shown(facts.workspace.clone())
-                        .in_scope(self.input.namespace.clone()),
-                    start,
-                    len,
-                    grid.size,
-                    grid.line,
-                )
-            });
-            column = column.child(
-                div()
-                    .relative()
-                    .min_w_0()
-                    .truncate()
-                    .map(|line| {
-                        if strong {
-                            line.font_weight(theme::W_STRONG)
-                                .text_color(gpui::rgb(theme::TEXT_STRONG))
-                        } else {
-                            line.text_color(gpui::rgb(theme::TEXT_MUTED))
-                        }
-                    })
-                    .child(selection.line(BlockId::BANNER, line.text, highlights))
-                    .children(overlay),
-            );
-        }
+        let line = banner_line(facts);
+        let highlights = line
+            .path
+            .map(|len| {
+                let to = line
+                    .text
+                    .char_indices()
+                    .nth(len)
+                    .map_or(line.text.len(), |(at, _)| at);
+                vec![(
+                    0..to,
+                    gpui::HighlightStyle {
+                        color: Some(gpui::rgb(theme::PATH_INK).into()),
+                        ..Default::default()
+                    },
+                )]
+            })
+            .unwrap_or_default();
+        let overlay = line.path.map(|len| {
+            crate::file_links::path_overlay(
+                PathTarget::new(facts.workspace_path.clone())
+                    .shown(facts.workspace.clone())
+                    .in_scope(self.input.namespace.clone()),
+                0,
+                len,
+                grid.size,
+                grid.line,
+            )
+        });
         div()
             .debug_selector(|| "transcript-banner".into())
-            .flex()
-            .items_start()
-            .gap(px(theme::BANNER_GAP_CELLS * grid.cell()))
+            .relative()
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .child(
-                div()
-                    .debug_selector(|| "transcript-banner-mark".into())
-                    .child(banner_mark(theme::BANNER_MARK_ROWS * grid.line)),
-            )
-            .child(column)
+            .truncate()
+            .text_color(gpui::rgb(theme::TEXT_MUTED))
+            .child(selection.line(BlockId::BANNER, line.text, highlights))
+            .children(overlay)
             .into_any_element()
     }
 
@@ -1466,72 +1424,29 @@ impl TranscriptView {
     }
 }
 
-/// One banner line: its text, and where its path target sits in it (in
-/// characters), if it has one.
+/// The banner's line: its text, and how many characters of it, from its
+/// start, are the path target.
 struct BannerLine {
     text: String,
-    path: Option<(usize, usize)>,
+    path: Option<usize>,
 }
 
-/// The banner's three lines.
-fn banner_lines(facts: &BannerFacts) -> [BannerLine; 3] {
-    let seam = " \u{b7} ";
-    let mut facts_line = String::new();
-    for part in [
-        Some(&facts.provider_word),
-        facts.model.as_ref(),
-        facts.effort.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        facts_line.push_str(part);
-        facts_line.push_str(seam);
-    }
-    let start = facts_line.chars().count();
-    facts_line.push_str(&facts.workspace);
-    let path = (!facts.workspace.is_empty()).then_some((start, facts.workspace.chars().count()));
+/// `~/ferrite on dev · started 7:18 pm`: whichever of these the Thread has.
+fn banner_line(facts: &BannerFacts) -> BannerLine {
+    let mut text = facts.workspace.to_string();
+    let path = (!text.is_empty()).then(|| text.chars().count());
     if let Some(branch) = &facts.branch {
-        facts_line.push_str(" on ");
-        facts_line.push_str(branch);
+        text.push_str(" on ");
+        text.push_str(branch);
     }
-    let mut time = Vec::new();
     if let Some(started) = &facts.started_at {
-        time.push(format!("started {started}"));
+        if !text.is_empty() {
+            text.push_str(" \u{b7} ");
+        }
+        text.push_str("started ");
+        text.push_str(started);
     }
-    time.push(format!(
-        "{} turn{}",
-        facts.turns,
-        if facts.turns == 1 { "" } else { "s" }
-    ));
-    if let Some(working) = facts.working {
-        time.push(format!(
-            "{} working",
-            ferrite_core::progress::settled_duration_label(working)
-        ));
-    }
-    [
-        BannerLine {
-            text: facts.title.to_string(),
-            path: None,
-        },
-        BannerLine {
-            text: facts_line,
-            path,
-        },
-        BannerLine {
-            text: time.join(seam),
-            path: None,
-        },
-    ]
-}
-
-/// The steel mark, `height` tall, cropped to its shards (the prototype's
-/// `viewBox="280 30 700 1130"`), in its steel gradient
-/// (`components::steel_mark`), so the banner's text starts its gap after
-/// the mark rather than after its box.
-fn banner_mark(height: f32) -> gpui::Div {
-    crate::components::steel_mark(height)
+    BannerLine { text, path }
 }
 
 /// What prose path targets resolve against: the checkout, and every path
@@ -2087,7 +2002,8 @@ impl Render for TranscriptView {
                     window.defer(cx, move |window, cx| {
                         let measured = measured.borrow();
                         let height_of = |index: usize| {
-                            rows.get(index).and_then(|row| measured.get(row.id()).copied())
+                            rows.get(index)
+                                .and_then(|row| measured.get(row.id()).copied())
                         };
                         let visuals: Vec<(usize, &crate::visual::Visual)> = rows
                             .visual_rows()

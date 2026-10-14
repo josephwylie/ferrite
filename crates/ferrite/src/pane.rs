@@ -643,11 +643,7 @@ pub struct PaneWiring {
     /// The retained L1 transcript. Its cached entity owns native text and
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
-    /// Files edited by this Thread, as one-click preview entries.
-    pub changed_files: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
-    /// Pointer equivalents of the owning Composer's send and interrupt keys.
-    pub composer_actions: Option<AnyElement>,
     /// The Session's running background tasks as chips at the Composer's
     /// right edge, each wired to its stop control — the other half of the
     /// shelf the attachment island sits on. None while nothing runs in the
@@ -659,17 +655,6 @@ pub struct PaneWiring {
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
-    /// The Composer's model picker — logomark, model label, chevron —
-    /// supplied for **every** L1 Pane, before and after the first-prompt
-    /// lock: the prototype draws it in all four Panes (#25).
-    pub model_picker: Option<AnyElement>,
-    /// Context and account usage lines beside the model control.
-    pub usage_meter: Option<AnyElement>,
-    pub session_controls: Option<AnyElement>,
-    /// The mode chip as a menu trigger: a click lists the Session's native
-    /// permission modes and a pick switches the running Session. `None`
-    /// draws the plain chip.
-    pub mode_picker: Option<AnyElement>,
     /// The head's title cell, wired: the name with a double-click that
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
@@ -1159,7 +1144,6 @@ pub(crate) struct PaneCtx<'a> {
     pub queue_height: f32,
     pub composer_empty: bool,
     pub composer_files: usize,
-    pub permission_mode: Option<SharedString>,
     pub suggestion: Option<&'a str>,
     pub received_reasoning_visible: bool,
     // ---- pre-plumbed for the work packages: wired, not read yet
@@ -1183,15 +1167,8 @@ pub(crate) struct PaneCtx<'a> {
     // ---- owned wiring
     /// `l1_composer` / `l2_composer`.
     pub attachments: Option<AnyElement>,
-    pub composer_actions: Option<AnyElement>,
     pub background: Option<AnyElement>,
-    /// Files this Thread edited: the Composer's shelf above the prompt.
-    pub changed_files: Option<AnyElement>,
     pub menu: Option<AnyElement>,
-    pub model_picker: Option<AnyElement>,
-    pub usage_meter: Option<AnyElement>,
-    pub session_controls: Option<AnyElement>,
-    pub mode_picker: Option<AnyElement>,
     /// A Subagent's footer, drawn where the Composer would be.
     pub child_footer: Option<AnyElement>,
     /// `l1_dock`: activity requests that were not docked in the body.
@@ -1233,16 +1210,10 @@ pub fn render_pane(
     let wall = wall.unwrap_or(&empty);
     let PaneWiring {
         transcript: retained_transcript,
-        changed_files,
         attachments,
-        composer_actions,
         background,
         received_reasoning_visible,
         menu,
-        model_picker,
-        usage_meter,
-        session_controls,
-        mode_picker,
         title,
         agents,
         activity_decisions,
@@ -1296,8 +1267,8 @@ pub fn render_pane(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
-    // Solo (fullscreen included) has no head at any tier: the titlebar
-    // carries the Thread (C2). A Group's head is the Pane's drag handle
+    // Solo (fullscreen included) has no head at any tier: the nav's row
+    // names the Thread (C2, ADR 0014). A Group's head is the Pane's drag handle
     // whenever the cockpit wires one. It names the Thread and nothing
     // else (theme rule 7): the dot, the title, the provider's mark.
     let head = |title: Option<AnyElement>| {
@@ -1357,11 +1328,6 @@ pub fn render_pane(
         queue_height: composer_queue_height,
         composer_empty,
         composer_files,
-        permission_mode: thread.and_then(|thread| {
-            thread
-                .permission_mode()
-                .and_then(|mode| permission_mode_label(mode, &thread.permission_modes()))
-        }),
         suggestion: thread.and_then(|thread| thread.suggestion()),
         received_reasoning_visible,
         reduce_motion,
@@ -1371,21 +1337,15 @@ pub fn render_pane(
         unread: attention,
         grid: show_focus,
         attachments,
-        composer_actions,
         background,
-        changed_files,
         menu,
-        model_picker,
-        usage_meter,
-        session_controls,
-        mode_picker,
         child_footer,
         activity_decisions: None,
         decision_joined,
     };
 
-    // Solo (fullscreen included) has no head: the titlebar carries the
-    // Thread (C2), and the body starts at the Pane's own top edge. A
+    // Solo (fullscreen included) has no head: the nav's row names the
+    // Thread (C2, ADR 0014), and the body starts at the Pane's own top edge. A
     // Group's Pane wears the one head. Subagent tabs keep a strip of their
     // own either way.
     let mut pane = shell.children(head(title));
@@ -1620,15 +1580,11 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     let transcript = cx.transcript?;
     // The working line (`working_line`), noted for this frame above.
     let working = working_line(cx.view, transcript, cx.focused);
-    // The session controls are the palette's (`background tasks`, `refresh
-    // MCP`): the status line has no `•••`.
-    let _ = cx.session_controls.take();
     Some(
         composer_region(
             cx.view,
             Some(transcript),
             ComposerStack {
-                compact: false,
                 grid: cx.grid,
                 decision: cx.decision,
                 queued: std::mem::take(&mut cx.queued),
@@ -1636,15 +1592,9 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 empty: cx.composer_empty,
                 files: cx.composer_files,
                 attachments: cx.attachments.take(),
-                actions: cx.composer_actions.take(),
                 background: cx.background.take(),
-                changed_files: cx.changed_files.take(),
                 menu: cx.menu.take(),
-                mode: cx.permission_mode.as_deref(),
-                mode_picker: cx.mode_picker.take(),
-                model_picker: cx.model_picker.take(),
-                usage_meter: cx.usage_meter.take(),
-                setup_controls: None,
+                draft: false,
                 draft_error: None,
                 suggestion: cx.suggestion,
                 working,
@@ -1754,15 +1704,8 @@ fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
-    pub composer_actions: Option<AnyElement>,
     /// The draft-only close control in the Pane header.
     pub discard: AnyElement,
-    /// The draft's setup chips — project and workspace — riding the left
-    /// of the controls row, where a live Composer's mode chip rides.
-    pub band: AnyElement,
-    /// The draft's model and effort controls, in the trailing slot a live
-    /// Composer's model picker occupies.
-    pub picker: AnyElement,
     /// The open band popover, hung above the Composer like every menu.
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
@@ -1771,10 +1714,6 @@ pub struct DraftState<'a> {
     pub focused: bool,
     /// A failed bootstrap's words, shown where the band is.
     pub error: Option<&'a SharedString>,
-    /// The usage meter, in the slot a live Composer hangs it in: a draft
-    /// has spent no context, and its account windows answer before the
-    /// prompt is written.
-    pub usage_meter: Option<AnyElement>,
     /// The Composer holds the keyboard in the active window, and the
     /// operator asked for reduced motion.
     pub editing: bool,
@@ -1786,29 +1725,24 @@ pub struct DraftState<'a> {
     pub show_focus: bool,
 }
 
-/// What a draft is called until its first send names the Thread — in the
-/// titlebar (Solo) and in its Group head.
+/// What a draft is called until its first send names the Thread — in its
+/// Group head.
 pub const DRAFT_TITLE: &str = "New thread";
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
-/// the pre-prompt band. In Solo it has no head — the titlebar reads
-/// `ferrite / New thread` and holds the discard ×. On a board it wears the
+/// the pre-prompt band. In Solo it has no head. On a board it wears the
 /// Group head (the glyph column reserved, no dot: nothing runs yet) with the
 /// × in its slot, then the grid's one Composer line; below L1 the body is
 /// the head and that line alone.
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         attachments,
-        composer_actions,
         discard,
-        band,
-        picker,
         menu,
         composer_empty,
         composer_files,
         focused,
         error,
-        usage_meter,
         editing,
         reduce_motion,
         drop_target,
@@ -1837,7 +1771,6 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         view,
         None,
         ComposerStack {
-            compact: level != Level::Transcript,
             grid: show_focus,
             decision: None,
             queued: Vec::new(),
@@ -1845,15 +1778,9 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             empty: composer_empty,
             files: composer_files,
             attachments,
-            actions: composer_actions,
             background: None,
-            changed_files: None,
             menu,
-            mode: None,
-            mode_picker: None,
-            model_picker: Some(picker),
-            usage_meter,
-            setup_controls: Some(band),
+            draft: true,
             draft_error: error.cloned(),
             // A draft has no conversation yet, so nothing to predict.
             suggestion: None,
@@ -2366,9 +2293,8 @@ pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState 
     }
 }
 
-/// A Thread's face away from its Pane — the Solo titlebar, which carries
-/// the Thread the headless Solo Pane does not (C2): its status dot and its
-/// state word, read exactly as the Pane reads them.
+/// A Thread's face away from its Pane: its status dot and its state word,
+/// read exactly as the Pane reads them.
 pub(crate) fn thread_face(
     open: ThreadView<'_>,
     card: Option<&WallCard>,
@@ -3283,9 +3209,8 @@ fn parked_body(parked_line: Option<SharedString>) -> Div {
 /// The Composer stack's slice of `PaneState`, bundled so `composer_region`
 /// stays readable as the states grow.
 struct ComposerStack<'a> {
-    compact: bool,
     /// A board cell (C4): only the focused cell's Composer is live — its
-    /// shelf, queue and status line; the others keep their input band.
+    /// shelf and queue; the others keep their input band.
     grid: bool,
     decision: Option<&'a Decision>,
     /// Prompts held back while the turn runs, newest first: they pile up
@@ -3297,22 +3222,12 @@ struct ComposerStack<'a> {
     /// the shelf (`attachments`) waits for the live Composer.
     files: usize,
     attachments: Option<AnyElement>,
-    /// Solo's status line right: `⇧⇥ mode · ? shortcuts`.
-    actions: Option<AnyElement>,
     /// Running background tasks as chips, hung at the right edge of the
     /// same shelf the pending files sit on.
     background: Option<AnyElement>,
-    /// The status line's changed-files segment (`1 file +9 −4`), Solo's.
-    changed_files: Option<AnyElement>,
     menu: Option<AnyElement>,
-    mode: Option<&'a str>,
-    /// The mode segment wired to its menu; `None` draws the plain segment.
-    mode_picker: Option<AnyElement>,
-    /// The model segment: the model and its effort, one control (#25).
-    model_picker: Option<AnyElement>,
-    /// The `ctx` segment, after the model.
-    usage_meter: Option<AnyElement>,
-    setup_controls: Option<AnyElement>,
+    /// A draft's Composer: nothing exists to steer yet.
+    draft: bool,
     draft_error: Option<SharedString>,
     /// The follow-up predicted for this Thread's last response, if one has
     /// landed. The idle line shows it verbatim and Tab accepts it.
@@ -3345,11 +3260,8 @@ fn composer_rule() -> Div {
 /// runs, the working line; then an input band across the Pane's width on
 /// `paint::INBAND` between two transparent rules — queued prompts, then the
 /// `❯` in its 2-cell gutter and the line growing upward to
-/// `composer::MAX_ROWS` rows — and, in Solo and the focused board Pane, the
-/// status line under the lower rule: the mode, the model with its effort,
-/// `ctx`, and in Solo the changed files and `⇧⇥ mode · ? shortcuts` at the
-/// right. An unfocused board Pane is flush: band, rule, and the stack's
-/// foot.
+/// `composer::MAX_ROWS` rows — and the stack's foot. Its status line is the
+/// window's (`status_line`, in the bottom bar, ADR 0014).
 ///
 /// The shelf — pending files at left, background tasks at right — stands
 /// above the band. The Pane lays the stack out `flex_shrink_0` below the
@@ -3359,7 +3271,6 @@ fn composer_rule() -> Div {
 /// Composer (#23).
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
-        compact,
         grid,
         decision,
         queued,
@@ -3367,15 +3278,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         empty,
         files,
         attachments,
-        actions,
         background,
-        changed_files,
         menu,
-        mode,
-        mode_picker,
-        model_picker,
-        usage_meter,
-        setup_controls,
+        draft,
         draft_error,
         suggestion,
         working,
@@ -3387,23 +3292,13 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // On a board only the focused cell's Composer is live (C4): the others
     // keep their band — `❯`, the hollow caret, a Decision's placeholder —
     // and say what the shelf and the queue hold in words after the `❯`
-    // (`flat_facts`); focus brings them back as they were. The status line
-    // is the live Composer's: Solo always, the focused board Pane; an
-    // unfocused board Pane draws none and holds no room for one (FL-11).
+    // (`flat_facts`); focus brings them back as they were.
     let live = !grid || focused || drop_target;
-    let status = !grid || focused;
     let flat = (!live).then(|| flat_facts(files, queued.len())).flatten();
     let (attachments, queued) = if live {
         (attachments, queued)
     } else {
         (None, Vec::new())
-    };
-    // Solo's status line alone names the changed files and the keys at its
-    // right; a focused board Pane's stops at `ctx` (R4).
-    let (changed_files, actions) = if grid {
-        (None, None)
-    } else {
-        (changed_files, actions)
     };
     let geometry = view.geometry.clone();
     let band = div()
@@ -3514,13 +3409,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .text_color(rgb(TEXT))
         .child(view.composer.clone());
     if empty && (live || decision.is_some()) {
-        let ghost = placeholder(
-            decision.is_some(),
-            setup_controls.is_some(),
-            transcript,
-            suggestion,
-        );
-        line = line.child(ghost_row(ghost, compact));
+        let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
+        line = line.child(ghost_row(ghost));
     }
 
     // The `❯` is always in layout and always the accent (the prompt's own
@@ -3566,71 +3456,6 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // The status line (the prototype's `.status`), the live Composer's
-    // only: segments split by a faint `·`, Solo's keys at the right. Its
-    // first segment hangs its padding out, so its text starts on the `❯`
-    // column; the right segment's text ends three cells in from the Pane's
-    // edge.
-    let status_line = status.then(|| {
-        let mut segments: Vec<AnyElement> = Vec::new();
-        if let Some(setup) = setup_controls {
-            segments.push(
-                div()
-                    .flex_shrink(1.)
-                    .min_w_0()
-                    .child(setup)
-                    .into_any_element(),
-            );
-        }
-        // The word is the live Session's permission mode, so it rides every
-        // Pane whose Session has announced one other than the default — a
-        // pending Decision too: the mode is what the answer will run under.
-        if let Some(mode) = mode {
-            let key = view.thread().map_or(0, ThreadId::get);
-            segments.push(
-                div()
-                    .debug_selector(move || format!("composer-mode-{key}"))
-                    .flex_shrink_0()
-                    .child(match mode_picker {
-                        Some(picker) => picker,
-                        None => mode_chip(mode, false).into_any_element(),
-                    })
-                    .into_any_element(),
-            );
-        }
-        for segment in [model_picker, usage_meter, changed_files]
-            .into_iter()
-            .flatten()
-        {
-            segments.push(div().flex_shrink_0().child(segment).into_any_element());
-        }
-        let mut line = div()
-            .debug_selector(|| "composer-meta".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .h(px(theme::COMPOSER_STATUS_H))
-            .mt(px(theme::COMPOSER_STATUS_GAP))
-            // The first segment hangs its padding out (the prototype's
-            // `.seg:first-child{margin-left:-1ch}`); the last keeps its own
-            // inside the Composer's three cells.
-            .pl(px(theme::STATUS_HANG_PAD))
-            .pr(px(theme::COMPOSER_PAD_R))
-            .min_w_0()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
-            .text_color(rgb(TEXT_MUTED));
-        for (index, segment) in segments.into_iter().enumerate() {
-            if index > 0 {
-                line = line.child(status_seam());
-            }
-            line = line.child(segment);
-        }
-        line.child(div().flex_1().min_w(px(theme::CH)))
-            .children(actions.map(|actions| div().flex_shrink_0().child(actions)))
-    });
     div()
         .flex()
         .flex_col()
@@ -3676,7 +3501,48 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .child(composer_rule())
         .child(band)
         .child(composer_rule())
-        .children(status_line)
+}
+
+/// The focused Pane's status line (the prototype's `.status`), laid in the
+/// window's bottom bar (ADR 0014): its segments — a draft's setup chips,
+/// the mode, the model with its effort, `ctx`, the changed files — split by
+/// a faint `·`, in `TEXT_MUTED`, a cell after the view tabs. It gives way
+/// to the bar's own segments, clipping at its right.
+pub fn status_line(segments: Vec<AnyElement>) -> Div {
+    let mut line = div()
+        .debug_selector(|| "composer-meta".into())
+        .flex()
+        .flex_shrink(1.)
+        .items_center()
+        .h_full()
+        .min_w_0()
+        .pl(px(theme::BAR_SEG_PAD_X))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(TEXT_MUTED));
+    for (index, segment) in segments.into_iter().enumerate() {
+        if index > 0 {
+            line = line.child(status_seam());
+        }
+        line = line.child(segment);
+    }
+    line
+}
+
+/// The mode segment: the Session's permission mode, wired to its menu when
+/// the Session can switch it (`picker`), else the plain chip.
+pub fn mode_segment(thread: ThreadId, mode: &str, picker: Option<AnyElement>) -> AnyElement {
+    let key = thread.get();
+    div()
+        .debug_selector(move || format!("composer-mode-{key}"))
+        .flex_shrink_0()
+        .child(match picker {
+            Some(picker) => picker,
+            None => mode_chip(mode, false).into_any_element(),
+        })
+        .into_any_element()
 }
 
 /// The faint `·` between two status segments.
@@ -3809,34 +3675,9 @@ pub fn changed_file_row(
         )
 }
 
-/// Solo's status line right (FL-10): `⇧⇥ mode · ? shortcuts` in
-/// `TEXT_MUTED`, its keys read from the key table and drawn
-/// (`components::key_combo`), as one quiet segment.
-pub fn shortcuts_hint(cycle: Option<String>, help: Option<String>) -> Div {
-    let mut seg = status_seg(TEXT_MUTED)
-        .gap(px(0.))
-        .debug_selector(|| "status-keys".into());
-    let led = cycle.is_some();
-    if let Some(cycle) = cycle {
-        seg = seg
-            .child(components::key_combo(&cycle, TEXT_MUTED))
-            .child(components::cells("\u{a0}mode"));
-    }
-    if let Some(help) = help {
-        if led {
-            seg = seg.child(components::cells("\u{a0}\u{b7}\u{a0}"));
-        }
-        seg = seg
-            .child(components::key_combo(&help, TEXT_MUTED))
-            .child(components::cells("\u{a0}shortcuts"));
-    }
-    seg
-}
-
-/// The idle line's placeholder: words in `TEXT_MUTED` after the caret cell
-/// and a space — a head that always shows, then pieces after a faint `·`
-/// that drop out whole from the right where the line is narrow, never a
-/// word cut in half.
+/// The idle line's placeholder: a couple of words in `TEXT_MUTED` after
+/// the caret cell and a space, cut at their end only where even they do not
+/// fit. The keys live behind `?` (ADR 0014), not on the line.
 ///
 /// A predicted follow-up is already in the operator's voice and already
 /// filtered, so it is shown verbatim — a draft of their next prompt, not a
@@ -3845,54 +3686,32 @@ pub fn shortcuts_hint(cycle: Option<String>, help: Option<String>) -> Div {
 /// prediction's own words give way to it.
 #[derive(Clone, Debug, PartialEq)]
 struct Ghost {
-    /// The words that always show (cut at their end only when even they do
-    /// not fit).
     head: SharedString,
-    /// The pieces after it, each after a faint `·`; they drop out whole.
-    more: Vec<SharedString>,
-    /// A verbatim prediction: its words give way to the accept hint (the
-    /// one piece in `more`), which never goes.
-    verbatim: bool,
+    /// A verbatim prediction, followed by its accept key.
+    accept: bool,
 }
 
 impl Ghost {
-    fn pieces(head: &'static str, more: &[&'static str]) -> Self {
+    fn says(head: &'static str) -> Self {
         Self {
             head: head.into(),
-            more: more
-                .iter()
-                .map(|piece| SharedString::from(*piece))
-                .collect(),
-            verbatim: false,
+            accept: false,
         }
     }
 
-    /// Whether the hint stays whole whatever the width (`⇥ accept`).
-    fn keeps_hint(&self) -> bool {
-        self.verbatim
-    }
-
-    /// Every rung the line can show, longest first: what `ghost_row`'s
-    /// row-fit picks from, spelled out for the tests.
+    /// The whole line, as the tests read it.
     #[cfg(test)]
-    fn rungs(&self) -> Vec<String> {
-        if self.verbatim {
-            return vec![std::iter::once(self.head.to_string())
-                .chain(self.more.iter().map(|piece| piece.to_string()))
-                .collect::<Vec<_>>()
-                .join(" \u{b7} ")];
+    fn text(&self) -> String {
+        if self.accept {
+            format!("{} \u{b7} {ACCEPT_HINT}", self.head)
+        } else {
+            self.head.to_string()
         }
-        (0..=self.more.len())
-            .rev()
-            .map(|kept| {
-                std::iter::once(self.head.to_string())
-                    .chain(self.more[..kept].iter().map(|piece| piece.to_string()))
-                    .collect::<Vec<_>>()
-                    .join(" \u{b7} ")
-            })
-            .collect()
     }
 }
+
+/// What follows a verbatim prediction.
+const ACCEPT_HINT: &str = "\u{21e5} accept";
 
 /// The placeholder for this line: a draft's first prompt, a Decision's
 /// reply, a dead Session's revival, a landed prediction, a follow-up queued
@@ -3904,29 +3723,20 @@ fn placeholder(
     suggestion: Option<&str>,
 ) -> Ghost {
     if draft {
-        return Ghost::pieces(
-            "Start a thread",
-            &["/ for commands", "drop or paste images"],
-        );
+        return Ghost::says("Start a thread");
     }
     let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);
     match followup::suggest(pending, transcript, suggestion) {
         // A docked Decision owns the block above this line; the line itself
         // still steers, so it says so (rule 2.8.1: one input line).
-        Followup::Decision => Ghost::pieces("answer above, or steer", &[]),
-        Followup::Revive => Ghost::pieces("Revive and continue", &["/ for commands"]),
+        Followup::Decision => Ghost::says("answer above, or steer"),
+        Followup::Revive => Ghost::says("Revive and continue"),
         Followup::Suggested(text) => Ghost {
             head: SharedString::from(text),
-            more: vec![SharedString::from("\u{21e5} accept")],
-            verbatim: true,
+            accept: true,
         },
-        Followup::Steer if busy => {
-            Ghost::pieces("queue a follow-up", &["\u{23ce} sends when the turn ends"])
-        }
-        Followup::Steer => Ghost::pieces(
-            "Steer this thread",
-            &["/ for commands", "drop or paste images"],
-        ),
+        Followup::Steer if busy => Ghost::says("Queue a follow-up"),
+        Followup::Steer => Ghost::says("Steer this thread"),
     }
 }
 
@@ -3970,39 +3780,11 @@ pub(crate) fn flat_facts_text(files: usize, queued: usize) -> String {
     facts.join(" \u{b7} ")
 }
 
-/// The placeholder drawn on a clipped, wrapping row one line high, starting
-/// two cells in (after the caret's cell and a space): the head first, then
-/// each further piece after its faint `·` as one whole, so a piece that does
-/// not fit falls to the hidden second line and the row shows the longest
-/// rung that fits. A prediction instead lets its own words truncate before
-/// the accept hint, which never goes. A compact (L2) line shows the head
-/// only.
-fn ghost_row(ghost: Ghost, compact: bool) -> Div {
-    // The placeholder is one muted run, its `·` too (the prototype's
-    // `.ph-text`).
-    let seam = || {
-        components::cells("\u{b7}")
-            .px(px(theme::CH))
-            .w(px(3.0 * theme::CH))
-            .text_color(rgb(TEXT_MUTED))
-    };
-    let more: Vec<SharedString> = if compact && !ghost.verbatim {
-        Vec::new()
-    } else {
-        ghost.more.clone()
-    };
-    let pieces = more.into_iter().enumerate().map(move |(index, piece)| {
-        div()
-            .flex()
-            .flex_shrink_0()
-            .h(px(theme::COMPOSER_ROW_H))
-            .when(index == 0, |piece| {
-                piece.debug_selector(|| "prompt-placeholder-hint".into())
-            })
-            .child(seam())
-            .child(components::cells(piece))
-    });
-    let row = div()
+/// The placeholder drawn on a clipped row one line high, starting two cells
+/// in (after the caret's cell and a space). A prediction lets its own words
+/// truncate before the accept hint, which never goes.
+fn ghost_row(ghost: Ghost) -> Div {
+    div()
         .debug_selector(|| "prompt-placeholder".into())
         .absolute()
         .left(px(2.0 * theme::FS_UI * theme::CODE_ADVANCE))
@@ -4012,31 +3794,32 @@ fn ghost_row(ghost: Ghost, compact: bool) -> Div {
         .flex()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_color(rgb(TEXT_MUTED));
-    if ghost.keeps_hint() {
-        return row
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(theme::COMPOSER_ROW_H))
-                    .truncate()
-                    .child(ghost.head),
-            )
-            .children(pieces);
-    }
-    let head_w = components::run_width(&ghost.head);
-    row.flex_wrap()
+        .text_color(rgb(TEXT_MUTED))
         .child(
             div()
                 .flex_shrink(1.)
                 .min_w_0()
-                .w(px(head_w))
                 .h(px(theme::COMPOSER_ROW_H))
                 .truncate()
                 .child(ghost.head),
         )
-        .children(pieces)
+        .when(ghost.accept, |row| {
+            // The placeholder is one muted run, its `·` too (the
+            // prototype's `.ph-text`).
+            row.child(
+                div()
+                    .debug_selector(|| "prompt-placeholder-hint".into())
+                    .flex()
+                    .flex_shrink_0()
+                    .h(px(theme::COMPOSER_ROW_H))
+                    .child(
+                        components::cells("\u{b7}")
+                            .px(px(theme::CH))
+                            .w(px(3.0 * theme::CH)),
+                    )
+                    .child(components::cells(ACCEPT_HINT)),
+            )
+        })
 }
 
 /// #11: whether this Thread still offers adopting a CLI session — no
@@ -4168,19 +3951,11 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, grid: bool, coun
     rows as f32 * theme::QUEUE_ROW_H
 }
 
-/// The live Composer's height less its editor rows and queue: the band's
-/// padding, its two rules, the status line with its gap, and the air under
-/// the stack — the same at every level. A quiet board cell is shorter by
-/// the status line and its gap (`composer_quiet_height`); the budget reads
-/// the live one, the taller. The shelf and the working line stand above
-/// and are not part of it.
+/// The Composer's height less its editor rows and queue: the band's
+/// padding, its two rules and the air under the stack — the same at every
+/// level, focused or not; its status line is the window's (ADR 0014). The
+/// shelf and the working line stand above and are not part of it.
 fn composer_fixed_height(_compact: bool, _grid: bool) -> f32 {
-    composer_quiet_height() + theme::COMPOSER_STATUS_GAP + theme::COMPOSER_STATUS_H
-}
-
-/// An unfocused board cell's Composer less its editor rows (FL-11): the
-/// band's padding, its two rules and the air under it — flush, no status.
-pub(crate) fn composer_quiet_height() -> f32 {
     2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B
 }
 
@@ -9190,19 +8965,13 @@ mod tests {
             "try again... @\"/tmp/shot.png\" thanks"
         );
     }
-    /// The placeholder's pieces after its head (terminal-native, WP-D): at
-    /// rest the `/` menu and the drop hint; a prediction's accept key (the
-    /// one thing about it the line cannot show). A Decision's line carries
-    /// none.
+    /// The placeholder carries one key hint at most (ADR 0014): a
+    /// prediction's accept key, the one thing about it the line cannot
+    /// show, never cut.
     #[test]
     fn the_placeholder_carries_the_one_key_hint() {
         let live = Transcript::default();
-        let hint = |ghost: Ghost| ghost.more.first().map(|piece| piece.to_string());
-        assert_eq!(
-            hint(placeholder(false, false, Some(&live), None)).as_deref(),
-            Some("/ for commands")
-        );
-        assert_eq!(hint(placeholder(true, false, Some(&live), None)), None);
+        assert!(!placeholder(false, false, Some(&live), None).accept);
         let mut answered = Transcript::default();
         answered.apply(Input::Prompt("fix the decoder".into()));
         answered.apply(Input::Event(SessionEvent::TextDelta {
@@ -9213,26 +8982,13 @@ mod tests {
             cost_usd: None,
         }));
         assert_eq!(
-            hint(placeholder(
-                false,
-                false,
-                Some(&answered),
-                Some("Run the tests")
-            ))
-            .as_deref(),
-            Some("\u{21e5} accept")
+            placeholder(false, false, Some(&answered), Some("Run the tests")).text(),
+            "Run the tests \u{b7} \u{21e5} accept"
         );
         assert_eq!(
-            hint(placeholder(false, true, None, Some("Run the tests"))).as_deref(),
-            Some("/ for commands"),
+            placeholder(false, true, None, Some("Run the tests")).text(),
+            "Start a thread",
             "a draft has no conversation to predict from"
-        );
-        // The accept key is never cut; the menu pointer may drop out whole.
-        assert!(placeholder(false, false, Some(&answered), Some("Run the tests")).keeps_hint());
-        assert!(!placeholder(false, false, Some(&live), None).keeps_hint());
-        assert_eq!(
-            placeholder(false, false, Some(&answered), Some("Run the tests")).rungs(),
-            ["Run the tests \u{b7} \u{21e5} accept"]
         );
     }
     use ferrite_core::transcript::{Input, Lexer, Todos};
@@ -11194,23 +10950,19 @@ mod tests {
 
     /// §D.7 (terminal-native, WP-D): the idle line says what the Pane is
     /// waiting on — a Decision, a live Thread, a running turn or a closed
-    /// Session — and, once a prediction lands, shows it verbatim as the
-    /// operator's own next line. Its pieces drop out whole, from the right;
-    /// none ends in an ellipsis, a terminal placeholder's own grammar.
+    /// Session — in a couple of words, and, once a prediction lands, shows
+    /// it verbatim as the operator's own next line. None ends in an
+    /// ellipsis, a terminal placeholder's own grammar.
     #[test]
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
         assert_eq!(
-            placeholder(false, false, Some(&live), None).rungs(),
-            [
-                "Steer this thread \u{b7} / for commands \u{b7} drop or paste images",
-                "Steer this thread \u{b7} / for commands",
-                "Steer this thread",
-            ]
+            placeholder(false, false, Some(&live), None).text(),
+            "Steer this thread"
         );
         assert_eq!(
-            placeholder(true, false, Some(&live), None).rungs(),
-            ["answer above, or steer"]
+            placeholder(true, false, Some(&live), None).text(),
+            "answer above, or steer"
         );
         let mut running = Transcript::default();
         running.apply(Input::Prompt("fix the decoder".into()));
@@ -11218,11 +10970,8 @@ mod tests {
             text: "Looking".into(),
         }));
         assert_eq!(
-            placeholder(false, false, Some(&running), None).rungs(),
-            [
-                "queue a follow-up \u{b7} \u{23ce} sends when the turn ends",
-                "queue a follow-up",
-            ]
+            placeholder(false, false, Some(&running), None).text(),
+            "Queue a follow-up"
         );
 
         let mut closed = Transcript::default();
@@ -11230,20 +10979,12 @@ mod tests {
             reason: "the CLI exited".into(),
         }));
         assert_eq!(
-            placeholder(false, false, Some(&closed), None).rungs(),
-            [
-                "Revive and continue \u{b7} / for commands",
-                "Revive and continue"
-            ]
+            placeholder(false, false, Some(&closed), None).text(),
+            "Revive and continue"
         );
-        // A draft: what the first prompt does, then the menu pointer.
         assert_eq!(
-            placeholder(false, true, None, None).rungs(),
-            [
-                "Start a thread \u{b7} / for commands \u{b7} drop or paste images",
-                "Start a thread \u{b7} / for commands",
-                "Start a thread",
-            ]
+            placeholder(false, true, None, None).text(),
+            "Start a thread"
         );
 
         // A landed prediction is the line, verbatim and unadorned — it is a
@@ -11263,18 +11004,15 @@ mod tests {
         );
         // A Decision and a dead Session both outrank it.
         assert_eq!(
-            placeholder(true, false, Some(&answered), Some("Run the tests")).rungs(),
-            ["answer above, or steer"]
+            placeholder(true, false, Some(&answered), Some("Run the tests")).text(),
+            "answer above, or steer"
         );
         assert_eq!(
-            placeholder(false, false, Some(&closed), Some("Run the tests")).rungs(),
-            [
-                "Revive and continue \u{b7} / for commands",
-                "Revive and continue"
-            ]
+            placeholder(false, false, Some(&closed), Some("Run the tests")).text(),
+            "Revive and continue"
         );
 
-        // No rung names a message or ends in an ellipsis.
+        // No line names a message or ends in an ellipsis.
         for ghost in [
             placeholder(false, false, Some(&live), None),
             placeholder(true, false, Some(&live), None),
@@ -11282,10 +11020,9 @@ mod tests {
             placeholder(false, false, Some(&closed), None),
             placeholder(false, true, None, None),
         ] {
-            for rung in ghost.rungs() {
-                assert!(!rung.contains("message"), "{rung}");
-                assert!(!rung.ends_with('\u{2026}'), "{rung}");
-            }
+            let text = ghost.text();
+            assert!(!text.contains("message"), "{text}");
+            assert!(!text.ends_with('\u{2026}'), "{text}");
         }
     }
 
@@ -11300,25 +11037,16 @@ mod tests {
 
     // ---- WP-D tests (append above the end line)
     /// The height budget counts exactly what the Composer draws around its
-    /// editor rows (terminal-native, WP-D): the band's padding, the status
-    /// line and its gap, and the air under the stack — at every level, since
-    /// a quiet cell holds the status line's room.
+    /// editor rows (terminal-native, WP-D): the band's padding, its two 1px
+    /// rules and 6px to the Pane's foot — at every level, focused or not.
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
-        assert_eq!(theme::COMPOSER_STATUS_H, theme::LH_UI);
-        // A quiet board cell (FL-11): the band's padding, its two 1px rules
-        // and 6px to the Pane's foot — 7px under the band.
-        let quiet =
+        let fixed =
             2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B;
-        assert_eq!(composer_quiet_height(), quiet);
         assert_eq!(theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B, 7.);
-        // The live Composer adds the status line and its 2px gap: band,
-        // rule, 2px, 20px, 6px.
-        let status = theme::COMPOSER_STATUS_GAP + theme::COMPOSER_STATUS_H;
-        assert_eq!(status, 22.);
         for grid in [false, true] {
             for compact in [false, true] {
-                assert_eq!(composer_fixed_height(compact, grid), quiet + status);
+                assert_eq!(composer_fixed_height(compact, grid), fixed);
             }
         }
         // One band row is the old grid line's 32px: 6 + 20 + 6.

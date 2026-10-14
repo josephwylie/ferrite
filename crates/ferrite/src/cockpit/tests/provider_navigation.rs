@@ -165,12 +165,11 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
 }
 
 /// Folded (cmd-B), the column draws nothing and the board takes the width;
-/// the titlebar cell keeps the traffic lights' reserve, then the sidebar
-/// toggle, the bell and (off macOS, whose app menu lists it) Settings in
-/// that order, and the toggle opens the column again (the prototype's
-/// collapsed titlebar).
+/// the bottom bar keeps the sidebar toggle, the bell and (off macOS, whose
+/// app menu lists it) Settings at its left in that order, each the bar's
+/// full height, and the toggle opens the column again (ADR 0014).
 #[gpui::test]
-fn a_folded_nav_keeps_its_doors_in_the_titlebar_cell(cx: &mut TestAppContext) {
+fn a_folded_nav_keeps_its_doors_in_the_bottom_bar(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
@@ -187,44 +186,30 @@ fn a_folded_nav_keeps_its_doors_in_the_titlebar_cell(cx: &mut TestAppContext) {
         cx.debug_bounds("nav-column").unwrap().size.width,
         px(nav::FOLDED_WIDTH)
     );
-    let cell = cx.debug_bounds("nav-chrome").unwrap();
-    assert!((cell.size.width - px(crate::theme::NAV_CHROME_FOLDED_W)).abs() < px(1.));
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
     let toggle = bounds(cx, "nav-collapse".to_string());
     let bell = cx.debug_bounds("notifications-bell").unwrap();
-    assert!(
-        toggle.left() >= px(crate::theme::NAV_CHROME_LEAD),
-        "clear of the traffic lights"
-    );
+    assert_eq!(toggle.left(), bar.left(), "the bar's first door");
     assert!(
         toggle.right() <= bell.left() + px(0.5),
         "toggle, bell: {toggle:?} {bell:?}"
     );
-    // The toggle is a 28×24 door centred in the band.
     assert_eq!(toggle.size.width, px(crate::theme::ICON_BUTTON));
-    assert_eq!(toggle.size.height, px(crate::theme::ICON_BUTTON_H));
-    assert!(
-        (toggle.center().y - px(crate::theme::WIN_CHROME_H / 2.)).abs() < px(0.5),
-        "{toggle:?}"
-    );
     let mut doors = vec![toggle, bell];
     if cfg!(target_os = "macos") {
         assert!(cx.debug_bounds("settings-gear").is_none());
-        assert!(bell.right() <= cell.right());
-        // The prototype's collapsed 20ch cell: the toggle at 92.2–120.2,
-        // the bell from 120.2, 1ch clear of the cell's edge.
-        assert!((toggle.left() - px(92.2)).abs() < px(0.5), "{toggle:?}");
-        assert!((bell.left() - px(120.2)).abs() < px(0.5), "{bell:?}");
     } else {
         let settings = cx.debug_bounds("settings-gear").unwrap();
         assert!(
             bell.right() <= settings.left() + px(0.5),
             "bell, Settings: {bell:?} {settings:?}"
         );
-        assert!(settings.right() <= cell.right());
         doors.push(settings);
     }
+    let session = cx.debug_bounds("bottom-bar-session").unwrap();
     for door in doors {
-        assert!(door.bottom() <= px(crate::theme::WIN_CHROME_H));
+        assert!(door.top() >= bar.top() && door.bottom() <= bar.bottom());
+        assert!(door.right() <= session.left() + px(0.5), "before `ferrite`");
     }
 
     cx.simulate_click(toggle.center(), gpui::Modifiers::none());
