@@ -250,7 +250,7 @@ pub const ROW_TEXT_CELLS: usize = 76 - 2 - 2 - 10 - 5;
 // ----------------------------------------------------------------- Bell
 
 /// How long an event waits before it alerts: a request answered, or a
-/// finish read, within it never interrupts anyone (ADR 0014).
+/// finish read, within it never interrupts anyone (ADR 0017).
 pub const ALERT_DELAY: Duration = Duration::from_secs(1);
 
 /// How long a toast for a request stands.
@@ -303,7 +303,7 @@ pub struct Ring {
 /// waiting out `ALERT_DELAY`, and the toasts standing (oldest first; the
 /// newest draws).
 ///
-/// **Toasts** (FL-18, ADR 0014). A new finish or request waits a second,
+/// **Toasts** (FL-18, ADR 0017). A new finish or request waits a second,
 /// then is checked again: one read, answered or gone by then is dropped.
 /// A survivor toasts unless the operator is already looking at it, and
 /// replaces any toast its Thread had. A toast goes on its own (8s for a
@@ -1043,7 +1043,7 @@ mod tests {
         assert!(folded[2].folded.is_empty());
     }
 
-    /// ADR 0014: an event waits a second and is checked again before it
+    /// ADR 0017: an event waits a second and is checked again before it
     /// rings; a survivor toasts once, unless in view, and goes on its own
     /// or as soon as it is read.
     #[test]

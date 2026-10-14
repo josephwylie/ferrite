@@ -1,5 +1,5 @@
 //! Sounds: the two chimes Ferrite plays when a Thread finished or needs the
-//! operator, and playing them (ADR 0014).
+//! operator, and playing them (ADR 0017).
 //!
 //! The built-in chimes are synthesised here as WAV: no audio files in the
 //! tree and no audio crate. Playback hands a file to the platform's own
@@ -85,24 +85,28 @@ impl Sound {
 /// and playable, else the built-in chime.
 pub fn play(sound: Sound, file: Option<&Path>) {
     let file = file.map(Path::to_path_buf);
-    std::thread::spawn(move || {
-        if file.as_deref().is_some_and(run_player) {
-            return;
-        }
-        // The players read files, so the chime is written out for each
-        // play and removed once it has played.
-        static PLAYS: AtomicU64 = AtomicU64::new(0);
-        let path: PathBuf = std::env::temp_dir().join(format!(
-            "ferrite-{}-{}-{}.wav",
-            sound.slug(),
-            std::process::id(),
-            PLAYS.fetch_add(1, Ordering::Relaxed)
-        ));
-        if std::fs::write(&path, sound.wav()).is_ok() {
-            run_player(&path);
-        }
-        let _ = std::fs::remove_file(&path);
-    });
+    std::thread::spawn(move || play_with(sound, file.as_deref(), run_player));
+}
+
+/// `play`'s work, through `run` (which plays a file to its end and says
+/// whether it could).
+fn play_with(sound: Sound, file: Option<&Path>, run: impl Fn(&Path) -> bool) {
+    if file.is_some_and(&run) {
+        return;
+    }
+    // The players read files, so the chime is written out for each play
+    // and removed once it has played.
+    static PLAYS: AtomicU64 = AtomicU64::new(0);
+    let path: PathBuf = std::env::temp_dir().join(format!(
+        "ferrite-{}-{}-{}.wav",
+        sound.slug(),
+        std::process::id(),
+        PLAYS.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&path, sound.wav()).is_ok() {
+        run(&path);
+    }
+    let _ = std::fs::remove_file(&path);
 }
 
 /// Play the file at `path` to its end. False when it could not be played.
@@ -173,6 +177,34 @@ mod tests {
             assert!(ms < 500, "{sound:?}");
         }
         assert_ne!(Sound::Done.wav(), Sound::NeedsYou.wav());
+    }
+
+    /// The operator's file plays alone when it can; one that cannot falls
+    /// back to the built-in chime, written out for the player and then
+    /// removed.
+    #[test]
+    fn an_unplayable_file_falls_back_to_the_built_in_chime() {
+        use std::cell::RefCell;
+        let own = Path::new("/sounds/bell.aiff");
+        let played = RefCell::new(Vec::new());
+        play_with(Sound::Done, Some(own), |path| {
+            played.borrow_mut().push(path.to_path_buf());
+            true
+        });
+        assert_eq!(*played.borrow(), [own]);
+
+        let played = RefCell::new(Vec::new());
+        play_with(Sound::NeedsYou, Some(own), |path| {
+            let wav = (path != own).then(|| std::fs::read(path).unwrap());
+            played.borrow_mut().push((path.to_path_buf(), wav));
+            path != own
+        });
+        let played = played.into_inner();
+        assert_eq!(played.len(), 2);
+        assert_eq!(played[0], (own.to_path_buf(), None));
+        let (chime, wav) = &played[1];
+        assert_eq!(wav.as_deref(), Some(&Sound::NeedsYou.wav()[..]));
+        assert!(!chime.exists(), "the written chime is removed");
     }
 
     /// Every note fades in and out: no sample at either side of a note's

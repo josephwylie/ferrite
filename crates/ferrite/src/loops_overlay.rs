@@ -49,7 +49,7 @@ fn enabled() -> bool {
 /// The kit Root's view: the Cockpit, cached, and the loops over it. It
 /// also tells the Cockpit when the window gains or loses the system's
 /// focus, and brings the window forward for a clicked system notification
-/// (ADR 0014).
+/// (ADR 0017).
 pub struct CockpitWindow {
     cockpit: Entity<CockpitView>,
     overlay: Option<Entity<LoopsOverlay>>,

@@ -630,7 +630,7 @@ pub struct Cockpit {
     notifications: Notifications,
     /// Whether the operator is looking: the window has the system's focus.
     /// While it is false nothing is acknowledged, so a finish or a request
-    /// on the focused Pane stays unread until they come back (ADR 0014).
+    /// on the focused Pane stays unread until they come back (ADR 0017).
     present: bool,
     /// The Subject the window has actually selected in each open Thread.
     /// Main is implicit until the renderer records a child selection.

@@ -86,7 +86,7 @@ pub struct Settings {
     /// thread keeps the tool it started with. Default: When asked.
     pub visuals: crate::visual::Level,
     /// Whether a Thread that finished or needs you plays a sound (ADR
-    /// 0014). Default: true.
+    /// 0017). Default: true.
     pub sounds: bool,
     /// The file played when a Thread finishes, instead of the built-in
     /// chime. `None` is the built-in one.
@@ -282,14 +282,19 @@ impl Settings {
     /// Whether a Thread on `provider` plays its sounds: sounds are on and
     /// that provider is not muted.
     pub fn sounds_for(&self, provider: Provider) -> bool {
-        self.sounds
-            && match provider {
-                Provider::Claude => self.claude_sounds,
-                Provider::Codex => self.codex_sounds,
-            }
+        self.sounds && self.provider_sounds(provider)
     }
 
-    pub fn set_sounds_for(&mut self, provider: Provider, on: bool) {
+    /// Whether `provider` is unmuted, whatever the switch for all sounds
+    /// says.
+    pub fn provider_sounds(&self, provider: Provider) -> bool {
+        match provider {
+            Provider::Claude => self.claude_sounds,
+            Provider::Codex => self.codex_sounds,
+        }
+    }
+
+    pub fn set_provider_sounds(&mut self, provider: Provider, on: bool) {
         match provider {
             Provider::Claude => self.claude_sounds = on,
             Provider::Codex => self.codex_sounds = on,
@@ -434,7 +439,7 @@ mod tests {
     #[test]
     fn sounds_mute_per_provider_and_all_at_once() {
         let mut settings = Settings::default();
-        settings.set_sounds_for(Provider::Codex, false);
+        settings.set_provider_sounds(Provider::Codex, false);
         assert!(settings.sounds_for(Provider::Claude));
         assert!(!settings.sounds_for(Provider::Codex));
         settings.sounds = false;

@@ -308,7 +308,7 @@ fn main() {
                 .then(|| core.groups().iter().next().map(|group| group.id))
                 .flatten();
 
-            // Who posts the system notifications (ADR 0014): the bundle's
+            // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
             cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite");
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);

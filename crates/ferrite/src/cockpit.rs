@@ -4602,13 +4602,8 @@ impl CockpitView {
                 id,
                 title,
                 "",
-                settings.sounds_for(provider),
-                self.setting_change(cx, move |s, v| {
-                    s.set_sounds_for(provider, v);
-                    // Unmuting one provider while sounds are off means
-                    // sounds on for that provider.
-                    s.sounds |= v;
-                }),
+                settings.provider_sounds(provider),
+                self.setting_change(cx, move |s, v| s.set_provider_sounds(provider, v)),
             )
         });
         let system = vec![prefs::toggle(
@@ -12381,14 +12376,13 @@ impl CockpitView {
         }
     }
 
-    /// Keep the bell up with the Notices and requests (FL-18, ADR 0014),
+    /// Keep the bell up with the Notices and requests (FL-18, ADR 0017),
     /// on every pump: hear what arrived, and ring what waited out its
     /// delay and still stands — a toast, a sound, and while the window is
     /// in the background a system notification.
     ///
     /// The operator is looking at an event, and nothing rings for it, while
-    /// the window has focus and the event is in view: a request on the
-    /// focused Pane (its keys answer it there), a finish on the board.
+    /// the window has focus and its Thread is on the board.
     fn ring_bell(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let notifications = self.cockpit.notifications();
@@ -12410,15 +12404,8 @@ impl CockpitView {
             .into_iter()
             .filter_map(|index| self.panes[index].thread())
             .collect();
-        let focused = self.focused_thread();
-        let in_view = |alert: &crate::notifications::Alert| {
-            present
-                && if alert.needs_you() {
-                    Some(alert.thread) == focused
-                } else {
-                    on_board.contains(&alert.thread)
-                }
-        };
+        let in_view =
+            |alert: &crate::notifications::Alert| present && on_board.contains(&alert.thread);
         let notifications = self.cockpit.notifications();
         let live = |target: &RowTarget| target.wants(notifications);
         let ring = self.bell.ring(now, &live, &in_view);
@@ -12434,38 +12421,44 @@ impl CockpitView {
             self.system_alerts.remove(&thread);
             cx.dismiss_system_notification(&system_tag(thread));
         }
-        for alert in &ring.rang {
-            self.alert(alert, present, cx);
+        // Alerts that ring together chime once, needs-you over done.
+        let settings = &self.prefs.settings;
+        let sound = ring
+            .rang
+            .iter()
+            .filter(|alert| {
+                self.cockpit
+                    .thread(alert.thread)
+                    .is_some_and(|open| settings.sounds_for(open.provider()))
+            })
+            .map(|alert| {
+                if alert.needs_you() {
+                    Sound::NeedsYou
+                } else {
+                    Sound::Done
+                }
+            })
+            .max_by_key(|sound| *sound == Sound::NeedsYou);
+        if let Some(sound) = sound {
+            self.chime(sound);
+        }
+        if !present && self.prefs.settings.system_notifications {
+            for alert in &ring.rang {
+                self.post_system_notification(alert, cx);
+            }
         }
         if ring.redraw {
             cx.notify();
         }
     }
 
-    /// One alert's sound and, away from the window, its system
-    /// notification — each as Settings allow.
-    fn alert(
+    /// One alert's system notification, tagged with its Thread so a newer
+    /// one replaces it.
+    fn post_system_notification(
         &mut self,
         alert: &crate::notifications::Alert,
-        present: bool,
         cx: &mut Context<Self>,
     ) {
-        let settings = &self.prefs.settings;
-        let provider = self
-            .cockpit
-            .thread(alert.thread)
-            .map(|open| open.provider());
-        if provider.is_some_and(|provider| settings.sounds_for(provider)) {
-            let sound = if alert.needs_you() {
-                Sound::NeedsYou
-            } else {
-                Sound::Done
-            };
-            self.chime(sound);
-        }
-        if present || !self.prefs.settings.system_notifications {
-            return;
-        }
         let Some(row) = self.alert_row(&alert.target, ferrite_core::clock::system_time()) else {
             return;
         };
@@ -15202,7 +15195,7 @@ mod tests {
     }
 
     /// Pump past the bell's delay: whatever still stands has rung (ADR
-    /// 0014).
+    /// 0017).
     fn ring(cx: &mut gpui::VisualTestContext) {
         cx.executor()
             .advance_clock(crate::notifications::ALERT_DELAY);
@@ -24464,14 +24457,14 @@ mod tests {
         });
     }
 
-    /// FL-18, ADR 0014: a request from a Thread that is not the focused
-    /// Pane toasts once, a second after it arrives, with the nav open or
-    /// folded; pumping never duplicates it, one cancelled within the second
-    /// never toasts, and a newer request from the same Thread replaces it.
+    /// FL-18, ADR 0017: a request from a Thread off the board toasts once,
+    /// a second after it arrives, with the nav open or folded; pumping
+    /// never duplicates it, one cancelled within the second never toasts,
+    /// and a newer request from the same Thread replaces it.
     #[gpui::test]
     fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut TestAppContext) {
         use ferrite_core::activity::ActivityEvent;
-        // Solo on the first Thread: the second is off the focused Pane.
+        // Solo on the first Thread: the second is off the board.
         let (core, fake) = cockpit("request-toast-contract", 2);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let toasts = |cx: &mut gpui::VisualTestContext| {
@@ -24544,7 +24537,7 @@ mod tests {
         });
     }
 
-    /// ADR 0014: a toast goes on its own, a request's after 8s.
+    /// ADR 0017: a toast goes on its own, a request's after 8s.
     #[gpui::test]
     fn a_request_toast_expires(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("request-toast-expiry", 2);
@@ -24573,7 +24566,7 @@ mod tests {
         });
     }
 
-    /// ADR 0014: with the window in the background, a finish on the very
+    /// ADR 0017: with the window in the background, a finish on the very
     /// Pane the operator left focused is news. It chimes, toasts and posts
     /// a system notification; clicking that lands on the Thread and reads
     /// it, and so does coming back to the window.
@@ -24608,7 +24601,11 @@ mod tests {
             "both Panes are on the board, but nobody is looking"
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.chimed, [Sound::Done, Sound::Done]);
+            assert_eq!(
+                view.chimed,
+                [Sound::Done],
+                "ringing together, they chime once"
+            );
             assert_eq!(view.bell.toasts().len(), 2);
         });
 
@@ -24631,6 +24628,58 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| {
             assert!(view.bell.toasts().is_empty(), "both are in view now");
+        });
+    }
+
+    /// ADR 0017: alerts ringing together chime once, needs-you over done;
+    /// and with the window focused, a request on a Pane that is on the
+    /// board but not focused rings nothing — it shows where it is asked.
+    #[gpui::test]
+    fn alerts_chime_once_and_a_request_in_view_rings_nothing(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("alerts-together", 2);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        fake.streams.borrow()[1].send(decision("away")).unwrap();
+        tick(cx);
+        ring(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.chimed, [Sound::NeedsYou]);
+            assert_eq!(view.bell.toasts().len(), 2);
+        });
+
+        view.update(cx, |view, cx| {
+            view.set_window_active(true, cx);
+            view.chimed.clear();
+        });
+        tick(cx);
+        let unfocused = view.read_with(cx, |view, _| {
+            assert!(view.bell.toasts().is_empty(), "both are in view now");
+            view.cockpit
+                .threads()
+                .into_iter()
+                .position(|thread| Some(thread) != view.focused_thread())
+                .unwrap()
+        });
+        fake.streams.borrow()[unfocused]
+            .send(decision("here"))
+            .unwrap();
+        tick(cx);
+        ring(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.bell.toasts().is_empty());
+            assert!(view.chimed.is_empty());
+            assert!(
+                view.cockpit.notifications().unread() > 0,
+                "the bell keeps the request"
+            );
         });
     }
 
@@ -24663,13 +24712,14 @@ mod tests {
         assert!(!settings(cx).sounds_for(Provider::Claude));
         click("settings-claude-sounds", cx);
         assert!(
-            settings(cx).sounds_for(Provider::Claude),
-            "a provider turned on turns sounds on"
+            !settings(cx).sounds && !settings(cx).provider_sounds(Provider::Claude),
+            "a provider's switch is its own: sounds stay off"
         );
-        assert!(
-            !settings(cx).sounds_for(Provider::Codex),
-            "Codex stays muted"
-        );
+        click("settings-sounds", cx);
+        assert!(!settings(cx).sounds_for(Provider::Claude));
+        assert!(!settings(cx).sounds_for(Provider::Codex));
+        click("settings-claude-sounds", cx);
+        assert!(settings(cx).sounds_for(Provider::Claude));
         click("settings-system-notifications", cx);
         assert!(!settings(cx).system_notifications);
 
@@ -24703,7 +24753,9 @@ mod tests {
         cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
-            view.prefs.settings.set_sounds_for(Provider::Claude, false);
+            view.prefs
+                .settings
+                .set_provider_sounds(Provider::Claude, false);
             view.prefs.settings.system_notifications = false;
             view.set_window_active(false, cx);
         });

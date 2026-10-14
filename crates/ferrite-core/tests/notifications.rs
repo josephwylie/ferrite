@@ -220,7 +220,7 @@ fn a_finish_on_the_focused_thread_is_born_read() {
     assert!(!h.cockpit.notifications().attention(thread));
 }
 
-/// ADR 0014: the focused Pane is only seen while the window has focus. A
+/// ADR 0017: the focused Pane is only seen while the window has focus. A
 /// finish there while the operator is in another app stays unread, and
 /// coming back reads it.
 #[test]

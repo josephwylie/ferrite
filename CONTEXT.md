@@ -147,8 +147,8 @@ Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread
 until they land on the Thread with the window focused; shown by the bell, a
 toast, a chime, the Pane's pulsing ring, and, while the window is in the
-background, a system notification. A Subagent finishing, an interrupt, or a held prompt going
-out is never a Notice.
+background, a system notification. A Subagent finishing, an interrupt, or a
+held prompt going out is never a Notice.
 _Avoid_: alert, ping, notification (the bell's whole surface is that).
 
 **Draft**
