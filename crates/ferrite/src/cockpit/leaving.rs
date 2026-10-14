@@ -63,7 +63,7 @@ impl CockpitView {
             .threads()
             .into_iter()
             .filter_map(|thread| self.cockpit.thread(thread))
-            .filter(|thread| thread.busy() && thread.pending().is_none())
+            .filter(|thread| thread.working() && thread.pending().is_none())
             .count();
         interrupted(working, waiting)
     }

@@ -1762,8 +1762,9 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
 /// registry, the Groups) so that a crash or power cut at any moment leaves
 /// the old file or the new one, never a torn one: written beside, synced
 /// behind a barrier so the contents reach the drive before the rename can
-/// (ADR 0009), renamed over. A symlinked file is written through to its
-/// target, so the link the operator made survives.
+/// (ADR 0009), renamed over, the rename made durable by syncing the
+/// directory. A symlinked file is written through to its target, so the
+/// link the operator made survives.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         fs::canonicalize(path)?
@@ -1779,7 +1780,8 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })()
     .inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
-    })
+    })?;
+    sync_dir(path.parent().unwrap_or(Path::new(".")))
 }
 
 /// A name for a file written beside a log and renamed over it. Never a
@@ -1794,8 +1796,8 @@ fn temp_beside(path: &Path) -> PathBuf {
     path.with_file_name(format!("{name}.tmp-{}-{n}", std::process::id()))
 }
 
-/// Rename `from` over `to` and make the rename itself survive a crash: the
-/// directory is synced after it.
+/// Rename `from` over `to`. The rename survives a crash once its
+/// directory is synced (`sync_dir`).
 #[cfg(not(windows))]
 fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)

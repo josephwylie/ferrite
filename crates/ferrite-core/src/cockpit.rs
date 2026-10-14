@@ -946,6 +946,7 @@ impl Cockpit {
                 Some(Ok(())) => "restarted on the updated CLI".to_string(),
                 Some(Err(e)) => format!("restart on the updated CLI failed: {e}"),
             };
+            crate::log!("thread {id}: session {note}");
             if let Some(thread) = self.threads.get_mut(&id) {
                 thread.apply(Input::Notice(note));
             }
@@ -1492,6 +1493,14 @@ impl Cockpit {
                 }
             }
         }
+        if state.session.is_some() {
+            let why = match kind {
+                ReplacementKind::Fresh => "replaced by a fresh conversation".to_string(),
+                ReplacementKind::Handover => format!("handed over to {provider}"),
+                ReplacementKind::Retune => "replaced to change model or effort".to_string(),
+            };
+            crate::log!("thread {thread}: session ended: {why}");
+        }
         state.session = Some(session);
         state.provider = provider;
         state.model = model;
@@ -1523,6 +1532,10 @@ impl Cockpit {
         let meta = self.store.peek(thread).map_err(DeleteError::Load)?;
         let groups_before = self.groups.clone();
         let grouped = self.groups.of(thread).is_some();
+        let live = self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| state.session.is_some());
         if grouped {
             self.groups
                 .apply(GroupChange::Leave { thread })
@@ -1558,6 +1571,10 @@ impl Cockpit {
             self.notifications.forget(thread);
             self.store.delete(thread).map_err(DeleteError::Io)
         })();
+        // A refused delete may still have ended the Session (see above).
+        if live && !self.threads.contains_key(&thread) {
+            crate::log!("thread {thread}: session ended: deleted");
+        }
 
         if let Err(error) = deleted {
             if grouped {
@@ -2335,6 +2352,7 @@ impl Cockpit {
                 match result {
                     Ok(()) => release = true,
                     Err(error) => {
+                        crate::log!("thread {id}: session change failed: {error}");
                         self.threads
                             .get_mut(&id)
                             .expect("exists")
@@ -2396,6 +2414,7 @@ impl Cockpit {
                     Err(error) => {
                         state.session = None;
                         state.replace_generation();
+                        crate::log!("thread {id}: session could not start: {error}");
                         state.apply(Input::Notice(format!("could not start: {error}")));
                     }
                 }
@@ -3599,6 +3618,12 @@ impl<'a> ThreadView<'a> {
 
     pub fn busy(&self) -> bool {
         self.state.busy() || self.starting()
+    }
+
+    /// Is the agent mid-turn? Unlike `busy`, a Session still starting
+    /// (a launch's revival, a model or provider change) is not working.
+    pub fn working(&self) -> bool {
+        self.state.busy()
     }
 
     /// Whether a model or effort change waits on the provider's answer:

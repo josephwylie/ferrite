@@ -36,8 +36,14 @@ the pump adopts it when ready or shows "could not start" in the Pane.
 
 - A worktree that cannot be made (a squatting directory, a refused `git
   worktree add`) no longer refuses the revive. The Thread opens, and its
-  start fails in the Pane like any CLI that will not start. With a scripted
-  spawner the old synchronous refusal stands.
+  start fails in the Pane like any CLI that will not start, and in the
+  log (ADR 0015). With a scripted spawner the old synchronous refusal
+  stands.
+- Several revivals may place worktrees in one repository at once.
+  `workspace::ensure_worktree` takes a process-wide lock around its
+  `prune` and `add`: git marks a half-made worktree "initializing" only
+  after creating its admin directory, and a `prune` in that instant would
+  remove it.
 - `open_choice` (a new Thread) still makes its worktree inline: its rollback
   (registry entry, store) depends on knowing the outcome before the Thread
   exists. Revival has nothing to roll back.

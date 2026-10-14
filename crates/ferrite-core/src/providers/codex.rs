@@ -284,7 +284,10 @@ impl CodexSession {
 
     fn spawn_once(program: &str, config: &CodexConfig) -> Result<Self, CodexSpawnError> {
         let mut command = Command::new(program);
-        command.arg("app-server").no_console_window().agent_environment();
+        command
+            .arg("app-server")
+            .no_console_window()
+            .agent_environment();
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -1323,6 +1326,7 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {

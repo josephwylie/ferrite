@@ -16,7 +16,9 @@ fn an_unreadable_settings_file_is_never_saved_over(cx: &mut TestAppContext) {
         CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
     });
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.unreadable_told, "the window said so"));
+    view.read_with(cx, |view, _| {
+        assert!(view.unreadable_told, "the window said so")
+    });
 
     view.update(cx, |view, cx| {
         view.change_settings(|settings| settings.confirm_delete = false, cx)
@@ -35,9 +37,14 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.copy_diagnostics(cx));
 
-    let report = cx.read_from_clipboard().and_then(|item| item.text()).unwrap();
+    let report = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
     assert!(report.starts_with("Ferrite diagnostics\n"), "{report}");
     assert!(report.contains("Open Threads: 1\n"), "{report}");
     assert!(report.contains("--- log, last"), "{report}");
-    view.read_with(cx, |view, _| assert_eq!(view.settings_copied, Some("Diagnostics")));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.settings_copied, Some("Diagnostics"))
+    });
 }

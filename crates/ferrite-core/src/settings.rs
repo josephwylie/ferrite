@@ -185,9 +185,7 @@ impl Settings {
     pub fn load(dir: &Path) -> io::Result<Settings> {
         let bytes = match fs::read(dir.join(Self::FILE)) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Settings::default())
-            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Settings::default()),
             Err(error) => return Err(error),
         };
         let mut settings: Settings = serde_json::from_slice(&bytes)
@@ -348,7 +346,10 @@ mod tests {
         let dir = scratch("missing");
 
         assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
-        assert_eq!(Settings::load(&dir.join("nowhere")).unwrap(), Settings::default());
+        assert_eq!(
+            Settings::load(&dir.join("nowhere")).unwrap(),
+            Settings::default()
+        );
         assert!(!dir.join(Settings::FILE).exists(), "load never writes");
     }
 
@@ -467,7 +468,26 @@ mod tests {
         let link = fs::symlink_metadata(dir.join(Settings::FILE)).unwrap();
         assert!(link.file_type().is_symlink(), "the link survives");
         assert_eq!(Settings::load(&dir).unwrap(), changed);
-        assert_eq!(fs::read(&elsewhere).unwrap(), serde_json::to_vec_pretty(&changed).unwrap());
+        assert_eq!(
+            fs::read(&elsewhere).unwrap(),
+            serde_json::to_vec_pretty(&changed).unwrap()
+        );
+    }
+
+    /// A link whose target is gone is refused, not replaced by a plain
+    /// file: the operator's link stays for them to mend.
+    #[cfg(unix)]
+    #[test]
+    fn save_refuses_a_dangling_symlink() {
+        let dir = scratch("dangling");
+        let gone = dir.join("gone").join("ferrite.json");
+        std::os::unix::fs::symlink(&gone, dir.join(Settings::FILE)).unwrap();
+
+        assert!(everything_changed().save(&dir).is_err());
+
+        let link = fs::symlink_metadata(dir.join(Settings::FILE)).unwrap();
+        assert!(link.file_type().is_symlink(), "the link survives");
+        assert!(!gone.exists());
     }
 
     /// A field this build does not know is ignored, so a file from a newer

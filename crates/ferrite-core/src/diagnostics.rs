@@ -20,6 +20,8 @@ const LOG: &str = "ferrite.log";
 const PREVIOUS: &str = "ferrite.log.1";
 /// Past this the live log becomes the previous one: two files, about 2 MB.
 const CAP: u64 = 1024 * 1024;
+/// Crash reports kept; a new one past this removes the oldest.
+const CRASHES: usize = 5;
 /// How much of the log a copied report carries.
 const REPORT_LINES: usize = 200;
 
@@ -132,7 +134,8 @@ impl Log {
     }
 }
 
-/// `report` written to `crash-<time>.txt` in `dir`.
+/// `report` written to `crash-<time>.txt` in `dir`, keeping only the
+/// newest `CRASHES`: a panic on every restart must not fill the disk.
 fn write_crash(dir: &Path, report: &str) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let path = dir.join(format!("crash-{}.txt", stamp("%Y%m%d-%H%M%S%.3f")));
@@ -143,20 +146,33 @@ fn write_crash(dir: &Path, report: &str) -> io::Result<PathBuf> {
         std::env::consts::ARCH
     );
     fs::write(&path, header + report)?;
+    let crashes = crashes(dir);
+    for old in &crashes[..crashes.len().saturating_sub(CRASHES)] {
+        let _ = fs::remove_file(old);
+    }
     Ok(path)
 }
 
-/// The newest crash report in `dir`: their names sort by time.
+/// The newest crash report in `dir`.
 fn newest_crash(dir: &Path) -> Option<PathBuf> {
-    fs::read_dir(dir)
-        .ok()?
+    crashes(dir).pop()
+}
+
+/// The crash reports in `dir`, oldest first: their names sort by time.
+fn crashes(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut crashes: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("crash-"))
         })
-        .max()
+        .collect();
+    crashes.sort();
+    crashes
 }
 
 fn stamp(format: &str) -> String {
@@ -191,6 +207,23 @@ mod tests {
         assert!(live.ends_with("line 19\n"), "{live}");
         assert!(!previous.contains("line 0\n"), "the oldest lines are gone");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    /// Only the newest crash reports stay; older ones go as new ones come.
+    #[test]
+    fn crash_reports_are_capped() {
+        let dir = scratch("crashes");
+        fs::create_dir_all(&dir).unwrap();
+        for n in 0..CRASHES + 2 {
+            fs::write(dir.join(format!("crash-20261001-09000{n}.000.txt")), "old").unwrap();
+        }
+
+        let newest = write_crash(&dir, "panicked at 'boom'").unwrap();
+
+        let kept = crashes(&dir);
+        assert_eq!(kept.len(), CRASHES);
+        assert_eq!(kept.last(), Some(&newest));
+        assert!(!dir.join("crash-20261001-090000.000.txt").exists());
     }
 
     /// The copied report carries the facts, the newest crash and the end

@@ -19,10 +19,15 @@ reconstructed from memory.
   threading a handle through the core.
 - `diagnostics::open` is the first thing a launch does. It also installs a
   panic hook that writes `crash-<time>.txt` (version, platform, message,
-  thread, backtrace) beside the log before the default hook runs.
-- The core records why each Session ended: the CLI's exit (`Closed`'s
-  reason, with its stderr tail), a park, the memory watchdog's restart, and
-  the quit.
+  thread, backtrace) beside the log before the default hook runs. Only
+  the newest five crash reports are kept, so a panic on every restart
+  cannot fill the disk.
+- The core records why each Session ended or never began: the CLI's exit
+  (`Closed`'s reason, with its stderr tail), a start that failed (a
+  revival's worktree placement included, ADR 0014), a replacement (fresh
+  conversation, handover, model or effort change) and one that failed, a
+  park, a delete, the memory watchdog's restart, a restart onto an updated
+  CLI, and the quit.
 - Settings › About's Diagnostics copies a report — version, platform, CLI
   versions, the newest crash report and the log's last 200 lines — for the
   operator to paste into a bug report. Nothing is sent anywhere.

@@ -1050,6 +1050,7 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
