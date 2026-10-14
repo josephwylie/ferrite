@@ -534,7 +534,7 @@ impl ViewInner {
             None,
         );
         if browser.is_none() {
-            eprintln!("ferrite visuals: cef_browser_host_create_browser_sync returned null");
+            ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
         }
         *self.browser.borrow_mut() = browser;
         // The browser loads the document as it is now.

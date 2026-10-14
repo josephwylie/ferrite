@@ -1,15 +1,25 @@
-//! The command palette (⌘K, the prototype's `#palette`): every Thread, then
-//! every command, filtered as the operator types (FL-1…FL-5).
+//! The command palette (⌘K, the prototype's `#palette`): every Thread, the
+//! Projects and Groups to jump to, then every command, filtered as the
+//! operator types (FL-1…FL-5).
 //!
 //! The view holds what it shows — the rows, the filter's survivors and the
 //! cursor — and draws it in the float grammar: the input row (`❯`, the query
-//! in `TEXT_STRONG`, the block caret), section rows (`threads`, `commands`,
-//! or `groups` for ⌘G), rows (the cursor's `❯` on its `FLOAT_SEL` bar, a
-//! still state dot, the name with its matches in the accent at `W_STRONG`,
-//! the context muted after it, the key at the right), and the footer. The
+//! in `TEXT_STRONG`, the block caret, the status filter's name at the
+//! right), section rows (`threads`, `projects`, `groups`, `commands`), rows
+//! (the cursor's `❯` on its `FLOAT_SEL` bar, a still state mark, the name
+//! with its matches in the accent at `W_STRONG`, the context muted after
+//! it, the key at the right), and the footer — the cursor row's detail (a
+//! Thread's working directory) where it has one, else the keys. The
 //! cockpit builds the rows (`cockpit::palette`) and runs them: every key
 //! the palette answers is a `palette::*` action bound in its `Palette`
 //! context, handled at the cockpit's root.
+//!
+//! **Status filters.** A line of one letter is a filter, not a search: `b`
+//! `w` `i` `d` keep only the rows whose state is blocked, working, idle or
+//! done (`cockpit::Attention`; a Project or Group by its roll-up), and `a`
+//! keeps them all. Commands have no state and stay. The next letter turns
+//! the line into a search, so no key is ever lost to a filter: `debug`
+//! finds an idle Thread named so although `d` alone keeps the done ones.
 
 use std::ops::Range;
 
@@ -22,8 +32,10 @@ use gpui::{
     Subscription, Window,
 };
 
+use crate::cockpit::Attention;
 use crate::components;
 use crate::composer::{Composer, Edited, Role};
+use crate::nav::RowStatus;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
 
@@ -57,6 +69,7 @@ pub(crate) enum PaletteScope {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Section {
     Threads,
+    Projects,
     Groups,
     Commands,
 }
@@ -65,39 +78,21 @@ impl Section {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Section::Threads => "threads",
+            Section::Projects => "projects",
             Section::Groups => "groups",
             Section::Commands => "commands",
         }
     }
 }
 
-/// A Thread row's still state dot (never a spinner): `●` in the state's ink,
-/// `○` faint for a parked Thread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Dot {
-    Working,
-    NeedsYou,
-    Failing,
-    Done,
-    Parked,
-}
-
-impl Dot {
-    pub(crate) fn glyph(self) -> &'static str {
-        match self {
-            Dot::Parked => "\u{25cb}",
-            _ => "\u{25cf}",
-        }
-    }
-
-    pub(crate) fn ink(self) -> u32 {
-        match self {
-            Dot::Working => RUNNING,
-            Dot::NeedsYou => ATTENTION,
-            Dot::Failing => BLOCKED,
-            Dot::Done => TEXT_MUTED,
-            Dot::Parked => TEXT_FAINT,
-        }
+/// The status filter's name, at the input row's right while it is on.
+fn filter_word(filter: Attention) -> &'static str {
+    use crate::theme::words;
+    match filter {
+        Attention::Blocked => words::BLOCKED,
+        Attention::Working => words::WORKING,
+        Attention::Idle => words::IDLE,
+        Attention::Done => words::DONE,
     }
 }
 
@@ -120,6 +115,7 @@ pub(crate) enum Command {
     FilterProject(ProjectId),
     SortCreated,
     SortRecent,
+    SortAttention,
     NewProject,
     EditProject(ProjectId),
     Settings,
@@ -157,6 +153,8 @@ pub(crate) enum Act {
     Thread(ThreadId),
     /// Enter the Group.
     Group(GroupId),
+    /// Land on the Project's Thread that most needs the operator.
+    Project(ProjectId),
     Command(Command),
 }
 
@@ -168,8 +166,13 @@ pub(crate) struct Row {
     /// The muted words after the name: a Thread's `perf sweep · working`,
     /// a command's description. Part of what the query matches.
     pub context: SharedString,
-    /// A Thread's state dot; `None` holds the 2-cell column empty.
-    pub dot: Option<Dot>,
+    /// A Thread's state, or a Project's or Group's roll-up: its still mark
+    /// (`RowStatus::face`) and what the status filters read. `None` holds
+    /// the 2-cell column empty and passes every filter.
+    pub status: Option<RowStatus>,
+    /// The footer's line while the cursor is on the row: a Thread's working
+    /// directory.
+    pub detail: Option<SharedString>,
     /// The key that does the same, as the key table spells it (`cmd-1`).
     pub keys: Option<String>,
     pub act: Act,
@@ -177,11 +180,19 @@ pub(crate) struct Row {
 
 impl Row {
     /// How far after the name its context stands: four cells for a Thread
-    /// (and a Group), two for a command's description.
+    /// (and a Project or Group), two for a command's description.
     fn context_gap(&self) -> f32 {
         match self.section {
             Section::Commands => FLOAT_DETAIL_GAP,
-            Section::Threads | Section::Groups => PALETTE_CONTEXT_GAP,
+            Section::Threads | Section::Projects | Section::Groups => PALETTE_CONTEXT_GAP,
+        }
+    }
+
+    /// Whether the status filter keeps the row: a row with no state always.
+    fn passes(&self, filter: Option<Attention>) -> bool {
+        match (filter, self.status) {
+            (Some(filter), Some(status)) => status.attention() == filter,
+            _ => true,
         }
     }
 }
@@ -245,8 +256,9 @@ impl Palette {
         self.input.read(cx).text().to_string()
     }
 
-    /// Filter the rows by the line (`fuzzy::palette_match`): survivors keep
-    /// their order, never re-ranked; the cursor returns to the first.
+    /// Filter the rows by the line (`fuzzy::palette_match`, or a status
+    /// filter's letter): survivors keep their order, never re-ranked; the
+    /// cursor returns to the first.
     pub(crate) fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
         self.shown = filter(&self.rows, &query);
@@ -316,10 +328,29 @@ impl Palette {
     }
 }
 
-/// The rows the query keeps, with their names' lit ranges.
+/// The status filter a one-letter line asks for: `Some(None)` for `a`,
+/// every state. Any other line is a search.
+fn status_filter(query: &str) -> Option<Option<Attention>> {
+    match query {
+        "b" => Some(Some(Attention::Blocked)),
+        "w" => Some(Some(Attention::Working)),
+        "i" => Some(Some(Attention::Idle)),
+        "d" => Some(Some(Attention::Done)),
+        "a" => Some(None),
+        _ => None,
+    }
+}
+
+/// The rows the line keeps — a status filter's, or the search's — with
+/// their names' lit ranges.
 fn filter(rows: &[Row], query: &str) -> Vec<Shown> {
+    let (query, status) = match status_filter(query) {
+        Some(status) => ("", status),
+        None => (query, None),
+    };
     rows.iter()
         .enumerate()
+        .filter(|(_, row)| row.passes(status))
         .filter_map(|(index, row)| {
             crate::fuzzy::palette_match(query, &row.name, &row.context)
                 .map(|lit| Shown { row: index, lit })
@@ -365,7 +396,15 @@ impl Render for Palette {
                     .line_height(px(LH_UI))
                     .text_color(rgb(TEXT_STRONG))
                     .child(self.input.clone()),
-            );
+            )
+            .children(status_filter(&self.query(cx)).flatten().map(|filter| {
+                div()
+                    .debug_selector(|| "palette-filter".into())
+                    .flex_shrink_0()
+                    .ml(px(FLOAT_DETAIL_GAP))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(filter_word(filter))
+            }));
         let mut list = div()
             .id("palette-rows")
             .flex()
@@ -397,9 +436,13 @@ impl Render for Palette {
         if self.shown.is_empty() {
             list = list.child(crate::menu::note("no matches").mt(px(FLOAT_SECTION_GAP)));
         }
-        let footer = match self.scope {
-            PaletteScope::All => FOOTER,
-            PaletteScope::Groups => GROUPS_FOOTER,
+        let footer = match (
+            self.selected().and_then(|row| row.detail.clone()),
+            self.scope,
+        ) {
+            (Some(detail), _) => detail,
+            (None, PaletteScope::All) => FOOTER.into(),
+            (None, PaletteScope::Groups) => GROUPS_FOOTER.into(),
         };
         crate::menu::float()
             .debug_selector(|| "palette".into())
@@ -445,9 +488,7 @@ fn row_element(
                 .flex_shrink_0()
                 .items_center()
                 .w(px(FLOAT_GUTTER))
-                .when_some(row.dot, |cell, dot| {
-                    cell.text_color(rgb(dot.ink())).child(dot.glyph())
-                }),
+                .when_some(row.status, |cell, status| cell.child(status.face().dot())),
         )
         .child(div().flex_shrink_0().min_w_0().truncate().child(name))
         .child(
@@ -480,11 +521,16 @@ mod tests {
     use super::*;
 
     fn thread(name: &str, context: &str, id: u64) -> Row {
+        state_thread(name, context, id, RowStatus::Working)
+    }
+
+    fn state_thread(name: &str, context: &str, id: u64, status: RowStatus) -> Row {
         Row {
             section: Section::Threads,
             name: name.to_string().into(),
             context: context.to_string().into(),
-            dot: Some(Dot::Working),
+            status: Some(status),
+            detail: None,
             keys: None,
             act: Act::Thread(ThreadId::new(id)),
         }
@@ -495,10 +541,18 @@ mod tests {
             section: Section::Commands,
             name: name.to_string().into(),
             context: context.to_string().into(),
-            dot: None,
+            status: None,
+            detail: None,
             keys: None,
             act: Act::Command(command),
         }
+    }
+
+    fn names<'a>(rows: &'a [Row], shown: &[Shown]) -> Vec<&'a str> {
+        shown
+            .iter()
+            .map(|shown| rows[shown.row].name.as_ref())
+            .collect()
     }
 
     /// The filter keeps the table's order and lights only the names.
@@ -507,7 +561,7 @@ mod tests {
         let rows = vec![
             thread("Nav rows jitter on stream start", "ferrite \u{b7} done", 1),
             thread("Perf: layout cache", "perf sweep \u{b7} working", 2),
-            thread("Close stale issues", "perf sweep \u{b7} needs you", 3),
+            thread("Close stale issues", "perf sweep \u{b7} question", 3),
             thread("Parked \u{b7} Release 0.5.0 notes", "ferrite \u{b7} 2h", 4),
             thread("Port onboarding flow", "zeron \u{b7} working", 5),
             command("park thread", "", Command::ParkThread),
@@ -520,12 +574,8 @@ mod tests {
             command("open a group", "", Command::OpenGroup),
         ];
         let shown = filter(&rows, "par");
-        let names: Vec<&str> = shown
-            .iter()
-            .map(|shown| rows[shown.row].name.as_ref())
-            .collect();
         assert_eq!(
-            names,
+            names(&rows, &shown),
             [
                 "Perf: layout cache",
                 "Parked \u{b7} Release 0.5.0 notes",
@@ -538,16 +588,40 @@ mod tests {
         assert_eq!(filter(&rows, "").len(), rows.len());
     }
 
+    /// A one-letter line keeps the rows in its one of the four states —
+    /// failed reads as idle, background work as working — and every
+    /// command, which has no state; `a` keeps every row.
     #[test]
-    fn the_dots_are_the_states_inks() {
-        assert_eq!(Dot::Working.ink(), RUNNING);
-        assert_eq!(Dot::NeedsYou.ink(), ATTENTION);
-        assert_eq!(Dot::Failing.ink(), BLOCKED);
-        assert_eq!(Dot::Done.ink(), TEXT_MUTED);
-        assert_eq!(
-            (Dot::Parked.ink(), Dot::Parked.glyph()),
-            (TEXT_FAINT, "\u{25cb}")
-        );
-        assert_eq!(Dot::Done.glyph(), "\u{25cf}");
+    fn a_status_letter_keeps_its_states_rows_and_every_command() {
+        let rows = vec![
+            state_thread("waits", "", 1, RowStatus::NeedsYou),
+            state_thread("broke", "", 2, RowStatus::Failed),
+            state_thread("runs", "", 3, RowStatus::Working),
+            state_thread("behind", "", 4, RowStatus::Background),
+            state_thread("finished", "", 5, RowStatus::Done),
+            state_thread("quiet", "", 6, RowStatus::Idle),
+            state_thread("shelved", "", 7, RowStatus::Parked),
+            command("settings", "", Command::Settings),
+        ];
+        let kept = |query| names(&rows, &filter(&rows, query));
+        assert_eq!(kept("b"), ["waits", "settings"]);
+        assert_eq!(kept("w"), ["runs", "behind", "settings"]);
+        assert_eq!(kept("d"), ["finished", "settings"]);
+        assert_eq!(kept("i"), ["broke", "quiet", "shelved", "settings"]);
+        assert_eq!(kept("a").len(), rows.len());
+    }
+
+    /// The letter after a status letter makes the line a search, whatever
+    /// the state: no name is hidden by the filter its first letter names.
+    #[test]
+    fn a_second_letter_searches_every_state() {
+        let rows = vec![
+            state_thread("debug crash", "", 1, RowStatus::Idle),
+            state_thread("wire up", "", 2, RowStatus::Done),
+        ];
+        let kept = |query| names(&rows, &filter(&rows, query));
+        assert_eq!(kept("d"), ["wire up"]);
+        assert_eq!(kept("de"), ["debug crash"]);
+        assert_eq!(kept("wi"), ["wire up"]);
     }
 }

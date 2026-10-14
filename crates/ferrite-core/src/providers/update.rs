@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use super::discover::{self, Located};
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use crate::store::Provider;
 
 /// Generous for one small JSON document; a check that overruns it is
@@ -240,7 +240,8 @@ pub fn run(provider: Provider, upgrade: &Upgrade) -> Result<String, String> {
     command
         .args(&upgrade.args)
         .stdin(Stdio::null())
-        .no_console_window();
+        .no_console_window()
+        .agent_environment();
     if let Some(prefix) = &upgrade.path_prefix {
         let rest = std::env::var_os("PATH").unwrap_or_default();
         let joined = std::env::join_paths(

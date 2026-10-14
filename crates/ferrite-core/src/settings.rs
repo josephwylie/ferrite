@@ -4,9 +4,10 @@
 //! Settings are a menu of defaults, never history: the Thread headers keep
 //! each Thread's own provider and model as the durable truth, so a settings
 //! file lost or damaged by hand changes what the *next* Thread starts with
-//! and nothing that already exists. That is why `load` never fails and
-//! never writes — a bad file is worth more to the operator whole than
-//! replaced by defaults they did not choose.
+//! and nothing that already exists. `load` never writes, and says why a
+//! file it could not use was refused: a bad file is worth more to the
+//! operator whole than replaced by defaults they did not choose, and the
+//! window tells them so rather than silently running on the defaults.
 
 use std::fs;
 use std::io;
@@ -146,6 +147,9 @@ pub enum ThreadListOrder {
     /// Most recently used first (the palette's `sort: recent`).
     #[serde(rename = "last-used")]
     Recent,
+    /// What needs the operator first — blocked, done, working, idle — and
+    /// creation order within each (the palette's `sort: attention`).
+    Attention,
 }
 
 impl Default for Settings {
@@ -177,51 +181,47 @@ impl Settings {
     /// The file's name under the store directory.
     pub const FILE: &str = "settings.json";
 
-    /// Read `<dir>/settings.json`. A missing file is the defaults. An
-    /// unreadable or corrupt file is the defaults too, and the bad file is
-    /// left in place untouched: `load` never writes, so nothing overwrites
-    /// it until the operator changes a setting and the caller `save`s —
-    /// callers save on change, never on load, which is what keeps a
-    /// damaged file around long enough to be looked at or repaired by hand.
-    pub fn load(dir: &Path) -> Settings {
-        match fs::read(dir.join(Self::FILE)) {
-            Ok(bytes) => {
-                let mut settings: Settings = serde_json::from_slice(&bytes).unwrap_or_default();
-                settings.reading_size = ReadingSize::nearest(settings.reading_size.px());
-                // A file from before the zoom names one of three sizes; it
-                // keeps reading at the size it chose.
-                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                    if value.get("reading_size").is_none() {
-                        if let Some(old) = value.get("solo_reading_size").and_then(|v| v.as_str()) {
-                            // The pixel size each name meant when it was
-                            // saved (the old standard was 14): a chosen
-                            // size is never migrated.
-                            settings.reading_size = match old {
-                                "comfortable" => ReadingSize(16),
-                                "large" => ReadingSize(18),
-                                _ => ReadingSize(14),
-                            };
-                        }
-                    }
+    /// Read `<dir>/settings.json`. A missing file is the defaults. A file
+    /// that cannot be read or parsed is an error, and stays exactly as it
+    /// is: `load` never writes, and the caller keeps the defaults in memory
+    /// without saving over the file (the window says so), so a damaged file
+    /// is around to be looked at or repaired by hand.
+    pub fn load(dir: &Path) -> io::Result<Settings> {
+        let bytes = match fs::read(dir.join(Self::FILE)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Settings::default()),
+            Err(error) => return Err(error),
+        };
+        let mut settings: Settings = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        settings.reading_size = ReadingSize::nearest(settings.reading_size.px());
+        // A file from before the zoom names one of three sizes; it keeps
+        // reading at the size it chose.
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if value.get("reading_size").is_none() {
+                if let Some(old) = value.get("solo_reading_size").and_then(|v| v.as_str()) {
+                    // The pixel size each name meant when it was saved (the
+                    // old standard was 14): a chosen size is never migrated.
+                    settings.reading_size = match old {
+                        "comfortable" => ReadingSize(16),
+                        "large" => ReadingSize(18),
+                        _ => ReadingSize(14),
+                    };
                 }
-                settings
             }
-            Err(_) => Settings::default(),
         }
+        Ok(settings)
     }
 
     /// Write `<dir>/settings.json` as pretty JSON, creating `dir` if
-    /// needed. Written beside and renamed over, so a crash mid-write leaves
-    /// the old file whole — the store's own rewrite discipline.
+    /// needed, so that a crash at any moment leaves the old file or the
+    /// new one (`store::replace_file`); a symlinked file keeps its link.
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
-        let path = dir.join(Self::FILE);
-        let tmp = path.with_extension("json.tmp");
-        fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
-        )?;
-        fs::rename(&tmp, &path)
+        crate::store::replace_file(
+            &dir.join(Self::FILE),
+            &serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
+        )
     }
 
     /// The model choice for `provider`; `None` is that provider's own
@@ -271,6 +271,16 @@ mod tests {
         dir
     }
 
+    /// The names in `dir`, sorted.
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Every field set away from its default, so a round trip that drops
     /// any one of them shows.
     fn everything_changed() -> Settings {
@@ -303,18 +313,19 @@ mod tests {
 
         settings.save(&dir).unwrap();
 
-        assert_eq!(Settings::load(&dir), settings);
+        assert_eq!(Settings::load(&dir).unwrap(), settings);
         // Pretty JSON, and only the file — the tmp was renamed over.
         let text = fs::read_to_string(dir.join(Settings::FILE)).unwrap();
         assert!(
             text.contains("\n  \"default_provider\": \"codex\""),
             "{text}"
         );
-        assert!(!dir.join("settings.json.tmp").exists());
+        assert_eq!(entries(&dir), [Settings::FILE], "the temp was renamed over");
     }
 
     /// The retired orders (one activity stream, Project sections) load as
-    /// creation order, which replaced both; `sort: recent` round-trips.
+    /// creation order, which replaced both; `sort: recent` and `sort:
+    /// attention` round-trip.
     #[test]
     fn retired_thread_orders_load_as_creation_order() {
         for (stored, order) in [
@@ -322,6 +333,7 @@ mod tests {
             ("\"by-project\"", ThreadListOrder::Created),
             ("\"created\"", ThreadListOrder::Created),
             ("\"last-used\"", ThreadListOrder::Recent),
+            ("\"attention\"", ThreadListOrder::Attention),
         ] {
             assert_eq!(
                 serde_json::from_str::<ThreadListOrder>(stored).unwrap(),
@@ -339,8 +351,11 @@ mod tests {
     fn a_missing_file_or_directory_is_the_defaults() {
         let dir = scratch("missing");
 
-        assert_eq!(Settings::load(&dir), Settings::default());
-        assert_eq!(Settings::load(&dir.join("nowhere")), Settings::default());
+        assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
+        assert_eq!(
+            Settings::load(&dir.join("nowhere")).unwrap(),
+            Settings::default()
+        );
         assert!(!dir.join(Settings::FILE).exists(), "load never writes");
     }
 
@@ -391,23 +406,25 @@ mod tests {
                 format!("{{\"solo_reading_size\": \"{old}\"}}"),
             )
             .unwrap();
-            assert_eq!(Settings::load(&dir).reading_size.px(), px, "{old}");
+            assert_eq!(Settings::load(&dir).unwrap().reading_size.px(), px, "{old}");
         }
     }
 
-    /// A corrupt file loads as the defaults and stays exactly as it was:
-    /// nothing rewrites it until the operator changes something.
+    /// A corrupt file is refused, saying why, and stays exactly as it was:
+    /// the caller runs on the defaults without saving over it.
     #[test]
-    fn a_corrupt_file_is_the_defaults_and_is_left_untouched() {
+    fn a_corrupt_file_is_refused_and_left_untouched() {
         let dir = scratch("corrupt");
         let path = dir.join(Settings::FILE);
         let garbage = b"{\"default_provider\": \"codex\", ";
         fs::write(&path, garbage).unwrap();
 
-        assert_eq!(Settings::load(&dir), Settings::default());
+        let error = Settings::load(&dir).unwrap_err();
 
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("EOF"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), garbage);
-        assert!(!dir.join("settings.json.tmp").exists());
+        assert_eq!(entries(&dir), [Settings::FILE], "load never writes");
         // A wrong type is corrupt too: no half-read where one field lands
         // and the rest silently default.
         fs::write(
@@ -415,7 +432,7 @@ mod tests {
             br#"{"nav_collapsed": "yes", "confirm_delete": false}"#,
         )
         .unwrap();
-        assert_eq!(Settings::load(&dir), Settings::default());
+        assert!(Settings::load(&dir).is_err());
     }
 
     /// A setting Ferrite no longer has (the retired usage meter style) is
@@ -428,17 +445,55 @@ mod tests {
             br#"{"usage_meter_style": "rings", "confirm_delete": false}"#,
         )
         .unwrap();
-        assert!(!Settings::load(&dir).confirm_delete);
+        assert!(!Settings::load(&dir).unwrap().confirm_delete);
     }
 
-    /// An unreadable file — here a directory squatting at its path — is the
-    /// defaults, not a failure.
+    /// An unreadable file — here a directory squatting at its path — is
+    /// refused too, never mistaken for a missing one.
     #[test]
-    fn an_unreadable_file_is_the_defaults() {
+    fn an_unreadable_file_is_refused() {
         let dir = scratch("unreadable");
         fs::create_dir_all(dir.join(Settings::FILE)).unwrap();
 
-        assert_eq!(Settings::load(&dir), Settings::default());
+        assert!(Settings::load(&dir).is_err());
+    }
+
+    /// A settings file symlinked elsewhere (a dotfiles repo) is saved
+    /// through the link: the link stays, its target changes.
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_through_a_symlink() {
+        let dir = scratch("symlink");
+        let elsewhere = scratch("symlink-target").join("ferrite.json");
+        fs::write(&elsewhere, b"{}").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(Settings::FILE)).unwrap();
+
+        let changed = everything_changed();
+        changed.save(&dir).unwrap();
+
+        let link = fs::symlink_metadata(dir.join(Settings::FILE)).unwrap();
+        assert!(link.file_type().is_symlink(), "the link survives");
+        assert_eq!(Settings::load(&dir).unwrap(), changed);
+        assert_eq!(
+            fs::read(&elsewhere).unwrap(),
+            serde_json::to_vec_pretty(&changed).unwrap()
+        );
+    }
+
+    /// A link whose target is gone is refused, not replaced by a plain
+    /// file: the operator's link stays for them to mend.
+    #[cfg(unix)]
+    #[test]
+    fn save_refuses_a_dangling_symlink() {
+        let dir = scratch("dangling");
+        let gone = dir.join("gone").join("ferrite.json");
+        std::os::unix::fs::symlink(&gone, dir.join(Settings::FILE)).unwrap();
+
+        assert!(everything_changed().save(&dir).is_err());
+
+        let link = fs::symlink_metadata(dir.join(Settings::FILE)).unwrap();
+        assert!(link.file_type().is_symlink(), "the link survives");
+        assert!(!gone.exists());
     }
 
     /// A field this build does not know is ignored, so a file from a newer
@@ -452,7 +507,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = Settings::load(&dir);
+        let loaded = Settings::load(&dir).unwrap();
 
         assert_eq!(loaded.default_provider, Provider::Codex);
         assert_eq!(
@@ -474,7 +529,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = Settings::load(&dir);
+        let loaded = Settings::load(&dir).unwrap();
 
         assert_eq!(
             loaded,
@@ -498,12 +553,12 @@ mod tests {
         assert!(!dir.exists());
 
         Settings::default().save(&dir).unwrap();
-        assert_eq!(Settings::load(&dir), Settings::default());
+        assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
 
         let changed = everything_changed();
         changed.save(&dir).unwrap();
-        assert_eq!(Settings::load(&dir), changed);
-        assert!(!dir.join("settings.json.tmp").exists());
+        assert_eq!(Settings::load(&dir).unwrap(), changed);
+        assert_eq!(entries(&dir), [Settings::FILE], "the temp was renamed over");
     }
 
     #[test]

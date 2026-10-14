@@ -191,7 +191,7 @@ impl CockpitView {
                 // A parked Thread wakes to stand beside; focus stays home.
                 if self.cockpit.thread(thread).is_none() {
                     if let Err(error) = self.cockpit.wake(thread) {
-                        eprintln!("ferrite: thread {thread} could not be opened beside: {error:?}");
+                        ferrite_core::log!("thread {thread} could not be opened beside: {error:?}");
                         return;
                     }
                 }

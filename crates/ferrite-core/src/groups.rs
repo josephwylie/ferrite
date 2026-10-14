@@ -750,9 +750,7 @@ impl Groups {
                 .collect(),
         };
         let bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
-        let temporary = self.dir.join(format!(".{FILE_NAME}.tmp"));
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, self.dir.join(FILE_NAME))
+        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
     }
 }
 

@@ -1711,7 +1711,7 @@ fn spill_pasted_image(image: &gpui::Image) -> Option<PathBuf> {
         std::fs::write(&scratch, image.bytes())?;
         std::fs::rename(&scratch, &path)
     }) {
-        eprintln!("ferrite: the pasted image could not be saved: {error}");
+        ferrite_core::log!("the pasted image could not be saved: {error}");
         return None;
     }
     Some(path)

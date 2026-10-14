@@ -104,7 +104,7 @@ impl LimitCache {
             return false;
         }
         if let Err(error) = save(&self.dir.join(name), &snapshot) {
-            eprintln!("ferrite: could not save {provider:?} rate limits: {error}");
+            crate::log!("could not save {provider:?} rate limits: {error}");
         }
         true
     }

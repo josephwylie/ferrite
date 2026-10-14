@@ -618,13 +618,10 @@ impl Registry {
                 })
                 .collect(),
         };
-        let path = self.dir.join(FILE_NAME);
-        let tmp = path.with_extension("json.tmp");
-        fs::write(
-            &tmp,
-            serde_json::to_vec(&persisted).map_err(io::Error::other)?,
-        )?;
-        fs::rename(&tmp, &path)
+        crate::store::replace_file(
+            &self.dir.join(FILE_NAME),
+            &serde_json::to_vec(&persisted).map_err(io::Error::other)?,
+        )
     }
 }
 

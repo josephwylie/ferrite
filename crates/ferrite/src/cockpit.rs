@@ -6,6 +6,7 @@
 pub(crate) mod beside;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;
+mod leaving;
 mod palette;
 mod parts;
 pub(crate) mod subagents;
@@ -32,28 +33,31 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
 
-/// The loose rows the nav last drew, in order (C8, "never re-sort under
-/// the pointer"): under `sort: recent`, while the pointer is inside the
-/// column or a drag is live, the tree keeps this order. It re-ranks on
-/// pointer-leave, a focus change, or a Thread arriving or leaving — any of
-/// which changes `focused` or the row set, so the snapshot no longer
-/// applies. Creation order never moves a row, so it has nothing to hold.
+/// The loose rows the nav last drew, in order, and under `sort: attention`
+/// the state each row was ranked by (C8, "never re-sort under the
+/// pointer"): while the pointer is inside the column or a drag is live,
+/// the tree keeps this order, and Groups and sections keep the ranks they
+/// were sorted by. It re-ranks on pointer-leave, a focus change, or a
+/// Thread arriving or leaving — any of which changes `focused` or the row
+/// set, so the snapshot no longer applies. Creation order never moves a
+/// row, so it has nothing to hold.
 struct NavSnapshot {
     rows: Vec<ThreadId>,
     focused: Option<ThreadId>,
+    ranks: std::collections::HashMap<ThreadId, Attention>,
 }
 
 /// Reorder `rows` by where they sat in `snapshot`, when the snapshot holds
 /// exactly the same Threads; `false` (and `rows` untouched) otherwise.
-fn hold_order(rows: &mut [ThreadId], snapshot: &[ThreadId]) -> bool {
+fn hold_order(rows: &mut [nav::ThreadRow], snapshot: &[ThreadId]) -> bool {
     if rows.len() != snapshot.len() {
         return false;
     }
-    let position = |thread: &ThreadId| snapshot.iter().position(|held| held == thread);
-    if rows.iter().any(|thread| position(thread).is_none()) {
+    let position = |row: &nav::ThreadRow| snapshot.iter().position(|held| *held == row.thread);
+    if rows.iter().any(|row| position(row).is_none()) {
         return false;
     }
-    rows.sort_by_key(|thread| position(thread));
+    rows.sort_by_key(position);
     true
 }
 
@@ -80,14 +84,17 @@ pub(crate) fn focus_rail_action(ordinal: usize) -> Option<&'static str> {
     .copied()
 }
 
-/// A status dot's shape: filled for a live Thread, hollow for a parked one.
+/// A status mark's shape: filled for a live Thread, hollow for a parked one
+/// or for work still running behind an idle Main, and a check for a finish
+/// the operator has not yet seen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DotShape {
     Solid,
     Ring,
+    Check,
 }
 
-/// What a Thread's state looks like wherever it is drawn: the dot's shape
+/// What a Thread's state looks like wherever it is drawn: the mark's shape
 /// and ink, and its lexicon word (`theme::words`) when the state has one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ThreadStatus {
@@ -97,28 +104,50 @@ pub(crate) struct ThreadStatus {
 }
 
 impl ThreadStatus {
-    /// The still dot: the face every surface draws (motion is layered on
+    /// Main is idle while its Subagents or background tasks still work
+    /// (`nav::RowStatus::Background`): the running ink, hollow.
+    pub fn background() -> Self {
+        ThreadStatus {
+            shape: DotShape::Ring,
+            ink: crate::theme::RUNNING,
+            word: Some(crate::theme::words::BACKGROUND),
+        }
+    }
+
+    /// The still mark: the face every surface draws (motion is layered on
     /// by the surface that needs it, never by changing the ink).
     pub fn dot(self) -> Div {
         match self.shape {
             DotShape::Solid => crate::components::status_dot(self.ink),
             DotShape::Ring => crate::components::status_ring(self.ink),
+            DotShape::Check => crate::components::status_check(self.ink),
         }
     }
 }
 
+/// The four states every list sorts, filters and rolls up by, least
+/// urgent first (Herdr's model, read from the protocol rather than the
+/// screen): **Blocked** waits on the operator, **Done** finished and has
+/// not been seen, **Working** runs (Main, or only its background work),
+/// **Idle** is everything else. Ferrite's own states (failing, failed,
+/// parked, background) are faces within these; failed is a red idle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum Attention {
+    Idle,
+    Working,
+    Done,
+    Blocked,
+}
+
 /// **The one status truth.** The nav row, the Pane head, the L2 cell, the
-/// wall cell (and, later, the rail and the titlebar) all read a Thread's
-/// face from here, so no two surfaces can disagree about a Thread.
+/// wall cell, the palette and the bottom bar all read a Thread's face from
+/// here, so no two surfaces can disagree about a Thread.
 ///
-/// Unread is its own axis, never a state, and never the dot's: a quiet
-/// Thread that finished while the operator looked elsewhere keeps its
-/// state's dot and reads as unread by its `TEXT_STRONG` title (theme rule
-/// 6: one place per fact; the accent is for focus, the prompt and links).
-/// The `unread` argument stays so callers keep naming the axis.
+/// `unread` is whether the Thread holds a Notice the operator has not seen
+/// (on screen while the window had focus): a quiet Thread that finished
+/// unseen is **done**, a teal check, until it is seen and settles to idle.
 pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatus {
-    use crate::theme::{words, ATTENTION, BLOCKED, IDLE, RUNNING, TEXT_FAINT};
-    let _ = unread;
+    use crate::theme::{words, ATTENTION, BLOCKED, FINISHED, IDLE, RUNNING, TEXT_FAINT};
     use pane::WallState;
     let solid = |ink, word| ThreadStatus {
         shape: DotShape::Solid,
@@ -130,8 +159,12 @@ pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatu
         WallState::Failing => solid(BLOCKED, Some(words::FAILING)),
         WallState::Decision => solid(ATTENTION, Some(words::NEEDS_YOU)),
         WallState::Blocked => solid(BLOCKED, Some(words::FAILED)),
-        WallState::Done => solid(IDLE, Some(words::DONE)),
-        WallState::Idle => solid(IDLE, None),
+        WallState::Done | WallState::Idle if unread => ThreadStatus {
+            shape: DotShape::Check,
+            ink: FINISHED,
+            word: Some(words::DONE),
+        },
+        WallState::Done | WallState::Idle => solid(IDLE, None),
         // A parked Thread is a faint ring, in the nav and on the board
         // alike (F-4): structure, not state.
         WallState::Parked => ThreadStatus {
@@ -369,6 +402,11 @@ pub struct CockpitView {
     nav_parked_eased: bool,
     /// The Parked list's own scroll — it must not share the tree's.
     nav_parked_scroll: ScrollHandle,
+    /// The rail's own scroll (cmd-B folded).
+    nav_rail_scroll: ScrollHandle,
+    /// The window's activation, followed into the Cockpit
+    /// (`Cockpit::set_window_active`) once the first frame has a window.
+    activation: Option<gpui::Subscription>,
     /// The one popover in the Composer's slot, or None: the `/`/`@` menu
     /// (#23), a picker (#11, #25) or a band chip (#29). Always on the
     /// focused Pane's Composer; render self-heals it shut when the operator
@@ -495,6 +533,10 @@ pub struct CockpitView {
     cli_updates: crate::cli_updates::CliUpdates,
     /// Whether the window has said the store is read-only (ADR 0009).
     read_only_told: bool,
+    /// Whether the window has said `settings.json` could not be used.
+    unreadable_told: bool,
+    /// Whether "Quit Ferrite?" is on screen (`leaving`).
+    leave_asked: bool,
     group_error: Option<SharedString>,
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
@@ -571,6 +613,9 @@ pub struct Preferences {
     /// them. False in the test and demo constructors, so no suite reaches
     /// the registry or runs an installer.
     pub cli_updates: bool,
+    /// Why `settings.json` could not be used, when it could not: the
+    /// window says so, and saves nothing over the file (`change_settings`).
+    pub unreadable: Option<String>,
 }
 
 impl Preferences {
@@ -585,6 +630,7 @@ impl Preferences {
             )),
             titler: false,
             cli_updates: false,
+            unreadable: None,
         }
     }
 }
@@ -1223,7 +1269,7 @@ pub(crate) mod drawn {
     #[derive(Clone, Debug, Default, PartialEq)]
     pub(crate) struct Pane {
         pub focused: bool,
-        pub attention: bool,
+        pub unread: bool,
         pub drop_target: bool,
         pub editing: bool,
         pub reduce_motion: bool,
@@ -1407,6 +1453,8 @@ impl CockpitView {
             nav_parked_open: false,
             nav_parked_eased: false,
             nav_parked_scroll: ScrollHandle::new(),
+            nav_rail_scroll: ScrollHandle::new(),
+            activation: None,
             popover: None,
             menu_muted: false,
             draft_commands: None,
@@ -1463,6 +1511,8 @@ impl CockpitView {
             shown_version: env!("CARGO_PKG_VERSION").into(),
             cli_updates: Default::default(),
             read_only_told: false,
+            unreadable_told: false,
+            leave_asked: false,
             group_error: None,
             bell: Bell::new(),
             floats: palette::Floats::new(cx),
@@ -1949,11 +1999,8 @@ impl CockpitView {
         let now = cx.background_executor().now();
         if now.duration_since(self.swept) >= SWEEP_INTERVAL {
             self.swept = now;
+            // The core logs each restart (`Cockpit::sweep`).
             for restart in self.cockpit.sweep() {
-                eprintln!(
-                    "ferrite: restarted thread {} after {} bytes resident",
-                    restart.thread, restart.rss
-                );
                 restarted.push(restart.thread);
             }
             // Redraw only for what moved: a fact, a working Thread's clock
@@ -2085,8 +2132,8 @@ impl CockpitView {
 
     /// What a stream can change that more than its own Pane and nav row
     /// draw: the account's usage windows (every Pane's meter), the Threads
-    /// waiting on the operator (every wall tile's answer keys, the
-    /// needs-you strip), the unread notices and attention (the bell, each
+    /// waiting on the operator (every wall tile's answer keys), the unread
+    /// notices and attention (the bell, each
     /// Pane's head).
     fn shared_chrome(&self) -> String {
         let notifications = self.cockpit.notifications();
@@ -2773,7 +2820,7 @@ impl CockpitView {
             None => return,
         };
         if !ready {
-            eprintln!("ferrite: {what}");
+            ferrite_core::log!("{what}");
             return;
         }
         for provider in self.cli_updates.ready() {
@@ -4122,9 +4169,75 @@ impl CockpitView {
         );
     }
 
-    /// Every change to the settings goes through here: saved at once, the
-    /// Session defaults the spawner reads refreshed, and the facts that
-    /// depend on a setting re-derived.
+    /// Settings › About's Diagnostics: what a bug report needs, on the
+    /// clipboard (`ferrite_core::diagnostics::report`). The report reads
+    /// up to the whole log, so it is gathered in the background.
+    fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let (claude, codex) = self
+            .cli_versions
+            .clone()
+            .unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+        let facts = [
+            (
+                "Version",
+                version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV),
+            ),
+            (
+                "Platform",
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            ),
+            ("Claude CLI", claude.to_string()),
+            ("Codex CLI", codex.to_string()),
+            ("Open Threads", self.cockpit.threads().len().to_string()),
+        ];
+        let dir = self.prefs.dir.clone();
+        cx.spawn(async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn(async move { ferrite_core::diagnostics::report(&dir, &facts) })
+                .await;
+            this.update(cx, |view, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(report));
+                view.settings_copied = Some("Diagnostics");
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A `settings.json` that could not be used is said once and kept on
+    /// screen: the window runs on the defaults and saves nothing over the
+    /// file, so a change made now lasts only until Ferrite quits.
+    fn present_unreadable_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        if self.unreadable_told {
+            return;
+        }
+        let Some(reason) = &self.prefs.unreadable else {
+            return;
+        };
+        self.unreadable_told = true;
+        let path = self.prefs.dir.join(ferrite_core::settings::Settings::FILE);
+        window.push_notification(
+            Notification::new()
+                .title("Settings could not be read")
+                .message(format!(
+                    "{}: {reason}. Ferrite is using the defaults and will not save over \
+                     the file; fix or remove it, then relaunch.",
+                    path.display()
+                ))
+                .with_type(NotificationType::Warning)
+                .autohide(false),
+            cx,
+        );
+    }
+
+    /// Every change to the settings goes through here: saved at once
+    /// (unless the file on disk could not be read, which is kept as it
+    /// is), the Session defaults the spawner reads refreshed, and the facts
+    /// that depend on a setting re-derived.
     fn change_settings(
         &mut self,
         change: impl FnOnce(&mut ferrite_core::settings::Settings),
@@ -4133,8 +4246,10 @@ impl CockpitView {
         change(&mut self.prefs.settings);
         self.cockpit
             .set_suggestions_enabled(self.prefs.settings.placeholder_suggestions);
-        if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
-            self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
+        if self.prefs.unreadable.is_none() {
+            if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
+                self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
+            }
         }
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
@@ -4448,6 +4563,20 @@ impl CockpitView {
                     .to_string(),
                 copied == Some("Settings file"),
                 copy("Settings file", cx),
+            ),
+            prefs::action(
+                "settings-copy-diagnostics",
+                "Diagnostics",
+                "Version, platform, the CLIs, the newest crash report and the end of \
+                 the log, for a bug report",
+                ferrite_core::diagnostics::logs(&self.prefs.dir).display().to_string().into(),
+                Some(if copied == Some("Diagnostics") { "Copied" } else { "Copy" }.into()),
+                {
+                    let view = cx.entity().downgrade();
+                    move |cx| {
+                        let _ = view.update(cx, |view, cx| view.copy_diagnostics(cx));
+                    }
+                },
             ),
         ];
         let pages = vec![
@@ -5082,7 +5211,7 @@ impl CockpitView {
                     self.parked_changed(cx);
                 }
                 Err(error) => {
-                    eprintln!("ferrite: thread {thread} could not be woken: {error:?}")
+                    ferrite_core::log!("thread {thread} could not be woken: {error:?}")
                 }
             }
             cx.notify();
@@ -6689,8 +6818,8 @@ impl CockpitView {
                     // Durable but not on screen: the Thread sits in the
                     // nav's parked rows, exactly like a launch-time import
                     // that would not open.
-                    eprintln!(
-                        "ferrite: imported thread {} would not open: {error:?}",
+                    ferrite_core::log!(
+                        "imported thread {} would not open: {error:?}",
                         adopted.thread
                     );
                 } else if let Some(index) = from.draft().and_then(|_| self.index_of(from)) {
@@ -6700,7 +6829,7 @@ impl CockpitView {
                     self.panes[index].adopt_thread(adopted.thread);
                 }
                 if let Some(error) = &adopted.blank_kept {
-                    eprintln!("ferrite: the blank thread stayed open: {error}");
+                    ferrite_core::log!("the blank thread stayed open: {error}");
                 }
                 self.sync_panes(cx);
                 // A draft that became the import keeps its Pane, so the
@@ -7547,7 +7676,7 @@ impl CockpitView {
                     self.group_error = None;
                 }
                 if let Some(error) = done.refused_leave {
-                    eprintln!("ferrite: group change refused: {error}");
+                    ferrite_core::log!("group change refused: {error}");
                     self.group_error = Some(error.to_string().into());
                 }
                 if self.popover.as_ref().is_some_and(|open| {
@@ -7891,8 +8020,11 @@ impl CockpitView {
     /// draws no heading, and a Thread a second Group includes is listed
     /// under that Group too (R1). Rows keep creation order (N-3) — a Thread
     /// starting or finishing work never moves — unless `sort: recent` asks
-    /// for last use within each Project. Filtered to a Project, the tree is
-    /// that Project's section, holding every Group with a member there.
+    /// for last use within each Project, or `sort: attention` ranks by
+    /// state: the loose rows, each Group's members, the Groups in a section
+    /// and the sections themselves, each by its roll-up, creation order
+    /// among equals. Filtered to a Project, the tree is that Project's
+    /// section, holding every Group with a member there.
     ///
     /// The one selection (N-5) is the row of what the board shows: the
     /// Group being viewed (its view or its wall), or the Solo Thread. The
@@ -7916,41 +8048,53 @@ impl CockpitView {
         // order. Drafts are not rows (#29) — the grid is where a draft
         // lives — and a parked loose Thread waits in the Parked section.
         let homed = self.homed_threads();
-        let mut loose: Vec<ThreadId> = self
+        let mut threads: Vec<ThreadId> = self
             .panes
             .iter()
             .filter_map(PaneView::thread)
             .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
             .collect();
-        loose.sort();
-        loose.dedup();
-        if self.prefs.settings.thread_list_order == ThreadListOrder::Recent {
-            // Stable: Threads used at the same moment keep creation order.
-            loose.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread)));
+        threads.sort();
+        threads.dedup();
+        let mut loose: Vec<nav::ThreadRow> = threads.into_iter().map(row).collect();
+        // Stable: Threads used at the same moment, or in the same state,
+        // keep creation order.
+        let order = self.prefs.settings.thread_list_order;
+        match order {
+            ThreadListOrder::Created => {}
+            ThreadListOrder::Recent => {
+                loose.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)))
+            }
+            ThreadListOrder::Attention => {
+                loose.sort_by_key(|row| std::cmp::Reverse(row.status.attention()))
+            }
         }
         // Never re-sort under the pointer (C8): while the pointer is inside
         // the column or a drag is live, the rows keep the order they were
-        // last drawn in, as long as the same Threads are there and focus
-        // has not moved. Anything else re-ranks, and is remembered.
+        // last drawn in, and the ranks they were sorted by, as long as the
+        // same Threads are there and focus has not moved. Anything else
+        // re-ranks, and is remembered at the end.
         let focused = roster.focused_thread();
         let frozen = self.nav_hovered || self.nav_drag_live.get();
-        let mut snapshot = self.nav_snapshot.borrow_mut();
-        let held = frozen
-            && snapshot.as_ref().is_some_and(|held| {
-                held.focused == focused && hold_order(&mut loose.clone(), &held.rows)
-            });
-        match snapshot.as_ref() {
-            Some(held_rows) if held => {
-                hold_order(&mut loose, &held_rows.rows);
+        let held_ranks = match self.nav_snapshot.borrow().as_ref() {
+            Some(held) if frozen && held.focused == focused => {
+                hold_order(&mut loose, &held.rows).then(|| held.ranks.clone())
             }
-            _ => {
-                *snapshot = Some(NavSnapshot {
-                    rows: loose.clone(),
-                    focused,
-                });
-            }
-        }
-        drop(snapshot);
+            _ => None,
+        };
+        let held = held_ranks.is_some();
+        let ranks = held_ranks.unwrap_or_default();
+        // A row's rank under `sort: attention`, most urgent least: the held
+        // one while the tree holds still.
+        let rank = |row: &nav::ThreadRow| {
+            std::cmp::Reverse(
+                ranks
+                    .get(&row.thread)
+                    .copied()
+                    .unwrap_or_else(|| row.status.attention()),
+            )
+        };
+        let attention = order == ThreadListOrder::Attention;
 
         // The Groups, in the durable order (creation order unless the
         // operator moved one), each under the one Project its members share
@@ -7959,7 +8103,7 @@ impl CockpitView {
         // when any member is there, drawing only those members. A member
         // whose leave is parked on a pending draft has already left, as in
         // `visible_indices`.
-        let placed: Vec<(Option<Option<ProjectId>>, nav::GroupBlock)> = self
+        let mut placed: Vec<(Option<Option<ProjectId>>, nav::GroupBlock)> = self
             .cockpit
             .groups()
             .iter()
@@ -7971,7 +8115,7 @@ impl CockpitView {
                     .copied()
                     .filter(|thread| Some(*thread) != leaving)
                     .collect();
-                let shown: Vec<nav::ThreadRow> = members
+                let mut shown: Vec<nav::ThreadRow> = members
                     .iter()
                     .copied()
                     .filter(|thread| self.admitted(*thread))
@@ -7979,6 +8123,9 @@ impl CockpitView {
                     .collect();
                 if shown.is_empty() {
                     return None;
+                }
+                if attention {
+                    shown.sort_by_key(rank);
                 }
                 // `None` is the Groups section; `Some(project)` a Project's.
                 let project = match self.nav_filter {
@@ -8002,6 +8149,7 @@ impl CockpitView {
                     nav::GroupBlock {
                         id: group.id,
                         title: group.display_title().into(),
+                        status: nav::RowStatus::roll_up(&shown).unwrap_or_default(),
                         members: shown,
                         folded: self.nav_folds.contains(&NavFold::Group(group.id)),
                         selected: !board_empty && view == View::Group(group.id),
@@ -8009,13 +8157,16 @@ impl CockpitView {
                 ))
             })
             .collect();
+        if attention {
+            placed.sort_by_cached_key(|(_, block)| block.members.iter().map(rank).min());
+        }
 
         // The sections: every Project something is drawn under, in creation
         // order (ids are handed out in registration order), `Other` last.
         // The Groups section, when any Group spans Projects, comes first.
         let mut keys: Vec<Option<ProjectId>> = loose
             .iter()
-            .map(|thread| project_of(*thread))
+            .map(|row| project_of(row.thread))
             .chain(placed.iter().filter_map(|(project, _)| *project))
             .collect();
         keys.sort_by_key(|key| (key.is_none(), *key));
@@ -8035,18 +8186,23 @@ impl CockpitView {
             sections.push(nav::ProjectSection {
                 project: None,
                 mixed: true,
-                label: SharedString::from("Groups"),
+                label: SharedString::from("groups"),
                 branch: None,
                 folded: self.nav_folds.contains(&NavFold::Groups),
+                status: mixed
+                    .iter()
+                    .map(|index| groups[*index].status)
+                    .max()
+                    .unwrap_or_default(),
                 solos: Vec::new(),
                 groups: mixed,
             });
         }
         for key in keys {
             let mut section_solos = Vec::new();
-            for thread in loose.iter().filter(|thread| project_of(**thread) == key) {
+            for row in loose.iter().filter(|row| project_of(row.thread) == key) {
                 section_solos.push(solos.len());
-                solos.push(row(*thread));
+                solos.push(row.clone());
             }
             let mut section_groups = Vec::new();
             for (_, block) in placed.iter().filter(|(project, _)| *project == Some(key)) {
@@ -8055,7 +8211,7 @@ impl CockpitView {
             }
             let label = key
                 .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| SharedString::from(project.title.clone()))
+                .map(|project| SharedString::from(project.title.to_lowercase()))
                 .or_else(|| {
                     key.and_then(|_| {
                         section_solos
@@ -8066,10 +8222,11 @@ impl CockpitView {
                                     .iter()
                                     .flat_map(|index| groups[*index].members.iter()),
                             )
-                            .find_map(|row| row.project.clone())
+                            .find_map(|row| row.project.as_deref().map(str::to_lowercase))
+                            .map(SharedString::from)
                     })
                 })
-                .unwrap_or_else(|| SharedString::from("Other"));
+                .unwrap_or_else(|| SharedString::from("other"));
             // A heading names its branch; `Other` names no Project, so no
             // branch either.
             // Only the section's own Threads say it: a Group's guest from
@@ -8087,6 +8244,14 @@ impl CockpitView {
                     .collect();
                 self.section_branch(&rows)
             });
+            let status = nav::RowStatus::roll_up(
+                section_solos.iter().map(|index| &solos[*index]).chain(
+                    section_groups
+                        .iter()
+                        .flat_map(|index| groups[*index].members.iter()),
+                ),
+            )
+            .unwrap_or_default();
             sections.push(nav::ProjectSection {
                 project: key,
                 mixed: false,
@@ -8094,23 +8259,45 @@ impl CockpitView {
                 branch,
                 folded: key
                     .is_some_and(|project| self.nav_folds.contains(&NavFold::Project(project))),
+                status,
                 solos: section_solos,
                 groups: section_groups,
             });
         }
 
-        // The Needs-you strip: every waiting Thread, whatever the filter
-        // admits, in creation order like every other nav row (R14) — a new
-        // request never moves the rows above it.
-        let mut waiting = self.cockpit.needs_you();
-        waiting.sort();
-        let needs_you = waiting
-            .into_iter()
-            .map(|thread| nav::NeedsYouRow {
-                row: self.thread_row(thread),
-                kind: self.request_word(thread),
-            })
-            .collect();
+        if attention {
+            sections.sort_by_cached_key(|section| {
+                section
+                    .solos
+                    .iter()
+                    .map(|index| &solos[*index])
+                    .chain(
+                        section
+                            .groups
+                            .iter()
+                            .flat_map(|index| groups[*index].members.iter()),
+                    )
+                    .map(rank)
+                    .min()
+            });
+        }
+        if !held {
+            let ranks = if attention {
+                solos
+                    .iter()
+                    .chain(groups.iter().flat_map(|group| group.members.iter()))
+                    .map(|row| (row.thread, row.status.attention()))
+                    .collect()
+            } else {
+                Default::default()
+            };
+            *self.nav_snapshot.borrow_mut() = Some(NavSnapshot {
+                rows: loose.iter().map(|row| row.thread).collect(),
+                focused,
+                ranks,
+            });
+        }
+
         let parked = self.parked_threads().into_iter().map(row).collect();
         let smart = self
             .prefs
@@ -8119,7 +8306,6 @@ impl CockpitView {
             .then(|| self.smart_sections());
 
         nav::NavState {
-            needs_you,
             smart,
             sections,
             groups,
@@ -8129,39 +8315,24 @@ impl CockpitView {
         }
     }
 
-    /// Smart filtering's sections, whatever the Project filter admits (like
-    /// the Needs-you strip), in creation order so a row never moves under
-    /// the pointer: `done` is every open Thread holding an unread Notice
-    /// that is no longer working or waiting, `working` every open Thread at
-    /// work. A Thread waiting on the operator is the strip's, not these.
+    /// Smart filtering's sections, whatever the Project filter admits, in
+    /// creation order so a row never moves under the pointer: `done` is
+    /// every open Thread that finished unseen, `working` every open Thread
+    /// at work. A Thread waiting on the operator is its row's yellow mark,
+    /// not these.
     fn smart_sections(&self) -> nav::SmartSections {
         let mut threads = self.cockpit.threads();
         threads.sort();
         let mut sections = nav::SmartSections::default();
         for thread in threads {
             let row = self.thread_row(thread);
-            match row.status {
-                nav::RowStatus::Working | nav::RowStatus::Failing => sections.working.push(row),
-                nav::RowStatus::NeedsYou | nav::RowStatus::Parked => {}
-                nav::RowStatus::Idle | nav::RowStatus::Failed if row.unread => {
-                    sections.done.push(row)
-                }
-                nav::RowStatus::Idle | nav::RowStatus::Failed => {}
+            match row.status.attention() {
+                Attention::Working => sections.working.push(row),
+                Attention::Done => sections.done.push(row),
+                Attention::Blocked | Attention::Idle => {}
             }
         }
         sections
-    }
-
-    /// What a waiting Thread waits for, in the lexicon: `question` or
-    /// `approval` — read as its Pane's head reads it.
-    fn request_word(&self, thread: ThreadId) -> &'static str {
-        let slot = self.cockpit.thread(thread).and_then(|open| {
-            pane::thread_face(open, self.facts.get(thread).map(|facts| &facts.wall), false).1
-        });
-        match slot {
-            Some(pane::HeadSlot::NeedsYou(kind)) => kind,
-            _ => crate::theme::words::APPROVAL,
-        }
     }
 
     /// Does the Project filter admit this Thread? `All projects` admits
@@ -8177,37 +8348,40 @@ impl CockpitView {
     }
 
     /// One Thread's nav row, entirely from caches: the name core has (there
-    /// is no display name), its state, the cached Project, and its word.
-    /// Not selected: `nav_state` decides what carries the selection.
+    /// is no display name), its state, the cached Project and checkout
+    /// facts, and its word. Not selected: `nav_state` decides what carries
+    /// the selection.
     fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
         let facts = self.facts.get(thread);
         let open = self.cockpit.thread(thread);
         let now = ferrite_core::clock::system_time();
-        // Unread is its own axis: a Thread that finished while the operator
-        // was elsewhere keeps its state and wears the unread face
-        // (`thread_status`), never a Decision's ochre.
+        // A Notice not yet seen makes a quiet Thread done.
         let unread = self.cockpit.notifications().attention(thread);
         // The tail reads the Pane's own head slot, so the nav and the Pane
         // never disagree about a Thread (C10).
         let slot =
-            open.and_then(|open| pane::thread_face(open, facts.map(|facts| &facts.wall), unread).1);
-        // The dot is squared with that word (`pane::dot_state`): a row whose
+            open.and_then(|open| pane::thread_word(open, facts.map(|facts| &facts.wall), unread));
+        // The mark is squared with that word (`pane::dot_state`): a row whose
         // tail says `failed` never wears an idle dot.
         let status = match open {
             None => nav::RowStatus::Parked,
             Some(open) => {
                 let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
-                nav::RowStatus::of(pane::dot_state(
-                    pane::wall_state(
-                        Some(open.transcript()),
-                        open.activity()
-                            .pending_decisions()
-                            .iter()
-                            .any(|pending| pending.decision.blocks_execution()),
-                        failing,
+                nav::RowStatus::of(
+                    pane::dot_state(
+                        pane::wall_state(
+                            Some(open.transcript()),
+                            open.activity()
+                                .pending_decisions()
+                                .iter()
+                                .any(|pending| pending.decision.blocks_execution()),
+                            failing,
+                        ),
+                        slot.as_ref(),
                     ),
-                    slot.as_ref(),
-                ))
+                    unread,
+                    open.background_work(),
+                )
             }
         };
         let age = facts
@@ -8218,18 +8392,18 @@ impl CockpitView {
             thread,
             name: self.facts.name(thread),
             status,
-            unread,
             project: facts.and_then(|facts| facts.project_label.clone()),
             selected: false,
-            tail: nav::NavTail::of(slot.as_ref(), age),
+            details: facts
+                .and_then(|facts| facts.status.as_ref())
+                .map(nav::RowDetails::of)
+                .unwrap_or_default(),
+            tail: nav::NavTail::of(status, slot.as_ref(), age),
         };
         #[cfg(test)]
         drawn::record_row(
             thread,
-            format!(
-                "{:?} unread={} {:?} {}",
-                row.status, row.unread, row.tail, row.name
-            ),
+            format!("{:?} {:?} {}", row.status, row.tail, row.name),
         );
         row
     }
@@ -8261,7 +8435,7 @@ impl CockpitView {
         })
     }
 
-    /// Land on a Thread from the nav's other doors — a Needs-you row: the
+    /// Land on a Thread from the nav's other doors — a smart or rail row: the
     /// Group on screen when it holds the Thread, else its home Group's
     /// view, else its Pane if open, else revived — exactly as a press on
     /// its own row does.
@@ -8348,7 +8522,7 @@ impl CockpitView {
         match self.cockpit.drop(drag.drag, drag.origin, target) {
             Ok(()) => self.group_error = None,
             Err(error) => {
-                eprintln!("ferrite: group change refused: {error}");
+                ferrite_core::log!("group change refused: {error}");
                 self.group_error = Some(error.to_string().into());
             }
         }
@@ -8365,7 +8539,7 @@ impl CockpitView {
                 self.sync_panes(cx);
                 cx.notify();
             }
-            Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
+            Err(e) => ferrite_core::log!("thread {thread} could not be reopened: {e:?}"),
         }
     }
 
@@ -8436,7 +8610,7 @@ impl CockpitView {
                 cx.notify();
             }
             Some((thread, Err(e))) => {
-                eprintln!("ferrite: thread {thread} could not be reopened: {e:?}")
+                ferrite_core::log!("thread {thread} could not be reopened: {e:?}")
             }
             None => {}
         }
@@ -8488,10 +8662,10 @@ impl CockpitView {
                 }
             }
             Err(CloseError::Park(e)) => {
-                eprintln!("ferrite: pane {identity:?} did not park cleanly: {e}")
+                ferrite_core::log!("pane {identity:?} did not park cleanly: {e}")
             }
             Err(CloseError::Group(error)) => {
-                eprintln!("ferrite: group change refused: {error}");
+                ferrite_core::log!("group change refused: {error}");
                 self.group_error = Some(error.to_string().into());
             }
         }
@@ -8512,7 +8686,7 @@ impl CockpitView {
     fn next_decision(&mut self, _: &NextDecision, window: &mut Window, cx: &mut Context<Self>) {
         let focused = self.focused();
         let mut requests = Vec::new();
-        // The strip's order (`Cockpit::needs_you`): ⌘D walks the answer
+        // The answer order (`Cockpit::needs_you`): ⌘D walks the answer
         // queue top to bottom, so its first press lands on the answer target.
         let queue = self.cockpit.needs_you();
         let mut panes: Vec<&PaneView> = self.panes.iter().collect();
@@ -8993,6 +9167,18 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
         self.tend_reader_finds(window);
+        // Seen is on screen while the window has focus: the Cockpit follows
+        // the window's activation from its first frame — a window that opens
+        // unfocused sees nothing until it is focused — and the window coming
+        // back reads what it shows, which every part then draws.
+        if self.activation.is_none() {
+            self.cockpit.set_window_active(window.is_window_active());
+            self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
+                if view.cockpit.set_window_active(window.is_window_active()) {
+                    cx.notify();
+                }
+            }));
+        }
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
@@ -9139,6 +9325,7 @@ impl CockpitView {
         self.present_notices(window, cx);
         self.present_cli_updates(window, cx);
         self.present_read_only(window, cx);
+        self.present_unreadable_settings(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -9733,7 +9920,7 @@ impl CockpitView {
                     .min_h_0()
                     .w_full()
                     // The nav and its one seam column (`nav::seam`).
-                    .child(self.nav(cx))
+                    .child(self.nav(window, cx))
                     // The board lies from its own left edge — the column's
                     // width this frame and the one seam the nav draws — so
                     // it rides cmd-B with the column, every frame (F-12).
@@ -9970,7 +10157,7 @@ impl CockpitView {
                 open.map_or(0, |thread| thread.queued_all().len()),
             ),
             focused,
-            attention: !focused && self.cockpit.notifications().attention(thread),
+            unread: self.cockpit.notifications().attention(thread),
             wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
             reduce_motion: cx.reduce_motion(),
             editing: focused
@@ -10020,7 +10207,7 @@ impl CockpitView {
             pane.identity,
             drawn::Pane {
                 focused,
-                attention: facts.attention,
+                unread: facts.unread,
                 drop_target: facts.drop_target,
                 editing: facts.editing,
                 reduce_motion: facts.reduce_motion,
@@ -10075,12 +10262,29 @@ impl CockpitView {
             .filter_map(PaneView::thread)
             .filter(|thread| self.cockpit.groups().of(*thread).is_none())
             .max_by_key(|thread| self.last_used(*thread));
+        // A tab's mark is the roll-up of the Threads its view shows — the
+        // loose ones for Solo, the members for a Group — when it says
+        // anything (`nav::RowStatus::roll_up`).
+        let mark = |threads: &mut dyn Iterator<Item = ThreadId>| {
+            let rows: Vec<nav::ThreadRow> = threads.map(|thread| self.thread_row(thread)).collect();
+            nav::RowStatus::roll_up(&rows)
+                .filter(|status| status.attention() != Attention::Idle)
+                .map(nav::RowStatus::face)
+        };
+        let loose = mark(
+            &mut self
+                .panes
+                .iter()
+                .filter_map(PaneView::thread)
+                .filter(|thread| self.cockpit.groups().of(*thread).is_none()),
+        );
         tabs.push(
             crate::titlebar::bar_tab(
                 "bottom-bar-tab-solo".into(),
                 1,
                 "solo".into(),
                 !empty && view == View::Solo,
+                loose,
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| match solo {
                 Some(thread) => {
@@ -10100,6 +10304,7 @@ impl CockpitView {
                     at + 2,
                     title.into(),
                     !empty && view == View::Group(id),
+                    mark(&mut group.members.iter().copied()),
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     view.enter_group(id, cx);
@@ -10630,7 +10835,7 @@ impl CockpitView {
     }
 
     /// The Thread `y`/`n`/`a` act on right now: the focused Thread when
-    /// it waits, else the answer target (the Needs-you strip's first row) —
+    /// it waits, else the answer target (`Cockpit::answer_target`) —
     /// exactly what `answer` picks, so the one cell that shows the keys is
     /// the one they answer.
     pub(crate) fn key_target(&self) -> Option<ThreadId> {
@@ -12437,20 +12642,12 @@ impl CockpitView {
         .into_any_element()
     }
 
-    /// The nav column and its one seam (`nav::seam`): the Needs-you strip,
-    /// the tree and the Parked fold on the chrome. cmd-B rides its width to nothing over
-    /// `motion::RESIZE` (the render tail keeps frames coming while it
-    /// moves) while its content fades on its own clock (N-15): 1 → 0 over
-    /// 150ms folding, 0 → 1 opening. At rest folded, the column draws
-    /// nothing and the seam beside it is the plane.
-    /// The nav's rows at its content's width (`nav::content`): the
-    /// needs-you strip, the tree and its scrollbar, the parked fold.
-    fn nav_content(&self, cx: &mut Context<Self>) -> Div {
+    /// The nav's rows at its content's width (`nav::content`): the tree and
+    /// its scrollbar, the parked fold.
+    fn nav_content(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_nav();
-        let state = self.nav_state();
         nav::content()
-            .children(self.needs_you_strip(&state, cx))
             .child(
                 div()
                     .relative()
@@ -12458,13 +12655,21 @@ impl CockpitView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .child(self.nav_tree(&state, cx))
+                    .child(self.nav_tree(state, cx))
                     .child(nav::scrollbar(&self.nav_scroll)),
             )
-            .children(self.nav_parked(&state, cx))
+            .children(self.nav_parked(state, cx))
     }
 
-    fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The nav column and its one seam (`nav::seam`): the tree and the
+    /// Parked fold on the chrome, from the window's top (ADR 0014).
+    /// cmd-B rides its width down to the rail over `motion::RESIZE` (the
+    /// render tail keeps frames coming while it moves) while its content
+    /// fades on its own clock (N-15): 1 → 0 over 150ms folding, 0 → 1
+    /// opening, the rail cross-fading the other way. At rest folded, the
+    /// column is the rail. The rail and the uncached rows share one
+    /// `nav_state` a frame.
+    fn nav(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
@@ -12477,16 +12682,75 @@ impl CockpitView {
             nav::WIDTH
         });
         let frame = div().flex().flex_row().flex_shrink_0().h_full();
-        let shell = nav::shell(width);
-        // Folded at rest, the column holds nothing to draw up.
-        if collapsed && ride.is_none() {
-            return frame.child(shell).child(nav::seam(true)).into_any_element();
+        let shell = nav::shell(width).child(nav::body());
+        let content = if collapsed && ride.is_none() {
+            0.0
+        } else {
+            self.nav_content_opacity(now, reduced)
+        };
+        let state = std::cell::OnceCell::new();
+        let shell = shell
+            .when(content > 0.0, |shell| {
+                shell.child(self.nav_rows(content, &state, cx))
+            })
+            .when(content < 1.0, |shell| {
+                let state = state.get_or_init(|| self.nav_state());
+                shell.child(self.nav_rail(state, window, cx).opacity(1.0 - content))
+            });
+        frame.child(shell).child(nav::seam()).into_any_element()
+    }
+
+    /// The rail (cmd-B folded): every open Thread in the tree's order —
+    /// loose rows, then Group members, folds ignored, each Thread once —
+    /// with its mark, and the digit of the ⌘1–9 that focuses it where one
+    /// does (the board's head order, R5). A press lands on the Thread as
+    /// its tree row's does.
+    fn nav_rail(
+        &self,
+        state: &nav::NavState,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let keyed: Vec<Option<ThreadId>> = self
+            .board_order(window)
+            .into_iter()
+            .take(9)
+            .map(|index| self.panes[index].thread())
+            .collect();
+        let focused = self.cockpit.roster().focused_thread();
+        let mut rows: Vec<nav::RailRow> = Vec::new();
+        let mut listed = std::collections::HashSet::new();
+        for section in &state.sections {
+            let solos = section
+                .solos
+                .iter()
+                .map(|index| (&state.solos[*index], false));
+            let members = section.groups.iter().flat_map(|index| {
+                let group = &state.groups[*index];
+                group.members.iter().map(|row| (row, group.selected))
+            });
+            for (row, group_shown) in solos.chain(members) {
+                if listed.insert(row.thread) {
+                    rows.push(nav::RailRow {
+                        key: keyed
+                            .iter()
+                            .position(|shown| *shown == Some(row.thread))
+                            .map(|at| at + 1),
+                        thread: row.thread,
+                        status: row.status,
+                        selected: row.selected || (group_shown && focused == Some(row.thread)),
+                    });
+                }
+            }
         }
-        let rows = self.nav_rows(self.nav_content_opacity(now, reduced), cx);
-        frame
-            .child(shell.child(nav::body()).child(rows))
-            .child(nav::seam(collapsed))
-            .into_any_element()
+        let mut rail = nav::rail(&self.nav_rail_scroll);
+        for row in &rows {
+            let thread = row.thread;
+            rail = rail.child(nav::rail_row(row).on_click(
+                cx.listener(move |view, _: &ClickEvent, _, cx| view.land_on_thread(thread, cx)),
+            ));
+        }
+        rail
     }
 
     /// The nav content's opacity this frame (N-15): wherever its own fade
@@ -12512,27 +12776,6 @@ impl CockpitView {
             (Some(ride), Some(fade)) if ride.running(now, reduced) => fade.value(now, reduced),
             _ => 1.0,
         }
-    }
-
-    /// The Needs-you strip at the top of the column (C8), or nothing while
-    /// no Thread waits: `needs you N ⌘D`, then one reference row per
-    /// waiting Thread in the answer order. A row's press lands on its
-    /// Thread like its own row's; its own row stays where it is in the tree.
-    fn needs_you_strip(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Option<Div> {
-        if state.needs_you.is_empty() {
-            return None;
-        }
-        let mut strip = nav::needs_you_strip().child(nav::needs_you_header(state.needs_you.len()));
-        for entry in &state.needs_you {
-            let thread = entry.row.thread;
-            strip = strip.child(nav::needs_you_row(entry).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.land_on_thread(thread, cx);
-                }),
-            ));
-        }
-        Some(strip)
     }
 
     /// Smart filtering over the tree: `done N` and its rows, `working N`
@@ -12594,8 +12837,8 @@ impl CockpitView {
             }
             tree = tree.child(block);
         }
-        // An empty tree says so just under the strip, before the ground. It
-        // names the Project the filter chose.
+        // An empty tree says so at its top, before the ground. It names the
+        // Project the filter chose.
         if state.sections.is_empty() {
             let filtered = self
                 .nav_filter
@@ -12629,12 +12872,7 @@ impl CockpitView {
         section: &nav::ProjectSection,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let heading = nav::project_section(
-            index,
-            section.label.clone(),
-            section.branch.clone(),
-            section.folded,
-        );
+        let heading = nav::project_section(index, section);
         let fold = match section.project {
             _ if section.mixed => NavFold::Groups,
             Some(project) => NavFold::Project(project),
@@ -13139,10 +13377,12 @@ mod tests {
     mod composer_controls;
     mod core_transcript_parity;
     mod decisions_parity;
+    mod diagnostics;
     mod find;
     mod floats_parity;
     mod frame_parity;
     mod layout_polish;
+    mod leaving;
     mod loops_overlay;
     mod nav_parity;
     mod provider_controls;
@@ -13873,7 +14113,7 @@ mod tests {
                 "a cross-Project Group belongs to none of its Projects"
             );
             assert!(nav.sections[0].mixed, "it is the Groups section");
-            assert_eq!(nav.sections[0].label.as_ref(), "Groups");
+            assert_eq!(nav.sections[0].label.as_ref(), "groups");
             assert_eq!(nav.sections[0].groups, [0]);
             view.nav_filter = Some(second_project);
             let nav = view.nav_state();
@@ -14221,24 +14461,20 @@ mod tests {
         );
     }
 
-    /// C8: while Threads wait, the nav pins `Needs you N ⌘D` under its
-    /// head with one reference row per waiting Thread, in creation order
-    /// (R14); ⌘D walks them oldest request first, and — the nav being
-    /// open — no system toast card shows.
+    /// C8: while Threads wait, their own rows say so — the yellow mark and
+    /// what each waits for — and their Group's row rolls it up; there is
+    /// no second strip of them. ⌘D walks them oldest request first, and —
+    /// the nav being open — no system toast card shows.
     #[gpui::test]
-    fn two_decisions_make_a_needs_you_strip_and_no_toast(cx: &mut TestAppContext) {
+    fn two_decisions_mark_their_rows_and_their_group_and_no_toast(cx: &mut TestAppContext) {
         use gpui::component::WindowExt as _;
-        let (mut core, fake) = cockpit("needs-you-strip", 3);
+        let (mut core, fake) = cockpit("needs-you-rows", 3);
         let threads = core.threads();
         let group = group_all(&mut core);
         core.enter_group(group).unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
         tick(cx);
-        assert!(
-            cx.debug_bounds("nav-needs-you").is_none(),
-            "nothing waits yet"
-        );
 
         // The third Thread asks first, then the first.
         fake.streams.borrow()[2].send(decision("perm_3")).unwrap();
@@ -14246,57 +14482,40 @@ mod tests {
         fake.streams.borrow()[0].send(decision("perm_1")).unwrap();
         tick(cx);
 
-        let order = view.read_with(cx, |view, _| {
+        view.read_with(cx, |view, _| {
             let state = view.nav_state();
-            state
-                .needs_you
-                .iter()
-                .map(|entry| entry.row.thread)
-                .collect::<Vec<_>>()
+            let block = &state.groups[0];
+            assert_eq!(block.status, nav::RowStatus::NeedsYou, "the Group rolls up");
+            for at in [0, 2] {
+                let row = view.thread_row(threads[at]);
+                assert_eq!(row.status, nav::RowStatus::NeedsYou);
+                assert_eq!(
+                    row.tail,
+                    nav::NavTail::Waiting(crate::theme::words::APPROVAL),
+                    "the word says what it waits for"
+                );
+            }
+            assert_ne!(view.thread_row(threads[1]).status, nav::RowStatus::NeedsYou);
         });
-        assert_eq!(
-            order,
-            vec![threads[0], threads[2]],
-            "creation order, like every nav row (R14): a request moves no row"
+        assert!(
+            cx.debug_bounds("nav-needs-you").is_none(),
+            "no strip: the rows are the list"
         );
         assert_eq!(
             view.read_with(cx, |view, _| view.cockpit.answer_target()),
             Some(threads[2]),
-            "⌘D still answers the request that has waited longest"
+            "⌘D answers the request that has waited longest"
         );
-        let header = cx
-            .debug_bounds("nav-needs-you")
-            .expect("the strip's header");
-        let mut above = header.bottom();
-        for thread in &order {
-            let id: &'static str = format!("nav-needs-{}", thread.get()).leak();
-            let row = cx
-                .debug_bounds(id)
-                .expect("one strip row per waiting Thread");
-            assert_eq!(row.size.height, px(crate::theme::NAV_LINE));
-            assert!(row.origin.y >= above, "in creation order");
-            above = row.bottom();
-            let own: &'static str = format!("nav-thread-{}", thread.get()).leak();
-            assert!(
-                cx.debug_bounds(own).is_some(),
-                "the Thread's own row stays in the tree"
-            );
-        }
+        assert!(
+            cx.debug_bounds("nav-needs-you").is_none(),
+            "no strip restates the waiting rows"
+        );
         cx.update(|window, cx| {
             assert_eq!(
                 window.notifications(cx).len(),
                 0,
-                "the strip is the queue: no toast card"
+                "the rows are the queue: no toast card"
             )
-        });
-        view.read_with(cx, |view, _| {
-            let words: Vec<_> = view
-                .nav_state()
-                .needs_you
-                .iter()
-                .map(|entry| entry.kind)
-                .collect();
-            assert_eq!(words, vec![crate::theme::words::APPROVAL; 2]);
         });
     }
 
@@ -14448,6 +14667,7 @@ mod tests {
             *view.nav_snapshot.borrow_mut() = Some(NavSnapshot {
                 rows: held.clone(),
                 focused: view.cockpit.roster().focused_thread(),
+                ranks: Default::default(),
             });
             let order: Vec<ThreadId> = view
                 .nav_state()
@@ -14483,10 +14703,10 @@ mod tests {
             view.read_with(cx, |view, _| view.nav_railed()),
             "720px folds"
         );
-        assert_eq!(
-            cx.debug_bounds("nav-column").unwrap().size.width,
-            px(nav::FOLDED_WIDTH),
-            "the column is folded away"
+        assert!(
+            (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs()
+                < px(0.5),
+            "the column is folded to the rail"
         );
         assert!(
             cx.debug_bounds("nav-collapse").is_some(),
@@ -14794,7 +15014,19 @@ mod tests {
     }
 
     // Match main: Root mounts the toolkit selection layer, menus and dialogs.
+    // The window opens focused, as a launched one does; what is on screen
+    // is seen from its first frame.
     fn add_cockpit_window(
+        cx: &mut TestAppContext,
+        build: impl FnOnce(&mut Window, &mut Context<CockpitView>) -> CockpitView,
+    ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
+        let (view, cx) = add_unfocused_cockpit_window(cx, build);
+        cx.update(|window, _| window.activate_window());
+        (view, cx)
+    }
+
+    /// A Cockpit window that opens without the operator's focus.
+    fn add_unfocused_cockpit_window(
         cx: &mut TestAppContext,
         build: impl FnOnce(&mut Window, &mut Context<CockpitView>) -> CockpitView,
     ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
@@ -22646,7 +22878,7 @@ mod tests {
         tick(cx);
         let size = |cx: &mut gpui::VisualTestContext| {
             view.read_with(cx, |view, _| {
-                let saved = Settings::load(&view.prefs.dir).reading_size;
+                let saved = Settings::load(&view.prefs.dir).unwrap().reading_size;
                 assert_eq!(saved, view.prefs.settings.reading_size, "saved at once");
                 saved
             })
@@ -22759,7 +22991,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.prefs.settings.default_provider, Provider::Codex);
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).default_provider,
+                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().default_provider,
                 Provider::Codex,
                 "the restyled component must save through the real settings action"
             );
@@ -22786,7 +23018,7 @@ mod tests {
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).reading_size,
+                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().reading_size,
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
         });
@@ -22803,7 +23035,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.prefs.settings.confirm_delete);
-            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).confirm_delete);
+            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().confirm_delete);
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes("escape");
@@ -22852,7 +23084,7 @@ mod tests {
                 cx,
             );
         });
-        let saved = ferrite_core::settings::Settings::load(&dir);
+        let saved = ferrite_core::settings::Settings::load(&dir).unwrap();
         assert_eq!(saved.default_provider, Provider::Codex, "saved on change");
         assert_eq!(saved.claude_permission_mode.as_deref(), Some("acceptEdits"));
         view.read_with(cx, |view, _| {
@@ -24024,18 +24256,15 @@ mod tests {
         });
     }
 
-    /// A Thread that finishes while the operator is on another Pane rings
-    /// the bell: an unread Notice and its own dot breathing until the
-    /// keyboard lands on it — which reads it. It is on the board and the nav
-    /// is open, so nothing toasts (C8): the Pane and the tree say it.
+    /// A Thread that finishes off the screen rings the bell: an unread
+    /// Notice until the operator lands on it — which reads it. The nav is
+    /// open, so nothing toasts (C8): the tree says it.
     #[gpui::test]
-    fn a_finished_thread_rings_the_bell_and_pulses_until_focused(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("finished-bell", 2);
-        let group = group_all(&mut core);
-        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-]", NextPane, None)]));
+    fn a_finished_thread_rings_the_bell_until_it_is_seen(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("finished-bell", 2);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.enter_group(group, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
         fake.streams.borrow()[1]
             .send(SessionEvent::TextDelta {
                 text: "done".into(),
@@ -24049,26 +24278,19 @@ mod tests {
             .unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused(), 0);
             let notifications = view.cockpit.notifications();
             assert_eq!(notifications.unread(), 1);
-            assert!(
-                notifications.attention(threads[1]),
-                "the finished Pane pulses"
-            );
+            assert!(notifications.attention(threads[1]), "off the screen");
             assert!(!notifications.attention(threads[0]));
-        });
-        view.read_with(cx, |view, _| {
             assert!(
                 view.bell.toasts().is_empty(),
-                "a finish on the board, with the nav open, toasts nothing"
+                "with the nav open, a finish toasts nothing"
             );
         });
 
-        cx.simulate_keystrokes("cmd-]");
+        view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused(), 1);
             let notifications = view.cockpit.notifications();
             assert_eq!(notifications.unread(), 0, "landing on the Pane reads it");
             assert!(!notifications.attention(threads[1]));
@@ -24080,61 +24302,86 @@ mod tests {
         });
     }
 
-    /// The tree names the Thread the toast was about: an unread finish
-    /// marks its nav row unread (its own axis — the state stays Idle and
-    /// the dot keeps its idle ink, never a Decision's ochre; terminal-native,
-    /// the title's ink carries unread where the accent dot used to), and
-    /// landing on the Pane — which reads the Notice — clears it.
+    /// The tree names the Thread the toast was about: a finish off the
+    /// screen is **done** — the teal check, the word `done` — and landing
+    /// on its Pane, which shows it, reads it back to idle. A finish on the
+    /// screen is seen as it lands, unless the window is away: then it is
+    /// done until the window comes back.
     #[gpui::test]
-    fn a_finished_thread_marks_its_nav_row_until_it_is_read(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("finished-nav-row", 2);
-        let group = group_all(&mut core);
-        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-]", NextPane, None)]));
+    fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("finished-nav-row", 2);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.enter_group(group, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-        fake.streams.borrow()[1]
+        view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+        let finish = |at: usize| {
+            fake.streams.borrow()[at]
+                .send(SessionEvent::TurnEnded {
+                    outcome: ferrite_core::TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+        };
+        finish(1);
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let finished = view.thread_row(threads[1]);
+            assert_eq!(finished.status, nav::RowStatus::Done, "off the screen");
+            assert_eq!(finished.tail, nav::NavTail::Done);
+            let face = finished.status.face();
+            assert_eq!(face.shape, DotShape::Check);
+            assert_eq!(face.ink, crate::theme::FINISHED, "teal, never ochre");
+            assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);
+        });
+
+        view.update(cx, |view, cx| view.land_on_thread(threads[1], cx));
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let read = view.thread_row(threads[1]);
+            assert_eq!(read.status, nav::RowStatus::Idle, "seen on its Pane");
+            assert_ne!(read.tail, nav::NavTail::Done);
+        });
+
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.deactivate_window();
+        finish(1);
+        tick(cx);
+        let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| view.thread_row(threads[1]).status)
+        };
+        assert_eq!(
+            status(&view, cx),
+            nav::RowStatus::Done,
+            "on the screen, but the window is away"
+        );
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(status(&view, cx), nav::RowStatus::Idle, "seen on return");
+    }
+
+    /// A window that opens without focus has seen nothing yet: a finish on
+    /// its one Pane is done until the window is focused.
+    #[gpui::test]
+    fn a_window_opened_unfocused_sees_nothing_until_focused(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("finished-unfocused", 1);
+        let (view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        fake.streams.borrow()[0]
             .send(SessionEvent::TurnEnded {
                 outcome: ferrite_core::TurnOutcome::Completed,
                 cost_usd: None,
             })
             .unwrap();
         tick(cx);
-        view.read_with(cx, |view, _| {
-            let finished = view.thread_row(threads[1]);
-            assert!(
-                finished.unread,
-                "the unfocused Thread that finished is marked in the tree"
-            );
-            assert_eq!(
-                finished.status,
-                nav::RowStatus::Idle,
-                "unread never lifts a quiet Thread to needs you"
-            );
-            assert_eq!(
-                thread_status(finished.status.wall(), finished.unread).ink,
-                crate::theme::IDLE,
-                "the dot keeps its state, never ochre: the title says unread"
-            );
-            let other = view.thread_row(threads[0]);
-            assert_eq!(other.status, nav::RowStatus::Idle);
-            assert!(!other.unread);
-        });
-
-        cx.simulate_keystrokes("cmd-]");
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            let read = view.thread_row(threads[1]);
-            assert_eq!(read.status, nav::RowStatus::Idle);
-            assert!(
-                !read.unread,
-                "landing on the Pane reads the Notice and clears the mark"
-            );
-            assert_eq!(
-                thread_status(read.status.wall(), read.unread).ink,
-                crate::theme::IDLE
-            );
-        });
+        let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                view.thread_row(view.cockpit.threads()[0]).status
+            })
+        };
+        assert_eq!(status(&view, cx), nav::RowStatus::Done, "not yet seen");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(status(&view, cx), nav::RowStatus::Idle, "seen once focused");
     }
 
     /// A finish on the Pane the operator is already on is read as it is

@@ -175,6 +175,11 @@ fn main() {
         );
         return;
     }
+    // The operator's settings live beside the store (`~/.ferrite`), and
+    // the log and crash reports beside them: opened first, so everything
+    // after is on record.
+    let settings_dir = settings_dir();
+    ferrite_core::diagnostics::open(&settings_dir);
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = shell::adopt_login_environment();
@@ -183,9 +188,13 @@ fn main() {
     let demo = load || args.iter().any(|arg| arg == "--demo");
     // `--demo parity`: the approved prototype's world, on its own store.
     let parity = flag(&args, "--demo") == Some("parity");
-    // The operator's settings live beside the store: `~/.ferrite`.
-    let settings_dir = settings_dir();
-    let settings = Settings::load(&settings_dir);
+    let (settings, unreadable) = match Settings::load(&settings_dir) {
+        Ok(settings) => (settings, None),
+        Err(e) => {
+            ferrite_core::log!("settings.json could not be read: {e}");
+            (Settings::default(), Some(e.to_string()))
+        }
+    };
     let provider = match flag(&args, "--provider") {
         None => settings.default_provider,
         Some("claude") => Provider::Claude,
@@ -232,19 +241,18 @@ fn main() {
 
             let bindings = load_bindings(keymap::PLATFORM, cx);
             cx.bind_keys(bindings);
-            cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(app_menus());
 
             let store = match Store::open(store_dir()) {
                 Ok(store) => store,
                 Err(e) => {
-                    eprintln!("ferrite: cannot open the Thread store: {e}");
+                    ferrite_core::log!("cannot open the Thread store: {e}");
                     std::process::exit(1);
                 }
             };
             let (adopted, refused) = adopt(&store, &imports);
             for refusal in refused {
-                eprintln!("ferrite: {refusal}");
+                ferrite_core::log!("{refusal}");
             }
 
             // The fixture adapter serves `--demo` and `--load`; every other
@@ -267,7 +275,7 @@ fn main() {
                 match Cockpit::try_new(store, spawner) {
                     Ok(core) => core,
                     Err(e) => {
-                        eprintln!("ferrite: cannot open the workspace registry: {e}");
+                        ferrite_core::log!("cannot open the workspace registry: {e}");
                         std::process::exit(1);
                     }
                 }
@@ -277,13 +285,13 @@ fn main() {
             // works instead, so the launch project and every draft begin there.
             if dock {
                 if let Err(e) = std::env::set_current_dir(dock_launch_dir(&core)) {
-                    eprintln!("ferrite: cannot stand in the launch directory: {e}");
+                    ferrite_core::log!("cannot stand in the launch directory: {e}");
                 }
             }
             core.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
             for thread in adopted {
                 if let Err(e) = core.revive(thread) {
-                    eprintln!("ferrite: imported thread {thread} would not open: {e}");
+                    ferrite_core::log!("imported thread {thread} would not open: {e}");
                 }
             }
             if core.threads().is_empty() {
@@ -311,6 +319,7 @@ fn main() {
                 .flatten();
 
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let mut cockpit_view = None;
             let window = cx
                 .open_window(
                     WindowOptions {
@@ -359,6 +368,7 @@ fn main() {
                                     defaults: defaults.clone(),
                                     titler: true,
                                     cli_updates: true,
+                                    unreadable: unreadable.clone(),
                                 },
                                 cx,
                             );
@@ -367,6 +377,13 @@ fn main() {
                             }
                             view
                         });
+                        let closing = view.downgrade();
+                        window.on_window_should_close(cx, move |window, cx| {
+                            closing
+                                .update(cx, |view, cx| view.close_requested(window, cx))
+                                .unwrap_or(true)
+                        });
+                        cockpit_view = Some(view.downgrade());
                         // The kit Root paints its theme's opaque `background`
                         // under everything; on glass the window's root paints
                         // nothing (`paint::WINDOW`), so the blur reaches the
@@ -381,6 +398,17 @@ fn main() {
                     },
                 )
                 .unwrap();
+            // ⌘Q asks first while an agent works or a Decision waits.
+            let cockpit_view: WeakEntity<CockpitView> =
+                cockpit_view.expect("the window built its Cockpit");
+            cx.on_action(move |_: &Quit, cx| {
+                let asked = window.update(cx, |_, window, cx| {
+                    cockpit_view.update(cx, |view, cx| view.request_quit(window, cx))
+                });
+                if !matches!(asked, Ok(Ok(()))) {
+                    cx.quit();
+                }
+            });
 
             window
                 .update(cx, |_, window, cx| {
@@ -413,16 +441,21 @@ fn adopt(store: &Store, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
     (adopted, refused)
 }
 
-/// Restore the Threads whose Panes were open when Ferrite stopped. Stores from
-/// before open-state persistence fall back once to their most recently used
-/// Thread; creation order breaks ties. An intentionally all-parked store opens
-/// no Session and the window supplies a draft Pane instead (#29).
+/// How far apart the launch starts the Sessions it restores (ADR 0018): a
+/// window of Threads coming back does not start every CLI in one instant.
+const LAUNCH_STAGGER: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Restore the Threads whose Panes were open when Ferrite stopped, each
+/// Session `LAUNCH_STAGGER` after the one before. Stores from before
+/// open-state persistence fall back once to their most recently used
+/// Thread; creation order breaks ties. An intentionally all-parked store
+/// opens no Session and the window supplies a draft Pane instead (#29).
 fn revive_launch_threads(cockpit: &mut Cockpit) {
     let previously_open = cockpit.previously_open().unwrap_or_default();
     if cockpit.tracks_open_state() {
-        for thread in previously_open {
-            if let Err(e) = cockpit.revive(thread) {
-                eprintln!("ferrite: thread {thread} could not be revived: {e:?}");
+        for (nth, thread) in previously_open.into_iter().enumerate() {
+            if let Err(e) = cockpit.revive_after(thread, LAUNCH_STAGGER * nth as u32) {
+                ferrite_core::log!("thread {thread} could not be revived: {e:?}");
             }
         }
         return;
@@ -436,7 +469,7 @@ fn revive_launch_threads(cockpit: &mut Cockpit) {
         return;
     };
     if let Err(e) = cockpit.revive(thread) {
-        eprintln!("ferrite: thread {thread} could not be revived: {e:?}");
+        ferrite_core::log!("thread {thread} could not be revived: {e:?}");
     }
 }
 
@@ -774,6 +807,74 @@ mod tests {
         revive_launch_threads(&mut restarted);
 
         assert_eq!(restarted.threads(), vec![first, second]);
+    }
+
+    /// ADR 0018: each restored Session starts `LAUNCH_STAGGER` after the
+    /// one before, the wait being its start's, not the launch's.
+    #[test]
+    fn a_launch_staggers_the_sessions_it_restores() {
+        use ferrite_core::cockpit::{Preparation, SpawnRequest, Spawner};
+        use ferrite_core::session::SessionLifecycle;
+        use std::time::{Duration, Instant};
+        struct Timing {
+            demo: demo::Spawn,
+            waits: std::rc::Rc<std::cell::RefCell<Vec<Duration>>>,
+        }
+        impl Spawner for Timing {
+            fn spawn(
+                &mut self,
+                request: SpawnRequest,
+            ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+                self.demo.spawn(request)
+            }
+            fn start_after(
+                &mut self,
+                prepare: Preparation,
+                request: SpawnRequest,
+            ) -> std::io::Result<SessionLifecycle> {
+                let started = Instant::now();
+                prepare()?;
+                self.waits.borrow_mut().push(started.elapsed());
+                self.start(request)
+            }
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-launch-{}-stagger",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let checkout = std::env::current_dir().unwrap();
+        let mut core = Cockpit::new(
+            Store::open(&dir).unwrap(),
+            Box::new(demo::Spawn::new(false)),
+        );
+        for _ in 0..3 {
+            core.open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        }
+        core.halt_sessions();
+        drop(core);
+
+        let waits = std::rc::Rc::default();
+        let mut restarted = Cockpit::new(
+            Store::open(&dir).unwrap(),
+            Box::new(Timing {
+                demo: demo::Spawn::new(false),
+                waits: std::rc::Rc::clone(&waits),
+            }),
+        );
+        revive_launch_threads(&mut restarted);
+
+        let waits = waits.borrow();
+        assert_eq!(waits.len(), 3);
+        for (nth, wait) in waits.iter().enumerate() {
+            assert!(*wait >= super::LAUNCH_STAGGER * nth as u32, "{waits:?}");
+        }
     }
 
     /// Leg 3: a file that is not a session file is refused in the operator's

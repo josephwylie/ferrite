@@ -220,21 +220,26 @@ pub fn help_door() -> Stateful<Div> {
 }
 
 /// One view's tab: ` 1 solo `, ` 2 perf sweep ` — the words a cell in from
-/// the tab's own cell of padding. The current view's is `TEXT_STRONG` on
-/// `paint::BAND2`; the rest are dim and lift to `TEXT` on `paint::HOVER`
-/// under the pointer. The cockpit wires the press.
+/// the tab's own cell of padding, and the roll-up `mark` of the Threads it
+/// shows after them (` 2 perf sweep ✓ `) while it says anything. The
+/// current view's is `TEXT_STRONG` on `paint::BAND2`; the rest are dim and
+/// lift to `TEXT` on `paint::HOVER` under the pointer. The cockpit wires
+/// the press.
 pub fn bar_tab(
     id: SharedString,
     ordinal: usize,
     label: SharedString,
     current: bool,
+    mark: Option<crate::cockpit::ThreadStatus>,
 ) -> Stateful<Div> {
     let selector = id.clone();
     let key = id.clone();
     let words = format!("{ordinal} {label}");
     // The prototype's ` 2 perf sweep `, one run, in a cell of padding
-    // each side.
-    let width = components::run_width(&format!(" {words} ")) + 2.0 * BAR_SEG_PAD_X;
+    // each side; a mark takes a space and its cell more.
+    let width = components::run_width(&format!(" {words} "))
+        + 2.0 * BAR_SEG_PAD_X
+        + if mark.is_some() { 2.0 * CH } else { 0.0 };
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
@@ -259,6 +264,7 @@ pub fn bar_tab(
                 })
                 .child(components::cells(words)),
         )
+        .children(mark.map(|mark| div().flex_shrink_0().ml(px(CH)).child(mark.dot())))
 }
 
 /// The window a provider's usage segment reads: its more used one, the 5h
