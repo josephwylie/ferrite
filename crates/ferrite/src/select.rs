@@ -65,9 +65,13 @@ impl RunText {
     }
 
     /// The text a find counts in: `plain`, with every run its view paints
-    /// on a line of its own.
+    /// on a line of its own. A literal is one run, as written.
     pub fn find_text(&self) -> String {
-        gpui::base::text::TextView::markdown_find_text(&self.markdown())
+        if self.markdown {
+            gpui::base::text::TextView::markdown_find_text(&self.source)
+        } else {
+            self.source.to_string()
+        }
     }
 
     fn markdown(&self) -> std::borrow::Cow<'_, str> {
@@ -144,19 +148,24 @@ impl TextRuns {
         *self.next_ordinal.borrow_mut() = 0;
     }
 
-    fn collect(&self, id: &SharedString, source: &str, markdown: bool) {
+    /// Note a native text for copy (a member of the selection document)
+    /// and find, in order. A bounded output viewer owns its selection, so
+    /// only find notes it (`copied` false).
+    fn collect(&self, id: &SharedString, source: &str, markdown: bool, copied: bool) {
         if let Some((members, texts)) = self.members.borrow_mut().as_mut() {
             let text = RunText {
                 key: id.clone(),
                 source: source.to_owned().into(),
                 markdown,
             };
-            let version = text.source.clone();
-            let copy = text.clone();
-            members.push(
-                TextSelectionDocumentMember::new(id.clone(), move |_| copy.plain())
-                    .with_content_version(version),
-            );
+            if copied {
+                let version = text.source.clone();
+                let copy = text.clone();
+                members.push(
+                    TextSelectionDocumentMember::new(id.clone(), move |_| copy.plain())
+                        .with_content_version(version),
+                );
+            }
             texts.push(text);
         }
     }
@@ -181,7 +190,7 @@ impl TextRuns {
                 .push((first, 0, true, source.clone()));
         }
         let id: SharedString = format!("markdown-{}-{first:?}", self.namespace).into();
-        self.collect(&id, &source, true);
+        self.collect(&id, &source, true, true);
         let find = self.marks(&id);
         crate::rich::Markdown::new(id, source, self.cache.clone())
             .selection_document(self.document.clone())
@@ -197,8 +206,11 @@ impl TextRuns {
                 .or_default()
                 .push((block, 0, true, text.to_string()));
         }
+        let id: SharedString = format!("output-{}-{block:?}-{part}", self.namespace).into();
+        self.collect(&id, text, false, false);
         crate::rich::Output {
-            id: format!("output-{}-{block:?}-{part}", self.namespace).into(),
+            find: self.marks(&id),
+            id,
             text: text.to_string().into(),
             cache: self.cache.clone(),
             aria_label: "Tool output".into(),
@@ -216,7 +228,7 @@ impl TextRuns {
                 .push((block, 0, true, source.clone()));
         }
         let id: SharedString = format!("thinking-{}-{block:?}", self.namespace).into();
-        self.collect(&id, &source, true);
+        self.collect(&id, &source, true, true);
         let find = self.marks(&id);
         crate::rich::Markdown::new(id, source, self.cache.clone())
             .selection_document(self.document.clone())
@@ -246,7 +258,7 @@ impl TextRuns {
                 .push((block, ordinal, true, text.to_string()));
         }
         let id: SharedString = format!("literal-{}-{block:?}-{ordinal}", self.namespace).into();
-        self.collect(&id, &text, false);
+        self.collect(&id, &text, false, true);
         crate::rich::Literal {
             find: self.marks(&id),
             id,

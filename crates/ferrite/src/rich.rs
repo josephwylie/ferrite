@@ -1023,6 +1023,8 @@ pub struct Output {
     pub cache: TextCache,
     pub aria_label: SharedString,
     pub fill: bool,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 impl gpui::RenderOnce for Output {
@@ -1033,6 +1035,7 @@ impl gpui::RenderOnce for Output {
         else {
             unreachable!("output has its own namespace")
         };
+        state.update(cx, |state, cx| state.set_find(self.find, cx));
         #[cfg(test)]
         testing::record_output(self.id, state.clone(), cx);
         Textarea::new(&state)
@@ -1083,6 +1086,7 @@ pub fn document_body(
             cache,
             aria_label,
             fill: true,
+            find: None,
         }
         .into_any_element(),
     }

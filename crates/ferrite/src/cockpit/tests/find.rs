@@ -173,6 +173,58 @@ fn find_steps_both_ways_and_wraps(cx: &mut TestAppContext) {
     assert_eq!(count(cx).as_ref(), "2/4");
 }
 
+/// Output past `OUTPUT_INLINE_BYTES`, opened, scrolls in its own bounded
+/// viewer: an occurrence deep inside it is counted, washed, and scrolled
+/// into view within the viewer and the transcript both.
+#[gpui::test]
+fn find_reaches_into_a_scrolling_output(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("find-big-output", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let output: String = (0..400)
+        .map(|n| match n {
+            300 => "the needle is down here\n".to_string(),
+            n => format!("line {n} of output that only pads it\n"),
+        })
+        .collect();
+    assert!(output.len() > crate::theme::OUTPUT_INLINE_BYTES);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "big".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo build" }),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "big".into(),
+            output,
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    say(&fake, "Done.\n\n");
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("big".into()));
+        cx.notify();
+    });
+    tick(cx);
+    open(cx);
+    cx.simulate_input("needle");
+    settle(&view, cx);
+    let found = state(&view, cx).unwrap();
+    assert_eq!(found.count.as_deref(), Some("1/1"));
+    let painted = found.painted.expect("the occurrence painted");
+    let shown = viewport(&view, cx);
+    assert!(
+        painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
+        "the occurrence is in view: {painted:?} in {shown:?}"
+    );
+}
+
 /// A long answer at the followed tail: its row is in view but the
 /// occurrence at its head is not. The bar scrolls within the row.
 #[gpui::test]
