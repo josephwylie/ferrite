@@ -317,7 +317,10 @@ impl Remote {
 
     fn send_command(&mut self, op: Op) -> Result<u64, WireError> {
         if self.attachment.is_none() {
-            return Err(gone(&self.detached));
+            return Err(WireError {
+                code: ErrorCode::Failed,
+                message: self.detached.clone(),
+            });
         }
         self.next_request += 1;
         let id = self.next_request;
@@ -540,6 +543,8 @@ fn hello(attach: &Attach) -> ClientMessage {
     }
 }
 
+/// An act in flight when the connection went: the Server may have taken
+/// it, and it is never sent again.
 fn gone(reason: &str) -> WireError {
     WireError {
         code: ErrorCode::Failed,
