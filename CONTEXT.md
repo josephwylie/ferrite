@@ -179,6 +179,12 @@ first prompt creates a Thread. It has no durable history or Session.
 Following and answering Decisions away from the desktop. Wanted soon;
 scope under discussion.
 
+**Server**
+The headless Ferrite process (`ferrite server`) that owns every Session,
+the Threads' history and the pending Decisions, so agents keep running
+when no window is open. Windows are its clients; several may attach.
+_Avoid_: daemon, backend (that is a Provider), host.
+
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,
