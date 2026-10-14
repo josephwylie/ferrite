@@ -851,6 +851,13 @@ impl CockpitView {
             Command::UpdateClis,
         );
         add(
+            self.ferrite_update.ready(),
+            "restart to update Ferrite".into(),
+            "",
+            None,
+            Command::UpdateFerrite,
+        );
+        add(
             draft,
             "discard draft".into(),
             "",
@@ -988,6 +995,7 @@ impl CockpitView {
             Command::ShowChecks => self.open_checks(window, cx),
             Command::ShowPlan => self.open_plan(window, cx),
             Command::UpdateClis => self.install_cli_updates(cx),
+            Command::UpdateFerrite => self.restart_to_update(cx),
             Command::DiscardDraft => {
                 if let Some(identity) = self.panes.get(self.focused()).map(|pane| pane.identity) {
                     if identity.thread().is_none() {

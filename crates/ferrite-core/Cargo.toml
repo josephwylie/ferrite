@@ -11,6 +11,9 @@ serde_json = { workspace = true }
 base64 = "0.22"
 chrono = "0.4.45"
 ureq = "3"
+# Ferrite's own update is checked against the SHA-256 GitHub publishes
+# for the installer (`self_update`). Already in the tree via gpui.
+sha2 = "0.10"
 
 # An npm-installed provider CLI on Windows is a `.cmd` shim: the Session's
 # child is cmd.exe with the real CLI beneath it, and only a Job Object can

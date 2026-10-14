@@ -69,6 +69,11 @@ pub struct Settings {
     /// through a newer CLI. Off, Ferrite still offers each update.
     /// Default: true.
     pub auto_update_clis: bool,
+    /// Whether Ferrite looks for a newer release of itself every few
+    /// hours and downloads it. Installing still waits for a restart, which
+    /// Ferrite offers and never forces. Off, Settings checks on request.
+    /// Default: true.
+    pub check_for_updates: bool,
     /// Whether a transcript shows the model's thinking (Claude's thinking,
     /// Codex's reasoning summaries) as `∴` rows between the calls. The
     /// approved transcript has none, so they are kept off it and shown from
@@ -170,6 +175,7 @@ impl Default for Settings {
             placeholder_suggestions: true,
             reading_size: ReadingSize::STANDARD,
             auto_update_clis: true,
+            check_for_updates: true,
             show_thinking: false,
             smart_filtering: false,
             visuals: crate::visual::Level::WhenAsked,
@@ -300,6 +306,7 @@ mod tests {
             placeholder_suggestions: false,
             reading_size: ReadingSize(18),
             auto_update_clis: false,
+            check_for_updates: false,
             show_thinking: true,
             smart_filtering: true,
             visuals: crate::visual::Level::Automatic,

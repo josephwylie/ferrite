@@ -13,6 +13,7 @@ mod composer;
 mod decision;
 mod demo;
 mod facts;
+mod ferrite_update;
 mod file_links;
 mod float;
 mod fuzzy;
@@ -179,6 +180,13 @@ fn main() {
     // after is on record.
     let settings_dir = settings_dir();
     ferrite_core::diagnostics::open(&settings_dir);
+    // A Ferrite update the last run downloaded installs now, before any
+    // Session exists for it to cut off (ADR 0020). A successful install
+    // does not return here: the new Ferrite takes this process's place.
+    let ferrite_updates = ferrite_update::enabled();
+    let whats_new = ferrite_updates
+        .then(|| ferrite_update::at_launch(&settings_dir))
+        .flatten();
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = shell::adopt_login_environment();
@@ -367,6 +375,8 @@ fn main() {
                                     defaults: defaults.clone(),
                                     titler: true,
                                     cli_updates: true,
+                                    ferrite_updates,
+                                    whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
                                 },
                                 cx,

@@ -22,6 +22,7 @@ mod prompt_history;
 pub mod providers;
 pub mod questions;
 pub mod roster;
+pub mod self_update;
 pub mod session;
 pub mod settings;
 pub mod spawn;
