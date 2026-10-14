@@ -9,6 +9,7 @@ pub(crate) mod empty_board;
 mod leaving;
 mod palette;
 mod parts;
+mod server;
 pub(crate) mod subagents;
 mod transcript_glue;
 mod updating;
@@ -542,8 +543,8 @@ pub struct CockpitView {
     cli_updates: crate::cli_updates::CliUpdates,
     /// Where Ferrite's own update stands (ADR 0023).
     ferrite_update: crate::ferrite_update::FerriteUpdate,
-    /// Whether the window has said the store is read-only (ADR 0009).
-    read_only_told: bool,
+    /// What the window has said about its Server (ADR 0025).
+    server_bands: server::ServerBands,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
     /// The operator's commands running, and what they and the keys have
@@ -1413,8 +1414,7 @@ impl CockpitView {
     ) -> Self {
         crate::theme::init_components(cx);
         subagents::init(cx);
-        cockpit.set_suggestions_enabled(prefs.settings.placeholder_suggestions);
-        cockpit.set_allowance_thresholds(prefs.settings.allowance_warnings.clone());
+        cockpit.settings_changed(&prefs.settings);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -1545,7 +1545,7 @@ impl CockpitView {
             shown_version: env!("CARGO_PKG_VERSION").into(),
             cli_updates: Default::default(),
             ferrite_update: Default::default(),
-            read_only_told: false,
+            server_bands: Default::default(),
             unreadable_told: false,
             user_commands: Default::default(),
             leave_asked: false,
@@ -4132,8 +4132,7 @@ impl CockpitView {
                 if result.is_ok() {
                     // Open Threads restart on the new CLI as each goes
                     // idle, and the pickers ask for its menu now.
-                    view.cockpit.restart_sessions(provider);
-                    view.cockpit.rediscover_models();
+                    view.cockpit.cli_replaced(provider);
                 }
                 view.cli_updates.updated(provider, result);
                 view.probe_cli_versions(cx);
@@ -4184,29 +4183,6 @@ impl CockpitView {
             window.push_notification(notification, cx);
         }
         cx.notify();
-    }
-
-    /// A second Ferrite on one store reads it and changes nothing (ADR
-    /// 0009). Said once, and kept on screen: every refused act would
-    /// otherwise look like a fault of its own.
-    fn present_read_only(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use gpui::component::notification::{Notification, NotificationType};
-        use gpui::component::WindowExt as _;
-        if self.read_only_told {
-            return;
-        }
-        let Some(reason) = self.cockpit.store_read_only() else {
-            return;
-        };
-        self.read_only_told = true;
-        window.push_notification(
-            Notification::new()
-                .title("This window is read-only")
-                .message(format!("{reason}. Quit the other Ferrite to work here."))
-                .with_type(NotificationType::Warning)
-                .autohide(false),
-            cx,
-        );
     }
 
     /// Settings › About's Diagnostics: what a bug report needs, on the
@@ -4314,15 +4290,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         change(&mut self.prefs.settings);
-        self.cockpit
-            .set_suggestions_enabled(self.prefs.settings.placeholder_suggestions);
-        self.cockpit
-            .set_allowance_thresholds(self.prefs.settings.allowance_warnings.clone());
         if self.prefs.unreadable.is_none() {
             if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
                 self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
             }
         }
+        // Saved first: a Server rereads the file.
+        self.cockpit.settings_changed(&self.prefs.settings);
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = ferrite_core::spawner::SessionDefaults::from_settings(&self.prefs.settings);
         }
@@ -4755,6 +4729,12 @@ impl CockpitView {
             ),
         ];
         about.splice(1..1, self.ferrite_update_rows(window, cx));
+        let mut about = vec![prefs::Group::new(None).rows(about)];
+        let server = self.server_rows(window, cx);
+        if !server.is_empty() {
+            about.push(prefs::Group::new(Some("Server")).rows(server));
+        }
+        about.push(prefs::Group::new(Some("Provider CLIs")).rows(clis));
         let pages = vec![
             prefs::page(prefs::PageKey::NewThreads, new_thread_groups),
             prefs::page(
@@ -4779,13 +4759,7 @@ impl CockpitView {
                     prefs::Group::new(Some("System")).rows(system),
                 ],
             ),
-            prefs::page(
-                prefs::PageKey::About,
-                vec![
-                    prefs::Group::new(None).rows(about),
-                    prefs::Group::new(Some("Provider CLIs")).rows(clis),
-                ],
-            ),
+            prefs::page(prefs::PageKey::About, about),
         ];
 
         let select = {
@@ -6637,9 +6611,7 @@ impl CockpitView {
     /// or the error line under a draft's band.
     fn say_to(&mut self, pane: PaneIdentity, message: String) {
         match pane {
-            PaneIdentity::Thread(thread) => self
-                .cockpit
-                .apply_input(thread, ferrite_core::transcript::Input::Notice(message)),
+            PaneIdentity::Thread(thread) => self.cockpit.say(thread, message),
             PaneIdentity::Draft(_) => {
                 if let Some(draft) = self
                     .index_of(pane)
@@ -6824,10 +6796,7 @@ impl CockpitView {
             self.cockpit.set_provider(thread, choice)
         };
         if let Err(e) = result {
-            self.cockpit.apply_input(
-                thread,
-                ferrite_core::transcript::Input::Notice(format!("model unchanged: {e}")),
-            );
+            self.cockpit.say(thread, format!("model unchanged: {e}"));
         }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
@@ -9362,7 +9331,7 @@ impl CockpitView {
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
-        self.present_read_only(window, cx);
+        self.present_server(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);
@@ -12308,10 +12277,7 @@ impl CockpitView {
     /// words land in the transcript either way).
     fn pick_effort(&mut self, thread: ThreadId, effort: Option<String>, cx: &mut Context<Self>) {
         if let Err(e) = self.cockpit.set_effort(thread, effort) {
-            self.cockpit.apply_input(
-                thread,
-                ferrite_core::transcript::Input::Notice(format!("effort unchanged: {e}")),
-            );
+            self.cockpit.say(thread, format!("effort unchanged: {e}"));
         }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();

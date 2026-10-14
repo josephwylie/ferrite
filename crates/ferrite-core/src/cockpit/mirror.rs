@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::activity::{Activity, ActivityInput, ActivityView, ToolTiming};
+use crate::activity::{Activity, ActivityInput, ActivityView, Subject, ToolTiming};
 use crate::engine::{event_changes_content, PaneUpdate};
 use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
 use crate::store::Provider;
@@ -47,6 +47,10 @@ struct Facts {
     permission_modes: Vec<PermissionModeChoice>,
     controls: Vec<ControlKind>,
     store_error: Option<String>,
+    for_draft: bool,
+    recovered: usize,
+    wants_listing: bool,
+    history_errors: HashMap<String, String>,
 }
 
 impl From<ThreadState> for Facts {
@@ -86,6 +90,14 @@ impl From<ThreadState> for Facts {
                 .filter_map(|kind| kind.try_into().ok())
                 .collect(),
             store_error: state.store_error,
+            for_draft: state.for_draft,
+            recovered: state.recovered.len(),
+            wants_listing: state.wants_listing,
+            history_errors: state
+                .history_errors
+                .into_iter()
+                .map(|error| (error.agent, error.error))
+                .collect(),
         }
     }
 }
@@ -252,9 +264,48 @@ impl Mirrors {
 
     /// The last input this window applied to a Thread: where a resume
     /// picks up.
-    #[cfg(test)]
     pub(crate) fn seq(&self, thread: ThreadId) -> Option<u64> {
         self.threads.get(&thread).map(|mirror| mirror.seq)
+    }
+
+    /// Only these Threads are open: the rest go.
+    pub(crate) fn retain(&mut self, open: &[ThreadId]) {
+        self.threads.retain(|thread, _| open.contains(thread));
+    }
+
+    pub(crate) fn threads(&self) -> Vec<ThreadId> {
+        self.threads.keys().copied().collect()
+    }
+
+    /// Whether a Draft's first send is starting this Thread.
+    pub(crate) fn for_draft(&self, thread: ThreadId) -> bool {
+        self.facts(thread).is_some_and(|facts| facts.for_draft)
+    }
+
+    /// Whether some Thread's binding waits on a fresh worktree listing.
+    pub(crate) fn wants_listing(&self) -> bool {
+        self.threads
+            .values()
+            .filter_map(|mirror| mirror.facts.as_ref())
+            .any(|facts| facts.wants_listing)
+    }
+
+    /// Why a Subagent's history could not be read back, if it could not.
+    pub(crate) fn history_error(&self, thread: ThreadId, subject: &Subject) -> Option<&str> {
+        let mirror = self.threads.get(&thread)?;
+        let Subject::Subagent(key) = mirror.activity.view().canonical_subject(subject) else {
+            return None;
+        };
+        mirror
+            .facts
+            .as_ref()?
+            .history_errors
+            .get(key.as_str())
+            .map(String::as_str)
+    }
+
+    fn facts(&self, thread: ThreadId) -> Option<&Facts> {
+        self.threads.get(&thread)?.facts.as_ref()
     }
 
     pub(crate) fn view(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
@@ -432,6 +483,11 @@ impl<'a> ThreadView<'a> {
     /// Session announces a list.
     pub fn models(&self) -> &'a [ModelInfo] {
         &self.facts.models
+    }
+
+    /// How many prompts the provider handed back wait for the Composer.
+    pub fn recovered(&self) -> Option<usize> {
+        (self.facts.recovered > 0).then_some(self.facts.recovered)
     }
 
     /// The live Session's permission mode (#23): the meta row's mode chip.

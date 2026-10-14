@@ -199,6 +199,10 @@ fn state() -> ThreadState {
         }],
         controls: vec![WireControlKind::RefreshContext, WireControlKind::StopTask],
         store_error: None,
+        for_draft: false,
+        recovered: vec![],
+        wants_listing: false,
+        history_errors: vec![],
     }
 }
 
@@ -299,8 +303,28 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     },
                     prompt: "fix the parser".into(),
                     group: Some(group),
+                    new_group_with: None,
                 },
             ),
+        ),
+        (
+            "command_bootstrap_new_group",
+            command(
+                27,
+                Op::Bootstrap {
+                    provider: Provider::Claude,
+                    model: None,
+                    effort: None,
+                    workspace: checkout(),
+                    prompt: "pair with this".into(),
+                    group: None,
+                    new_group_with: Some(thread),
+                },
+            ),
+        ),
+        (
+            "command_cancel_bootstrap",
+            command(28, Op::CancelBootstrap { request: 27 }),
         ),
         (
             "command_send",
@@ -330,6 +354,84 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 Op::CancelQueued {
                     thread,
                     restore: true,
+                    edit: false,
+                },
+            ),
+        ),
+        (
+            "command_cancel_queued_edit",
+            command(
+                29,
+                Op::CancelQueued {
+                    thread,
+                    restore: true,
+                    edit: true,
+                },
+            ),
+        ),
+        ("command_take_recovered", command(30, Op::TakeRecovered { thread })),
+        (
+            "command_recall",
+            command(
+                31,
+                Op::Recall {
+                    thread,
+                    direction: WireDirection::Older,
+                    draft: "half a thought".into(),
+                },
+            ),
+        ),
+        ("command_revive_group", command(32, Op::ReviveGroup { group })),
+        (
+            "command_cli_replaced",
+            command(
+                33,
+                Op::CliReplaced {
+                    provider: Provider::Codex,
+                },
+            ),
+        ),
+        (
+            "command_worktrees_listed",
+            command(
+                34,
+                Op::WorktreesListed {
+                    thread,
+                    listed: vec!["/src/ferrite".into(), "/src/ferrite-wt/4".into()],
+                    age_ms: 120,
+                },
+            ),
+        ),
+        (
+            "command_load_subject",
+            command(
+                35,
+                Op::LoadSubject {
+                    thread,
+                    subject: WireSubject::Subagent {
+                        key: "claude:root:agent-1".into(),
+                    },
+                    retry: true,
+                },
+            ),
+        ),
+        (
+            "command_show_subject",
+            command(
+                36,
+                Op::ShowSubject {
+                    thread,
+                    subject: WireSubject::Main,
+                },
+            ),
+        ),
+        (
+            "command_say",
+            command(
+                37,
+                Op::Say {
+                    thread,
+                    text: "model unchanged: a turn is running".into(),
                 },
             ),
         ),
@@ -504,6 +606,21 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 boot_id: "b-1".into(),
                 capabilities: vec![],
                 error: None,
+                uptime_ms: None,
+            }),
+        ),
+        (
+            "welcome_uptime",
+            Sample::Server(ServerMessage::Welcome {
+                generation: 1,
+                server: ServerInfo {
+                    version: "0.9.0".into(),
+                    executable: "/Applications/Ferrite.app/Contents/MacOS/ferrite".into(),
+                },
+                boot_id: "b-1".into(),
+                capabilities: vec![],
+                error: None,
+                uptime_ms: Some(61_000),
             }),
         ),
         (
@@ -644,6 +761,77 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Thread {
                 revision: 8,
                 state: state(),
+            }),
+        ),
+        (
+            "thread_starting",
+            Sample::Server(ServerMessage::Thread {
+                revision: 15,
+                state: ThreadState {
+                    for_draft: true,
+                    recovered: vec![WireRecovered {
+                        text: "and then the tests".into(),
+                        prepend: true,
+                    }],
+                    wants_listing: true,
+                    history_errors: vec![WireHistoryError {
+                        agent: "claude:root:agent-1".into(),
+                        error: "the log is gone".into(),
+                    }],
+                    ..state()
+                },
+            }),
+        ),
+        (
+            "allowance_warning",
+            Sample::Server(ServerMessage::AllowanceWarning {
+                provider: Provider::Claude,
+                window: WireLimitWindow::FiveHour,
+                threshold: 80,
+                used_fraction: 0.5,
+            }),
+        ),
+        (
+            "reply_changed",
+            Sample::Server(ServerMessage::Reply {
+                id: 34,
+                ok: Some(Done::Changed { changed: true }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_threads",
+            Sample::Server(ServerMessage::Reply {
+                id: 32,
+                ok: Some(Done::Threads {
+                    threads: vec![thread, ThreadId::new(2)],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_recovered",
+            Sample::Server(ServerMessage::Reply {
+                id: 30,
+                ok: Some(Done::Recovered {
+                    text: "and then the tests".into(),
+                    prepend: false,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_grouped",
+            Sample::Server(ServerMessage::Reply {
+                id: 19,
+                ok: Some(Done::Grouped {
+                    group: Some(group),
+                    dissolved: vec![WireDissolved {
+                        group: GroupId::new(2),
+                        survivor: ThreadId::new(2),
+                    }],
+                }),
+                error: None,
             }),
         ),
         (
@@ -1074,12 +1262,12 @@ fn a_newer_generation_is_refused_with_unsupported_generation() {
         version: "0.9.0".into(),
         executable: "/bin/ferrite".into(),
     };
-    let ServerMessage::Welcome { error, .. } = welcome(generation, server.clone(), "b-1".into())
+    let ServerMessage::Welcome { error, .. } = welcome(generation, server.clone(), "b-1".into(), 0)
     else {
         panic!("a welcome");
     };
     assert_eq!(error.unwrap().code, ErrorCode::UnsupportedGeneration);
-    let ServerMessage::Welcome { error, .. } = welcome(GENERATION, server, "b-1".into()) else {
+    let ServerMessage::Welcome { error, .. } = welcome(GENERATION, server, "b-1".into(), 0) else {
         panic!("a welcome");
     };
     assert_eq!(error, None);

@@ -111,6 +111,9 @@ const CLAIM: &str = ".lock";
 const READ_ONLY: &str = "another Ferrite has this store open, so this window can read \
      its Threads but not open, create or change them";
 
+/// Why a window's handle may not write: its Server does (ADR 0025).
+const READER: &str = "this window reads its Threads; the Ferrite server writes them";
+
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2004,7 +2007,25 @@ impl Store {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let shared = Shared::of(&dir)?;
-        Ok(Self {
+        Ok(Self::with_shared(dir, flush_interval, shared))
+    }
+
+    /// A window's handle on the Store its Server writes (ADR 0025): it
+    /// reads the Threads, and never takes the claim — a Server that starts
+    /// after the window must find it free.
+    pub fn reader(dir: impl AsRef<Path>) -> io::Result<Self> {
+        let dir = dir.as_ref().to_path_buf();
+        fs::create_dir_all(&dir)?;
+        let shared = std::sync::Arc::new(Shared::new(Some(READER.to_string())));
+        Ok(Self::with_shared(dir, DEFAULT_FLUSH_INTERVAL, shared))
+    }
+
+    fn with_shared(
+        dir: PathBuf,
+        flush_interval: std::time::Duration,
+        shared: std::sync::Arc<Shared>,
+    ) -> Self {
+        Self {
             dir,
             flush_interval,
             full_sync_interval: FULL_SYNC_INTERVAL,
@@ -2015,7 +2036,7 @@ impl Store {
             fail_create: false,
             #[cfg(test)]
             fail_delete: false,
-        })
+        }
     }
 
     /// Why this process may only read the store — another Ferrite holds its

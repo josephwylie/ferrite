@@ -626,6 +626,8 @@ struct Published {
 
 impl Thread {
     /// Everything a window reads of this Thread that is not its Activity.
+    /// What a window reads of this Thread beyond its Activity. Whether a
+    /// Draft is starting it is the Engine's to say (`Engine::thread_state`).
     fn wire_state(&self, id: ThreadId) -> protocol::ThreadState {
         use crate::ControlKind as Kind;
         let session = self.session.as_ref().and_then(SessionLifecycle::session);
@@ -684,6 +686,29 @@ impl Thread {
             .map(Into::into)
             .collect(),
             store_error: self.store_error.clone(),
+            for_draft: false,
+            recovered: self
+                .native_queue
+                .recovered
+                .iter()
+                .map(|(text, prepend)| protocol::WireRecovered {
+                    text: text.clone(),
+                    prepend: *prepend,
+                })
+                .collect(),
+            wants_listing: self.follow.wants_listing(),
+            history_errors: {
+                let mut errors: Vec<_> = self
+                    .history_errors
+                    .iter()
+                    .map(|(key, error)| protocol::WireHistoryError {
+                        agent: key.as_str().to_string(),
+                        error: error.clone(),
+                    })
+                    .collect();
+                errors.sort_by(|a, b| a.agent.cmp(&b.agent));
+                errors
+            },
         }
     }
 
@@ -2240,21 +2265,6 @@ impl Engine {
             .collect())
     }
 
-    /// Threads whose Panes were open when the previous Ferrite process ended.
-    pub fn previously_open(&self) -> io::Result<Vec<ThreadId>> {
-        self.store.open_threads()
-    }
-
-    pub fn tracks_open_state(&self) -> bool {
-        self.store.tracks_open_state()
-    }
-
-    /// Why this Ferrite may only read its store — another one holds the
-    /// store's claim — or `None` when it may change it (ADR 0009).
-    pub fn store_read_only(&self) -> Option<&str> {
-        self.store.read_only()
-    }
-
     /// Whether some Thread's Main just finished making a worktree and is
     /// waiting on a fresh listing to name it — the driver's cue to list
     /// now rather than on its next tick.
@@ -2300,69 +2310,8 @@ impl Engine {
         apply_move(&self.store, thread, state, moved)
     }
 
-    /// Header-only facts about a Thread the store holds — what a nav row
-    /// says about a parked Thread (#21). One header line off disk, never a
-    /// log replay; still I/O, so callers cache it rather than peek per
-    /// frame.
-    pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
-        self.store.peek(thread)
-    }
-
-    /// The subagents a Thread knows, live or parked. Parked Threads replay
-    /// their durable activity into a throwaway projection; callers should
-    /// cache this moment-level read rather than ask for it while rendering.
-    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        if let Some(open) = self.thread(thread) {
-            return Ok(open.activity().children().len());
-        }
-        self.log_reader().subagent_count(thread)
-    }
-
-    /// A read-only handle on the Thread logs, for the parked-Thread reads
-    /// too slow for the UI thread: it can be moved to a background task.
-    pub fn log_reader(&self) -> LogReader {
-        LogReader {
-            store: self.store.clone(),
-        }
-    }
-
-    /// When a Thread was last used, live or parked — the nav's default
-    /// order and its "3 days" line. One `stat`, so callers still cache it
-    /// rather than ask per frame.
-    pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
-        self.store.last_used(thread)
-    }
-
     pub fn threads(&self) -> Vec<ThreadId> {
         self.threads.keys().copied().collect()
-    }
-
-    /// The Project the operator was last working in: the Project of the
-    /// most recently written Thread the store holds, skipping Threads
-    /// whose Project the registry no longer knows — a Project removed from
-    /// the menu must not come back as a draft's default. `None` when no
-    /// Thread names a registered Project, which is what a fresh
-    /// installation looks like.
-    ///
-    /// One `stat` and one header line per Thread, and it stops at the
-    /// first answer, so the common case is two reads. Launch-time only:
-    /// callers keep the answer rather than ask it per frame.
-    pub fn last_worked_project(&self) -> Option<ProjectId> {
-        let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
-            .store
-            .thread_ids()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|thread| (self.store.last_used(thread), thread))
-            .collect();
-        // Newest first, and a Thread whose log cannot be stat'd sorts last
-        // rather than counting as the epoch's most recent.
-        threads
-            .sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
-        threads.into_iter().find_map(|(_, thread)| {
-            let project = self.project_id(thread)?;
-            self.registry.project(project).map(|_| project)
-        })
     }
 
     /// The process is quitting: end every Session now, replacements and
@@ -2382,55 +2331,6 @@ impl Engine {
         // Every record accepted is written before Ferrite goes (E1); only
         // the final syncs are bounded.
         self.store.quit(QUIT_SYNC_DEADLINE);
-    }
-
-    /// The durable operator title, whether this Thread is live or parked.
-    pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
-        if let Some(state) = self.threads.get(&thread) {
-            return Ok(state.title.clone());
-        }
-        self.store.peek(thread).map(|meta| meta.title)
-    }
-
-    /// What a Thread is called on screen: the title the operator gave it;
-    /// else, when `auto` is on, the first line of its first prompt,
-    /// shortened; else its number. Reads one header line (and at most
-    /// the first few records) off disk for a parked Thread — callers cache
-    /// it by moment, never per frame.
-    pub fn display_title(&self, thread: ThreadId, auto: bool) -> String {
-        let numbered = || format!("thread-{}", thread.get());
-        if let Some(open) = self.thread(thread) {
-            if let Some(title) = open.title() {
-                return title.to_string();
-            }
-            if !auto {
-                return numbered();
-            }
-            return open
-                .transcript()
-                .blocks()
-                .iter()
-                .find_map(|block| match &block.body {
-                    crate::transcript::Body::Prompt(text) => Some(title_from_prompt(text)),
-                    _ => None,
-                })
-                .unwrap_or_else(numbered);
-        }
-        let Ok(meta) = self.store.peek(thread) else {
-            return numbered();
-        };
-        if let Some(title) = meta.title {
-            return title;
-        }
-        if !auto {
-            return numbered();
-        }
-        self.store
-            .peek_first_prompt(thread)
-            .ok()
-            .flatten()
-            .map(|text| title_from_prompt(&text))
-            .unwrap_or_else(numbered)
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
@@ -3297,11 +3197,6 @@ impl Engine {
         self.allowance_thresholds = thresholds;
     }
 
-    /// The allowance warnings due since the last take, oldest first.
-    pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
-        std::mem::take(&mut self.allowance_warnings)
-    }
-
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,
@@ -3545,51 +3440,6 @@ impl Engine {
         self.replace_session(thread, provider, model, effort, ReplacementKind::Retune)
     }
 
-    /// The next Thread waiting on the operator, after `from` in the answer
-    /// order (`needs_you`), wrapping. One key held down walks every Decision
-    /// in the cockpit, in the order the nav's Needs-you strip lists them,
-    /// and stops nowhere else. From a Thread that waits on nothing it lands
-    /// on the strip's first row, the answer target.
-    pub fn next_blocked(&self, from: Option<ThreadId>) -> Option<ThreadId> {
-        let queue = self.needs_you();
-        let next = from
-            .and_then(|from| queue.iter().position(|thread| *thread == from))
-            .map_or(0, |at| (at + 1) % queue.len().max(1));
-        queue.get(next).copied()
-    }
-
-    /// **The answer order** (C8): every Thread waiting on the operator, the
-    /// first request raised first. It is the nav's Needs-you strip, top to
-    /// bottom, so the strip's first row is exactly what ⌘D and the wall's
-    /// `y`/`n`/`a` act on. A Thread whose request has not reached the
-    /// notification record yet queues behind the rest, in Thread order.
-    pub fn needs_you(&self) -> Vec<ThreadId> {
-        let mut queue = self.blocked();
-        queue.sort_by_key(|thread| {
-            (
-                self.notifications
-                    .first_request(*thread)
-                    .map_or(u64::MAX, |notice| notice.seq),
-                *thread,
-            )
-        });
-        queue
-    }
-
-    /// The Thread the answer keys act on when the focused Pane waits on
-    /// nothing: the Needs-you strip's first row.
-    pub fn answer_target(&self) -> Option<ThreadId> {
-        self.needs_you().first().copied()
-    }
-
-    /// Threads waiting on the operator — what the wall badges.
-    pub fn blocked(&self) -> Vec<ThreadId> {
-        self.threads
-            .iter()
-            .filter(|(_, state)| !state.activity.view().decisions().is_empty())
-            .map(|(id, _)| *id)
-            .collect()
-    }
 }
 
 impl Engine {
@@ -3704,7 +3554,7 @@ impl Engine {
             threads: self
                 .threads
                 .iter()
-                .map(|(&id, state)| state.wire_state(id))
+                .map(|(&id, _)| self.thread_state(id))
                 .collect(),
             roster: SharedRoster {
                 open: self.open.clone(),
@@ -3733,6 +3583,12 @@ impl Engine {
             notices: self.published_shared.notices.clone(),
             providers: self.published_shared.providers.clone(),
         }
+    }
+
+    fn thread_state(&self, id: ThreadId) -> protocol::ThreadState {
+        let mut state = self.threads[&id].wire_state(id);
+        state.for_draft = self.starting_for_draft(id);
+        state
     }
 
     /// What a window shows of each provider.
@@ -3867,7 +3723,7 @@ impl Engine {
         let states: Vec<_> = self
             .threads
             .iter()
-            .map(|(&id, thread)| thread.wire_state(id))
+            .map(|(&id, _)| self.thread_state(id))
             .collect();
         for state in states {
             let published = self.published.entry(state.thread).or_default();
@@ -3918,6 +3774,14 @@ impl Engine {
             self.outbox.push(ServerMessage::Notices {
                 revision: self.revision,
                 notices,
+            });
+        }
+        for warning in self.allowance_warnings.drain(..) {
+            self.outbox.push(ServerMessage::AllowanceWarning {
+                provider: warning.provider,
+                window: warning.window.into(),
+                threshold: warning.threshold,
+                used_fraction: warning.used_fraction,
             });
         }
         let providers = self.provider_states();
@@ -4664,6 +4528,10 @@ pub struct LogReader {
 }
 
 impl LogReader {
+    pub(crate) fn new(store: Store) -> Self {
+        Self { store }
+    }
+
     /// The subagents a parked Thread's durable activity knows — a replay of
     /// its whole log, so never on the UI thread for more than one Thread.
     /// Read off the log's tail for a schema-13 log; a log from before is

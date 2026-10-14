@@ -20,8 +20,8 @@ pub fn ensure_running(store: &Path, executable: &Path) -> io::Result<()> {
         return Ok(());
     }
     // The LaunchAgent serves the operator's own Store; a dev or test Store
-    // (`FERRITE_STORE`) gets a Server of its own.
-    let launched = std::env::var_os("FERRITE_STORE").is_none() && kickstart();
+    // gets a Server of its own.
+    let launched = operators_store(store) && kickstart();
     if !launched {
         start_detached(executable, &[])?;
     }
@@ -38,6 +38,14 @@ pub fn ensure_running(store: &Path, executable: &Path) -> io::Result<()> {
             Err(_) => std::thread::sleep(Duration::from_millis(25)),
         }
     }
+}
+
+/// Whether `store` is the operator's own, `~/.ferrite/threads`: the one
+/// the LaunchAgent's Server serves.
+fn operators_store(store: &Path) -> bool {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .is_some_and(|home| Path::new(&home).join(".ferrite").join("threads") == store)
 }
 
 /// Start `executable server …` so it outlives this process.

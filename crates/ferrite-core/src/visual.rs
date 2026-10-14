@@ -394,6 +394,13 @@ pub trait Renderer: Send + Sync {
 /// The one answer to one [`RenderRequest`].
 pub struct Reply(std::sync::mpsc::SyncSender<Result<Rendered, String>>);
 
+/// A reply and where its answer arrives: for a renderer's caller that is
+/// not a Session (a window drawing for its Server).
+pub(crate) fn reply() -> (Reply, std::sync::mpsc::Receiver<Result<Rendered, String>>) {
+    let (sender, answer) = std::sync::mpsc::sync_channel(1);
+    (Reply(sender), answer)
+}
+
 impl Reply {
     /// Answer the request: the render, or why there is none.
     pub fn send(self, result: Result<Rendered, String>) {

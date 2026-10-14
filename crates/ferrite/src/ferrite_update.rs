@@ -30,6 +30,15 @@ pub fn enabled() -> bool {
     !crate::titlebar::DEV && self_update::supported()
 }
 
+/// Whether this window is the one Ferrite that updates itself: it holds
+/// the update claim from here until it quits.
+pub fn claim(dir: &Path) -> bool {
+    self_update::claim(dir).unwrap_or_else(|error| {
+        ferrite_core::log!("the update claim could not be taken: {error}");
+        false
+    })
+}
+
 /// Act on the release the last run staged, before any Session starts. A
 /// successful install does not return: the new Ferrite takes this
 /// process's place. Answers the notes to show when this launch is the

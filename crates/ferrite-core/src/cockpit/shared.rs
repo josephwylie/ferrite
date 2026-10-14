@@ -1,10 +1,10 @@
 //! What every window shares, as a window holds it (ADR 0025): read-only
 //! copies of the Server's Groups, registry, Notices and providers, and the
-//! open and parked Threads, each replaced whole by its latest message.
+//! open Threads, each replaced whole by its latest message.
 
 use crate::groups::Groups;
 use crate::notifications::Notifications;
-use crate::protocol::{ProviderState, ServerMessage};
+use crate::protocol::{ProviderState, ServerMessage, Snapshot};
 use crate::store::Provider;
 use crate::transcript::RateLimits;
 use crate::workspace::registry::Registry;
@@ -18,18 +18,36 @@ pub(crate) struct Shared {
     providers: Vec<ProviderState>,
     /// The open Threads, in the order they opened.
     pub(crate) open: Vec<ThreadId>,
-    /// The Threads that are not open.
-    pub(crate) parked: Vec<ThreadId>,
     /// A provider's models changed since the window last asked.
     models_changed: bool,
 }
 
 impl Shared {
+    pub(crate) fn from_snapshot(snapshot: &Snapshot) -> Self {
+        let mut shared = Self {
+            open: snapshot.roster.open.clone(),
+            ..Self::default()
+        };
+        if let Some(groups) = &snapshot.groups {
+            shared.set_groups(groups);
+        }
+        if let Some(registry) = &snapshot.registry {
+            shared.set_registry(registry);
+        }
+        if let Some(notices) = &snapshot.notices {
+            shared.notifications = Notifications::from_wire(notices);
+        }
+        if let Some(providers) = &snapshot.providers {
+            shared.providers = providers.clone();
+            shared.models_changed = true;
+        }
+        shared
+    }
+
     pub(crate) fn receive(&mut self, message: &ServerMessage) {
         match message {
             ServerMessage::Roster { roster, .. } => {
                 self.open = roster.open.clone();
-                self.parked = roster.parked.clone();
             }
             ServerMessage::Groups { groups, .. } => self.set_groups(groups),
             ServerMessage::Registry { registry, .. } => self.set_registry(registry),

@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::protocol::{
-    Done, ErrorCode, NoticeAction, Op, ProjectAction, WireAnswer, WireError, WireHandle,
+    Done, ErrorCode, NoticeAction, Op, ProjectAction, WireAnswer, WireDirection, WireDissolved,
+    WireError, WireHandle,
 };
 
 /// What a command came to: a result to reply `ok` with, or why not.
@@ -38,32 +39,6 @@ impl Engine {
                     .map(|thread| Some(Done::Thread { thread }))
                     .map_err(failed)
             }
-            Op::Bootstrap {
-                provider,
-                model,
-                effort,
-                workspace,
-                prompt,
-                group,
-            } => {
-                let workspace = workspace.try_into().map_err(|_| unknown())?;
-                let choice = ProviderChoice {
-                    provider: *provider,
-                    model: model.clone(),
-                };
-                match group {
-                    Some(group) => self.bootstrap_in_group_with(
-                        choice,
-                        workspace,
-                        prompt,
-                        *group,
-                        effort.clone(),
-                    ),
-                    None => self.bootstrap_with(choice, workspace, prompt, effort.clone()),
-                }
-                .map(|thread| Some(Done::Thread { thread }))
-                .map_err(failed)
-            }
             Op::Send { thread, text } => {
                 self.open_thread(thread)?;
                 self.send(*thread, text.clone());
@@ -77,9 +52,34 @@ impl Engine {
                 }
             }
             Op::Unqueue { thread } => Ok(self.unqueue(*thread).map(|text| Done::Text { text })),
-            Op::CancelQueued { thread, restore } => {
-                self.cancel_queued(*thread, *restore);
+            Op::CancelQueued {
+                thread,
+                restore,
+                edit,
+            } => {
+                if *edit {
+                    self.edit_queued(*thread);
+                } else {
+                    self.cancel_queued(*thread, *restore);
+                }
                 Ok(None)
+            }
+            Op::TakeRecovered { thread } => Ok(self
+                .take_retrieved_prompt(*thread)
+                .map(|(text, prepend)| Done::Recovered { text, prepend })),
+            Op::Recall {
+                thread,
+                direction,
+                draft,
+            } => {
+                let direction = match direction {
+                    WireDirection::Older => HistoryDirection::Older,
+                    WireDirection::Newer => HistoryDirection::Newer,
+                    WireDirection::Unknown => return Err(unknown()),
+                };
+                Ok(self
+                    .recall_prompt(*thread, direction, draft)
+                    .map(|text| Done::Text { text }))
             }
             Op::Interrupt { thread } => {
                 self.open_thread(thread)?;
@@ -125,6 +125,10 @@ impl Engine {
                 .map_err(failed),
             Op::Park { thread } => self.park(*thread).map(|()| None).map_err(failed),
             Op::Revive { thread } => self.revive(*thread).map(|()| None).map_err(failed),
+            Op::ReviveGroup { group } => self
+                .revive_group(*group)
+                .map(|threads| Some(Done::Threads { threads }))
+                .map_err(failed),
             Op::Delete { thread } => self.delete(*thread).map(|()| None).map_err(failed),
             Op::Import { path } => self
                 .import(path)
@@ -132,7 +136,21 @@ impl Engine {
                 .map_err(failed),
             Op::Group { change } => {
                 let change = change.try_into().map_err(|_| unknown())?;
-                self.apply_group(change).map(|_| None).map_err(failed)
+                self.apply_group(change)
+                    .map(|applied| {
+                        Some(Done::Grouped {
+                            group: applied.group,
+                            dissolved: applied
+                                .dissolved
+                                .iter()
+                                .map(|dissolved| WireDissolved {
+                                    group: dissolved.group,
+                                    survivor: dissolved.survivor,
+                                })
+                                .collect(),
+                        })
+                    })
+                    .map_err(failed)
             }
             Op::Layout { group, tree } => match tree {
                 Some(tree) => self.set_group_layout(*group, tree.clone()),
@@ -145,12 +163,84 @@ impl Engine {
                 self.notice(action);
                 Ok(None)
             }
+            Op::CliReplaced { provider } => {
+                self.restart_sessions(*provider);
+                self.rediscover_models();
+                Ok(None)
+            }
+            Op::WorktreesListed {
+                thread,
+                listed,
+                age_ms,
+            } => {
+                let taken_at = crate::clock::instant()
+                    .checked_sub(Duration::from_millis(*age_ms))
+                    .unwrap_or(self.boot);
+                let changed = self.worktrees_listed(*thread, listed.clone(), taken_at);
+                Ok(Some(Done::Changed { changed }))
+            }
+            Op::LoadSubject {
+                thread,
+                subject,
+                retry,
+            } => {
+                let subject = subject.try_into().map_err(|_| unknown())?;
+                if *retry {
+                    self.retry_subject_history(*thread, &subject)
+                } else {
+                    self.ensure_subject_history(*thread, &subject)
+                }
+                .map(|changed| Some(Done::Changed { changed }))
+                .map_err(failed)
+            }
+            Op::ShowSubject { thread, subject } => {
+                let subject = subject.try_into().map_err(|_| unknown())?;
+                self.set_visible_subject(*thread, subject);
+                Ok(None)
+            }
+            Op::Say { thread, text } => {
+                self.open_thread(thread)?;
+                self.apply_input(*thread, Input::Notice(text.clone()));
+                Ok(None)
+            }
             Op::SettingsChanged
+            | Op::Bootstrap { .. }
+            | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Unknown => Err(unknown()),
         }
+    }
+
+    /// A window's first send, with the scope its Draft gave it, tagged
+    /// `tag` so its settling (`take_bootstrap_results`) names it. The
+    /// Thread, or `None` while it starts.
+    pub fn bootstrap_command(&mut self, tag: DraftId, op: &Op) -> Result<Option<ThreadId>, WireError> {
+        let Op::Bootstrap {
+            provider,
+            model,
+            effort,
+            workspace,
+            prompt,
+            group,
+            new_group_with,
+        } = op
+        else {
+            return Err(unknown());
+        };
+        let workspace = workspace.try_into().map_err(|_| unknown())?;
+        let choice = ProviderChoice {
+            provider: *provider,
+            model: model.clone(),
+        };
+        let scope = DraftScope {
+            group: *group,
+            new_group_with: *new_group_with,
+            pending_leave: None,
+        };
+        self.bootstrap_draft(tag, scope, choice, workspace, prompt, effort.clone())
+            .map_err(failed)
     }
 
     fn open_thread(&self, thread: &ThreadId) -> Result<(), WireError> {

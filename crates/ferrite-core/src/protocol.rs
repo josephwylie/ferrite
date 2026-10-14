@@ -128,6 +128,14 @@ pub enum Op {
         prompt: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group: Option<GroupId>,
+        /// The loose Thread the new one makes a Group with once it starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_group_with: Option<ThreadId>,
+    },
+    /// Take back a `bootstrap` still starting: no Thread is left of it,
+    /// and that command is answered by this one's reply.
+    CancelBootstrap {
+        request: u64,
     },
     Send {
         thread: ThreadId,
@@ -143,6 +151,20 @@ pub enum Op {
     CancelQueued {
         thread: ThreadId,
         restore: bool,
+        /// Up's edit: the prompt goes back ahead of the Composer's draft.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        edit: bool,
+    },
+    /// Hand a prompt the provider gave back to the Composer
+    /// (`ThreadState::recovered`): it leaves the Thread.
+    TakeRecovered {
+        thread: ThreadId,
+    },
+    /// Up or Down through the Thread's sent prompts.
+    Recall {
+        thread: ThreadId,
+        direction: WireDirection,
+        draft: String,
     },
     Interrupt {
         thread: ThreadId,
@@ -184,6 +206,10 @@ pub enum Op {
     Revive {
         thread: ThreadId,
     },
+    /// Every member of a Group opened.
+    ReviveGroup {
+        group: GroupId,
+    },
     Delete {
         thread: ThreadId,
     },
@@ -207,6 +233,37 @@ pub enum Op {
     },
     /// Settings changed on disk: reread them for the next Session.
     SettingsChanged,
+    /// A provider's CLI was replaced on disk: its Sessions restart on the
+    /// new release as they idle, and its models are asked for again.
+    CliReplaced {
+        provider: Provider,
+    },
+    /// Git's worktree list for a Thread's repo, read `age_ms` before it was
+    /// sent: a binding follows its agent into a worktree it made.
+    WorktreesListed {
+        thread: ThreadId,
+        listed: Vec<PathBuf>,
+        age_ms: u64,
+    },
+    /// Read an evicted Subagent's history back from the log; `retry`
+    /// forgets a failed read first.
+    LoadSubject {
+        thread: ThreadId,
+        subject: WireSubject,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        retry: bool,
+    },
+    /// The Subject a window's Pane shows: its Decisions are the ones read
+    /// when the window is looked at.
+    ShowSubject {
+        thread: ThreadId,
+        subject: WireSubject,
+    },
+    /// A line Ferrite itself says in a Thread's Pane.
+    Say {
+        thread: ThreadId,
+        text: String,
+    },
     SearchFiles {
         thread: ThreadId,
         query: String,
@@ -217,6 +274,15 @@ pub enum Op {
     Stop {
         when: When,
     },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireDirection {
+    Older,
+    Newer,
     #[serde(other)]
     Unknown,
 }
@@ -389,6 +455,10 @@ pub enum ServerMessage {
         /// Set when the generations do not meet; the Server then closes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<WireError>,
+        /// The Server's clock now, as `at_ms` counts it: a window offsets
+        /// every `at_ms` by it, so working timers agree across windows.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uptime_ms: Option<u64>,
     },
     Snapshot(Snapshot),
     /// A watched Thread's log, from its start or after `after`.
@@ -462,6 +532,14 @@ pub enum ServerMessage {
     Providers {
         revision: u64,
         providers: Vec<ProviderState>,
+    },
+    /// A provider's allowance rose past one of the operator's thresholds.
+    AllowanceWarning {
+        provider: Provider,
+        window: WireLimitWindow,
+        /// The highest threshold crossed, in percent.
+        threshold: u8,
+        used_fraction: f32,
     },
     /// A Visual to draw, for the one `render_visual` client chosen.
     Render {
@@ -571,6 +649,41 @@ pub enum Done {
     Files {
         files: Vec<WireFile>,
     },
+    /// Whether the act changed anything.
+    Changed {
+        changed: bool,
+    },
+    Threads {
+        threads: Vec<ThreadId>,
+    },
+    /// A prompt handed back, and whether it goes ahead of the draft.
+    Recovered {
+        text: String,
+        prepend: bool,
+    },
+    /// A Group change: the Group it made or changed, and the Groups it
+    /// left with a single member, gone.
+    Grouped {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<GroupId>,
+        #[serde(default)]
+        dissolved: Vec<WireDissolved>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireDissolved {
+    pub group: GroupId,
+    pub survivor: ThreadId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireLimitWindow {
+    FiveHour,
+    Weekly,
     #[serde(other)]
     Unknown,
 }
@@ -639,6 +752,31 @@ pub struct ThreadState {
     pub controls: Vec<WireControlKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_error: Option<String>,
+    /// A Draft's first send is starting this Thread: its Pane is the
+    /// Draft's until it settles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub for_draft: bool,
+    /// Prompts the provider gave back, for the Composer (`take_recovered`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered: Vec<WireRecovered>,
+    /// The binding waits on a fresh worktree listing to follow its agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wants_listing: bool,
+    /// Subagent histories that could not be read back from the log.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history_errors: Vec<WireHistoryError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireRecovered {
+    pub text: String,
+    pub prepend: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireHistoryError {
+    pub agent: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1110,7 +1248,12 @@ pub fn decode<'a, T: Deserialize<'a>>(line: &'a [u8]) -> serde_json::Result<T> {
 
 /// The Server's answer to a `hello`: a welcome, refused when the client
 /// speaks another generation.
-pub fn welcome(generation: u32, server: ServerInfo, boot_id: String) -> ServerMessage {
+pub fn welcome(
+    generation: u32,
+    server: ServerInfo,
+    boot_id: String,
+    uptime_ms: u64,
+) -> ServerMessage {
     ServerMessage::Welcome {
         generation: GENERATION,
         server,
@@ -1120,6 +1263,7 @@ pub fn welcome(generation: u32, server: ServerInfo, boot_id: String) -> ServerMe
             code: ErrorCode::UnsupportedGeneration,
             message: format!("this server speaks generation {GENERATION}, not {generation}"),
         }),
+        uptime_ms: Some(uptime_ms),
     }
 }
 
@@ -2089,6 +2233,27 @@ impl TryFrom<&WireGroupChange> for GroupChange {
             WireGroupChange::MoveGroup { group, index } => Self::MoveGroup { group, index },
             WireGroupChange::Rename { group, title } => Self::Rename { group, title },
             WireGroupChange::Unknown => return Err(Unknown),
+        })
+    }
+}
+
+impl From<crate::providers::limits::LimitWindow> for WireLimitWindow {
+    fn from(window: crate::providers::limits::LimitWindow) -> Self {
+        use crate::providers::limits::LimitWindow;
+        match window {
+            LimitWindow::FiveHour => Self::FiveHour,
+            LimitWindow::Weekly => Self::Weekly,
+        }
+    }
+}
+
+impl TryFrom<WireLimitWindow> for crate::providers::limits::LimitWindow {
+    type Error = Unknown;
+    fn try_from(window: WireLimitWindow) -> Result<Self, Unknown> {
+        Ok(match window {
+            WireLimitWindow::FiveHour => Self::FiveHour,
+            WireLimitWindow::Weekly => Self::Weekly,
+            WireLimitWindow::Unknown => return Err(Unknown),
         })
     }
 }

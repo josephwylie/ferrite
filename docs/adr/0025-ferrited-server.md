@@ -72,8 +72,8 @@ app test run `Engine` in-process over the in-process link.
 
 ### Process lifecycle
 
-**Where it listens.** `~/.ferrite/server.sock` (the directory 0700, the
-socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
+**Where it listens.** `server.sock` in the Store's directory,
+`~/.ferrite/threads/server.sock` (the directory 0700, the socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
 stale socket (nothing answers a connect) is removed before binding; a live
 one means a Server already runs. On Windows, the pipe
 `\\.\pipe\ferrite-server-<user SID>-<Store hash>`, created with
@@ -88,7 +88,9 @@ install never meet the operator's Server.
 
 **Starting.** The app calls `server::agent::ensure_running`: connect; if
 nothing answers, on macOS `launchctl kickstart gui/<uid>/<label>` when the
-LaunchAgent is installed, otherwise (and always on Windows) start
+LaunchAgent is installed and the Store is the operator's own
+(`~/.ferrite/threads`: a dev or test Store never starts the operator's
+Server), otherwise (and always on Windows) start
 `<current_exe> server` detached: a new process group with null stdio on
 Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW |
 CREATE_BREAKAWAY_FROM_JOB` on Windows. Then it waits up to 5 s for the
@@ -183,14 +185,14 @@ Client → Server:
 |---|---|
 | `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capability: `render_visual` (this client can draw Visuals). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` is always sent. |
-| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt), `send`, `queue`, `unqueue`, `cancel_queued`, `interrupt`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `delete`, `import`, `group`, `layout`, `project`, `notice` (open, dismiss, read, seen), `settings_changed`, `search_files`, `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
+| `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `search_files`, `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
 
 Server → Client:
 
 | Message | Lane | Meaning |
 |---|---|---|
-| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. |
+| `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. |
 | `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
 | `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`; then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
@@ -200,6 +202,7 @@ Server → Client:
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
+| `allowance_warning {provider, window, threshold, used_fraction}` | reliable | A provider's allowance rose past one of the operator's thresholds. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |
 
 An `input` carries `{"record": …}`, a Store `Record` exactly as the log
@@ -263,7 +266,24 @@ still pending means the operator answers again.
 - `Cockpit` holds a `Link` instead of a Store and a Spawner. Its mirrors
   apply exactly the `ActivityInput`s the Engine applied, so the window draws
   what it draws now. `PaneUpdate` is computed from the mirror, as the pump
-  does today.
+  does today. Groups, the registry, Notices and the providers' state are
+  read-only copies built from their latest-wins messages.
+- The link is one of two. Attached (`Cockpit::attach`), an act is a
+  command whose reply the window waits for, reading what arrives before it
+  into an inbox, so the window is up to date when the act returns; a
+  first send (`bootstrap`, answered once the Thread has started, and taken
+  back by `cancel_bootstrap`) and a file search answer later. In-process
+  (`--demo`, `--load`, the tests) an act stays a direct call, keeping its
+  typed error; both read the same mirrors and copies. Acts only fixtures
+  and tests use (injected inputs, fixture Notices, the launch-time revival
+  the Server does itself) exist in-process only.
+- What a parked Thread says (titles, its Project, last use, the parked
+  list, Subagent counts) the window reads itself, through a Store handle
+  that never takes the claim (`Store::reader`), so a Server started after
+  the window still finds it free. So do the derived reads — Needs-you
+  order, display titles, the last Project worked in. Discovery of CLI
+  session files and workspace commands reads the operator's own files and
+  stays in the window too.
 - Per window: focus, View (Solo or a Group), fullscreen, Drafts, the
   Composer's prompt history, find. Shared through the Server: which
   Threads are open, Groups and Layouts, projects, Notices and whether they
@@ -272,12 +292,21 @@ still pending means the operator answers again.
   getting a read-only Store, so `Store::read_only` and its banner leave
   the app. Several windows in one app are not built here.
 - Quitting or closing the window ends nothing, so ⌘Q no longer asks.
-  Settings › Server shows the Server's version, uptime and live Sessions,
-  with "Start at login", "Restart" and "Stop" (stop asks first while an
-  agent works or a Decision waits — the question ⌘Q asks today).
-- Without a Server the window shows a band with the reason and Retry, and
-  keeps reconnecting with backoff. It never falls back to running agents
-  itself: two pumps on one Store is the bug the claim exists to stop.
+  Settings › About's Server group shows the Server's version, uptime and
+  live Sessions, with "Start at login", "Restart" and "Stop" (both ask
+  first while an agent works or a Decision waits — the question ⌘Q asks
+  today).
+- Without a Server the window shows a band — a notification that stays
+  up, with the reason; clicking it retries now — and keeps reconnecting
+  with backoff (from 250 ms to 5 s; 2 s after `restarting`, so a Server
+  coming back from `exec` is not raced by a second one). It never falls
+  back to running agents itself: two pumps on one Store is the bug the
+  claim exists to stop.
+- The window still lists each Thread's worktrees (it runs git for its
+  branch labels anyway) and sends the list as `worktrees_listed`, with
+  how long ago it was read, so the Server judges it against its own clock.
+  A focused window reports a Thread seen only when looking at it would
+  read something, since the check runs every frame.
 - Settings stay a file the window writes. `settings_changed` makes the
   Engine reread it; it applies to the next Session, as today.
 
@@ -318,14 +347,15 @@ over live processes.
   running Server, and the restart above follows. On Windows the setup
   cannot replace a running executable (and Inno's silent
   `CloseApplications` would kill the Server unflushed), so "restart to
-  update" sends `stop {when: idle}` (or `now`), and the detached
-  PowerShell waits for the Server's pid as well as the app's before it
-  runs the setup; the relaunched app starts the new Server, which resumes
-  the Threads. The update band says it waits for the agents.
+  update", which already waits for every agent to be idle (or asks, for
+  "now"), sends `stop {when: now}` before the app quits; the relaunched
+  app installs before it starts a Server, and the new Server resumes the
+  Threads.
 - ADR 0023's gate, "only the Ferrite holding the Store's claim updates",
   has no holder once the Server owns the Store: the app instead takes the
-  same kind of lock on `~/.ferrite/update/claim` for its lifetime, and
-  only its holder checks, downloads and installs.
+  same kind of lock on `~/.ferrite/update.claim` for its lifetime, and
+  only its holder checks, downloads and installs. It sits beside the
+  staging directory `update/`, which a download replaces whole.
 - An app older than its Server (two installs, a downgrade) attaches; the
   contract allows it. It never asks for a restart.
 
@@ -416,8 +446,11 @@ Never the `live_*` tests. Scripted Sessions throughout.
 - **Windows**: the pipe, the Run key and the detached start are
   `cfg(windows)`; Windows CI runs the link tests on the pipe.
 - **App**: the existing `CockpitView` tests run unchanged over the
-  in-process Engine; one test drops the link and sees the band and the
-  resume.
+  in-process Engine; one test starts a window with no Server and sees the
+  band, and that quitting asks nothing. A Cockpit attached over the socket
+  to a Server with scripted Sessions (server tests) opens, sends, reads the
+  stream, registers a Project, answers a Decision a second window then
+  finds answered, and parks.
 - **By hand** before step 12 ships: quit mid-turn and relaunch; `kill -9`
   the Server mid-turn; log out and in; update with a working agent, both
   "when idle" and "now".

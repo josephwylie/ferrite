@@ -528,3 +528,227 @@ fn only_a_newer_window_running_the_same_executable_asks_for_a_restart() {
     assert!(!wants_restart("garbage", &exe, &server("0.9.3", &exe)));
     assert!(wants_restart("1.0.0-beta.1", &exe, &server("0.9.9", &exe)));
 }
+
+/// What a window finds on its own; a test's finds nothing.
+struct NoDiscovery;
+
+impl Spawner for NoDiscovery {
+    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
+        Err(io::Error::other("a window spawns no Session"))
+    }
+}
+
+/// A Cockpit attached to the harness's Server, as the app attaches.
+fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
+    crate::cockpit::Cockpit::attach(crate::cockpit::Attach {
+        store: harness.dir.join("threads"),
+        executable: "/bin/false".into(),
+        client: Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(NoDiscovery),
+    })
+    .unwrap()
+}
+
+/// Pump a window until `done` holds, for at most five seconds.
+fn pump_until(
+    window: &mut crate::cockpit::Cockpit,
+    done: impl Fn(&crate::cockpit::Cockpit) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done(window) {
+        assert!(Instant::now() < deadline, "timed out");
+        window.pump();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn shows(window: &crate::cockpit::Cockpit, thread: ThreadId, said: &str) -> bool {
+    window.thread(thread).is_some_and(|open| {
+        open.transcript()
+            .blocks()
+            .iter()
+            .any(|block| format!("{:?}", block.body).contains(said))
+    })
+}
+
+/// The app's window over the socket: its acts are commands, what it reads
+/// is what the Server's messages built, and a second window sees the same
+/// Threads. Of two answers to one Decision only the first is delivered.
+#[test]
+fn a_window_attached_over_the_socket_drives_the_servers_threads() {
+    let harness = start("cockpit");
+    let mut window = cockpit(&harness);
+    assert!(matches!(
+        window.server(),
+        Some(crate::cockpit::ServerState::Attached { .. })
+    ));
+    let thread = window
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: harness.dir.clone(),
+            },
+        )
+        .unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(window
+        .visible()
+        .contains(&crate::roster::PaneIdentity::Thread(thread)));
+    window.send(thread, "go".into());
+    provider.send(text("on it")).unwrap();
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    let project = window.register_project(&harness.dir).unwrap();
+    assert!(window.registry().project(project).is_some());
+
+    let mut second = cockpit(&harness);
+    pump_until(&mut second, |second| shows(second, thread, "on it"));
+
+    provider.send(decision()).unwrap();
+    let pending = |window: &crate::cockpit::Cockpit| {
+        window
+            .thread(thread)
+            .is_some_and(|open| open.pending().is_some())
+    };
+    pump_until(&mut window, pending);
+    pump_until(&mut second, pending);
+    let handle = window.thread(thread).unwrap().activity().decisions()[0]
+        .handle
+        .clone();
+    let allow = DecisionAnswer::Allow {
+        input: serde_json::json!({}),
+    };
+    assert!(window
+        .respond_decision(thread, &handle, allow.clone())
+        .unwrap());
+    assert!(
+        !second.respond_decision(thread, &handle, allow).unwrap(),
+        "already answered"
+    );
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+    pump_until(&mut second, |second| !pending(second));
+
+    window.park(thread).unwrap();
+    assert!(window.thread(thread).is_none());
+    assert_eq!(window.parked().unwrap(), vec![thread]);
+    pump_until(&mut second, |second| second.thread(thread).is_none());
+}
+
+/// An Engine on its own Store, its Sessions scripted.
+fn engine(dir: &Path, spawner: Box<dyn Spawner>) -> Engine {
+    Engine::try_new(Store::open(dir).unwrap(), spawner).unwrap()
+}
+
+/// Scripted Sessions, and where their providers arrive: held, so each
+/// Session lives as long as the test.
+fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
+    let (sessions, providers) = mpsc::channel();
+    let spawner = Spawn {
+        sessions,
+        answers: Answers::default(),
+    };
+    (Box::new(spawner), providers)
+}
+
+fn open_in(engine: &mut Engine, dir: &Path) -> ThreadId {
+    engine
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: dir.to_path_buf(),
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn threads_the_operator_parked_stay_parked_at_the_next_boot() {
+    let dir = scratch("parked-stay");
+    let store = dir.join("threads");
+    let (spawner, _providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let older = open_in(&mut first, &dir);
+    let newer = open_in(&mut first, &dir);
+    first.send(older, "worked here last".into());
+    first.park(older).unwrap();
+    first.park(newer).unwrap();
+    drop(first);
+
+    assert_eq!(launch_threads(&Store::open(&store).unwrap()), vec![]);
+}
+
+#[test]
+fn a_boot_resumes_every_thread_that_was_open() {
+    let dir = scratch("open-resume");
+    let store = dir.join("threads");
+    let (spawner, _providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let one = open_in(&mut first, &dir);
+    let two = open_in(&mut first, &dir);
+    first.halt_sessions();
+    drop(first);
+
+    let (spawner, _resumed) = spawn();
+    let mut next = engine(&store, spawner);
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    assert_eq!(next.threads(), vec![one, two]);
+}
+
+/// ADR 0018: each resumed Session starts `LAUNCH_STAGGER` after the one
+/// before, the wait being its start's, not the boot's.
+#[test]
+fn a_boot_staggers_the_sessions_it_resumes() {
+    use crate::engine::Preparation;
+    use crate::session::SessionLifecycle;
+    struct Timing {
+        inner: Box<dyn Spawner>,
+        waits: Arc<Mutex<Vec<Duration>>>,
+    }
+    impl Spawner for Timing {
+        fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
+            self.inner.spawn(request)
+        }
+        fn start_after(
+            &mut self,
+            prepare: Preparation,
+            request: SpawnRequest,
+        ) -> io::Result<SessionLifecycle> {
+            let started = Instant::now();
+            prepare()?;
+            self.waits.lock().unwrap().push(started.elapsed());
+            self.start(request)
+        }
+    }
+    let dir = scratch("stagger");
+    let store = dir.join("threads");
+    let (spawner, _providers) = spawn();
+    let mut first = engine(&store, spawner);
+    for _ in 0..3 {
+        open_in(&mut first, &dir);
+    }
+    first.halt_sessions();
+    drop(first);
+
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let (inner, _resumed) = spawn();
+    let mut next = engine(
+        &store,
+        Box::new(Timing {
+            inner,
+            waits: waits.clone(),
+        }),
+    );
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+
+    let waits = waits.lock().unwrap();
+    assert_eq!(waits.len(), 3);
+    for (nth, wait) in waits.iter().enumerate() {
+        assert!(*wait >= LAUNCH_STAGGER * nth as u32, "{waits:?}");
+    }
+}

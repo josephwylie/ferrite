@@ -502,23 +502,23 @@ fn a_move_drops_child_history_reads_in_flight() {
         .unwrap();
     cockpit.pump();
     cockpit
-        .engine.threads
+        .engine_mut().threads
         .get_mut(&thread)
         .unwrap()
         .activity
         .apply(ActivityInput::Evict(subject.clone()));
     let (loader, _finish) = history::gated_loader();
-    cockpit.engine.history_loader = Some(loader);
+    cockpit.engine_mut().history_loader = Some(loader);
     assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
     assert!(
-        !cockpit.engine.threads[&thread].history.is_empty(),
+        !cockpit.engine().threads[&thread].history.is_empty(),
         "a read is pending against the old log"
     );
 
     follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-history"));
 
     assert!(
-        cockpit.engine.threads[&thread].history.is_empty(),
+        cockpit.engine().threads[&thread].history.is_empty(),
         "the pending read was invalidated before the header rewrite"
     );
 }
@@ -1264,7 +1264,7 @@ fn deleting_a_grouped_thread_removes_membership_before_the_log() {
 
     assert!(cockpit.groups().get(group).is_none());
     assert_eq!(cockpit.threads(), vec![two]);
-    assert_eq!(cockpit.engine.store.thread_ids().unwrap(), vec![two]);
+    assert_eq!(cockpit.engine().store.thread_ids().unwrap(), vec![two]);
 }
 
 #[test]
@@ -1331,7 +1331,7 @@ fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
     cockpit.park(first).unwrap();
     cockpit.park(second).unwrap();
     cockpit.park(third).unwrap();
-    cockpit.engine.refuse_park.insert(first);
+    cockpit.engine_mut().refuse_park.insert(first);
     *fake.fail_at.borrow_mut() = Some(*fake.attempts.borrow() + 3);
 
     assert!(matches!(
@@ -1347,7 +1347,7 @@ fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
         [first, second, third]
     );
 
-    cockpit.engine.refuse_park.clear();
+    cockpit.engine_mut().refuse_park.clear();
     *fake.fail_at.borrow_mut() = None;
     assert_eq!(cockpit.revive_group(group).unwrap(), [first, second, third]);
     assert_eq!(cockpit.threads(), [first, second, third]);
@@ -1648,15 +1648,15 @@ fn disabling_suggestions_clears_an_existing_prediction() {
 fn a_stale_prediction_is_dropped() {
     let (mut cockpit, _fake) = cockpit("suggest-stale");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    let generation = cockpit.engine.threads[&thread].generation;
+    let generation = cockpit.engine().threads[&thread].generation;
 
     cockpit
-        .engine.suggestions
+        .engine().suggestions
         .0
         .send(Suggestion {
             thread,
             generation: generation.wrapping_add(1),
-            revision: cockpit.engine.threads[&thread].suggestion_revision,
+            revision: cockpit.engine().threads[&thread].suggestion_revision,
             text: "Run the tests".into(),
         })
         .unwrap();
@@ -1668,12 +1668,12 @@ fn a_stale_prediction_is_dropped() {
     );
 
     cockpit
-        .engine.suggestions
+        .engine().suggestions
         .0
         .send(Suggestion {
             thread,
             generation,
-            revision: cockpit.engine.threads[&thread].suggestion_revision,
+            revision: cockpit.engine().threads[&thread].suggestion_revision,
             text: "Run the tests".into(),
         })
         .unwrap();
@@ -1692,7 +1692,7 @@ fn a_new_turn_drops_the_previous_prediction() {
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
     cockpit.send(thread, "go".into());
 
-    let generation = cockpit.engine.threads[&thread].generation;
+    let generation = cockpit.engine().threads[&thread].generation;
     fake.streams.borrow()[0].send(text("Done.")).unwrap();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -1702,12 +1702,12 @@ fn a_new_turn_drops_the_previous_prediction() {
         .unwrap();
     cockpit.pump();
     cockpit
-        .engine.suggestions
+        .engine().suggestions
         .0
         .send(Suggestion {
             thread,
             generation,
-            revision: cockpit.engine.threads[&thread].suggestion_revision,
+            revision: cockpit.engine().threads[&thread].suggestion_revision,
             text: "Run the tests".into(),
         })
         .unwrap();
@@ -1757,14 +1757,14 @@ fn older_turn_predictions_cannot_replace_the_latest_or_survive_disabling() {
         text: "Run the tests".into(),
     };
     // Sending invalidates an outstanding prediction immediately.
-    cockpit.engine.suggestions.0.send(old.clone()).unwrap();
+    cockpit.engine().suggestions.0.send(old.clone()).unwrap();
     cockpit.pump();
     assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
     finish();
     cockpit.pump();
     cockpit.deliver_suggestion(thread, "Commit the fix".into());
     cockpit.pump();
-    cockpit.engine.suggestions.0.send(old).unwrap();
+    cockpit.engine().suggestions.0.send(old).unwrap();
     cockpit.pump();
     assert_eq!(
         cockpit.thread(thread).unwrap().suggestion(),
@@ -2043,13 +2043,13 @@ fn child_completion_survives_a_history_read_already_in_flight() {
     cockpit.pump();
     // Arrange the normal evicted-child state, and gate the disk boundary.
     cockpit
-        .engine.threads
+        .engine_mut().threads
         .get_mut(&thread)
         .unwrap()
         .activity
         .apply(ActivityInput::Evict(subject.clone()));
     let (loader, finish) = history::gated_loader();
-    cockpit.engine.history_loader = Some(loader);
+    cockpit.engine_mut().history_loader = Some(loader);
     assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
     emit(ActivityEvent::Content {
         key,
@@ -2060,7 +2060,7 @@ fn child_completion_survives_a_history_read_already_in_flight() {
         },
     });
     cockpit.pump();
-    finish(&cockpit.engine.store);
+    finish(&cockpit.engine().store);
     cockpit.pump();
     let view = cockpit.thread(thread).unwrap().activity();
     let child = view.subject(&subject).unwrap();
@@ -2095,15 +2095,15 @@ fn child_completion_survives_a_history_read_already_in_flight() {
     // A later ordinary reload must use the same persisted observation,
     // after the in-flight buffer that supplied it above has been consumed.
     cockpit
-        .engine.threads
+        .engine_mut().threads
         .get_mut(&thread)
         .unwrap()
         .activity
         .apply(ActivityInput::Evict(subject.clone()));
     let (loader, finish) = history::gated_loader();
-    cockpit.engine.history_loader = Some(loader);
+    cockpit.engine_mut().history_loader = Some(loader);
     assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-    finish(&cockpit.engine.store);
+    finish(&cockpit.engine().store);
     cockpit.pump();
     assert_eq!(
         completion(&cockpit),
@@ -2155,13 +2155,13 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
         }
         cockpit.pump();
         cockpit
-            .engine.threads
+            .engine_mut().threads
             .get_mut(&thread)
             .unwrap()
             .activity
             .apply(ActivityInput::Evict(subject.clone()));
         let (loader, finish) = history::gated_loader();
-        cockpit.engine.history_loader = Some(loader);
+        cockpit.engine_mut().history_loader = Some(loader);
         assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
         emit("completion", completed(native_duration));
         cockpit.pump();
@@ -2173,7 +2173,7 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
             .unwrap()
             .timings()
             .is_empty());
-        finish(&cockpit.engine.store);
+        finish(&cockpit.engine().store);
         cockpit.pump();
         let timing = |cockpit: &Cockpit| match cockpit
             .thread(thread)
@@ -2196,15 +2196,15 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
         // Reload from disk without the live-tail buffer: both paths must
         // agree, allowing the log's millisecond precision.
         cockpit
-            .engine.threads
+            .engine_mut().threads
             .get_mut(&thread)
             .unwrap()
             .activity
             .apply(ActivityInput::Evict(subject.clone()));
         let (loader, finish) = history::gated_loader();
-        cockpit.engine.history_loader = Some(loader);
+        cockpit.engine_mut().history_loader = Some(loader);
         assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-        finish(&cockpit.engine.store);
+        finish(&cockpit.engine().store);
         cockpit.pump();
         assert_eq!(timing(&cockpit).as_millis(), observed.as_millis());
     }
@@ -2416,7 +2416,7 @@ fn native_queue_history_records_consumption_once() {
     assert_eq!(prompts, 1);
     cockpit.park(thread).unwrap();
     assert_eq!(
-        cockpit.engine.store.load(thread).unwrap().prompt_texts(),
+        cockpit.engine().store.load(thread).unwrap().prompt_texts(),
         ["sent", "held"]
     );
 }
@@ -3448,7 +3448,7 @@ fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
 #[test]
 fn learned_provider_models_survive_parking_and_a_restart() {
     let (mut cockpit, fake) = cockpit("learned-models");
-    let dir = cockpit.engine.store.dir().to_path_buf();
+    let dir = cockpit.engine().store.dir().to_path_buf();
     let mut expected = Vec::new();
     for (index, provider) in [Provider::Claude, Provider::Codex].into_iter().enumerate() {
         let thread = cockpit.open(provider, main_choice()).unwrap();
@@ -3747,7 +3747,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
     );
 
     // (1) Every event is in the log, in order.
-    let log = cockpit.engine.store.load(thread).unwrap();
+    let log = cockpit.engine().store.load(thread).unwrap();
     let mut prompts = Vec::new();
     let mut answers = String::new();
     for input in log.inputs() {
@@ -3786,7 +3786,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
     let mut handover = None;
     for _ in 0..500 {
         cockpit.pump();
-        handover = cockpit.engine.store.load(thread).unwrap().last_handover();
+        handover = cockpit.engine().store.load(thread).unwrap().last_handover();
         if handover.is_some() {
             break;
         }

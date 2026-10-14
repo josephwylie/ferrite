@@ -1,6 +1,7 @@
 //! Asking before Ferrite goes (⌘Q, or the window's close button) while
 //! an agent is working or a Decision waits: either would be cut off
-//! mid-turn. With nothing in flight it goes at once, as before.
+//! mid-turn. With nothing in flight it goes at once, as before. A window on
+//! the Server never asks: its agents keep running without it (ADR 0025).
 
 use super::*;
 use gpui::{App, PromptLevel};
@@ -8,27 +9,32 @@ use gpui::{App, PromptLevel};
 impl CockpitView {
     /// ⌘Q: quit, asking first when work would be interrupted.
     pub(crate) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_leaving("Quit", window, cx, |_, cx| cx.quit()) {
+        let warning = self.leaving_warning();
+        if self.confirm_leaving("Quit", warning, window, cx, |_, cx| cx.quit()) {
             cx.quit();
         }
     }
 
     /// The window's close button: the same question. `true` closes now.
     pub(crate) fn close_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.confirm_leaving("Close", window, cx, |window, _| window.remove_window())
+        let warning = self.leaving_warning();
+        self.confirm_leaving("Close", warning, window, cx, |window, _| {
+            window.remove_window()
+        })
     }
 
-    /// Whether leaving may go ahead now; otherwise the operator is asked,
-    /// and `leave` runs on their yes. A second ⌘Q while the question is
-    /// up asks nothing more.
+    /// Whether leaving may go ahead now — nothing would be cut off, as
+    /// `warning` says; otherwise the operator is asked, and `leave` runs on
+    /// their yes. A second ⌘Q while the question is up asks nothing more.
     pub(super) fn confirm_leaving(
         &mut self,
         verb: &'static str,
+        warning: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
         leave: impl FnOnce(&mut Window, &mut App) + 'static,
     ) -> bool {
-        let Some(warning) = self.leaving_warning() else {
+        let Some(warning) = warning else {
             return true;
         };
         if self.leave_asked {
@@ -57,6 +63,9 @@ impl CockpitView {
 
     /// What leaving now would interrupt, or `None` when nothing would.
     pub(crate) fn leaving_warning(&self) -> Option<String> {
+        if self.cockpit.server().is_some() {
+            return None;
+        }
         self.in_flight()
             .map(|what| format!("{what}. Leaving stops them; their Threads reopen next launch."))
     }

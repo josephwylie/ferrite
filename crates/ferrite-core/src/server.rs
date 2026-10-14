@@ -12,10 +12,11 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::engine::Engine;
 use crate::link::{self, ClientId, Connection, Heard, Ring};
+use crate::roster::DraftId;
 use crate::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, ServerInfo, ServerMessage, When,
     WireError, WireFile,
@@ -35,6 +36,8 @@ const PUMP: Duration = Duration::from_millis(16);
 const IDLE: Duration = Duration::from_millis(250);
 /// The open Threads are revived this far apart at boot (ADR 0018).
 const LAUNCH_STAGGER: Duration = Duration::from_millis(100);
+/// How often the memory watchdog samples the Sessions.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
 pub struct Options {
     /// Where the Threads live (`FERRITE_STORE`, else `~/.ferrite/threads`).
@@ -68,6 +71,7 @@ pub fn run(options: Options) -> i32 {
         crate::log!("server: not starting: another Ferrite server holds this store");
         return 0;
     }
+    let reopen = launch_threads(&store);
     let listener = match link::listen(&link::address(&options.store)) {
         Ok(listener) => listener,
         Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
@@ -106,13 +110,41 @@ pub fn run(options: Options) -> i32 {
     };
     let mut server = Server::new(engine, info, renders, defaults, options.settings_dir);
     server.apply_settings(&settings);
-    server.revive_open();
+    revive_launch(&mut server.engine, reopen);
     crate::log!(
         "server: {} listening, boot {}",
         server.info.version,
         server.boot_id
     );
     server.serve(hear)
+}
+
+/// The Threads whose Panes were open when the last Server stopped — after
+/// a crash, a reboot or a restart — which resume without a window. A store
+/// from before open-state persistence falls back once to its most recently
+/// used Thread, creation order breaking ties; an intentionally all-parked
+/// store opens none, and a window offers a Draft instead (#29).
+fn launch_threads(store: &Store) -> Vec<ThreadId> {
+    if store.tracks_open_state() {
+        return store.open_threads().unwrap_or_default();
+    }
+    store
+        .thread_ids()
+        .unwrap_or_default()
+        .into_iter()
+        .max_by_key(|thread| (store.last_used(*thread), *thread))
+        .into_iter()
+        .collect()
+}
+
+/// Revive each Thread `LAUNCH_STAGGER` after the one before (ADR 0018):
+/// the Threads coming back do not start every CLI in one instant.
+fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
+    for (nth, thread) in threads.into_iter().enumerate() {
+        if let Err(error) = engine.revive_after(thread, LAUNCH_STAGGER * nth as u32) {
+            crate::log!("thread {thread} could not be revived: {error:?}");
+        }
+    }
 }
 
 /// A boot's identity: a resume names it, and a Server that restarted has
@@ -152,6 +184,11 @@ struct Server {
     rings: HashMap<ThreadId, Ring>,
     renders: render::Renders,
     searches: Vec<Search>,
+    /// First sends still starting, by the tag the Engine knows them by:
+    /// who asked, in which command.
+    starting: HashMap<DraftId, (ClientId, u64)>,
+    next_start: u64,
+    swept: Instant,
     defaults: Arc<Mutex<SessionDefaults>>,
     settings_dir: PathBuf,
     /// `stop` was asked for: at once, or once every agent is idle.
@@ -178,25 +215,14 @@ impl Server {
             rings: HashMap::new(),
             renders,
             searches: Vec::new(),
+            starting: HashMap::new(),
+            next_start: 0,
+            swept: Instant::now(),
             defaults,
             settings_dir,
             stopping: None,
             restarting: None,
             relaunch: Box::new(relaunch),
-        }
-    }
-
-    /// The Threads that were open when the Server last stopped — after a
-    /// crash, a reboot or a restart — resume without a window.
-    fn revive_open(&mut self) {
-        let open = self.engine.previously_open().unwrap_or_default();
-        for (nth, thread) in open.into_iter().enumerate() {
-            if let Err(error) = self
-                .engine
-                .revive_after(thread, LAUNCH_STAGGER * nth as u32)
-            {
-                crate::log!("thread {thread} could not be revived: {error:?}");
-            }
         }
     }
 
@@ -220,11 +246,11 @@ impl Server {
                 self.hear(heard);
             }
             self.engine.pump();
-            for settled in self.engine.take_bootstrap_results() {
-                if let Err(error) = settled.result {
-                    crate::log!("server: a first send did not start: {error}");
-                }
+            if self.swept.elapsed() >= SWEEP_INTERVAL {
+                self.swept = Instant::now();
+                self.engine.sweep();
             }
+            self.answer_bootstraps();
             self.answer_searches();
             self.forward_renders();
             self.broadcast();
@@ -282,8 +308,13 @@ impl Server {
                 ..
             } = message
             {
-                let welcome =
-                    protocol::welcome(generation, self.info.clone(), self.boot_id.clone());
+                let uptime = protocol::ms_since(crate::clock::instant(), self.engine.boot());
+                let welcome = protocol::welcome(
+                    generation,
+                    self.info.clone(),
+                    self.boot_id.clone(),
+                    uptime,
+                );
                 let accepted = !matches!(welcome, ServerMessage::Welcome { error: Some(_), .. });
                 let _ = client.connection.send(welcome);
                 if accepted {
@@ -360,6 +391,37 @@ impl Server {
                 }
                 Err(error) => Err(failed(error)),
             },
+            Op::Bootstrap { .. } => {
+                self.next_start += 1;
+                let tag = DraftId::new(self.next_start);
+                match self.engine.bootstrap_command(tag, &op) {
+                    Ok(Some(thread)) => Ok(Some(Done::Thread { thread })),
+                    Ok(None) => {
+                        self.starting.insert(tag, (id, request));
+                        self.broadcast();
+                        return;
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Op::CancelBootstrap { request: started } => {
+                let tag = self
+                    .starting
+                    .iter()
+                    .find(|(_, asked)| **asked == (id, *started))
+                    .map(|(tag, _)| *tag);
+                match tag {
+                    Some(tag) => {
+                        self.starting.remove(&tag);
+                        let cancelled = self.engine.cancel_draft_start(tag);
+                        self.reply(id, *started, Err(failed("the first send was cancelled")));
+                        cancelled
+                            .map(|changed| Some(Done::Changed { changed }))
+                            .map_err(failed)
+                    }
+                    None => Ok(Some(Done::Changed { changed: false })),
+                }
+            }
             Op::Stop { when } => {
                 self.stopping = Some(*when);
                 Ok(None)
@@ -401,6 +463,29 @@ impl Server {
             .set_suggestions_enabled(settings.placeholder_suggestions);
         self.engine
             .set_allowance_thresholds(settings.allowance_warnings.clone());
+    }
+
+    /// A first send that settled answers the command that started it.
+    fn answer_bootstraps(&mut self) {
+        for settled in self.engine.take_bootstrap_results() {
+            let asked = settled.draft.and_then(|tag| self.starting.remove(&tag));
+            match (asked, settled.result) {
+                (Some((client, request)), result) => {
+                    let executed = result
+                        .map(|started| {
+                            Some(Done::Thread {
+                                thread: started.thread,
+                            })
+                        })
+                        .map_err(failed);
+                    self.reply(client, request, executed);
+                }
+                (None, Err(error)) => {
+                    crate::log!("server: a first send did not start: {error}");
+                }
+                (None, Ok(_)) => {}
+            }
+        }
     }
 
     fn answer_searches(&mut self) {

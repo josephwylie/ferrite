@@ -238,6 +238,7 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
                     executable: "/bin/ferrite".into(),
                 },
                 "b-1".into(),
+                0,
             ))
             .unwrap();
         connection
@@ -308,6 +309,7 @@ fn a_refused_generation_is_the_attach_error() {
                     executable: "/bin/ferrite".into(),
                 },
                 "b".into(),
+                0,
             ))
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(100));
