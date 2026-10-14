@@ -474,7 +474,9 @@ impl CockpitView {
 /// right-aligned and dim, `READER_NUMBER_GAP` before the code, the code in
 /// its syntax colours (`highlight_tokens` for the path's language). The
 /// target line lies on `paint::SELECTION` with its number in `ACCENT`.
-/// Virtualised: only the rows in view are laid out.
+/// A line wider than the reader is cut at its edge; the one holding the
+/// find's occurrence starts further in when that would lie past it
+/// (`shown_from`). Virtualised: only the rows in view are laid out.
 fn numbered_lines(
     leaf: ThreadId,
     document: &crate::attachment_preview::Document,
@@ -494,30 +496,32 @@ fn numbered_lines(
             find.active().map(|hit| (hit.unit, hit.ordinal)),
         )
     });
+    let list = scroll.clone();
     gpui::uniform_list(
         ("reader-lines", leaf.get() as usize),
         count,
         move |range, _window, _cx| {
+            // The cells a line shows before the reader's edge cuts it.
+            let width = list.0.borrow().base_handle.bounds().size.width;
+            let columns = ((f32::from(width) - READER_NUMBER_W) / CH).max(0.) as usize;
             range
                 .map(|at| {
                     let text = lines[at].clone();
                     let tokens = ferrite_core::transcript::highlight_tokens(language, &text);
                     let highlights = pane::code(&text, Some(tokens.as_slice()));
-                    let highlights = match &find {
-                        Some((query, active)) => {
-                            let washes: Vec<_> = query
-                                .matches(&text)
-                                .into_iter()
-                                .enumerate()
-                                .map(|(ordinal, range)| {
-                                    let on = *active == Some((at, ordinal));
-                                    (range, if on { FIND_ACTIVE_WASH } else { FIND_WASH })
-                                })
-                                .collect();
-                            crate::find::washed(highlights, &washes)
+                    let mut washes = Vec::new();
+                    let mut from = 0;
+                    if let Some((query, active)) = &find {
+                        for (ordinal, range) in query.matches(&text).into_iter().enumerate() {
+                            let on = *active == Some((at, ordinal));
+                            if on {
+                                from = shown_from(&text, &range, columns);
+                            }
+                            washes.push((range, if on { FIND_ACTIVE_WASH } else { FIND_WASH }));
                         }
-                        None => highlights,
-                    };
+                    }
+                    let (text, highlights) =
+                        cut_head(text, crate::find::washed(highlights, &washes), from);
                     let number = at + 1;
                     let marked = target == Some(number as u32);
                     div()
@@ -557,6 +561,36 @@ fn numbered_lines(
     .w_full()
     .py(px(HALF_ROW))
     .into_any_element()
+}
+
+/// Where a file's line starts drawing so the occurrence the find is on
+/// (`found`) shows in the `columns` cells before the reader's edge: its
+/// head (0) when it fits, else the occurrence a third of the way in.
+fn shown_from(text: &str, found: &std::ops::Range<usize>, columns: usize) -> usize {
+    if columns == 0 || text[..found.end].chars().count() <= columns {
+        return 0;
+    }
+    let lead = (text[..found.start].chars().count()).saturating_sub(columns / 3);
+    text.char_indices().nth(lead).map_or(0, |(at, _)| at)
+}
+
+/// `text` from byte `from` on, a `…` in place of the head it skips, its
+/// highlights moved with it.
+fn cut_head(
+    text: String,
+    highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
+    from: usize,
+) -> (String, Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>) {
+    if from == 0 {
+        return (text, highlights);
+    }
+    let shift = |at: usize| at.max(from) - from + '…'.len_utf8();
+    let highlights = highlights
+        .into_iter()
+        .filter(|(range, _)| range.end > from)
+        .map(|(range, style)| (shift(range.start)..shift(range.end), style))
+        .collect();
+    (format!("…{}", &text[from..]), highlights)
 }
 
 /// Bring the reader's active occurrence into view: a file's line centred
@@ -821,5 +855,23 @@ deleted file mode 100644
             compare_of("dev", "main", "").head,
             "dev \u{2194} main \u{b7} 0 files +0 \u{2212}0"
         );
+    }
+
+    /// A file's line too long for the reader starts further in on the
+    /// line the find is on, so its occurrence shows: a third of the way
+    /// across, a `…` for the head, the highlights moved with the text.
+    #[test]
+    fn a_long_line_slides_its_occurrence_into_view() {
+        let text = format!("{}needle()", "x".repeat(100));
+        let found = 100..106;
+        assert_eq!(shown_from(&text, &found, 120), 0, "it fits");
+        let from = shown_from(&text, &found, 60);
+        assert_eq!(from, 80, "a third of 60 cells before it");
+        let wash = gpui::HighlightStyle::default();
+        let (shown, highlights) = cut_head(text, vec![(0..4, wash), (100..106, wash)], from);
+        assert_eq!(shown, format!("…{}needle()", "x".repeat(20)));
+        let at = &highlights[0].0;
+        assert_eq!(highlights.len(), 1, "the skipped head's highlight is gone");
+        assert_eq!(&shown[at.clone()], "needle");
     }
 }

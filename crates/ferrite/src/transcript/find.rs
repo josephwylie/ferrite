@@ -26,10 +26,10 @@ pub(crate) struct FindState {
 /// The open bar and what it needs between frames.
 pub(super) struct TranscriptFind {
     bar: crate::find::Find,
-    /// Each text as a find counts in it (`RunText::find_text`), by key,
-    /// kept while its source is unchanged: a keystroke parses only what
-    /// changed.
-    plain: HashMap<SharedString, (SharedString, String)>,
+    /// Each text as a find counts in it (`RunText::find_text`), in row
+    /// order with its key and source: a text whose source is unchanged
+    /// keeps it, so a keystroke parses only what changed.
+    plain: Vec<(SharedString, SharedString, String)>,
     /// Frames left to bring the active hit into view; 0 when none is due.
     reveal: u8,
 }
@@ -40,7 +40,7 @@ impl TranscriptView {
         if self.find.is_none() {
             self.find = Some(TranscriptFind {
                 bar: crate::find::Find::new(cx, |view: &mut Self, cx| view.refind(cx)),
-                plain: HashMap::new(),
+                plain: Vec::new(),
                 reveal: 0,
             });
             cx.notify();
@@ -77,7 +77,16 @@ impl TranscriptView {
         let Some(find) = self.find.as_mut() else {
             return;
         };
-        let mut old = std::mem::take(&mut find.plain);
+        // The hit the bar is on, by its text's key: rows trimmed or added
+        // ahead of it must not move the bar to another occurrence.
+        let on = find
+            .bar
+            .active()
+            .and_then(|hit| Some((find.plain.get(hit.unit)?.0.clone(), hit.ordinal)));
+        let mut old: HashMap<_, _> = std::mem::take(&mut find.plain)
+            .into_iter()
+            .map(|(key, source, rendered)| (key, (source, rendered)))
+            .collect();
         find.plain = self
             .texts
             .iter()
@@ -86,17 +95,17 @@ impl TranscriptView {
                     Some((source, rendered)) if source == text.source => rendered,
                     _ => text.find_text(),
                 };
-                (text.key.clone(), (text.source.clone(), rendered))
+                (text.key.clone(), text.source.clone(), rendered)
             })
             .collect();
         let TranscriptFind { bar, plain, .. } = find;
-        let units = self
-            .texts
-            .iter()
-            .map(|(_, text)| plain[&text.key].1.as_str());
-        let changed = bar.search(units, from, cx);
+        let changed = bar.search(plain.iter().map(|(.., text)| text.as_str()), from, cx);
         if changed {
             self.reveal_found();
+        } else if let Some((key, ordinal)) = on {
+            if let Some(unit) = plain.iter().position(|(at, ..)| *at == key) {
+                bar.keep(crate::find::Hit { unit, ordinal });
+            }
         }
         cx.notify();
     }

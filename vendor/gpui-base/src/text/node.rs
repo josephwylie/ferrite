@@ -1405,12 +1405,21 @@ impl CodeBlock {
                 )
             })
             .into_any_element();
-        // Ferrite: the application may draw the block as something else.
-        let block = match &node_cx.code_block_view {
-            Some(view) => view(self, block, window, cx),
-            None => block,
+        // Ferrite: the application may draw the block as something else;
+        // a find still counts the code's occurrences where it paints.
+        let (block, drawn) = match &node_cx.code_block_view {
+            Some(view) => (view(self, block, window, cx), true),
+            None => (block, false),
         };
-        div().w_full().min_w_0().child(block).into_any_element()
+        div()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .when(drawn, |this| {
+                this.child(super::find::count_drawn(self.state.clone()))
+            })
+            .child(block)
+            .into_any_element()
     }
 }
 

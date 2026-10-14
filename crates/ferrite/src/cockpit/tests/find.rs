@@ -436,6 +436,50 @@ fn find_counts_what_a_markdown_view_marks(cx: &mut TestAppContext) {
     assert!(painted.is_some(), "the card reports where it painted");
 }
 
+/// A ```mermaid fence drawn as its diagram still counts its occurrences
+/// where it paints (copy keeps its source), so the count and the marks
+/// agree on the runs after it; on one of its own, the diagram is what is
+/// brought into view.
+#[gpui::test]
+fn find_counts_a_fence_drawn_as_its_diagram(cx: &mut TestAppContext) {
+    let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+    cx.update(|cx| {
+        crate::visual::engine::Visuals::install(engine, cx);
+        crate::visual::diagram::init(true, cx);
+    });
+    let pad = "A paragraph that only pads the document.\n\n".repeat(60);
+    let source = format!("```mermaid\ngraph TD\n  needle --> B\n```\n\n{pad}The last needle.\n");
+    let (core, _fake) = cockpit("find-markdown-diagram", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    markdown_beside(&view, &scratch("find-markdown-diagram"), &source, cx);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    tick(cx);
+    let diagram = cx
+        .debug_bounds("mermaid-diagram")
+        .expect("the fence is drawn");
+    open(cx);
+    cx.simulate_input("needle");
+    settle_reader(&view, cx);
+    let (count, painted) = reader_state(&view, cx).unwrap();
+    assert_eq!(count.as_deref(), Some("1/2"));
+    assert!(
+        painted.expect("the diagram reports").contains(&diagram.center()),
+        "the fence's occurrence is its diagram"
+    );
+    cx.simulate_keystrokes("enter");
+    settle_reader(&view, cx);
+    let (count, painted) = reader_state(&view, cx).unwrap();
+    assert_eq!(count.as_deref(), Some("2/2"));
+    let painted = painted.expect("the last occurrence painted");
+    assert!(painted.size.height < diagram.size.height, "a line, not the diagram");
+    assert!(reader_shows(&view, painted, cx));
+}
+
 /// The reader's bar closes with the reader, however it closes: the same
 /// file opened again has no bar.
 #[gpui::test]

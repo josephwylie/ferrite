@@ -9,13 +9,21 @@
 //! The text it counts over is `TextView::markdown_find_text`: every run on a
 //! line of its own, so a one-line needle never spans two runs there either.
 
-use std::{cell::Cell, collections::HashMap, ops::Range, rc::Rc};
-
-use gpui::{
-    BorderStyle, Bounds, Edges, Hsla, Pixels, SharedString, Window, px, quad, transparent_black,
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    ops::Range,
+    rc::Rc,
+    sync::{Arc, Mutex},
 };
 
-use super::state::TextViewState;
+use gpui::{
+    BorderStyle, Bounds, Edges, Hsla, IntoElement, Pixels, SharedString, Styled, Window, canvas,
+    px, quad, transparent_black,
+};
+
+use super::{inline::InlineState, state::TextViewState};
+use crate::GlobalState;
 
 /// What a view marks, and which occurrence (its ordinal in the view) is the
 /// active one.
@@ -100,6 +108,52 @@ pub(super) fn paint_marks(
             find.report.revealed.set(placed);
         }
     }
+}
+
+/// Count the occurrences in a source run (`root`) its view draws as
+/// something else (`TextView::code_block_view`: a fence as its diagram), at
+/// its place in paint order — laid over the drawing, painted before it — so
+/// the runs after it keep the ordinals their host counts in the view's find
+/// text. Nothing is washed; the active one reports the drawing's bounds. A
+/// drawing that is the run's own text after all paints its own marks, on
+/// the ordinals counted here.
+pub(super) fn count_drawn(root: Arc<Mutex<InlineState>>) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let Some(view) = GlobalState::global(cx).text_view_state() else {
+                return;
+            };
+            let view = view.read(cx);
+            let Some(find) = &view.find else {
+                return;
+            };
+            let Some(source) = root.try_lock().ok().map(|root| root.text.clone()) else {
+                return;
+            };
+            let count = find_matches(&source, &find.needle, find.case_sensitive).len();
+            let base = view
+                .find_tally
+                .borrow_mut()
+                .base(Arc::as_ptr(&root) as usize, count);
+            if count == 0 {
+                return;
+            }
+            if bounds.bottom() > window.content_mask().bounds.top()
+                && find.report.ahead.get().is_none_or(|ahead| base < ahead)
+            {
+                find.report.ahead.set(Some(base));
+            }
+            if find
+                .active
+                .is_some_and(|active| (base..base + count).contains(&active))
+            {
+                find.report.revealed.set(Some(bounds));
+            }
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 /// Every non-overlapping occurrence of `needle` in `haystack`, as byte

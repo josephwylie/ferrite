@@ -195,8 +195,9 @@ impl Find {
 
     /// Search `units` (in reading order) for what the line holds. A new
     /// query starts on its first hit in unit `from` or after (the first in
-    /// view), wrapping to the first; the same query keeps its place as the
-    /// text changes under it. Whether the query changed.
+    /// view), wrapping to the first; the same query keeps its index as the
+    /// text changes under it (a host that can say which hit that was puts
+    /// the bar back on it, `keep`). Whether the query changed.
     pub(crate) fn search<'a>(
         &mut self,
         units: impl IntoIterator<Item = &'a str>,
@@ -226,6 +227,14 @@ impl Find {
             self.active.map(|at| at.min(self.hits.len() - 1))
         };
         changed
+    }
+
+    /// Stay on `hit` when it is still found: the text moved under the
+    /// same query.
+    pub(crate) fn keep(&mut self, hit: Hit) {
+        if let Some(at) = self.hits.iter().position(|found| *found == hit) {
+            self.active = Some(at);
+        }
     }
 
     /// Step to the next hit (or the previous), wrapping.
@@ -386,6 +395,16 @@ mod tests {
             assert_eq!(find.step(false).map(|hit| hit.unit), Some(3), "and back");
             assert!(!find.search(units, 0, cx), "the same query");
             assert_eq!(find.count().as_deref(), Some("4/4"), "keeps its place");
+            // The first unit trimmed away: its index now names another
+            // occurrence until the host puts the bar back on its own.
+            find.go_to(1);
+            find.search(units[1..].iter().copied(), 0, cx);
+            assert_eq!(find.count().as_deref(), Some("2/3"));
+            find.keep(Hit {
+                unit: 1,
+                ordinal: 0,
+            });
+            assert_eq!(find.count().as_deref(), Some("1/3"), "the same occurrence");
             find.type_query("BETA", cx);
             find.search(units, 0, cx);
             assert_eq!(find.count().as_deref(), Some("no matches"));
