@@ -79,10 +79,6 @@ fn keep_mouse_cursor_visible(cx: &mut App) {
     cx.set_cursor_hide_mode(CursorHideMode::Never);
 }
 
-/// One Session may hold this much before the watchdog replaces it. Generous:
-/// a busy agent legitimately grows, and a restart costs the operator context.
-const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
-
 /// The bundled face, compiled in: Geist Mono, the one face on every surface
 /// (theme rule 1). gpui has no variation-axis support, so each weight is its
 /// own static file. Every weight shares the typographic family name
@@ -113,7 +109,16 @@ pub(crate) fn register_fonts(cx: &App) {
 }
 
 fn main() {
-    // First of all: a Chromium helper process is this same binary, started
+    // `ferrite server` is the headless Server the window attaches to (ADR
+    // 0025): it never starts a window, Chromium or the self-update.
+    if std::env::args().nth(1).as_deref() == Some("server") {
+        std::process::exit(ferrite_core::server::run(ferrite_core::server::Options {
+            store: store_dir(),
+            settings_dir: settings_dir(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        }));
+    }
+    // A Chromium helper process is this same binary, started
     // by Chromium with `--type=…`; it runs the helper and exits here, before
     // any shell, store or window. In the app this only readies Chromium
     // (ADR 0013); it starts on the first visual.
@@ -298,7 +303,7 @@ fn main() {
                     ferrite_core::log!("cannot stand in the launch directory: {e}");
                 }
             }
-            core.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
+            core.watch_memory(Box::new(ProcessRss::default()), spawner::RSS_LIMIT);
             for thread in adopted {
                 if let Err(e) = core.revive(thread) {
                     ferrite_core::log!("imported thread {thread} would not open: {e}");

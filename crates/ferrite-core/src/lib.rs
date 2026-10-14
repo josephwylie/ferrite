@@ -28,6 +28,7 @@ pub mod questions;
 pub mod review;
 pub mod roster;
 pub mod self_update;
+pub mod server;
 pub mod session;
 pub mod settings;
 pub mod sound;

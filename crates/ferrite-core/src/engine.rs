@@ -37,6 +37,7 @@ use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
+mod commands;
 mod history;
 mod queue;
 
@@ -688,6 +689,25 @@ impl Thread {
     fn busy(&self) -> bool {
         self.activity.view().main().busy()
     }
+
+    /// At rest: no turn, no starting or replacement Session, no change
+    /// waiting on the provider, no working Subagent or background task, no
+    /// Decision and nothing in the provider's queue. What a Session may be
+    /// replaced at without cutting anything off.
+    fn settled(&self) -> bool {
+        let view = self.activity.view();
+        !self
+            .session
+            .as_ref()
+            .is_some_and(SessionLifecycle::is_starting)
+            && self.replacement.is_none()
+            && self.tuning.is_none()
+            && !self.busy()
+            && !view.main_operator_turn()
+            && view.working_descendants() == 0
+            && view.decisions().is_empty()
+            && !self.native_queue.pending()
+    }
     /// Whether the model and effort can change now: not mid-turn, not
     /// while the Session starts or is being replaced, and not while the
     /// last change waits on the provider.
@@ -1056,19 +1076,10 @@ impl Engine {
             let Some(state) = self.threads.get(id) else {
                 return false;
             };
-            let Some(session) = &state.session else {
+            if state.session.is_none() {
                 return false;
-            };
-            let view = state.activity.view();
-            let settled = !session.is_starting()
-                && state.replacement.is_none()
-                && state.tuning.is_none()
-                && !state.busy()
-                && !view.main_operator_turn()
-                && view.working_descendants() == 0
-                && view.decisions().is_empty()
-                && !state.native_queue.pending();
-            if settled {
+            }
+            if state.settled() {
                 idle.push(*id);
             }
             true
@@ -3650,6 +3661,106 @@ impl Engine {
             read |= self.notifications.acknowledge_subject(thread, &subject);
         }
         read
+    }
+
+    /// Whether every Thread is at rest and nothing waits to be sent: what
+    /// the Server may stop or restart at without cutting an agent off.
+    pub fn idle(&self) -> bool {
+        self.bootstraps.is_empty()
+            && self
+                .threads
+                .values()
+                .all(|state| state.settled() && state.queued.is_none())
+    }
+
+    /// Everything a window draws before any transcript (ADR 0025).
+    pub fn snapshot(&mut self, boot_id: &str) -> protocol::Snapshot {
+        self.publish();
+        protocol::Snapshot {
+            boot_id: boot_id.into(),
+            revision: self.revision,
+            threads: self
+                .threads
+                .iter()
+                .map(|(&id, state)| state.wire_state(id))
+                .collect(),
+            roster: SharedRoster {
+                open: self.open.clone(),
+                parked: self.parked().unwrap_or_default(),
+            },
+            decisions: self
+                .threads
+                .iter()
+                .flat_map(|(&thread, state)| {
+                    state
+                        .activity
+                        .view()
+                        .decisions()
+                        .iter()
+                        .map(move |pending| protocol::PendingEntry {
+                            thread,
+                            subject: pending.subject.as_ref().map(Into::into),
+                            handle: (&pending.handle).into(),
+                            decision: (&pending.decision).into(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            groups: None,
+            registry: None,
+            notices: None,
+            providers: None,
+        }
+    }
+
+    /// A Thread's history for a watcher that has none of it: its log as a
+    /// reopen would replay it, then the live state the log never holds —
+    /// the Session's connection, pending Decisions, MCP state, limits.
+    /// Everything published so far is in it; inputs continue after `seq`.
+    pub fn history(&mut self, thread: ThreadId) -> Option<protocol::History> {
+        use protocol::{Live, WireInput};
+        self.publish();
+        let state = self.threads.get_mut(&thread)?;
+        if let Err(error) = state.writer.flush() {
+            state.report_store_error(error);
+            return None;
+        }
+        let snapshot = self.store.load(thread).ok()?;
+        let state = &self.threads[&thread];
+        let inputs = std::iter::once(ActivityInput::Disconnect)
+            .chain(snapshot.activity_inputs())
+            .filter_map(|input| match protocol::outgoing(&input, None) {
+                Outgoing::Input(input) => Some(input),
+                _ => None,
+            })
+            .collect();
+        let view = state.activity.view();
+        let transcript = view.main().transcript();
+        let mut live = vec![WireInput::Live(Live::Connect {
+            generation: state.generation,
+        })];
+        live.extend(view.decisions().iter().map(|pending| {
+            WireInput::Live(match &pending.subject {
+                Some(Subject::Main) => Live::DecisionRequested {
+                    decision: (&pending.decision).into(),
+                },
+                subject => Live::Decision {
+                    subject: subject.as_ref().map(Into::into),
+                    decision: (&pending.decision).into(),
+                },
+            })
+        }));
+        live.push(WireInput::Live(Live::McpServers {
+            servers: transcript.mcp_servers().iter().map(Into::into).collect(),
+        }));
+        live.push(WireInput::Live(Live::RateLimits {
+            limits: transcript.rate_limits().into(),
+        }));
+        Some(protocol::History {
+            inputs,
+            live,
+            seq: self.published.get(&thread).map_or(0, |published| published.seq),
+        })
     }
 
     /// When this Engine started: the zero of the `at_ms` it publishes.

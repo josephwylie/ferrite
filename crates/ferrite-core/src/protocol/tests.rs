@@ -617,6 +617,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "reply_text",
+            Sample::Server(ServerMessage::Reply {
+                id: 5,
+                ok: Some(Done::Text {
+                    text: "and then the tests".into(),
+                }),
+                error: None,
+            }),
+        ),
+        (
             "reply_error",
             Sample::Server(ServerMessage::Reply {
                 id: 8,

@@ -516,6 +516,14 @@ pub struct PendingEntry {
     pub decision: WireDecision,
 }
 
+/// A watched Thread rebuilt from its log (`history` … `history_end`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct History {
+    pub inputs: Vec<WireInput>,
+    pub live: Vec<WireInput>,
+    pub seq: u64,
+}
+
 /// The shared half of the Roster: which Threads are open, in order, and
 /// the order they were parked in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -555,6 +563,10 @@ pub enum Done {
     },
     Project {
         project: ProjectId,
+    },
+    /// A prompt handed back to the Composer (`unqueue`).
+    Text {
+        text: String,
     },
     Files {
         files: Vec<WireFile>,

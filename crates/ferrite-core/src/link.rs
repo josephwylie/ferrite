@@ -283,8 +283,10 @@ impl Ring {
 pub type ClientId = u64;
 
 /// What the Server hears from its connections, in arrival order.
-#[derive(Debug)]
 pub enum Heard {
+    /// A client connected: what to queue its messages on. Always heard
+    /// before anything it says.
+    Joined(ClientId, Connection),
     Message(ClientId, ClientMessage),
     /// The connection ended, or broke the protocol.
     Gone(ClientId),
@@ -297,9 +299,10 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Serve a stream: its reader thread hands each message to `heard`
-    /// (the pump's channel), its writer thread sends what is queued here.
-    pub fn serve<S>(id: ClientId, stream: S, heard: Sender<Heard>) -> io::Result<Self>
+    /// Serve a stream: the Connection is handed to `heard` (the pump's
+    /// channel), then its reader thread hands over each message the client
+    /// sends, and its writer thread sends what is queued on it.
+    pub fn serve<S>(id: ClientId, stream: S, heard: Sender<Heard>) -> io::Result<()>
     where
         S: Read + Write + Send + 'static + TryClone,
     {
@@ -323,7 +326,7 @@ impl Connection {
                             waiting = ready.wait(waiting).unwrap_or_else(|e| e.into_inner());
                         }
                     };
-                    let message = message.unwrap_or_else(|| lagged());
+                    let message = message.unwrap_or_else(lagged);
                     let closing = matches!(message, ServerMessage::Welcome { error: Some(_), .. })
                         || matches!(&message, ServerMessage::Reply { error: Some(error), .. }
                             if error.code == ErrorCode::Lagged);
@@ -333,6 +336,9 @@ impl Connection {
                     }
                 }
             })?;
+        if heard.send(Heard::Joined(id, Self { shared })).is_err() {
+            return Ok(());
+        }
         std::thread::Builder::new()
             .name(format!("ferrite-client-{id}-in"))
             .spawn(move || {
@@ -344,7 +350,7 @@ impl Connection {
                 }
                 let _ = heard.send(Heard::Gone(id));
             })?;
-        Ok(Self { shared })
+        Ok(())
     }
 
     /// Queue a message for this client. `Err(Lagged)`: it is too far
@@ -355,6 +361,29 @@ impl Connection {
         ready.notify_one();
         pushed
     }
+}
+
+/// Serve every connection `listener` accepts, numbered from 1, for as
+/// long as the pump listens.
+pub fn accept_all(listener: Listener, heard: Sender<Heard>) -> io::Result<()> {
+    std::thread::Builder::new()
+        .name("ferrite-server-accept".into())
+        .spawn(move || {
+            for id in 1.. {
+                match listener.accept() {
+                    Ok(stream) => {
+                        if let Err(error) = Connection::serve(id, stream, heard.clone()) {
+                            crate::log!("server: a connection could not be served: {error}");
+                        }
+                    }
+                    Err(error) => {
+                        crate::log!("server: stopped accepting: {error}");
+                        return;
+                    }
+                }
+            }
+        })?;
+    Ok(())
 }
 
 /// The last thing a lagged client hears: why it is being closed.

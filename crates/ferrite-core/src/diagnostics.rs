@@ -36,8 +36,14 @@ static SINK: OnceLock<Mutex<Log>> = OnceLock::new();
 /// Start logging into `<dir>/logs`, and write a crash report there for
 /// every panic. Called once, at launch; before it lines reach stderr only.
 pub fn open(dir: &Path) {
+    open_as(dir, LOG);
+}
+
+/// `open`, into a log of its own: the Server's is `server.log`, so the
+/// window's and the Server's lines never interleave.
+pub fn open_as(dir: &Path, name: &'static str) {
     let logs = logs(dir);
-    let log = Log::new(logs.clone(), CAP);
+    let log = Log::new(logs.clone(), name, CAP);
     if SINK.set(Mutex::new(log)).is_err() {
         return;
     }
@@ -103,14 +109,16 @@ pub fn report(dir: &Path, facts: &[(&str, String)]) -> String {
 /// The log file pair in one directory, rotated at `cap` bytes.
 struct Log {
     dir: PathBuf,
+    name: &'static str,
     cap: u64,
     file: Option<File>,
 }
 
 impl Log {
-    fn new(dir: PathBuf, cap: u64) -> Self {
+    fn new(dir: PathBuf, name: &'static str, cap: u64) -> Self {
         Self {
             dir,
+            name,
             cap,
             file: None,
         }
@@ -119,12 +127,12 @@ impl Log {
     /// One timestamped line. Past the cap the live file becomes the
     /// previous one (replacing it) and a fresh one starts.
     fn append(&mut self, line: &str) -> io::Result<()> {
-        let path = self.dir.join(LOG);
+        let path = self.dir.join(self.name);
         let entry = format!("{} {line}\n", stamp("%Y-%m-%d %H:%M:%S%.3f"));
         let full = fs::metadata(&path).is_ok_and(|meta| meta.len() + entry.len() as u64 > self.cap);
         if full {
             self.file = None;
-            fs::rename(&path, self.dir.join(PREVIOUS))?;
+            fs::rename(&path, self.dir.join(format!("{}.1", self.name)))?;
         }
         if self.file.is_none() {
             fs::create_dir_all(&self.dir)?;
@@ -198,7 +206,7 @@ mod tests {
     #[test]
     fn the_log_rotates_at_its_cap() {
         let dir = scratch("rotate");
-        let mut log = Log::new(dir.clone(), 200);
+        let mut log = Log::new(dir.clone(), LOG, 200);
 
         for n in 0..20 {
             log.append(&format!("line {n}")).unwrap();
@@ -235,7 +243,7 @@ mod tests {
     fn the_report_carries_facts_the_newest_crash_and_the_log() {
         let dir = scratch("report");
         let logs = logs(&dir);
-        let mut log = Log::new(logs.clone(), CAP);
+        let mut log = Log::new(logs.clone(), LOG, CAP);
         log.append("thread 3: session ended: exit status 1")
             .unwrap();
         log.append("thread 4: parked").unwrap();

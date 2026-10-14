@@ -239,6 +239,13 @@ impl Mirrors {
             .collect()
     }
 
+    /// The last input this window applied to a Thread: where a resume
+    /// picks up.
+    #[cfg(test)]
+    pub(crate) fn seq(&self, thread: ThreadId) -> Option<u64> {
+        self.threads.get(&thread).map(|mirror| mirror.seq)
+    }
+
     pub(crate) fn view(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
         let mirror = self.threads.get(&thread)?;
         Some(ThreadView {

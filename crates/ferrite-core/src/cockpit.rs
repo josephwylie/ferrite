@@ -26,7 +26,7 @@ use crate::workspace::WorkspaceChoice;
 use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
 pub use mirror::ThreadView;
 
-mod mirror;
+pub(crate) mod mirror;
 
 pub struct Cockpit {
     pub(crate) engine: Engine,

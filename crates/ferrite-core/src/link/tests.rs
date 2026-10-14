@@ -202,10 +202,19 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
     let dir = scratch("attach");
     let path = address(&dir);
     let listener = listen(&path).unwrap();
-    let (heard, hear) = mpsc::channel();
+    let (heard_tx, hear) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let stream = listener.accept().unwrap();
-        let connection = Connection::serve(7, stream, heard).unwrap();
+        let (joined, joining) = mpsc::channel();
+        Connection::serve(7, stream, joined).unwrap();
+        let Ok(Heard::Joined(7, connection)) = joining.recv() else {
+            panic!("joined first");
+        };
+        std::thread::spawn(move || {
+            for heard in joining {
+                let _ = heard_tx.send(heard);
+            }
+        });
         connection
             .send(protocol::welcome(
                 1,
@@ -271,8 +280,11 @@ fn a_refused_generation_is_the_attach_error() {
     let listener = listen(&path).unwrap();
     let server = std::thread::spawn(move || {
         let stream = listener.accept().unwrap();
-        let (heard, _hear) = mpsc::channel();
-        let connection = Connection::serve(1, stream, heard).unwrap();
+        let (heard, hear) = mpsc::channel();
+        Connection::serve(1, stream, heard).unwrap();
+        let Ok(Heard::Joined(_, connection)) = hear.recv() else {
+            panic!("joined first");
+        };
         connection
             .send(protocol::welcome(
                 2,

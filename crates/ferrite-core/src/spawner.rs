@@ -17,6 +17,10 @@ use crate::settings::Settings;
 use crate::store::Provider;
 use crate::ThreadId;
 
+/// One Session may hold this much before the watchdog replaces it. Generous:
+/// a busy agent legitimately grows, and a restart costs the operator context.
+pub const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+
 /// What every new Session is started with beyond the Thread's own choice:
 /// the operator's permission, sandbox and effort defaults, read from
 /// Settings and shared between the window (which edits them) and the
