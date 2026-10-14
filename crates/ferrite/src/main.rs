@@ -238,9 +238,11 @@ fn main() {
             visual::init(cx);
             visual::diagram::init(settings.visuals != ferrite_core::visual::Level::Off, cx);
 
-            let bindings = load_bindings(keymap::PLATFORM, cx);
-            cx.bind_keys(bindings);
-            cx.set_menus(app_menus());
+            // A refused key is said by the window (`cockpit::user_commands`).
+            bind_keys(
+                keymap::with_user_keys(keymap::PLATFORM, &settings.keys).0,
+                cx,
+            );
 
             let store = match Store::open(store_dir()) {
                 Ok(store) => store,
@@ -521,13 +523,23 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.get(at + 1).map(String::as_str)
 }
 
-/// Where Threads live between runs.
-/// The platform key table (crate::keymap), built into live bindings. The
-/// table is data so both platforms' spellings stay testable; actions are
-/// rebuilt from their registered names here, and the test below keeps a
-/// renamed action from surviving to a launch panic.
-fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
-    keymap::bindings(platform)
+/// Bind `table` (the defaults with the operator's keys laid over them) in
+/// place of whatever was bound, and make it the table every drawn chord
+/// reads; the menu bar is set again so its key equivalents follow.
+fn bind_keys(table: Vec<keymap::Binding>, cx: &mut App) {
+    keymap::install(table.clone());
+    let bindings = load_bindings(table, cx);
+    cx.clear_key_bindings();
+    cx.bind_keys(bindings);
+    cx.set_menus(app_menus());
+}
+
+/// A key table (crate::keymap), built into live bindings. The table is
+/// data so both platforms' spellings stay testable; actions are rebuilt
+/// from their registered names here, and the test below keeps a renamed
+/// action from surviving to a launch panic.
+fn load_bindings(table: Vec<keymap::Binding>, cx: &mut App) -> Vec<KeyBinding> {
+    table
         .into_iter()
         .map(|(keystroke, action, context)| {
             let action = cx
@@ -636,6 +648,7 @@ fn settings_dir() -> std::path::PathBuf {
         .unwrap_or(store)
 }
 
+/// Where Threads live between runs.
 fn store_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("FERRITE_STORE") {
         return dir.into();
@@ -668,7 +681,7 @@ mod tests {
         cx.update(|cx| {
             for platform in [keymap::Platform::Mac, keymap::Platform::Windows] {
                 assert_eq!(
-                    load_bindings(platform, cx).len(),
+                    load_bindings(keymap::bindings(platform), cx).len(),
                     keymap::bindings(platform).len()
                 );
             }

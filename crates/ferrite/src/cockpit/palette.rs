@@ -480,7 +480,7 @@ impl CockpitView {
                     });
                 }
             };
-        let new_thread_t = crate::keymap::bindings(crate::keymap::PLATFORM)
+        let new_thread_t = crate::keymap::active()
             .into_iter()
             .find(|(keys, action, context)| {
                 *action == "cockpit::NewThread" && context.is_none() && keys.ends_with("-t")
@@ -781,7 +781,15 @@ impl CockpitView {
             bound_chord("cockpit::CloseThread"),
             Command::DiscardDraft,
         );
+        add(
+            !self.prefs.settings.keys.is_empty(),
+            "reset keys".into(),
+            "forget the keys in settings.json",
+            None,
+            Command::ResetKeys,
+        );
         let _ = cx;
+        rows.extend(self.user_command_rows());
         rows
     }
 
@@ -918,6 +926,8 @@ impl CockpitView {
                     }
                 }
             }
+            Command::ResetKeys => self.reset_keys(cx),
+            Command::User(index) => self.run_user_command(index, cx),
         }
         cx.notify();
     }
@@ -953,7 +963,7 @@ impl CockpitView {
         self.clear_for_float();
         self.floats.palette = None;
         let sheet = cx.new(Shortcuts::new);
-        let focus = sheet.focus_handle(cx);
+        let focus = sheet.read(cx).input.focus_handle(cx);
         self.floats.shortcuts = Some(sheet);
         window.focus(&focus, cx);
         cx.notify();

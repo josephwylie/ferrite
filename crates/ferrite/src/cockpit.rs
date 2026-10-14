@@ -11,6 +11,7 @@ mod palette;
 mod parts;
 pub(crate) mod subagents;
 mod transcript_glue;
+mod user_commands;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =
@@ -498,6 +499,8 @@ pub struct CockpitView {
     read_only_told: bool,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
+    /// What the operator's commands and keys have still to say.
+    said: user_commands::Said,
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     group_error: Option<SharedString>,
@@ -1470,6 +1473,7 @@ impl CockpitView {
             cli_updates: Default::default(),
             read_only_told: false,
             unreadable_told: false,
+            said: Default::default(),
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),
@@ -9202,6 +9206,7 @@ impl CockpitView {
         self.present_cli_updates(window, cx);
         self.present_read_only(window, cx);
         self.present_unreadable_settings(window, cx);
+        self.present_user_commands(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -13208,6 +13213,7 @@ mod tests {
     mod ui_e;
     mod ui_f;
     mod ui_g;
+    mod user_commands;
     mod visuals;
     use super::*;
     use std::cell::RefCell;
@@ -20324,7 +20330,8 @@ mod tests {
     /// launch binds.
     fn bind_production_keys(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            let bindings = crate::load_bindings(crate::keymap::Platform::Mac, cx);
+            let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
+            let bindings = crate::load_bindings(table, cx);
             cx.bind_keys(bindings);
         });
     }
