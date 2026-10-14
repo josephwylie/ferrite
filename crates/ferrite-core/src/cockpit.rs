@@ -2009,6 +2009,9 @@ impl Cockpit {
             allowed,
             at: crate::clock::instant(),
         });
+        if let Err(error) = state.writer.flush() {
+            state.report_store_error(error);
+        }
         Ok(true)
     }
 
@@ -2662,6 +2665,13 @@ impl Cockpit {
                         thread.report_store_error(error);
                     }
                 }
+                // An agent blocked on the operator may wait for hours:
+                // everything it did before it asked is on disk meanwhile.
+                if changes_decisions(&event) {
+                    if let Err(error) = thread.writer.flush() {
+                        thread.report_store_error(error);
+                    }
+                }
                 let completion_accepted = match &event {
                     SessionEvent::Activity(event) => {
                         applied.accepted.iter().any(|accepted| accepted == event)
@@ -2978,6 +2988,9 @@ impl Cockpit {
             },
             at: crate::clock::instant(),
         });
+        if let Err(error) = state.writer.flush() {
+            state.report_store_error(error);
+        }
         true
     }
 
@@ -4596,6 +4609,19 @@ fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspac
 /// operator can read `git branch` and know whose work each one is.
 fn branch_name(thread: ThreadId) -> String {
     format!("ferrite/thread-{thread}")
+}
+
+/// A Decision asked, answered or withdrawn: a point the log is flushed at.
+fn changes_decisions(event: &SessionEvent) -> bool {
+    matches!(
+        event,
+        SessionEvent::DecisionRequested { .. }
+            | SessionEvent::Activity(
+                ActivityEvent::Decision { .. }
+                    | ActivityEvent::DecisionReply { .. }
+                    | ActivityEvent::DecisionCancelled { .. }
+            )
+    )
 }
 
 fn event_changes_content(event: &SessionEvent) -> bool {
@@ -7581,6 +7607,54 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// ADR 0025: an agent waiting on a Decision may wait for hours, so the
+    /// log holds everything before the Decision while it waits — not only
+    /// after the turn ends — and the answer is flushed as it is given.
+    #[test]
+    fn the_log_holds_everything_before_a_pending_decision() {
+        let dir = scratch("decision-flush");
+        let store = Store::with_flush_interval(&dir, Duration::from_secs(3600)).unwrap();
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "write the file".into());
+        let log = dir.join(thread.to_string()).join("log.jsonl");
+        let on_disk = || std::fs::read_to_string(&log).unwrap();
+
+        fake.streams.borrow()[0]
+            .send(text("before the question"))
+            .unwrap();
+        cockpit.pump();
+        assert!(
+            !on_disk().contains("before the question"),
+            "mid-turn text waits for a boundary"
+        );
+
+        fake.streams.borrow()[0]
+            .send(decision("perm_01", "Write"))
+            .unwrap();
+        cockpit.pump();
+        assert!(on_disk().contains("before the question"));
+
+        fake.streams.borrow()[0]
+            .send(text("while it waits"))
+            .unwrap();
+        cockpit.pump();
+        let pending = cockpit
+            .thread(thread)
+            .and_then(|open| open.pending())
+            .cloned()
+            .unwrap();
+        cockpit.respond(
+            thread,
+            &pending,
+            crate::DecisionAnswer::Allow {
+                input: pending.input.clone(),
+            },
+        );
+        assert!(on_disk().contains("while it waits"));
     }
 
     #[test]
