@@ -74,8 +74,8 @@ impl CockpitView {
             cx.listener(|view, _: &palette::ShowParked, window, cx| view.show_parked(window, cx)),
         )
         .on_action(
-            cx.listener(|view, _: &palette::CompareWithMain, window, cx| {
-                view.compare_with_main(window, cx)
+            cx.listener(|view, _: &palette::ReviewBranch, window, cx| {
+                view.review_branch(window, cx)
             }),
         )
         .on_action(cx.listener(|view, _: &palette::SelectNext, _, cx| view.palette_step(1, cx)))
@@ -502,10 +502,10 @@ impl CockpitView {
         );
         add(
             focused.is_some_and(|thread| self.thread_path(thread).is_some()),
-            "compare with main".into(),
-            "open the diff reader",
-            bound_chord("palette::CompareWithMain"),
-            Command::CompareWithMain,
+            "review branch".into(),
+            "against the default branch",
+            bound_chord("palette::ReviewBranch"),
+            Command::ReviewBranch,
         );
         add(
             focused.is_some_and(|thread| self.thread_path(thread).is_some()),
@@ -812,7 +812,7 @@ impl CockpitView {
         match command {
             Command::ParkThread => self.close_thread(&CloseThread, window, cx),
             Command::ShowParked => self.show_parked(window, cx),
-            Command::CompareWithMain => self.compare_with_main(window, cx),
+            Command::ReviewBranch => self.review_branch(window, cx),
             Command::ReviewChanges => self.open_beside(
                 beside::Beside::Review(ferrite_core::review::Scope::Uncommitted),
                 window,
@@ -934,9 +934,9 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// ⌘⇧D, `compare with main`: the focused Thread's branch against its
+    /// ⌘⇧D, `review branch`: the focused Thread's branch against its
     /// Project's default branch, in the Review beside it.
-    fn compare_with_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn review_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_palette(cx);
         self.open_beside(
             beside::Beside::Review(ferrite_core::review::Scope::Branch),

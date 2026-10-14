@@ -252,6 +252,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         .when_some(on_drop, |chip, on_drop| {
             chip.child(
                 crate::components::button("drop-review-comments")
+                    .debug_selector(|| "drop-review-comments".into())
                     .tab_stop(true)
                     .p_0()
                     .flex_shrink_0()

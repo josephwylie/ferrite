@@ -1,6 +1,7 @@
 //! The Review slot's body (ADR 0021): a diff beside the Thread, scoped to
 //! the uncommitted work, the branch against its base, or the last turn,
-//! whose lines take comments.
+//! whose lines take comments. The bar and footer are chrome; the diff reads
+//! at the operator's reading size, like every diff in a transcript.
 //!
 //! The bar names the scopes (`menu::token`, the chosen one inverse) and
 //! what the diff adds up to; under it, one row per diff line — numbered on
@@ -22,7 +23,7 @@ use gpui::{
 };
 
 use crate::composer::{Composer, Role};
-use crate::pane::DiffKind;
+use crate::pane::{DiffKind, Grid};
 use crate::pointer::Pointer as _;
 use crate::theme::*;
 
@@ -53,9 +54,6 @@ const FOOTER: [(&str, &str); 5] = [
     ("esc", ""),
 ];
 
-/// The line-number columns: as wide as a tool row's diff numbers.
-const NUMBER_W: f32 = DIFF_NUMBER_CELLS * CH;
-
 /// The operator picked another scope; the cockpit loads it and calls `show`.
 pub(crate) struct ScopePicked(pub Scope);
 
@@ -63,6 +61,8 @@ pub(crate) struct ReviewView {
     /// The Pane's own prompt: where comments gather, and are read back to
     /// mark the lines they are about.
     composer: Entity<Composer>,
+    /// The reading size's grid the diff rows sit on.
+    grid: Grid,
     focus: FocusHandle,
     scroll: ScrollHandle,
     scope: Scope,
@@ -77,9 +77,15 @@ pub(crate) struct ReviewView {
 impl EventEmitter<ScopePicked> for ReviewView {}
 
 impl ReviewView {
-    pub(crate) fn new(composer: Entity<Composer>, scope: Scope, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        composer: Entity<Composer>,
+        scope: Scope,
+        reading: ferrite_core::settings::ReadingSize,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             composer,
+            grid: Grid::of(reading),
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             scope,
@@ -92,6 +98,24 @@ impl ReviewView {
 
     pub(crate) fn scope(&self) -> Scope {
         self.scope
+    }
+
+    /// The operator changed the reading size: the rows follow it.
+    pub(crate) fn set_reading(
+        &mut self,
+        reading: ferrite_core::settings::ReadingSize,
+        cx: &mut Context<Self>,
+    ) {
+        let grid = Grid::of(reading);
+        if grid != self.grid {
+            self.grid = grid;
+            cx.notify();
+        }
+    }
+
+    /// The line-number columns: as wide as a tool row's diff numbers.
+    fn number_w(&self) -> f32 {
+        DIFF_NUMBER_CELLS * self.grid.cell()
     }
 
     /// The handle holding the keyboard in this review — its comment field,
@@ -214,12 +238,13 @@ impl ReviewView {
             ferrite_core::transcript::language_for_path(std::path::Path::new(&edit.path));
         let tokens = ferrite_core::transcript::highlight_tokens(language, &body);
         let highlights = crate::pane::code(&body, Some(tokens.as_slice()));
+        let (cell, line_h, number_w) = (self.grid.cell(), self.grid.line, self.number_w());
         let number = |number: Option<u32>| {
             crate::components::tabular(
                 div()
                     .flex_shrink_0()
-                    .w(px(NUMBER_W))
-                    .pr(px(CH))
+                    .w(px(number_w))
+                    .pr(px(cell))
                     .text_right()
                     .text_color(rgb(if picked { ACCENT } else { TEXT_MUTED }))
                     .children(number.map(|number| SharedString::from(number.to_string()))),
@@ -227,9 +252,10 @@ impl ReviewView {
         };
         let row = div()
             .id(("review-line", at))
+            .debug_selector(move || format!("review-line-{at}"))
             .flex()
             .w_full()
-            .h(px(LH_UI))
+            .h(px(line_h))
             .whitespace_nowrap()
             .cursor_pointer()
             .map(|row| match (picked, ink.wash) {
@@ -242,7 +268,7 @@ impl ReviewView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .w(px(2. * CH))
+                    .w(px(2. * cell))
                     .text_color(rgb(ink.sign_color))
                     .child(ink.sign),
             )
@@ -260,7 +286,7 @@ impl ReviewView {
                         .id(("review-comment-on", at))
                         .debug_selector(|| "review-add-comment".into())
                         .flex_shrink_0()
-                        .px(px(CH))
+                        .px(px(cell))
                         .text_color(rgb(ACCENT))
                         .hover_control(format!("review-comment-on-{at}"))
                         .child("+ comment")
@@ -274,15 +300,16 @@ impl ReviewView {
                 window.focus(&view.focus, cx);
                 view.pick(at, event.modifiers().shift, cx);
             }));
-        let mut cell = div().flex().flex_col().w_full();
+        let indent = 2. * number_w + 2. * cell;
+        let mut stack = div().flex().flex_col().w_full();
         if first_of_file {
-            cell = cell.child(
+            stack = stack.child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(LH_UI))
-                    .mt(px(if at == 0 { 0. } else { HALF_ROW }))
-                    .px(px(CH))
+                    .h(px(line_h))
+                    .mt(px(if at == 0 { 0. } else { self.grid.half() }))
+                    .px(px(cell))
                     .whitespace_nowrap()
                     .child(
                         div()
@@ -294,15 +321,18 @@ impl ReviewView {
                             .child(SharedString::from(edit.path.clone())),
                     )
                     .child(crate::components::tabular(
-                        div().flex_shrink_0().pl(px(2. * CH)).child(file_stat(edit)),
+                        div()
+                            .flex_shrink_0()
+                            .pl(px(2. * cell))
+                            .child(file_stat(edit)),
                     )),
             );
         }
         if let Some(hunk) = hunk {
-            cell = cell.child(
+            stack = stack.child(
                 div()
-                    .h(px(LH_UI))
-                    .pl(px(2. * NUMBER_W + 2. * CH))
+                    .h(px(line_h))
+                    .pl(px(indent))
                     .truncate()
                     .text_color(rgb(TEXT_MUTED))
                     .child(SharedString::from(hunk.section.clone().unwrap_or_else(
@@ -310,23 +340,22 @@ impl ReviewView {
                     ))),
             );
         }
-        cell = cell.child(row);
-        for comment in comments
-            .iter()
-            .filter(|comment| comment.ends_at(&edit.path, line))
-        {
-            cell = cell.child(self.comment_row(comment, cx));
+        stack = stack.child(row);
+        for (index, comment) in comments.iter().enumerate() {
+            if comment.ends_at(&edit.path, line) {
+                stack = stack.child(self.comment_row(index, comment, cx));
+            }
         }
         if let Some(editor) = self.editor.as_ref().filter(|_| last_picked) {
-            cell = cell.child(
+            stack = stack.child(
                 div()
                     .debug_selector(|| "review-comment-field".into())
                     .flex()
                     .items_center()
                     .gap(px(SPACE_2))
-                    .py(px(HALF_ROW / 2.))
-                    .pl(px(2. * NUMBER_W + 2. * CH))
-                    .pr(px(CH))
+                    .py(px(self.grid.half() / 2.))
+                    .pl(px(indent))
+                    .pr(px(cell))
                     .bg(paint::BAND2)
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
@@ -337,21 +366,27 @@ impl ReviewView {
                     ),
             );
         }
-        cell.into_any_element()
+        stack.into_any_element()
     }
 
     /// A comment under the line it ends on: its words, quiet, with a `×`
-    /// that takes it off the Composer's shelf.
-    fn comment_row(&self, comment: &review::Comment, cx: &mut Context<Self>) -> AnyElement {
+    /// that takes it off the Composer's shelf. `index` is its place there.
+    fn comment_row(
+        &self,
+        index: usize,
+        comment: &review::Comment,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let cell = self.grid.cell();
         let composer = self.composer.clone();
         let removed = comment.clone();
         div()
             .debug_selector(|| "review-comment".into())
             .flex()
             .items_center()
-            .min_h(px(LH_UI))
-            .pl(px(2. * NUMBER_W + 2. * CH))
-            .pr(px(CH))
+            .min_h(px(self.grid.line))
+            .pl(px(2. * self.number_w() + 2. * cell))
+            .pr(px(cell))
             .bg(paint::BAND2)
             .child(
                 div()
@@ -362,13 +397,9 @@ impl ReviewView {
             )
             .child(
                 div()
-                    .id(SharedString::from(format!(
-                        "review-uncomment-{}-{}",
-                        comment.location(),
-                        comment.text.len()
-                    )))
+                    .id(("review-uncomment", index))
                     .flex_shrink_0()
-                    .px(px(CH))
+                    .px(px(cell))
                     .text_color(rgb(TEXT_MUTED))
                     .cursor_pointer()
                     .child("\u{d7}")
@@ -447,6 +478,8 @@ impl Render for ReviewView {
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
                 .font_family(FONT_CODE)
+                .text_size(px(self.grid.size))
+                .line_height(px(self.grid.line))
                 .children((0..self.lines.len()).map(|at| self.line_row(at, &comments, cx)))
                 .into_any_element(),
         };
@@ -507,7 +540,14 @@ mod tests {
         });
         let window = cx.add_window(|_, cx| {
             let composer = cx.new(Composer::new);
-            let review = cx.new(|cx| ReviewView::new(composer, Scope::LastTurn, cx));
+            let review = cx.new(|cx| {
+                ReviewView::new(
+                    composer,
+                    Scope::LastTurn,
+                    ferrite_core::settings::ReadingSize::STANDARD,
+                    cx,
+                )
+            });
             Host(review)
         });
         let cx = &mut gpui::VisualTestContext::from_window(*window, cx);

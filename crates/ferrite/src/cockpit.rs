@@ -1888,7 +1888,7 @@ impl CockpitView {
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
                     pane.composer.update(cx, |composer, cx| {
                         let (current, mut files) =
-                            ferrite_core::prompt_files::split(composer.prompt());
+                            ferrite_core::prompt_files::split(composer.editable());
                         let (held, restored_files) = ferrite_core::prompt_files::split(held);
                         let text = if current.is_empty() {
                             held
@@ -4144,6 +4144,10 @@ impl CockpitView {
             }
             self.refresh_names();
         }
+        let reading = self.prefs.settings.reading_size;
+        for review in self.panes.iter().filter_map(|pane| pane.preview.review()) {
+            review.update(cx, |review, cx| review.set_reading(reading, cx));
+        }
         cx.notify();
     }
 
@@ -6014,7 +6018,7 @@ impl CockpitView {
             return;
         }
         let composer = self.panes[index].composer.clone();
-        let draft = composer.read(cx).prompt();
+        let draft = composer.read(cx).editable();
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
             return;
         };

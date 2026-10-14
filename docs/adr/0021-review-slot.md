@@ -16,15 +16,18 @@ the branch against `main`, read-only, in the reader slot.
 1. **The compare becomes the Review; one slot, no new surface.** The
    Review is a view (`review.rs`, `ReviewView`) that takes the reader slot
    beside its Pane (`attachment_preview::Document::review`), laid out,
-   dragged and closed like any reader (F-14). ⌘⇧D opens it at the branch
-   scope; the palette's `review changes` and the files-changed card's
+   dragged and closed like any reader (F-14). ⌘⇧D (`review branch`, in the
+   palette and the menu — no longer `compare with main`, since the base is
+   the Project's default branch) opens it at the branch scope; the palette's `review changes` and the files-changed card's
    `review` open it at the uncommitted scope. A Review already open beside
    the Pane switches scope rather than opening another.
 2. **Three scopes, read by the cockpit.** *Uncommitted* is `git diff HEAD`
    plus every untracked, unignored file as all-new (`git diff --no-index
    /dev/null <file>`); *branch* is `git diff <base>...HEAD`, the base being
    the Project's default branch (else `main`). Both read off the UI thread,
-   a read that lands after the operator moved on is dropped. *Last turn*
+   a read that lands after the operator moved on is dropped. A file with
+   no hunks (a binary one) is left out of both, so the bar counts only
+   what the rows show; each untracked file costs one `git diff` process. *Last turn*
    reads the diffs Main's tool results already carry after the latest
    prompt (`ferrite_core::review::last_turn`), one entry per edit and never
    merged, because each edit numbers the file as it stood then. The Review
@@ -33,7 +36,9 @@ the branch against `main`, read-only, in the reader slot.
    unified rows (the transcript's signs, washes and syntax colours) so each
    diff line is a pick target: click or ↑↓ picks, shift-click or ⇧↑↓
    stretches the pick within one file. The split layout the compare had on
-   wide slots goes: a comment needs one line to hang under.
+   wide slots goes: a comment needs one line to hang under. The rows read
+   at the operator's reading size, as the compare did (and every diff in a
+   transcript does); the bar and footer are chrome, at the UI size.
 4. **Comments live on the Composer.** `c`, ⏎ or `+ comment` opens a field
    under the pick; ⏎ adds the comment to the Pane's Composer, where the
    comments wait as one attachment chip (`N review comments`, × drops them)
@@ -43,7 +48,10 @@ the branch against `main`, read-only, in the reader slot.
    `Review comments on your changes:`, then per comment its location
    (`path:12-14`, old-side numbers marked `(removed)`), its lines in a diff
    fence and what was said. Every Provider reads the same text; queueing,
-   history and handover need nothing new.
+   history and handover need nothing new. Round trips that put text back
+   on the line (history recall, a held prompt merged back) read only the
+   line and its files (`Composer::editable`), so the comments stay on the
+   shelf, once, for whichever prompt goes next.
 5. **Keys in their own context.** The Review's keys are bound in `Review
    && !Composer` (never while its field takes text), the field's ⏎/esc in
    `ReviewComment`, all after the bare rows they shadow. They are listed in
@@ -57,5 +65,9 @@ the branch against `main`, read-only, in the reader slot.
   next send; a recalled prompt shows them as the text that was sent.
 - A large branch diff renders every row (as the compare did); virtualising
   would need uniform rows, which the inline comments break.
+- A comment holds a path, a numbered range and the quoted lines, not the
+  scope or edit it was made in. It hangs under any row of that path whose
+  number and text match its last line — in another scope, or under another
+  edit of the same file in the last turn, the same line can show it too.
 - Last turn sees Main's edits only; a Subagent's edits show under the
   uncommitted scope.

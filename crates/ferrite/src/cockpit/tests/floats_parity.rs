@@ -106,12 +106,13 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     assert_eq!(*fake.interrupts.borrow(), 0);
 }
 
-/// FL-3 / FL-4: `par` keeps exactly `park thread`, `show parked` and
-/// `compare with main` among the commands, in the table's order, and the
-/// parked Thread among the Threads, its name lit from the start.
+/// FL-3 / FL-4: `par` keeps exactly `park thread` and `show parked` among
+/// the commands, in the table's order, and the parked Thread among the
+/// Threads, its name lit from the start. (`compare with main`, once a
+/// third survivor, is `review branch` since ADR 0021.)
 #[gpui::test]
 #[allow(clippy::single_range_in_vec_init)]
-fn par_keeps_three_commands_and_the_parked_thread(cx: &mut TestAppContext) {
+fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-par", 3);
     let threads = core.threads();
     core.rename_thread(threads[2], "Release notes").unwrap();
@@ -132,10 +133,7 @@ fn par_keeps_three_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .filter(|row| row.section == Section::Commands)
             .map(|row| row.name.as_ref())
             .collect();
-        assert_eq!(
-            commands,
-            ["park thread", "show parked", "compare with main"]
-        );
+        assert_eq!(commands, ["park thread", "show parked"]);
         let threads: Vec<&str> = survivors
             .iter()
             .filter(|row| row.section == Section::Threads)

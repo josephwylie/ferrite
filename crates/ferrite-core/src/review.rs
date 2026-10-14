@@ -254,14 +254,17 @@ impl Comment {
     }
 
     /// Whether this comment hangs under `line` of a review of `path`: the
-    /// line its range ends on, in its own numbering.
+    /// line its range ends on, in its own numbering, reading as it did.
+    /// A comment carries no scope or edit, so the same path, number and
+    /// text elsewhere (another edit of the file in the last turn) takes it
+    /// too; the text keeps it off every other line that shares the number.
     pub fn ends_at(&self, path: &str, line: &Line) -> bool {
         let number = match self.side {
             Side::New => line.new,
             Side::Old if line.new.is_none() => line.old,
             Side::Old => None,
         };
-        self.path == path && number == Some(self.end)
+        self.path == path && number == Some(self.end) && self.quote.last() == Some(&line.text)
     }
 
     /// `src/a.rs:12-14`, or `src/a.rs:30 (removed)` for old-side lines.
@@ -410,6 +413,12 @@ mod tests {
         assert_eq!(old.location(), "src/b.rs:4 (removed)");
         assert_eq!(old.text, "keep it");
         assert!(old.ends_at("src/b.rs", &lines[6]));
+        // Another edit numbering the file differently: same number, other text.
+        let elsewhere = Line {
+            text: "+other".into(),
+            ..lines[3].clone()
+        };
+        assert!(!new.ends_at("src/a.rs", &elsewhere));
         assert!(Comment::on(&edits, &lines, Selection::at(0), "  ").is_none());
     }
 

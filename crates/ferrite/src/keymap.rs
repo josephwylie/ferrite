@@ -235,9 +235,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // ⌘K: the command palette — every Thread, then every command.
         (with_primary("k"), "palette::Toggle", None),
         // The palette's two keyed commands: the parked Threads, and the
-        // focused Thread's diff against main in a reader beside it.
+        // focused Thread's branch in the Review beside it.
         (with_primary("shift-p"), "palette::ShowParked", None),
-        (with_primary("shift-d"), "palette::CompareWithMain", None),
+        (with_primary("shift-d"), "palette::ReviewBranch", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -436,7 +436,7 @@ mod tests {
             ("cockpit::NewGroup", "shift-g"),
             ("palette::Toggle", "k"),
             ("palette::ShowParked", "shift-p"),
-            ("palette::CompareWithMain", "shift-d"),
+            ("palette::ReviewBranch", "shift-d"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),

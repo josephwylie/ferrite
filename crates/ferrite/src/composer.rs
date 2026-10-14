@@ -139,7 +139,7 @@ pub struct Composer {
     line: Line,
     files: Vec<PathBuf>,
     /// Review comments gathered from the reader beside this Pane (ADR
-    /// 0017): one attachment on the shelf, sent after the line's text.
+    /// 0021): one attachment on the shelf, sent after the line's text.
     review: Vec<review::Comment>,
     /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
     /// any occurrence still standing in the text paints as the comp's
@@ -382,7 +382,8 @@ impl Composer {
         }
     }
 
-    /// Put a line back into the Composer, ready to edit at its end.
+    /// Put a line back into the Composer, ready to edit at its end. The
+    /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
         let (text, files) = prompt_files::split(text);
         self.files = files;
@@ -409,6 +410,13 @@ impl Composer {
 
     pub fn prompt(&self) -> String {
         prompt_files::compose(&review::attach(self.line.text(), &self.review), &self.files)
+    }
+
+    /// The line and its files without the review comments — what `set`
+    /// takes back, so a round trip through history or a merged held
+    /// prompt neither repeats the comments nor writes them into the line.
+    pub fn editable(&self) -> String {
+        prompt_files::compose(self.line.text(), &self.files)
     }
 
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {

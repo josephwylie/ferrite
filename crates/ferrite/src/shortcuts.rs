@@ -70,7 +70,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::CloseThread" => Row(Threads, "park thread"),
         "cockpit::ReopenThread" => Row(Threads, "reopen last"),
         "palette::ShowParked" => Row(Threads, "show parked"),
-        "palette::CompareWithMain" => Row(Threads, "compare with main"),
+        "palette::ReviewBranch" => Row(Threads, "review branch"),
         "cockpit::NextDecision" => Row(Threads, "next request"),
         "cockpit::ToggleNotifications" => Row(Threads, "notifications"),
         "cockpit::OpenSettings" => Row(Threads, "settings"),
