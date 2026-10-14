@@ -223,10 +223,11 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "cockpit::ToggleFullscreen",
             None,
         ),
-        // Find in the focused Pane's transcript.
+        // Find in the focused Pane's transcript (or its reader): the
+        // platform's find key, so fullscreen moved off it.
         (with_primary("f"), "find::Open", None),
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
-        // muscle memory (cmd-t/w/f are spoken for by #20).
+        // muscle memory (cmd-t/w are spoken for by #20, cmd-f by find).
         (with_primary("b"), "cockpit::ToggleNav", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),

@@ -480,7 +480,8 @@ impl Element for InlineFlow {
                                 .child(
                                     gpui::canvas(
                                         |_, _, _| {},
-                                        move |bounds, _, _window, cx| {
+                                        move |bounds, _, window, cx| {
+                                            paint_card_find(&state, bounds, window, cx);
                                             let projection = InlineSelectionProjection::atomic(
                                                 state.clone(),
                                                 bounds,
@@ -575,6 +576,43 @@ impl Element for InlineFlow {
             element.paint(window, cx);
         }
     }
+}
+
+/// Ferrite: a find's occurrences in an inline card's label (its slice of
+/// the source run) wash the whole card, over it: the card paints its own
+/// ground. The label counts like the text around it, so it is marked too.
+fn paint_card_find(
+    state: &Arc<Mutex<InlineState>>,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &App,
+) {
+    let Some(view) = GlobalState::global(cx).text_view_state() else {
+        return;
+    };
+    let view = view.read(cx);
+    if view.find.is_none() {
+        return;
+    }
+    let (root, offset) = InlineState::source_metadata(state);
+    let Some(len) = state.lock().ok().map(|state| state.text.len()) else {
+        return;
+    };
+    let Some(source) = root
+        .upgrade()
+        .and_then(|root| root.try_lock().ok().map(|root| root.text.clone()))
+    else {
+        return;
+    };
+    super::find::paint_marks(
+        view,
+        root.as_ptr() as usize,
+        &source,
+        offset..offset + len,
+        bounds,
+        |_| vec![bounds],
+        window,
+    );
 }
 
 impl From<&InlineFlowItem> for MeasureItem {

@@ -287,6 +287,17 @@ fn find_in_a_code_reader_centres_its_line(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.panes[0].preview.document().is_some()),
         "and keeps the reader"
     );
+    cx.simulate_input("x");
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .text()
+            .to_string()),
+        "x",
+        "the keyboard goes back to the Pane"
+    );
 }
 
 /// A rendered Markdown document: the occurrence is marked in its text and
@@ -322,4 +333,160 @@ fn find_in_a_markdown_reader_scrolls_to_the_occurrence(cx: &mut TestAppContext) 
         painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
         "the occurrence is in view: {painted:?} in {shown:?}"
     );
+}
+
+/// Open `source` as `name` in a Markdown reader beside the Solo Pane, the
+/// reader pressed so ⌘F finds there.
+fn markdown_beside(
+    view: &Entity<CockpitView>,
+    dir: &std::path::Path,
+    source: &str,
+    cx: &mut gpui::VisualTestContext,
+) {
+    std::fs::create_dir_all(dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(&file, source).unwrap();
+    read_beside(view, file, cx);
+}
+
+fn settle_reader(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    for _ in 0..8 {
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+    }
+}
+
+fn reader_shows(
+    view: &Entity<CockpitView>,
+    painted: gpui::Bounds<gpui::Pixels>,
+    cx: &mut gpui::VisualTestContext,
+) -> bool {
+    let shown = view.read_with(cx, |view, _| view.panes[0].reader_markdown_scroll.bounds());
+    painted.top() >= shown.top() && painted.bottom() <= shown.bottom()
+}
+
+/// A new query in a Markdown reader starts on the first occurrence in view,
+/// as the transcript and a file's lines do — not at the document's head.
+#[gpui::test]
+fn find_in_a_markdown_reader_starts_in_view(cx: &mut TestAppContext) {
+    let pad = "A paragraph that only pads the document.\n\n".repeat(60);
+    let source = format!(
+        "The first needle opens it.\n\n{pad}A marker: the second needle.\n\n{pad}The last needle.\n"
+    );
+    let (core, _fake) = cockpit("find-markdown-in-view", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    markdown_beside(&view, &scratch("find-markdown-in-view"), &source, cx);
+    open(cx);
+    // Scroll the middle of the document into view by finding it.
+    cx.simulate_input("marker");
+    settle_reader(&view, cx);
+    let painted = reader_state(&view, cx).unwrap().1.expect("painted");
+    assert!(reader_shows(&view, painted, cx));
+
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("needle");
+    settle_reader(&view, cx);
+    let (count, painted) = reader_state(&view, cx).unwrap();
+    assert_eq!(count.as_deref(), Some("2/3"), "the needle in view");
+    assert!(reader_shows(&view, painted.expect("painted"), cx));
+}
+
+/// The count is what the view marks: a query across two table cells is no
+/// occurrence (no run paints it), and one in an inline file card's label is
+/// (the card is washed), so the bar stays on the occurrence it names.
+#[gpui::test]
+fn find_counts_what_a_markdown_view_marks(cx: &mut TestAppContext) {
+    let dir = scratch("find-markdown-runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("card-label.md"), "linked\n").unwrap();
+    let pad = "A paragraph that only pads the document.\n\n".repeat(60);
+    let source = format!(
+        "One alpha beta here.\n\n| x | y |\n|---|---|\n| alpha | beta |\n\n\
+         See [card-label.md](card-label.md) beside it.\n\n{pad}Last alpha beta.\n"
+    );
+    let (core, _fake) = cockpit("find-markdown-runs", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    markdown_beside(&view, &dir, &source, cx);
+    open(cx);
+    cx.simulate_input("alpha beta");
+    settle_reader(&view, cx);
+    assert_eq!(reader_state(&view, cx).unwrap().0.as_deref(), Some("1/2"));
+    cx.simulate_keystrokes("enter");
+    settle_reader(&view, cx);
+    let (count, painted) = reader_state(&view, cx).unwrap();
+    assert_eq!(count.as_deref(), Some("2/2"));
+    assert!(
+        reader_shows(&view, painted.expect("the last occurrence painted"), cx),
+        "the bar's occurrence is the one brought into view"
+    );
+
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("label");
+    settle_reader(&view, cx);
+    let (count, painted) = reader_state(&view, cx).unwrap();
+    assert_eq!(count.as_deref(), Some("1/1"));
+    assert!(painted.is_some(), "the card reports where it painted");
+}
+
+/// The reader's bar closes with the reader, however it closes: the same
+/// file opened again has no bar.
+#[gpui::test]
+fn the_reader_bar_closes_with_its_reader(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("find-reader-closes", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let dir = scratch("find-reader-closes");
+    markdown_beside(&view, &dir, "A needle.\n", cx);
+    open(cx);
+    cx.simulate_input("needle");
+    tick(cx);
+    assert!(reader_state(&view, cx).is_some());
+    let close = cx
+        .debug_bounds("close-markdown-reader")
+        .expect("the reader's ×");
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(reader_state(&view, cx).is_none(), "the bar closed with it");
+    read_beside(&view, dir.join("notes.md"), cx);
+    assert!(reader_state(&view, cx).is_none());
+    assert!(cx.debug_bounds("find-bar").is_none(), "no old bar returns");
+}
+
+/// A Pane narrower than the bar narrows the bar's query: the bar stays
+/// inside the text it searches, its count whole.
+#[gpui::test]
+fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("find-narrow", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(600.), px(700.)));
+    say(&fake, "A needle in a narrow Pane.\n\n");
+    tick(cx);
+    let shown = viewport(&view, cx);
+    assert!(
+        shown.size.width < px(crate::theme::FIND_W + crate::theme::TX_PAD_R),
+        "narrower than the bar: {shown:?}"
+    );
+    open(cx);
+    cx.simulate_input("needle");
+    tick(cx);
+    let bar = cx.debug_bounds("find-bar").expect("the bar");
+    let count = cx.debug_bounds("find-count").expect("its count");
+    assert!(
+        bar.left() >= shown.left() && bar.right() <= shown.right(),
+        "the bar fits: {bar:?} in {shown:?}"
+    );
+    assert!(count.right() <= bar.right(), "the count is whole");
 }

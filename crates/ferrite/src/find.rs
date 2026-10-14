@@ -10,15 +10,12 @@
 //! what is searched: it hands the bar its text as units, in reading order,
 //! and maps the hit the bar is on back to where that text is drawn.
 
-use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
 
+use gpui::base::text::{FindReport, TextFind};
 use gpui::prelude::*;
-use gpui::{
-    div, px, rgb, rgba, App, Bounds, Context, Div, Entity, HighlightStyle, Pixels, SharedString,
-    Window,
-};
+use gpui::{div, px, rgb, rgba, App, Context, Div, Entity, HighlightStyle, SharedString, Window};
 
 use crate::composer::{Composer, Edited, Role};
 use crate::theme::*;
@@ -36,8 +33,9 @@ pub(crate) const KEY_CONTEXT: &str = "Find";
 /// not drawn.
 pub(crate) const REVEAL_FRAMES: u8 = 4;
 
-/// What the line asks for. Smart case: a capital letter anywhere makes
-/// the whole query match case.
+/// What the line asks for: its first line (the text a find counts in puts
+/// every run on a line of its own, so a query must not cross one). Smart
+/// case: a capital letter anywhere makes the whole query match case.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Query {
     pub needle: SharedString,
@@ -46,6 +44,7 @@ pub(crate) struct Query {
 
 impl Query {
     pub(crate) fn new(text: &str) -> Self {
+        let text = text.lines().next().unwrap_or_default();
         Self {
             needle: text.to_string().into(),
             case_sensitive: text.chars().any(char::is_uppercase),
@@ -60,22 +59,22 @@ impl Query {
 
 /// The marks a native text paints for `query`: every occurrence, and its
 /// `active`th (counted in the text) more strongly, reporting where it
-/// painted into `revealed`. None before a query.
+/// painted into `report`. None before a query.
 pub(crate) fn marks(
     query: &Query,
     active: Option<usize>,
-    revealed: &Rc<Cell<Option<Bounds<Pixels>>>>,
-) -> Option<gpui::base::text::TextFind> {
+    report: &Rc<FindReport>,
+) -> Option<TextFind> {
     if query.needle.is_empty() {
         return None;
     }
-    Some(gpui::base::text::TextFind {
+    Some(TextFind {
         needle: query.needle.clone(),
         case_sensitive: query.case_sensitive,
         active,
         wash: rgba(FIND_WASH).into(),
         active_wash: rgba(FIND_ACTIVE_WASH).into(),
-        revealed: revealed.clone(),
+        report: report.clone(),
     })
 }
 
@@ -124,13 +123,14 @@ pub(crate) struct Hit {
     pub ordinal: usize,
 }
 
-/// The bar: its line, the query last searched, what it found, and the hit
-/// it is on.
+/// The bar: its line, the query last searched, what it found, the hit it
+/// is on, and what the text it marks reports back.
 pub(crate) struct Find {
     field: Entity<Composer>,
     query: Query,
     hits: Vec<Hit>,
     active: Option<usize>,
+    report: Rc<FindReport>,
     _edited: gpui::Subscription,
 }
 
@@ -152,6 +152,7 @@ impl Find {
             query: Query::default(),
             hits: Vec::new(),
             active: None,
+            report: Rc::default(),
             _edited: subscription,
         }
     }
@@ -179,6 +180,17 @@ impl Find {
 
     pub(crate) fn active(&self) -> Option<&Hit> {
         self.hits.get(self.active?)
+    }
+
+    pub(crate) fn report(&self) -> &Rc<FindReport> {
+        &self.report
+    }
+
+    /// Put the bar on hit `at`, when there is one.
+    pub(crate) fn go_to(&mut self, at: usize) {
+        if at < self.hits.len() {
+            self.active = Some(at);
+        }
     }
 
     /// Search `units` (in reading order) for what the line holds. A new
@@ -229,13 +241,9 @@ impl Find {
     }
 
     /// The marks the native text holding `unit`'s text paints.
-    pub(crate) fn marks(
-        &self,
-        unit: usize,
-        revealed: &Rc<Cell<Option<Bounds<Pixels>>>>,
-    ) -> Option<gpui::base::text::TextFind> {
+    pub(crate) fn marks(&self, unit: usize) -> Option<TextFind> {
         let active = self.active().filter(|hit| hit.unit == unit);
-        marks(&self.query, active.map(|hit| hit.ordinal), revealed)
+        marks(&self.query, active.map(|hit| hit.ordinal), &self.report)
     }
 
     /// What the count reads: `3/17`, `no matches`, or nothing before a
@@ -252,11 +260,14 @@ impl Find {
 
     /// The bar: the palette's input row as a float of its own — `❯` in
     /// the accent, the query in `TEXT_STRONG`, the count muted at the
-    /// right. The host places it.
+    /// right — hung `FLOAT_OFFSET` under the top right of its host, the
+    /// text it searches (`relative`). A host narrower than the bar narrows
+    /// the query, never the count.
     pub(crate) fn bar(&self) -> Div {
-        crate::menu::float()
+        let bar = crate::menu::float()
             .debug_selector(|| "find-bar".into())
             .w(px(FIND_W))
+            .min_w_0()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -290,7 +301,15 @@ impl Find {
                             .text_color(rgb(TEXT_MUTED))
                             .child(count)
                     })),
-            )
+            );
+        div()
+            .absolute()
+            .top(px(FLOAT_OFFSET))
+            .left(px(TX_PAD_L))
+            .right(px(TX_PAD_R))
+            .flex()
+            .justify_end()
+            .child(bar)
     }
 
     /// Put `text` on the line (what a test types).
@@ -370,11 +389,11 @@ mod tests {
             find.type_query("BETA", cx);
             find.search(units, 0, cx);
             assert_eq!(find.count().as_deref(), Some("no matches"));
-            assert!(find.marks(0, &Rc::default()).is_some(), "still washes");
+            assert!(find.marks(0).is_some(), "still washes");
             find.type_query("", cx);
             find.search(units, 0, cx);
             assert_eq!(find.count(), None);
-            assert!(find.marks(0, &Rc::default()).is_none());
+            assert!(find.marks(0).is_none());
         });
     }
 }

@@ -16,9 +16,7 @@
 //! a member.
 
 use super::*;
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 /// Find in the reader (⌘F when the reader took the last press or holds the
 /// keyboard; the bar is the transcript's, `crate::find`): a file's lines, or
@@ -26,13 +24,14 @@ use std::rc::Rc;
 /// finds in the transcript.
 pub(crate) struct ReaderFind {
     bar: crate::find::Find,
-    /// The document it searches; another one opening in the reader leaves
-    /// it behind.
+    /// The document it searches: the bar closes with it, and another one
+    /// opening in the reader closes it too (`tend_reader_finds`).
     path: PathBuf,
-    /// Where the active occurrence of a Markdown document painted.
-    revealed: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
     /// Frames left to settle a Markdown occurrence into view.
-    reveal: Cell<u8>,
+    reveal: u8,
+    /// A new query in a Markdown document, waiting for its paint to say
+    /// which occurrence is the first in view.
+    start_in_view: bool,
 }
 
 impl ReaderFind {
@@ -46,7 +45,7 @@ impl ReaderFind {
 impl ReaderFind {
     /// What the bar reads, and where a Markdown occurrence last painted.
     pub(crate) fn state(&self) -> (Option<SharedString>, Option<gpui::Bounds<Pixels>>) {
-        (self.bar.count(), self.revealed.get())
+        (self.bar.count(), self.bar.report().revealed.get())
     }
 }
 
@@ -252,8 +251,8 @@ impl CockpitView {
                     view.refind_reader(owner, cx)
                 }),
                 path: document.path,
-                revealed: Rc::default(),
-                reveal: Cell::new(0),
+                reveal: 0,
+                start_in_view: false,
             });
             cx.notify();
         }
@@ -264,7 +263,7 @@ impl CockpitView {
     }
 
     /// Search the reader's document again (its line changed): a new query
-    /// starts on its first occurrence from the top line in view.
+    /// starts on its first occurrence in view, or the first below it.
     fn refind_reader(&mut self, owner: PaneIdentity, cx: &mut Context<Self>) {
         let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) else {
             return;
@@ -274,7 +273,7 @@ impl CockpitView {
             return;
         };
         let changed = if renders_markdown(&document) {
-            let text = gpui::base::text::TextView::markdown_plain_text(&document.source);
+            let text = gpui::base::text::TextView::markdown_find_text(&document.source);
             find.bar.search([text.as_str()], 0, cx)
         } else {
             let top = -pane.reader_scroll.0.borrow().base_handle.offset().y;
@@ -282,7 +281,7 @@ impl CockpitView {
             find.bar.search(document.source.lines(), from, cx)
         };
         if changed {
-            reveal_in_reader(pane, &document);
+            reveal_in_reader(pane, &document, true);
         }
         cx.notify();
     }
@@ -300,16 +299,45 @@ impl CockpitView {
             .as_mut()
             .is_some_and(|find| find.bar.step(forward).is_some())
         {
-            reveal_in_reader(pane, &document);
+            reveal_in_reader(pane, &document, false);
             cx.notify();
         }
     }
 
-    /// Esc in the reader's bar: it closes, the reader stays.
-    fn close_reader_find(&mut self, owner: PaneIdentity, cx: &mut Context<Self>) {
+    /// Esc in the reader's bar: it closes, the reader stays, and the
+    /// keyboard goes back to the Pane. The line held it inside the reader,
+    /// where the focus snap (`render`) leaves the reader's own text alone,
+    /// so it is let go first.
+    fn close_reader_find(
+        &mut self,
+        owner: PaneIdentity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) {
             pane.reader_find = None;
+            window.blur(cx);
             cx.notify();
+        }
+    }
+
+    /// Each frame, before the board draws: a reader's bar closes with its
+    /// document (esc, its ×, another file opening), and a Markdown reveal
+    /// that is due settles.
+    pub(super) fn tend_reader_finds(&mut self, window: &mut Window) {
+        for pane in &mut self.panes {
+            let Some(find) = &mut pane.reader_find else {
+                continue;
+            };
+            if pane
+                .preview
+                .document()
+                .is_none_or(|document| document.path != find.path)
+            {
+                pane.reader_find = None;
+                continue;
+            }
+            settle_markdown_found(find, &pane.reader_markdown_scroll, window);
         }
     }
 
@@ -333,19 +361,12 @@ impl CockpitView {
         &self,
         owner: PaneIdentity,
         leaf: ThreadId,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let index = self.index_of(owner)?;
         let pane = &self.panes[index];
         let document = pane.preview.document()?;
-        let find = pane
-            .reader_find
-            .as_ref()
-            .filter(|find| find.path == document.path);
-        if let Some(find) = find {
-            settle_markdown_found(find, &pane.reader_markdown_scroll, window);
-        }
+        let find = pane.reader_find.as_ref();
         let face = GhostFace {
             title: document.title.clone().into(),
             detail: Some(SharedString::from(document.kind())),
@@ -367,7 +388,7 @@ impl CockpitView {
             None if renders_markdown(&document) => {
                 pane.document_rich
                     .file_context(document.path.parent(), &pane.preview);
-                let marks = find.and_then(|find| find.bar.marks(0, &find.revealed));
+                let marks = find.and_then(|find| find.bar.marks(0));
                 div()
                     .id(("markdown-reader-scroll", leaf.get() as usize))
                     .flex_1()
@@ -400,13 +421,7 @@ impl CockpitView {
             .min_w_0()
             .min_h_0()
             .child(body)
-            .children(find.map(|find| {
-                div()
-                    .absolute()
-                    .top(px(crate::theme::FLOAT_OFFSET))
-                    .right(px(crate::theme::TX_PAD_R))
-                    .child(find.bar.bar())
-            }))
+            .children(find.map(|find| find.bar.bar()))
             .into_any_element();
         let preview = pane.preview.clone();
         let slot = pane
@@ -423,9 +438,11 @@ impl CockpitView {
             .on_action(cx.listener(move |view, _: &crate::find::Previous, _, cx| {
                 view.step_reader_find(owner, false, cx)
             }))
-            .on_action(cx.listener(move |view, _: &crate::find::Close, _, cx| {
-                view.close_reader_find(owner, cx)
-            }))
+            .on_action(
+                cx.listener(move |view, _: &crate::find::Close, window, cx| {
+                    view.close_reader_find(owner, window, cx)
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -544,39 +561,62 @@ fn numbered_lines(
 
 /// Bring the reader's active occurrence into view: a file's line centred
 /// (the list scrolls itself), or a Markdown occurrence once it has painted
-/// (`settle_markdown_found`).
-fn reveal_in_reader(pane: &PaneView, document: &crate::attachment_preview::Document) {
-    let Some(find) = &pane.reader_find else {
+/// (`settle_markdown_found`). A new query (`start_in_view`) in a Markdown
+/// document is on its first occurrence until that paint says which is the
+/// first in view.
+fn reveal_in_reader(
+    pane: &mut PaneView,
+    document: &crate::attachment_preview::Document,
+    start_in_view: bool,
+) {
+    let Some(find) = &mut pane.reader_find else {
         return;
     };
-    let Some(hit) = find.bar.active() else {
+    let Some(hit) = find.bar.active().copied() else {
         return;
     };
     if renders_markdown(document) {
-        find.revealed.set(None);
-        find.reveal.set(crate::find::REVEAL_FRAMES);
+        let report = find.bar.report();
+        report.revealed.set(None);
+        report.ahead.set(None);
+        find.reveal = crate::find::REVEAL_FRAMES;
+        find.start_in_view = start_in_view;
     } else {
         pane.reader_scroll
             .scroll_to_item(hit.unit, gpui::ScrollStrategy::Center);
     }
 }
 
-/// Each render while a Markdown reveal is due: once the active occurrence
-/// has painted outside the reader's view, scroll it a third of the way
-/// down.
-fn settle_markdown_found(find: &ReaderFind, scroll: &gpui::ScrollHandle, window: &mut Window) {
-    let left = find.reveal.get();
-    if left == 0 {
+/// Each frame while a Markdown reveal is due: once the active occurrence
+/// has painted, a new query moves to the first occurrence in view (or the
+/// first below it) and paints again; then an occurrence outside the
+/// reader's view scrolls a third of the way down.
+fn settle_markdown_found(find: &mut ReaderFind, scroll: &gpui::ScrollHandle, window: &mut Window) {
+    if find.reveal == 0 {
         return;
     }
-    let Some(found) = find.revealed.get() else {
-        find.reveal.set(left - 1);
-        if left > 1 {
+    let report = find.bar.report().clone();
+    let Some(found) = report.revealed.get() else {
+        find.reveal -= 1;
+        if find.reveal > 0 {
             window.request_animation_frame();
         }
         return;
     };
-    find.reveal.set(0);
+    let start = std::mem::take(&mut find.start_in_view);
+    let on = find.bar.active().map(|hit| hit.ordinal);
+    if let Some(ahead) = report
+        .ahead
+        .get()
+        .filter(|ahead| start && Some(*ahead) != on)
+    {
+        find.bar.go_to(ahead);
+        report.revealed.set(None);
+        find.reveal = crate::find::REVEAL_FRAMES;
+        window.request_animation_frame();
+        return;
+    }
+    find.reveal = 0;
     let view = scroll.bounds();
     if found.top() < view.top() || found.bottom() > view.bottom() {
         let goal = view.top() + view.size.height / 3.;

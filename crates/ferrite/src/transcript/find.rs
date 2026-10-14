@@ -4,18 +4,15 @@
 //! texts copy reads (`TextRuns::capture_members`), each with its row, as
 //! drawn — a folded call's output is not searched, as it is not shown. A
 //! hit off screen is brought in by scrolling to its row; once its text has
-//! painted, the active occurrence reports where (`TextFind::revealed`) and
+//! painted, the active occurrence reports where (`FindReport::revealed`) and
 //! the view settles it a third of the way down, clear of the pinned band.
 
-use std::cell::Cell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
-use gpui::{div, prelude::*, px, AnyElement, Bounds, Context, Pixels, SharedString, Window};
+use gpui::{prelude::*, px, AnyElement, Context, SharedString, Window};
 
 use super::{Runway, TranscriptView};
 use crate::select::FindMarks;
-use crate::theme;
 
 /// The bar's count, its hit's row, and where that occurrence last painted.
 #[cfg(test)]
@@ -23,16 +20,16 @@ use crate::theme;
 pub(crate) struct FindState {
     pub count: Option<SharedString>,
     pub row: Option<usize>,
-    pub painted: Option<Bounds<Pixels>>,
+    pub painted: Option<gpui::Bounds<gpui::Pixels>>,
 }
 
 /// The open bar and what it needs between frames.
 pub(super) struct TranscriptFind {
     bar: crate::find::Find,
-    /// Each text as rendered, by key, kept while its source is unchanged:
-    /// a keystroke parses only what changed.
+    /// Each text as a find counts in it (`RunText::find_text`), by key,
+    /// kept while its source is unchanged: a keystroke parses only what
+    /// changed.
     plain: HashMap<SharedString, (SharedString, String)>,
-    revealed: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Frames left to bring the active hit into view; 0 when none is due.
     reveal: u8,
 }
@@ -44,7 +41,6 @@ impl TranscriptView {
             self.find = Some(TranscriptFind {
                 bar: crate::find::Find::new(cx, |view: &mut Self, cx| view.refind(cx)),
                 plain: HashMap::new(),
-                revealed: Rc::default(),
                 reveal: 0,
             });
             cx.notify();
@@ -88,7 +84,7 @@ impl TranscriptView {
             .map(|(_, text)| {
                 let rendered = match old.remove(&text.key) {
                     Some((source, rendered)) if source == text.source => rendered,
-                    _ => text.plain(),
+                    _ => text.find_text(),
                 };
                 (text.key.clone(), (text.source.clone(), rendered))
             })
@@ -126,7 +122,7 @@ impl TranscriptView {
         let Some(&(row, _)) = find.bar.active().and_then(|hit| self.texts.get(hit.unit)) else {
             return;
         };
-        find.revealed.set(None);
+        find.bar.report().revealed.set(None);
         find.reveal = crate::find::REVEAL_FRAMES;
         if !self.scroll.item_is_visible(row) {
             self.glide = None;
@@ -142,7 +138,7 @@ impl TranscriptView {
         let Some(find) = self.find.as_mut().filter(|find| find.reveal > 0) else {
             return;
         };
-        let Some(found) = find.revealed.get() else {
+        let Some(found) = find.bar.report().revealed.get() else {
             find.reveal -= 1;
             if find.reveal > 0 {
                 window.request_animation_frame();
@@ -167,21 +163,13 @@ impl TranscriptView {
                 let (_, text) = self.texts.get(hit.unit)?;
                 Some((text.key.clone(), hit.ordinal))
             }),
-            revealed: find.revealed.clone(),
+            report: find.bar.report().clone(),
         })
     }
 
-    /// The bar, hung `FLOAT_OFFSET` under the transcript's top right.
+    /// The bar over the transcript (`Find::bar`).
     pub(super) fn find_bar(&self) -> Option<AnyElement> {
-        let find = self.find.as_ref()?;
-        Some(
-            div()
-                .absolute()
-                .top(px(theme::FLOAT_OFFSET))
-                .right(px(theme::TX_PAD_R))
-                .child(find.bar.bar())
-                .into_any_element(),
-        )
+        Some(self.find.as_ref()?.bar.bar().into_any_element())
     }
 
     /// What the bar reads and where its hit is — what the tests read.
@@ -195,7 +183,7 @@ impl TranscriptView {
                 .active()
                 .and_then(|hit| self.texts.get(hit.unit))
                 .map(|(row, _)| *row),
-            painted: find.revealed.get(),
+            painted: find.bar.report().revealed.get(),
         })
     }
 }

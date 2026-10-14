@@ -97,6 +97,9 @@ enum BlockTextKind {
     /// Like `Selected`, but reconstructs Markdown source for the selection
     /// instead of the rendered plain text.
     SelectedSource,
+    /// Ferrite: like `All`, but a table's cells each on a line of their own,
+    /// so every source run is (`TextView::markdown_find_text`).
+    Runs,
 }
 
 impl BlockNode {
@@ -144,6 +147,10 @@ impl BlockNode {
         self.text_by_kind(BlockTextKind::All)
     }
 
+    pub(super) fn find_text(&self) -> String {
+        self.text_by_kind(BlockTextKind::Runs)
+    }
+
     /// The selected text within this block, in `format`.
     ///
     /// [`SelectionFormat::Source`] reconstructs the Markdown source of the
@@ -167,7 +174,7 @@ impl BlockNode {
             }
             BlockNode::Paragraph(paragraph) => {
                 let block_text = match kind {
-                    BlockTextKind::All => paragraph.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => paragraph.text(),
                     BlockTextKind::Selected => paragraph.selected_text(),
                     BlockTextKind::SelectedSource => paragraph.selected_source(),
                 };
@@ -180,7 +187,7 @@ impl BlockNode {
                 level, children, ..
             } => {
                 let block_text = match kind {
-                    BlockTextKind::All => children.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => children.text(),
                     BlockTextKind::Selected => children.selected_text(),
                     BlockTextKind::SelectedSource => children.selected_source(),
                 };
@@ -251,13 +258,18 @@ impl BlockNode {
                         let mut row_texts = vec![];
                         for cell in row.children.iter() {
                             row_texts.push(match kind {
-                                BlockTextKind::All => cell.children.text(),
+                                BlockTextKind::All | BlockTextKind::Runs => cell.children.text(),
                                 // Source is handled above; only Selected reaches here.
                                 _ => cell.children.selected_text(),
                             });
                         }
                         if !row_texts.is_empty() {
-                            block_text.push_str(&row_texts.join(" "));
+                            let gap = if matches!(kind, BlockTextKind::Runs) {
+                                "\n"
+                            } else {
+                                " "
+                            };
+                            block_text.push_str(&row_texts.join(gap));
                             block_text.push('\n');
                         }
                     }
@@ -270,7 +282,7 @@ impl BlockNode {
             }
             BlockNode::CodeBlock(code_block) => {
                 let block_text = match kind {
-                    BlockTextKind::All => code_block.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => code_block.text(),
                     BlockTextKind::Selected => code_block.selected_text(),
                     BlockTextKind::SelectedSource => code_block.selected_source(),
                 };
@@ -280,7 +292,7 @@ impl BlockNode {
                 }
             }
             BlockNode::Custom(node) => {
-                if let BlockTextKind::All = kind {
+                if let BlockTextKind::All | BlockTextKind::Runs = kind {
                     let content = node.as_text();
                     if !content.is_empty() {
                         text.push_str(content);

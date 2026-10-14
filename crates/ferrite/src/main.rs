@@ -623,8 +623,8 @@ mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
-        adopt, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap, load_bindings,
-        revive_launch_threads,
+        adopt, app_menus, demo, dock_launch_dir, find, keep_mouse_cursor_visible, keymap,
+        load_bindings, revive_launch_threads,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -642,6 +642,21 @@ mod tests {
                 );
             }
         });
+    }
+
+    /// The Edit menu finds, as ⌘F does: the menu bar spells the key from
+    /// the same action's binding.
+    #[test]
+    fn the_edit_menu_finds() {
+        let edit = app_menus()
+            .into_iter()
+            .find(|menu| menu.name == "Edit")
+            .expect("an Edit menu");
+        assert!(edit.items.iter().any(|item| matches!(
+            item,
+            gpui::MenuItem::Action { name, action, .. }
+                if name == "Find\u{2026}" && action.partial_eq(&find::Open)
+        )));
     }
 
     #[gpui::test]

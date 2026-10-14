@@ -176,6 +176,15 @@ impl TextView {
             .unwrap_or_else(|_| source.to_string())
     }
 
+    /// Ferrite: the text a find counts in — the plain text with every
+    /// source run on a line of its own (a table's cells too), so a one-line
+    /// needle never spans two runs, as the view's marks never do.
+    pub fn markdown_find_text(source: &str) -> String {
+        crate::text::format::markdown::parse(source, &mut NodeContext::default())
+            .map(|document| document.find_text())
+            .unwrap_or_else(|_| source.to_string())
+    }
+
     /// Create new TextView with managed state.
     pub fn new(state: &Entity<TextViewState>) -> Self {
         Self {

@@ -361,6 +361,10 @@ mod tests {
         assert_eq!(find(Place::Composer, "shortcuts"), "?");
         assert_eq!(find(Place::Composer, "delete word back"), "alt-\u{232b}");
         assert_eq!(find(Place::Transcript, "copy selection"), "cmd-C");
+        assert_eq!(find(Place::Transcript, "find"), "cmd-F");
+        assert_eq!(find(Place::Transcript, "find: next"), "\u{23ce}");
+        assert_eq!(find(Place::Transcript, "find: previous"), "shift-\u{23ce}");
+        assert_eq!(find(Place::Transcript, "find: close"), "esc");
         let places: Vec<Place> = rows.iter().map(|row| row.place).collect();
         let mut sorted = places.clone();
         sorted.sort();

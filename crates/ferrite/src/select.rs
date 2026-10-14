@@ -5,12 +5,8 @@ use ferrite_core::{
     ThreadId,
 };
 use gpui::base::{TextSelectionDocument, TextSelectionDocumentMember};
-use gpui::{Bounds, HighlightStyle, Pixels, SharedString};
-use std::{
-    cell::{Cell, RefCell},
-    ops::Range,
-    rc::Rc,
-};
+use gpui::{HighlightStyle, SharedString};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 #[cfg(test)]
 type Registry =
@@ -65,12 +61,20 @@ pub struct RunText {
 impl RunText {
     /// The text as rendered: Markdown without its markup, a literal exact.
     pub fn plain(&self) -> String {
+        gpui::base::text::TextView::markdown_plain_text(&self.markdown())
+    }
+
+    /// The text a find counts in: `plain`, with every run its view paints
+    /// on a line of its own.
+    pub fn find_text(&self) -> String {
+        gpui::base::text::TextView::markdown_find_text(&self.markdown())
+    }
+
+    fn markdown(&self) -> std::borrow::Cow<'_, str> {
         if self.markdown {
-            gpui::base::text::TextView::markdown_plain_text(&self.source)
+            self.source.as_ref().into()
         } else {
-            gpui::base::text::TextView::markdown_plain_text(&crate::rich::literal_source(
-                &self.source,
-            ))
+            crate::rich::literal_source(&self.source).into()
         }
     }
 }
@@ -80,7 +84,7 @@ impl RunText {
 pub struct FindMarks {
     pub query: crate::find::Query,
     pub active: Option<(SharedString, usize)>,
-    pub revealed: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pub report: Rc<gpui::base::text::FindReport>,
 }
 
 pub struct TextRuns {
@@ -164,7 +168,7 @@ impl TextRuns {
             .as_ref()
             .filter(|(key, _)| key == id)
             .map(|(_, ordinal)| *ordinal);
-        crate::find::marks(&find.query, active, &find.revealed)
+        crate::find::marks(&find.query, active, &find.report)
     }
 
     pub fn answer(&self, first: BlockId, source: String) -> crate::rich::Markdown {

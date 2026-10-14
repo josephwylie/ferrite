@@ -3179,6 +3179,8 @@ impl CockpitView {
     /// The rows a target offers. `None` is a gap between groups of rows.
     fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
+        let fullscreen =
+            crate::components::bound_chord("cockpit::ToggleFullscreen").unwrap_or_default();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
             // park it, move it between Groups, delete it.
@@ -3195,7 +3197,7 @@ impl CockpitView {
                 }
                 if shown {
                     rows.push(Some((
-                        menu::Item::new("Toggle fullscreen").shortcut("cmd-F"),
+                        menu::Item::new("Toggle fullscreen").shortcut(fullscreen.clone()),
                         MenuVerb::Fullscreen,
                     )));
                 }
@@ -3243,7 +3245,7 @@ impl CockpitView {
                 rows.push(None);
                 rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
                 rows.push(Some((
-                    menu::Item::new("Toggle fullscreen").shortcut("cmd-F"),
+                    menu::Item::new("Toggle fullscreen").shortcut(fullscreen),
                     MenuVerb::Fullscreen,
                 )));
                 rows.push(None);
@@ -3638,7 +3640,7 @@ impl CockpitView {
                     self.pane_slot(index, level, window, cx)
                 }
                 Slot::Reader(owner) => {
-                    let Some(cell) = self.reader_cell(owner, leaf, window, cx) else {
+                    let Some(cell) = self.reader_cell(owner, leaf, cx) else {
                         continue;
                     };
                     cell
@@ -9078,6 +9080,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
+        self.tend_reader_finds(window);
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
@@ -22541,6 +22544,42 @@ mod tests {
                 Some(Provider::Claude)
             );
         });
+    }
+
+    /// A menu row names the key that does the same thing: a chord the
+    /// keymap binds, never one it has moved (⌘F is find, not fullscreen).
+    #[gpui::test]
+    fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("menu-shortcuts", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let bound: Vec<String> = crate::keymap::bindings(crate::keymap::PLATFORM)
+            .into_iter()
+            .map(|(keys, _, _)| crate::components::spell_chord(&keys))
+            .collect();
+        view.read_with(cx, |view, _| {
+            let thread = view.panes[0].thread().unwrap();
+            for target in [MenuTarget::Thread(thread), MenuTarget::Pane(thread)] {
+                for (item, _) in view.context_rows(target).into_iter().flatten() {
+                    if let Some(keys) = &item.shortcut {
+                        assert!(
+                            bound.iter().any(|chord| chord == keys.as_ref()),
+                            "{}: {keys} is bound to nothing",
+                            item.label
+                        );
+                    }
+                }
+            }
+        });
+        let fullscreen = view.read_with(cx, |view, _| {
+            let thread = view.panes[0].thread().unwrap();
+            view.context_rows(MenuTarget::Pane(thread))
+                .into_iter()
+                .flatten()
+                .find(|(_, verb)| *verb == MenuVerb::Fullscreen)
+                .and_then(|(item, _)| item.shortcut)
+        });
+        assert_eq!(fullscreen.as_deref(), Some("cmd-shift-⏎"));
     }
 
     /// A right-click on a Pane summons the menu for its Thread; escape

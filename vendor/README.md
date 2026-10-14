@@ -31,10 +31,15 @@ selection calculation and copying of offscreen text remain unchanged.
   `Inline` washes each occurrence of the needle under its glyphs, the active
   one more strongly, and the active one reports where it painted so Ferrite
   can scroll it into view. Occurrences are found in the whole source run (a
-  run split by wraps or inline cards keeps one count) and numbered in paint
-  order, which is document order, so Ferrite names the active one by its
-  ordinal in the view's plain text (`find_matches`). Remove when upstream
-  offers search highlighting in `TextView`.
+  run split by wraps or inline cards keeps one count; an inline card whose
+  label holds one is washed whole) and numbered in paint order, which is
+  document order, so Ferrite names the active one by its ordinal in
+  `TextView::markdown_find_text` — the plain text with every run on a line
+  of its own (`BlockTextKind::Runs`). The paint reports where the active one
+  landed and the first one at or below the view's top (`FindReport`).
+  Ferrite's `cockpit/tests/find.rs` covers it (gpui-base is not a workspace
+  member, so tests here would not run). Remove when upstream offers search
+  highlighting in `TextView`.
 
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
