@@ -97,6 +97,8 @@ pub(crate) struct Remote {
     inbox: VecDeque<ServerMessage>,
     /// First sends in flight, by command.
     starting: BTreeMap<u64, (DraftId, String)>,
+    /// First sends the connection took with it, for the next `poll`.
+    abandoned: Vec<Arrival>,
     searches: BTreeMap<u64, Sender<io::Result<Vec<FileSuggestion>>>>,
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
@@ -118,6 +120,7 @@ impl Remote {
             next_request: 0,
             inbox: VecDeque::new(),
             starting: BTreeMap::new(),
+            abandoned: Vec::new(),
             searches: BTreeMap::new(),
             watching: BTreeSet::new(),
             rendered: mpsc::channel(),
@@ -207,8 +210,8 @@ impl Remote {
         }
         if gone {
             self.detach("the Ferrite server went away");
-            arrivals.extend(self.abandon_starting());
         }
+        arrivals.append(&mut self.abandoned);
         arrivals
     }
 
@@ -389,6 +392,7 @@ impl Remote {
         self.retry_at = Instant::now();
         self.watching.clear();
         self.searches.clear();
+        self.abandon_starting();
     }
 
     fn heard(&mut self, message: ServerMessage) -> Vec<Arrival> {
@@ -397,7 +401,7 @@ impl Remote {
                 if let Some(error) = error.as_ref().filter(|error| error.code == ErrorCode::Lagged)
                 {
                     self.detach(&error.message);
-                    return self.abandon_starting();
+                    return Vec::new();
                 }
                 let result = match error {
                     Some(error) => Err(io::Error::from(error)),
@@ -446,20 +450,21 @@ impl Remote {
             ServerMessage::Restarting { .. } => {
                 self.detach("the Ferrite server is restarting");
                 self.retry_at = Instant::now() + RESTART_GRACE;
-                self.abandon_starting()
+                Vec::new()
             }
             ServerMessage::Stopping => {
                 self.detach("the Ferrite server stopped");
-                self.abandon_starting()
+                Vec::new()
             }
             message => vec![Arrival::Message(message)],
         }
     }
 
     /// First sends the Server will never answer now: each Draft hears it
-    /// may not have started.
-    fn abandon_starting(&mut self) -> Vec<Arrival> {
-        std::mem::take(&mut self.starting)
+    /// may not have started, at the next `poll` — wherever the connection
+    /// was found gone.
+    fn abandon_starting(&mut self) {
+        let abandoned = std::mem::take(&mut self.starting)
             .into_values()
             .map(|(draft, prompt)| {
                 Arrival::Started(BootstrapResult {
@@ -469,8 +474,8 @@ impl Remote {
                         "the Ferrite server went away; the Thread may not have started",
                     )),
                 })
-            })
-            .collect()
+            });
+        self.abandoned.extend(abandoned);
     }
 
     /// Draw a Visual for the Server's agent and answer it from the
@@ -557,3 +562,6 @@ impl From<WireError> for io::Error {
         io::Error::other(error.message)
     }
 }
+
+#[cfg(test)]
+mod tests;
