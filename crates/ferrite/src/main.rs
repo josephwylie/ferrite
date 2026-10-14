@@ -116,6 +116,8 @@ fn main() {
             store: store_dir(),
             settings_dir: settings_dir(),
             version: env!("CARGO_PKG_VERSION").into(),
+            after: flag(&std::env::args().collect::<Vec<_>>(), "--after")
+                .and_then(|pid| pid.parse().ok()),
         }));
     }
     // A Chromium helper process is this same binary, started

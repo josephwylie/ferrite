@@ -65,6 +65,8 @@ impl Spawner for Spawn {
 
 struct Harness {
     server: std::thread::JoinHandle<i32>,
+    /// Every executable the Server restarted into, in place of `exec`.
+    relaunched: Receiver<PathBuf>,
     dir: PathBuf,
     address: PathBuf,
     sessions: Receiver<Sender<SessionEvent>>,
@@ -83,6 +85,7 @@ fn start(name: &str) -> Harness {
         answers: answers.clone(),
     };
     let settings_dir = dir.clone();
+    let (relaunches, relaunched) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let engine = Engine::try_new(Store::open(&store).unwrap(), Box::new(spawn)).unwrap();
         let info = ServerInfo {
@@ -91,13 +94,18 @@ fn start(name: &str) -> Harness {
         };
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
-        let server = Server::new(engine, info, renders, defaults, settings_dir);
+        let mut server = Server::new(engine, info, renders, defaults, settings_dir);
+        server.relaunch = Box::new(move |executable: &Path| {
+            relaunches.send(executable.to_owned()).unwrap();
+            Ok(())
+        });
         let (heard, hear) = mpsc::channel();
         link::accept_all(listener, heard).unwrap();
         server.serve(hear)
     });
     Harness {
         server,
+        relaunched,
         dir,
         address,
         sessions: started,
@@ -387,4 +395,95 @@ fn stop_now_ends_the_server_cleanly() {
     assert!(matches!(reply, ServerMessage::Reply { error: None, .. }));
     window.until(|window| window.replies.is_empty());
     assert_eq!(harness.server.join().unwrap(), 0);
+}
+
+/// `restart {when: idle}` waits for the agents: not while a turn runs,
+/// and then once — windows told first, the Sessions ended, the successor
+/// started, and this Server done.
+#[test]
+fn a_restart_when_idle_waits_for_the_turn_and_happens_once() {
+    let harness = start("restart");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    window.command(
+        2,
+        Op::Send {
+            thread,
+            text: "go".into(),
+        },
+    );
+    provider.send(text("working")).unwrap();
+    window.until(|window| {
+        window
+            .said(thread)
+            .iter()
+            .any(|said| said.contains("working"))
+    });
+
+    let reply = window.command(3, Op::Restart { when: When::Idle });
+    assert!(
+        matches!(reply, ServerMessage::Reply { error: None, .. }),
+        "{reply:?}"
+    );
+    assert!(
+        harness
+            .relaunched
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "not mid-turn"
+    );
+
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    let successor = harness
+        .relaunched
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(successor, std::env::current_exe().unwrap());
+    let restarting = loop {
+        match window.client.messages.recv_timeout(Duration::from_secs(5)) {
+            Ok(ServerMessage::Restarting { when }) => break when,
+            Ok(_) => continue,
+            Err(error) => panic!("no restarting: {error}"),
+        }
+    };
+    assert_eq!(restarting, When::Idle);
+    assert_eq!(harness.server.join().unwrap(), 0);
+    assert!(harness.relaunched.try_recv().is_err(), "restarted once");
+}
+
+#[test]
+fn only_a_newer_window_running_the_same_executable_asks_for_a_restart() {
+    let exe = std::env::current_exe().unwrap();
+    let server = |version: &str, executable: &Path| ServerInfo {
+        version: version.into(),
+        executable: executable.to_owned(),
+    };
+    assert!(wants_restart("0.10.0", &exe, &server("0.9.3", &exe)));
+    assert!(
+        !wants_restart("0.9.3", &exe, &server("0.9.3", &exe)),
+        "equal never"
+    );
+    assert!(
+        !wants_restart("0.9.0", &exe, &server("0.10.0", &exe)),
+        "older never"
+    );
+    assert!(
+        !wants_restart(
+            "0.10.0",
+            &exe,
+            &server(
+                "0.9.3",
+                Path::new("/Applications/Ferrite.app/Contents/MacOS/ferrite")
+            )
+        ),
+        "another install's Server restarts into itself"
+    );
+    assert!(!wants_restart("garbage", &exe, &server("0.9.3", &exe)));
+    assert!(wants_restart("1.0.0-beta.1", &exe, &server("0.9.9", &exe)));
 }

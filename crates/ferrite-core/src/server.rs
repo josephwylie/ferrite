@@ -43,6 +43,9 @@ pub struct Options {
     pub settings_dir: PathBuf,
     /// This build's version, as `welcome` names it.
     pub version: String,
+    /// `--after <pid>`: the Server this one replaces, on Windows, where a
+    /// restart cannot `exec`. It must be gone before the Store is claimed.
+    pub after: Option<u32>,
 }
 
 /// Run the Server until it is stopped. The process's exit code: 0 for a
@@ -51,6 +54,9 @@ pub struct Options {
 pub fn run(options: Options) -> i32 {
     crate::diagnostics::open_as(&options.settings_dir, "server.log");
     crate::login_shell::adopt_login_environment();
+    if let Some(pid) = options.after {
+        wait_for_exit(pid);
+    }
     let store = match Store::open(&options.store) {
         Ok(store) => store,
         Err(error) => {
@@ -147,6 +153,10 @@ struct Server {
     settings_dir: PathBuf,
     /// `stop` was asked for: at once, or once every agent is idle.
     stopping: Option<When>,
+    /// `restart` was asked for, likewise.
+    restarting: Option<When>,
+    /// How this Server starts its successor (`relaunch`; a test's own).
+    relaunch: Box<dyn FnMut(&std::path::Path) -> io::Result<()>>,
 }
 
 impl Server {
@@ -168,6 +178,8 @@ impl Server {
             defaults,
             settings_dir,
             stopping: None,
+            restarting: None,
+            relaunch: Box::new(relaunch),
         }
     }
 
@@ -223,6 +235,13 @@ impl Server {
                     crate::log!("server: stopping, as a window asked");
                     self.stop();
                     return 0;
+                }
+            }
+            if let Some(when) = self.restarting {
+                if when == When::Now || self.engine.idle() {
+                    if let Some(code) = self.restart(when) {
+                        return code;
+                    }
                 }
             }
         }
@@ -342,10 +361,13 @@ impl Server {
                 self.stopping = Some(*when);
                 Ok(None)
             }
-            Op::Restart { .. } => Err(WireError {
-                code: ErrorCode::Unsupported,
-                message: "this server cannot restart itself yet".into(),
-            }),
+            Op::Restart { when } => match self.successor() {
+                Ok(_) => {
+                    self.restarting = Some(*when);
+                    Ok(None)
+                }
+                Err(error) => Err(failed(error)),
+            },
             op => self.engine.execute(op),
         };
         self.reply(id, request, executed);
@@ -492,13 +514,141 @@ impl Server {
     /// Flush every writer and end every Session without parking it: the
     /// open markers stay, so the next Server resumes the same Threads.
     fn stop(&mut self) {
+        self.say(ServerMessage::Stopping);
+        self.halt();
+    }
+
+    fn say(&mut self, message: ServerMessage) {
         for id in self.clients.keys().copied().collect::<Vec<_>>() {
-            self.send(id, ServerMessage::Stopping);
+            self.send(id, message.clone());
         }
+    }
+
+    fn halt(&mut self) {
         self.engine.halt_sessions();
         // The writers' last lines, before the process takes them.
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+impl Server {
+    /// What a restart starts: this executable, as it is on disk now. An
+    /// update may have replaced it — that is the point — but one that is
+    /// gone would leave no Server at all.
+    fn successor(&self) -> io::Result<PathBuf> {
+        let executable = std::env::current_exe()?;
+        if executable.exists() {
+            Ok(executable)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "this server's executable is gone",
+            ))
+        }
+    }
+
+    /// Restart into this executable: windows hear it, every Session ends
+    /// as on SIGTERM (a turn cut off reads interrupted when it is revived),
+    /// and the successor revives the open Threads. `None` when it cannot,
+    /// and this Server keeps running.
+    fn restart(&mut self, when: When) -> Option<i32> {
+        self.restarting = None;
+        let executable = match self.successor() {
+            Ok(executable) => executable,
+            Err(error) => {
+                crate::log!("server: not restarting: {error}");
+                return None;
+            }
+        };
+        crate::log!("server: restarting ({when:?})");
+        self.say(ServerMessage::Restarting { when });
+        self.halt();
+        match (self.relaunch)(&executable) {
+            Ok(()) => Some(0),
+            Err(error) => {
+                // Sessions are already gone: a failure exit has launchd (or
+                // the next window) start a Server again.
+                crate::log!("server: could not restart: {error}");
+                Some(1)
+            }
+        }
+    }
+}
+
+/// Start the successor. On Unix the same process becomes it (`exec`: same
+/// pid, so launchd sees no exit; the Store's claim is close-on-exec, so the
+/// new image takes it). On Windows, a detached Server that waits for this
+/// one to exit before it claims the Store.
+fn relaunch(executable: &std::path::Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(std::process::Command::new(executable).arg("server").exec())
+    }
+    #[cfg(not(unix))]
+    {
+        let pid = std::process::id().to_string();
+        agent::start_detached(executable, &["--after", &pid])
+    }
+}
+
+/// Wait for the Server this one replaces to exit.
+fn wait_for_exit(pid: u32) {
+    #[cfg(unix)]
+    // SAFETY: signal 0 only asks whether the process exists.
+    while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+        };
+        // SAFETY: a handle opened only to wait on, and closed after.
+        unsafe {
+            let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if !process.is_null() {
+                WaitForSingleObject(process, INFINITE);
+                CloseHandle(process);
+            }
+        }
+    }
+}
+
+/// Whether a window should ask its Server to restart into a newer build:
+/// only when this window is newer (equal versions never restart on their
+/// own) and the Server runs this window's own executable — a Server always
+/// restarts into its own path, so any other would be asked again after
+/// every restart.
+pub fn wants_restart(
+    app_version: &str,
+    app_executable: &std::path::Path,
+    server: &ServerInfo,
+) -> bool {
+    let same = |a: &std::path::Path, b: &std::path::Path| {
+        a == b
+            || a.canonicalize()
+                .ok()
+                .zip(b.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b)
+    };
+    newer(app_version, &server.version) && same(app_executable, &server.executable)
+}
+
+/// Whether semantic version `a` is newer than `b`. Anything unreadable is
+/// not newer.
+fn newer(a: &str, b: &str) -> bool {
+    let parse = |version: &str| -> Option<(u64, u64, u64)> {
+        let core = version.split(['-', '+']).next()?;
+        let mut parts = core.split('.').map(str::parse::<u64>);
+        Some((
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+        ))
+    };
+    matches!((parse(a), parse(b)), (Some(a), Some(b)) if a > b)
 }
 
 fn failed(error: impl ToString) -> WireError {
