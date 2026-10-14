@@ -1921,7 +1921,7 @@ fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
 /// The arrows in an open model picker move its cursor by rebuilding the
 /// status line it rides in the bottom bar (ADR 0014), not any Pane.
 #[gpui::test]
-fn a_pickers_arrows_rebuild_no_pane(cx: &mut TestAppContext) {
+fn a_pickers_arrows_rebuild_the_status_line_and_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("picker-parts", &[], cx);
     bind_production_keys(cx);
     // The window moves from pointer to keyboard first (see the typing
@@ -1931,6 +1931,7 @@ fn a_pickers_arrows_rebuild_no_pane(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cockpit_renders_over(cx, 1_000);
     let panes = pane_builds(&threads);
+    let status = crate::cockpit::drawn::status_renders();
     for key in ["down", "down", "up", "down"] {
         cx.simulate_keystrokes(key);
         cx.run_until_parked();
@@ -1940,6 +1941,8 @@ fn a_pickers_arrows_rebuild_no_pane(cx: &mut TestAppContext) {
         .zip(&panes)
         .map(|(after, before)| after - before)
         .collect();
-    eprintln!("PICKER_ARROWS_4 pane_builds={built:?}");
+    let status = crate::cockpit::drawn::status_renders() - status;
+    eprintln!("PICKER_ARROWS_4 pane_builds={built:?} status_builds={status}");
+    assert!(status >= 4, "the status line redraws the picker's cursor");
     assert_eq!(built, [0, 0, 0, 0], "an arrow rebuilt a Pane");
 }

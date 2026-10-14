@@ -94,9 +94,9 @@ pub struct PaneView {
     pub decision_focus: FocusHandle,
     disclosure: ToolDisclosure,
     disclosure_revision: u64,
-    /// Where this Pane's card and Composer were last laid out, so a surface
-    /// summoned from a chip can hang off the Composer's edge and stay inside
-    /// the card (`components::float_place`), whatever the pointer did.
+    /// Where this Pane's card and Composer were last laid out, so a card
+    /// the Pane summons can hang off the Composer's edge or the head and
+    /// stay inside the card (`card_corner`), whatever the pointer did.
     pub geometry: std::rc::Rc<std::cell::Cell<PaneGeometry>>,
     /// What the working line reads besides its transcript, as of this
     /// Pane's last render (`working_line`).
@@ -112,20 +112,6 @@ pub struct PaneView {
 pub struct PaneGeometry {
     pub card: Option<gpui::Bounds<gpui::Pixels>>,
     pub composer: Option<gpui::Bounds<gpui::Pixels>>,
-}
-
-impl PaneGeometry {
-    /// The float limits for this Pane: the Composer's top edge (a surface
-    /// opening upward rests `FLOAT_OFFSET` above it) and the card's inner
-    /// right edge (`PANE_PAD_X` in from its right).
-    pub fn float_limits(&self) -> Option<(f32, f32)> {
-        let card = self.card?;
-        let composer = self.composer?;
-        Some((
-            f32::from(composer.top()),
-            f32::from(card.right()) - PANE_PAD_X,
-        ))
-    }
 }
 
 /// View ownership stays with a Subject even while its transcript is hidden.
@@ -1526,7 +1512,7 @@ fn l1_tasks(cx: &mut PaneCtx) -> Option<AnyElement> {
 }
 
 /// The plan's meter (`tasks_strip`) for a Thread working to one: beside the
-/// subagent tabs, and in the Solo titlebar.
+/// subagent tabs.
 pub(crate) fn tasks_meter(thread: ThreadId, transcript: &Transcript) -> Option<AnyElement> {
     let todos = transcript.todos()?;
     Some(
@@ -1833,7 +1819,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
 /// A Draft is disposable state, so its Pane advertises the same close action
 /// as cmd-w: an `ICON_BUTTON` × in `TEXT_MUTED` — the Group head's slot on a
-/// board, the titlebar's trailing slot in Solo. Its tooltip names the key
+/// board (Solo has no head: cmd-w alone). Its tooltip names the key
 /// only where one is bound. Live Threads deliberately keep keyboard and
 /// context-menu closure instead of adding this control to every Pane.
 pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
@@ -2200,9 +2186,9 @@ fn request_kind(decision: &Decision) -> &'static str {
 }
 
 /// One lexicon word for where a Thread stands (rule 2.11.2), shared by the
-/// Solo titlebar's state segment and the wall tile's state word. Each
-/// variant is one state; `text` is what it reads, `ink` the one ink it
-/// wears where colour is allowed (the titlebar sets it dim).
+/// Group head's state slot and the wall tile's state word. Each variant
+/// is one state; `text` is what it reads, `ink` the one ink it wears
+/// where colour is allowed.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HeadSlot {
     /// `needs you · approval` / `needs you · question` — `ATTENTION` on
@@ -2244,7 +2230,7 @@ impl HeadSlot {
     }
 }
 
-/// The state vocabulary, shared by the titlebar and the wall:
+/// The state vocabulary, shared by the Group head and the wall:
 /// `needs you` > `failing` > `failed` > `working` > `done` > `interrupted`
 /// > `parked`; idle is nothing.
 fn state_word(
@@ -2283,7 +2269,7 @@ fn state_word(
 /// word beside it so the two can never disagree. A turn that ended in an
 /// error reads `failed`, so its dot is `BLOCKED` like a closed Session's;
 /// a `failing` word is always a `BLOCKED` dot. Every surface that draws a
-/// Thread's dot — the nav, the rail, the Group head, the titlebar — reads
+/// Thread's dot — the nav, the rail, the Group head — reads
 /// it through here.
 pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState {
     match word {
@@ -2535,7 +2521,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
 /// `needs you` as a door: a press runs the ⌘D jump (`NextDecision`) from
 /// wherever the keyboard is — the press does not land on a Pane first — and
 /// the tooltip names that key: `Next needs you ⌘D`. The Group head's
-/// slot and the Solo titlebar share it.
+/// slot draws it.
 pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div) -> AnyElement {
     let door = div()
         .id(gpui::ElementId::Name(id))
@@ -3729,7 +3715,7 @@ fn placeholder(
     match followup::suggest(pending, transcript, suggestion) {
         // A docked Decision owns the block above this line; the line itself
         // still steers, so it says so (rule 2.8.1: one input line).
-        Followup::Decision => Ghost::says("answer above, or steer"),
+        Followup::Decision => Ghost::says("Answer above"),
         Followup::Revive => Ghost::says("Revive and continue"),
         Followup::Suggested(text) => Ghost {
             head: SharedString::from(text),
@@ -3938,9 +3924,9 @@ fn head_truncated(path: &SharedString, tail: usize) -> SharedString {
 }
 
 /// The bounded queue viewport, shared with the editor's pane-height budget.
-pub(crate) fn composer_queue_height(height: f32, compact: bool, grid: bool, count: usize) -> f32 {
+pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) -> f32 {
     let budget = height * theme::COMPOSER_MAX_PANE_FRACTION
-        - composer_fixed_height(compact, grid)
+        - composer_fixed_height()
         - theme::COMPOSER_ROW_H;
     let fitting = (budget / theme::QUEUE_ROW_H).floor().max(1.) as usize;
     let rows = count.min(fitting).min(if compact {
@@ -3955,16 +3941,16 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, grid: bool, coun
 /// padding, its two rules and the air under the stack — the same at every
 /// level, focused or not; its status line is the window's (ADR 0014). The
 /// shelf and the working line stand above and are not part of it.
-fn composer_fixed_height(_compact: bool, _grid: bool) -> f32 {
+fn composer_fixed_height() -> f32 {
     2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B
 }
 
 /// Leave the majority of a Pane available for its Thread context. Only the
 /// viewport changes: the Composer keeps every character and scrolls to its
 /// caret, then reveals more rows again when the Pane grows.
-pub(crate) fn composer_row_limit(height: f32, compact: bool, grid: bool, queued: usize) -> usize {
-    let fixed = composer_fixed_height(compact, grid);
-    let queue = composer_queue_height(height, compact, grid, queued);
+pub(crate) fn composer_row_limit(height: f32, compact: bool, queued: usize) -> usize {
+    let fixed = composer_fixed_height();
+    let queue = composer_queue_height(height, compact, queued);
     ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue) / theme::COMPOSER_ROW_H)
         .floor()
         .max(1.)
@@ -10962,7 +10948,7 @@ mod tests {
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).text(),
-            "answer above, or steer"
+            "Answer above"
         );
         let mut running = Transcript::default();
         running.apply(Input::Prompt("fix the decoder".into()));
@@ -11005,7 +10991,7 @@ mod tests {
         // A Decision and a dead Session both outrank it.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).text(),
-            "answer above, or steer"
+            "Answer above"
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).text(),
@@ -11044,11 +11030,7 @@ mod tests {
         let fixed =
             2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B;
         assert_eq!(theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B, 7.);
-        for grid in [false, true] {
-            for compact in [false, true] {
-                assert_eq!(composer_fixed_height(compact, grid), fixed);
-            }
-        }
+        assert_eq!(composer_fixed_height(), fixed);
         // One band row is the old grid line's 32px: 6 + 20 + 6.
         assert_eq!(theme::COMPOSER_GRID_H, 32.);
         assert_eq!(
@@ -11059,28 +11041,26 @@ mod tests {
         assert_eq!(theme::COMPOSER_PAD_L, theme::GLYPH_GUTTER);
         assert_eq!(theme::COMPOSER_GUTTER, theme::GLYPH_GUTTER);
         // A tall Pane shows every editor row; a short one keeps its majority.
-        for grid in [false, true] {
-            assert_eq!(
-                composer_row_limit(900., false, grid, 0),
-                crate::composer::MAX_ROWS
-            );
-            let limit = composer_row_limit(300., false, grid, 0) as f32;
-            assert!(
-                composer_fixed_height(false, grid) + limit * theme::COMPOSER_ROW_H
-                    <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
-            );
-            // Queued rows stack at the input's own pitch with no gap between
-            // them: three rows are exactly three lines.
-            assert_eq!(theme::QUEUE_ROW_H, theme::COMPOSER_ROW_H);
-            assert_eq!(
-                composer_queue_height(900., false, grid, 3),
-                3. * theme::COMPOSER_ROW_H
-            );
-            assert_eq!(
-                composer_queue_height(900., true, grid, 3),
-                theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * theme::COMPOSER_ROW_H
-            );
-        }
+        assert_eq!(
+            composer_row_limit(900., false, 0),
+            crate::composer::MAX_ROWS
+        );
+        let limit = composer_row_limit(300., false, 0) as f32;
+        assert!(
+            composer_fixed_height() + limit * theme::COMPOSER_ROW_H
+                <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
+        );
+        // Queued rows stack at the input's own pitch with no gap between
+        // them: three rows are exactly three lines.
+        assert_eq!(theme::QUEUE_ROW_H, theme::COMPOSER_ROW_H);
+        assert_eq!(
+            composer_queue_height(900., false, 3),
+            3. * theme::COMPOSER_ROW_H
+        );
+        assert_eq!(
+            composer_queue_height(900., true, 3),
+            theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * theme::COMPOSER_ROW_H
+        );
     }
 
     /// The ctx meter fills green, then yellow, then red (the prototype's

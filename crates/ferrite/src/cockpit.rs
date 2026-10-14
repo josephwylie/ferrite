@@ -238,7 +238,7 @@ const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
 
-/// How many frames a card waits for its Pane's geometry (`card_corner`).
+/// How many frames a card waits for its geometry (`card_corner`).
 /// A Pane laid out for the first time has it by the next frame; a few more
 /// cover a layout that settles over two.
 const CARD_GEOMETRY_FRAMES: u8 = 3;
@@ -424,11 +424,11 @@ pub struct CockpitView {
     context_checks: Option<ThreadId>,
     /// The changed-files card, opened from the status line's `N files`.
     changed_files_card: Option<ThreadId>,
-    /// Each card trigger's bounds as last laid out (`usage-…`,
-    /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
+    /// Each status-line card trigger's bounds as last laid out (`usage-…`,
+    /// `files-…`), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
-    /// Frames each open card has waited for its Pane's geometry, by trigger
-    /// key (`card_corner`); none once it has some.
+    /// Frames each open card has waited for its trigger's or Pane's
+    /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
     /// A seam being dragged: the board, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
@@ -529,6 +529,16 @@ pub struct CockpitView {
     solo_beside: Option<(PaneIdentity, ThreadId)>,
     /// The plan card (`open_plan`), tied to its Thread.
     plan_card: Option<ThreadId>,
+}
+
+/// What a card hangs from (`card_corner`): its trigger in the window's
+/// bar (a status-line segment, ADR 0014), or its Pane's Composer (opening
+/// up) or head (opening down).
+#[derive(Clone, Copy)]
+enum CardFrom {
+    Bar,
+    Composer(PaneIdentity),
+    Head(PaneIdentity),
 }
 
 /// What an inline rename is aimed at. Both are titles the operator owns:
@@ -1227,12 +1237,19 @@ pub(crate) mod drawn {
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static STATUS_USAGE: RefCell<Option<String>> = const { RefCell::new(None) };
+        static STATUS_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     /// The bar's status line was built reading these usage facts: the
     /// focused Thread's context window and its account's.
     pub(crate) fn record_status(usage: Option<String>) {
+        STATUS_RENDERS.with(|renders| renders.set(renders.get() + 1));
         STATUS_USAGE.with(|status| *status.borrow_mut() = usage);
+    }
+
+    /// How many times the bar's status line has been built on this thread.
+    pub(crate) fn status_renders() -> usize {
+        STATUS_RENDERS.with(Cell::get)
     }
 
     /// The usage facts the bar's status line last drew.
@@ -2743,8 +2760,7 @@ impl CockpitView {
     }
 
     /// The palette's `install CLI updates` command (F-11): every provider
-    /// CLI with a newer release ready installs, as the old titlebar door
-    /// did. Nothing while one is already installing.
+    /// CLI with a newer release ready installs. Nothing while one is already installing.
     pub(crate) fn install_cli_updates(&mut self, cx: &mut Context<Self>) {
         use crate::cli_updates::Badge;
         let (ready, what) = match self.cli_updates.badge() {
@@ -2778,8 +2794,7 @@ impl CockpitView {
         let current = transcript.current_task();
         let at = self.card_corner(
             format!("plan-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            false,
+            CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
         let mut card = crate::components::floating_surface()
@@ -9179,7 +9194,6 @@ impl CockpitView {
         // ComposerMenu: the focused node, where enter and escape can win
         // their tie against Submit and Interrupt.
         let pane_rects = self.pane_rects(window);
-        let grid = self.grid_board();
         let focused_index = self.focused();
         let float_open = self.overlay_open();
         for (index, pane) in self.panes.iter().enumerate() {
@@ -9191,7 +9205,7 @@ impl CockpitView {
                         .thread()
                         .and_then(|thread| self.cockpit.thread(thread))
                         .map_or(0, |thread| thread.queued_all().len());
-                    pane::composer_row_limit(rect.h, false, grid, queued)
+                    pane::composer_row_limit(rect.h, false, queued)
                 })
                 .unwrap_or(crate::composer::MAX_ROWS);
             // Derive this every frame so answering, leaving fullscreen, or
@@ -9857,7 +9871,6 @@ impl CockpitView {
             composer_queue_height: pane::composer_queue_height(
                 rect.map_or(self.cell(window).height, |rect| rect.h),
                 false,
-                self.grid_board(),
                 open.map_or(0, |thread| thread.queued_all().len()),
             ),
             focused,
@@ -10245,12 +10258,7 @@ impl CockpitView {
         use crate::theme::*;
         use gpui::component::scroll::ScrollableElement as _;
         let thread = self.changed_files_card?;
-        let at = self.card_corner(
-            format!("files-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            true,
-            window,
-        )?;
+        let at = self.card_corner(format!("files-{}", thread.get()), CardFrom::Bar, window)?;
         let index = self.pane_for(thread)?;
         let files = self.facts.get(thread)?.changed_files.clone();
         if files.is_empty() {
@@ -10779,64 +10787,71 @@ impl CockpitView {
         }
     }
 
-    /// Where a card opened from trigger `key` in Pane `identity` hangs
-    /// (`FloatPlace::card_corner`). Until the Pane has been laid out once,
-    /// it waits a frame rather than guess — `CARD_GEOMETRY_FRAMES` of them
-    /// at most, then hangs from the board's corner: a Pane with nothing to
-    /// give (an L3 tile draws no Composer, a Pane gone from the roster
-    /// draws nothing) would have the card ask for every frame for as long
-    /// as it stayed open.
+    /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger
+    /// or Pane has been laid out once, it waits a frame rather than guess —
+    /// `CARD_GEOMETRY_FRAMES` of them at most, then hangs from the board's
+    /// corner: a Pane with nothing to give (an L3 tile draws no Composer, a
+    /// Pane gone from the roster draws nothing) would have the card ask for
+    /// every frame for as long as it stayed open.
     fn card_corner(
         &self,
         key: String,
-        identity: PaneIdentity,
-        up: bool,
+        from: CardFrom,
         window: &mut Window,
     ) -> Option<Point<Pixels>> {
-        let trigger = self.float_triggers.borrow().get(key.as_str()).copied();
-        let geometry = self
-            .index_of(identity)
-            .map(|index| self.panes[index].geometry.get())
-            .unwrap_or_default();
-        // A card opening down needs only the card's edge, not a Composer.
-        let place = geometry.card.and_then(|card| {
-            let limit_right = f32::from(card.right()) - crate::theme::PANE_PAD_X;
-            match geometry.composer {
-                Some(composer) => Some(crate::components::FloatPlace {
-                    floor: f32::from(composer.top()),
-                    limit_right,
-                }),
-                None if !up => Some(crate::components::FloatPlace {
-                    floor: 0.,
-                    limit_right,
-                }),
-                None => None,
+        let up = !matches!(from, CardFrom::Head(_));
+        let corner = match from {
+            CardFrom::Bar => {
+                let trigger = self.float_triggers.borrow().get(key.as_str()).copied();
+                trigger.map(|trigger| self.bar_place().card_corner(trigger, true))
             }
-        });
-        // A card opened with no chip on screen (a slash command, a scene)
-        // hangs off the Composer's right edge, or the card's top.
-        let trigger = trigger.or(if up { geometry.composer } else { geometry.card });
+            CardFrom::Composer(identity) | CardFrom::Head(identity) => {
+                self.pane_card_corner(identity, up)
+            }
+        };
         let mut waits = self.card_waits.borrow_mut();
-        match (trigger, place) {
-            (Some(trigger), Some(place)) => {
-                waits.remove(&key);
-                Some(place.card_corner(trigger, up))
-            }
-            _ => {
-                let waited = waits.entry(key).or_default();
-                if *waited < CARD_GEOMETRY_FRAMES {
-                    *waited += 1;
-                    window.request_animation_frame();
-                    return None;
-                }
-                Some(self.board_card_corner(up, window))
-            }
+        if corner.is_some() {
+            waits.remove(&key);
+            return corner;
+        }
+        let waited = waits.entry(key).or_default();
+        if *waited < CARD_GEOMETRY_FRAMES {
+            *waited += 1;
+            window.request_animation_frame();
+            return None;
+        }
+        Some(self.board_card_corner(up, window))
+    }
+
+    /// A Pane's own card: off its Composer's right edge opening up, its
+    /// head's opening down, inside the Pane.
+    fn pane_card_corner(&self, identity: PaneIdentity, up: bool) -> Option<Point<Pixels>> {
+        let geometry = self.panes[self.index_of(identity)?].geometry.get();
+        let card = geometry.card?;
+        let limit_right = f32::from(card.right()) - crate::theme::PANE_PAD_X;
+        let (floor, trigger) = if up {
+            let composer = geometry.composer?;
+            (f32::from(composer.top()), composer)
+        } else {
+            (0., card)
+        };
+        Some(crate::components::FloatPlace { floor, limit_right }.card_corner(trigger, up))
+    }
+
+    /// The limits a surface summoned from the window's bar rests within
+    /// (ADR 0014): its foot over the bar's top, its right edge inside the
+    /// window's margin.
+    fn bar_place(&self) -> crate::components::FloatPlace {
+        let board = self.board.get();
+        crate::components::FloatPlace {
+            floor: board.y + board.h,
+            limit_right: board.x + board.w - crate::theme::GRID_PAD,
         }
     }
 
-    /// Where a card hangs with no Pane geometry to hang from: off the
-    /// board as though it were the Pane — from its foot (where a Composer
-    /// would be) for a card opening up, its head for one opening down.
+    /// Where a card hangs with no geometry to hang from: off the board as
+    /// though it were the Pane — from its foot (where a Composer would be)
+    /// for a card opening up, its head for one opening down.
     fn board_card_corner(&self, up: bool, window: &Window) -> Point<Pixels> {
         let board = self.board_bounds(window);
         let right = board.x + board.w;
@@ -10916,7 +10931,6 @@ impl CockpitView {
                 width: None,
                 lead: 0.,
                 id: format!("mode-picker-{}", thread.get()).into(),
-                anchor: gpui::Anchor::BottomLeft,
                 trigger: pane::composer_control(("mode-picker", thread.get() as usize), cx)
                     .debug_selector(move || format!("mode-picker-{}", thread.get()))
                     .tip("Permission mode")
@@ -10952,7 +10966,7 @@ impl CockpitView {
                         cx.notify();
                     });
                 }),
-                place: self.float_place(index),
+                place: self.bar_place(),
             }
             .into_any_element(),
         )
@@ -11024,8 +11038,7 @@ impl CockpitView {
         let (thread, generation) = self.session_controls?;
         let at = self.card_corner(
             format!("session-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            true,
+            CardFrom::Composer(PaneIdentity::Thread(thread)),
             window,
         )?;
         let open = self.cockpit.thread(thread)?;
@@ -11439,8 +11452,7 @@ impl CockpitView {
         let thread = self.context_checks?;
         let at = self.card_corner(
             format!("ci-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            false,
+            CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
         let pr = self
@@ -11510,7 +11522,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let identity = self.context_usage?;
-        let at = self.card_corner(format!("usage-{identity:?}"), identity, true, window)?;
+        let at = self.card_corner(format!("usage-{identity:?}"), CardFrom::Bar, window)?;
         // The card opens upward from `at`: it grows into the room above,
         // inside the window's margin, and scrolls past that.
         let max_h = (f32::from(at.y) - crate::theme::GRID_PAD)
@@ -11649,6 +11661,7 @@ impl CockpitView {
             index,
             Kind::Provider,
             pane::composer_control(("model-picker", thread.get() as usize), cx)
+                .debug_selector(move || format!("model-picker-{}", thread.get()))
                 .tip(hold.unwrap_or("Model"))
                 .child(pane::model_picker(
                     Some(provider),
@@ -11774,10 +11787,6 @@ impl CockpitView {
             },
             // Rebuild the retained menu when availability changes.
             id: format!("choice-{identity:?}-{effort}-{}", hold.unwrap_or_default()).into(),
-            // The model and effort chips lead the status line (and a
-            // draft's band starts its own): the picker hangs right from the
-            // chip and the measured shift keeps it inside the Pane.
-            anchor: gpui::Anchor::BottomLeft,
             trigger,
             choices,
             open: open.is_some(),
@@ -11815,7 +11824,7 @@ impl CockpitView {
             on_pick: std::rc::Rc::new(move |at, _, cx| {
                 let _ = picker.update(cx, |view, cx| view.pick(at, cx));
             }),
-            place: self.float_place(index),
+            place: self.bar_place(),
         }
     }
 
@@ -11849,13 +11858,6 @@ impl CockpitView {
         });
         let chosen = current.and_then(|current| labels.iter().position(|label| *label == current));
         Some((steps, labels, chosen))
-    }
-
-    /// The limits a surface summoned from Pane `index` rests within: the
-    /// Composer's edge and the card's inner right edge, as last laid out.
-    fn float_place(&self, index: usize) -> Option<crate::components::FloatPlace> {
-        let (floor, limit_right) = self.panes.get(index)?.geometry.get().float_limits()?;
-        Some(crate::components::FloatPlace { floor, limit_right })
     }
 
     /// The effort chip's click: the root chip's toggle grammar.
@@ -13532,7 +13534,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
-        // The palette's `new group` (the titlebar door is `⌘K commands`).
+        // The palette's `new group`.
         view.update(cx, |view, cx| {
             view.open_draft_with_placement(
                 DraftTarget::Main,
@@ -14883,8 +14885,8 @@ mod tests {
 
     /// A card hangs off its trigger, never the pointer: wherever the meter
     /// is pressed, the usage card rests at the same place, its foot
-    /// `FLOAT_OFFSET` above the Composer's edge and its right edge inside
-    /// the Pane's. With no account windows reported, one line says so.
+    /// `FLOAT_OFFSET` above the bar and its right edge on the meter's (ADR
+    /// 0014). With no account windows reported, one line says so.
     #[gpui::test]
     fn the_usage_card_origin_is_independent_of_the_pointer(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("usage-card-origin", 1);
@@ -14918,14 +14920,13 @@ mod tests {
                 .debug_bounds("context-usage-card")
                 .expect("the press opens the card");
             origins.push(card.origin);
-            let composer = cx.debug_bounds("composer-block").unwrap();
+            let bar = cx.debug_bounds("bottom-bar").unwrap();
             assert_eq!(
                 card.bottom(),
-                composer.top() - px(crate::theme::FLOAT_OFFSET),
-                "the card rests FLOAT_OFFSET above the Composer's edge"
+                bar.top() - px(crate::theme::FLOAT_OFFSET),
+                "the card rests FLOAT_OFFSET above the bar it opened from"
             );
-            let pane = cx.debug_bounds("pane-body-1").unwrap();
-            assert!(card.right() <= pane.right() - px(crate::theme::PANE_PAD_X) + px(1.5));
+            assert_eq!(card.right(), meter.right(), "it hangs off its trigger");
             assert!(
                 cx.debug_bounds("context-usage-limits-unknown").is_some(),
                 "no account window reported: one line, no bars"
@@ -14937,11 +14938,11 @@ mod tests {
         assert_eq!(origins[0], origins[1], "the pointer does not move the card");
     }
 
-    /// The model picker rests on the Composer's edge, not over it: its foot
-    /// `FLOAT_OFFSET` above the Composer, its right edge inside the Pane,
-    /// every row one menu row high.
+    /// The model picker rests on the bar its chip rides, not over it (ADR
+    /// 0014): its foot `MODEL_PICKER_GAP` above the bar, its right edge
+    /// inside the window's margin, every row one menu row high.
     #[gpui::test]
-    fn the_model_picker_rests_above_the_composer_inside_the_pane(cx: &mut TestAppContext) {
+    fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("model-picker-place", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -14955,23 +14956,85 @@ mod tests {
             cx.run_until_parked();
         }
         let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
-        let composer = cx.debug_bounds("composer-block").unwrap();
+        let bar = cx.debug_bounds("bottom-bar").unwrap();
         assert_eq!(
             menu.bottom(),
-            composer.top() - px(crate::theme::MODEL_PICKER_GAP),
-            "FL-13: the picker's foot 5px over the input band"
+            bar.top() - px(crate::theme::MODEL_PICKER_GAP),
+            "FL-13: the picker's foot 5px over the bar its chip rides"
         );
         assert!(
             (menu.size.width - px(crate::theme::MODEL_PICKER_W)).abs() <= px(1.),
             "66 cells: {menu:?}"
         );
-        let pane = cx.debug_bounds("pane-body-1").unwrap();
-        assert!(menu.right() <= pane.right() - px(crate::theme::PANE_PAD_X) + px(1.5));
+        assert!(menu.right() <= bar.right() - px(crate::theme::GRID_PAD) + px(1.5));
         let row = cx
             .debug_bounds("choice-row-1")
             .expect("a live row under the section");
         // Terminal-native (WP-E): a float row is one grid row.
         assert_eq!(row.size.height, px(crate::theme::FLOAT_ROW_H));
+    }
+
+    /// The status line's popovers hang off their triggers in the bar, not
+    /// off the focused Pane (ADR 0014): with focus in a Group's right
+    /// column, the ctx card's right edge is the meter's and the model
+    /// picker's left edge stands its nudge left of its chip, both resting
+    /// on the bar.
+    #[gpui::test]
+    fn the_status_lines_popovers_hang_off_the_bar(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("bar-popovers", 2);
+        let group = group_all(&mut core);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+        view.update(cx, |view, cx| {
+            view.enter_group(group, cx);
+            view.focus_pane(1);
+            cx.notify();
+        });
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 64_000,
+                input_tokens: 64_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(200_000),
+            })
+            .unwrap();
+        tick(cx);
+        let settle = |cx: &mut gpui::VisualTestContext| {
+            for _ in 0..3 {
+                cx.executor().advance_clock(Duration::from_millis(300));
+                cx.update(|window, _| window.refresh());
+                cx.run_until_parked();
+            }
+        };
+        let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+        let bar = cx.debug_bounds("bottom-bar").unwrap();
+        let meter = debug_bounds(cx, format!("usage-meter-{}", thread.get()))
+            .expect("the focused Thread's ctx rides the bar");
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        settle(cx);
+        let card = cx
+            .debug_bounds("context-usage-card")
+            .expect("the press opens the card");
+        assert_eq!(card.right(), meter.right(), "the card hangs off the meter");
+        assert_eq!(card.bottom(), bar.top() - px(crate::theme::FLOAT_OFFSET));
+        cx.simulate_keystrokes("escape");
+        view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+        settle(cx);
+        let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
+            .expect("the model chip rides the bar");
+        let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
+        assert_eq!(
+            menu.bottom(),
+            bar.top() - px(crate::theme::MODEL_PICKER_GAP)
+        );
+        assert!(
+            (menu.left() - (chip.left() - px(crate::theme::MODEL_PICKER_NUDGE))).abs() <= px(1.5),
+            "the picker stands its nudge left of its chip: {menu:?} / {chip:?}"
+        );
     }
 
     /// A draft has spent no context, so its status line reads nothing — no
@@ -22580,9 +22643,9 @@ mod tests {
         cx.simulate_click(close, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(!view.settings_open));
-        // The titlebar cell carries the gear only where Settings has no
+        // The bottom bar carries the gear only where Settings has no
         // other visible door: macOS lists it in the app menu (and ⌘,), so
-        // there the cell has none, open or folded (the prototype).
+        // there the bar has none (the prototype).
         if cfg!(target_os = "macos") {
             assert!(cx.debug_bounds("settings-gear").is_none());
             cx.simulate_keystrokes("cmd-b");

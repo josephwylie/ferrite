@@ -526,7 +526,7 @@ fn a_tile_head_names_no_branch_and_no_state(cx: &mut TestAppContext) {
     branch("feat/board", cx);
     assert!(
         cx.debug_bounds("pane-head-branch-1").is_none(),
-        "the head carries no branch: the titlebar and the sidebar do"
+        "the head carries no branch: the sidebar does"
     );
     fake.streams.borrow()[0]
         .send(question("l2-head-question"))
@@ -794,6 +794,27 @@ fn the_empty_board_titlebar_says_nothing(cx: &mut TestAppContext) {
         cx.debug_bounds("composer-meta").is_none(),
         "no Pane's status line on the empty board"
     );
+}
+
+/// The band paints the plane from the board's own left edge, not a seam
+/// past it; where the app draws its own titlebar the window drags by the
+/// band's full width, over the nav as well as the board (ADR 0014).
+#[gpui::test]
+fn the_titlebar_band_spans_the_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("titlebar-band", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let plane = cx.debug_bounds("titlebar-plane").expect("the band's plane");
+    let board = cx.debug_bounds("board").expect("the board");
+    assert_eq!(plane.left(), board.left());
+    let drag = cx.debug_bounds("titlebar-drag");
+    if crate::titlebar::CUSTOM {
+        let drag = drag.expect("the drag region");
+        assert_eq!(drag.left(), px(0.), "the band over the nav drags too");
+    } else {
+        assert!(drag.is_none(), "macOS: AppKit owns the drag");
+    }
 }
 
 /// The checks card grows to its own tally: the counts line is never cut
@@ -1264,7 +1285,7 @@ fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
 /// column a cell in from the Pane's inner edge (`HEAD_PAD_X`), two cells
 /// wide (`HEAD_DOT_W`), its title right after it — so every head on a
 /// board shares one vertical of dots. Solo has no head at all: the
-/// titlebar carries the Thread.
+/// nav's selected row names the Thread.
 #[gpui::test]
 fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("head-on-column", 2);

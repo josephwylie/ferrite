@@ -27,8 +27,12 @@ logo. Herdr, the calmer reference, has no top toolbar and one status line.
   Pane head drawn there could not be dragged or clicked; on Windows it is
   the drag region and the caption buttons. It draws no location, no doors
   and no cell of its own over the nav: the nav's chrome runs from the
-  window's top, and folded, the lights sit on the plane. Solo still has no
-  head; the nav's selected row names the Thread.
+  window's top, and folded, the lights sit on the plane. On Windows the
+  drag region spans the band's full width, over the nav as well as the
+  board. Solo still has no head; the nav's selected row names the Thread.
+  Removing the band outright was rejected: macOS gives the window its drag
+  and its lights only there, and a Pane head or transcript drawn under
+  them could be neither clicked nor dragged.
 - **One bar per window: the bottom bar.** Left to right: the sidebar toggle,
   the bell (its list now opens upward) and, off macOS, the Settings gear;
   `ferrite`; the view tabs; the **focused Pane's status line**; the stretch;
@@ -36,10 +40,14 @@ logo. Herdr, the calmer reference, has no top toolbar and one status line.
   alone (an unfocused board Pane drew none), so moving it to the bar keeps
   per-Pane information per Pane: it follows focus, and every Pane's own
   Composer is now just its band. A draft's setup chips ride the same slot.
-  Its popovers still open over the focused Pane's Composer.
+  Its popovers hang off their triggers in the bar, the way the bell's
+  list does: their foot rests on the bar, their right edge inside the
+  window. They may cover the nav or a neighbouring Pane — they belong to
+  the bar, not to a Pane. A Pane's own cards (the plan, checks, session
+  controls) still hang off its head or Composer.
 - **`?` is the one way in to the keys.** No `⌘K commands`, no `⇧⇥ mode · ?
   shortcuts`. Placeholders are a couple of words (`Steer this thread`,
-  `Queue a follow-up`, `Start a thread`). A landed prediction keeps
+  `Queue a follow-up`, `Answer above`, `Start a thread`). A landed prediction keeps
   `⇥ accept`: without it the ghost reads as typed text.
 - **The banner is one muted line**: `~/ferrite on dev · started 7:18 pm`,
   the checkout still a path target. The title, provider and model are said

@@ -1,7 +1,6 @@
 //! The terminal-native nav's parity behaviour: non-exclusive Groups (R1,
 //! N-17), the real folds (N-4), the selection following the board (N-5),
-//! the one seam (N-8), and the content fade and titlebar cross-fade on
-//! their own clocks (N-15, N-16).
+//! the one seam (N-8), and the content fade on its own clock (N-15).
 
 use super::*;
 

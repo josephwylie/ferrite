@@ -229,6 +229,40 @@ fn the_focused_threads_context_reaches_the_bar(cx: &mut TestAppContext) {
     );
 }
 
+/// The bar's status line is the focused Pane's (ADR 0014): moving focus
+/// on a board (cmd-]) redraws it from the newly focused Thread.
+#[gpui::test]
+fn the_bars_status_line_follows_focus(cx: &mut TestAppContext) {
+    let b = board("stale-status-focus", &[], cx);
+    bind_production_keys(b.cx);
+    b.send(
+        1,
+        SessionEvent::TokenUsage {
+            total_tokens: 99_000,
+            input_tokens: 99_000,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            context_window: Some(200_000),
+        },
+    );
+    tick(b.cx);
+    frames(b.cx, 200);
+    let unfocused = drawn::status_usage().unwrap_or_default();
+    assert!(
+        !unfocused.starts_with("Some(99000)"),
+        "an unfocused Thread's usage is not the bar's: {unfocused}"
+    );
+    b.cx.simulate_keystrokes("cmd-]");
+    tick(b.cx);
+    frames(b.cx, 200);
+    assert!(
+        drawn::status_usage().is_some_and(|usage| usage.starts_with("Some(99000)")),
+        "{:?}",
+        drawn::status_usage()
+    );
+}
+
 /// The rename editor: opening it on a Pane's head draws it there; the name
 /// committed reaches the nav row, and the editor leaves the head.
 #[gpui::test]

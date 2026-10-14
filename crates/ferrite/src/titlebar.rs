@@ -55,21 +55,21 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 
 /// The band above the Pane board, as an overlay: the board's geometry
 /// already reserves `WIN_CHROME_H` at the top (`board_bounds`) and the nav
-/// draws its own chrome row inside the column, so this adds no layout — it
-/// claims what the window already left empty.
+/// leaves its top `WIN_CHROME_H` empty (`nav::content`), so this adds no
+/// layout — it claims what the window already left empty.
 ///
 /// The band says nothing (ADR 0014): it is the window's titlebar and no
 /// more — on macOS the empty strip AppKit drags by, on Windows a drag
-/// region and the caption buttons. It paints the reading plane
-/// (`paint::PLANE`, the same glass as the board under it) right of the
-/// nav's cell (`nav_width`), which it skips rather than covers.
+/// region across the window's full width and the caption buttons. It
+/// paints the reading plane (`paint::PLANE`, the same glass as the board
+/// under it) from `board_left`; left of that the nav's own chrome shows.
 ///
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
-pub fn strip(nav_width: f32, draggable: bool, maximized: bool) -> Div {
+pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
     let stretch = if CUSTOM && draggable {
-        drag_region("titlebar-drag", maximized)
+        drag_region(maximized)
     } else {
         div().flex_1().h_full()
     };
@@ -81,26 +81,24 @@ pub fn strip(nav_width: f32, draggable: bool, maximized: bool) -> Div {
         .h(px(WIN_CHROME_H))
         .flex()
         .flex_row()
-        .items_center()
-        .child(div().flex_shrink_0().w(px(nav_width + CHROME_SEAM_W)))
         .child(
             div()
-                .debug_selector(|| "titlebar-cell".into())
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .items_center()
-                .bg(paint::PLANE)
-                .child(stretch)
-                .children(CUSTOM.then(|| caption_buttons(maximized))),
+                .debug_selector(|| "titlebar-plane".into())
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(board_left))
+                .right_0()
+                .bg(paint::PLANE),
         )
+        .child(stretch)
+        .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
 /// below the resize edge on a restored window, so the top border still
 /// resizes; maximized, there is no border to preserve and it runs flush.
-pub fn drag_region(id: &'static str, maximized: bool) -> Div {
+fn drag_region(maximized: bool) -> Div {
     let inset = if maximized { 0.0 } else { CAPTION_RESIZE_EDGE };
     div()
         .flex_1()
@@ -110,7 +108,8 @@ pub fn drag_region(id: &'static str, maximized: bool) -> Div {
         .child(div().flex_shrink_0().h(px(inset)))
         .child(
             div()
-                .id(id)
+                .id("titlebar-drag")
+                .debug_selector(|| "titlebar-drag".into())
                 .flex_1()
                 .w_full()
                 // See `button`: the root's focus hitbox must not count as

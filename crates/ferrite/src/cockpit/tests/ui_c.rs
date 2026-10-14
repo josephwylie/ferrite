@@ -744,7 +744,7 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
 }
 
 /// Fix 2: a Thread whose turn ended in an error reads `failed` in the nav,
-/// and its dot is `BLOCKED` there, in the rail and in the titlebar — never
+/// and its dot is `BLOCKED` there, in the rail and in the Group head — never
 /// the idle grey beside a red word.
 #[gpui::test]
 fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAppContext) {
@@ -774,7 +774,11 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         );
         let (face, word) = pane::thread_face(view.cockpit.thread(thread).unwrap(), None, false);
         assert_eq!(word, Some(pane::HeadSlot::Failed));
-        assert_eq!(face.ink, crate::theme::BLOCKED, "the titlebar's dot agrees");
+        assert_eq!(
+            face.ink,
+            crate::theme::BLOCKED,
+            "the Group head's dot agrees"
+        );
     });
 }
 

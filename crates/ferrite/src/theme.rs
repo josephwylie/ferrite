@@ -42,8 +42,7 @@
 //! 3. **Grey, not near-black.** The opaque ladder, darkest first: `NODIFF`
 //!    (a split diff's empty side) < `PLANE` #1b1b1c (the reading plane: a
 //!    Pane's body, the empty board) < `HUNK` (a hunk's header row) <
-//!    `CHROME` #242425 (the sidebar, the titlebar cell over it, the bottom
-//!    bar; also `HEAD`, the focused Pane's head band, and `INBAND`, the
+//!    `CHROME` #242425 (the sidebar, the bottom bar; also `HEAD`, the focused Pane's head band, and `INBAND`, the
 //!    Composer's input band) < `FLOAT` (floating ground) < `HOVER` #2c2c2e
 //!    (under the pointer) < `BAND` #2e2e30 (the prompt echo, sticky over its
 //!    turn; a diff's file head; a Decision's command well) < `SELECTION`
@@ -229,13 +228,13 @@ impl From<Paint> for gpui::Fill {
 // (`0xRRGGBBAA`). Paint a region with `paint::*`, which picks between them.
 
 /// `#1b1b1c` — the reading plane: a Pane's body, the empty board, the
-/// titlebar cell over the board. The darkest working plane.
+/// titlebar band over the board. The darkest working plane.
 pub const PLANE: u32 = 0x1b1b1c;
 /// The reading plane as glass: 94%, a terminal's background opacity.
 #[allow(dead_code)]
 pub const PLANE_GLASS: u32 = 0x1a1a1bf0;
-/// `#242425` — chrome, lifted off the plane: the sidebar, the titlebar cell
-/// over it, the bottom bar.
+/// `#242425` — chrome, lifted off the plane: the sidebar, the bottom
+/// bar.
 pub const CHROME: u32 = 0x242425;
 /// Chrome as glass, 88%. The window's blur shows whatever sits behind
 /// Ferrite — other windows included — so a bright window behind turned a
@@ -372,8 +371,7 @@ pub const TEXT_MUTED: u32 = 0x98989d;
 /// `#5e5e63` — structure, never words: the `·` seam, `└` elbows, rails,
 /// disclosure glyphs, the parked ring.
 pub const TEXT_FAINT: u32 = 0x5e5e63;
-/// The muted ink on the chrome glass (the sidebar, the titlebar cell over it,
-/// the bottom bar). Over a see-through ground the opaque `TEXT_MUTED` loses
+/// The muted ink on the chrome glass (the sidebar, the bottom bar). Over a see-through ground the opaque `TEXT_MUTED` loses
 /// its contrast against a bright desktop, so on glass it lifts a step;
 /// opaque builds keep `TEXT_MUTED`.
 pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6bb } else { TEXT_MUTED };
@@ -1611,7 +1609,7 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`,
 ///   a couple of words and no keys (`?` lists them, ADR 0014): `Steer this
 ///   thread`; while a turn runs `Queue a follow-up`; a Pane a Decision
-///   waits in `answer above, or steer`; any other unfocused Pane nothing.
+///   waits in `Answer above`; any other unfocused Pane nothing.
 /// - **The working line** (`pane::working_line`, the spinner, the caption
 ///   and its facts) is the Composer's first row while a turn runs,
 ///   `COMPOSER_WORKING_GAP` above the band's rule.
