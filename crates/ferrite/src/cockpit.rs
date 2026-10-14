@@ -9270,7 +9270,9 @@ impl Render for CockpitView {
         if self.activation.is_none() {
             self.cockpit.set_window_active(window.is_window_active());
             self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
-                view.set_window_active(window.is_window_active(), cx);
+                if view.cockpit.set_window_active(window.is_window_active()) {
+                    cx.notify();
+                }
             }));
         }
         let root = self.render_cockpit(window, cx);
@@ -12636,13 +12638,6 @@ impl CockpitView {
         if let Some(target) = target {
             self.notice_verb(crate::notifications::target_verb(&target), cx);
         }
-    }
-
-    /// The window gained or lost the system's focus. Coming back reads
-    /// what is on screen, so its toasts go too.
-    pub(crate) fn set_window_active(&mut self, active: bool, cx: &mut Context<Self>) {
-        self.cockpit.set_window_active(active);
-        cx.notify();
     }
 
     /// The row a toast or a system notification shows for `target`, while
@@ -24704,10 +24699,10 @@ mod tests {
         });
     }
 
-    /// ADR 0017: with the window in the background, a finish on the very
-    /// Pane the operator left focused is news. It chimes, toasts and posts
-    /// a system notification; clicking that lands on the Thread and reads
-    /// it, and so does coming back to the window.
+    /// ADR 0017: with the window in the background, a finish on a Pane
+    /// left on screen is news. It chimes, toasts and posts a system
+    /// notification; clicking that brings the window forward and lands on
+    /// the Thread, and everything on screen is read.
     #[gpui::test]
     fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("system-notification", 2);
@@ -24716,7 +24711,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        cx.deactivate_window();
         for at in [0, 1] {
             fake.streams.borrow()[at]
                 .send(SessionEvent::TurnEnded {
@@ -24755,18 +24750,12 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 1, "the click landed on its Thread");
             assert!(!view.cockpit.notifications().attention(threads[1]));
-        });
-        assert_eq!(
-            tags(cx),
-            [system_tag(threads[0])],
-            "read, it leaves the notification centre"
-        );
-
-        view.update(cx, |view, cx| view.set_window_active(true, cx));
-        tick(cx);
-        view.read_with(cx, |view, _| {
             assert!(view.bell.toasts().is_empty(), "both are in view now");
         });
+        assert!(
+            tags(cx).is_empty(),
+            "read, they leave the notification centre"
+        );
     }
 
     /// ADR 0017: a request waiting while the window is away posts a system
@@ -24780,7 +24769,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        cx.deactivate_window();
         fake.streams.borrow()[1].send(decision("away")).unwrap();
         tick(cx);
         ring(cx);
@@ -24812,14 +24801,14 @@ mod tests {
 
     /// ADR 0017: alerts ringing together chime once, needs-you over done;
     /// and with the window focused, a request on a Pane that is on the
-    /// board but not focused rings nothing — it shows where it is asked.
+    /// board but not focused rings nothing — it is seen where it is asked.
     #[gpui::test]
     fn alerts_chime_once_and_a_request_in_view_rings_nothing(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("alerts-together", 2);
         let group = group_all(&mut core);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
-        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        cx.deactivate_window();
         fake.streams.borrow()[0]
             .send(SessionEvent::TurnEnded {
                 outcome: ferrite_core::TurnOutcome::Completed,
@@ -24834,10 +24823,8 @@ mod tests {
             assert_eq!(view.bell.toasts().len(), 2);
         });
 
-        view.update(cx, |view, cx| {
-            view.set_window_active(true, cx);
-            view.chimed.clear();
-        });
+        cx.update(|window, _| window.activate_window());
+        view.update(cx, |view, _| view.chimed.clear());
         tick(cx);
         let unfocused = view.read_with(cx, |view, _| {
             assert!(view.bell.toasts().is_empty(), "both are in view now");
@@ -24855,10 +24842,6 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.bell.toasts().is_empty());
             assert!(view.chimed.is_empty());
-            assert!(
-                view.cockpit.notifications().unread() > 0,
-                "the bell keeps the request"
-            );
         });
     }
 
@@ -24931,13 +24914,13 @@ mod tests {
         let (core, fake) = cockpit("alert-settings", 2);
         cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| {
+        view.update(cx, |view, _| {
             view.prefs
                 .settings
                 .set_provider_sounds(Provider::Claude, false);
             view.prefs.settings.system_notifications = false;
-            view.set_window_active(false, cx);
         });
+        cx.deactivate_window();
         fake.streams.borrow()[0]
             .send(SessionEvent::TurnEnded {
                 outcome: ferrite_core::TurnOutcome::Completed,
