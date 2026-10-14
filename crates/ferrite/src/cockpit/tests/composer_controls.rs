@@ -160,7 +160,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     core.set_effort(thread, Some("high".into())).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.update(cx, |view, cx| {
+    view.update_in(cx, |view, window, cx| {
         view.open_provider_picker(thread, cx);
         let pick = view
             .popover
@@ -178,7 +178,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
                 state: ferrite_core::RunState::Running,
             }),
         );
-        view.pick(pick, cx);
+        view.pick(pick, window, cx);
         let menu = view.popover.as_ref().expect("explanation stays open");
         assert_eq!(menu.rows[0].name, TUNING_BUSY_HINT);
         assert!(menu.rows.iter().all(|row| row.inert));

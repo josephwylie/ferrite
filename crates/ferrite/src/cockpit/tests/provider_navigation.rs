@@ -137,10 +137,11 @@ fn contract_native_session_picker_shows_titles_without_spawning(cx: &mut TestApp
     }]))
     .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().unwrap();
-        assert_eq!(menu.rows[0].name.as_ref(), "Fix startup latency");
-        assert!(menu.rows[0].detail.contains("ferrite"));
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        let rows = palette.survivors();
+        assert_eq!(rows[0].name.as_ref(), "Fix startup latency");
+        assert!(rows[0].context.contains("ferrite"));
     });
     assert_eq!(fake.spawned.borrow().len(), count);
     assert!(fake.sent.borrow().is_empty());
@@ -161,7 +162,9 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     cx.run_until_parked();
     let _ = tx.send(Ok(vec![]));
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, _| {
+        assert!(view.popover.is_none() && view.floats.palette.is_none())
+    });
 }
 
 /// Folded (cmd-B), the column draws nothing and the board takes the width;

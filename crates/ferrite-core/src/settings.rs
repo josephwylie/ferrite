@@ -104,6 +104,10 @@ pub struct Settings {
     /// notification while Ferrite's window is in the background.
     /// Default: true.
     pub system_notifications: bool,
+    /// The use, in percent, at which a provider's 5-hour or weekly window
+    /// warns: one toast as a window rises past each. Empty turns the
+    /// warnings off. Default: 80 and 95.
+    pub allowance_warnings: Vec<u8>,
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -197,6 +201,7 @@ impl Default for Settings {
             claude_sounds: true,
             codex_sounds: true,
             system_notifications: true,
+            allowance_warnings: vec![80, 95],
         }
     }
 }
@@ -369,6 +374,7 @@ mod tests {
             claude_sounds: false,
             codex_sounds: false,
             system_notifications: false,
+            allowance_warnings: vec![90],
         }
     }
 
@@ -448,6 +454,7 @@ mod tests {
         assert_eq!(settings.sound_file(Sound::NeedsYou), None);
         assert!(settings.sounds_for(Provider::Claude) && settings.sounds_for(Provider::Codex));
         assert!(settings.system_notifications);
+        assert_eq!(settings.allowance_warnings, [80, 95]);
     }
 
     /// A provider's mute silences only its own Threads, and turning sounds

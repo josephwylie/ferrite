@@ -1029,13 +1029,12 @@ fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target
 }
 
 /// The one popover the Composer's slot can hold — the `/` or `@` menu
-/// (#23), the import file-picker (#11), the provider picker (#25) or a
-/// draft's band chip (#29) — and everything it shows. At most one for the
-/// whole cockpit, always on the focused Pane's Composer: `pane` names that
-/// Pane by the roster's own identity. Rows
-/// are discovered when it opens and re-derived only by its kind's own
-/// rule, never per frame; each row carries what picking it does, so the
-/// two can never drift apart.
+/// (#23), the provider picker (#25) or a draft's band chip (#29) — and
+/// everything it shows. At most one for the whole cockpit, always on the
+/// focused Pane's Composer: `pane` names that Pane by the roster's own
+/// identity. Rows are discovered when it opens and re-derived only by its
+/// kind's own rule, never per frame; each row carries what picking it
+/// does, so the two can never drift apart.
 struct Popover {
     /// The Pane whose Composer holds it.
     pane: PaneIdentity,
@@ -1070,8 +1069,6 @@ enum Kind {
         query: String,
         request_id: u64,
     },
-    /// #11: adopt a CLI session file into a still-blank Thread.
-    ImportFile,
     /// #25: re-aim the Thread's provider / model before its first prompt.
     Provider,
     /// The Composer's effort picker: the reasoning ladder the Thread's
@@ -1096,8 +1093,10 @@ struct PendingFileSearch {
     reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
     fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
 }
+/// The import picker's session listing, under way off the UI thread.
 struct PendingDiscovery {
-    pane: PaneIdentity,
+    /// The blank Pane a pick replaces, if any.
+    into: Option<PaneIdentity>,
     request_id: u64,
     started: std::time::Instant,
     reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
@@ -1129,7 +1128,6 @@ impl Kind {
         match self {
             Kind::Commands => &[("↑↓", "select"), ("↵", "run"), ("esc", "dismiss")],
             Kind::Files { .. } => &[("↑↓", "select"), ("↵", "insert"), ("esc", "dismiss")],
-            Kind::ImportFile => &[("↑↓", "select"), ("↵", "adopt"), ("esc", "dismiss")],
             Kind::Band(pane::BandChip::Project) => &[
                 ("type", "a path"),
                 ("↑↓", "move"),
@@ -1220,7 +1218,7 @@ enum Consequence {
     OpenEffortPicker,
     /// An effort-row pick: this level, or None for the operator's default.
     Effort(Option<String>),
-    /// The local `import` row (#11): open the file picker — clearing the
+    /// The local `import` row (#11): open the import picker — clearing the
     /// line on a Thread, and leaving it alone on a draft, whose typed
     /// command must survive a refused adoption.
     OpenImportPicker,
@@ -1232,7 +1230,6 @@ enum Consequence {
     /// CLI reads the `@path` text itself, Codex's send derives its mention
     /// item — the pick just paints the standing token.
     Mention(SharedString),
-    Adopt(std::path::PathBuf),
     Provision(ProviderChoice),
     Band(BandChoice),
 }
@@ -1397,6 +1394,7 @@ impl CockpitView {
         crate::theme::init_components(cx);
         subagents::init(cx);
         cockpit.set_suggestions_enabled(prefs.settings.placeholder_suggestions);
+        cockpit.set_allowance_thresholds(prefs.settings.allowance_warnings.clone());
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -4251,6 +4249,36 @@ impl CockpitView {
         );
     }
 
+    /// A provider's 5-hour or weekly window rising past one of the
+    /// operator's thresholds: one toast per crossing, left up — the
+    /// allowance is the account's, and every Thread on it draws it down.
+    fn present_allowance_warnings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use ferrite_core::providers::limits::LimitWindow;
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        for warning in self.cockpit.take_allowance_warnings() {
+            let span = match warning.window {
+                LimitWindow::FiveHour => "5-hour",
+                LimitWindow::Weekly => "weekly",
+            };
+            let provider = provider_title(warning.provider);
+            window.push_notification(
+                Notification::new()
+                    .title(format!(
+                        "{provider} {span} allowance {:.0}% used",
+                        warning.used_fraction * 100.0
+                    ))
+                    .message(format!(
+                        "Past your {}% warning. Every {provider} Thread draws on it.",
+                        warning.threshold
+                    ))
+                    .with_type(NotificationType::Warning)
+                    .autohide(false),
+                cx,
+            );
+        }
+    }
+
     /// Every change to the settings goes through here: saved at once
     /// (unless the file on disk could not be read, which is kept as it
     /// is), the Session defaults the spawner reads refreshed, and the facts
@@ -4263,6 +4291,8 @@ impl CockpitView {
         change(&mut self.prefs.settings);
         self.cockpit
             .set_suggestions_enabled(self.prefs.settings.placeholder_suggestions);
+        self.cockpit
+            .set_allowance_thresholds(self.prefs.settings.allowance_warnings.clone());
         if self.prefs.unreadable.is_none() {
             if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
                 self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
@@ -5305,7 +5335,7 @@ impl CockpitView {
         self.panes.get_mut(focused).and_then(PaneView::draft_mut)
     }
 
-    fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         // The card's ↵ is its confirm: the only line on it is the name.
         if self.project_editor.is_some() {
             if self.project_editor_ready() {
@@ -5318,10 +5348,17 @@ impl CockpitView {
             return;
         }
         // A draft's ↵ (#29): on a band chip it opens that chip's popover;
-        // on the prompt line it is the first send — the bootstrap.
-        if let Some(draft) = self.panes.get(self.focused()).and_then(PaneView::draft) {
-            match draft.band_focus {
+        // on the prompt line it is the first send — the bootstrap — or a
+        // typed-out `/import`.
+        if let Some(band_focus) = self
+            .panes
+            .get(self.focused())
+            .and_then(PaneView::draft)
+            .map(|draft| draft.band_focus)
+        {
+            match band_focus {
                 Some(chip) => self.open_band_popover(chip, cx),
+                None if self.typed_import(window, cx) => {}
                 None => self.bootstrap_draft(cx),
             }
             return;
@@ -5351,6 +5388,9 @@ impl CockpitView {
         // ↵ on an empty line sends a pending question whose every question
         // is answered (digits toggled a multi-select; ↵ sends it).
         if self.panes[self.focused()].composer.read(cx).is_empty() && self.send_ready_question(cx) {
+            return;
+        }
+        if self.typed_import(window, cx) {
             return;
         }
         let composer = self.panes[self.focused()].composer.clone();
@@ -5541,7 +5581,7 @@ impl CockpitView {
             .filter(|open| matches!(open.kind, Kind::Commands))
             .map(|open| open.selected)
         {
-            self.pick(at, cx);
+            self.pick(at, window, cx);
             return;
         }
         if self.accept_suggestion(window, cx) {
@@ -5990,7 +6030,8 @@ impl CockpitView {
                         if !standalone {
                             return None;
                         }
-                        let row = local_row(filter, "import", "Adopt a CLI session file", false)?;
+                        let row =
+                            local_row(filter, "import", "Resume a Claude or Codex session", false)?;
                         return Some(Popover {
                             scroll: ScrollHandle::new(),
                             revealed: Default::default(),
@@ -6030,7 +6071,7 @@ impl CockpitView {
                     })
                     .collect();
                 if let Some(row) = standalone
-                    .then(|| local_row(filter, "import", "Adopt a CLI session file", false))
+                    .then(|| local_row(filter, "import", "Resume a Claude or Codex session", false))
                     .flatten()
                 {
                     rows.retain(|existing| existing.row.name != row.name);
@@ -6087,9 +6128,10 @@ impl CockpitView {
                 .collect();
             // Ferrite's local rows ride on top, through the same fuzzy
             // filter and under the same cap as every row. #11: `import`
-            // while the Thread still offers adoption. #25: `provider`
-            // always — live before the first prompt, and kept visible but
-            // inert after it, so the door's absence never reads as a bug.
+            // always — in the Thread's place while it is blank, else
+            // alongside. #25: `provider` always — live before the first
+            // prompt, and kept visible but inert after it, so the door's
+            // absence never reads as a bug.
             // A local row replaces a provider command of the same name
             // (Claude lists its own `effort`): Ferrite's opens the picker,
             // and the typed form (`/effort max`) still works — `submit`
@@ -6099,8 +6141,10 @@ impl CockpitView {
                 rows.insert(0, row);
                 rows.truncate(MENU_ROWS_MAX);
             };
-            if standalone && pane::offers_import(Some(open.transcript())) {
-                if let Some(row) = local_row(filter, "import", "Adopt a CLI session file", false) {
+            if standalone {
+                if let Some(row) =
+                    local_row(filter, "import", "Resume a Claude or Codex session", false)
+                {
                     push_local(
                         &mut rows,
                         Row {
@@ -6357,9 +6401,9 @@ impl CockpitView {
         }
     }
 
-    fn menu_pick(&mut self, _: &MenuPick, _window: &mut Window, cx: &mut Context<Self>) {
+    fn menu_pick(&mut self, _: &MenuPick, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(at) = self.popover.as_ref().map(|open| open.selected) {
-            self.pick(at, cx);
+            self.pick(at, window, cx);
         }
     }
 
@@ -6379,7 +6423,7 @@ impl CockpitView {
                 }
             }
             Kind::Commands | Kind::Files { .. } => self.menu_muted = true,
-            Kind::ImportFile | Kind::Provider | Kind::Effort => {}
+            Kind::Provider | Kind::Effort => {}
         }
         cx.notify();
     }
@@ -6387,7 +6431,7 @@ impl CockpitView {
     /// The shared tail of ↵ and a row click: the row's own consequence,
     /// dispatched. The popover closes either way — a door it opens (the
     /// pickers) is a fresh popover in its place.
-    fn pick(&mut self, at: usize, cx: &mut Context<Self>) {
+    fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
         // The native menu can outlive the frame in which it opened. A turn
         // that started meanwhile, or a change still waiting on the
         // provider, must not turn a visible choice into a guaranteed
@@ -6452,10 +6496,16 @@ impl CockpitView {
                 }
             }
             Consequence::OpenImportPicker => {
-                if open.pane.thread().is_some() {
-                    splice_line(cx, "");
-                }
-                self.open_import_picker(open.pane, cx);
+                // A draft's one line is the `/import` its pick replaces; a
+                // Thread is replaced only while it is blank.
+                let into = match open.pane {
+                    PaneIdentity::Draft(_) => Some(open.pane),
+                    PaneIdentity::Thread(_) => {
+                        splice_line(cx, "");
+                        self.import_target(cx)
+                    }
+                };
+                self.open_import_palette(into, window, cx);
             }
             Consequence::Mention(path) => {
                 let Kind::Files { token_start, .. } = &open.kind else {
@@ -6469,7 +6519,6 @@ impl CockpitView {
                     composer.stage_mention(SharedString::from(token), cx);
                 });
             }
-            Consequence::Adopt(path) => self.adopt_file(open.pane, path, cx),
             Consequence::Provision(choice) => {
                 if let Some(thread) = open.pane.thread() {
                     self.pick_provider(thread, choice.clone(), cx);
@@ -6555,183 +6604,7 @@ impl CockpitView {
                 }
             }
         }
-        if let Some(pending) = self.pending_discovery.take() {
-            let current = self.index_of(pending.pane).is_some()
-                && self.discovery_request == pending.request_id
-                && self.popover.as_ref().is_some_and(|open| {
-                    open.pane == pending.pane && matches!(open.kind, Kind::ImportFile)
-                });
-            if current {
-                let result = match pending.reply.try_recv() {
-                    Ok(result) => Some(result.map_err(|error| error.to_string())),
-                    Err(TryRecvError::Empty)
-                        if pending.started.elapsed() < Duration::from_secs(15) =>
-                    {
-                        None
-                    }
-                    Err(error) => Some(Err(error.to_string())),
-                };
-                if let Some(result) = result {
-                    let now = ferrite_core::clock::system_time();
-                    let rows = match result {
-                        Ok(candidates) if !candidates.is_empty() => candidates
-                            .into_iter()
-                            .map(|candidate| {
-                                let title = candidate.title.unwrap_or_else(|| {
-                                    candidate
-                                        .path
-                                        .file_name()
-                                        .map(|name| name.to_string_lossy().into_owned())
-                                        .unwrap_or_default()
-                                });
-                                let cwd = candidate
-                                    .cwd
-                                    .as_deref()
-                                    .map(|path| path.display().to_string())
-                                    .unwrap_or_default();
-                                Row {
-                                    row: pane::MenuRow {
-                                        insert: SharedString::default(),
-                                        name: title.into(),
-                                        matched: Vec::new(),
-                                        detail: format!(
-                                            "{} · {} · {}",
-                                            provider_label(candidate.provider),
-                                            cwd,
-                                            age_label(candidate.modified, now)
-                                        )
-                                        .into(),
-                                        prose_detail: false,
-                                        inert: false,
-                                    },
-                                    active: false,
-                                    consequence: Consequence::Adopt(candidate.path),
-                                }
-                            })
-                            .collect(),
-                        other => {
-                            let message = match other {
-                                Ok(_) => "No sessions found".to_string(),
-                                Err(error) => format!("Could not find sessions: {error}"),
-                            };
-                            vec![Row {
-                                row: pane::MenuRow {
-                                    insert: SharedString::default(),
-                                    name: message.into(),
-                                    matched: Vec::new(),
-                                    detail: SharedString::default(),
-                                    prose_detail: true,
-                                    inert: true,
-                                },
-                                active: false,
-                                consequence: Consequence::Inert,
-                            }]
-                        }
-                    };
-                    if let Some(open) = &mut self.popover {
-                        open.rows = rows;
-                        open.selected = 0;
-                    }
-                    cx.notify();
-                } else {
-                    self.pending_discovery = Some(pending);
-                }
-            }
-        }
-    }
-
-    /// #11: discovery and the file-pick popover, run once per open — never
-    /// per frame. With nothing to list it says so in the transcript instead
-    /// of opening an empty popover; the Notice is Ferrite's own out-of-band
-    /// line, so the Thread keeps offering import. On a draft the words land
-    /// where the band is.
-    fn open_import_picker(&mut self, from: PaneIdentity, cx: &mut Context<Self>) {
-        self.discovery_request = self.discovery_request.wrapping_add(1);
-        let request_id = self.discovery_request;
-        if let Some(receiver) = self
-            .cockpit
-            .discover_sessions(self.session_file_roots.clone(), IMPORT_ROWS_MAX)
-        {
-            self.popover = Some(Popover {
-                scroll: ScrollHandle::new(),
-                revealed: Default::default(),
-                pane: from,
-                kind: Kind::ImportFile,
-                rows: vec![Row {
-                    row: pane::MenuRow {
-                        insert: SharedString::default(),
-                        name: "Searching sessions…".into(),
-                        matched: Vec::new(),
-                        detail: SharedString::default(),
-                        prose_detail: true,
-                        inert: true,
-                    },
-                    active: false,
-                    consequence: Consequence::Inert,
-                }],
-                selected: 0,
-            });
-            self.pending_discovery = Some(PendingDiscovery {
-                pane: from,
-                request_id,
-                started: std::time::Instant::now(),
-                reply: receiver,
-            });
-            cx.notify();
-            return;
-        }
-        let candidates =
-            ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
-        if candidates.is_empty() {
-            let roots = self
-                .session_file_roots
-                .iter()
-                .map(|(_, root)| root.display().to_string())
-                .collect::<Vec<_>>()
-                .join(" or ");
-            let message = format!("no CLI session files found under {roots}");
-            self.say_to(from, message);
-            cx.notify();
-            return;
-        }
-        let now = ferrite_core::clock::system_time();
-        let rows = candidates
-            .into_iter()
-            .map(|candidate| {
-                let name = candidate
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let row = pane::MenuRow {
-                    // Nothing lands in the line on ↵: the pick reads the
-                    // consequence riding beside this row.
-                    insert: SharedString::default(),
-                    name: SharedString::from(provider_label(candidate.provider)),
-                    matched: Vec::new(),
-                    detail: SharedString::from(format!(
-                        "{name} · {}",
-                        age_label(candidate.modified, now)
-                    )),
-                    prose_detail: false,
-                    inert: false,
-                };
-                Row {
-                    row,
-                    active: false,
-                    consequence: Consequence::Adopt(candidate.path),
-                }
-            })
-            .collect();
-        self.popover = Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            pane: from,
-            kind: Kind::ImportFile,
-            rows,
-            selected: 0,
-        });
-        cx.notify();
+        self.poll_session_discovery(cx);
     }
 
     /// Ferrite's own words to one Pane: a Notice in a Thread's transcript,
@@ -6934,14 +6807,24 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// An import-row pick (#11): adopt the picked file through the core
-    /// door, in place of the Pane it was picked from — a draft becomes the
-    /// imported Thread and its line clears; a blank Thread yields its slot.
-    /// A refusal is the core's readable words, surfaced in that Pane — and
-    /// the door stays open for the next try.
-    fn adopt_file(&mut self, from: PaneIdentity, path: &std::path::Path, cx: &mut Context<Self>) {
-        match self.cockpit.adopt_into(from, path) {
+    /// An import pick (#11): adopt the picked file through the core door —
+    /// in place of `into`, the blank Pane the picker was opened for (a
+    /// draft becomes the imported Thread and its line clears; a blank
+    /// Thread yields its slot), else alongside the Panes shown. A refusal
+    /// is the core's readable words, surfaced in that Pane (a toast with
+    /// none) — and the door stays open for the next try.
+    pub(super) fn adopt_file(
+        &mut self,
+        into: Option<PaneIdentity>,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The Pane may have gone while the picker was up.
+        let into = into.filter(|pane| self.index_of(*pane).is_some());
+        match self.cockpit.adopt_into(into, path) {
             Ok(adopted) => {
+                let draft = into.filter(|pane| pane.draft().is_some());
                 if let Some(error) = &adopted.not_opened {
                     // Durable but not on screen: the Thread sits in the
                     // nav's parked rows, exactly like a launch-time import
@@ -6950,11 +6833,16 @@ impl CockpitView {
                         "imported thread {} would not open: {error:?}",
                         adopted.thread
                     );
-                } else if let Some(index) = from.draft().and_then(|_| self.index_of(from)) {
-                    self.panes[index].composer.update(cx, |composer, cx| {
-                        composer.take(cx);
-                    });
-                    self.panes[index].adopt_thread(adopted.thread);
+                } else {
+                    // The import has focus: an empty board shown over the
+                    // open Threads would hide it.
+                    self.empty_shown = false;
+                    if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
+                        self.panes[index].composer.update(cx, |composer, cx| {
+                            composer.take(cx);
+                        });
+                        self.panes[index].adopt_thread(adopted.thread);
+                    }
                 }
                 if let Some(error) = &adopted.blank_kept {
                     ferrite_core::log!("the blank thread stayed open: {error}");
@@ -6965,11 +6853,28 @@ impl CockpitView {
                 // a fresh parked row.
                 if adopted.not_opened.is_some() {
                     self.parked_changed(cx);
-                } else if from.draft().is_some() {
+                } else if draft.is_some() {
                     self.thread_opened(adopted.thread, cx);
                 }
             }
-            Err(e) => self.say_to(from, format!("cannot import {}: {e}", path.display())),
+            Err(e) => {
+                let message = format!("cannot import {}: {e}", path.display());
+                match into {
+                    Some(pane) => self.say_to(pane, message),
+                    None => {
+                        use gpui::component::notification::{Notification, NotificationType};
+                        use gpui::component::WindowExt as _;
+                        window.push_notification(
+                            Notification::new()
+                                .title("Session not imported")
+                                .message(message)
+                                .with_type(NotificationType::Error)
+                                .autohide(false),
+                            cx,
+                        );
+                    }
+                }
+            }
         }
         cx.notify();
     }
@@ -8052,9 +7957,9 @@ impl CockpitView {
                 }))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.listener(move |view, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        view.pick(at, cx);
+                        view.pick(at, window, cx);
                     }),
                 )
                 .into_any_element()
@@ -8104,7 +8009,7 @@ impl CockpitView {
                     )
                 }
                 _ if explains => wire(crate::menu::note(row.name.clone()), at, cx),
-                Kind::Commands | Kind::Files { .. } | Kind::ImportFile => wire(
+                Kind::Commands | Kind::Files { .. } => wire(
                     pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
                     at,
                     cx,
@@ -9093,10 +8998,10 @@ fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec
         .collect()
 }
 
-/// How many session files the import picker lists (#11) — the same dense
-/// keyboard-menu bound as the Composer menus. Newest first is how the
-/// operator finds the session they just left.
-const IMPORT_ROWS_MAX: usize = MENU_ROWS_MAX;
+/// How many sessions the import picker lists (#11), newest first: enough
+/// history to search, few enough that the listing reads a bounded slice
+/// of each file rather than every session ever run.
+const IMPORT_ROWS_MAX: usize = 200;
 
 /// One Ferrite-local `/` row (#11's `import`, #25's `provider`) — never
 /// the provider's, which its description says out loud. The same fuzzy
@@ -9119,27 +9024,6 @@ fn local_row(
         prose_detail: true,
         inert,
     })
-}
-
-/// A file's age as the operator scans it — the picker row's meta.
-fn age_label(modified: Option<std::time::SystemTime>, now: std::time::SystemTime) -> String {
-    let Some(modified) = modified else {
-        return "age unknown".into();
-    };
-    // A file from the future (clock skew) is as good as new.
-    let Ok(elapsed) = now.duration_since(modified) else {
-        return "just now".into();
-    };
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        "just now".into()
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86400)
-    }
 }
 
 /// What git lists for one repo, for the workspace chip: its worktrees
@@ -9453,6 +9337,7 @@ impl CockpitView {
         self.present_cli_updates(window, cx);
         self.present_read_only(window, cx);
         self.present_unreadable_settings(window, cx);
+        self.present_allowance_warnings(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -9553,23 +9438,14 @@ impl CockpitView {
 
         // The popover belongs to the focused Pane's Composer at L1 (#23):
         // leaving that Pane, or zooming below L1, closes it here — and a
-        // picker closes the moment its offer expires (#11, #25). The
-        // import picker's Thread stopping being adoptable means a pick can
-        // never delete a Thread that is no longer blank; the provider
-        // picker's lock arming means nothing re-aims after the first
-        // prompt, however it went out; a band chip (#29) goes with the
-        // draft becoming a Thread. Render is the one chokepoint every
-        // open, pick, dismissal and heal passes.
+        // picker closes the moment its offer expires (#25): a band chip
+        // (#29) goes with the draft becoming a Thread. Render is the one
+        // chokepoint every open, pick, dismissal and heal passes.
         if self.popover.as_ref().is_some_and(|open| {
             let focused = self.panes.get(self.focused());
             level != Level::Transcript
                 || focused.is_none_or(|pane| pane.identity != open.pane)
                 || match &open.kind {
-                    Kind::ImportFile => open.pane.thread().is_some_and(|thread| {
-                        !pane::offers_import(
-                            self.cockpit.thread(thread).map(|live| live.transcript()),
-                        )
-                    }),
                     // The model picker outlives the first prompt (the
                     // model can always change); only its Thread going
                     // away closes it.
@@ -10865,6 +10741,28 @@ impl CockpitView {
                 .clone()
                 .update(cx, |composer, cx| composer.insert(digit, cx));
         }
+    }
+
+    /// A typed-out `/import` (the slash menu muted) opens the import
+    /// picker, as its menu row does, rather than going to the provider as
+    /// text.
+    fn typed_import(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(pane) = self.panes.get(self.focused()) else {
+            return false;
+        };
+        let (identity, composer) = (pane.identity, pane.composer.clone());
+        if composer.read(cx).prompt().trim() != "/import" {
+            return false;
+        }
+        let into = match identity {
+            PaneIdentity::Draft(_) => Some(identity),
+            PaneIdentity::Thread(_) => {
+                composer.update(cx, |composer, cx| composer.take(cx));
+                self.import_target(cx)
+            }
+        };
+        self.open_import_palette(into, window, cx);
+        true
     }
 
     /// A typed `/effort <level>` or `/model <name>` the cockpit itself can
@@ -12276,8 +12174,8 @@ impl CockpitView {
                     }
                 });
             }),
-            on_pick: std::rc::Rc::new(move |at, _, cx| {
-                let _ = picker.update(cx, |view, cx| view.pick(at, cx));
+            on_pick: std::rc::Rc::new(move |at, window, cx| {
+                let _ = picker.update(cx, |view, cx| view.pick(at, window, cx));
             }),
             place: self.bar_place(),
         }
@@ -21875,7 +21773,10 @@ mod tests {
                 menu.rows[0].detail.as_ref(),
                 "Switch model or hand over to the other provider"
             );
-            assert_eq!(menu.rows[2].detail.as_ref(), "Adopt a CLI session file");
+            assert_eq!(
+                menu.rows[2].detail.as_ref(),
+                "Resume a Claude or Codex session"
+            );
         });
 
         // The Session announces its own commands: import rides on top, and
@@ -21913,9 +21814,9 @@ mod tests {
             );
         });
 
-        // A conversation starts: the import door closes; the model row
-        // stays live — the model can change any time — and says what it
-        // does now that the provider is fixed.
+        // A conversation starts: import stays, opening alongside now; the
+        // model row stays live — the model can change any time — and says
+        // what it does now that the provider is fixed.
         cx.simulate_keystrokes("backspace");
         cx.simulate_input("hello");
         cx.simulate_keystrokes("enter");
@@ -21925,8 +21826,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             let menu = view.popover.as_ref().expect("the model menu still lists");
             assert!(
-                menu.rows.iter().all(|row| row.name.as_ref() != "/import"),
-                "a Thread with history offers no import"
+                menu.rows.iter().any(|row| row.name.as_ref() == "/import"),
+                "a Thread with history still offers import, alongside"
             );
             assert_eq!(menu.rows[0].name.as_ref(), "/model");
             assert!(!menu.rows[0].inert, "the model door stays open");
@@ -21935,15 +21836,37 @@ mod tests {
                 "Switch model or hand over to the other provider"
             );
             assert_eq!(menu.rows[1].name.as_ref(), "/effort");
-            assert_eq!(menu.rows.len(), 6);
+            assert_eq!(menu.rows.len(), 7);
         });
     }
 
+    /// The open import picker's survivors: each row's name and context.
+    fn session_rows(
+        view: &Entity<CockpitView>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Vec<(String, String)> {
+        view.read_with(cx, |view, cx| {
+            let palette = view
+                .floats
+                .palette
+                .as_ref()
+                .expect("the picker is open")
+                .read(cx);
+            assert_eq!(palette.scope, crate::palette::PaletteScope::Sessions);
+            palette
+                .survivors()
+                .iter()
+                .map(|row| (row.name.to_string(), row.context.to_string()))
+                .collect()
+        })
+    }
+
     /// #11: picking `import` is Ferrite's own act — the line is cleared,
-    /// nothing goes near the provider, and the file-pick popover lists both
-    /// vendors' session files newest first with provider and age per row.
+    /// nothing goes near the provider, and the import picker lists both
+    /// vendors' sessions newest first with provider and age per row,
+    /// searched as the operator types.
     #[gpui::test]
-    fn picking_import_opens_the_file_picker_and_sends_the_provider_nothing(
+    fn picking_import_opens_the_session_picker_and_sends_the_provider_nothing(
         cx: &mut TestAppContext,
     ) {
         let (core, _fake) = cockpit("import-picker", 1);
@@ -21988,25 +21911,24 @@ mod tests {
             "",
             "the pick never lands as slash text"
         );
-        view.read_with(cx, |view, _| {
-            let picker = view.popover.as_ref().expect("the file picker is open");
-            let names: Vec<&str> = picker
-                .rows
-                .iter()
-                .map(|pick| pick.row.name.as_ref())
-                .collect();
-            assert_eq!(names, ["claude", "codex", "claude"], "newest first");
-            let detail = |at: usize| picker.rows[at].row.detail.as_ref();
-            assert!(detail(0).contains("bbbb.jsonl"));
-            assert!(detail(0).contains("1m ago"));
-            assert!(detail(1).contains("rollout-cccc.jsonl"));
-            assert!(detail(2).contains("3h ago"));
-            // The row and the file it adopts ride together.
+        assert_eq!(
+            session_rows(&view, cx),
+            [
+                ("bbbb".to_string(), "claude \u{b7} 1m".to_string()),
+                ("rollout-cccc".to_string(), "codex \u{b7} 30m".to_string()),
+                ("aaaa".to_string(), "claude \u{b7} 3h".to_string()),
+            ],
+            "newest first"
+        );
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().unwrap().read(cx);
+            // The row and the file it adopts, in place of this blank
+            // Thread, ride together.
             assert!(matches!(
-                &picker.rows[0].consequence,
-                Consequence::Adopt(path) if path.ends_with("bbbb.jsonl")
+                palette.selected().map(|row| &row.act),
+                Some(crate::palette::Act::Adopt { path, into: Some(PaneIdentity::Thread(into)) })
+                    if path.ends_with("bbbb.jsonl") && *into == thread
             ));
-            assert_eq!(picker.selected, 0);
             // Nothing reached the provider: no prompt, no running turn.
             let transcript = view.cockpit.thread(thread).unwrap().transcript();
             assert!(
@@ -22019,23 +21941,63 @@ mod tests {
             assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
         });
 
-        // The arrows walk the rows; escape dismisses with the keyboard
-        // still in the Composer.
-        cx.simulate_keystrokes("down");
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.popover.as_ref().expect("open").selected, 1);
-        });
+        // Typing searches; escape dismisses with the keyboard back in the
+        // Composer.
+        cx.simulate_input("codex");
+        tick(cx);
+        assert_eq!(
+            session_rows(&view, cx),
+            [("rollout-cccc".to_string(), "codex \u{b7} 30m".to_string())]
+        );
         cx.simulate_keystrokes("escape");
-        cx.run_until_parked();
+        tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "escape dismissed the picker");
+            assert!(view.floats.palette.is_none(), "escape dismissed the picker");
         });
         cx.simulate_input("still typing");
         assert_eq!(
             composer_text(&view, cx),
             "still typing",
-            "the keyboard never left the Composer"
+            "the keyboard is back in the Composer"
+        );
+    }
+
+    /// The listing runs off the UI thread: the picker opens at once and
+    /// fills when it answers, with the session's own title and project.
+    #[gpui::test]
+    fn the_import_picker_fills_when_the_listing_answers(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("import-listing", 1);
+        let (tx, rx) = mpsc::channel();
+        *fake.session_discovery.borrow_mut() = Some(rx);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        assert!(session_rows(&view, cx).is_empty(), "still listing");
+
+        tx.send(Ok(vec![ferrite_core::import::Candidate {
+            provider: Provider::Claude,
+            path: "/sessions/one.jsonl".into(),
+            title: Some("Fix the startup latency\nand more".into()),
+            cwd: Some("/workspace/ferrite".into()),
+            session_id: Some("one".into()),
+            modified: Some(std::time::SystemTime::now() - Duration::from_secs(2 * 86400)),
+        }]))
+        .unwrap();
+        tick(cx);
+        assert_eq!(
+            session_rows(&view, cx),
+            [(
+                "Fix the startup latency".to_string(),
+                "ferrite \u{b7} claude \u{b7} 2d".to_string()
+            )]
         );
     }
 
@@ -22068,7 +22030,7 @@ mod tests {
         cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "the pick closed the picker");
+            assert!(view.floats.palette.is_none(), "the pick closed the picker");
             assert_eq!(view.panes.len(), 1, "one Pane: the adopted Thread");
             let adopted = view.panes[0].thread().unwrap();
             assert_ne!(adopted, blank);
@@ -22092,6 +22054,299 @@ mod tests {
             );
             // The blank Thread is gone entirely — not parked clutter.
             assert!(view.cockpit.thread(blank).is_none());
+            assert!(view.cockpit.parked().unwrap().is_empty());
+        });
+    }
+
+    /// From ⌘K over a Thread with a conversation, the import opens beside
+    /// it and takes focus; the Thread it was opened over is untouched.
+    #[gpui::test]
+    fn palette_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-alongside", 1);
+        let base = scratch("import-alongside-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[0].1.join("-workspace-alpha").join("beside.jsonl"),
+            &claude_session_body("beside"),
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.session_file_roots = roots);
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let busy = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().unwrap().read(cx);
+            assert!(matches!(
+                palette.selected().map(|row| &row.act),
+                Some(crate::palette::Act::Adopt { into: None, .. })
+            ));
+        });
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let adopted = view.focused_thread().expect("the import is focused");
+            assert_ne!(adopted, busy);
+            assert_eq!(
+                view.cockpit
+                    .thread(adopted)
+                    .unwrap()
+                    .transcript()
+                    .session_id(),
+                Some("beside")
+            );
+            assert!(
+                view.cockpit.thread(busy).is_some(),
+                "the conversation it was opened over stays"
+            );
+        });
+    }
+
+    /// `/import` over a conversation still offers the picker, and its pick
+    /// opens alongside: the conversation is not a blank Pane to replace.
+    #[gpui::test]
+    fn slash_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-slash-alongside", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| {
+            view.session_file_roots = session_roots(&scratch("import-slash-alongside-roots"))
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        cx.simulate_input("/im");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().expect("the picker is open");
+            assert_eq!(
+                palette.read(cx).scope,
+                crate::palette::PaletteScope::Sessions
+            );
+            assert_eq!(view.import_target(cx), None, "nothing to replace");
+        });
+    }
+
+    /// `/import` typed out with the slash menu muted is the picker too,
+    /// like `/effort` and `/model` typed out: it never reaches the
+    /// provider as a prompt.
+    #[gpui::test]
+    fn typed_import_with_the_menu_muted_opens_the_picker(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-typed", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| {
+            view.session_file_roots = session_roots(&scratch("import-typed-roots"))
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        cx.simulate_input("/import");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.menu_muted));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        assert_eq!(composer_text(&view, cx), "");
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().expect("the picker is open");
+            assert_eq!(
+                palette.read(cx).scope,
+                crate::palette::PaletteScope::Sessions
+            );
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
+            assert!(
+                !transcript
+                    .blocks()
+                    .iter()
+                    .any(|block| matches!(block.body, Body::Prompt(_))),
+                "a typed /import must not prompt the provider"
+            );
+        });
+    }
+
+    /// ⇥ previews a Thread beside; on a session row it does nothing, and
+    /// the picker stays.
+    #[gpui::test]
+    fn tab_on_a_session_row_does_nothing(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-tab", 1);
+        let base = scratch("import-tab-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[0].1.join("-workspace-alpha").join("tab.jsonl"),
+            &claude_session_body("tab"),
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.session_file_roots = roots);
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_input("/im");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(session_rows(&view, cx).len(), 1);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+
+        assert_eq!(session_rows(&view, cx).len(), 1, "the picker stays open");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1, "nothing opened beside");
+            assert_eq!(view.cockpit.threads().len(), 1, "nothing imported");
+        });
+    }
+
+    /// A listing that answers after its picker closed, and the palette
+    /// reopened in another scope, is dropped rather than filling it.
+    #[gpui::test]
+    fn a_late_listing_is_dropped_by_a_palette_reopened_elsewhere(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("import-late", 1);
+        let (tx, rx) = mpsc::channel();
+        *fake.session_discovery.borrow_mut() = Some(rx);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().expect("⌘K is open").read(cx);
+            assert_ne!(palette.scope, crate::palette::PaletteScope::Sessions);
+            assert!(view.pending_discovery.is_none(), "the listing was let go");
+        });
+        let late = tx.send(Ok(vec![ferrite_core::import::Candidate {
+            provider: Provider::Claude,
+            path: "/sessions/late.jsonl".into(),
+            title: Some("Too late".into()),
+            cwd: None,
+            session_id: Some("late".into()),
+            modified: None,
+        }]));
+        assert!(late.is_err(), "its answer has nowhere to land");
+    }
+
+    /// ⌘K's import over the empty board shown on purpose lands on the
+    /// import, not on the board it was picked from.
+    #[gpui::test]
+    fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-empty-board", 1);
+        let base = scratch("import-empty-board-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[0].1.join("-workspace-alpha").join("board.jsonl"),
+            &claude_session_body("board"),
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.session_file_roots = roots;
+            view.show_empty_board(cx);
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let adopted = view.focused_thread().expect("the import is focused");
+            assert_eq!(
+                view.cockpit
+                    .thread(adopted)
+                    .unwrap()
+                    .transcript()
+                    .session_id(),
+                Some("board")
+            );
+            assert!(
+                !view.empty_board_shown(),
+                "the board gave way to the import"
+            );
+        });
+    }
+
+    /// A refused import with no Pane to speak in says so as a toast, and
+    /// leaves no Thread behind.
+    #[gpui::test]
+    fn a_refused_import_with_no_pane_toasts(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-refused-toast", 1);
+        let base = scratch("import-refused-toast-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[1].1.join("2026").join("junk.jsonl"),
+            "not a session file at all\n",
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.session_file_roots = roots);
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        let toasts = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                gpui::component::Root::read(window, cx)
+                    .notification
+                    .read(cx)
+                    .notifications()
+                    .len()
+            })
+        };
+        let before = toasts(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1, "no Thread was added");
             assert!(view.cockpit.parked().unwrap().is_empty());
         });
     }
@@ -22124,7 +22379,10 @@ mod tests {
         cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "the refusal closed the picker");
+            assert!(
+                view.floats.palette.is_none(),
+                "the refusal closed the picker"
+            );
             assert_eq!(view.panes.len(), 1);
             assert_eq!(view.panes[0].thread().unwrap(), thread, "the Thread stays");
             let transcript = view.cockpit.thread(thread).unwrap().transcript();
@@ -22155,10 +22413,9 @@ mod tests {
         });
     }
 
-    /// #11: with nothing to list, picking import says so in the transcript
-    /// instead of opening an empty popover.
+    /// #11: with nothing to list, the picker says so and where it looked.
     #[gpui::test]
-    fn with_no_session_files_found_the_pick_says_so(cx: &mut TestAppContext) {
+    fn with_no_session_files_found_the_picker_says_so(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("import-none", 1);
         let base = scratch("import-none-roots");
         bind_production_keys(cx);
@@ -22166,23 +22423,23 @@ mod tests {
         view.update(cx, |view, _| view.session_file_roots = session_roots(&base));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
-        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
 
         cx.simulate_input("/im");
         cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
 
-        view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "nothing to pick from");
-            let transcript = view.cockpit.thread(thread).unwrap().transcript();
+        assert!(session_rows(&view, cx).is_empty());
+        let note = format!(
+            "no CLI sessions found under {}",
+            base.join("claude-projects").display()
+        );
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().unwrap().read(cx);
             assert!(
-                transcript.blocks().iter().any(|block| matches!(
-                    &block.body,
-                    Body::Notice(line) if line.contains("no CLI session files found")
-                )),
-                "the empty discovery is said out loud: {:?}",
-                transcript.blocks()
+                palette.empty_note().starts_with(&note),
+                "the empty listing is said out loud: {}",
+                palette.empty_note()
             );
         });
     }
@@ -22220,7 +22477,7 @@ mod tests {
         });
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+        view.read_with(cx, |view, _| assert!(view.floats.palette.is_some()));
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
 
@@ -22266,41 +22523,37 @@ mod tests {
         });
     }
 
-    /// The dismissal law holds for the picker: a press the popover did not
-    /// swallow closes it, exactly like the selector and the menus.
+    // ------------------------------------------------- Allowance warnings
+
+    /// A rising allowance window toasts once per threshold crossed, and a
+    /// repeat of the same reading toasts nothing.
     #[gpui::test]
-    fn a_press_on_the_transcript_dismisses_the_open_picker(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("import-press-dismiss", 1);
-        let base = scratch("import-press-roots");
-        let roots = session_roots(&base);
-        write_session_file(
-            &roots[0].1.join("-workspace-alpha").join("aaaa.jsonl"),
-            &claude_session_body("aaaa"),
-            60,
-        );
-        bind_production_keys(cx);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.session_file_roots = roots);
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fn a_window_crossing_its_threshold_toasts_once(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("allowance-warning", 1);
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
-
-        cx.simulate_input("/im");
-        cx.run_until_parked();
-        cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(view.popover.is_some()));
-
-        // The middle of the Pane's transcript — nowhere near the popover.
-        cx.simulate_mouse_down(
-            gpui::point(px(600.), px(200.)),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        cx.run_until_parked();
-
-        view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "the press dismissed it");
-        });
+        let report = |used_fraction: f32| SessionEvent::RateLimits {
+            five_hour: Some(ferrite_core::RateLimitWindow {
+                used_fraction,
+                resets_at: None,
+            }),
+            weekly: None,
+        };
+        let toasts = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                use gpui::component::WindowExt as _;
+                window.notifications(cx).len()
+            })
+        };
+        let before = toasts(cx);
+        for used in [0.5, 0.82, 0.83] {
+            fake.streams.borrow()[0].send(report(used)).unwrap();
+            tick(cx);
+        }
+        assert_eq!(toasts(cx), before + 1, "80% crossed once");
+        fake.streams.borrow()[0].send(report(0.96)).unwrap();
+        tick(cx);
+        assert_eq!(toasts(cx), before + 2, "then 95%");
     }
 
     // ------------------------------------------------- Provider choice (#25)
@@ -22479,7 +22732,7 @@ mod tests {
             fake.spawned.borrow().is_empty(),
             "discovery creates no Session"
         );
-        view.update(cx, |view, cx| view.pick(index, cx));
+        view.update_in(cx, |view, window, cx| view.pick(index, window, cx));
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.panes[0]
@@ -22599,7 +22852,7 @@ mod tests {
             codex + 1
         });
 
-        view.update(cx, |view, cx| view.pick(first_codex, cx));
+        view.update_in(cx, |view, window, cx| view.pick(first_codex, window, cx));
         cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
@@ -22756,9 +23009,9 @@ mod tests {
             assert!(rows[2].active, "✓ on the inherited choice");
             assert_eq!(view.popover.as_ref().unwrap().selected, 2);
         });
-        view.update(cx, |view, cx| {
+        view.update_in(cx, |view, window, cx| {
             let selected = view.popover.as_ref().unwrap().selected;
-            view.pick(selected, cx);
+            view.pick(selected, window, cx);
             assert_eq!(
                 view.panes[view.focused()]
                     .draft()
@@ -23937,7 +24190,7 @@ mod tests {
             .unwrap();
         tick(cx);
 
-        view.update(cx, |view, cx| {
+        view.update_in(cx, |view, window, cx| {
             view.open_effort_picker(thread, cx);
             let picker = view.popover.as_ref().expect("the effort picker opens");
             assert!(matches!(picker.kind, Kind::Effort));
@@ -23947,7 +24200,7 @@ mod tests {
                 picker.rows[0].active,
                 "no choice yet: the default is in force"
             );
-            view.pick(2, cx);
+            view.pick(2, window, cx);
             assert!(view.popover.is_none(), "a pick closes the picker");
             assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
         });
@@ -24033,7 +24286,7 @@ mod tests {
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
-        view.update(cx, |view, cx| {
+        view.update_in(cx, |view, window, cx| {
             view.open_band_popover(pane::BandChip::Effort, cx);
             let band = view.popover.as_ref().expect("the effort popover");
             assert!(matches!(band.kind, Kind::Band(pane::BandChip::Effort)));
@@ -24041,7 +24294,7 @@ mod tests {
             assert_eq!(names[0], "Default");
             assert!(names.contains(&"High"), "{names:?}");
             let high = names.iter().position(|name| *name == "High").unwrap();
-            view.pick(high, cx);
+            view.pick(high, window, cx);
             let draft = view.panes[view.focused()].draft().expect("still a draft");
             assert_eq!(draft.binding.effort(), Some("high"));
         });
@@ -24090,19 +24343,6 @@ mod tests {
             let picker = view.popover.as_ref().expect("open");
             assert!(matches!(picker.kind, Kind::Provider | Kind::Effort));
         });
-    }
-
-    /// The row meta's age, spelled the way an operator scans it.
-    #[test]
-    fn the_age_label_rounds_to_the_operator_scale() {
-        let now = std::time::SystemTime::now();
-        let ago = |secs: u64| Some(now - Duration::from_secs(secs));
-        assert_eq!(age_label(ago(12), now), "just now");
-        assert_eq!(age_label(ago(90), now), "1m ago");
-        assert_eq!(age_label(ago(45 * 60), now), "45m ago");
-        assert_eq!(age_label(ago(3 * 3600), now), "3h ago");
-        assert_eq!(age_label(ago(2 * 86400), now), "2d ago");
-        assert_eq!(age_label(None, now), "age unknown");
     }
 
     fn drag_nav(cx: &mut gpui::VisualTestContext, source: &'static str, target: &'static str) {
