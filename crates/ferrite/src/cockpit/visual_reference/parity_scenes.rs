@@ -300,9 +300,9 @@ fn prepare(
     view.set_nav_fold(NavFold::Group(everything), true, cx);
     use gpui::component::WindowExt as _;
     window.clear_notifications(cx);
-    // The requests standing when the window opened were presented then:
-    // none of them toasts (the toast scene delivers its one request after).
-    view.present_notices(window, cx);
+    // The requests standing when the window opened were heard then: none
+    // of them toasts (the toast scene delivers its one request after).
+    view.ring_bell(cx);
     view.bell.clear_toasts();
     // The prototype's window has the keyboard: the focused Composer's caret
     // is the solid block, not the hollow one an inactive window draws.

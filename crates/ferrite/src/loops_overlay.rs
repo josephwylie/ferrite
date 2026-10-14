@@ -27,7 +27,7 @@ use std::rc::Rc;
 use gpui::{
     div, prelude::*, AnyElement, AnyView, App, AvailableSpace, Bounds, ContentMask, Context,
     ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, LayoutId, Pixels,
-    StyleRefinement, TextStyle, TextStyleRefinement, Window, WindowId,
+    StyleRefinement, Subscription, TextStyle, TextStyleRefinement, Window, WindowId,
 };
 
 use crate::cockpit::CockpitView;
@@ -46,10 +46,14 @@ fn enabled() -> bool {
 
 // ---------------------------------------------------------------- the window
 
-/// The kit Root's view: the Cockpit, cached, and the loops over it.
+/// The kit Root's view: the Cockpit, cached, and the loops over it. It
+/// also tells the Cockpit when the window gains or loses the system's
+/// focus, and brings the window forward for a clicked system notification
+/// (ADR 0014).
 pub struct CockpitWindow {
     cockpit: Entity<CockpitView>,
     overlay: Option<Entity<LoopsOverlay>>,
+    _activation: Subscription,
 }
 
 impl CockpitWindow {
@@ -68,6 +72,19 @@ impl CockpitWindow {
     ) -> Self {
         // Over a cached Cockpit, its nav and Panes are cached parts too.
         cockpit.update(cx, |view, _| view.set_parts(overlay));
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            let active = window.is_window_active();
+            this.cockpit
+                .update(cx, |view, cx| view.set_window_active(active, cx));
+        });
+        let handle = window.window_handle();
+        let clicked = cockpit.downgrade();
+        cx.on_system_notification_response(move |response, cx| {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            let _ = clicked.update(cx, |view, cx| {
+                view.open_system_notification(&response.tag, cx)
+            });
+        });
         let overlay = overlay.then(|| {
             let overlay = cx.new(|_| LoopsOverlay);
             let id = window.window_handle().window_id();
@@ -79,7 +96,11 @@ impl CockpitWindow {
             .detach();
             overlay
         });
-        Self { cockpit, overlay }
+        Self {
+            cockpit,
+            overlay,
+            _activation: activation,
+        }
     }
 
     /// The Cockpit this window shows (what a test window's root holds).

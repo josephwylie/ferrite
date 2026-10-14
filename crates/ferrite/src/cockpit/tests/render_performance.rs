@@ -1596,8 +1596,13 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
         .iter()
         .map(|thread| debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("a nav row"))
         .collect();
-    // The transcript's scrollbar, shown by the stream, fades out first.
-    cockpit_renders_over(cx, 2_000);
+    // The transcript's scrollbar, shown by the stream, fades out first,
+    // and the off-board finishes' toasts come and go.
+    cockpit_renders_over(
+        cx,
+        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
+            + 1_000,
+    );
     reset_native_text_renders(cx);
     let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
     let mut rendered = 0;

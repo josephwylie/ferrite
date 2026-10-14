@@ -220,6 +220,26 @@ fn a_finish_on_the_focused_thread_is_born_read() {
     assert!(!h.cockpit.notifications().attention(thread));
 }
 
+/// ADR 0014: the focused Pane is only seen while the window has focus. A
+/// finish there while the operator is in another app stays unread, and
+/// coming back reads it.
+#[test]
+fn a_finish_on_the_focused_thread_waits_while_the_window_is_away() {
+    let mut h = Harness::new("away", 1);
+    let thread = h.threads[0];
+    h.cockpit.set_present(false);
+    h.cockpit.send(thread, "go".into());
+    h.control.emit(0, ended());
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 1, "nobody was looking");
+    assert!(h.cockpit.notifications().attention(thread));
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 1, "pumping never reads it");
+
+    h.cockpit.set_present(true);
+    assert_eq!(h.unread(), 0, "coming back to the window reads it");
+}
+
 #[test]
 fn notifications_wait_for_a_child_permission_before_finishing() {
     let mut h = Harness::new("waiting-permission", 1);

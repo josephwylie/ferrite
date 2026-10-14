@@ -10,10 +10,11 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::sound::Sound;
 use crate::store::Provider;
 
 /// The operator's preferences. Every field has a default, and the file is
@@ -84,6 +85,23 @@ pub struct Settings {
     /// or Automatic. Applies to Sessions started after it changes; a Codex
     /// thread keeps the tool it started with. Default: When asked.
     pub visuals: crate::visual::Level,
+    /// Whether a Thread that finished or needs you plays a sound (ADR
+    /// 0014). Default: true.
+    pub sounds: bool,
+    /// The file played when a Thread finishes, instead of the built-in
+    /// chime. `None` is the built-in one.
+    pub done_sound: Option<PathBuf>,
+    /// The file played when a Thread needs you, instead of the built-in
+    /// chime. `None` is the built-in one.
+    pub needs_you_sound: Option<PathBuf>,
+    /// Whether Claude's Threads play their sounds. Default: true.
+    pub claude_sounds: bool,
+    /// Whether Codex's Threads play their sounds. Default: true.
+    pub codex_sounds: bool,
+    /// Whether a Thread that finished or needs you posts a system
+    /// notification while Ferrite's window is in the background.
+    /// Default: true.
+    pub system_notifications: bool,
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -168,6 +186,12 @@ impl Default for Settings {
             show_thinking: false,
             smart_filtering: false,
             visuals: crate::visual::Level::WhenAsked,
+            sounds: true,
+            done_sound: None,
+            needs_you_sound: None,
+            claude_sounds: true,
+            codex_sounds: true,
+            system_notifications: true,
         }
     }
 }
@@ -254,12 +278,43 @@ impl Settings {
             Provider::Codex => self.codex_effort = effort,
         }
     }
+
+    /// Whether a Thread on `provider` plays its sounds: sounds are on and
+    /// that provider is not muted.
+    pub fn sounds_for(&self, provider: Provider) -> bool {
+        self.sounds
+            && match provider {
+                Provider::Claude => self.claude_sounds,
+                Provider::Codex => self.codex_sounds,
+            }
+    }
+
+    pub fn set_sounds_for(&mut self, provider: Provider, on: bool) {
+        match provider {
+            Provider::Claude => self.claude_sounds = on,
+            Provider::Codex => self.codex_sounds = on,
+        }
+    }
+
+    /// The operator's own file for `sound`; `None` is the built-in chime.
+    pub fn sound_file(&self, sound: Sound) -> Option<&Path> {
+        match sound {
+            Sound::Done => self.done_sound.as_deref(),
+            Sound::NeedsYou => self.needs_you_sound.as_deref(),
+        }
+    }
+
+    pub fn set_sound_file(&mut self, sound: Sound, file: Option<PathBuf>) {
+        match sound {
+            Sound::Done => self.done_sound = file,
+            Sound::NeedsYou => self.needs_you_sound = file,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     /// A fresh scratch directory for one test's settings file.
     fn scratch(name: &str) -> PathBuf {
@@ -292,6 +347,12 @@ mod tests {
             show_thinking: true,
             smart_filtering: true,
             visuals: crate::visual::Level::Automatic,
+            sounds: false,
+            done_sound: Some(PathBuf::from("/sounds/done.aiff")),
+            needs_you_sound: Some(PathBuf::from("/sounds/needs-you.aiff")),
+            claude_sounds: false,
+            codex_sounds: false,
+            system_notifications: false,
         }
     }
 
@@ -361,6 +422,32 @@ mod tests {
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);
         assert_eq!(settings.reading_size, ReadingSize::STANDARD);
+        assert!(settings.sounds);
+        assert_eq!(settings.sound_file(Sound::Done), None);
+        assert_eq!(settings.sound_file(Sound::NeedsYou), None);
+        assert!(settings.sounds_for(Provider::Claude) && settings.sounds_for(Provider::Codex));
+        assert!(settings.system_notifications);
+    }
+
+    /// A provider's mute silences only its own Threads, and turning sounds
+    /// off silences every provider without forgetting the mutes.
+    #[test]
+    fn sounds_mute_per_provider_and_all_at_once() {
+        let mut settings = Settings::default();
+        settings.set_sounds_for(Provider::Codex, false);
+        assert!(settings.sounds_for(Provider::Claude));
+        assert!(!settings.sounds_for(Provider::Codex));
+        settings.sounds = false;
+        assert!(!settings.sounds_for(Provider::Claude));
+        settings.sounds = true;
+        assert!(!settings.sounds_for(Provider::Codex), "the mute was kept");
+
+        settings.set_sound_file(Sound::NeedsYou, Some(PathBuf::from("/tmp/ping.aiff")));
+        assert_eq!(
+            settings.sound_file(Sound::NeedsYou),
+            Some(Path::new("/tmp/ping.aiff"))
+        );
+        assert_eq!(settings.sound_file(Sound::Done), None);
     }
 
     /// The zoom steps one size at a time and stops at either end; a file

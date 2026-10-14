@@ -628,6 +628,10 @@ pub struct Cockpit {
     /// What every Thread has to tell the operator once they look away:
     /// the Notices, and the per-Thread deferrals behind them.
     notifications: Notifications,
+    /// Whether the operator is looking: the window has the system's focus.
+    /// While it is false nothing is acknowledged, so a finish or a request
+    /// on the focused Pane stays unread until they come back (ADR 0014).
+    present: bool,
     /// The Subject the window has actually selected in each open Thread.
     /// Main is implicit until the renderer records a child selection.
     visible_subjects: BTreeMap<ThreadId, Subject>,
@@ -673,6 +677,7 @@ impl Cockpit {
             bootstrap_results: Vec::new(),
             history_loader: None,
             notifications: Notifications::default(),
+            present: true,
             visible_subjects: BTreeMap::new(),
             sampler: None,
             limit: u64::MAX,
@@ -3405,7 +3410,22 @@ impl Cockpit {
         self.notifications.fixture_push(thread, outcome);
     }
 
+    /// Whether the operator is looking: the window has the system's focus.
+    pub fn present(&self) -> bool {
+        self.present
+    }
+
+    /// The window gained or lost the system's focus. Coming back reads the
+    /// focused Pane at once, as landing on it does.
+    pub fn set_present(&mut self, present: bool) {
+        self.present = present;
+        self.acknowledge_focus();
+    }
+
     fn acknowledge_focus(&mut self) {
+        if !self.present {
+            return;
+        }
         if let Some(thread) = self.roster.focused_thread() {
             let subject = self
                 .visible_subjects

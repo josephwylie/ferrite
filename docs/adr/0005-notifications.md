@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended by 0014
 date: 2026-09-06
 ---
 
@@ -43,8 +43,9 @@ finish in the kit's `Notification` stack at the board's top-right, which
 auto-hides and lands the operator on the Pane when clicked; and the Pane's
 existing focus ring, which pulses on an unread Notice until focus lands.
 The ring is the same ring: motion, not a second colour, says which Pane
-wants the operator. Toasts are in-app only and silent; system delivery is
-a later choice.
+wants the operator. ADR 0014 adds sounds and system notifications, makes
+toasts wait a second and expire, and reads the focused Pane only while
+the window has focus.
 
 Both adapters are proven by replaying the committed captures through the
 real Sessions into the Cockpit: the Claude overlap capture finishes exactly
