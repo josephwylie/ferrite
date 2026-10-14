@@ -15,6 +15,8 @@
 //! - [`collect_text`]: a Visual row's selectable text.
 //! - [`renderer`]: the screenshot an agent gets back, for core's
 //!   `VisualRenderer` seam.
+//! - [`diagram`]: a ` ```mermaid ` fence drawn as its diagram (ADR 0016),
+//!   by the same engine.
 //!
 //! Inside: the engine seam ([`web`]: `Engine`/`View`, the Chromium adapter
 //! on macOS and Windows, and a fake), the element that draws a view ([`element::WebView`]),
@@ -22,6 +24,7 @@
 //! lifecycle ([`engine`]) and the row's look ([`card`]).
 
 mod card;
+pub(crate) mod diagram;
 pub(crate) mod element;
 pub(crate) mod engine;
 pub(crate) mod renderer;

@@ -1368,48 +1368,49 @@ impl CodeBlock {
     ) -> AnyElement {
         let style = &node_cx.style;
 
-        div()
+        let block = div()
+            .id(("codeblock", options.ix))
             .w_full()
             .min_w_0()
-            .child(
-                div()
-                    .id(("codeblock", options.ix))
-                    .w_full()
-                    .min_w_0()
-                    .p_3()
-                    .bg(style.code_background())
-                    .font_family(cx.theme().tokens.typography.mono.clone())
-                    .text_size(cx.theme().tokens.typography.mono_md.size)
-                    .relative()
-                    .refine_style(&style.code_block())
-                    .child(Inline::new(
-                        "code",
-                        self.state.clone(),
-                        vec![],
-                        node_cx
-                            .code_block_highlighter
-                            .as_ref()
-                            .map(|highlighter| self.highlighted_styles(highlighter))
-                            .unwrap_or_default(),
-                        node_cx.link_click_handler.clone(),
-                    ))
-                    // Ferrite: actions are an overlay over the whole block,
-                    // painted after the code and taking no layout, so a block
-                    // with actions is exactly as tall as one without. The
-                    // actions element places itself inside the overlay.
-                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
-                        this.child(
-                            div()
-                                .id("actions")
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full()
-                                .child(actions(&self, window, cx)),
-                        )
-                    }),
-            )
-            .into_any_element()
+            .p_3()
+            .bg(style.code_background())
+            .font_family(cx.theme().tokens.typography.mono.clone())
+            .text_size(cx.theme().tokens.typography.mono_md.size)
+            .relative()
+            .refine_style(&style.code_block())
+            .child(Inline::new(
+                "code",
+                self.state.clone(),
+                vec![],
+                node_cx
+                    .code_block_highlighter
+                    .as_ref()
+                    .map(|highlighter| self.highlighted_styles(highlighter))
+                    .unwrap_or_default(),
+                node_cx.link_click_handler.clone(),
+            ))
+            // Ferrite: actions are an overlay over the whole block,
+            // painted after the code and taking no layout, so a block
+            // with actions is exactly as tall as one without. The
+            // actions element places itself inside the overlay.
+            .when_some(node_cx.code_block_actions.clone(), |this, actions| {
+                this.child(
+                    div()
+                        .id("actions")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(actions(&self, window, cx)),
+                )
+            })
+            .into_any_element();
+        // Ferrite: the application may draw the block as something else.
+        let block = match &node_cx.code_block_view {
+            Some(view) => view(self, block, window, cx),
+            None => block,
+        };
+        div().w_full().min_w_0().child(block).into_any_element()
     }
 }
 
@@ -1422,6 +1423,7 @@ pub(crate) struct NodeContext {
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    pub(crate) code_block_view: Option<Arc<super::text_view::CodeBlockViewFn>>,
     pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     pub(crate) table_actions: Option<Arc<TableActionsFn>>,
     pub(crate) link_renderer: Option<Arc<super::text_view::LinkRendererFn>>,

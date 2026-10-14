@@ -238,7 +238,7 @@ const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
 
-/// How many frames a card waits for its Pane's geometry (`card_corner`).
+/// How many frames a card waits for its geometry (`card_corner`).
 /// A Pane laid out for the first time has it by the next frame; a few more
 /// cover a layout that settles over two.
 const CARD_GEOMETRY_FRAMES: u8 = 3;
@@ -345,9 +345,6 @@ pub struct CockpitView {
     /// (`nav::CONTENT_FADE`, 150ms CSS ease), on its own clock apart from the
     /// width's ride. None on launch, like `nav_tween`.
     nav_fade: Option<crate::motion::Tween>,
-    /// The titlebar cell's ground on its way between the chrome (0) and the
-    /// plane (1) (`nav::BAND_FADE`, 200ms CSS ease). None on launch.
-    nav_band: Option<crate::motion::Tween>,
     /// What the nav's triangles hold folded (N-4): Projects and Groups. The
     /// Parked section's fold is `nav_parked_open`. In memory only.
     nav_folds: std::collections::HashSet<NavFold>,
@@ -427,11 +424,11 @@ pub struct CockpitView {
     context_checks: Option<ThreadId>,
     /// The changed-files card, opened from the status line's `N files`.
     changed_files_card: Option<ThreadId>,
-    /// Each card trigger's bounds as last laid out (`usage-…`,
-    /// `session-…`, `ci-…`), recorded in prepaint: what a card hangs from.
+    /// Each status-line card trigger's bounds as last laid out (`usage-…`,
+    /// `files-…`), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
-    /// Frames each open card has waited for its Pane's geometry, by trigger
-    /// key (`card_corner`); none once it has some.
+    /// Frames each open card has waited for its trigger's or Pane's
+    /// geometry, by trigger key (`card_corner`); none once it has some.
     card_waits: std::cell::RefCell<std::collections::HashMap<String, u8>>,
     /// A seam being dragged: the board, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
@@ -535,6 +532,16 @@ pub struct CockpitView {
     /// The Pane whose reader took the last press: ⌘F finds there. A press
     /// hands the keyboard back to the Pane, so focus cannot say it.
     reader_pressed: Option<PaneIdentity>,
+}
+
+/// What a card hangs from (`card_corner`): its trigger in the window's
+/// bar (a status-line segment, ADR 0014), or its Pane's Composer (opening
+/// up) or head (opening down).
+#[derive(Clone, Copy)]
+enum CardFrom {
+    Bar,
+    Composer(PaneIdentity),
+    Head(PaneIdentity),
 }
 
 /// What an inline rename is aimed at. Both are titles the operator owns:
@@ -1223,8 +1230,6 @@ pub(crate) mod drawn {
         pub cell_width: f32,
         /// The working clock its lines read (`12s`).
         pub clock: Option<String>,
-        /// Its usage meter's facts: the context window and the account's.
-        pub usage: Option<String>,
         /// Its head holds the rename editor.
         pub renaming: bool,
     }
@@ -1234,6 +1239,25 @@ pub(crate) mod drawn {
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
+        static STATUS_USAGE: RefCell<Option<String>> = const { RefCell::new(None) };
+        static STATUS_RENDERS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The bar's status line was built reading these usage facts: the
+    /// focused Thread's context window and its account's.
+    pub(crate) fn record_status(usage: Option<String>) {
+        STATUS_RENDERS.with(|renders| renders.set(renders.get() + 1));
+        STATUS_USAGE.with(|status| *status.borrow_mut() = usage);
+    }
+
+    /// How many times the bar's status line has been built on this thread.
+    pub(crate) fn status_renders() -> usize {
+        STATUS_RENDERS.with(Cell::get)
+    }
+
+    /// The usage facts the bar's status line last drew.
+    pub(crate) fn status_usage() -> Option<String> {
+        STATUS_USAGE.with(|status| status.borrow().clone())
     }
 
     pub(crate) fn built_pane(identity: PaneIdentity) {
@@ -1415,7 +1439,6 @@ impl CockpitView {
             nav_snapshot: std::cell::RefCell::new(None),
             nav_tween: None,
             nav_fade: None,
-            nav_band: None,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -2046,8 +2069,13 @@ impl CockpitView {
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
         let rows = !frame.is_empty() || !swept_busy.is_empty();
+        let focused = self.focused_thread();
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
+            // Its usage and mode read in the bar's status line.
+            if Some(thread) == focused {
+                self.notify_part(parts::Part::Status, cx);
+            }
         }
         if rows {
             self.notify_part(parts::Part::Nav, cx);
@@ -2208,8 +2236,8 @@ impl CockpitView {
                     moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
                 // Git said what it said last time: nothing to redraw. A
-                // label that moved is its Thread's: its Pane, its nav row,
-                // the titlebar's crumb. A binding that moved, everything.
+                // label that moved is its Thread's: its Pane and its nav
+                // row. A binding that moved, everything.
                 if moved {
                     cx.notify();
                 } else if !labels.is_empty() || !roots.is_empty() {
@@ -2307,13 +2335,6 @@ impl CockpitView {
         }
     }
 
-    /// The column's width on screen this frame: wherever the cmd-B ride has
-    /// it while it moves, else `nav_width` (a finished ride's end may be
-    /// stale: a window too narrow folds the column without one).
-    fn nav_column_now(&self, cx: &gpui::App) -> f32 {
-        self.nav_ride_now(cx).unwrap_or_else(|| self.nav_width())
-    }
-
     /// The column's width mid-ride (F-12): the cmd-B tween's value this
     /// frame, or a scene's held progress (`fixture_hold_nav`) along the
     /// same curve; `None` at rest.
@@ -2342,13 +2363,6 @@ impl CockpitView {
     #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     pub(crate) fn fixture_hold_nav(&mut self, progress: Option<f32>) {
         self.nav_hold = progress;
-    }
-
-    /// The titlebar cell over the column this frame (`nav::chrome_width`):
-    /// it rides with the column, and the titlebar strip starts where it
-    /// ends. (A waiting CLI update is a palette command, not a door.)
-    fn nav_chrome_width(&self, cx: &gpui::App) -> f32 {
-        nav::chrome_width(self.nav_column_now(cx), 0)
     }
 
     /// Whether the nav draws as the rail: the operator folded it, or the
@@ -2703,123 +2717,6 @@ impl CockpitView {
         self.board_level(window)
     }
 
-    /// The titlebar's location (F-10) for what the board shows: the empty
-    /// board `Ferrite`; one Thread alone (Solo, or a Pane fullscreen) its
-    /// Project, title, state word and branch; a Group its Project — or `all
-    /// projects` when its members span several — its name, how many members
-    /// it has and how many of them need you, then its branch, or how many
-    /// fail when no one branch applies. The branch is always named, the
-    /// default included.
-    fn titlebar_location(&self, fullscreen: Option<usize>) -> crate::titlebar::Location {
-        use crate::titlebar::Location;
-        if fullscreen.is_none() && self.empty_board_shown() {
-            return Location::Nowhere;
-        }
-        let project_title = |project: Option<ProjectId>| {
-            project
-                .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| SharedString::from(project.title.clone()))
-        };
-        let thread_project = |thread: ThreadId| {
-            self.cockpit
-                .project_id(thread)
-                .or_else(|| self.facts.get(thread).and_then(|facts| facts.project))
-        };
-        let branch_of = |thread: ThreadId| {
-            self.facts.get(thread).and_then(|facts| {
-                facts
-                    .status
-                    .as_ref()
-                    .and_then(|status| status.branch.clone())
-                    .map(SharedString::from)
-                    .or_else(|| facts.branch.clone())
-            })
-        };
-        if let (View::Group(group), None) = (self.cockpit.roster().view(), fullscreen) {
-            let Some(group) = self.cockpit.groups().get(group) else {
-                return Location::Nowhere;
-            };
-            let members = group.members.clone();
-            let mut projects: Vec<Option<ProjectId>> = Vec::new();
-            for member in &members {
-                let project = thread_project(*member);
-                if !projects.contains(&project) {
-                    projects.push(project);
-                }
-            }
-            let project = match projects.as_slice() {
-                [Some(project)] => project_title(Some(*project)),
-                _ => None,
-            };
-            let need_you = members
-                .iter()
-                .filter(|member| {
-                    self.cockpit.thread(**member).is_some_and(|open| {
-                        open.pending().is_some() || !open.activity().pending_decisions().is_empty()
-                    })
-                })
-                .count();
-            let failing = members
-                .iter()
-                .filter(|member| {
-                    self.cockpit.thread(**member).is_some_and(|open| {
-                        matches!(
-                            pane::thread_face(
-                                open,
-                                self.facts.get(**member).map(|facts| &facts.wall),
-                                false
-                            )
-                            .1,
-                            Some(pane::HeadSlot::Failing(_) | pane::HeadSlot::Failed)
-                        )
-                    })
-                })
-                .count();
-            return Location::Group {
-                project,
-                name: SharedString::from(group.display_title()),
-                members: members.len(),
-                need_you,
-                branch: members.first().and_then(|first| branch_of(*first)),
-                failing,
-            };
-        }
-        let index = fullscreen.unwrap_or_else(|| self.focused());
-        let Some(pane) = self.panes.get(index) else {
-            return Location::Nowhere;
-        };
-        let project = pane
-            .thread()
-            .and_then(thread_project)
-            .or_else(|| pane.draft().map(|draft| draft.binding.project()));
-        match pane.thread() {
-            None => Location::Thread {
-                project: project_title(project),
-                title: pane.name.clone(),
-                state: None,
-                branch: None,
-            },
-            Some(thread) => {
-                let state = match self.cockpit.thread(thread) {
-                    Some(open) => pane::thread_face(
-                        open,
-                        self.facts.get(thread).map(|facts| &facts.wall),
-                        false,
-                    )
-                    .1
-                    .map(|word| SharedString::from(word.text())),
-                    None => Some(SharedString::from(pane::HeadSlot::Parked.text())),
-                };
-                Location::Thread {
-                    project: project_title(project),
-                    title: pane.name.clone(),
-                    state,
-                    branch: branch_of(thread),
-                }
-            }
-        }
-    }
-
     /// The palette's `checks` command (F-11): the checks card for the
     /// focused Thread's PR, hung from its Pane's top edge. Nothing when the
     /// PR reports no checks.
@@ -2867,8 +2764,7 @@ impl CockpitView {
     }
 
     /// The palette's `install CLI updates` command (F-11): every provider
-    /// CLI with a newer release ready installs, as the old titlebar door
-    /// did. Nothing while one is already installing.
+    /// CLI with a newer release ready installs. Nothing while one is already installing.
     pub(crate) fn install_cli_updates(&mut self, cx: &mut Context<Self>) {
         use crate::cli_updates::Badge;
         let (ready, what) = match self.cli_updates.badge() {
@@ -2902,8 +2798,7 @@ impl CockpitView {
         let current = transcript.current_task();
         let at = self.card_corner(
             format!("plan-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            false,
+            CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
         let mut card = crate::components::floating_surface()
@@ -4244,6 +4139,10 @@ impl CockpitView {
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
         }
+        crate::visual::diagram::set_enabled(
+            self.prefs.settings.visuals != ferrite_core::visual::Level::Off,
+            cx,
+        );
         if self.facts.set_auto_title(self.prefs.settings.auto_title) {
             self.parked_changed(cx);
             for thread in self.cockpit.threads() {
@@ -5149,30 +5048,6 @@ impl CockpitView {
         self.panes.get_mut(focused).and_then(PaneView::draft_mut)
     }
 
-    /// The status line's right (FL-10): Solo's `⇧⇥ mode · ? shortcuts`,
-    /// its keys read from the key table; a click opens the shortcuts sheet.
-    /// A board Pane's status line and a draft's carry nothing there: ⏎ sends
-    /// and esc interrupts, as in a terminal, with no verb drawn for them.
-    fn composer_actions(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        if !pane.is_main() || pane.thread().is_none() || self.grid_board() {
-            return None;
-        }
-        let identity = pane.identity;
-        let cycle = crate::components::bound_chord_in("status::CycleMode", Some("Ferrite"));
-        let help = crate::components::bound_chord_in("shortcuts::Toggle", Some("ComposerEmpty"));
-        Some(
-            pane::composer_control(SharedString::from(format!("status-keys-{identity:?}")), cx)
-                .accessibility_label("Shortcuts")
-                .child(pane::shortcuts_hint(cycle, help))
-                .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    view.toggle_shortcuts(window, cx);
-                }))
-                .into_any_element(),
-        )
-    }
-
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
         // The card's ↵ is its confirm: the only line on it is the name.
         if self.project_editor.is_some() {
@@ -5771,10 +5646,9 @@ impl CockpitView {
     }
 
     /// Ride the column's width from what was drawn to what is drawn now —
-    /// and, each on its own clock, its content's opacity (1 → 0 folding,
-    /// 0 → 1 opening, `nav::CONTENT_FADE`) and the titlebar cell's ground
-    /// (chrome → plane, `nav::BAND_FADE`). A flip mid-flight turns every
-    /// one around from where it is on screen.
+    /// and, on its own clock, its content's opacity (1 → 0 folding, 0 → 1
+    /// opening, `nav::CONTENT_FADE`). A flip mid-flight turns both around
+    /// from where they are on screen.
     fn tween_nav(&mut self, was_railed: bool, cx: &mut Context<Self>) {
         let railed = self.nav_railed();
         if was_railed == railed {
@@ -5796,22 +5670,13 @@ impl CockpitView {
             now,
             reduced,
         ));
-        // Opacity of the content; the band runs the other way (0 chrome, 1
-        // plane).
+        // Opacity of the content.
         let (from, to) = if railed { (1.0, 0.0) } else { (0.0, 1.0) };
         self.nav_fade = Some(crate::motion::Tween::retarget(
             self.nav_fade,
             from,
             to,
             nav::CONTENT_FADE,
-            now,
-            reduced,
-        ));
-        self.nav_band = Some(crate::motion::Tween::retarget(
-            self.nav_band,
-            1.0 - from,
-            1.0 - to,
-            nav::BAND_FADE,
             now,
             reduced,
         ));
@@ -7749,22 +7614,28 @@ impl CockpitView {
         for (slot, (chip, label)) in chips.into_iter().enumerate() {
             let focused = draft.band_focus == Some(chip);
             let chip_composer = composer.clone();
-            band = band.child(pane::band_chip(slot, label, false, focused).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    // The chip is this Pane's: land on it first, then
-                    // toggle — and stop the press so the root's dismissal
-                    // cannot close what this just opened.
-                    cx.stop_propagation();
-                    if let Some(at) = view
-                        .panes
-                        .iter()
-                        .position(|pane| pane.composer == chip_composer)
-                    {
-                        view.focus_pane(at);
-                    }
-                    view.open_band_popover(chip, cx);
-                }),
+            let chip_element = pane::band_chip(slot, label, false, focused)
+                .relative()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        // The chip is this Pane's: land on it first, then
+                        // toggle — and stop the press so the root's dismissal
+                        // cannot close what this just opened.
+                        cx.stop_propagation();
+                        if let Some(at) = view
+                            .panes
+                            .iter()
+                            .position(|pane| pane.composer == chip_composer)
+                        {
+                            view.focus_pane(at);
+                        }
+                        view.open_band_popover(chip, cx);
+                    }),
+                );
+            band = band.child(crate::components::on_bounds(
+                chip_element,
+                self.record_trigger(band_trigger(chip)),
             ));
         }
         band.into_any_element()
@@ -7850,16 +7721,60 @@ impl CockpitView {
         }
     }
 
-    /// The open popover for this Pane, rows wired to their picks —
-    /// assembled here so its clicks land beside every other pointer wire
-    /// (the root selector's precedent); the Pane hangs it above the line.
-    /// Every row is the one menu row: `/`, `@` and import rows through
-    /// `pane::menu_row` (slash descriptions in one aligned column), band rows
-    /// through `pane::picker_row` with the accent check on the standing
-    /// choice; an inert explanation ("Searching files…", a refusal) is a
-    /// `menu_note`. The rows scroll inside the popover's cap; the footer
-    /// stays.
+    /// The open popover for this Pane, which hangs it above the line.
     fn popover_element(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self
+            .popover
+            .as_ref()
+            .filter(|open| open.pane == self.panes[index].identity)?;
+        // The pickers are `ChoiceMenu`s, and a draft's band menus hang off
+        // their chips in the bar (`band_menu_element`).
+        if open.kind.picker_slot().is_some() || matches!(open.kind, Kind::Band(_)) {
+            return None;
+        }
+        Some(self.menu_surface(open, cx))
+    }
+
+    /// A draft's Project or Workspace menu, hung off its chip in the bar
+    /// (ADR 0014): its left edge at the chip's, its foot `FLOAT_OFFSET`
+    /// over the bar, kept inside the window's margin. The chip has been
+    /// drawn before it can be pressed, so its bounds are always recorded.
+    fn band_menu_element(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::theme::{FLOAT_OFFSET, GRID_PAD, SLASH_MENU_W};
+        let open = self.popover.as_ref()?;
+        let Kind::Band(chip @ (pane::BandChip::Project | pane::BandChip::Workspace)) = open.kind
+        else {
+            return None;
+        };
+        let trigger = self
+            .float_triggers
+            .borrow()
+            .get(band_trigger(chip).as_ref())
+            .copied()?;
+        let floor = self.bar_place().floor - FLOAT_OFFSET;
+        let width = SLASH_MENU_W.min(f32::from(window.viewport_size().width) - 2. * GRID_PAD);
+        Some(
+            deferred(
+                anchored()
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .position(gpui::point(trigger.left(), px(floor)))
+                    .snap_to_window_with_margin(px(GRID_PAD))
+                    .child(div().w(px(width)).child(self.menu_surface(open, cx))),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+
+    /// The open popover's surface, rows wired to their picks — assembled
+    /// here so its clicks land beside every other pointer wire (the root
+    /// selector's precedent). Every row is the one menu row: `/`, `@` and
+    /// import rows through `pane::menu_row` (slash descriptions in one
+    /// aligned column), band rows through `pane::picker_row` with the
+    /// accent check on the standing choice; an inert explanation
+    /// ("Searching files…", a refusal) is a `menu_note`. The rows scroll
+    /// inside the popover's cap; the footer stays.
+    fn menu_surface(&self, open: &Popover, cx: &mut Context<Self>) -> AnyElement {
         fn wire<E: InteractiveElement + IntoElement + 'static>(
             drawn: E,
             at: usize,
@@ -7886,13 +7801,6 @@ impl CockpitView {
                     }),
                 )
                 .into_any_element()
-        }
-        let open = self
-            .popover
-            .as_ref()
-            .filter(|open| open.pane == self.panes[index].identity)?;
-        if open.kind.picker_slot().is_some() {
-            return None;
         }
         // Slash commands align their descriptions in one column sized to
         // the longest name shown (clamped, so a long `mcp__…` name cuts).
@@ -7968,10 +7876,8 @@ impl CockpitView {
             )
             .child(rows)
             .child(pane::popover_footer(open.kind.hints()));
-        Some(
-            crate::motion::menu_in("composer-menu-in", popover, crate::motion::Opens::Up)
-                .into_any_element(),
-        )
+        crate::motion::menu_in("composer-menu-in", popover, crate::motion::Opens::Up)
+            .into_any_element()
     }
 
     /// The nav's per-frame state, from caches and O(1) reads only. Nothing
@@ -9032,6 +8938,12 @@ fn effort_chip_label(effort: &str) -> SharedString {
     SharedString::from(effort_title(effort).to_lowercase())
 }
 
+/// The key a draft's band chip records its bounds under, for the menu it
+/// opens (`band_menu_element`).
+fn band_trigger(chip: pane::BandChip) -> SharedString {
+    format!("band-{chip:?}").into()
+}
+
 /// The effort a chip shows (rule 2.6.5): the Thread's or draft's own
 /// choice, else the operator's saved default, else the model row's own
 /// default (`medium` for Codex). `None` when nothing resolves: a Thread's
@@ -9155,11 +9067,10 @@ impl CockpitView {
                 .map(|elapsed| ferrite_core::cadence::next_rollover(elapsed, second))
         };
         let now = cx.background_executor().now();
-        let focused = self.panes.get(self.focused()).and_then(PaneView::thread);
         let parts = self.parts.borrow().on;
         let mut nav = thread_ages;
-        let mut frame = Some(notices.map_or(minute, |next| next.min(minute)));
-        let mut everything = nav.into_iter().chain(frame).min();
+        let frame = notices.map_or(minute, |next| next.min(minute));
+        let mut everything = nav.into_iter().chain(Some(frame)).min();
         // Each Pane's working clocks: its own part rides them.
         for pane in &self.panes {
             let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) else {
@@ -9177,10 +9088,6 @@ impl CockpitView {
                 continue;
             };
             everything = Some(everything.map_or(next, |at| at.min(next)));
-            if pane.thread() == focused {
-                // The titlebar names the focused Thread's clock.
-                frame = Some(frame.map_or(next, |at| at.min(next)));
-            }
             if parts {
                 let view = self
                     .parts
@@ -9209,9 +9116,7 @@ impl CockpitView {
         if let (Some(view), Some(next)) = (nav_view, nav) {
             crate::motion::ride(view, now + next, cx);
         }
-        if let Some(next) = frame {
-            crate::motion::ride(self.frame_tick_id(), now + next, cx);
-        }
+        crate::motion::ride(self.frame_tick_id(), now + frame, cx);
     }
 
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -9368,7 +9273,6 @@ impl CockpitView {
         // ComposerMenu: the focused node, where enter and escape can win
         // their tie against Submit and Interrupt.
         let pane_rects = self.pane_rects(window);
-        let grid = self.grid_board();
         let focused_index = self.focused();
         let float_open = self.overlay_open();
         for (index, pane) in self.panes.iter().enumerate() {
@@ -9380,7 +9284,7 @@ impl CockpitView {
                         .thread()
                         .and_then(|thread| self.cockpit.thread(thread))
                         .map_or(0, |thread| thread.queued_all().len());
-                    pane::composer_row_limit(rect.h, false, grid, queued)
+                    pane::composer_row_limit(rect.h, false, queued)
                 })
                 .unwrap_or(crate::composer::MAX_ROWS);
             // Derive this every frame so answering, leaving fullscreen, or
@@ -9845,41 +9749,24 @@ impl CockpitView {
                             .child(grid),
                     ),
             )
-            .child(self.bottom_bar(cx))
+            .child(self.bottom_bar(level, cx))
             // The window's own titlebar, where the platform makes the app
             // draw one. It is the last thing over the band and the first
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .map(|root| {
-                // The location (F-10) and the one trailing door, `⌘K
-                // commands` (F-11), its chord the keymap's.
-                let location = self.titlebar_location(fullscreen);
-                let chord = crate::components::bound_chord("palette::Toggle")
-                    .unwrap_or_else(|| "cmd-K".to_string());
-                let door = crate::titlebar::commands_door(Some(&chord))
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(crate::palette::Toggle), cx);
-                    })
-                    .into_any_element();
-                // The strip starts where the nav's titlebar cell ends — the
-                // cell rides with the column, folded it keeps the lights
-                // and the window's doors — and the cell lies over it.
-                root.child(crate::titlebar::strip(
-                    self.nav_chrome_width(cx),
-                    crate::titlebar::Title { location },
-                    door,
-                    !self.overlay_open(),
-                    self.maximized,
-                ))
-                .child(self.nav_chrome(cx))
-            })
+            .child(crate::titlebar::strip(
+                self.board_left(),
+                !self.overlay_open(),
+                self.maximized,
+            ))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(window, cx))
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
             .children(self.changed_files_element(window, cx))
+            .children(self.band_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
             .children(self.notices_float(cx))
@@ -10007,7 +9894,7 @@ impl CockpitView {
                 }),
             );
         let cell = self.slot_drop_target(cell, pane_leaf(pane.identity), cx);
-        // A draft Pane (#29): the band and its popover instead of a
+        // A draft Pane (#29): the Composer and its menu instead of a
         // transcript — nothing in core exists to read yet.
         let Some(thread) = pane.thread() else {
             let draft_id = pane.identity.draft().expect("this is a Draft Pane");
@@ -10016,15 +9903,7 @@ impl CockpitView {
                 pane,
                 pane::DraftState {
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
-                    composer_actions: self.composer_actions(index, cx),
                     discard: self.draft_discard(draft_id, cx),
-                    band: self.draft_band_element(index, cx),
-                    picker: self.draft_model_picker(index, cx),
-                    // A draft has spent no context, so it reads nothing
-                    // (no `ctx —`) unless an account window runs tight.
-                    usage_meter: (level == Level::Transcript)
-                        .then(|| self.usage_meter(index, cx))
-                        .flatten(),
                     menu: (level == Level::Transcript)
                         .then(|| self.popover_element(index, cx))
                         .flatten(),
@@ -10088,7 +9967,6 @@ impl CockpitView {
             composer_queue_height: pane::composer_queue_height(
                 rect.map_or(self.cell(window).height, |rect| rect.h),
                 false,
-                self.grid_board(),
                 open.map_or(0, |thread| thread.queued_all().len()),
             ),
             focused,
@@ -10125,7 +10003,6 @@ impl CockpitView {
         let background = (level != Level::Wall)
             .then(|| self.background_chips(index, cx))
             .flatten();
-        let changed_files = l1.then(|| self.changed_files_chip(index, cx)).flatten();
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
         let joins = pane.is_main()
@@ -10151,13 +10028,6 @@ impl CockpitView {
                 clock: open
                     .and_then(|open| open.transcript().turn_elapsed())
                     .map(ferrite_core::progress::live_seconds),
-                usage: open.map(|open| {
-                    format!(
-                        "{:?} {:?}",
-                        open.transcript().usage().map(|usage| usage.total_tokens),
-                        self.cockpit.account_limits(open.provider())
-                    )
-                }),
                 renaming: matches!(
                     &self.rename,
                     Some((RenameTarget::PaneTitle(renamed), _)) if *renamed == thread
@@ -10166,20 +10036,10 @@ impl CockpitView {
         );
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
-            changed_files,
             received_reasoning_visible,
             attachments,
-            composer_actions: (level != Level::Wall)
-                .then(|| self.composer_actions(index, cx))
-                .flatten(),
             background,
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
-            model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
-            usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
-            // The session controls are the palette's (`background tasks`,
-            // `refresh MCP`): the status line has no `•••`.
-            session_controls: None,
-            mode_picker: l1.then(|| self.mode_picker(index, cx)).flatten(),
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — a tile with no
             // handle could not be rearranged at all.
@@ -10205,7 +10065,7 @@ impl CockpitView {
     /// the current view's bright (none on the empty board) — a press on
     /// `1 solo` showing Solo (the loose Thread used last, else the empty
     /// board) and on a Group entering it; each provider's usage; the clock.
-    fn bottom_bar(&self, cx: &mut Context<Self>) -> Div {
+    fn bottom_bar(&self, level: Level, cx: &mut Context<Self>) -> Div {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
         let mut tabs = Vec::new();
@@ -10254,11 +10114,99 @@ impl CockpitView {
             })
             .map(IntoElement::into_any_element)
             .collect();
+        let gear = prefs::gear(
+            prefs::gear_button(cx).on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_settings(cx);
+            })),
+            "settings-gear-tip",
+        );
+        let mut doors = vec![
+            nav::collapse_button()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.toggle_nav_now(cx);
+                    }),
+                )
+                .into_any_element(),
+            self.bell_element(cx),
+        ];
+        // Settings keeps its gear only where it has no other visible door:
+        // macOS lists it in the app menu (and ⌘,).
+        if !cfg!(target_os = "macos") {
+            doors.push(gear.into_any_element());
+        }
+        let help = crate::titlebar::help_door()
+            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.toggle_shortcuts(window, cx);
+            }))
+            .into_any_element();
         crate::titlebar::bottom_bar(
+            doors,
             tabs,
+            self.status_slot(level, cx),
             usage,
+            help,
             SharedString::from(ferrite_core::progress::clock_label()),
         )
+    }
+
+    /// The focused Pane's status line, for the window's bar (ADR 0014): a
+    /// draft's setup chips, model and usage; a Thread's mode, model, `ctx`
+    /// and changed files. Nothing on the empty board, below L1, or on a
+    /// Subagent's tab, whose footer stands in for the Composer.
+    fn pane_status(&self, level: Level, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if level != Level::Transcript || self.empty_board_shown() {
+            return None;
+        }
+        let index = self.focused();
+        let pane = self.panes.get(index)?;
+        if !pane.is_main() {
+            return None;
+        }
+        #[cfg(test)]
+        drawn::record_status(pane.thread().and_then(|thread| {
+            let open = self.cockpit.thread(thread)?;
+            Some(format!(
+                "{:?} {:?}",
+                open.transcript().usage().map(|usage| usage.total_tokens),
+                self.cockpit.account_limits(open.provider())
+            ))
+        }));
+        let segments: Vec<AnyElement> = match pane.thread() {
+            None => [
+                Some(
+                    div()
+                        .flex_shrink(1.)
+                        .min_w_0()
+                        .child(self.draft_band_element(index, cx))
+                        .into_any_element(),
+                ),
+                Some(self.draft_model_picker(index, cx)),
+                self.usage_meter(index, cx),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            Some(thread) => {
+                let mode = self.cockpit.thread(thread).and_then(|open| {
+                    pane::permission_mode_label(open.permission_mode()?, &open.permission_modes())
+                });
+                [
+                    mode.map(|mode| pane::mode_segment(thread, &mode, self.mode_picker(index, cx))),
+                    self.model_picker(index, cx),
+                    self.usage_meter(index, cx),
+                    self.changed_files_chip(index, cx),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+        };
+        (!segments.is_empty()).then(|| pane::status_line(segments).into_any_element())
     }
 
     /// A bound action's first keystroke as a keycap reads it, from this
@@ -10406,12 +10354,7 @@ impl CockpitView {
         use crate::theme::*;
         use gpui::component::scroll::ScrollableElement as _;
         let thread = self.changed_files_card?;
-        let at = self.card_corner(
-            format!("files-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            true,
-            window,
-        )?;
+        let at = self.card_corner(format!("files-{}", thread.get()), CardFrom::Bar, window)?;
         let index = self.pane_for(thread)?;
         let files = self.facts.get(thread)?.changed_files.clone();
         if files.is_empty() {
@@ -10940,64 +10883,71 @@ impl CockpitView {
         }
     }
 
-    /// Where a card opened from trigger `key` in Pane `identity` hangs
-    /// (`FloatPlace::card_corner`). Until the Pane has been laid out once,
-    /// it waits a frame rather than guess — `CARD_GEOMETRY_FRAMES` of them
-    /// at most, then hangs from the board's corner: a Pane with nothing to
-    /// give (an L3 tile draws no Composer, a Pane gone from the roster
-    /// draws nothing) would have the card ask for every frame for as long
-    /// as it stayed open.
+    /// Where a card hangs (`FloatPlace::card_corner`). Until its trigger
+    /// or Pane has been laid out once, it waits a frame rather than guess —
+    /// `CARD_GEOMETRY_FRAMES` of them at most, then hangs from the board's
+    /// corner: a Pane with nothing to give (an L3 tile draws no Composer, a
+    /// Pane gone from the roster draws nothing) would have the card ask for
+    /// every frame for as long as it stayed open.
     fn card_corner(
         &self,
         key: String,
-        identity: PaneIdentity,
-        up: bool,
+        from: CardFrom,
         window: &mut Window,
     ) -> Option<Point<Pixels>> {
-        let trigger = self.float_triggers.borrow().get(key.as_str()).copied();
-        let geometry = self
-            .index_of(identity)
-            .map(|index| self.panes[index].geometry.get())
-            .unwrap_or_default();
-        // A card opening down needs only the card's edge, not a Composer.
-        let place = geometry.card.and_then(|card| {
-            let limit_right = f32::from(card.right()) - crate::theme::PANE_PAD_X;
-            match geometry.composer {
-                Some(composer) => Some(crate::components::FloatPlace {
-                    floor: f32::from(composer.top()),
-                    limit_right,
-                }),
-                None if !up => Some(crate::components::FloatPlace {
-                    floor: 0.,
-                    limit_right,
-                }),
-                None => None,
+        let up = !matches!(from, CardFrom::Head(_));
+        let corner = match from {
+            CardFrom::Bar => {
+                let trigger = self.float_triggers.borrow().get(key.as_str()).copied();
+                trigger.map(|trigger| self.bar_place().card_corner(trigger, true))
             }
-        });
-        // A card opened with no chip on screen (a slash command, a scene)
-        // hangs off the Composer's right edge, or the card's top.
-        let trigger = trigger.or(if up { geometry.composer } else { geometry.card });
+            CardFrom::Composer(identity) | CardFrom::Head(identity) => {
+                self.pane_card_corner(identity, up)
+            }
+        };
         let mut waits = self.card_waits.borrow_mut();
-        match (trigger, place) {
-            (Some(trigger), Some(place)) => {
-                waits.remove(&key);
-                Some(place.card_corner(trigger, up))
-            }
-            _ => {
-                let waited = waits.entry(key).or_default();
-                if *waited < CARD_GEOMETRY_FRAMES {
-                    *waited += 1;
-                    window.request_animation_frame();
-                    return None;
-                }
-                Some(self.board_card_corner(up, window))
-            }
+        if corner.is_some() {
+            waits.remove(&key);
+            return corner;
+        }
+        let waited = waits.entry(key).or_default();
+        if *waited < CARD_GEOMETRY_FRAMES {
+            *waited += 1;
+            window.request_animation_frame();
+            return None;
+        }
+        Some(self.board_card_corner(up, window))
+    }
+
+    /// A Pane's own card: off its Composer's right edge opening up, its
+    /// head's opening down, inside the Pane.
+    fn pane_card_corner(&self, identity: PaneIdentity, up: bool) -> Option<Point<Pixels>> {
+        let geometry = self.panes[self.index_of(identity)?].geometry.get();
+        let card = geometry.card?;
+        let limit_right = f32::from(card.right()) - crate::theme::PANE_PAD_X;
+        let (floor, trigger) = if up {
+            let composer = geometry.composer?;
+            (f32::from(composer.top()), composer)
+        } else {
+            (0., card)
+        };
+        Some(crate::components::FloatPlace { floor, limit_right }.card_corner(trigger, up))
+    }
+
+    /// The limits a surface summoned from the window's bar rests within
+    /// (ADR 0014): its foot over the bar's top, its right edge inside the
+    /// window's margin.
+    fn bar_place(&self) -> crate::components::FloatPlace {
+        let board = self.board.get();
+        crate::components::FloatPlace {
+            floor: board.y + board.h,
+            limit_right: board.x + board.w - crate::theme::GRID_PAD,
         }
     }
 
-    /// Where a card hangs with no Pane geometry to hang from: off the
-    /// board as though it were the Pane — from its foot (where a Composer
-    /// would be) for a card opening up, its head for one opening down.
+    /// Where a card hangs with no geometry to hang from: off the board as
+    /// though it were the Pane — from its foot (where a Composer would be)
+    /// for a card opening up, its head for one opening down.
     fn board_card_corner(&self, up: bool, window: &Window) -> Point<Pixels> {
         let board = self.board_bounds(window);
         let right = board.x + board.w;
@@ -11077,7 +11027,6 @@ impl CockpitView {
                 width: None,
                 lead: 0.,
                 id: format!("mode-picker-{}", thread.get()).into(),
-                anchor: gpui::Anchor::BottomLeft,
                 trigger: pane::composer_control(("mode-picker", thread.get() as usize), cx)
                     .debug_selector(move || format!("mode-picker-{}", thread.get()))
                     .tip("Permission mode")
@@ -11113,7 +11062,7 @@ impl CockpitView {
                         cx.notify();
                     });
                 }),
-                place: self.float_place(index),
+                place: self.bar_place(),
             }
             .into_any_element(),
         )
@@ -11185,8 +11134,7 @@ impl CockpitView {
         let (thread, generation) = self.session_controls?;
         let at = self.card_corner(
             format!("session-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            true,
+            CardFrom::Composer(PaneIdentity::Thread(thread)),
             window,
         )?;
         let open = self.cockpit.thread(thread)?;
@@ -11600,8 +11548,7 @@ impl CockpitView {
         let thread = self.context_checks?;
         let at = self.card_corner(
             format!("ci-{}", thread.get()),
-            PaneIdentity::Thread(thread),
-            false,
+            CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
         let pr = self
@@ -11671,7 +11618,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let identity = self.context_usage?;
-        let at = self.card_corner(format!("usage-{identity:?}"), identity, true, window)?;
+        let at = self.card_corner(format!("usage-{identity:?}"), CardFrom::Bar, window)?;
         // The card opens upward from `at`: it grows into the room above,
         // inside the window's margin, and scrolls past that.
         let max_h = (f32::from(at.y) - crate::theme::GRID_PAD)
@@ -11810,6 +11757,7 @@ impl CockpitView {
             index,
             Kind::Provider,
             pane::composer_control(("model-picker", thread.get() as usize), cx)
+                .debug_selector(move || format!("model-picker-{}", thread.get()))
                 .tip(hold.unwrap_or("Model"))
                 .child(pane::model_picker(
                     Some(provider),
@@ -11935,10 +11883,6 @@ impl CockpitView {
             },
             // Rebuild the retained menu when availability changes.
             id: format!("choice-{identity:?}-{effort}-{}", hold.unwrap_or_default()).into(),
-            // The model and effort chips lead the status line (and a
-            // draft's band starts its own): the picker hangs right from the
-            // chip and the measured shift keeps it inside the Pane.
-            anchor: gpui::Anchor::BottomLeft,
             trigger,
             choices,
             open: open.is_some(),
@@ -11976,7 +11920,7 @@ impl CockpitView {
             on_pick: std::rc::Rc::new(move |at, _, cx| {
                 let _ = picker.update(cx, |view, cx| view.pick(at, cx));
             }),
-            place: self.float_place(index),
+            place: self.bar_place(),
         }
     }
 
@@ -12010,13 +11954,6 @@ impl CockpitView {
         });
         let chosen = current.and_then(|current| labels.iter().position(|label| *label == current));
         Some((steps, labels, chosen))
-    }
-
-    /// The limits a surface summoned from Pane `index` rests within: the
-    /// Composer's edge and the card's inner right edge, as last laid out.
-    fn float_place(&self, index: usize) -> Option<crate::components::FloatPlace> {
-        let (floor, limit_right) = self.panes.get(index)?.geometry.get().float_limits()?;
-        Some(crate::components::FloatPlace { floor, limit_right })
     }
 
     /// The effort chip's click: the root chip's toggle grammar.
@@ -12472,9 +12409,9 @@ impl CockpitView {
         rows
     }
 
-    /// The bell's door in the nav's chrome band (FL-17), its badge the
-    /// unread waiting requests; a click drops the list, which hangs from
-    /// the door's bounds as last laid out (`notices_float`).
+    /// The bell's door in the bottom bar (FL-17), its badge the unread
+    /// waiting requests; a click raises the list, which hangs from the
+    /// door's bounds as last laid out (`notices_float`).
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let requests = self.cockpit.notifications().unread_requests();
         let door = crate::notifications::door(requests, self.bell.open, cx).on_click(cx.listener(
@@ -12489,6 +12426,7 @@ impl CockpitView {
                 .id("notifications-bell-tip")
                 .relative()
                 .flex_shrink_0()
+                .h_full()
                 .tooltip(crate::menu::action_tooltip(
                     "Notifications",
                     "cockpit::ToggleNotifications",
@@ -12500,8 +12438,7 @@ impl CockpitView {
     }
 
     /// The nav column and its one seam (`nav::seam`): the Needs-you strip,
-    /// the tree and the Parked fold on the chrome, under the titlebar cell
-    /// (`nav_chrome`). cmd-B rides its width to nothing over
+    /// the tree and the Parked fold on the chrome. cmd-B rides its width to nothing over
     /// `motion::RESIZE` (the render tail keeps frames coming while it
     /// moves) while its content fades on its own clock (N-15): 1 → 0 over
     /// 150ms folding, 0 → 1 opening. At rest folded, the column draws
@@ -12575,68 +12512,6 @@ impl CockpitView {
             (Some(ride), Some(fade)) if ride.running(now, reduced) => fade.value(now, reduced),
             _ => 1.0,
         }
-    }
-
-    /// How far the titlebar cell's ground is from the chrome (0) to the
-    /// plane (1) this frame (N-16): its own cross-fade while the column
-    /// rides, else where the column rests.
-    fn nav_band_t(&self, now: std::time::Instant, reduced: bool) -> f32 {
-        match (self.nav_tween, self.nav_band) {
-            (Some(ride), Some(band)) if ride.running(now, reduced) => band.value(now, reduced),
-            _ if self.nav_railed() => 1.0,
-            _ => 0.0,
-        }
-    }
-
-    /// The titlebar cell over the column (`nav::chrome_band`), laid over
-    /// everything under it at the window's top-left: the traffic lights'
-    /// reserve, a stretch (where the app draws its own titlebar, a drag
-    /// region), then a waiting CLI update, the sidebar toggle and the bell
-    /// (and the gear where Settings has no other door) — the prototype's
-    /// titlebar. It rides with the column (`nav_chrome_width`) and
-    /// cross-fades from the chrome to the plane as one colour, so folded it
-    /// keeps every door on the reading plane.
-    fn nav_chrome(&self, cx: &mut Context<Self>) -> AnyElement {
-        let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
-        let gear = prefs::gear(
-            prefs::gear_button(cx).on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.toggle_settings(cx);
-            })),
-            "settings-gear-tip",
-        );
-        // The stretch is the window's where the app draws its own titlebar:
-        // the band reads as a titlebar, so it drags like one (`titlebar.rs`).
-        let stretch = if crate::titlebar::CUSTOM {
-            crate::titlebar::drag_region(
-                "nav-chrome-drag",
-                crate::titlebar::Title::default(),
-                self.maximized,
-            )
-        } else {
-            div().flex_1()
-        };
-        // A waiting CLI update is a palette command, not a door (F-9).
-        nav::chrome_band(
-            self.nav_chrome_width(cx),
-            nav::band_ground(self.nav_band_t(now, reduced)),
-            self.nav_railed(),
-        )
-        .child(stretch)
-        .child(nav::collapse_button().on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.toggle_nav_now(cx);
-            }),
-        ))
-        .child(self.bell_element(cx))
-        // Settings keeps its gear only where it has no other visible
-        // door: macOS lists it in the app menu (and ⌘,), so there the
-        // cell carries none, folded or not (theme WP-C, the prototype).
-        .children((!cfg!(target_os = "macos")).then_some(gear))
-        .into_any_element()
     }
 
     /// The Needs-you strip at the top of the column (C8), or nothing while
@@ -13756,7 +13631,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
-        // The palette's `new group` (the titlebar door is `⌘K commands`).
+        // The palette's `new group`.
         view.update(cx, |view, cx| {
             view.open_draft_with_placement(
                 DraftTarget::Main,
@@ -13882,71 +13757,29 @@ mod tests {
         });
     }
 
-    // macOS caption buttons belong to AppKit, outside GPUI geometry.
-    #[cfg(target_os = "windows")]
+    /// ADR 0014: the titlebar band says nothing — no location, no build
+    /// badge, no doors. The sidebar toggle, the bell and `?` live in the
+    /// window's one bar at its foot.
     #[gpui::test]
-    fn the_commands_door_sits_before_the_caption_controls(cx: &mut TestAppContext) {
-        let (mut core, _fake) = cockpit("titlebar-add-placement", 2);
-        let threads = core.threads();
-        let group = core
-            .apply_group(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.enter_group(group, cx));
-        tick(cx);
-
-        let button = cx
-            .debug_bounds("titlebar-commands")
-            .expect("the titlebar's commands door is visible");
-        if !crate::titlebar::CUSTOM {
-            assert!(
-                cx.debug_bounds("caption-minimize").is_none(),
-                "host owns native caption controls"
-            );
-            return;
-        }
-        let minimize = cx
-            .debug_bounds("caption-minimize")
-            .expect("the minimize button is visible");
-        assert!(button.right() <= minimize.origin.x);
-        assert!(
-            minimize.origin.x - button.right() <= px(crate::theme::GRID_PAD),
-            "the door belongs beside the caption controls"
-        );
-        assert_eq!(
-            button.center().y,
-            minimize.center().y,
-            "the door is vertically centered in the titlebar"
-        );
-    }
-
-    /// F-10/F-11: the band carries no build badge (Settings › About says
-    /// which build this is) and its one trailing door is `⌘K commands`, two
-    /// cells in from the window's edge, vertically centred.
-    #[gpui::test]
-    fn the_titlebar_carries_no_build_badge_and_one_door(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("titlebar-dev-badge", 1);
+    fn the_titlebar_band_says_nothing_and_the_bar_holds_the_doors(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("titlebar-says-nothing", 1);
         let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
         tick(cx);
-        assert!(cx.debug_bounds("titlebar-dev-badge").is_none());
-        assert!(cx.debug_bounds("titlebar-add-thread").is_none());
-        let door = cx
-            .debug_bounds("titlebar-commands")
-            .expect("the commands door");
-        assert!(
-            (door.center().y - px(crate::theme::WIN_CHROME_H / 2.0)).abs() <= px(1.),
-            "centred in the band: {door:?}"
-        );
-        if !crate::titlebar::CUSTOM {
+        for gone in [
+            "titlebar-location",
+            "titlebar-commands",
+            "titlebar-dev-badge",
+            "nav-chrome",
+        ] {
+            assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
+        }
+        let bar = cx.debug_bounds("bottom-bar").expect("the bottom bar");
+        for door in ["nav-collapse", "notifications-bell", "bottom-bar-help"] {
+            let at = cx.debug_bounds(door).unwrap_or_else(|| panic!("{door}"));
             assert!(
-                (px(1440.) - door.right() - px(crate::theme::TITLE_PAD_X)).abs() <= px(1.),
-                "two cells in from the window's edge: {door:?}"
+                at.top() >= bar.top() && at.bottom() <= bar.bottom(),
+                "{door} rides the bar: {at:?} in {bar:?}"
             );
         }
     }
@@ -14390,8 +14223,8 @@ mod tests {
 
     /// C8: while Threads wait, the nav pins `Needs you N ⌘D` under its
     /// head with one reference row per waiting Thread, in creation order
-    /// (R14); ⌘D walks them oldest request first, the titlebar counts them,
-    /// and — the nav being open — no system toast card shows.
+    /// (R14); ⌘D walks them oldest request first, and — the nav being
+    /// open — no system toast card shows.
     #[gpui::test]
     fn two_decisions_make_a_needs_you_strip_and_no_toast(cx: &mut TestAppContext) {
         use gpui::component::WindowExt as _;
@@ -14449,14 +14282,6 @@ mod tests {
                 "the Thread's own row stays in the tree"
             );
         }
-        let location = view.read_with(cx, |view, _| view.titlebar_location(None));
-        assert!(
-            matches!(
-                location,
-                crate::titlebar::Location::Group { need_you: 2, .. }
-            ),
-            "the titlebar counts who on the board needs you: {location:?}"
-        );
         cx.update(|window, cx| {
             assert_eq!(
                 window.notifications(cx).len(),
@@ -14647,10 +14472,7 @@ mod tests {
     /// plus its hysteresis. cmd-B overrides it.
     #[gpui::test]
     fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-        use crate::theme::{
-            GRID_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_CHROME_FOLDED_W,
-            NAV_WIDTH,
-        };
+        use crate::theme::{GRID_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
         let (core, _fake) = cockpit("nav-auto-rail", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
@@ -14667,9 +14489,8 @@ mod tests {
             "the column is folded away"
         );
         assert!(
-            (cx.debug_bounds("nav-chrome").unwrap().size.width - px(NAV_CHROME_FOLDED_W)).abs()
-                < px(1.),
-            "the titlebar cell keeps the window's doors"
+            cx.debug_bounds("nav-collapse").is_some(),
+            "the bar keeps the sidebar toggle"
         );
         assert_eq!(
             view.read_with(cx, |view, _| (
@@ -15161,8 +14982,8 @@ mod tests {
 
     /// A card hangs off its trigger, never the pointer: wherever the meter
     /// is pressed, the usage card rests at the same place, its foot
-    /// `FLOAT_OFFSET` above the Composer's edge and its right edge inside
-    /// the Pane's. With no account windows reported, one line says so.
+    /// `FLOAT_OFFSET` above the bar and its right edge on the meter's (ADR
+    /// 0014). With no account windows reported, one line says so.
     #[gpui::test]
     fn the_usage_card_origin_is_independent_of_the_pointer(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("usage-card-origin", 1);
@@ -15196,14 +15017,13 @@ mod tests {
                 .debug_bounds("context-usage-card")
                 .expect("the press opens the card");
             origins.push(card.origin);
-            let composer = cx.debug_bounds("composer-block").unwrap();
+            let bar = cx.debug_bounds("bottom-bar").unwrap();
             assert_eq!(
                 card.bottom(),
-                composer.top() - px(crate::theme::FLOAT_OFFSET),
-                "the card rests FLOAT_OFFSET above the Composer's edge"
+                bar.top() - px(crate::theme::FLOAT_OFFSET),
+                "the card rests FLOAT_OFFSET above the bar it opened from"
             );
-            let pane = cx.debug_bounds("pane-body-1").unwrap();
-            assert!(card.right() <= pane.right() - px(crate::theme::PANE_PAD_X) + px(1.5));
+            assert_eq!(card.right(), meter.right(), "it hangs off its trigger");
             assert!(
                 cx.debug_bounds("context-usage-limits-unknown").is_some(),
                 "no account window reported: one line, no bars"
@@ -15215,11 +15035,11 @@ mod tests {
         assert_eq!(origins[0], origins[1], "the pointer does not move the card");
     }
 
-    /// The model picker rests on the Composer's edge, not over it: its foot
-    /// `FLOAT_OFFSET` above the Composer, its right edge inside the Pane,
-    /// every row one menu row high.
+    /// The model picker rests on the bar its chip rides, not over it (ADR
+    /// 0014): its foot `MODEL_PICKER_GAP` above the bar, its right edge
+    /// inside the window's margin, every row one menu row high.
     #[gpui::test]
-    fn the_model_picker_rests_above_the_composer_inside_the_pane(cx: &mut TestAppContext) {
+    fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("model-picker-place", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -15233,23 +15053,126 @@ mod tests {
             cx.run_until_parked();
         }
         let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
-        let composer = cx.debug_bounds("composer-block").unwrap();
+        let bar = cx.debug_bounds("bottom-bar").unwrap();
         assert_eq!(
             menu.bottom(),
-            composer.top() - px(crate::theme::MODEL_PICKER_GAP),
-            "FL-13: the picker's foot 5px over the input band"
+            bar.top() - px(crate::theme::MODEL_PICKER_GAP),
+            "FL-13: the picker's foot 5px over the bar its chip rides"
         );
         assert!(
             (menu.size.width - px(crate::theme::MODEL_PICKER_W)).abs() <= px(1.),
             "66 cells: {menu:?}"
         );
-        let pane = cx.debug_bounds("pane-body-1").unwrap();
-        assert!(menu.right() <= pane.right() - px(crate::theme::PANE_PAD_X) + px(1.5));
+        assert!(menu.right() <= bar.right() - px(crate::theme::GRID_PAD) + px(1.5));
         let row = cx
             .debug_bounds("choice-row-1")
             .expect("a live row under the section");
         // Terminal-native (WP-E): a float row is one grid row.
         assert_eq!(row.size.height, px(crate::theme::FLOAT_ROW_H));
+    }
+
+    /// The status line's popovers hang off their triggers in the bar, not
+    /// off the focused Pane (ADR 0014): with focus in a Group's right
+    /// column, the ctx card's right edge is the meter's and the model
+    /// picker's left edge stands its nudge left of its chip, both resting
+    /// on the bar.
+    #[gpui::test]
+    fn the_status_lines_popovers_hang_off_the_bar(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("bar-popovers", 2);
+        let group = group_all(&mut core);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+        view.update(cx, |view, cx| {
+            view.enter_group(group, cx);
+            view.focus_pane(1);
+            cx.notify();
+        });
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 64_000,
+                input_tokens: 64_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(200_000),
+            })
+            .unwrap();
+        tick(cx);
+        let settle = |cx: &mut gpui::VisualTestContext| {
+            for _ in 0..3 {
+                cx.executor().advance_clock(Duration::from_millis(300));
+                cx.update(|window, _| window.refresh());
+                cx.run_until_parked();
+            }
+        };
+        let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+        let bar = cx.debug_bounds("bottom-bar").unwrap();
+        let meter = debug_bounds(cx, format!("usage-meter-{}", thread.get()))
+            .expect("the focused Thread's ctx rides the bar");
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        settle(cx);
+        let card = cx
+            .debug_bounds("context-usage-card")
+            .expect("the press opens the card");
+        assert_eq!(card.right(), meter.right(), "the card hangs off the meter");
+        assert_eq!(card.bottom(), bar.top() - px(crate::theme::FLOAT_OFFSET));
+        cx.simulate_keystrokes("escape");
+        view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+        settle(cx);
+        let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
+            .expect("the model chip rides the bar");
+        let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
+        assert_eq!(
+            menu.bottom(),
+            bar.top() - px(crate::theme::MODEL_PICKER_GAP)
+        );
+        assert!(
+            (menu.left() - (chip.left() - px(crate::theme::MODEL_PICKER_NUDGE))).abs() <= px(1.5),
+            "the picker stands its nudge left of its chip: {menu:?} / {chip:?}"
+        );
+    }
+
+    /// A draft's Project menu hangs off its chip in the bar, not off the
+    /// draft's Composer (ADR 0014): its left edge at the chip's, resting
+    /// on the bar.
+    #[gpui::test]
+    fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("band-menu-place", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+        tick(cx);
+        let chip = cx.debug_bounds("band-chip-0").expect("the Project chip");
+        cx.simulate_mouse_down(chip.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(chip.center(), MouseButton::Left, gpui::Modifiers::none());
+        for _ in 0..3 {
+            cx.executor().advance_clock(Duration::from_millis(300));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| {
+            assert!(view
+                .popover
+                .as_ref()
+                .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))));
+        });
+        let bar = cx.debug_bounds("bottom-bar").unwrap();
+        let composer = cx.debug_bounds("composer-block").unwrap();
+        let rows = cx
+            .debug_bounds("composer-menu-rows")
+            .expect("the menu is drawn");
+        assert!(
+            (rows.left() - chip.left()).abs() <= px(1.5),
+            "the menu stands on its chip: {rows:?} / {chip:?}"
+        );
+        assert!(rows.bottom() <= bar.top() - px(crate::theme::FLOAT_OFFSET));
+        assert!(
+            rows.bottom() > composer.bottom(),
+            "it rests on the bar, not over the draft's Composer: {rows:?} / {composer:?}"
+        );
     }
 
     /// A draft has spent no context, so its status line reads nothing — no
@@ -15391,29 +15314,6 @@ mod tests {
         view.read_with(cx, |view, _| assert!(view.context_checks.is_some()));
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_checks.is_none()));
-    }
-
-    /// F-10: the titlebar always names the checkout's branch, the default
-    /// included, after the Thread's state.
-    #[gpui::test]
-    fn the_titlebar_names_the_branch_always(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("project-branches", 1);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
-        view.update(cx, |view, cx| {
-            view.facts
-                .set_branches(vec![(thread, Some(branch_status_with_checks()))]);
-            cx.notify();
-        });
-        tick(cx);
-        let location = view.read_with(cx, |view, _| view.titlebar_location(None));
-        match location {
-            crate::titlebar::Location::Thread { branch, .. } => {
-                assert_eq!(branch.as_deref(), Some("feat/thread-pane-header"))
-            }
-            other => panic!("a Solo Thread's location: {other:?}"),
-        }
     }
 
     /// A PR whose rollup is empty claims nothing about CI, so the checks
@@ -20324,9 +20224,8 @@ mod tests {
 
     /// #21: the nav's width is part of the zoom input — cmd-b folding it
     /// away hands width back, so a Pane that could not hold a transcript
-    /// beside the full nav can without it. Folded, the titlebar cell keeps
-    /// the sidebar toggle, the bell and Settings, and the titlebar keeps its
-    /// `⌘K commands` door. cmd-b again takes the width back.
+    /// beside the full nav can without it. Folded, the bottom bar keeps the
+    /// bell and Settings in reach. cmd-b again takes the width back.
     #[gpui::test]
     fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-toggle", 1);
@@ -20350,9 +20249,7 @@ mod tests {
         let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
         assert_eq!(collapsed, Level::Transcript, "folding hands width back");
         tick(cx);
-        let cell = cx
-            .debug_bounds("nav-chrome")
-            .expect("the folded titlebar cell");
+        let bar = cx.debug_bounds("bottom-bar").expect("the bottom bar");
         // Settings has its gear only off macOS (the app menu lists it).
         let doors: &[&'static str] = if cfg!(target_os = "macos") {
             &["notifications-bell"]
@@ -20364,14 +20261,10 @@ mod tests {
                 .debug_bounds(door)
                 .unwrap_or_else(|| panic!("folded, {door} stays in reach"));
             assert!(
-                bounds.bottom() <= px(crate::theme::WIN_CHROME_H) && bounds.right() <= cell.right(),
-                "{door} sits in the titlebar cell: {bounds:?} in {cell:?}"
+                bounds.top() >= bar.top() && bounds.bottom() <= bar.bottom(),
+                "{door} sits in the bar: {bounds:?} in {bar:?}"
             );
         }
-        assert!(
-            cx.debug_bounds("titlebar-commands").is_some(),
-            "the titlebar keeps its commands door"
-        );
 
         cx.simulate_keystrokes("cmd-b");
         let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
@@ -22924,9 +22817,9 @@ mod tests {
         cx.simulate_click(close, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(!view.settings_open));
-        // The titlebar cell carries the gear only where Settings has no
+        // The bottom bar carries the gear only where Settings has no
         // other visible door: macOS lists it in the app menu (and ⌘,), so
-        // there the cell has none, open or folded (the prototype).
+        // there the bar has none (the prototype).
         if cfg!(target_os = "macos") {
             assert!(cx.debug_bounds("settings-gear").is_none());
             cx.simulate_keystrokes("cmd-b");

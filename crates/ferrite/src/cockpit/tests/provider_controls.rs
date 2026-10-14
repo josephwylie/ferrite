@@ -316,16 +316,13 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     view.read_with(cx, |view, _| {
         assert!(view.mode_picker.is_some(), "the menu survives a redraw");
     });
-    // Anchored BottomLeft, the menu rests above the Composer's edge, clear
-    // of the chip; its one item is the pick.
+    // Anchored BottomLeft, the menu rests above the bar, clear of the
+    // chip; its one item is the pick.
     let item = cx
         .debug_bounds("choice-row-0")
         .expect("the mode menu's item is drawn");
-    let composer = cx.debug_bounds("composer-block").unwrap();
-    assert!(
-        item.bottom() <= composer.top(),
-        "{item:?} over {composer:?}"
-    );
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    assert!(item.bottom() <= bar.top(), "{item:?} over {bar:?}");
     cx.simulate_click(item.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(

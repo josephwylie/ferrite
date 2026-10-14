@@ -11,54 +11,23 @@
 //! — else the latest.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
-use ferrite_core::store::Provider;
 use ferrite_core::transcript::Transcript;
 use ferrite_core::ThreadId;
 use gpui::{App, ClipboardItem, Context, SharedString, Window};
 
-use super::{effort_value, home_relative, CockpitView};
+use super::{home_relative, CockpitView};
 use crate::transcript::{BannerFacts, ScrollTarget, TranscriptTail};
 
 impl CockpitView {
-    /// What the banner heading `thread`'s transcript says: its title; its
-    /// provider, model, effort (only when one resolves) and checkout on its
-    /// branch; when its first prompt went out, how many turns have ended,
-    /// and the latest completed turn's settled time (R17).
+    /// What the banner heading `thread`'s transcript says: its checkout on
+    /// its branch, and when its first prompt went out.
     pub(super) fn banner_facts(
         &self,
         thread: ThreadId,
         transcript: &Transcript,
     ) -> Option<BannerFacts> {
         let open = self.cockpit.thread(thread)?;
-        let provider = open.provider();
-        let facts = self.facts.get(thread);
-        let title = facts
-            .map(|facts| facts.name.clone())
-            .filter(|name| !name.is_empty())
-            .or_else(|| {
-                open.title()
-                    .map(|title| SharedString::from(title.to_string()))
-            })
-            .unwrap_or_else(|| SharedString::from("New thread"));
-        let model = open
-            .model()
-            .or_else(|| open.transcript().model())
-            .map(|model| {
-                let label = SharedString::from(ferrite_core::providers::models::label(
-                    model,
-                    open.models(),
-                ));
-                crate::pane::status_model_word(&label)
-            });
-        let effort = effort_value(
-            open.effort(),
-            self.prefs.settings.effort_for(provider),
-            provider,
-            open.model(),
-            open.models(),
-        );
         let workspace_path =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf)
@@ -69,18 +38,15 @@ impl CockpitView {
             SharedString::from(home_relative(&workspace_path))
         };
         Some(BannerFacts {
-            title,
-            provider_word: SharedString::from(provider_word(provider)),
-            model,
-            effort,
             workspace,
             workspace_path,
-            branch: facts.and_then(|facts| facts.branch.clone()),
+            branch: self
+                .facts
+                .get(thread)
+                .and_then(|facts| facts.branch.clone()),
             started_at: transcript
                 .started_at()
                 .map(|at| SharedString::from(at.to_string())),
-            turns: transcript.turn_count(),
-            working: transcript.last_working_ms().map(Duration::from_millis),
         })
     }
 
@@ -197,13 +163,5 @@ impl CockpitView {
                 transcript.preview_path(path, line, window, cx)
             });
         }
-    }
-}
-
-/// The provider as the banner says it: lowercase.
-fn provider_word(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
     }
 }

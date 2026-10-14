@@ -432,6 +432,12 @@ impl gpui::RenderOnce for Markdown {
         let chips = self.chips.clone();
         let link_cwd = cwd.clone();
         let hang = theme::tx_cell(f32::from(base));
+        // A ```mermaid fence draws as its diagram (`visual::diagram`); the
+        // fence's Markdown (the source, moved in) says whether it has closed.
+        let diagrams = self
+            .source
+            .contains(crate::visual::diagram::LANGUAGE)
+            .then_some(self.source);
         let view = TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.
@@ -500,6 +506,27 @@ impl gpui::RenderOnce for Markdown {
                 } else {
                     cx.open_url(url);
                 }
+            })
+            .when_some(diagrams, |view, source| {
+                view.code_block_view(move |block, element, window, cx| {
+                    let fence = block.span.and_then(|span| source.get(span.start..span.end));
+                    match fence {
+                        Some(fence)
+                            if block.lang().as_deref()
+                                == Some(crate::visual::diagram::LANGUAGE) =>
+                        {
+                            crate::visual::diagram::or_code(
+                                fence,
+                                block.code().to_string(),
+                                element,
+                                f32::from(base),
+                                window,
+                                cx,
+                            )
+                        }
+                        _ => element,
+                    }
+                })
             })
             .code_block_actions(move |block, window, cx| {
                 let id: SharedString =
@@ -1643,6 +1670,97 @@ mod file_link_tests {
             "revealing the actions leaves the block where it was"
         );
         assert_eq!(cx.debug_bounds("code-actions"), Some(actions));
+    }
+
+    const MERMAID: &str = "Before\n\n```mermaid\ngraph TD\n  a --> b\n```\n\nAfter";
+
+    /// A ```mermaid fence shows as code, asks for its diagram once that code
+    /// is on screen, and shows the diagram (cropped to what it drew, at its
+    /// own height) once drawn.
+    #[gpui::test]
+    fn a_mermaid_fence_draws_as_its_diagram(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_none(),
+            "code until drawn"
+        );
+        assert_eq!(
+            engine.journal().len(),
+            1,
+            "one page opened: {:?}",
+            engine.journal()
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        let diagram = cx
+            .debug_bounds("mermaid-diagram")
+            .expect("the diagram replaces the fence");
+        let height = crate::visual::web::fake::CONTENT_HEIGHT as f32;
+        assert!(
+            (diagram.size.height - px(height)).abs() < px(1.),
+            "{diagram:?}"
+        );
+        assert_eq!(
+            engine.live_views(),
+            0,
+            "no page stays open for a drawn diagram"
+        );
+    }
+
+    /// A fence in a quote closes on a quoted line, and draws all the same.
+    #[gpui::test]
+    fn a_mermaid_fence_in_a_quote_draws(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, "> ```mermaid\n> graph TD\n> ```\n\nAfter");
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_some());
+    }
+
+    /// Without an engine, or with visuals off, the fence stays code.
+    #[gpui::test]
+    fn a_mermaid_fence_stays_code_without_visuals(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::visual::diagram::init(true, cx));
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_none());
+        assert!(
+            cx.debug_bounds("code-actions").is_some(),
+            "the fence is drawn"
+        );
+    }
+
+    #[gpui::test]
+    fn a_mermaid_fence_stays_code_with_visuals_off(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(false, cx);
+        });
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        assert!(engine.journal().is_empty(), "nothing is drawn");
+        assert!(cx.debug_bounds("mermaid-diagram").is_none());
     }
 
     #[gpui::test]

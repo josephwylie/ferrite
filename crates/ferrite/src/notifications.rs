@@ -354,8 +354,8 @@ impl Default for Bell {
 
 // --------------------------------------------------------------- the door
 
-/// The bell's door in the titlebar band (the prototype's `.ib`, FL-17):
-/// `ICON_BUTTON` × `ICON_BUTTON_H`, the bell at `ICON_BUTTON_GLYPH` in
+/// The bell's door in the bottom bar (the prototype's `.ib`, FL-17):
+/// `ICON_BUTTON` wide and the bar's full height, the bell at `ICON_BUTTON_GLYPH` in
 /// `TEXT_MUTED`, `paint::HOVER` and `TEXT` under the pointer (and while the
 /// list is down), and the badge: the unread waiting requests as a bare
 /// `BADGE_FS` digit in `ATTENTION` at its top-right corner — hidden at
@@ -384,7 +384,7 @@ pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::B
     .debug_selector(|| "notifications-bell".into())
     .relative()
     .w(px(ICON_BUTTON))
-    .h(px(ICON_BUTTON_H))
+    .h_full()
     .p_0()
     .accessibility_label("Notifications")
     .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
