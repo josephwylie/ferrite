@@ -32,6 +32,7 @@ mod pointer;
 mod prefs;
 mod project_editor;
 mod prompt_drop;
+mod review;
 mod rich;
 mod scrollbar;
 mod select;

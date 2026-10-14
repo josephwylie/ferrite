@@ -4057,7 +4057,7 @@ pub(crate) fn approval_diff(
                 .w_full()
                 .min_w_0()
                 .flex_shrink_0()
-                .child(render_diff(None, diff, Grid::of(reading), false, true))
+                .child(render_diff(None, diff, Grid::of(reading), false))
                 .into_any_element(),
         );
     }
@@ -4090,7 +4090,7 @@ pub(crate) fn approval_diff(
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .child(render_diff(None, &diff, Grid::of(reading), false, true))
+            .child(render_diff(None, &diff, Grid::of(reading), false))
             .into_any_element(),
     )
 }
@@ -6144,7 +6144,7 @@ fn trail_duration(
 
 /// A change's size in a call's trail: `+7 −3`, the whole `+7` in `RUNNING`
 /// and the whole `−3` (U+2212) in `BLOCKED`.
-fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
+pub(crate) fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
     let added = format!("+{added}");
     let text = format!("{added} \u{2212}{removed}");
     let removed_at = added.len() + 1;
@@ -7048,7 +7048,6 @@ pub(crate) fn render_tool(
                     each,
                     grid,
                     row_cx.wide,
-                    true,
                 ));
             }
         }
@@ -8224,8 +8223,7 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
 }
 
 /// A diff under its call (the prototype's `.diff`, clean): no box, half a
-/// line under the call, on the content column (`inset`; the compare reader
-/// draws it flush). A `TEXT_MUTED` hunk header opens a hunk that names a
+/// line under the call, on the content column. A `TEXT_MUTED` hunk header opens a hunk that names a
 /// section (none otherwise); each row is `[number][sign][code]` (unified
 /// carries the old and the new number), the numbers `TEXT_MUTED`
 /// right-aligned in `DIFF_NUMBER_CELLS`, the sign in its hue, the code in
@@ -8239,17 +8237,16 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
 /// whole, however they are cut; numbers, signs and headers are chrome and
 /// never do (#27). Without a selection (`None`) nothing registers.
 ///
-/// Under a call the diff draws at most `HUNK_MAX_ROWS` lines and then names
-/// what it left out; the reader draws it all.
+/// The diff draws at most `HUNK_MAX_ROWS` lines and then names what it
+/// left out.
 fn render_diff(
     selection: Option<(&TextRuns, BlockId)>,
     diff: &Diff,
     grid: Grid,
     wide: bool,
-    inset: bool,
 ) -> impl IntoElement {
     let total: usize = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum();
-    let (cap, omitted) = if inset { hunk_rows(total) } else { (total, 0) };
+    let (cap, omitted) = hunk_rows(total);
     let cells = diff_number_cells(diff_max_number(diff, cap));
     let number_w = cells * grid.cell();
     let sign_w = theme::DIFF_SIGN_CELLS * grid.cell();
@@ -8344,12 +8341,7 @@ fn render_diff(
         .w_full()
         .min_w_0()
         .text_color(rgb(TEXT));
-    let rows = if inset {
-        preview_rows(diff, cap, wide)
-    } else {
-        diff_rows(diff, cap, wide)
-    };
-    for row in rows {
+    for row in preview_rows(diff, cap, wide) {
         lines = lines.child(match &row {
             DiffRow::Hunk(header) => div()
                 .debug_selector(|| "diff-hunk".into())
@@ -8403,20 +8395,16 @@ fn render_diff(
                 .child(SharedString::from(format!("\u{2026} +{omitted} lines"))),
         );
     }
-    if inset {
-        // The prototype's `.diff` keeps its 1px border, clear: the rows sit
-        // a pixel in from every side.
-        content_row(grid).pt(px(grid.half())).child(
-            div()
-                .w_full()
-                .min_w_0()
-                .border_1()
-                .border_color(gpui::transparent_black())
-                .child(lines),
-        )
-    } else {
-        div().w_full().min_w_0().child(lines)
-    }
+    // The prototype's `.diff` keeps its 1px border, clear: the rows sit a
+    // pixel in from every side.
+    content_row(grid).pt(px(grid.half())).child(
+        div()
+            .w_full()
+            .min_w_0()
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .child(lines),
+    )
 }
 
 /// A one-line code run cut at its column's edge as the prototype's
@@ -8659,64 +8647,6 @@ impl gpui::Element for CellCut {
     }
 }
 
-/// A change set as the compare reader shows it (frame's `Beside::Compare`):
-/// each file's head — its path in `TEXT_STRONG` at `W_LABEL`, `+N −M` at its
-/// right — then its whole diff, split when `wide`, on the transcript's grid
-/// at the reading size. Nothing in it registers with a selection.
-pub(crate) fn diff_document(
-    edits: &[ferrite_core::FileEdit],
-    reading: ferrite_core::settings::ReadingSize,
-    wide: bool,
-) -> AnyElement {
-    let grid = Grid::of(reading);
-    let mut column = div()
-        .debug_selector(|| "diff-document".into())
-        .flex()
-        .flex_col()
-        .w_full()
-        .min_w_0()
-        .font_family(theme::FONT_CODE)
-        .text_size(px(grid.size))
-        .line_height(px(grid.line))
-        .text_color(rgb(TEXT));
-    for edit in edits {
-        let lines = || edit.hunks.iter().flat_map(|hunk| hunk.lines.iter());
-        let diff = Diff {
-            path: edit.path.clone(),
-            hunks: edit.hunks.clone(),
-            added: lines().filter(|line| line.starts_with('+')).count(),
-            removed: lines().filter(|line| line.starts_with('-')).count(),
-        };
-        column = column
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .min_w_0()
-                    .h(px(grid.line))
-                    .mt(px(grid.half()))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(theme::W_LABEL)
-                            .text_color(rgb(TEXT_STRONG))
-                            .child(SharedString::from(diff.path.clone())),
-                    )
-                    .child(components::tabular(
-                        div()
-                            .flex_shrink_0()
-                            .pl(px(2.0 * grid.cell()))
-                            .child(trail_diff_stat(diff.added, diff.removed)),
-                    )),
-            )
-            .child(render_diff(None, &diff, grid, wide, false));
-    }
-    column.into_any_element()
-}
-
 /// How many of a diff's rows the card draws, and how many are left for
 /// the omission line to account for. Split out so the arithmetic the card
 /// depends on is assertable without a window.
@@ -8761,7 +8691,7 @@ fn diff_number_cells(max: usize) -> f32 {
 
 /// What a unified-diff line is, read from its first byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DiffKind {
+pub(crate) enum DiffKind {
     Added,
     Removed,
     Context,
@@ -8769,15 +8699,15 @@ pub(super) enum DiffKind {
 
 /// A diff row's colours: the sign column, the code, and the row's wash.
 #[derive(Debug, PartialEq, Eq)]
-struct DiffPaint {
-    sign: &'static str,
-    sign_color: u32,
-    code_color: u32,
-    wash: Option<u32>,
+pub(crate) struct DiffPaint {
+    pub sign: &'static str,
+    pub sign_color: u32,
+    pub code_color: u32,
+    pub wash: Option<u32>,
 }
 
 impl DiffKind {
-    fn of(line: &str) -> Self {
+    pub(crate) fn of(line: &str) -> Self {
         match line.chars().next() {
             Some('+') => Self::Added,
             Some('-') => Self::Removed,
@@ -8789,7 +8719,7 @@ impl DiffKind {
     /// hue (`DIFF_*_SIGN`); the code keeps body ink under its syntax
     /// colours on the row's wash; a context line is the same code with no
     /// wash.
-    fn paint(self) -> DiffPaint {
+    pub(crate) fn paint(self) -> DiffPaint {
         match self {
             Self::Added => DiffPaint {
                 sign: "+",

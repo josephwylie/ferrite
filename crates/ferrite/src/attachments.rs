@@ -3,7 +3,8 @@
 //! `paint::BAND2`, a cell of padding each side, the image mark (or the file
 //! mark) and the name in `PATH_INK`. This module owns presentation and
 //! image preview; callers only supply paths and, for a draft, a removal
-//! callback. The prompt codec owns persistence.
+//! callback. The prompt codec owns persistence. A draft's review comments
+//! (ADR 0021) ride the same shelf as one more chip.
 
 use std::{path::PathBuf, rc::Rc};
 
@@ -17,6 +18,7 @@ use crate::attachment_preview::Preview;
 pub fn init(_cx: &mut App) {}
 
 type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
+type DropReview = Rc<dyn Fn(&mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct Attachments {
@@ -24,6 +26,8 @@ pub struct Attachments {
     files: Vec<PathBuf>,
     preview: Preview,
     on_remove: Option<Remove>,
+    review: usize,
+    on_drop_review: Option<DropReview>,
     island: bool,
 }
 
@@ -34,6 +38,8 @@ impl Attachments {
             files,
             preview: preview.clone(),
             on_remove: None,
+            review: 0,
+            on_drop_review: None,
             island: false,
         }
     }
@@ -49,6 +55,18 @@ impl Attachments {
         callback: impl Fn(&PathBuf, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_remove = Some(Rc::new(callback));
+        self
+    }
+
+    /// `comments` review comments wait with the files: one chip for all.
+    pub fn review(mut self, comments: usize) -> Self {
+        self.review = comments;
+        self
+    }
+
+    /// The review chip's ×: every gathered comment goes.
+    pub fn on_drop_review(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_drop_review = Some(Rc::new(callback));
         self
     }
 }
@@ -70,6 +88,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         files,
         preview,
         on_remove,
+        review,
+        on_drop_review,
         island,
     } = attachments;
     let chips = files.into_iter().enumerate().map(|(index, path)| {
@@ -182,6 +202,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 }
             })
     });
+    let review = (review > 0).then(|| review_chip(review, on_drop_review));
     div()
         .id(id)
         .when(island, |shelf| {
@@ -194,7 +215,59 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .min_w_0()
         .max_w_full()
         .children(chips)
+        .children(review)
         .into_any_element()
+}
+
+/// The draft's review comments as one `.att` chip: the pencil, `N review
+/// comments` in `PATH_INK`, and a quiet `×` that drops them all.
+fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
+    use crate::theme;
+    use gpui::{div, rgb, SharedString};
+    let label = format!(
+        "{comments} review comment{}",
+        if comments == 1 { "" } else { "s" }
+    );
+    div()
+        .debug_selector(|| "review-attachment".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::CH))
+        .h(px(theme::ATTACH_CHIP_H))
+        .px(px(theme::CH))
+        .bg(theme::paint::BAND2)
+        .font_family(theme::FONT_CODE)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(theme::PATH_INK))
+        .whitespace_nowrap()
+        .child(crate::icons::icon(
+            crate::icons::PENCIL,
+            theme::ATTACH_THUMB,
+            theme::PATH_INK,
+        ))
+        .child(SharedString::from(label))
+        .when_some(on_drop, |chip, on_drop| {
+            chip.child(
+                crate::components::button("drop-review-comments")
+                    .tab_stop(true)
+                    .p_0()
+                    .flex_shrink_0()
+                    .h(px(theme::ATTACH_CHIP_H))
+                    .px(px(theme::SPACE_0_5))
+                    .rounded(px(theme::R_TIGHT))
+                    .key_context("PromptAttachment")
+                    .accessibility_label("Remove the review comments")
+                    .tooltip("Remove the review comments")
+                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child("\u{d7}"))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        on_drop(window, cx);
+                    }),
+            )
+        })
 }
 
 impl RenderOnce for Attachments {

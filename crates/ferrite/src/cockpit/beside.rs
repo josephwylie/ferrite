@@ -1,13 +1,18 @@
 //! What opens beside a Pane on the board (F-14, F-15): a reader on a file
-//! at a line, a compare of the branch against its base, or another Thread.
+//! at a line, a review of the Thread's changes (ADR 0021), or another
+//! Thread.
 //!
-//! A reader and a compare take the reader slot the Pane already has
+//! A reader and a review take the reader slot the Pane already has
 //! (`attachment_preview::Preview`'s document, laid out by `board_tree`): in
 //! Solo the board becomes `Pane | reader`, in a Group the Pane's own cell
 //! splits, half and half (`READER_SHARE`), the seam between them dragging
 //! like any other (22–78%). Escape in the reader — or ⌘W while it holds
 //! focus — closes it, and the tree it was spliced into closes back over it,
 //! restoring the board as it was.
+//!
+//! A review reads its scope's edits here: the uncommitted work and the
+//! branch from git, off the UI thread; the last turn from Main's
+//! transcript. Picking another scope in it comes back here to be read.
 //!
 //! Another Thread opens as a second Pane: beside the current one in Solo (a
 //! pair on the Solo board, for as long as focus stays on one of the two),
@@ -16,6 +21,8 @@
 //! a member.
 
 use super::*;
+use crate::review::{ReviewView, ScopePicked};
+use ferrite_core::review::Scope;
 use std::path::{Path, PathBuf};
 
 /// What `open_beside` opens.
@@ -23,8 +30,8 @@ use std::path::{Path, PathBuf};
 pub(crate) enum Beside {
     /// A file, marked and scrolled to `line` (1-based) when there is one.
     Reader { path: PathBuf, line: Option<u32> },
-    /// The branch in `workspace` against `base` (`git diff base...HEAD`).
-    Compare { workspace: PathBuf, base: String },
+    /// The focused Thread's changes, at a scope.
+    Review(Scope),
     /// Another Thread, as its own Pane.
     Thread(ThreadId),
 }
@@ -39,7 +46,7 @@ impl CockpitView {
     ) {
         match beside {
             Beside::Reader { path, line } => self.open_reader(path, line, window, cx),
-            Beside::Compare { workspace, base } => self.open_compare(workspace, base, cx),
+            Beside::Review(scope) => self.open_review(scope, window, cx),
             Beside::Thread(thread) => self.open_thread_beside(thread, cx),
         }
     }
@@ -81,28 +88,87 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The compare beside the focused Pane: `git diff --no-color
-    /// base...HEAD` in `workspace`, off the UI thread, parsed into file
-    /// edits and drawn by the transcript's own diff document.
-    fn open_compare(&mut self, workspace: PathBuf, base: String, cx: &mut Context<Self>) {
+    /// The review beside the focused Pane, at `scope`, holding the
+    /// keyboard. A review already open there switches scope (and reads it
+    /// afresh) rather than opening another.
+    fn open_review(&mut self, scope: Scope, window: &mut Window, cx: &mut Context<Self>) {
         self.empty_shown = false;
-        let Some(owner) = self.panes.get(self.focused()).map(|pane| pane.identity) else {
+        let Some(pane) = self.panes.get(self.focused()) else {
             return;
         };
-        let task = cx.background_executor().spawn(async move {
-            let diff = git_diff(&workspace, &base);
-            let branch = git_branch(&workspace).unwrap_or_else(|| "HEAD".to_string());
-            (workspace, compare_of(&branch, &base, &diff))
-        });
-        cx.spawn(async move |this, cx| {
-            let (workspace, compare) = task.await;
-            this.update(cx, |view, cx| {
-                if let Some(index) = view.index_of(owner) {
-                    view.panes[index].preview.open_compare(workspace, compare);
-                    cx.notify();
-                }
+        let Some((thread, workspace)) = pane
+            .thread()
+            .and_then(|thread| Some((thread, self.thread_path(thread)?)))
+        else {
+            return;
+        };
+        let review = pane.preview.review().unwrap_or_else(|| {
+            let composer = pane.composer.clone();
+            let review = cx.new(|cx| ReviewView::new(composer, scope, cx));
+            cx.subscribe(&review, move |view, review, ScopePicked(scope), cx| {
+                view.read_review(thread, review, *scope, cx)
             })
-            .ok();
+            .detach();
+            review
+        });
+        let title = self
+            .facts
+            .get(thread)
+            .and_then(|facts| facts.branch.clone())
+            .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
+        pane.preview.open_review(workspace, title, review.clone());
+        window.focus(&review.focus_handle(cx), cx);
+        review.update(cx, |review, cx| review.pick_scope(scope, cx));
+        cx.notify();
+    }
+
+    /// Read `scope`'s edits for `thread` into `review`. The git scopes read
+    /// off the UI thread; a read that lands after the operator moved on to
+    /// another scope is dropped.
+    fn read_review(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        scope: Scope,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let base = self
+            .facts
+            .get(thread)
+            .and_then(|facts| facts.default_branch.clone())
+            .map_or_else(|| MAIN_BRANCH.to_string(), |branch| branch.to_string());
+        let diff = match scope {
+            Scope::LastTurn => {
+                let edits = self
+                    .cockpit
+                    .thread(thread)
+                    .map(|open| {
+                        ferrite_core::review::last_turn(open.transcript(), Some(&workspace))
+                    })
+                    .unwrap_or_default();
+                review.update(cx, |review, cx| review.show(scope, edits, cx));
+                return;
+            }
+            Scope::Uncommitted => cx
+                .background_executor()
+                .spawn(async move { git_uncommitted(&workspace) }),
+            Scope::Branch => cx
+                .background_executor()
+                .spawn(async move { git_diff(&workspace, &base) }),
+        };
+        let review = review.downgrade();
+        cx.spawn(async move |_, cx| {
+            let edits = parse_git_diff(&diff.await);
+            review
+                .update(cx, |review, cx| {
+                    if review.scope() == scope {
+                        review.show(scope, edits, cx);
+                    }
+                })
+                .ok();
         })
         .detach();
     }
@@ -201,10 +267,10 @@ impl CockpitView {
 
     /// A Pane's reader as its own board slot (F-14, F-15): the reader shell
     /// (`Preview::reader` — its head the path in `PATH_INK` and `:line` dim,
-    /// or a compare's `dev ↔ main · N files +A −R`, the slot's drag handle)
-    /// over the body: the file's numbered lines in syntax colour with the
-    /// target line marked, rendered Markdown, or the compare's diff. A press
-    /// lands on the Pane that opened it; escape closes it.
+    /// or `review · dev`, the slot's drag handle) over the body: the file's
+    /// numbered lines in syntax colour with the target line marked,
+    /// rendered Markdown, or the review. A press lands on the Pane that
+    /// opened it; escape closes it.
     pub(super) fn reader_cell(
         &self,
         owner: PaneIdentity,
@@ -220,18 +286,8 @@ impl CockpitView {
             reader: true,
             size: self.slot_size(leaf),
         };
-        let body = match &document.compare {
-            Some(compare) => div()
-                .id(("compare-body", leaf.get() as usize))
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .child(pane::diff_document(
-                    &compare.edits,
-                    self.prefs.settings.reading_size,
-                    self.slot_size(leaf).0 >= crate::theme::SPLIT_DIFF_MIN_W,
-                ))
-                .into_any_element(),
+        let body = match &document.review {
+            Some(review) => review.clone().into_any_element(),
             None if document.is_markdown() && document.line.is_none() => {
                 pane.document_rich
                     .file_context(document.path.parent(), &pane.preview);
@@ -260,6 +316,11 @@ impl CockpitView {
                     preview.close_document(window);
                 }
             })
+            .on_action(cx.listener(move |view, _: &crate::review::Close, _, cx| {
+                if let Some(index) = view.index_of(owner) {
+                    view.close_reader(index, cx);
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -352,70 +413,50 @@ fn numbered_lines(
     .into_any_element()
 }
 
-/// `git diff --no-color base...HEAD` in `workspace`; empty when git is not
-/// there or refuses.
+/// `git diff --no-color base...HEAD` in `workspace`.
 fn git_diff(workspace: &Path, base: &str) -> String {
+    git_read(
+        workspace,
+        &["diff", "--no-color", &format!("{base}...HEAD")],
+    )
+}
+
+/// The checkout against its last commit, staged or not, and each untracked
+/// file as all-new (`git diff --no-index /dev/null <file>`).
+fn git_uncommitted(workspace: &Path) -> String {
+    let mut diff = git_read(workspace, &["diff", "--no-color", "HEAD"]);
+    let untracked = git_read(
+        workspace,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    );
+    for path in untracked.split('\0').filter(|path| !path.is_empty()) {
+        diff.push_str(&git_read(
+            workspace,
+            &["diff", "--no-color", "--no-index", "--", "/dev/null", path],
+        ));
+    }
+    diff
+}
+
+/// What a git read in `workspace` printed; empty when git is not there or
+/// refuses. Exit 1 still counts: `diff --no-index` says "they differ" so.
+fn git_read(workspace: &Path, args: &[&str]) -> String {
     std::process::Command::new("git")
         .arg("-C")
         .arg(workspace)
-        .args(["diff", "--no-color"])
-        .arg(format!("{base}...HEAD"))
+        .args(args)
         // A read, never a lock on the index an agent may be writing.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()
-        .filter(|out| out.status.success())
+        .filter(|out| matches!(out.status.code(), Some(0 | 1)))
         .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
         .unwrap_or_default()
 }
 
-/// The branch `workspace` is on.
-fn git_branch(workspace: &Path) -> Option<String> {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(workspace)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        // A read, never a lock on the index an agent may be writing.
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|branch| !branch.is_empty())
-}
-
-/// A compare from git's multi-file unified diff: one file edit per `diff
-/// --git` section (named by its `+++ b/` path, else its `--- a/` path for
-/// a deletion), its hunks as git printed them, and the head that names it:
-/// `dev ↔ main · 3 files +40 −12`.
-pub(crate) fn compare_of(
-    branch: &str,
-    base: &str,
-    diff: &str,
-) -> crate::attachment_preview::Compare {
-    let edits = parse_git_diff(diff);
-    let (added, removed) = edits
-        .iter()
-        .flat_map(|edit| edit.hunks.iter())
-        .flat_map(|hunk| hunk.lines.iter())
-        .fold((0usize, 0usize), |(added, removed), line| {
-            match line.as_bytes().first() {
-                Some(b'+') => (added + 1, removed),
-                Some(b'-') => (added, removed + 1),
-                _ => (added, removed),
-            }
-        });
-    let files = edits.len();
-    crate::attachment_preview::Compare {
-        head: format!(
-            "{branch} \u{2194} {base} \u{b7} {files} file{} +{added} \u{2212}{removed}",
-            if files == 1 { "" } else { "s" }
-        ),
-        edits,
-    }
-}
-
-/// git's multi-file diff into file edits (see `compare_of`).
+/// git's multi-file unified diff into file edits: one per `diff --git`
+/// section (named by its `+++ b/` path, else its `--- a/` path for a
+/// deletion), its hunks as git printed them.
 pub(crate) fn parse_git_diff(diff: &str) -> Vec<ferrite_core::FileEdit> {
     let mut edits: Vec<ferrite_core::FileEdit> = Vec::new();
     let mut old_path: Option<String> = None;
@@ -431,13 +472,20 @@ pub(crate) fn parse_git_diff(diff: &str) -> Vec<ferrite_core::FileEdit> {
             old_path = None;
             continue;
         }
-        if let Some(path) = line.strip_prefix("--- ") {
+        // git ends a path holding a space with a tab on these two lines.
+        if let Some(path) = line
+            .strip_prefix("--- ")
+            .map(|path| path.trim_end_matches('\t'))
+        {
             if hunk.is_none() {
                 old_path = path.strip_prefix("a/").map(str::to_string);
                 continue;
             }
         }
-        if let Some(path) = line.strip_prefix("+++ ") {
+        if let Some(path) = line
+            .strip_prefix("+++ ")
+            .map(|path| path.trim_end_matches('\t'))
+        {
             if hunk.is_none() {
                 flush(&mut edits, &mut hunk);
                 let path = path
@@ -517,10 +565,10 @@ deleted file mode 100644
 -
 ";
 
-    /// F-15: git's multi-file diff parses into one edit per file — a
-    /// deletion named by its old path — and the head counts files and lines.
+    /// git's multi-file diff parses into one edit per file — a deletion
+    /// named by its old path.
     #[test]
-    fn a_compare_parses_git_diff_into_file_edits() {
+    fn git_diff_parses_into_file_edits() {
         let edits = parse_git_diff(DIFF);
         assert_eq!(edits.len(), 2);
         assert_eq!(edits[0].path, "crates/ferrite/src/nav.rs");
@@ -537,14 +585,46 @@ deleted file mode 100644
         );
         assert_eq!(hunk.lines.len(), 5);
         assert_eq!(edits[1].path, "old.rs");
-        let compare = compare_of("dev", "main", DIFF);
+        assert!(parse_git_diff("").is_empty());
+    }
+
+    /// The uncommitted scope holds edits to tracked files and every
+    /// untracked file as all-new; ignored files stay out.
+    #[test]
+    fn uncommitted_includes_untracked_files() {
+        let dir = std::env::temp_dir().join(format!("ferrite-review-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "operator@example.invalid"]);
+        git(&["config", "user.name", "operator"]);
+        std::fs::write(dir.join("kept.rs"), "one\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), "target\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "root"]);
+        std::fs::write(dir.join("kept.rs"), "two\n").unwrap();
+        std::fs::write(dir.join("new file.rs"), "fresh\n").unwrap();
+        std::fs::write(dir.join("target"), "built\n").unwrap();
+        let edits = parse_git_diff(&git_uncommitted(&dir));
+        let files: Vec<(&str, &[String])> = edits
+            .iter()
+            .map(|edit| (edit.path.as_str(), edit.hunks[0].lines.as_slice()))
+            .collect();
         assert_eq!(
-            compare.head,
-            "dev \u{2194} main \u{b7} 2 files +2 \u{2212}3"
+            files,
+            [
+                ("kept.rs", &["-one".to_string(), "+two".to_string()][..]),
+                ("new file.rs", &["+fresh".to_string()][..]),
+            ]
         );
-        assert_eq!(
-            compare_of("dev", "main", "").head,
-            "dev \u{2194} main \u{b7} 0 files +0 \u{2212}0"
-        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

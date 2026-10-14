@@ -109,6 +109,7 @@ pub(crate) enum Command {
     ParkThread,
     ShowParked,
     CompareWithMain,
+    ReviewChanges,
     NewThread,
     NewWorktreeThread,
     NewThreadInGroup,

@@ -9319,6 +9319,14 @@ impl CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
+            // A review beside the focused Pane keeps the keyboard it took,
+            // from its first frame (its comment field's too).
+            .or_else(|| {
+                self.panes
+                    .get(self.focused())
+                    .and_then(|pane| pane.preview.review())
+                    .and_then(|review| review.read(cx).held_focus(window, cx))
+            })
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
                     _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
@@ -9864,7 +9872,7 @@ impl CockpitView {
                         .then(|| self.popover_element(index, cx))
                         .flatten(),
                     composer_empty: pane.composer.read(cx).is_empty(),
-                    composer_files: pane.composer.read(cx).file_count(),
+                    composer_files: pane.composer.read(cx).attachment_count(),
                     focused,
                     error: draft.error.as_ref(),
                     editing: focused
@@ -9919,7 +9927,7 @@ impl CockpitView {
         let facts = pane::PaneFacts {
             thread: open,
             composer_empty: pane.composer.read(cx).is_empty(),
-            composer_files: pane.composer.read(cx).file_count(),
+            composer_files: pane.composer.read(cx).attachment_count(),
             composer_queue_height: pane::composer_queue_height(
                 rect.map_or(self.cell(window).height, |rect| rect.h),
                 false,
@@ -10301,7 +10309,8 @@ impl CockpitView {
 
     /// The changed-files card: every file this Thread (and its subagents)
     /// edited, one menu row each with its `+N −N`. A row opens the file in
-    /// the reader beside the Pane and closes the card.
+    /// the reader beside the Pane and closes the card; the head's `review`
+    /// opens the Review there instead (ADR 0021).
     fn changed_files_element(
         &self,
         window: &mut Window,
@@ -10360,7 +10369,25 @@ impl CockpitView {
             .debug_selector(|| "changed-files-card".into())
             .w(px(CHANGED_FILES_CARD_W))
             .pb(px(HALF_ROW))
-            .child(crate::menu::head("files changed"))
+            .child(
+                crate::menu::head("files changed").child(
+                    div()
+                        .id("changed-files-review")
+                        .debug_selector(|| "changed-files-review".into())
+                        .px(px(CH))
+                        .hover_float("changed-files-review")
+                        .child("review")
+                        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            view.changed_files_card = None;
+                            view.open_beside(
+                                beside::Beside::Review(ferrite_core::review::Scope::Uncommitted),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
+            )
             .child(
                 div()
                     .min_w_0()
@@ -13105,6 +13132,7 @@ mod tests {
     mod provider_navigation;
     mod render_performance;
     mod retention;
+    mod review;
     mod stab;
     mod stale_chrome;
     mod subagents;

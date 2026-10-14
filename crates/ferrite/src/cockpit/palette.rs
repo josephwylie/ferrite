@@ -508,6 +508,13 @@ impl CockpitView {
             Command::CompareWithMain,
         );
         add(
+            focused.is_some_and(|thread| self.thread_path(thread).is_some()),
+            "review changes".into(),
+            "comment on the diff",
+            None,
+            Command::ReviewChanges,
+        );
+        add(
             true,
             "new thread".into(),
             "",
@@ -806,6 +813,11 @@ impl CockpitView {
             Command::ParkThread => self.close_thread(&CloseThread, window, cx),
             Command::ShowParked => self.show_parked(window, cx),
             Command::CompareWithMain => self.compare_with_main(window, cx),
+            Command::ReviewChanges => self.open_beside(
+                beside::Beside::Review(ferrite_core::review::Scope::Uncommitted),
+                window,
+                cx,
+            ),
             Command::NewThread => self.new_thread(&NewThread, window, cx),
             Command::NewWorktreeThread => self.new_worktree_thread(&NewWorktreeThread, window, cx),
             Command::NewThreadInGroup => {
@@ -922,21 +934,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// ⌘⇧D, `compare with main`: the focused Thread's workspace against
-    /// `main`, in the diff reader beside it.
+    /// ⌘⇧D, `compare with main`: the focused Thread's branch against its
+    /// Project's default branch, in the Review beside it.
     fn compare_with_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(workspace) = self
-            .focused_thread()
-            .and_then(|thread| self.thread_path(thread))
-        else {
-            return;
-        };
         self.close_palette(cx);
         self.open_beside(
-            beside::Beside::Compare {
-                workspace,
-                base: MAIN_BRANCH.to_string(),
-            },
+            beside::Beside::Review(ferrite_core::review::Scope::Branch),
             window,
             cx,
         );
