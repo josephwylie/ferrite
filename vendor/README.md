@@ -36,10 +36,17 @@ selection calculation and copying of offscreen text remain unchanged.
   document order, so Ferrite names the active one by its ordinal in
   `TextView::markdown_find_text` — the plain text with every run on a line
   of its own (`BlockTextKind::Runs`). The paint reports where the active one
-  landed and the first one at or below the view's top (`FindReport`).
-  Ferrite's `cockpit/tests/find.rs` covers it (gpui-base is not a workspace
-  member, so tests here would not run). Remove when upstream offers search
-  highlighting in `TextView`.
+  landed and the first one at or below the view's top (`FindReport`). A
+  fenced block `code_block_view` draws as something else still counts its
+  occurrences where it paints (`find::count_drawn`), so the runs after it
+  keep their ordinals; the active one among them reports the drawing.
+  `InputBaseState::set_find` (`input/editor/search.rs`) marks the same
+  needle over a read-only input (Ferrite's bounded output viewer) in the
+  same washes, scrolling the active occurrence into view and reporting
+  where it painted. Ferrite's `cockpit/tests/find.rs` covers it (gpui-base
+  is not a workspace member, so tests here would not run). Remove when
+  upstream offers search highlighting in `TextView` and an outside find
+  over an input.
 
 - `TextView::code_block_view` lets Ferrite draw a fenced code block as
   something else (a ` ```mermaid ` fence as its diagram, ADR 0016): the

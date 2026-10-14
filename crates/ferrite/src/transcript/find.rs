@@ -1,8 +1,9 @@
 //! Find in the transcript (⌘F, `crate::find`).
 //!
 //! The bar searches every row this transcript holds, laid out or not: the
-//! texts copy reads (`TextRuns::capture_members`), each with its row, as
-//! drawn — a folded call's output is not searched, as it is not shown. A
+//! texts copy reads (`TextRuns::capture_members`) and output that scrolls
+//! in its own viewer, each with its row, as drawn — a folded call's output
+//! is not searched, as it is not shown. A
 //! hit off screen is brought in by scrolling to its row; once its text has
 //! painted, the active occurrence reports where (`FindReport::revealed`) and
 //! the view settles it a third of the way down, clear of the pinned band.

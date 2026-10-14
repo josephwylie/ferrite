@@ -2,7 +2,9 @@
 //! transcript, or the reader beside it. Every occurrence is washed
 //! (`FIND_WASH`), the one the find is on more strongly (`FIND_ACTIVE_WASH`)
 //! and brought into view; ⏎ / ⇧⏎ (⌘G / ⌘⇧G) step through them, wrapping,
-//! and esc closes the bar. Smart case: a query with a capital letter
+//! and esc closes the bar — while its line holds the keyboard; elsewhere
+//! esc keeps its own meaning (in the Composer it interrupts), and ⌘F takes
+//! the keyboard back to the bar. Smart case: a query with a capital letter
 //! matches case, one without ignores it.
 //!
 //! The bar is a one-row float hung at the top right of the text (the

@@ -419,12 +419,12 @@ pub const ACCENT_EDGE: u32 = 0x8eb1f066;
 pub const ACCENT_WASH: u32 = 0x8eb1f024;
 /// `#8eb1f040` (25%) — native text selection, painted over glyphs.
 pub const TEXT_SELECTION_WASH: u32 = 0x8eb1f040;
-/// `#e6c47c33` (20%) — every occurrence a find (⌘F) marks, under its
-/// glyphs: find's conventional yellow, kept apart from the accent's
-/// selection.
-pub const FIND_WASH: u32 = 0xe6c47c33;
-/// `#e6c47c80` (50%) — the occurrence the find is on.
-pub const FIND_ACTIVE_WASH: u32 = 0xe6c47c80;
+/// `#eda87933` (20%) — every occurrence a find (⌘F) marks, under its
+/// glyphs: orange, a hue no state wears, kept apart from the accent's
+/// selection and from yellow, which means "needs you".
+pub const FIND_WASH: u32 = 0xeda87933;
+/// `#eda87980` (50%) — the occurrence the find is on.
+pub const FIND_ACTIVE_WASH: u32 = 0xeda87980;
 /// The caret: the soft block in the focused Composer.
 pub const CARET: u32 = ACCENT;
 
