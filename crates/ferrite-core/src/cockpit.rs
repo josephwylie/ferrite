@@ -648,8 +648,10 @@ pub struct Cockpit {
     /// Main is implicit until the renderer records a child selection.
     visible_subjects: BTreeMap<ThreadId, Subject>,
     /// Whether the window has the operator's focus: what is on screen is
-    /// seen only while it does (`acknowledge_seen`). True until the window
-    /// says otherwise, so a headless Cockpit reads what it shows.
+    /// seen only while it does (`acknowledge_seen`), so a finish or a
+    /// request on screen stays unread until they come back (ADR 0017). True
+    /// until the window says otherwise, so a headless Cockpit reads what it
+    /// shows.
     window_active: bool,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
@@ -3476,6 +3478,11 @@ impl Cockpit {
     /// (`Notifications::fixture_push`).
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
         self.notifications.fixture_push(thread, outcome);
+    }
+
+    /// Whether the operator is looking: the window has the system's focus.
+    pub fn window_active(&self) -> bool {
+        self.window_active
     }
 
     /// The window gained or lost the operator's focus. Gaining it, what

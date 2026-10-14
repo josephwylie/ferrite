@@ -10,8 +10,9 @@
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use ferrite_core::notifications::{DecisionNoticeId, NoticeId, RequestKind};
+use ferrite_core::notifications::{DecisionNoticeId, NoticeId, Notifications, RequestKind};
 use ferrite_core::ThreadId;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
@@ -58,6 +59,19 @@ pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 pub enum RowTarget {
     Notice(NoticeId),
     Decision(DecisionNoticeId),
+}
+
+impl RowTarget {
+    /// Whether its record still wants the operator: there, unread, and
+    /// for a request still live and not dismissed.
+    pub fn wants(&self, notifications: &Notifications) -> bool {
+        match self {
+            RowTarget::Notice(id) => notifications.get(*id).is_some_and(|notice| !notice.read),
+            RowTarget::Decision(id) => notifications
+                .decision(id)
+                .is_some_and(|notice| !notice.read),
+        }
+    }
 }
 
 /// A row's state in the lexicon: what its mark and its word say.
@@ -235,22 +249,75 @@ pub const ROW_TEXT_CELLS: usize = 76 - 2 - 2 - 10 - 5;
 
 // ----------------------------------------------------------------- Bell
 
+/// How long an event waits before it alerts: a request answered, or a
+/// finish read, within it never interrupts anyone (ADR 0017).
+pub const ALERT_DELAY: Duration = Duration::from_secs(1);
+
+/// How long a toast for a request stands.
+pub const NEEDS_YOU_TOAST: Duration = Duration::from_secs(8);
+
+/// How long a toast for a finished turn stands.
+pub const DONE_TOAST: Duration = Duration::from_secs(5);
+
+/// One event that may want the operator: a Notice or a live request, and
+/// its Thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Alert {
+    pub target: RowTarget,
+    pub thread: ThreadId,
+}
+
+impl Alert {
+    /// A live request (needs you), not a finished turn.
+    pub fn needs_you(&self) -> bool {
+        matches!(self.target, RowTarget::Decision(_))
+    }
+
+    fn stands(&self) -> Duration {
+        if self.needs_you() {
+            NEEDS_YOU_TOAST
+        } else {
+            DONE_TOAST
+        }
+    }
+}
+
+/// A toast standing, and when it goes on its own.
+#[derive(Clone, Debug)]
+pub struct Toast {
+    pub alert: Alert,
+    until: Instant,
+}
+
+/// What one `Bell::ring` did: the events that rang (each owes its sound and,
+/// away from the window, its system notification), and whether the toasts
+/// changed.
+#[derive(Debug, Default)]
+pub struct Ring {
+    pub rang: Vec<Alert>,
+    pub redraw: bool,
+}
+
 /// The window's side of the bell: whether its list is down and where its
-/// cursor stands, which Notices and requests it has seen, and which of them
-/// stand as toasts right now (oldest first; the newest draws).
+/// cursor stands, which Notices and requests it has heard, the events
+/// waiting out `ALERT_DELAY`, and the toasts standing (oldest first; the
+/// newest draws).
 ///
-/// **Toasts** (FL-18). A new request from any Thread that is not the
-/// focused Pane toasts, with the nav open or folded, and goes when it is
-/// answered, opened or read. A finished turn keeps its rule: it toasts only
-/// while the nav is folded and its Thread is off the board, and goes when
-/// the Thread lands on the board or is read.
+/// **Toasts** (FL-18, ADR 0017). A new finish or request waits a second,
+/// then is checked again: one read, answered or gone by then is dropped.
+/// A survivor toasts unless the operator is already looking at it, and
+/// replaces any toast its Thread had. A toast goes on its own (8s for a
+/// request, 5s for a finish), or sooner once it is read, resolved, or in
+/// view.
 pub struct Bell {
     pub open: bool,
     /// The list's cursor row (`SELECTION`), first on open.
     pub cursor: usize,
     presented: Option<NoticeId>,
     presented_requests: BTreeSet<DecisionNoticeId>,
-    toasts: Vec<(RowTarget, ThreadId)>,
+    /// Heard and waiting out `ALERT_DELAY`, one per Thread: the newest.
+    pending: Vec<(Alert, Instant)>,
+    toasts: Vec<Toast>,
     /// The bell's door as last laid out: what the list hangs from.
     pub door: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
@@ -262,87 +329,116 @@ impl Bell {
             cursor: 0,
             presented: None,
             presented_requests: BTreeSet::new(),
+            pending: Vec::new(),
             toasts: Vec::new(),
             door: Rc::new(std::cell::Cell::new(None)),
         }
     }
 
-    /// The watermark: Notices at or below it have been seen.
+    /// The watermark: Notices at or below it have been heard.
     pub fn presented(&self) -> Option<NoticeId> {
         self.presented
     }
 
     /// The toasts standing now, oldest first.
-    pub fn toasts(&self) -> &[(RowTarget, ThreadId)] {
+    pub fn toasts(&self) -> &[Toast] {
         &self.toasts
     }
 
-    /// Take every toast down, keeping what was presented as presented: a
-    /// scene's requests that stood before the window opened.
+    /// Whether anything is waiting or standing: what `ring` has to keep up.
+    pub fn busy(&self) -> bool {
+        !self.pending.is_empty() || !self.toasts.is_empty()
+    }
+
+    /// Take every toast down and forget what was waiting, keeping what was
+    /// heard as heard: a scene's requests that stood before the window
+    /// opened.
     #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub fn clear_toasts(&mut self) {
+        self.pending.clear();
         self.toasts.clear();
     }
 
     /// Take one toast down (its button acted on it).
     pub fn drop_toast(&mut self, target: &RowTarget) {
-        self.toasts.retain(|(standing, _)| standing != target);
+        self.toasts.retain(|toast| &toast.alert.target != target);
     }
 
-    /// Move the watermark past every Notice born since the last frame
-    /// (`fresh`: id, Thread, read), and toast each unread one whose Thread
-    /// is `toastable`.
-    pub fn present(
+    /// Hear what arrived since the last call: every Notice born since the
+    /// watermark (`notices`: id, Thread, read) moves it, and the live
+    /// requests (`requests`: id, read) replace the set heard. Each unread
+    /// newcomer waits out `ALERT_DELAY`, displacing whatever its Thread
+    /// had waiting.
+    pub fn hear(
         &mut self,
-        fresh: impl IntoIterator<Item = (NoticeId, ThreadId, bool)>,
-        toastable: &dyn Fn(ThreadId) -> bool,
+        notices: impl IntoIterator<Item = (NoticeId, ThreadId, bool)>,
+        requests: impl IntoIterator<Item = (DecisionNoticeId, bool)>,
+        now: Instant,
     ) {
-        for (id, thread, read) in fresh {
+        let mut heard = Vec::new();
+        for (id, thread, read) in notices {
             self.presented = Some(self.presented.map_or(id, |seen| seen.max(id)));
-            if read || !toastable(thread) {
-                continue;
+            if !read {
+                heard.push(Alert {
+                    target: RowTarget::Notice(id),
+                    thread,
+                });
             }
-            // One finished toast per Thread: a second finish replaces it.
-            self.toasts.retain(|(target, standing)| {
-                !(matches!(target, RowTarget::Notice(_)) && *standing == thread)
-            });
-            self.toasts.push((RowTarget::Notice(id), thread));
         }
-    }
-
-    /// Take down every standing completion toast `keep` no longer admits:
-    /// its Thread landed on the board, or its Notice was read.
-    pub fn retract(&mut self, keep: &dyn Fn(NoticeId, ThreadId) -> bool) {
-        self.toasts.retain(|(target, thread)| match target {
-            RowTarget::Notice(id) => keep(*id, *thread),
-            RowTarget::Decision(_) => true,
-        });
-    }
-
-    /// Keep request toasts in step with the live requests (`live`: id, read):
-    /// a request arriving unread from a `toastable` Thread toasts once; its
-    /// toast goes the moment it resolves, is dismissed or is read.
-    pub fn present_requests(
-        &mut self,
-        live: impl IntoIterator<Item = (DecisionNoticeId, bool)>,
-        toastable: &dyn Fn(ThreadId) -> bool,
-    ) {
-        let live: Vec<(DecisionNoticeId, bool)> = live.into_iter().collect();
-        self.toasts.retain(|(target, _)| match target {
-            RowTarget::Decision(id) => live.iter().any(|(live, read)| live == id && !read),
-            RowTarget::Notice(_) => true,
-        });
+        let requests: Vec<(DecisionNoticeId, bool)> = requests.into_iter().collect();
         let seen = std::mem::replace(
             &mut self.presented_requests,
-            live.iter().map(|(id, _)| id.clone()).collect(),
+            requests.iter().map(|(id, _)| id.clone()).collect(),
         );
-        for (id, read) in live {
-            if seen.contains(&id) || read || !toastable(id.thread) {
+        for (id, read) in requests {
+            if !seen.contains(&id) && !read {
+                heard.push(Alert {
+                    thread: id.thread,
+                    target: RowTarget::Decision(id),
+                });
+            }
+        }
+        for alert in heard {
+            self.pending
+                .retain(|(waiting, _)| waiting.thread != alert.thread);
+            self.pending.push((alert, now + ALERT_DELAY));
+        }
+    }
+
+    /// Bring the bell up to `now`. A standing toast goes once it expired,
+    /// is no longer `live` (read, resolved, dismissed) or is `in_view`. A
+    /// waiting event whose delay is up is checked again: still live and
+    /// not in view, it rings — toasting in place of its Thread's toast.
+    pub fn ring(
+        &mut self,
+        now: Instant,
+        live: &dyn Fn(&RowTarget) -> bool,
+        in_view: &dyn Fn(&Alert) -> bool,
+    ) -> Ring {
+        let mut ring = Ring::default();
+        let standing = self.toasts.len();
+        self.toasts.retain(|toast| {
+            toast.until > now && live(&toast.alert.target) && !in_view(&toast.alert)
+        });
+        ring.redraw = self.toasts.len() != standing;
+        let (due, waiting) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|(_, due)| *due <= now);
+        self.pending = waiting;
+        for (alert, _) in due {
+            if !live(&alert.target) || in_view(&alert) {
                 continue;
             }
-            let thread = id.thread;
-            self.toasts.push((RowTarget::Decision(id), thread));
+            self.toasts
+                .retain(|toast| toast.alert.thread != alert.thread);
+            self.toasts.push(Toast {
+                until: now + alert.stands(),
+                alert: alert.clone(),
+            });
+            ring.redraw = true;
+            ring.rang.push(alert);
         }
+        ring
     }
 }
 
@@ -947,50 +1043,105 @@ mod tests {
         assert!(folded[2].folded.is_empty());
     }
 
-    /// FL-18: a new request from a Thread off the focused Pane toasts once
-    /// and goes when it is read or resolves; one on the focused Pane never
-    /// toasts; a finish toasts by its own rule and goes when kept no more.
+    /// ADR 0017: an event waits a second and is checked again before it
+    /// rings; a survivor toasts once, unless in view, and goes on its own
+    /// or as soon as it is read.
     #[test]
-    fn toasts_stand_by_the_rules_and_retract() {
+    fn an_event_rings_after_its_delay_if_it_still_stands() {
         let mut bell = Bell::new();
-        let focused = ThreadId::new(1);
-        let off_focus = |thread: ThreadId| thread != focused;
+        let start = Instant::now();
         let waiting = request(2, 1);
         let here = request(1, 2);
-        bell.present_requests(
-            vec![(waiting.clone(), false), (here.clone(), false)],
-            &off_focus,
-        );
-        assert_eq!(
-            bell.toasts(),
-            &[(RowTarget::Decision(waiting.clone()), ThreadId::new(2))]
-        );
-        // Seen once: the next frame adds nothing.
-        bell.present_requests(
-            vec![(waiting.clone(), false), (here.clone(), false)],
-            &off_focus,
-        );
+        let in_view = |alert: &Alert| alert.thread == ThreadId::new(1);
+        bell.hear([], [(waiting.clone(), false), (here.clone(), false)], start);
+        let ring = bell.ring(start, &|_| true, &in_view);
+        assert!(ring.rang.is_empty() && bell.toasts().is_empty(), "not yet");
+
+        let due = start + ALERT_DELAY;
+        let ring = bell.ring(due, &|_| true, &in_view);
+        let toast = Alert {
+            target: RowTarget::Decision(waiting.clone()),
+            thread: ThreadId::new(2),
+        };
+        assert_eq!(ring.rang, [toast], "the one in view stays quiet");
+        assert!(ring.redraw);
+        assert_eq!(bell.toasts().len(), 1);
+        // Heard once: hearing the same requests again adds nothing.
+        bell.hear([], [(waiting.clone(), false), (here.clone(), false)], due);
+        let later = due + ALERT_DELAY;
+        assert!(bell.ring(later, &|_| true, &in_view).rang.is_empty());
         assert_eq!(bell.toasts().len(), 1);
         // Read (opened, or its Thread landed on): it goes.
-        bell.present_requests(vec![(waiting.clone(), true)], &off_focus);
-        assert!(bell.toasts().is_empty());
+        let ring = bell.ring(later, &|_| false, &in_view);
+        assert!(ring.redraw && bell.toasts().is_empty());
 
-        let notice = NoticeId::from_u64(4);
-        bell.present(vec![(notice, ThreadId::new(5), false)], &|_| true);
-        assert_eq!(bell.presented(), Some(notice));
-        assert_eq!(bell.toasts().len(), 1);
-        bell.retract(&|_, _| false);
-        assert!(bell.toasts().is_empty());
-        // A read Notice never toasts.
-        bell.present(
-            vec![(NoticeId::from_u64(5), ThreadId::new(5), true)],
-            &|_| true,
+        // A read Notice never waits; an unread one does, and one read
+        // during its delay never rings.
+        let read = NoticeId::from_u64(4);
+        let unread = NoticeId::from_u64(5);
+        bell.hear(
+            [
+                (read, ThreadId::new(5), true),
+                (unread, ThreadId::new(6), false),
+            ],
+            [],
+            later,
         );
-        assert!(bell.toasts().is_empty());
+        assert_eq!(bell.presented(), Some(unread));
+        let ring = bell.ring(later + ALERT_DELAY, &|_| false, &|_| false);
+        assert!(ring.rang.is_empty() && bell.toasts().is_empty());
+    }
+
+    /// A toast goes on its own: a request's after 8s, a finish's after 5s.
+    #[test]
+    fn toasts_expire_by_kind() {
+        let mut bell = Bell::new();
+        let start = Instant::now();
+        let asking = request(2, 1);
+        bell.hear(
+            [(NoticeId::from_u64(1), ThreadId::new(1), false)],
+            [(asking, false)],
+            start,
+        );
+        let shown = start + ALERT_DELAY;
+        assert_eq!(bell.ring(shown, &|_| true, &|_| false).rang.len(), 2);
+        let ring = bell.ring(shown + DONE_TOAST, &|_| true, &|_| false);
+        assert!(ring.redraw);
+        assert_eq!(bell.toasts().len(), 1);
+        assert!(
+            bell.toasts()[0].alert.needs_you(),
+            "the request stands longer"
+        );
+        bell.ring(shown + NEEDS_YOU_TOAST, &|_| true, &|_| false);
+        assert!(bell.toasts().is_empty() && !bell.busy());
+    }
+
+    /// A Thread has one voice: a new event for it displaces what it had
+    /// waiting, and its toast replaces the one it had standing.
+    #[test]
+    fn a_new_event_for_a_thread_replaces_its_toast() {
+        let mut bell = Bell::new();
+        let thread = ThreadId::new(3);
+        let start = Instant::now();
+        bell.hear([(NoticeId::from_u64(1), thread, false)], [], start);
+        bell.ring(start + ALERT_DELAY, &|_| true, &|_| false);
+        // Two requests in the same second: only the newer rings.
+        let at = start + DONE_TOAST / 2;
+        let (first, second) = (request(3, 1), request(3, 2));
+        bell.hear([], [(first.clone(), false)], at);
+        bell.hear([], [(first, false), (second.clone(), false)], at);
+        let ring = bell.ring(at + ALERT_DELAY, &|_| true, &|_| false);
+        assert_eq!(ring.rang.len(), 1);
+        assert_eq!(
+            bell.toasts()
+                .iter()
+                .map(|t| &t.alert.target)
+                .collect::<Vec<_>>(),
+            [&RowTarget::Decision(second)]
+        );
         // A button that acted takes its toast down.
-        let other = request(6, 3);
-        bell.present_requests(vec![(other.clone(), false)], &off_focus);
-        bell.drop_toast(&RowTarget::Decision(other));
+        let target = bell.toasts()[0].alert.target.clone();
+        bell.drop_toast(&target);
         assert!(bell.toasts().is_empty());
     }
 }

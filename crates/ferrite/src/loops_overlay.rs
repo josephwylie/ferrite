@@ -46,7 +46,9 @@ fn enabled() -> bool {
 
 // ---------------------------------------------------------------- the window
 
-/// The kit Root's view: the Cockpit, cached, and the loops over it.
+/// The kit Root's view: the Cockpit, cached, and the loops over it. It
+/// also brings the window forward for a clicked system notification (ADR
+/// 0017).
 pub struct CockpitWindow {
     cockpit: Entity<CockpitView>,
     overlay: Option<Entity<LoopsOverlay>>,
@@ -68,6 +70,14 @@ impl CockpitWindow {
     ) -> Self {
         // Over a cached Cockpit, its nav and Panes are cached parts too.
         cockpit.update(cx, |view, _| view.set_parts(overlay));
+        let handle = window.window_handle();
+        let clicked = cockpit.downgrade();
+        cx.on_system_notification_response(move |response, cx| {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            let _ = clicked.update(cx, |view, cx| {
+                view.open_system_notification(&response.tag, cx)
+            });
+        });
         let overlay = overlay.then(|| {
             let overlay = cx.new(|_| LoopsOverlay);
             let id = window.window_handle().window_id();

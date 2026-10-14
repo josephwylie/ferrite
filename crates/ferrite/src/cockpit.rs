@@ -32,6 +32,7 @@ use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan}
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
+use ferrite_core::sound::Sound;
 
 /// The loose rows the nav last drew, in order, and under `sort: attention`
 /// the state each row was ranked by (C8, "never re-sort under the
@@ -192,7 +193,7 @@ use crate::decision;
 use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
-use crate::notifications::{Bell, Handle, Row as NoticeRow, Verb};
+use crate::notifications::{Bell, Handle, Row as NoticeRow, RowTarget, Verb};
 use crate::pane::{self, PaneView};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
@@ -270,6 +271,12 @@ fn pump_interval() -> Duration {
 const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
+
+/// A Thread's system notification tag: a newer one for the same Thread
+/// replaces it in the notification centre.
+fn system_tag(thread: ThreadId) -> String {
+    format!("ferrite-thread-{thread}")
+}
 
 /// How many frames a card waits for its geometry (`card_corner`).
 /// A Pane laid out for the first time has it by the next frame; a few more
@@ -541,6 +548,12 @@ pub struct CockpitView {
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) bell: Bell,
+    /// The system notifications standing, one per Thread (their tag), and
+    /// what each opens when clicked.
+    system_alerts: std::collections::BTreeMap<ThreadId, RowTarget>,
+    /// The chimes that would have played (`chime`).
+    #[cfg(test)]
+    pub(crate) chimed: Vec<Sound>,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -1512,6 +1525,9 @@ impl CockpitView {
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),
+            system_alerts: Default::default(),
+            #[cfg(test)]
+            chimed: Vec::new(),
             floats: palette::Floats::new(cx),
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
@@ -1933,6 +1949,7 @@ impl CockpitView {
         }
         let frame = self.cockpit.pump();
         self.apply_thread_rules(&frame, cx);
+        self.ring_bell(cx);
         for pane in &self.panes {
             if let Some(thread) = pane.thread() {
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
@@ -4303,6 +4320,69 @@ impl CockpitView {
         })
     }
 
+    /// Settings' line for one chime: the file it plays (or the built-in),
+    /// `play` to hear it, `choose…` for a file of the operator's own, and
+    /// `built-in` to go back.
+    fn sound_file_row(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        sound: Sound,
+        cx: &Context<Self>,
+    ) -> prefs::Row {
+        let file = self.prefs.settings.sound_file(sound);
+        let view = cx.entity().downgrade();
+        let play: prefs::Act = std::rc::Rc::new({
+            let view = view.clone();
+            move |cx| {
+                let _ = view.update(cx, |view, _| view.chime(sound));
+            }
+        });
+        let choose: prefs::Act = std::rc::Rc::new({
+            move |cx| {
+                let _ = view.update(cx, |view, cx| view.choose_sound_file(sound, cx));
+            }
+        });
+        let mut acts = vec![("play", play), ("choose\u{2026}", choose)];
+        if file.is_some() {
+            let reset = self.setting_change(cx, move |s, ()| s.set_sound_file(sound, None));
+            acts.push((
+                "built-in",
+                std::rc::Rc::new(move |cx: &mut gpui::App| reset((), cx)),
+            ));
+        }
+        prefs::file_choice(
+            id,
+            title,
+            if cfg!(windows) { "A WAV file" } else { "" },
+            file,
+            "Built-in",
+            acts,
+        )
+    }
+
+    /// Ask the system for a sound file, and play it from now on.
+    fn choose_sound_file(&mut self, sound: Sound, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose sound".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |view, cx| {
+                view.change_settings(|s| s.set_sound_file(sound, Some(file)), cx);
+            });
+        })
+        .detach();
+    }
+
     /// The searchable Settings sheet, drawn above the cockpit's overlays.
     fn settings_element(
         &mut self,
@@ -4511,6 +4591,42 @@ impl CockpitView {
                 }
             },
         )];
+        let sounds = vec![
+            prefs::toggle(
+                "settings-sounds",
+                "Play sounds",
+                "A chime when a thread finishes or needs you, unless you are looking at it",
+                settings.sounds,
+                self.setting_change(cx, |s, v| s.sounds = v),
+            ),
+            self.sound_file_row("settings-done-sound", "Finished sound", Sound::Done, cx),
+            self.sound_file_row(
+                "settings-needs-you-sound",
+                "Needs-you sound",
+                Sound::NeedsYou,
+                cx,
+            ),
+        ];
+        let provider_sounds = [Provider::Claude, Provider::Codex].map(|provider| {
+            let (id, title) = match provider {
+                Provider::Claude => ("settings-claude-sounds", "Sounds for Claude threads"),
+                Provider::Codex => ("settings-codex-sounds", "Sounds for Codex threads"),
+            };
+            prefs::toggle(
+                id,
+                title,
+                "",
+                settings.provider_sounds(provider),
+                self.setting_change(cx, move |s, v| s.set_provider_sounds(provider, v)),
+            )
+        });
+        let system = vec![prefs::toggle(
+            "settings-system-notifications",
+            "System notifications",
+            "When Ferrite is in the background · clicking one opens its thread",
+            settings.system_notifications,
+            self.setting_change(cx, |s, v| s.system_notifications = v),
+        )];
         let (claude, codex) = self
             .cli_versions
             .clone()
@@ -4587,6 +4703,14 @@ impl CockpitView {
                 vec![
                     prefs::Group::new(Some("Reading")).rows(reading),
                     prefs::Group::new(Some("Threads and navigation")).rows(behaviour),
+                ],
+            ),
+            prefs::page(
+                prefs::PageKey::Notifications,
+                vec![
+                    prefs::Group::new(Some("Sounds")).rows(sounds),
+                    prefs::Group::new(Some("By provider")).rows(provider_sounds),
+                    prefs::Group::new(Some("System")).rows(system),
                 ],
             ),
             prefs::page(
@@ -9146,9 +9270,7 @@ impl Render for CockpitView {
         if self.activation.is_none() {
             self.cockpit.set_window_active(window.is_window_active());
             self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
-                if view.cockpit.set_window_active(window.is_window_active()) {
-                    cx.notify();
-                }
+                view.set_window_active(window.is_window_active(), cx);
             }));
         }
         let root = self.render_cockpit(window, cx);
@@ -9294,7 +9416,6 @@ impl CockpitView {
         }
         self.update_auto_rail(window);
         self.nav_drag_live.set(cx.has_active_drag());
-        self.present_notices(window, cx);
         self.present_cli_updates(window, cx);
         self.present_read_only(window, cx);
         self.present_unreadable_settings(window, cx);
@@ -12395,43 +12516,143 @@ impl CockpitView {
         }
     }
 
-    /// Toast what arrived since the last frame (FL-18). Render is the one
-    /// place with a Window in hand every frame; the pump has none.
+    /// Keep the bell up with the Notices and requests (FL-18, ADR 0017),
+    /// on every pump: hear what arrived, and ring what waited out its
+    /// delay and still stands — a toast, a sound, and while the window is
+    /// in the background a system notification.
     ///
-    /// A new request from any Thread that is not the focused Pane toasts,
-    /// with the nav open or folded, and goes when it is answered, opened or
-    /// read. A finished turn keeps its own rule: it toasts only while the
-    /// nav is folded and its Thread is off the board, and goes when the
-    /// Thread lands on the board or is read.
-    pub(crate) fn present_notices(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        let railed = self.nav_railed();
+    /// The operator is looking at an event, and nothing rings for it, while
+    /// the window has focus and its Thread is on the board.
+    fn ring_bell(&mut self, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let notifications = self.cockpit.notifications();
+        let fresh: Vec<_> = notifications
+            .since(self.bell.presented())
+            .map(|notice| (notice.id, notice.thread, notice.read))
+            .collect();
+        let requests: Vec<_> = notifications
+            .decisions()
+            .map(|notice| (notice.id.clone(), notice.read))
+            .collect();
+        self.bell.hear(fresh, requests, now);
+        // A system notification the operator has since read, or whose
+        // request resolved, is taken back out of the notification centre.
+        let stale: Vec<ThreadId> = self
+            .system_alerts
+            .iter()
+            .filter(|(_, target)| !target.wants(notifications))
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in stale {
+            self.system_alerts.remove(&thread);
+            cx.dismiss_system_notification(&system_tag(thread));
+        }
+        if !self.bell.busy() {
+            return;
+        }
+        let present = self.cockpit.window_active();
         let on_board: std::collections::HashSet<ThreadId> = self
             .visible_indices()
             .into_iter()
             .filter_map(|index| self.panes[index].thread())
             .collect();
-        let focused = self.focused_thread();
-        let finished = |thread: ThreadId| railed && !on_board.contains(&thread);
-        let fresh: Vec<(ferrite_core::notifications::NoticeId, ThreadId, bool)> = self
-            .cockpit
-            .notifications()
-            .since(self.bell.presented())
-            .map(|notice| (notice.id, notice.thread, notice.read))
-            .collect();
-        self.bell.present(fresh, &finished);
+        let in_view =
+            |alert: &crate::notifications::Alert| present && on_board.contains(&alert.thread);
         let notifications = self.cockpit.notifications();
-        let keep = |id: ferrite_core::notifications::NoticeId, thread: ThreadId| {
-            finished(thread) && notifications.get(id).is_some_and(|notice| !notice.read)
+        let live = |target: &RowTarget| target.wants(notifications);
+        let ring = self.bell.ring(now, &live, &in_view);
+        // Alerts that ring together chime once, needs-you over done.
+        let settings = &self.prefs.settings;
+        let sound = ring
+            .rang
+            .iter()
+            .filter(|alert| {
+                self.cockpit
+                    .thread(alert.thread)
+                    .is_some_and(|open| settings.sounds_for(open.provider()))
+            })
+            .map(|alert| {
+                if alert.needs_you() {
+                    Sound::NeedsYou
+                } else {
+                    Sound::Done
+                }
+            })
+            .max_by_key(|sound| *sound == Sound::NeedsYou);
+        if let Some(sound) = sound {
+            self.chime(sound);
+        }
+        if !present && self.prefs.settings.system_notifications {
+            for alert in &ring.rang {
+                self.post_system_notification(alert, cx);
+            }
+        }
+        if ring.redraw {
+            cx.notify();
+        }
+    }
+
+    /// One alert's system notification, tagged with its Thread so a newer
+    /// one replaces it.
+    fn post_system_notification(
+        &mut self,
+        alert: &crate::notifications::Alert,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(row) = self.alert_row(&alert.target, ferrite_core::clock::system_time()) else {
+            return;
         };
-        self.bell.retract(&keep);
-        let live: Vec<(ferrite_core::notifications::DecisionNoticeId, bool)> = self
-            .cockpit
-            .notifications()
-            .decisions()
-            .map(|notice| (notice.id.clone(), notice.read))
-            .collect();
-        let off_focus = |thread: ThreadId| Some(thread) != focused;
-        self.bell.present_requests(live, &off_focus);
+        cx.show_system_notification(gpui::SystemNotification {
+            tag: system_tag(alert.thread).into(),
+            title: format!("{} \u{b7} {}", row.word(), row.title).into(),
+            body: row.detail.text().into(),
+            actions: Vec::new(),
+        });
+        self.system_alerts
+            .insert(alert.thread, alert.target.clone());
+    }
+
+    /// Play a chime: the operator's own file for it, else the built-in.
+    /// Tests and captures keep quiet; a test reads what would have played.
+    fn chime(&mut self, sound: Sound) {
+        if cfg!(any(test, feature = "visual-reference")) {
+            #[cfg(test)]
+            self.chimed.push(sound);
+            return;
+        }
+        ferrite_core::sound::play(sound, self.prefs.settings.sound_file(sound));
+    }
+
+    /// The operator clicked a system notification: the app comes forward
+    /// (the window's doing) and lands on what it was about.
+    pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
+        // Its entry stays: read now, the next pump takes it out of the
+        // notification centre with the rest.
+        let target = self
+            .system_alerts
+            .iter()
+            .find(|(thread, _)| system_tag(**thread) == tag)
+            .map(|(_, target)| target.clone());
+        if let Some(target) = target {
+            self.notice_verb(crate::notifications::target_verb(&target), cx);
+        }
+    }
+
+    /// The window gained or lost the system's focus. Coming back reads
+    /// what is on screen, so its toasts go too.
+    pub(crate) fn set_window_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.cockpit.set_window_active(active);
+        cx.notify();
+    }
+
+    /// The row a toast or a system notification shows for `target`, while
+    /// its record is there to word it.
+    fn alert_row(&self, target: &RowTarget, now: std::time::SystemTime) -> Option<NoticeRow> {
+        let notifications = self.cockpit.notifications();
+        Some(match target {
+            RowTarget::Notice(id) => self.notice_row(notifications.get(*id)?, now),
+            RowTarget::Decision(id) => self.decision_row(notifications.decision(id)?, now),
+        })
     }
 
     /// A live request in the list's words (R7): an approval's `<Tool> wants
@@ -15022,6 +15243,14 @@ mod tests {
         cx.executor()
             .advance_clock(Duration::from_millis(PUMP_MS * 4));
         cx.run_until_parked();
+    }
+
+    /// Pump past the bell's delay: whatever still stands has rung (ADR
+    /// 0017).
+    fn ring(cx: &mut gpui::VisualTestContext) {
+        cx.executor()
+            .advance_clock(crate::notifications::ALERT_DELAY);
+        tick(cx);
     }
 
     fn decision(id: &str) -> SessionEvent {
@@ -22738,13 +22967,16 @@ mod tests {
         assert_eq!(page(cx), prefs::PageKey::Permissions);
         assert!(cx.debug_bounds("settings-codex-sandbox").is_some());
         assert!(cx.debug_bounds("settings-provider-0").is_none());
-        cx.simulate_keystrokes("down down down");
+        cx.simulate_keystrokes("down down down down");
         tick(cx);
         assert_eq!(page(cx), prefs::PageKey::About, "held at the foot");
         cx.simulate_keystrokes("up");
         tick(cx);
+        assert_eq!(page(cx), prefs::PageKey::Notifications);
+        cx.simulate_keystrokes("up");
+        tick(cx);
         assert_eq!(page(cx), prefs::PageKey::Behaviour);
-        cx.simulate_keystrokes("down");
+        cx.simulate_keystrokes("down down");
         tick(cx);
 
         let threads = cx
@@ -24363,13 +24595,14 @@ mod tests {
         });
     }
 
-    /// FL-18: a request from a Thread that is not the focused Pane toasts
-    /// once, with the nav open or folded; pumping never duplicates it, and
-    /// its cancellation takes it down.
+    /// FL-18, ADR 0017: a request from a Thread off the board toasts once,
+    /// a second after it arrives, with the nav open or folded; pumping
+    /// never duplicates it, one cancelled within the second never toasts,
+    /// and a newer request from the same Thread replaces it.
     #[gpui::test]
     fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut TestAppContext) {
         use ferrite_core::activity::ActivityEvent;
-        // Solo on the first Thread: the second is off the focused Pane.
+        // Solo on the first Thread: the second is off the board.
         let (core, fake) = cockpit("request-toast-contract", 2);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let toasts = |cx: &mut gpui::VisualTestContext| {
@@ -24388,6 +24621,9 @@ mod tests {
                 suggestions: vec![],
             },
         };
+        let cancelled = |name: &str| {
+            SessionEvent::Activity(ActivityEvent::DecisionCancelled { id: name.into() })
+        };
         let off = view.read_with(cx, |view, _| {
             view.cockpit
                 .threads()
@@ -24397,38 +24633,324 @@ mod tests {
         });
         fake.streams.borrow()[off].send(request("Early")).unwrap();
         tick(cx);
+        assert_eq!(toasts(cx), 0, "it waits its second");
+        ring(cx);
         assert_eq!(toasts(cx), 1, "with the nav open, a request still toasts");
-        fake.streams.borrow()[off]
-            .send(SessionEvent::Activity(ActivityEvent::DecisionCancelled {
-                id: "Early".into(),
-            }))
-            .unwrap();
+        tick(cx);
+        assert_eq!(toasts(cx), 1, "pumping must not duplicate a request toast");
+        fake.streams.borrow()[off].send(cancelled("Early")).unwrap();
         tick(cx);
         assert_eq!(toasts(cx), 0, "a cancelled request takes its toast down");
+
         view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+        fake.streams.borrow()[off].send(request("Brief")).unwrap();
         tick(cx);
+        fake.streams.borrow()[off].send(cancelled("Brief")).unwrap();
+        ring(cx);
+        assert_eq!(toasts(cx), 0, "gone within its second, it never toasts");
+
         for name in ["AskUserQuestion", "Bash"] {
             fake.streams.borrow()[off].send(request(name)).unwrap();
         }
         tick(cx);
+        ring(cx);
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.notifications().unread(), 2)
+            assert_eq!(view.cockpit.notifications().unread(), 2);
+            assert_eq!(view.bell.toasts().len(), 1, "one toast per Thread");
         });
-        assert_eq!(toasts(cx), 2, "each pending request toasts");
-        tick(cx);
-        assert_eq!(toasts(cx), 2, "pumping must not duplicate request toasts");
         for name in ["AskUserQuestion", "Bash"] {
-            fake.streams.borrow()[off]
-                .send(SessionEvent::Activity(ActivityEvent::DecisionCancelled {
-                    id: name.into(),
-                }))
-                .unwrap();
+            fake.streams.borrow()[off].send(cancelled(name)).unwrap();
         }
         tick(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.notifications().unread(), 0)
         });
         assert_eq!(toasts(cx), 0, "cancelled requests leave no stale toast");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.chimed,
+                [Sound::NeedsYou, Sound::NeedsYou],
+                "each toast rang once; the brief request never did"
+            );
+        });
+    }
+
+    /// ADR 0017: a toast goes on its own, a request's after 8s.
+    #[gpui::test]
+    fn a_request_toast_expires(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("request-toast-expiry", 2);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let off = view.read_with(cx, |view, _| {
+            view.cockpit
+                .threads()
+                .into_iter()
+                .position(|thread| Some(thread) != view.focused_thread())
+                .unwrap()
+        });
+        fake.streams.borrow()[off].send(decision("waits")).unwrap();
+        tick(cx);
+        ring(cx);
+        assert_eq!(view.read_with(cx, |view, _| view.bell.toasts().len()), 1);
+        cx.executor()
+            .advance_clock(crate::notifications::NEEDS_YOU_TOAST);
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.bell.toasts().is_empty(), "it went on its own");
+            assert_eq!(
+                view.cockpit.notifications().unread(),
+                1,
+                "the request still waits in the bell"
+            );
+        });
+    }
+
+    /// ADR 0017: with the window in the background, a finish on the very
+    /// Pane the operator left focused is news. It chimes, toasts and posts
+    /// a system notification; clicking that lands on the Thread and reads
+    /// it, and so does coming back to the window.
+    #[gpui::test]
+    fn away_from_the_window_a_finish_posts_a_system_notification(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("system-notification", 2);
+        let group = group_all(&mut core);
+        cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        for at in [0, 1] {
+            fake.streams.borrow()[at]
+                .send(SessionEvent::TurnEnded {
+                    outcome: ferrite_core::TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+        }
+        tick(cx);
+        ring(cx);
+        let tags = |cx: &mut gpui::VisualTestContext| {
+            cx.delivered_system_notifications()
+                .iter()
+                .map(|notification| notification.tag.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            tags(cx),
+            [system_tag(threads[0]), system_tag(threads[1])],
+            "both Panes are on the board, but nobody is looking"
+        );
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.chimed,
+                [Sound::Done],
+                "ringing together, they chime once"
+            );
+            assert_eq!(view.bell.toasts().len(), 2);
+        });
+
+        cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+            tag: system_tag(threads[1]).into(),
+            action_id: None,
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 1, "the click landed on its Thread");
+            assert!(!view.cockpit.notifications().attention(threads[1]));
+        });
+        assert_eq!(
+            tags(cx),
+            [system_tag(threads[0])],
+            "read, it leaves the notification centre"
+        );
+
+        view.update(cx, |view, cx| view.set_window_active(true, cx));
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.bell.toasts().is_empty(), "both are in view now");
+        });
+    }
+
+    /// ADR 0017: a request waiting while the window is away posts a system
+    /// notification too; clicking it lands on the request, and once read
+    /// it leaves the notification centre.
+    #[gpui::test]
+    fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("system-notification-request", 2);
+        let group = group_all(&mut core);
+        cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        fake.streams.borrow()[1].send(decision("away")).unwrap();
+        tick(cx);
+        ring(cx);
+        let tags = |cx: &mut gpui::VisualTestContext| {
+            cx.delivered_system_notifications()
+                .iter()
+                .map(|notification| notification.tag.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tags(cx), [system_tag(threads[1])]);
+        view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
+
+        cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+            tag: system_tag(threads[1]).into(),
+            action_id: None,
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 1, "the click landed on its Thread");
+            let request = view.cockpit.notifications().decisions().next().unwrap();
+            assert!(request.read);
+            assert!(view.bell.toasts().is_empty());
+        });
+        assert!(
+            tags(cx).is_empty(),
+            "read, it leaves the notification centre"
+        );
+    }
+
+    /// ADR 0017: alerts ringing together chime once, needs-you over done;
+    /// and with the window focused, a request on a Pane that is on the
+    /// board but not focused rings nothing — it shows where it is asked.
+    #[gpui::test]
+    fn alerts_chime_once_and_a_request_in_view_rings_nothing(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("alerts-together", 2);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        fake.streams.borrow()[1].send(decision("away")).unwrap();
+        tick(cx);
+        ring(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.chimed, [Sound::NeedsYou]);
+            assert_eq!(view.bell.toasts().len(), 2);
+        });
+
+        view.update(cx, |view, cx| {
+            view.set_window_active(true, cx);
+            view.chimed.clear();
+        });
+        tick(cx);
+        let unfocused = view.read_with(cx, |view, _| {
+            assert!(view.bell.toasts().is_empty(), "both are in view now");
+            view.cockpit
+                .threads()
+                .into_iter()
+                .position(|thread| Some(thread) != view.focused_thread())
+                .unwrap()
+        });
+        fake.streams.borrow()[unfocused]
+            .send(decision("here"))
+            .unwrap();
+        tick(cx);
+        ring(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.bell.toasts().is_empty());
+            assert!(view.chimed.is_empty());
+            assert!(
+                view.cockpit.notifications().unread() > 0,
+                "the bell keeps the request"
+            );
+        });
+    }
+
+    /// The Notifications page: sounds on and off, a provider's sounds, a
+    /// chime played and a chosen file put back to the built-in, system
+    /// notifications — each press a saved setting.
+    #[gpui::test]
+    fn the_notifications_page_sets_every_alert_setting(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("notifications-page", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        view.update(cx, |view, cx| {
+            view.settings_open = true;
+            view.settings_page = prefs::PageKey::Notifications;
+            cx.notify();
+        });
+        tick(cx);
+        let click = |selector: &'static str, cx: &mut gpui::VisualTestContext| {
+            let at = cx.debug_bounds(selector).expect(selector).center();
+            cx.simulate_click(at, gpui::Modifiers::none());
+            tick(cx);
+        };
+        let settings = |cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| view.prefs.settings.clone())
+        };
+        click("settings-codex-sounds", cx);
+        assert!(!settings(cx).sounds_for(Provider::Codex));
+        assert!(settings(cx).sounds_for(Provider::Claude));
+        click("settings-sounds", cx);
+        assert!(!settings(cx).sounds_for(Provider::Claude));
+        click("settings-claude-sounds", cx);
+        assert!(
+            !settings(cx).sounds && !settings(cx).provider_sounds(Provider::Claude),
+            "a provider's switch is its own: sounds stay off"
+        );
+        click("settings-sounds", cx);
+        assert!(!settings(cx).sounds_for(Provider::Claude));
+        assert!(!settings(cx).sounds_for(Provider::Codex));
+        click("settings-claude-sounds", cx);
+        assert!(settings(cx).sounds_for(Provider::Claude));
+        click("settings-system-notifications", cx);
+        assert!(!settings(cx).system_notifications);
+
+        click("settings-needs-you-sound-0", cx);
+        view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
+        view.update(cx, |view, cx| {
+            view.change_settings(
+                |s| s.set_sound_file(Sound::Done, Some("/sounds/bell.aiff".into())),
+                cx,
+            )
+        });
+        tick(cx);
+        let shown = cx
+            .debug_bounds("settings-fact-Finished sound")
+            .expect("the chosen file's name");
+        assert!(shown.size.width > px(0.));
+        click("settings-done-sound-2", cx);
+        assert_eq!(settings(cx).sound_file(Sound::Done), None, "built-in again");
+        let saved = view.read_with(cx, |view, _| {
+            ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap()
+        });
+        assert_eq!(saved, settings(cx), "every press was saved");
+    }
+
+    /// Settings decide what an alert may do: sounds off, or this
+    /// provider muted, keeps it quiet; system notifications off posts
+    /// nothing. The toast stands regardless.
+    #[gpui::test]
+    fn settings_silence_sounds_and_system_notifications(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("alert-settings", 2);
+        cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.prefs
+                .settings
+                .set_provider_sounds(Provider::Claude, false);
+            view.prefs.settings.system_notifications = false;
+            view.set_window_active(false, cx);
+        });
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        ring(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.bell.toasts().len(), 1);
+            assert!(view.chimed.is_empty(), "Claude is muted");
+        });
+        assert!(cx.delivered_system_notifications().is_empty());
     }
 
     #[gpui::test]

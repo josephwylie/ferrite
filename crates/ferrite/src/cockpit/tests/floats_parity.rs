@@ -548,7 +548,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .send(bash("one", "gh issue close 212 --reason x"))
         .unwrap();
     tick(cx);
-    tick(cx);
+    ring(cx);
     let allow: &'static str = format!("toast-allow-{}", off.get()).leak();
     let button = cx.debug_bounds(allow).expect("`1 allow`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
@@ -564,7 +564,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .send(bash("two", "rm -rf target"))
         .unwrap();
     tick(cx);
-    tick(cx);
+    ring(cx);
     let deny: &'static str = format!("toast-deny-{}", off.get()).leak();
     let button = cx.debug_bounds(deny).expect("`3 deny`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());

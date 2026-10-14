@@ -154,14 +154,16 @@ pub enum PageKey {
     NewThreads,
     Permissions,
     Behaviour,
+    Notifications,
     About,
 }
 
 impl PageKey {
-    pub const ALL: [PageKey; 4] = [
+    pub const ALL: [PageKey; 5] = [
         PageKey::NewThreads,
         PageKey::Permissions,
         PageKey::Behaviour,
+        PageKey::Notifications,
         PageKey::About,
     ];
 
@@ -170,6 +172,7 @@ impl PageKey {
             PageKey::NewThreads => "New threads",
             PageKey::Permissions => "Permissions",
             PageKey::Behaviour => "Behaviour",
+            PageKey::Notifications => "Notifications",
             PageKey::About => "About",
         }
     }
@@ -180,6 +183,7 @@ impl PageKey {
             PageKey::NewThreads => "settings-page-new-threads",
             PageKey::Permissions => "settings-page-permissions",
             PageKey::Behaviour => "settings-page-behaviour",
+            PageKey::Notifications => "settings-page-notifications",
             PageKey::About => "settings-page-about",
         }
     }
@@ -196,6 +200,9 @@ impl PageKey {
 }
 
 type Control = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
+/// What a row's token does when pressed.
+pub type Act = Rc<dyn Fn(&mut App)>;
 
 /// One setting: its label, an optional one-line hint, the words search
 /// also finds it by (every option label), and its control.
@@ -387,6 +394,7 @@ pub fn body(
                     PageKey::NewThreads,
                     PageKey::Permissions,
                     PageKey::Behaviour,
+                    PageKey::Notifications,
                 ]
                 .map(|key| nav_row(key, cx)),
             ),
@@ -889,6 +897,41 @@ pub fn stepper(
     })
 }
 
+/// A file the operator may choose in place of a built-in (a sound): its
+/// name, or `built_in`'s words, as a fact reads, then a token per `acts`
+/// (`play`, `choose…`, `built-in`). Searchable by the name.
+pub fn file_choice(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    file: Option<&std::path::Path>,
+    built_in: &'static str,
+    acts: Vec<(&'static str, Act)>,
+) -> Row {
+    let value: SharedString = file
+        .and_then(|file| file.file_name())
+        .map(|name| name.to_string_lossy().into_owned().into())
+        .unwrap_or_else(|| built_in.into());
+    Row::new(title, detail, vec![value.clone()], move |_, cx| {
+        div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .gap(px(CH))
+            .child(fact_value(title, value.clone()))
+            .child(div().flex().items_center().flex_shrink_0().children(
+                acts.iter().enumerate().map(|(at, (label, act))| {
+                    let act = act.clone();
+                    chip((id, at), (*label).into(), false, cx).on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        act(cx);
+                    })
+                }),
+            ))
+            .into_any_element()
+    })
+}
+
 /// A read-only fact (About): its key at the left, its value at the right
 /// in `TEXT_MUTED` (versions are machine text), wrapping anywhere rather
 /// than cut. Searchable by both.
@@ -1119,10 +1162,11 @@ mod tests {
     #[test]
     fn pages_step_in_sidebar_order_and_hold_at_the_ends() {
         assert_eq!(PageKey::NewThreads.step(1), PageKey::Permissions);
-        assert_eq!(PageKey::Behaviour.step(1), PageKey::About);
+        assert_eq!(PageKey::Behaviour.step(1), PageKey::Notifications);
+        assert_eq!(PageKey::Notifications.step(1), PageKey::About);
         assert_eq!(PageKey::About.step(1), PageKey::About);
         assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
-        assert_eq!(PageKey::About.step(-3), PageKey::NewThreads);
+        assert_eq!(PageKey::About.step(-4), PageKey::NewThreads);
         assert_eq!(PageKey::default(), PageKey::NewThreads);
     }
 

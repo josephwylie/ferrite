@@ -37,7 +37,8 @@ enum Shot {
     SoloPicker,
     /// group.png: Perf sweep, four transcript Panes.
     Group,
-    /// group-toast.png: Close stale's request arriving as a toast.
+    /// group-toast.png: Close stale's request arriving as a toast, the
+    /// operator away.
     Toast,
     /// group-notes.png: the notifications list down.
     Notes,
@@ -221,6 +222,15 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
             Shot::Toast => {
                 board_scroll(view, &cast, cx);
                 // The one request that arrives while the window is up.
+                // Its Pane is on the board, and a request in view rings
+                // nothing while the operator is there (ADR 0017), so the
+                // Cockpit counts the operator away once the window's
+                // activation has landed. The window keeps the keyboard, so
+                // the caret still draws as the prototype's.
+                let cockpit = cx.entity();
+                window.on_next_frame(move |_, cx| {
+                    cockpit.update(cx, |view, _| view.cockpit.set_window_active(false));
+                });
                 if let Some((feed, event)) = held {
                     let _ = feed.send(event);
                     view.pump(cx);
@@ -300,9 +310,9 @@ fn prepare(
     view.set_nav_fold(NavFold::Group(everything), true, cx);
     use gpui::component::WindowExt as _;
     window.clear_notifications(cx);
-    // The requests standing when the window opened were presented then:
-    // none of them toasts (the toast scene delivers its one request after).
-    view.present_notices(window, cx);
+    // The requests standing when the window opened were heard then: none
+    // of them toasts (the toast scene delivers its one request after).
+    view.ring_bell(cx);
     view.bell.clear_toasts();
     // The prototype's window has the keyboard: the focused Composer's caret
     // is the solid block, not the hollow one an inactive window draws.

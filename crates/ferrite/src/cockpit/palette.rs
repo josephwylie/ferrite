@@ -1192,18 +1192,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (target, _) = self.bell.toasts().last()?.clone();
-        let now = ferrite_core::clock::system_time();
-        let row = match &target {
-            crate::notifications::RowTarget::Notice(id) => {
-                let notice = self.cockpit.notifications().get(*id)?;
-                self.notice_row(notice, now)
-            }
-            crate::notifications::RowTarget::Decision(id) => {
-                let notice = self.cockpit.notifications().decision(id)?;
-                self.decision_row(notice, now)
-            }
-        };
+        let target = self.bell.toasts().last()?.alert.target.clone();
+        let row = self.alert_row(&target, ferrite_core::clock::system_time())?;
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
