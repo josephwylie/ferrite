@@ -8,7 +8,7 @@ use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use crate::cockpit::{Preparation, RssSampler, SpawnRequest, Spawner};
+use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
 use crate::providers::{
     ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session, SettingAck,
 };

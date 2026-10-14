@@ -11,6 +11,7 @@ pub mod cockpit;
 pub mod diagnostics;
 pub mod docview;
 pub mod draft;
+pub mod engine;
 pub mod followup;
 pub mod groups;
 pub mod import;

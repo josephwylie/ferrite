@@ -4,7 +4,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use crate::cockpit::ProviderChoice;
+use crate::engine::ProviderChoice;
 use crate::providers::models::efforts_for;
 use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;

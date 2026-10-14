@@ -487,7 +487,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 },
             ),
         ),
-        ("command_restart", command(25, Op::Restart { when: When::Idle })),
+        (
+            "command_restart",
+            command(25, Op::Restart { when: When::Idle }),
+        ),
         ("command_stop", command(26, Op::Stop { when: When::Now })),
         (
             "welcome",
@@ -933,7 +936,10 @@ fn every_gen1_message_has_a_frozen_fixture_that_round_trips_byte_for_byte() {
             String::from_utf8_lossy(&frozen),
             "{name}: this build no longer encodes the frozen fixture"
         );
-        assert!(sample.decodes_from(&frozen), "{name} decodes to something else");
+        assert!(
+            sample.decodes_from(&frozen),
+            "{name} decodes to something else"
+        );
     }
     assert!(
         missing.is_empty(),
@@ -979,7 +985,10 @@ fn an_unknown_enum_value_decodes_to_unknown() {
     else {
         panic!("a hello");
     };
-    assert_eq!(capabilities, vec![Capability::RenderVisual, Capability::Unknown]);
+    assert_eq!(
+        capabilities,
+        vec![Capability::RenderVisual, Capability::Unknown]
+    );
 }
 
 #[test]
@@ -1189,7 +1198,10 @@ fn a_tool_draft_crosses_as_its_own_latest_wins_message() {
             input: json!({"html": "<p"}),
         }
     );
-    assert_eq!(outgoing(&ActivityInput::DrainHighlights, None), Outgoing::Local);
+    assert_eq!(
+        outgoing(&ActivityInput::DrainHighlights, None),
+        Outgoing::Local
+    );
 }
 
 #[test]

@@ -234,11 +234,23 @@ pub enum When {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireChoice {
-    Main { checkout: PathBuf },
-    Branch { checkout: PathBuf, branch: String },
-    NewBranch { checkout: PathBuf },
-    NewWorktree { repo: PathBuf },
-    ExistingWorktree { repo: PathBuf, path: PathBuf },
+    Main {
+        checkout: PathBuf,
+    },
+    Branch {
+        checkout: PathBuf,
+        branch: String,
+    },
+    NewBranch {
+        checkout: PathBuf,
+    },
+    NewWorktree {
+        repo: PathBuf,
+    },
+    ExistingWorktree {
+        repo: PathBuf,
+        path: PathBuf,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -248,12 +260,20 @@ pub enum WireChoice {
 pub enum WireControl {
     RefreshContext,
     RefreshMcp,
-    ReconnectMcp { server: String },
-    LoginMcp { server: String },
+    ReconnectMcp {
+        server: String,
+    },
+    LoginMcp {
+        server: String,
+    },
     ReloadMcp,
-    StopTask { id: String },
+    StopTask {
+        id: String,
+    },
     BackgroundTasks,
-    SetPermissionMode { mode: String },
+    SetPermissionMode {
+        mode: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -530,9 +550,15 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
-    Thread { thread: ThreadId },
-    Project { project: ProjectId },
-    Files { files: Vec<WireFile> },
+    Thread {
+        thread: ThreadId,
+    },
+    Project {
+        project: ProjectId,
+    },
+    Files {
+        files: Vec<WireFile>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -548,7 +574,9 @@ pub struct WireFile {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ClosedBy {
-    Answered { client: u64 },
+    Answered {
+        client: u64,
+    },
     Cancelled,
     SessionEnded,
     ServerRestart,
@@ -606,8 +634,13 @@ pub struct ThreadState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireBinding {
-    Main { checkout: PathBuf },
-    Worktree { repo: PathBuf, path: PathBuf },
+    Main {
+        checkout: PathBuf,
+    },
+    Worktree {
+        repo: PathBuf,
+        path: PathBuf,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -673,7 +706,9 @@ pub enum WireNotice {
 pub enum WireOutcome {
     Completed,
     Interrupted,
-    Error { message: String },
+    Error {
+        message: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -812,7 +847,9 @@ pub struct WireHandle {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireSubject {
     Main,
-    Subagent { key: String },
+    Subagent {
+        key: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -844,10 +881,18 @@ pub enum WireDelivery {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireDecisionKind {
     Approval,
-    Questions { questions: Vec<WireQuestion> },
-    Form { fields: Vec<WireFormField> },
-    External { url: String },
-    Unsupported { reason: String },
+    Questions {
+        questions: Vec<WireQuestion>,
+    },
+    Form {
+        fields: Vec<WireFormField>,
+    },
+    External {
+        url: String,
+    },
+    Unsupported {
+        reason: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -1072,21 +1117,26 @@ pub fn outgoing(input: &ActivityInput, duration: Option<Duration>) -> Outgoing {
     match input {
         ActivityInput::Main { input, .. } => main_outgoing(input, duration),
         ActivityInput::Observe { event, .. } => {
-            match LogRecord::of(&Input::Event(SessionEvent::Activity(event.clone())), duration) {
+            match LogRecord::of(
+                &Input::Event(SessionEvent::Activity(event.clone())),
+                duration,
+            ) {
                 Some(record) => Outgoing::Input(WireInput::Record(WireRecord::Known(record))),
                 None => live_activity(event).map_or(Outgoing::Local, live),
             }
         }
         // A replay is of the log, so it is always a line of it.
-        ActivityInput::Replay(input) => LogRecord::of(input, None).map_or(Outgoing::Local, |record| {
+        ActivityInput::Replay(input) => LogRecord::of(input, None)
+            .map_or(Outgoing::Local, |record| {
+                Outgoing::Input(WireInput::Replay(WireRecord::Known(record)))
+            }),
+        ActivityInput::ReplayEvent(event) => LogRecord::of(
+            &Input::Event(SessionEvent::Activity(event.clone())),
+            duration,
+        )
+        .map_or(Outgoing::Local, |record| {
             Outgoing::Input(WireInput::Replay(WireRecord::Known(record)))
         }),
-        ActivityInput::ReplayEvent(event) => {
-            LogRecord::of(&Input::Event(SessionEvent::Activity(event.clone())), duration)
-                .map_or(Outgoing::Local, |record| {
-                    Outgoing::Input(WireInput::Replay(WireRecord::Known(record)))
-                })
-        }
         ActivityInput::Connect { generation } => live(Live::Connect {
             generation: *generation,
         }),
@@ -1137,9 +1187,9 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
         Input::Event(SessionEvent::Commands { commands }) => Live::Commands {
             commands: commands.iter().map(Into::into).collect(),
         },
-        Input::Event(SessionEvent::PermissionMode { mode }) => Live::PermissionMode {
-            mode: mode.clone(),
-        },
+        Input::Event(SessionEvent::PermissionMode { mode }) => {
+            Live::PermissionMode { mode: mode.clone() }
+        }
         Input::Event(SessionEvent::Models { models }) => Live::Models {
             models: models.clone(),
         },
@@ -1187,7 +1237,11 @@ fn live_activity(event: &ActivityEvent) -> Option<Live> {
 /// Decode one input for a mirror. `generation` is the Session the input
 /// belongs to; `at` is its instant on this side's clock. `None` means the
 /// input names something this build does not know, and is skipped.
-pub fn incoming(input: &WireInput, generation: u64, at: std::time::Instant) -> Option<ActivityInput> {
+pub fn incoming(
+    input: &WireInput,
+    generation: u64,
+    at: std::time::Instant,
+) -> Option<ActivityInput> {
     Some(match input {
         WireInput::Record(WireRecord::Known(record)) => match record.input()? {
             Input::Event(SessionEvent::Activity(event)) => ActivityInput::Observe {
@@ -1345,9 +1399,9 @@ impl From<&crate::Decision> for WireDecision {
                 crate::DecisionKind::Form { fields } => WireDecisionKind::Form {
                     fields: fields.iter().map(Into::into).collect(),
                 },
-                crate::DecisionKind::External { url } => WireDecisionKind::External {
-                    url: url.clone(),
-                },
+                crate::DecisionKind::External { url } => {
+                    WireDecisionKind::External { url: url.clone() }
+                }
                 crate::DecisionKind::Unsupported { reason } => WireDecisionKind::Unsupported {
                     reason: reason.clone(),
                 },
@@ -1388,9 +1442,9 @@ impl TryFrom<&WireDecision> for crate::Decision {
             // refuse: it shows as one it cannot render.
             kind: match &decision.kind {
                 WireDecisionKind::Approval => crate::DecisionKind::Approval,
-                WireDecisionKind::Questions { questions } => crate::DecisionKind::Questions(
-                    questions.iter().map(Into::into).collect(),
-                ),
+                WireDecisionKind::Questions { questions } => {
+                    crate::DecisionKind::Questions(questions.iter().map(Into::into).collect())
+                }
                 WireDecisionKind::Form { fields } => crate::DecisionKind::Form {
                     fields: fields
                         .iter()
