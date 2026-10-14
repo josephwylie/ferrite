@@ -104,11 +104,11 @@ impl Cockpit {
     fn with(link: Link, store: Store) -> Self {
         Self {
             link,
+            shared: shared::Shared::new(store.dir()),
             store,
             roster: Roster::default(),
             synced: Vec::new(),
             mirrors: mirror::Mirrors::default(),
-            shared: shared::Shared::default(),
             bootstrap_results: Vec::new(),
             allowance_warnings: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
@@ -248,7 +248,7 @@ impl Cockpit {
                     if new_boot {
                         self.mirrors = mirror::Mirrors::default();
                     }
-                    self.shared = shared::Shared::from_snapshot(&snapshot);
+                    self.shared = shared::Shared::from_snapshot(&snapshot, self.store.dir());
                     self.mirrors.retain(&self.shared.open);
                     for state in snapshot.threads {
                         self.mirrors.receive(

@@ -65,13 +65,6 @@ pub struct Registry {
     next_project: u64,
 }
 
-/// No projects, bound to no file: a window's copy before the Server's lands.
-impl Default for Registry {
-    fn default() -> Self {
-        Registry::empty(Path::new(""))
-    }
-}
-
 /// The registry file's schema, versioned from day one like the Thread log's.
 const SCHEMA_VERSION: u32 = 2;
 
@@ -128,15 +121,16 @@ impl Registry {
         serde_json::to_value(self.persisted()).expect("the registry serializes")
     }
 
-    /// A window's read-only copy of the Server's registry. It is never
-    /// written: every change is the Server's.
-    pub fn from_wire(value: serde_json::Value) -> io::Result<Registry> {
+    /// A window's read-only copy of the Server's registry for the Store in
+    /// `dir`. It is never written: every change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Registry> {
         let persisted = serde_json::from_value::<PersistedRegistry>(value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        Registry::from_persisted(Path::new(""), persisted)
+        Registry::from_persisted(dir, persisted)
     }
 
-    fn empty(dir: &Path) -> Registry {
+    /// No projects: also a window's copy before the Server's lands.
+    pub(crate) fn empty(dir: &Path) -> Registry {
         Registry {
             dir: dir.to_path_buf(),
             projects: Vec::new(),

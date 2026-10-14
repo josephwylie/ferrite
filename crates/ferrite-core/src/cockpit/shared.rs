@@ -2,6 +2,8 @@
 //! copies of the Server's Groups, registry, Notices and providers, and the
 //! open Threads, each replaced whole by its latest message.
 
+use std::path::{Path, PathBuf};
+
 use crate::groups::Groups;
 use crate::notifications::Notifications;
 use crate::protocol::{ProviderState, ServerMessage, Snapshot};
@@ -10,8 +12,9 @@ use crate::transcript::RateLimits;
 use crate::workspace::registry::Registry;
 use crate::{ModelInfo, ThreadId};
 
-#[derive(Default)]
 pub(crate) struct Shared {
+    /// The Store these are of.
+    dir: PathBuf,
     pub(crate) groups: Groups,
     pub(crate) registry: Registry,
     pub(crate) notifications: Notifications,
@@ -23,10 +26,24 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn from_snapshot(snapshot: &Snapshot) -> Self {
+    /// Nothing yet: the shared state of the Store in `dir` before the
+    /// Engine's first messages.
+    pub(crate) fn new(dir: &Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            groups: Groups::empty(dir),
+            registry: Registry::empty(dir),
+            notifications: Notifications::default(),
+            providers: Vec::new(),
+            open: Vec::new(),
+            models_changed: false,
+        }
+    }
+
+    pub(crate) fn from_snapshot(snapshot: &Snapshot, dir: &Path) -> Self {
         let mut shared = Self {
             open: snapshot.roster.open.clone(),
-            ..Self::default()
+            ..Self::new(dir)
         };
         if let Some(groups) = &snapshot.groups {
             shared.set_groups(groups);
@@ -68,14 +85,14 @@ impl Shared {
     /// A copy the Server sent that this build cannot read keeps the one
     /// before: a window older than its Server says so in its log.
     fn set_groups(&mut self, groups: &serde_json::Value) {
-        match Groups::from_wire(groups.clone()) {
+        match Groups::from_wire(groups.clone(), &self.dir) {
             Ok(groups) => self.groups = groups,
             Err(error) => crate::log!("the server's groups could not be read: {error}"),
         }
     }
 
     fn set_registry(&mut self, registry: &serde_json::Value) {
-        match Registry::from_wire(registry.clone()) {
+        match Registry::from_wire(registry.clone(), &self.dir) {
             Ok(registry) => self.registry = registry,
             Err(error) => crate::log!("the server's registry could not be read: {error}"),
         }

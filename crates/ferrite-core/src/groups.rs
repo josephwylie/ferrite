@@ -283,16 +283,6 @@ pub struct Groups {
     next_id: u64,
 }
 
-/// No Groups, bound to no file: a window's copy before the Server's lands.
-impl Default for Groups {
-    fn default() -> Self {
-        Self {
-            dir: PathBuf::new(),
-            groups: Vec::new(),
-            next_id: 1,
-        }
-    }
-}
 
 impl Groups {
     pub fn load(dir: &Path) -> io::Result<Self> {
@@ -718,8 +708,10 @@ impl Groups {
         }
     }
 
+    // Validation only reads the Store: a window's copy validates a drop
+    // without ever taking the Store's claim.
     fn thread_project(&self, thread: ThreadId) -> Result<Option<ProjectId>, ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         store
             .peek(thread)
             .map(|meta| meta.project_id)
@@ -732,7 +724,7 @@ impl Groups {
     }
 
     fn validate_all(&self) -> Result<(), ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         let known: BTreeSet<_> = store.thread_ids()?.into_iter().collect();
         for thread in self.groups.iter().flat_map(|group| &group.members) {
             if !known.contains(thread) {
@@ -751,10 +743,20 @@ impl Groups {
         serde_json::to_value(self.persisted()).expect("the groups serialize")
     }
 
-    /// A window's read-only copy of the Server's Groups, taken as the
-    /// Server healed them. It is never written: every change is the
-    /// Server's.
-    pub fn from_wire(value: serde_json::Value) -> io::Result<Self> {
+    /// No Groups: a window's copy of the Store in `dir` before the Server's
+    /// lands.
+    pub(crate) fn empty(dir: &Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            groups: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// A window's read-only copy of the Server's Groups for the Store in
+    /// `dir`, taken as the Server healed them. It is never written: every
+    /// change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Self> {
         let persisted = serde_json::from_value::<PersistedGroups>(value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let groups: Vec<Group> = persisted
@@ -771,7 +773,7 @@ impl Groups {
         Ok(Self {
             next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
             groups,
-            ..Self::default()
+            ..Self::empty(dir)
         })
     }
 
