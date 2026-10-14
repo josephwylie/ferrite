@@ -107,7 +107,10 @@ impl CockpitView {
     /// already waiting — restart now, asking first as ⌘Q does.
     fn press_ferrite_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.ferrite_update.state() {
-            State::Unchecked | State::UpToDate | State::Failed { .. } => {
+            State::Unchecked
+            | State::UpToDate
+            | State::HandedOver { .. }
+            | State::Failed { .. } => {
                 self.check_for_ferrite_update(cx)
             }
             State::Ready {

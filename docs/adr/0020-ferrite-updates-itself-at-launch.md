@@ -42,6 +42,13 @@ Setup `.exe` for Windows x64) and may go out unsigned.
   install failed and opens the installer for the operator instead of trying
   again — as does a macOS install that fails outright (an app folder Ferrite
   cannot write, say).
+- A hand-over is recorded, not forgotten: the manifest is marked
+  `handed_over` and kept with its installer. Later launches leave it alone,
+  and a check that finds the same release again answers the staged one
+  instead of downloading it, so Settings says it was handed over. Without
+  the mark, every launch would re-download the installer and open it again.
+  A newer release replaces it as usual; installing it by hand makes the next
+  launch the staged version, which shows What's New.
 - The first launch of the installed version shows What's New: the release
   body, as Markdown, in the same reading dialog as the HTML preview. The
   staged directory is removed once read, so it shows once.
@@ -54,8 +61,11 @@ Setup `.exe` for Windows x64) and may go out unsigned.
   signatures.
 - A release with no installer for the platform, or without a checksum, is
   reported in Settings and never downloaded.
-- An update installed by hand shows no What's New (there are no staged notes
-  to read), and a second Ferrite launched while the first runs would install
+- A handed-over installer (a few hundred MB) stays in `~/.ferrite/update`
+  until the operator installs it or a newer release replaces it.
+- An update installed by hand without Ferrite having staged it shows no
+  What's New (there are no staged notes to read; no CHANGELOG is bundled,
+  the release body is the one source of notes), and a second Ferrite launched while the first runs would install
   under it; macOS opening the running app instead of a second copy makes that
   rare.
 - Linux and Intel macOS have no installer and do not update themselves.

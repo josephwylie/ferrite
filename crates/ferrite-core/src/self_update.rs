@@ -8,7 +8,9 @@
 //! turns. The swap happens at the next launch, before any Session starts
 //! (`at_launch`, `install`); the window only offers to restart once no
 //! agent is working. The release's notes are kept beside the installer, so
-//! the relaunched window can say what changed.
+//! the relaunched window can say what changed. An installer Ferrite could
+//! not run itself is handed to the operator once (`hand_over`) and kept,
+//! with its notes, until they install it or a newer release replaces it.
 
 use std::convert::Infallible;
 use std::fs;
@@ -72,10 +74,34 @@ pub struct Staged {
     pub notes: String,
     /// The installer's file name, beside the manifest.
     installer: String,
-    /// Set just before an install is tried: a launch that finds it set
-    /// while still the older Ferrite knows that attempt did not land.
     #[serde(default)]
-    attempted: bool,
+    progress: Progress,
+}
+
+impl Staged {
+    /// Whether this release was given to the operator to install by hand:
+    /// Ferrite neither tries it again nor downloads it again.
+    pub fn handed_over(&self) -> bool {
+        self.progress == Progress::HandedOver
+    }
+
+    fn installer_in(&self, dir: &Path) -> PathBuf {
+        staging(dir).join(&self.installer)
+    }
+}
+
+/// How far a staged release has got towards installing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Progress {
+    /// Downloaded and verified: the next launch installs it.
+    #[default]
+    Downloaded,
+    /// Set just before an install is tried: a launch that finds it while
+    /// still the older Ferrite knows that attempt did not land.
+    Attempted,
+    /// The installer went to the operator (`hand_over`).
+    HandedOver,
 }
 
 /// What a launch should do about a staged release.
@@ -196,15 +222,15 @@ fn staging(dir: &Path) -> PathBuf {
 
 /// Fetch `release`'s installer into `dir`'s staging directory, verify it
 /// against its checksum and record it for the next launch, replacing
-/// whatever was staged before. Blocks for as long as the download takes.
+/// whatever was staged before. A release already staged is answered as it
+/// stands, handed over or not, and not fetched again. Blocks for as long
+/// as the download takes.
 pub fn download(dir: &Path, release: &Release) -> io::Result<Staged> {
-    let staging = staging(dir);
-    match fs::remove_dir_all(&staging) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-        _ => {}
+    if let Some(staged) = read_manifest(&staging(dir))
+        .filter(|staged| staged.version == release.version && staged.installer_in(dir).is_file())
+    {
+        return Ok(staged);
     }
-    fs::create_dir_all(&staging)?;
-    let partial = staging.join(format!("{}.part", release.asset.name));
     let mut response = ureq::get(&release.asset.url)
         .config()
         .timeout_connect(Some(API_TIMEOUT))
@@ -212,8 +238,21 @@ pub fn download(dir: &Path, release: &Release) -> io::Result<Staged> {
         .build()
         .call()
         .map_err(io::Error::other)?;
+    stage(dir, release, &mut response.body_mut().as_reader())
+}
+
+/// `download` past the network: `body` written into a fresh staging
+/// directory, kept only if it matches the published checksum.
+fn stage(dir: &Path, release: &Release, body: &mut impl Read) -> io::Result<Staged> {
+    let staging = staging(dir);
+    match fs::remove_dir_all(&staging) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    fs::create_dir_all(&staging)?;
+    let partial = staging.join(format!("{}.part", release.asset.name));
     let mut file = fs::File::create(&partial)?;
-    let digest = copy_hashing(&mut response.body_mut().as_reader(), &mut file)?;
+    let digest = copy_hashing(body, &mut file)?;
     file.sync_all()?;
     drop(file);
     if digest != release.asset.sha256 {
@@ -228,7 +267,7 @@ pub fn download(dir: &Path, release: &Release) -> io::Result<Staged> {
         version: release.version.clone(),
         notes: release.notes.clone(),
         installer: release.asset.name.clone(),
-        attempted: false,
+        progress: Progress::Downloaded,
     };
     write_manifest(&staging, &staged)?;
     Ok(staged)
@@ -252,6 +291,11 @@ fn copy_hashing(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<S
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn read_manifest(staging: &Path) -> Option<Staged> {
+    let text = fs::read_to_string(staging.join(MANIFEST)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// Written whole, then renamed over: a manifest is never half there.
 fn write_manifest(staging: &Path, staged: &Staged) -> io::Result<()> {
     let text = serde_json::to_string_pretty(staged).map_err(io::Error::other)?;
@@ -263,25 +307,21 @@ fn write_manifest(staging: &Path, staged: &Staged) -> io::Result<()> {
 }
 
 /// What the launch of `current` should do about `dir`'s staged release,
-/// tidying as it reads: a release already shown or superseded goes, and
-/// so does an installer left over from a hand-over.
+/// tidying as it reads: a release already shown or superseded goes. A
+/// handed-over release stays until the operator installs it, which this
+/// reads as installed, notes and all.
 pub fn at_launch(dir: &Path, current: &str) -> AtLaunch {
     let staging = staging(dir);
-    let staged = fs::read_to_string(staging.join(MANIFEST))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Staged>(&text).ok());
-    match staged {
+    match read_manifest(&staging) {
         Some(staged) if parse_version(&staged.version) == parse_version(current) => {
             let _ = fs::remove_dir_all(&staging);
             AtLaunch::Installed(staged)
         }
-        Some(staged)
-            if newer(&staged.version, current) && staging.join(&staged.installer).is_file() =>
-        {
-            if staged.attempted {
-                AtLaunch::Failed(staged)
-            } else {
-                AtLaunch::Install(staged)
+        Some(staged) if newer(&staged.version, current) && staged.installer_in(dir).is_file() => {
+            match staged.progress {
+                Progress::Downloaded => AtLaunch::Install(staged),
+                Progress::Attempted => AtLaunch::Failed(staged),
+                Progress::HandedOver => AtLaunch::Nothing,
             }
         }
         _ => {
@@ -301,22 +341,25 @@ pub fn install(dir: &Path, staged: &Staged) -> io::Result<Infallible> {
     write_manifest(
         &staging,
         &Staged {
-            attempted: true,
+            progress: Progress::Attempted,
             ..staged.clone()
         },
     )?;
-    let installer = staging.join(&staged.installer);
-    platform::install(&installer, &staging)
+    platform::install(&staged.installer_in(dir), &staging)
 }
 
 /// Give the installer to the operator, for when Ferrite could not install
-/// it itself: the disk image opens, or the setup runs as usual. The
-/// manifest goes, so the next launch does not try again (and has no notes
-/// to show).
+/// it itself: the disk image opens, or the setup runs as usual. Marked
+/// first, so neither a launch nor a check tries this release again.
 pub fn hand_over(dir: &Path, staged: &Staged) -> io::Result<()> {
-    let staging = staging(dir);
-    fs::remove_file(staging.join(MANIFEST))?;
-    platform::open(&staging.join(&staged.installer))
+    write_manifest(
+        &staging(dir),
+        &Staged {
+            progress: Progress::HandedOver,
+            ..staged.clone()
+        },
+    )?;
+    platform::open(&staged.installer_in(dir))
 }
 
 /// Start Ferrite again once this process has exited, so a restart for an
@@ -399,8 +442,9 @@ mod platform {
             let _ = fs::rename(&old, &bundle);
             return Err(error);
         }
+        // The disk image stays until the new Ferrite's first launch clears
+        // the staging directory: should the `exec` fail, it is handed over.
         let _ = fs::remove_dir_all(&old);
-        let _ = fs::remove_file(dmg);
         Err(Command::new(exe).args(std::env::args_os().skip(1)).exec())
     }
 
@@ -528,6 +572,18 @@ mod tests {
         dir
     }
 
+    fn release(version: &str, sha256: String) -> Release {
+        Release {
+            version: version.into(),
+            notes: "notes".into(),
+            asset: Asset {
+                name: "ferrite.dmg".into(),
+                url: "https://example.invalid/ferrite.dmg".into(),
+                sha256,
+            },
+        }
+    }
+
     fn answer(tag: &str, digest: Option<&str>) -> String {
         serde_json::json!({
             "tag_name": tag,
@@ -548,7 +604,9 @@ mod tests {
         .to_string()
     }
 
-    fn stage(dir: &Path, version: &str, attempted: bool) -> Staged {
+    /// A release staged as `download` leaves it, then got as far as
+    /// `progress`.
+    fn staged_at(dir: &Path, version: &str, progress: Progress) -> Staged {
         let staging = staging(dir);
         fs::create_dir_all(&staging).unwrap();
         fs::write(staging.join("ferrite.dmg"), b"image").unwrap();
@@ -556,7 +614,7 @@ mod tests {
             version: version.into(),
             notes: "notes".into(),
             installer: "ferrite.dmg".into(),
-            attempted,
+            progress,
         };
         write_manifest(&staging, &staged).unwrap();
         staged
@@ -612,7 +670,7 @@ mod tests {
     #[test]
     fn a_staged_newer_release_installs_at_launch() {
         let dir = scratch("install");
-        let staged = stage(&dir, "0.5.0", false);
+        let staged = staged_at(&dir, "0.5.0", Progress::Downloaded);
         assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Install(staged));
     }
 
@@ -621,20 +679,56 @@ mod tests {
     #[test]
     fn an_attempt_that_did_not_land_is_handed_over() {
         let dir = scratch("failed");
-        let staged = stage(&dir, "0.5.0", true);
-        assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Failed(staged.clone()));
-        // `hand_over` drops the manifest; the installer stays for the
-        // operator until the following launch tidies it away.
-        fs::remove_file(staging(&dir).join(MANIFEST)).unwrap();
+        let staged = staged_at(&dir, "0.5.0", Progress::Attempted);
+        assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Failed(staged));
+    }
+
+    /// Once handed over, a release is neither installed nor opened again
+    /// at launch, and the check that finds it again does not fetch it: it
+    /// answers what is staged, which the window reads as handed over.
+    #[test]
+    fn a_handed_over_release_is_not_tried_or_fetched_again() {
+        let dir = scratch("handed-over");
+        let staged = staged_at(&dir, "0.5.0", Progress::HandedOver);
         assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Nothing);
-        assert!(!staging(&dir).exists());
+        assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Nothing);
+        let again = download(&dir, &release("0.5.0", "0".repeat(64))).unwrap();
+        assert!(again.handed_over());
+        assert_eq!(again, staged);
+    }
+
+    /// Installed by hand from the handed-over installer, the new version
+    /// still opens on its notes.
+    #[test]
+    fn a_handed_over_release_installed_by_hand_shows_its_notes() {
+        let dir = scratch("by-hand");
+        let staged = staged_at(&dir, "0.5.0", Progress::HandedOver);
+        assert_eq!(at_launch(&dir, "0.5.0"), AtLaunch::Installed(staged));
+    }
+
+    #[test]
+    fn a_download_that_does_not_match_its_checksum_is_deleted() {
+        let dir = scratch("mismatch");
+        let release = release("0.5.0", DIGEST.into());
+        assert!(stage(&dir, &release, &mut &b"tampered"[..]).is_err());
+        assert_eq!(fs::read_dir(staging(&dir)).unwrap().count(), 0);
+        assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Nothing);
+    }
+
+    #[test]
+    fn a_verified_download_is_staged_for_the_next_launch() {
+        let dir = scratch("verified");
+        let sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let staged = stage(&dir, &release("0.5.0", sha256.into()), &mut &b"abc"[..]).unwrap();
+        assert_eq!(fs::read(staged.installer_in(&dir)).unwrap(), b"abc");
+        assert_eq!(at_launch(&dir, "0.4.0"), AtLaunch::Install(staged));
     }
 
     /// The new version's first launch takes the notes once.
     #[test]
     fn the_installed_release_shows_its_notes_once() {
         let dir = scratch("installed");
-        let staged = stage(&dir, "0.5.0", true);
+        let staged = staged_at(&dir, "0.5.0", Progress::Attempted);
         assert_eq!(at_launch(&dir, "0.5.0"), AtLaunch::Installed(staged));
         assert_eq!(at_launch(&dir, "0.5.0"), AtLaunch::Nothing);
     }
@@ -642,7 +736,7 @@ mod tests {
     #[test]
     fn a_superseded_release_is_cleared() {
         let dir = scratch("superseded");
-        stage(&dir, "0.5.0", false);
+        staged_at(&dir, "0.5.0", Progress::Downloaded);
         assert_eq!(at_launch(&dir, "0.6.0"), AtLaunch::Nothing);
         assert!(!staging(&dir).exists());
     }

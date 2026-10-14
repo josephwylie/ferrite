@@ -78,6 +78,11 @@ pub enum State {
         /// The operator asked to restart once no agent is working.
         when_idle: bool,
     },
+    /// Ferrite could not install it and gave the operator its installer.
+    HandedOver {
+        version: String,
+    },
+    /// The words say whether the check or the download failed.
     Failed {
         detail: String,
     },
@@ -125,7 +130,7 @@ impl FerriteUpdate {
             Err(error) => {
                 ferrite_core::log!("could not check for a newer Ferrite: {error}");
                 self.state = State::Failed {
-                    detail: error.to_string(),
+                    detail: format!("Could not check for a newer Ferrite: {error}"),
                 };
                 None
             }
@@ -134,6 +139,9 @@ impl FerriteUpdate {
 
     pub fn downloaded(&mut self, result: std::io::Result<Staged>) {
         self.state = match result {
+            Ok(staged) if staged.handed_over() => State::HandedOver {
+                version: staged.version,
+            },
             Ok(staged) => {
                 self.offer = Some(staged.version.clone());
                 State::Ready {
@@ -144,7 +152,7 @@ impl FerriteUpdate {
             Err(error) => {
                 ferrite_core::log!("could not download the newer Ferrite: {error}");
                 State::Failed {
-                    detail: error.to_string(),
+                    detail: format!("The download failed: {error}"),
                 }
             }
         };
@@ -204,7 +212,14 @@ impl FerriteUpdate {
                 },
                 Some("Restart now"),
             ),
-            State::Failed { detail } => (format!("The update failed: {detail}"), Some("Try again")),
+            State::HandedOver { version } => (
+                format!(
+                    "{version} could not install itself. Install it from the installer \
+                     Ferrite opened for you"
+                ),
+                Some("Check now"),
+            ),
+            State::Failed { detail } => (detail.clone(), Some("Try again")),
         };
         (text.into(), button.map(SharedString::from))
     }
@@ -268,7 +283,7 @@ mod tests {
         update.begin_check();
         update.checked(Err(std::io::Error::other("offline")));
         let (text, button) = update.describe(None);
-        assert_eq!(text.as_ref(), "The update failed: offline");
+        assert_eq!(text.as_ref(), "Could not check for a newer Ferrite: offline");
         assert_eq!(button.as_deref(), Some("Try again"));
         assert!(update.begin_check());
     }
@@ -297,6 +312,32 @@ mod tests {
             "0.5.0 installs once no agent is working or waiting (1 agent is working now)"
         );
         assert_eq!(button.as_deref(), Some("Restart now"));
+    }
+
+    /// A release Ferrite already handed over is neither offered nor
+    /// waited on again; checks go on, for the release after it.
+    #[test]
+    fn a_handed_over_release_is_not_offered_again() {
+        let mut update = FerriteUpdate::default();
+        update.begin_check();
+        update.checked(Ok(Some(release("0.5.0"))));
+        let staged: Staged = serde_json::from_value(serde_json::json!({
+            "version": "0.5.0",
+            "notes": "",
+            "installer": "ferrite.dmg",
+            "progress": "handed_over",
+        }))
+        .unwrap();
+        update.downloaded(Ok(staged));
+        assert_eq!(
+            update.state(),
+            &State::HandedOver {
+                version: "0.5.0".into()
+            }
+        );
+        assert_eq!(update.take_offer(), None);
+        assert!(!update.restart_when_idle());
+        assert!(update.begin_check());
     }
 
     #[test]
