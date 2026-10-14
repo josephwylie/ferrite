@@ -384,6 +384,59 @@ fn sort_attention_lifts_what_needs_you_and_the_heading_rolls_it_up(cx: &mut Test
     });
 }
 
+/// `sort: attention` ranks Groups too: the Group whose member waits
+/// rises above an older quiet one, and the waiting member leads its Group.
+#[gpui::test]
+fn sort_attention_ranks_groups_and_their_members(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("nav-attention-groups", 4);
+    let threads = sorted_threads(&core);
+    let mut group = |first, second| {
+        core.apply_group(GroupChange::Create { first, second })
+            .unwrap()
+            .group
+            .unwrap()
+    };
+    let quiet = group(threads[0], threads[1]);
+    let waiting = group(threads[2], threads[3]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    fake.streams.borrow()[3].send(decision("perm_4")).unwrap();
+    tick(cx);
+    let tree = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            state
+                .groups
+                .iter()
+                .map(|block| {
+                    let members: Vec<ThreadId> =
+                        block.members.iter().map(|row| row.thread).collect();
+                    (block.id, members)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        tree(&view, cx),
+        vec![
+            (quiet, vec![threads[0], threads[1]]),
+            (waiting, vec![threads[2], threads[3]]),
+        ],
+        "creation order by default"
+    );
+    view.update(cx, |view, cx| {
+        view.set_thread_order(ThreadListOrder::Attention, cx)
+    });
+    assert_eq!(
+        tree(&view, cx),
+        vec![
+            (waiting, vec![threads[3], threads[2]]),
+            (quiet, vec![threads[0], threads[1]]),
+        ],
+        "what waits first, then creation order"
+    );
+}
+
 /// A Group's row rolls its members up — folded too — and a folded
 /// Project heading still says what waits under it.
 #[gpui::test]
@@ -435,11 +488,12 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
     });
 }
 
-/// Folded, the nav is the rail: one numbered line per open Thread, each
-/// with its mark, beside the one seam; the board starts right of it, and a
-/// press on a line lands on its Thread.
+/// Folded, the nav is the rail: one line per open Thread, each with its
+/// mark, beside the one seam; the board starts right of it, and a press on
+/// a line lands on its Thread. A line's digit is the ⌘ key that focuses
+/// it: Solo, only the Solo Pane's `1`.
 #[gpui::test]
-fn the_folded_nav_is_a_numbered_rail(cx: &mut TestAppContext) {
+fn the_folded_nav_is_a_keyed_rail(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-rail", 3);
     let threads = sorted_threads(&core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -466,6 +520,24 @@ fn the_folded_nav_is_a_numbered_rail(cx: &mut TestAppContext) {
         (board.x - (nav::FOLDED_WIDTH + crate::theme::CHROME_SEAM_W)).abs() <= 0.5,
         "the board starts right of the rail: {board:?}"
     );
+    let keyed = |cx: &mut gpui::VisualTestContext| {
+        assert!(
+            cx.debug_bounds("nav-rail-key-2").is_none(),
+            "one Pane, one key"
+        );
+        let key = cx.debug_bounds("nav-rail-key-1").expect("⌘1's line");
+        threads
+            .iter()
+            .copied()
+            .find(|thread| {
+                let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
+                cx.debug_bounds(id)
+                    .is_some_and(|line| line.top() <= key.top() && key.bottom() <= line.bottom())
+            })
+            .expect("on a Thread's line")
+    };
+    let focused = view.read_with(cx, |view, _| view.cockpit.roster().focused_thread());
+    assert_eq!(Some(keyed(cx)), focused);
     let last: &'static str = format!("nav-rail-{}", threads[2].get()).leak();
     let line = cx.debug_bounds(last).unwrap();
     cx.simulate_click(line.center(), gpui::Modifiers::none());
@@ -474,4 +546,5 @@ fn the_folded_nav_is_a_numbered_rail(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
         Some(threads[2])
     );
+    assert_eq!(keyed(cx), threads[2], "⌘1 follows the Solo Pane");
 }

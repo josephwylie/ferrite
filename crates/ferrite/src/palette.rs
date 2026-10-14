@@ -14,10 +14,12 @@
 //! the palette answers is a `palette::*` action bound in its `Palette`
 //! context, handled at the cockpit's root.
 //!
-//! **Status filters.** On an empty line `b` `w` `i` `d` keep only the rows
-//! whose state is blocked, working, idle or done (`cockpit::Attention`; a
-//! Project or Group by its roll-up), and `a` shows them all again. Commands
-//! have no state and stay. Once the line holds text, every key types.
+//! **Status filters.** A line of one letter is a filter, not a search: `b`
+//! `w` `i` `d` keep only the rows whose state is blocked, working, idle or
+//! done (`cockpit::Attention`; a Project or Group by its roll-up), and `a`
+//! keeps them all. Commands have no state and stay. The next letter turns
+//! the line into a search, so no key is ever lost to a filter: `debug`
+//! finds an idle Thread named so although `d` alone keeps the done ones.
 
 use std::ops::Range;
 
@@ -53,12 +55,6 @@ gpui::actions!(
         Confirm,
         Preview,
         Dismiss,
-        // On an empty line: keep one state's rows, or all of them.
-        FilterBlocked,
-        FilterWorking,
-        FilterIdle,
-        FilterDone,
-        FilterAll,
     ]
 );
 
@@ -213,8 +209,6 @@ struct Shown {
 pub(crate) struct Palette {
     pub scope: PaletteScope,
     rows: Vec<Row>,
-    /// The status filter (`b` `w` `i` `d`), or every state (`a`).
-    filter: Option<Attention>,
     shown: Vec<Shown>,
     cursor: usize,
     pub input: Entity<Composer>,
@@ -247,7 +241,6 @@ impl Palette {
         let mut palette = Self {
             scope,
             rows,
-            filter: None,
             shown: Vec::new(),
             cursor: 0,
             input,
@@ -263,22 +256,15 @@ impl Palette {
         self.input.read(cx).text().to_string()
     }
 
-    /// Filter the rows by the line (`fuzzy::palette_match`) and the status
-    /// filter: survivors keep their order, never re-ranked; the cursor
-    /// returns to the first.
+    /// Filter the rows by the line (`fuzzy::palette_match`, or a status
+    /// filter's letter): survivors keep their order, never re-ranked; the
+    /// cursor returns to the first.
     pub(crate) fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
-        self.shown = filter(&self.rows, &query, self.filter);
+        self.shown = filter(&self.rows, &query);
         self.cursor = 0;
         self.scroll.scroll_to_item(0);
         cx.notify();
-    }
-
-    /// `b` `w` `i` `d` / `a` on an empty line: keep one state's rows, or
-    /// all of them.
-    pub(crate) fn set_filter(&mut self, filter: Option<Attention>, cx: &mut Context<Self>) {
-        self.filter = filter;
-        self.refilter(cx);
     }
 
     /// ↑ / ↓: the cursor steps over the survivors, wrapping.
@@ -342,9 +328,26 @@ impl Palette {
     }
 }
 
-/// The rows the query and the status filter keep, with their names' lit
-/// ranges.
-fn filter(rows: &[Row], query: &str, status: Option<Attention>) -> Vec<Shown> {
+/// The status filter a one-letter line asks for: `Some(None)` for `a`,
+/// every state. Any other line is a search.
+fn status_filter(query: &str) -> Option<Option<Attention>> {
+    match query {
+        "b" => Some(Some(Attention::Blocked)),
+        "w" => Some(Some(Attention::Working)),
+        "i" => Some(Some(Attention::Idle)),
+        "d" => Some(Some(Attention::Done)),
+        "a" => Some(None),
+        _ => None,
+    }
+}
+
+/// The rows the line keeps — a status filter's, or the search's — with
+/// their names' lit ranges.
+fn filter(rows: &[Row], query: &str) -> Vec<Shown> {
+    let (query, status) = match status_filter(query) {
+        Some(status) => ("", status),
+        None => (query, None),
+    };
     rows.iter()
         .enumerate()
         .filter(|(_, row)| row.passes(status))
@@ -394,7 +397,7 @@ impl Render for Palette {
                     .text_color(rgb(TEXT_STRONG))
                     .child(self.input.clone()),
             )
-            .children(self.filter.map(|filter| {
+            .children(status_filter(&self.query(cx)).flatten().map(|filter| {
                 div()
                     .debug_selector(|| "palette-filter".into())
                     .flex_shrink_0()
@@ -570,7 +573,7 @@ mod tests {
             ),
             command("open a group", "", Command::OpenGroup),
         ];
-        let shown = filter(&rows, "par", None);
+        let shown = filter(&rows, "par");
         assert_eq!(
             names(&rows, &shown),
             [
@@ -582,14 +585,14 @@ mod tests {
                 "compare with main",
             ]
         );
-        assert_eq!(filter(&rows, "", None).len(), rows.len());
+        assert_eq!(filter(&rows, "").len(), rows.len());
     }
 
-    /// A status filter keeps the rows in its one of the four states —
+    /// A one-letter line keeps the rows in its one of the four states —
     /// failed reads as blocked, background work as working — and every
-    /// command, which has no state; the query narrows what it kept.
+    /// command, which has no state; `a` keeps every row.
     #[test]
-    fn a_status_filter_keeps_its_states_rows_and_every_command() {
+    fn a_status_letter_keeps_its_states_rows_and_every_command() {
         let rows = vec![
             state_thread("waits", "", 1, RowStatus::NeedsYou),
             state_thread("broke", "", 2, RowStatus::Failed),
@@ -600,21 +603,25 @@ mod tests {
             state_thread("shelved", "", 7, RowStatus::Parked),
             command("settings", "", Command::Settings),
         ];
-        let kept = |status, query| names(&rows, &filter(&rows, query, status));
-        assert_eq!(
-            kept(Some(Attention::Blocked), ""),
-            ["waits", "broke", "settings"]
-        );
-        assert_eq!(
-            kept(Some(Attention::Working), ""),
-            ["runs", "behind", "settings"]
-        );
-        assert_eq!(kept(Some(Attention::Done), ""), ["finished", "settings"]);
-        assert_eq!(
-            kept(Some(Attention::Idle), ""),
-            ["quiet", "shelved", "settings"]
-        );
-        assert_eq!(kept(Some(Attention::Blocked), "wa"), ["waits"]);
-        assert_eq!(kept(None, "").len(), rows.len());
+        let kept = |query| names(&rows, &filter(&rows, query));
+        assert_eq!(kept("b"), ["waits", "broke", "settings"]);
+        assert_eq!(kept("w"), ["runs", "behind", "settings"]);
+        assert_eq!(kept("d"), ["finished", "settings"]);
+        assert_eq!(kept("i"), ["quiet", "shelved", "settings"]);
+        assert_eq!(kept("a").len(), rows.len());
+    }
+
+    /// The letter after a status letter makes the line a search, whatever
+    /// the state: no name is hidden by the filter its first letter names.
+    #[test]
+    fn a_second_letter_searches_every_state() {
+        let rows = vec![
+            state_thread("debug crash", "", 1, RowStatus::Idle),
+            state_thread("wire up", "", 2, RowStatus::Done),
+        ];
+        let kept = |query| names(&rows, &filter(&rows, query));
+        assert_eq!(kept("d"), ["wire up"]);
+        assert_eq!(kept("de"), ["debug crash"]);
+        assert_eq!(kept("wi"), ["wire up"]);
     }
 }

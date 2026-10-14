@@ -1,11 +1,11 @@
-//! The left navigation column (#21): one section per Project — its loose Threads and its Groups, each Group's members
-//! hanging under it — and, at the foot of the column, the **Parked**
-//! section: every parked Thread no Group claims, folded shut by default so
-//! the tree above holds only what is running. It is a view, never the only
-//! door: everything a row does (focus, revive, regroup) stays reachable
-//! from the keyboard and the ⌘K palette, which also holds what the column
-//! no longer draws — the Project filter, the sort, a new Project, a new
-//! Thread in a Project.
+//! The left navigation column (#21): one section per Project — its loose
+//! Threads and its Groups, each Group's members hanging under it — and, at
+//! the foot of the column, the **Parked** section: every parked Thread no
+//! Group claims, folded shut by default so the tree above holds only what
+//! is running. It is a view, never the only door: everything a row does
+//! (focus, revive, regroup) stays reachable from the keyboard and the ⌘K
+//! palette, which also holds what the column no longer draws — the Project
+//! filter, the sort, a new Project, a new Thread in a Project.
 //!
 //! Drawing only, like `pane.rs`: the cockpit assembles a `NavState` per
 //! frame from O(1) reads plus its project/branch/parked caches —
@@ -32,17 +32,18 @@
 //! work the green spinner or ring); every right-hand word is
 //! `CHROME_MUTED`. A Project heading and a Group row carry the roll-up of
 //! their rows — the most urgent one's mark — so a folded section still
-//! says what needs the operator, and `sort: attention` lifts it to the top. The selection is `paint::SELECTION` on the row of what the
-//! board shows — the Group being viewed, or the Solo Thread — with the `❯`
-//! and a `TEXT_STRONG` title; hover is `paint::HOVER`, reaching full in
-//! 80ms, and the pointer stays the arrow. One thing moves: a working
-//! Thread's spinner. Nothing pulses.
+//! says what needs the operator, and `sort: attention` ranks by it:
+//! sections, the Groups in a section, the rows in each. The selection is
+//! `paint::SELECTION` on the row of what the board shows — the Group being
+//! viewed, or the Solo Thread — with the `❯` and a `TEXT_STRONG` title;
+//! hover is `paint::HOVER`, reaching full in 80ms, and the pointer stays
+//! the arrow. One thing moves: a working Thread's spinner. Nothing pulses.
 //!
 //! **Folding** (cmd-B) rides the column down to the **rail** while its
 //! content fades on its own clock: one line per open Thread in the tree's
-//! order, its number and its mark (`rail`), so a folded nav still says
-//! what needs the operator. The sidebar toggle and the bell wait in the
-//! bottom bar (ADR 0014).
+//! order, its mark and, where ⌘1–9 reaches it, that digit (`rail`), so a
+//! folded nav still says what needs the operator and how to get there.
+//! The sidebar toggle and the bell wait in the bottom bar (ADR 0014).
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
@@ -162,9 +163,10 @@ impl NavState {
 
 /// One Project's run of the tree: its heading (a label like every nav
 /// heading, its roll-up mark, its branch dim at the right), its loose rows,
-/// then its Groups — each Group listed under the one Project its members share. A
-/// Group spanning Projects belongs to none of them: it is listed in the
-/// Groups section (`mixed`), first in the tree.
+/// then its Groups — each Group listed under the one Project its members
+/// share. A Group spanning Projects belongs to none of them: it is listed
+/// in the Groups section (`mixed`), first in the tree unless `sort:
+/// attention` ranks it.
 pub struct ProjectSection {
     pub project: Option<ProjectId>,
     /// The Groups section: no Project, no loose rows, only Groups whose
@@ -875,9 +877,10 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
 /// see `group_row_with_title`. One line: the cursor cell (`❯` when
 /// selected), a member's tree glyph (`place`: `├` at 3ch, the dot at 5ch,
 /// the title at 7ch), the status mark, the title pinned to what the row
-/// leaves it, and at the right its checkout's facts and its word. `group` scopes the row's blend
-/// when the Thread is listed under several Groups. `editing` is a rename
-/// in progress: the field takes the title's box and the word's.
+/// leaves it, and at the right its checkout's facts and its word. `group`
+/// scopes the row's blend when the Thread is listed under several Groups.
+/// `editing` is a rename in progress: the field takes the title's box and
+/// the word's.
 pub fn thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
@@ -1190,11 +1193,11 @@ pub fn parked_scrollbar(scroll: &ScrollHandle) -> Div {
 
 // ------------------------------------------------------------- the rail
 
-/// One open Thread on the rail: its number in the tree's order and its
-/// mark.
+/// One open Thread on the rail: its mark, and the digit of the ⌘1–9 that
+/// focuses it, if one does.
 #[derive(Clone)]
 pub struct RailRow {
-    pub number: usize,
+    pub key: Option<usize>,
     pub thread: ThreadId,
     pub status: RowStatus,
     /// The board shows this Thread (Solo) or its Group: the rail's one
@@ -1221,10 +1224,11 @@ pub fn rail(scroll: &ScrollHandle) -> Stateful<Div> {
         .track_scroll(scroll)
 }
 
-/// One rail line: the Thread's number right-aligned in two cells, dim (the
-/// selected one `TEXT_STRONG`), a space, and its mark — the tree row's own
-/// (`status_mark`), spinner included; the mark cell's own space is the
-/// air at the right. It washes and selects as a tree row does.
+/// One rail line: the Thread's ⌘ digit right-aligned in two cells, dim
+/// (the selected one `TEXT_STRONG`) and blank where no ⌘ key reaches it, a
+/// space, and its mark — the tree row's own (`status_mark`), spinner
+/// included; the mark cell's own space is the air at the right. It washes
+/// and selects as a tree row does.
 pub fn rail_row(row: &RailRow) -> Stateful<Div> {
     let thread = row.thread;
     let key = SharedString::from(format!("nav-rail-{}", thread.get()));
@@ -1242,7 +1246,10 @@ pub fn rail_row(row: &RailRow) -> Stateful<Div> {
                 } else {
                     CHROME_MUTED
                 }))
-                .child(components::cells(row.number.to_string())),
+                .children(row.key.map(|key| {
+                    components::cells(key.to_string())
+                        .debug_selector(move || format!("nav-rail-key-{key}"))
+                })),
         )
         .child(div().flex_shrink_0().w(px(CH)))
         .child(cell(status_mark(row.status)))
@@ -1519,7 +1526,7 @@ mod tests {
             line
         );
         let rail = RailRow {
-            number: 12,
+            key: Some(9),
             thread: ThreadId::new(9),
             status: RowStatus::Done,
             selected: false,
@@ -1871,12 +1878,12 @@ mod tests {
         );
     }
 
-    /// The rail keeps every open Thread's line: its number, dim, and its
+    /// The rail keeps every open Thread's line: its ⌘ digit, dim, and its
     /// mark, in 6ch; the selected line is the tree's selection.
     #[test]
-    fn the_rail_numbers_its_threads_and_keeps_their_marks() {
+    fn the_rail_keys_its_threads_and_keeps_their_marks() {
         let row = |selected| RailRow {
-            number: 3,
+            key: Some(3),
             thread: ThreadId::new(4),
             status: RowStatus::NeedsYou,
             selected,

@@ -3652,6 +3652,13 @@ impl<'a> ThreadView<'a> {
         self.state.busy()
     }
 
+    /// Whether work runs behind Main: its Subagents, or its transcript's
+    /// background tasks.
+    pub fn background_work(&self) -> bool {
+        self.activity().working_descendants() > 0
+            || self.transcript().progress().working_background() > 0
+    }
+
     /// Whether a model or effort change waits on the provider's answer:
     /// the pickers hold until it lands.
     pub fn tuning(&self) -> bool {

@@ -101,10 +101,9 @@ pub const MAX_ROWS: usize = 8;
 /// What a line is for. A Pane's prompt (`Prompt`, the default) adds
 /// `ComposerEmpty` to its key context while it holds nothing, so the keys
 /// an empty line answers (a Decision's ↑↓⏎, `?`, ⌘⌫) never fire under text.
-/// A one-line field inside a float or a sheet (`Field`) never does: it
+/// A one-line field inside a float or a sheet (`Field`) never does, and
 /// carries its float's own context (`Palette`) on the focused node, where
-/// its keys win their tie against the bare enter and escape, and
-/// `FieldEmpty` beside it while it holds nothing (the palette's filters).
+/// its keys win their tie against the bare enter and escape.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Role {
     #[default]
@@ -124,12 +123,7 @@ pub(crate) fn key_context(role: Role, empty: bool, history: bool, menu: bool) ->
     }
     match role {
         Role::Prompt if empty => context.add("ComposerEmpty"),
-        Role::Field(Some(extra)) => {
-            context.add(extra);
-            if empty {
-                context.add("FieldEmpty");
-            }
-        }
+        Role::Field(Some(extra)) => context.add(extra),
         Role::Prompt | Role::Field(None) => {}
     }
     context

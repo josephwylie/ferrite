@@ -729,12 +729,12 @@ fn palette_threads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext)
     })
 }
 
-/// ⌘K's status filters: on an empty line `b` `w` `i` `d` keep one of the
-/// four states' Threads, and say which at the input's right, `a` shows
-/// every state again, and commands stay throughout. Once the line holds
-/// text, the same keys type.
+/// ⌘K's status filters: a line of one letter — `b` `w` `i` `d` — keeps
+/// one of the four states' Threads and says which at the input's right,
+/// `a` keeps every state, and commands stay throughout. Every key types:
+/// the next letter makes the line a search, the filter gone.
 #[gpui::test]
-fn the_palette_filters_by_status_on_an_empty_line(cx: &mut TestAppContext) {
+fn a_one_letter_palette_line_filters_by_status(cx: &mut TestAppContext) {
     let (view, _project, threads, cx) = palette_states("palette-filters", cx);
     cx.simulate_keystrokes("cmd-k");
     tick(cx);
@@ -751,7 +751,7 @@ fn the_palette_filters_by_status_on_an_empty_line(cx: &mut TestAppContext) {
         assert!(cx.debug_bounds("palette-filter").is_some(), "{key} says so");
         view.read_with(cx, |view, cx| {
             let palette = view.floats.palette.as_ref().unwrap().read(cx);
-            assert_eq!(palette.query(cx), "", "{key} filters, never types");
+            assert_eq!(palette.query(cx), key, "{key} types");
             assert!(
                 palette
                     .survivors()
@@ -760,16 +760,19 @@ fn the_palette_filters_by_status_on_an_empty_line(cx: &mut TestAppContext) {
                 "{key}: commands have no state and stay"
             );
         });
+        cx.simulate_keystrokes("backspace");
+        tick(cx);
     }
     cx.simulate_keystrokes("a");
     tick(cx);
     assert_eq!(palette_threads(&view, cx), threads, "a: every state");
     assert!(cx.debug_bounds("palette-filter").is_none());
-    cx.simulate_keystrokes("x b");
+    cx.simulate_keystrokes("backspace d e");
     tick(cx);
+    assert!(cx.debug_bounds("palette-filter").is_none(), "a search");
     view.read_with(cx, |view, cx| {
         let palette = view.floats.palette.as_ref().unwrap().read(cx);
-        assert_eq!(palette.query(cx), "xb", "under text every key types");
+        assert_eq!(palette.query(cx), "de", "no key is lost to a filter");
     });
 }
 

@@ -1262,6 +1262,7 @@ pub fn render_pane(
                 view.is_main(),
                 dot_state(state, state_word(state, kind, wall, transcript).as_ref()),
                 unread,
+                thread.is_some_and(|thread| thread.background_work()),
                 status,
             );
             let head = group_head(GroupHead {
@@ -2152,27 +2153,31 @@ pub(crate) fn cell_dot(state: WallState, unread: bool) -> Div {
 }
 
 /// The Pane head's mark, and whether it is a working Thread's (drawn as the
-/// braille spinner). The main Thread's is the status truth the nav and the
-/// cells share (`thread_status`), the done check while its finish is
-/// `unread`; a subagent tab's is that agent's own transcript state.
+/// braille spinner). The main Thread's is its nav row's face
+/// (`nav::RowStatus`): the done check while its finish is `unread`, the
+/// green ring while `background` work runs behind its idle Main. A
+/// subagent tab's is that agent's own transcript state.
 fn head_dot(
     main: bool,
     state: WallState,
     unread: bool,
+    background: bool,
     subject: Option<Status>,
 ) -> (crate::cockpit::ThreadStatus, bool) {
-    let state = if main {
-        state
-    } else {
-        match subject {
-            Some(Status::Streaming) => WallState::Working,
-            Some(Status::Blocked) => WallState::Decision,
-            Some(Status::Closed) => WallState::Blocked,
-            _ => WallState::Idle,
-        }
+    if main {
+        return (
+            crate::nav::RowStatus::of(state, unread, background).face(),
+            state == WallState::Working,
+        );
+    }
+    let state = match subject {
+        Some(Status::Streaming) => WallState::Working,
+        Some(Status::Blocked) => WallState::Decision,
+        Some(Status::Closed) => WallState::Blocked,
+        _ => WallState::Idle,
     };
     (
-        crate::cockpit::thread_status(state, main && unread),
+        crate::cockpit::thread_status(state, false),
         state == WallState::Working,
     )
 }

@@ -88,19 +88,6 @@ impl CockpitView {
             view.palette_confirm(true, window, cx)
         }))
         .on_action(cx.listener(|view, _: &palette::Dismiss, _, cx| view.close_palette(cx)))
-        .on_action(cx.listener(|view, _: &palette::FilterBlocked, _, cx| {
-            view.filter_palette(Some(Attention::Blocked), cx)
-        }))
-        .on_action(cx.listener(|view, _: &palette::FilterWorking, _, cx| {
-            view.filter_palette(Some(Attention::Working), cx)
-        }))
-        .on_action(cx.listener(|view, _: &palette::FilterIdle, _, cx| {
-            view.filter_palette(Some(Attention::Idle), cx)
-        }))
-        .on_action(cx.listener(|view, _: &palette::FilterDone, _, cx| {
-            view.filter_palette(Some(Attention::Done), cx)
-        }))
-        .on_action(cx.listener(|view, _: &palette::FilterAll, _, cx| view.filter_palette(None, cx)))
         .on_action(
             cx.listener(|view, _: &shortcuts::Toggle, window, cx| {
                 view.toggle_shortcuts(window, cx)
@@ -197,14 +184,6 @@ impl CockpitView {
     pub(super) fn close_palette(&mut self, cx: &mut Context<Self>) {
         if self.floats.palette.take().is_some() {
             cx.notify();
-        }
-    }
-
-    /// The palette's status filter (`palette::FilterBlocked` …), bound on
-    /// its empty line.
-    fn filter_palette(&mut self, filter: Option<Attention>, cx: &mut Context<Self>) {
-        if let Some(palette) = self.floats.palette.clone() {
-            palette.update(cx, |palette, cx| palette.set_filter(filter, cx));
         }
     }
 

@@ -17,7 +17,11 @@ the unread Notices of `ferrite_core::notifications`. `cockpit::Attention`
 names the four; `nav::RowStatus` keeps Ferrite's finer states (failing,
 failed, background, parked) as faces within them, and its `Ord` agrees with
 `Attention`, so a heading's roll-up is the `max` of its rows and the
-attention sort is a stable sort on it.
+attention sort is a stable sort on it — of the loose rows, of each Group's
+members, of the Groups in a section and of the sections, each by its
+roll-up. Like `sort: recent`, it holds still under the pointer: the ranks
+the tree was sorted by are kept with the drawn order until the pointer
+leaves.
 
 **Seen** means on screen while the window has focus. The Cockpit follows
 the window's activation (`Cockpit::set_window_active`, fed by an activation
@@ -37,15 +41,29 @@ ring is parked, a green ring is background work behind an idle Main.
 **What it replaced.** The Needs-you strip duplicated rows that the yellow
 mark, the waiting reason word (`approval`, `plan`, `question`) and the
 attention sort already carry, so it is gone; ⌘D still walks
-`Cockpit::needs_you` oldest request first. Nav headings are one style — a
-lowercase label in the metadata ink with the section's roll-up mark — and
-the folded nav is a 6ch rail of numbered rows with their marks rather than
-nothing.
+`Cockpit::needs_you` oldest request first. The reason `plan` is Claude's
+alone: it is read off the `ExitPlanMode` tool, and Codex has no plan
+approval to wait on, so a Codex request reads `approval` or `question`.
+Nav headings are one style — a lowercase label in the metadata ink with
+the section's roll-up mark — and the folded nav is a 6ch rail of rows with
+their marks rather than nothing.
 
-**Palette filters.** On the palette's empty line `b` `w` `i` `d` keep one
-state's rows (a Project or Group by its roll-up) and `a` all of them; once
-the line holds text, every key types. Commands have no state and stay, so
-a command's first letter lost to a filter still matches on the rest.
+**Rail digits are keys.** In Herdr a rail number is the key that jumps
+there. Ferrite's ⌘1–9 already mean the shown board's Panes in head order
+(R5), so the rail keeps the tree's order and shows a row's digit only
+where ⌘ and that digit focus it; a row off the board shows its mark alone.
+Numbering the tree instead would have made line 3 and ⌘3 two different
+Threads.
+
+**Palette filters.** A line of one letter is a filter, not a search: `b`
+`w` `i` `d` keep one state's rows (a Project or Group by its roll-up), `a`
+all of them, and the state's name shows at the input's right. The next
+letter turns the line into a search, so no key is lost to a filter — `d`
+alone keeps the done rows, `debug` finds the idle Thread named so.
+Binding the letters as actions on the empty line was tried and dropped:
+the first letter of every search starting with one of them became a
+sticky filter that hid the row being searched for. Commands have no state
+and stay under a filter.
 
 Herdr's own "idle ○" and its yellow working dot were considered and
 declined for the reasons above; its screen detection was never an option.

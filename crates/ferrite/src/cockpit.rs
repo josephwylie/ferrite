@@ -33,15 +33,18 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
 
-/// The loose rows the nav last drew, in order (C8, "never re-sort under
-/// the pointer"): under `sort: recent`, while the pointer is inside the
-/// column or a drag is live, the tree keeps this order. It re-ranks on
-/// pointer-leave, a focus change, or a Thread arriving or leaving — any of
-/// which changes `focused` or the row set, so the snapshot no longer
-/// applies. Creation order never moves a row, so it has nothing to hold.
+/// The loose rows the nav last drew, in order, and under `sort: attention`
+/// the state each row was ranked by (C8, "never re-sort under the
+/// pointer"): while the pointer is inside the column or a drag is live,
+/// the tree keeps this order, and Groups and sections keep the ranks they
+/// were sorted by. It re-ranks on pointer-leave, a focus change, or a
+/// Thread arriving or leaving — any of which changes `focused` or the row
+/// set, so the snapshot no longer applies. Creation order never moves a
+/// row, so it has nothing to hold.
 struct NavSnapshot {
     rows: Vec<ThreadId>,
     focused: Option<ThreadId>,
+    ranks: std::collections::HashMap<ThreadId, Attention>,
 }
 
 /// Reorder `rows` by where they sat in `snapshot`, when the snapshot holds
@@ -7990,8 +7993,11 @@ impl CockpitView {
     /// draws no heading, and a Thread a second Group includes is listed
     /// under that Group too (R1). Rows keep creation order (N-3) — a Thread
     /// starting or finishing work never moves — unless `sort: recent` asks
-    /// for last use within each Project. Filtered to a Project, the tree is
-    /// that Project's section, holding every Group with a member there.
+    /// for last use within each Project, or `sort: attention` ranks by
+    /// state: the loose rows, each Group's members, the Groups in a section
+    /// and the sections themselves, each by its roll-up, creation order
+    /// among equals. Filtered to a Project, the tree is that Project's
+    /// section, holding every Group with a member there.
     ///
     /// The one selection (N-5) is the row of what the board shows: the
     /// Group being viewed (its view or its wall), or the Solo Thread. The
@@ -8025,38 +8031,42 @@ impl CockpitView {
         loose.dedup();
         // Stable: Threads used at the same moment, or in the same state,
         // keep creation order.
-        match self.prefs.settings.thread_list_order {
+        let order = self.prefs.settings.thread_list_order;
+        match order {
             ThreadListOrder::Created => {}
             ThreadListOrder::Recent => {
                 loose.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread)))
             }
-            ThreadListOrder::Attention => loose.sort_by_key(|thread| {
+            ThreadListOrder::Attention => loose.sort_by_cached_key(|thread| {
                 std::cmp::Reverse(self.thread_row(*thread).status.attention())
             }),
         }
         // Never re-sort under the pointer (C8): while the pointer is inside
         // the column or a drag is live, the rows keep the order they were
-        // last drawn in, as long as the same Threads are there and focus
-        // has not moved. Anything else re-ranks, and is remembered.
+        // last drawn in, and the ranks they were sorted by, as long as the
+        // same Threads are there and focus has not moved. Anything else
+        // re-ranks, and is remembered at the end.
         let focused = roster.focused_thread();
         let frozen = self.nav_hovered || self.nav_drag_live.get();
-        let mut snapshot = self.nav_snapshot.borrow_mut();
-        let held = frozen
-            && snapshot.as_ref().is_some_and(|held| {
-                held.focused == focused && hold_order(&mut loose.clone(), &held.rows)
-            });
-        match snapshot.as_ref() {
-            Some(held_rows) if held => {
-                hold_order(&mut loose, &held_rows.rows);
+        let held_ranks = match self.nav_snapshot.borrow().as_ref() {
+            Some(held) if frozen && held.focused == focused => {
+                hold_order(&mut loose, &held.rows).then(|| held.ranks.clone())
             }
-            _ => {
-                *snapshot = Some(NavSnapshot {
-                    rows: loose.clone(),
-                    focused,
-                });
-            }
-        }
-        drop(snapshot);
+            _ => None,
+        };
+        let held = held_ranks.is_some();
+        let ranks = held_ranks.unwrap_or_default();
+        // A row's rank under `sort: attention`, most urgent least: the held
+        // one while the tree holds still.
+        let rank = |row: &nav::ThreadRow| {
+            std::cmp::Reverse(
+                ranks
+                    .get(&row.thread)
+                    .copied()
+                    .unwrap_or_else(|| row.status.attention()),
+            )
+        };
+        let attention = order == ThreadListOrder::Attention;
 
         // The Groups, in the durable order (creation order unless the
         // operator moved one), each under the one Project its members share
@@ -8065,7 +8075,7 @@ impl CockpitView {
         // when any member is there, drawing only those members. A member
         // whose leave is parked on a pending draft has already left, as in
         // `visible_indices`.
-        let placed: Vec<(Option<Option<ProjectId>>, nav::GroupBlock)> = self
+        let mut placed: Vec<(Option<Option<ProjectId>>, nav::GroupBlock)> = self
             .cockpit
             .groups()
             .iter()
@@ -8077,7 +8087,7 @@ impl CockpitView {
                     .copied()
                     .filter(|thread| Some(*thread) != leaving)
                     .collect();
-                let shown: Vec<nav::ThreadRow> = members
+                let mut shown: Vec<nav::ThreadRow> = members
                     .iter()
                     .copied()
                     .filter(|thread| self.admitted(*thread))
@@ -8085,6 +8095,9 @@ impl CockpitView {
                     .collect();
                 if shown.is_empty() {
                     return None;
+                }
+                if attention {
+                    shown.sort_by_key(rank);
                 }
                 // `None` is the Groups section; `Some(project)` a Project's.
                 let project = match self.nav_filter {
@@ -8116,6 +8129,9 @@ impl CockpitView {
                 ))
             })
             .collect();
+        if attention {
+            placed.sort_by_cached_key(|(_, block)| block.members.iter().map(rank).min());
+        }
 
         // The sections: every Project something is drawn under, in creation
         // order (ids are handed out in registration order), `Other` last.
@@ -8220,6 +8236,39 @@ impl CockpitView {
             });
         }
 
+        if attention {
+            sections.sort_by_cached_key(|section| {
+                section
+                    .solos
+                    .iter()
+                    .map(|index| &solos[*index])
+                    .chain(
+                        section
+                            .groups
+                            .iter()
+                            .flat_map(|index| groups[*index].members.iter()),
+                    )
+                    .map(rank)
+                    .min()
+            });
+        }
+        if !held {
+            let ranks = if attention {
+                solos
+                    .iter()
+                    .chain(groups.iter().flat_map(|group| group.members.iter()))
+                    .map(|row| (row.thread, row.status.attention()))
+                    .collect()
+            } else {
+                Default::default()
+            };
+            *self.nav_snapshot.borrow_mut() = Some(NavSnapshot {
+                rows: loose,
+                focused,
+                ranks,
+            });
+        }
+
         let parked = self.parked_threads().into_iter().map(row).collect();
         let smart = self
             .prefs
@@ -8289,8 +8338,6 @@ impl CockpitView {
             None => nav::RowStatus::Parked,
             Some(open) => {
                 let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
-                let background = open.activity().working_descendants() > 0
-                    || open.transcript().progress().working_background() > 0;
                 nav::RowStatus::of(
                     pane::dot_state(
                         pane::wall_state(
@@ -8304,7 +8351,7 @@ impl CockpitView {
                         slot.as_ref(),
                     ),
                     unread,
-                    background,
+                    open.background_work(),
                 )
             }
         };
@@ -9825,7 +9872,7 @@ impl CockpitView {
                     .min_h_0()
                     .w_full()
                     // The nav and its one seam column (`nav::seam`).
-                    .child(self.nav(cx))
+                    .child(self.nav(window, cx))
                     // The board lies from its own left edge — the column's
                     // width this frame and the one seam the nav draws — so
                     // it rides cmd-B with the column, every frame (F-12).
@@ -12549,10 +12596,9 @@ impl CockpitView {
 
     /// The nav's rows at its content's width (`nav::content`): the tree and
     /// its scrollbar, the parked fold.
-    fn nav_content(&self, cx: &mut Context<Self>) -> Div {
+    fn nav_content(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_nav();
-        let state = self.nav_state();
         nav::content()
             .child(
                 div()
@@ -12561,10 +12607,10 @@ impl CockpitView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .child(self.nav_tree(&state, cx))
+                    .child(self.nav_tree(state, cx))
                     .child(nav::scrollbar(&self.nav_scroll)),
             )
-            .children(self.nav_parked(&state, cx))
+            .children(self.nav_parked(state, cx))
     }
 
     /// The nav column and its one seam (`nav::seam`): the tree and the
@@ -12573,8 +12619,9 @@ impl CockpitView {
     /// render tail keeps frames coming while it moves) while its content
     /// fades on its own clock (N-15): 1 → 0 over 150ms folding, 0 → 1
     /// opening, the rail cross-fading the other way. At rest folded, the
-    /// column is the rail.
-    fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// column is the rail. The rail and the uncached rows share one
+    /// `nav_state` a frame.
+    fn nav(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
@@ -12593,22 +12640,35 @@ impl CockpitView {
         } else {
             self.nav_content_opacity(now, reduced)
         };
+        let state = std::cell::OnceCell::new();
         let shell = shell
             .when(content > 0.0, |shell| {
-                shell.child(self.nav_rows(content, cx))
+                shell.child(self.nav_rows(content, &state, cx))
             })
             .when(content < 1.0, |shell| {
-                shell.child(self.nav_rail(cx).opacity(1.0 - content))
+                let state = state.get_or_init(|| self.nav_state());
+                shell.child(self.nav_rail(state, window, cx).opacity(1.0 - content))
             });
         frame.child(shell).child(nav::seam()).into_any_element()
     }
 
     /// The rail (cmd-B folded): every open Thread in the tree's order —
     /// loose rows, then Group members, folds ignored, each Thread once —
-    /// numbered, with its mark. A press lands on the Thread as its tree
-    /// row's does.
-    fn nav_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let state = self.nav_state();
+    /// with its mark, and the digit of the ⌘1–9 that focuses it where one
+    /// does (the board's head order, R5). A press lands on the Thread as
+    /// its tree row's does.
+    fn nav_rail(
+        &self,
+        state: &nav::NavState,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let keyed: Vec<Option<ThreadId>> = self
+            .board_order(window)
+            .into_iter()
+            .take(9)
+            .map(|index| self.panes[index].thread())
+            .collect();
         let focused = self.cockpit.roster().focused_thread();
         let mut rows: Vec<nav::RailRow> = Vec::new();
         let mut listed = std::collections::HashSet::new();
@@ -12624,7 +12684,10 @@ impl CockpitView {
             for (row, group_shown) in solos.chain(members) {
                 if listed.insert(row.thread) {
                     rows.push(nav::RailRow {
-                        number: rows.len() + 1,
+                        key: keyed
+                            .iter()
+                            .position(|shown| *shown == Some(row.thread))
+                            .map(|at| at + 1),
                         thread: row.thread,
                         status: row.status,
                         selected: row.selected || (group_shown && focused == Some(row.thread)),
@@ -14555,6 +14618,7 @@ mod tests {
             *view.nav_snapshot.borrow_mut() = Some(NavSnapshot {
                 rows: held.clone(),
                 focused: view.cockpit.roster().focused_thread(),
+                ranks: Default::default(),
             });
             let order: Vec<ThreadId> = view
                 .nav_state()
