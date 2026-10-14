@@ -105,6 +105,10 @@ pub struct PaneView {
     /// kept here so its position survives every frame, and so opening it at
     /// a line can scroll that line into view.
     pub reader_scroll: gpui::UniformListScrollHandle,
+    /// A rendered Markdown document's own scroll in the reader.
+    pub reader_markdown_scroll: gpui::ScrollHandle,
+    /// The reader's find bar, while it is open.
+    pub reader_find: Option<crate::cockpit::beside::ReaderFind>,
 }
 
 /// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
@@ -244,6 +248,8 @@ impl PaneView {
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
             reader_scroll: gpui::UniformListScrollHandle::new(),
+            reader_markdown_scroll: gpui::ScrollHandle::new(),
+            reader_find: None,
         }
     }
 
@@ -301,6 +307,8 @@ impl PaneView {
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
             reader_scroll: gpui::UniformListScrollHandle::new(),
+            reader_markdown_scroll: gpui::ScrollHandle::new(),
+            reader_find: None,
         }
     }
 
@@ -4149,6 +4157,7 @@ pub(crate) fn approval_input(
                 text: source.into(),
                 highlights: Vec::new(),
                 cache: cache.clone(),
+                find: None,
             })
             .into_any_element(),
     )

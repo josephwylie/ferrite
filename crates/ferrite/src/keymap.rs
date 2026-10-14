@@ -214,12 +214,20 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // #20: browser-tab muscle memory — cmd-t is the same new Thread,
         // and cmd-n stays as an alias beside it.
         (with_primary("t"), "cockpit::NewThread", None),
-        // The focused Pane takes the whole cockpit at L1; cmd-f again
-        // restores the grid. Escape stays Interrupt (#20 design): stealing
-        // the panic key for "exit fullscreen" would make it ambiguous.
-        (with_primary("f"), "cockpit::ToggleFullscreen", None),
+        // The focused Pane takes the whole cockpit at L1; the same chord
+        // restores the grid (iTerm's maximize-pane). Escape stays Interrupt
+        // (#20 design): stealing the panic key for "exit fullscreen" would
+        // make it ambiguous.
+        (
+            with_primary("shift-enter"),
+            "cockpit::ToggleFullscreen",
+            None,
+        ),
+        // Find in the focused Pane's transcript (or its reader): the
+        // platform's find key, so fullscreen moved off it.
+        (with_primary("f"), "find::Open", None),
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
-        // muscle memory (cmd-t/w/f are spoken for by #20).
+        // muscle memory (cmd-t/w are spoken for by #20, cmd-f by find).
         (with_primary("b"), "cockpit::ToggleNav", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
@@ -372,6 +380,14 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "cockpit::MenuDismiss",
             Some("ComposerMenu"),
         ),
+        // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
+        // closes it. Last, so its context wins every same-depth tie: send,
+        // the Composer's new line, Groups (⌘G, ⌘⇧G) and interrupt.
+        ("enter".into(), "find::Next", Some("Find")),
+        (with_primary("g"), "find::Next", Some("Find")),
+        ("shift-enter".into(), "find::Previous", Some("Find")),
+        (with_primary("shift-g"), "find::Previous", Some("Find")),
+        ("escape".into(), "find::Close", Some("Find")),
     ]
 }
 
@@ -404,7 +420,8 @@ mod tests {
             ("cockpit::NewThread", "n"),
             // #20: cmd-t is the browser-tab spelling of the same new Thread.
             ("cockpit::NewThread", "t"),
-            ("cockpit::ToggleFullscreen", "f"),
+            ("cockpit::ToggleFullscreen", "shift-enter"),
+            ("find::Open", "f"),
             // #21: the nav collapses to its rail on both platforms.
             ("cockpit::ToggleNav", "b"),
             ("cockpit::OpenSettings", ","),

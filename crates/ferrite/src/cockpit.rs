@@ -584,6 +584,9 @@ pub struct CockpitView {
     solo_beside: Option<(PaneIdentity, ThreadId)>,
     /// The plan card (`open_plan`), tied to its Thread.
     plan_card: Option<ThreadId>,
+    /// The Pane whose reader took the last press: ⌘F finds there. A press
+    /// hands the keyboard back to the Pane, so focus cannot say it.
+    reader_pressed: Option<PaneIdentity>,
 }
 
 /// What a card hangs from (`card_corner`): its trigger in the window's
@@ -1545,6 +1548,7 @@ impl CockpitView {
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
             solo_beside: None,
+            reader_pressed: None,
             plan_card: None,
         };
         // A Cockpit notification is the earliest common point after core
@@ -3134,6 +3138,8 @@ impl CockpitView {
     /// The rows a target offers. `None` is a gap between groups of rows.
     fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
+        let fullscreen =
+            crate::components::bound_chord("cockpit::ToggleFullscreen").unwrap_or_default();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
             // park it, move it between Groups, delete it.
@@ -3150,7 +3156,7 @@ impl CockpitView {
                 }
                 if shown {
                     rows.push(Some((
-                        menu::Item::new("Toggle fullscreen").shortcut("cmd-F"),
+                        menu::Item::new("Toggle fullscreen").shortcut(fullscreen.clone()),
                         MenuVerb::Fullscreen,
                     )));
                 }
@@ -3198,7 +3204,7 @@ impl CockpitView {
                 rows.push(None);
                 rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
                 rows.push(Some((
-                    menu::Item::new("Toggle fullscreen").shortcut("cmd-F"),
+                    menu::Item::new("Toggle fullscreen").shortcut(fullscreen),
                     MenuVerb::Fullscreen,
                 )));
                 rows.push(None);
@@ -5827,7 +5833,7 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
     /// restores the grid. Escape is deliberately not an exit — it stays
     /// Interrupt, and stealing the panic key would make it ambiguous.
     fn toggle_fullscreen(
@@ -5838,6 +5844,27 @@ impl CockpitView {
     ) {
         self.cockpit.toggle_fullscreen();
         cx.notify();
+    }
+
+    /// ⌘F: find in the focused Pane's transcript — or in its reader, when
+    /// the reader took the last press or holds the keyboard (`crate::find`).
+    /// A wall tile draws no transcript to search.
+    fn open_find(&mut self, _: &crate::find::Open, window: &mut Window, cx: &mut Context<Self>) {
+        if self.level_now(window) == Level::Wall {
+            return;
+        }
+        let index = self.focused();
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
+        let reading =
+            self.reader_pressed == Some(pane.identity) || pane.preview.reader_focused(window, cx);
+        if reading && self.open_reader_find(index, window, cx) {
+            return;
+        }
+        if let Some(transcript) = self.panes.get(index).and_then(PaneView::transcript) {
+            transcript.update(cx, |view, cx| view.open_find(window, cx));
+        }
     }
 
     /// cmd-b (#21): fold the nav away, or open it back to the full column.
@@ -9263,6 +9290,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
+        self.tend_reader_finds(window);
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
         // unfocused sees nothing until it is focused — and the window coming
@@ -9702,10 +9730,20 @@ impl CockpitView {
             .panes
             .iter()
             .any(|pane| pane.preview.reader_text_focused(window, cx));
+        // The find bar's line keeps the keyboard while the operator types.
+        let find_focused = self.panes.get(self.focused()).is_some_and(|pane| {
+            pane.reader_find
+                .as_ref()
+                .is_some_and(|find| find.holds_focus(window, cx))
+                || pane
+                    .transcript()
+                    .is_some_and(|view| view.read(cx).find_holds_focus(window, cx))
+        });
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
             || native_text_focused
             || reader_text_focused
+            || find_focused
             || pane_control_focused
         {
             // Native text, dialogs, and the bell keep their own keyboard focus.
@@ -9854,6 +9892,7 @@ impl CockpitView {
                 view.pick_or_type(3, "4", window, cx)
             }))
             .on_action(cx.listener(Self::toggle_fullscreen))
+            .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::toggle_nav))
             .on_action(
                 cx.listener(|view, _: &FocusThread1, window, cx| view.focus_rail(1, window, cx)),
@@ -9891,6 +9930,11 @@ impl CockpitView {
             .on_action(cx.listener(Self::menu_dismiss))
             .map(|root| self.register_decision_actions(root, cx))
             .map(|root| self.register_palette_actions(root, cx))
+            // Every press forgets the reader; one in a reader marks it again
+            // as it bubbles (`reader_cell`).
+            .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
+                view.reader_pressed = None;
+            }))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves
             // ride the root too (#27): a sweep keeps extending after the
@@ -13550,6 +13594,7 @@ mod tests {
     mod core_transcript_parity;
     mod decisions_parity;
     mod diagnostics;
+    mod find;
     mod floats_parity;
     mod frame_parity;
     mod layout_polish;
@@ -19688,16 +19733,16 @@ mod tests {
         });
     }
 
-    /// #20: cmd-f gives the focused Pane the whole cockpit at L1, and cmd-f
+    /// #20: ⌘⇧⏎ gives the focused Pane the whole cockpit at L1, and ⌘⇧⏎
     /// again restores the grid. The proof of L1 is the keyboard: only a
     /// Transcript-level Pane renders a Composer, so typing landing there is
     /// the level made observable — and the focus snap holding in fullscreen.
     #[gpui::test]
-    fn cmd_f_fullscreens_the_focused_pane_and_toggles_back(cx: &mut TestAppContext) {
+    fn the_fullscreen_chord_fullscreens_the_focused_pane_and_toggles_back(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("fullscreen", 4);
         let group = group_all(&mut core);
         cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+            cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
@@ -19714,13 +19759,13 @@ mod tests {
         });
         assert_eq!(typed, "", "a wall tile has no Composer to type into");
 
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
 
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[0].thread().unwrap())),
-                "cmd-f fullscreens the focused Pane"
+                "the chord fullscreens the focused Pane"
             );
         });
         // One Pane rendered, spanning the whole area right of the nav —
@@ -19747,13 +19792,13 @@ mod tests {
         });
         assert_eq!(typed, "hi", "fullscreen renders at Transcript level");
 
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
 
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.roster().fullscreen(),
                 None,
-                "cmd-f again restores the grid"
+                "the chord again restores the grid"
             );
         });
         cx.simulate_input("still");
@@ -19766,13 +19811,13 @@ mod tests {
     }
 
     #[gpui::test]
-    fn cmd_f_reaches_a_draft_from_a_dense_grid(cx: &mut TestAppContext) {
+    fn the_fullscreen_chord_reaches_a_draft_from_a_dense_grid(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("draft-fullscreen", 5);
         for thread in core.threads() {
             core.park(thread).unwrap();
         }
         cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+            cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
@@ -19783,7 +19828,7 @@ mod tests {
         cx.simulate_resize(gpui::size(px(500.), px(320.)));
         tick(cx);
 
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         cx.simulate_input("reachable");
 
         view.read_with(cx, |view, cx| {
@@ -19915,7 +19960,7 @@ mod tests {
     fn fullscreen_forces_transcript_level_even_in_a_tiny_window(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("fullscreen-tiny", 1);
         cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+            cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(240.), px(200.)));
@@ -19926,7 +19971,7 @@ mod tests {
             "the premise: this window cannot earn L1 by size ({natural:?})"
         );
 
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         cx.simulate_input("hi");
 
         let typed = view.update(cx, |view, cx| {
@@ -19946,14 +19991,14 @@ mod tests {
         let group = group_all(&mut core);
         cx.update(|cx| {
             cx.bind_keys([
-                KeyBinding::new("cmd-f", ToggleFullscreen, None),
+                KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None),
                 KeyBinding::new("cmd-]", NextPane, None),
             ]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.roster().fullscreen(),
@@ -19981,13 +20026,13 @@ mod tests {
         let (core, _fake) = cockpit("fullscreen-close", 2);
         cx.update(|cx| {
             cx.bind_keys([
-                KeyBinding::new("cmd-f", ToggleFullscreen, None),
+                KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None),
                 KeyBinding::new("cmd-w", CloseThread, None),
             ]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         let closed = view.read_with(cx, |view, _| {
             assert!(
                 view.cockpit.roster().fullscreen().is_some(),
@@ -20020,13 +20065,13 @@ mod tests {
         let (core, _fake) = cockpit("fullscreen-last", 1);
         cx.update(|cx| {
             cx.bind_keys([
-                KeyBinding::new("cmd-f", ToggleFullscreen, None),
+                KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None),
                 KeyBinding::new("cmd-w", CloseThread, None),
             ]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         view.read_with(cx, |view, _| {
             assert!(
                 view.cockpit.roster().fullscreen().is_some(),
@@ -20054,11 +20099,11 @@ mod tests {
     fn a_fullscreened_thread_parked_externally_falls_back_to_the_grid(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("fullscreen-external", 2);
         cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+            cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         let gone = view.read_with(cx, |view, _| {
             assert!(
                 view.cockpit.roster().fullscreen().is_some(),
@@ -20484,7 +20529,7 @@ mod tests {
     fn clicking_a_running_nav_row_focuses_its_pane_and_reaims_fullscreen(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-click", 2);
         cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+            cx.bind_keys([KeyBinding::new("cmd-shift-enter", ToggleFullscreen, None)]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
@@ -20516,7 +20561,7 @@ mod tests {
             assert_eq!(view.focused(), 1, "the click moved focus to the row's Pane");
         });
 
-        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_keystrokes("cmd-shift-enter");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.roster().fullscreen(),
@@ -22848,6 +22893,42 @@ mod tests {
                 Some(Provider::Claude)
             );
         });
+    }
+
+    /// A menu row names the key that does the same thing: a chord the
+    /// keymap binds, never one it has moved (⌘F is find, not fullscreen).
+    #[gpui::test]
+    fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("menu-shortcuts", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let bound: Vec<String> = crate::keymap::bindings(crate::keymap::PLATFORM)
+            .into_iter()
+            .map(|(keys, _, _)| crate::components::spell_chord(&keys))
+            .collect();
+        view.read_with(cx, |view, _| {
+            let thread = view.panes[0].thread().unwrap();
+            for target in [MenuTarget::Thread(thread), MenuTarget::Pane(thread)] {
+                for (item, _) in view.context_rows(target).into_iter().flatten() {
+                    if let Some(keys) = &item.shortcut {
+                        assert!(
+                            bound.iter().any(|chord| chord == keys.as_ref()),
+                            "{}: {keys} is bound to nothing",
+                            item.label
+                        );
+                    }
+                }
+            }
+        });
+        let fullscreen = view.read_with(cx, |view, _| {
+            let thread = view.panes[0].thread().unwrap();
+            view.context_rows(MenuTarget::Pane(thread))
+                .into_iter()
+                .flatten()
+                .find(|(_, verb)| *verb == MenuVerb::Fullscreen)
+                .and_then(|(item, _)| item.shortcut)
+        });
+        assert_eq!(fullscreen.as_deref(), Some("cmd-shift-⏎"));
     }
 
     /// A right-click on a Pane summons the menu for its Thread; escape

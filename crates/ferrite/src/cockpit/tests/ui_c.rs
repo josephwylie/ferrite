@@ -423,7 +423,7 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
         cx.notify();
     });
     tick(cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
