@@ -4238,6 +4238,10 @@ impl CockpitView {
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
         }
+        crate::visual::diagram::set_enabled(
+            self.prefs.settings.visuals != ferrite_core::visual::Level::Off,
+            cx,
+        );
         if self.facts.set_auto_title(self.prefs.settings.auto_title) {
             self.parked_changed(cx);
             for thread in self.cockpit.threads() {

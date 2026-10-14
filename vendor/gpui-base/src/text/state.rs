@@ -101,6 +101,7 @@ pub struct TextViewState {
     pub(super) clamped: bool,
     pub(super) text_view_style: TextViewStyle,
     pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
+    pub(super) code_block_view: Option<std::sync::Arc<super::text_view::CodeBlockViewFn>>,
     pub(super) code_block_highlighter: Option<std::sync::Arc<CodeBlockHighlighterFn>>,
     pub(super) table_actions: Option<std::sync::Arc<TableActionsFn>>,
     pub(super) link_renderer: Option<std::sync::Arc<super::text_view::LinkRendererFn>>,
@@ -201,6 +202,7 @@ impl TextViewState {
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)).measure_all(),
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
@@ -612,6 +614,7 @@ impl Render for TextViewState {
         let mut node_cx = self.parsed_content.node_cx.clone();
 
         node_cx.code_block_actions = self.code_block_actions.clone();
+        node_cx.code_block_view = self.code_block_view.clone();
         node_cx.code_block_highlighter = self.code_block_highlighter.clone();
         node_cx.table_actions = self.table_actions.clone();
         node_cx.link_click_handler = self.link_click_handler.clone();

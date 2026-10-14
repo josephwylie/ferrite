@@ -227,6 +227,7 @@ fn main() {
             motion::init(cx);
             register_fonts(cx);
             visual::init(cx);
+            visual::diagram::init(settings.visuals != ferrite_core::visual::Level::Off, cx);
 
             let bindings = load_bindings(keymap::PLATFORM, cx);
             cx.bind_keys(bindings);

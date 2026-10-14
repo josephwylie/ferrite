@@ -27,6 +27,13 @@ selection calculation and copying of offscreen text remain unchanged.
   text run, including wrapped text. Remove this extension when upstream offers
   equivalent inline link rendering and selection support.
 
+- `TextView::code_block_view` lets Ferrite draw a fenced code block as
+  something else (a ` ```mermaid ` fence as its diagram, ADR 0014): the
+  callback receives the block and its native element (code, padding and
+  actions) and returns what to draw in its place. The block stays in the
+  document, so selection and copy keep its source. Remove when upstream
+  offers custom code block rendering.
+
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
 tables, rules and custom blocks, including nested siblings and virtualized

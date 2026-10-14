@@ -62,7 +62,7 @@ fn page_width() -> u32 {
 /// Longest a render may take, start to answer.
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// A page that sends nothing new for this long has settled.
-const SETTLE: Duration = Duration::from_millis(300);
+pub(super) const SETTLE: Duration = Duration::from_millis(300);
 /// After the first frame, take what there is after this long even if the
 /// page keeps painting (an animation never settles).
 const SETTLE_MAX: Duration = Duration::from_secs(3);
@@ -132,7 +132,7 @@ pub(crate) async fn snapshot(
 }
 
 /// The frame is the page at its reported height (a frame can lag a resize).
-fn frame_matches(frame: Option<&Frame>, height: Option<u32>, scale: f32) -> bool {
+pub(super) fn frame_matches(frame: Option<&Frame>, height: Option<u32>, scale: f32) -> bool {
     match (frame, height) {
         (Some(frame), Some(height)) => (frame.height as f32 - height as f32 * scale).abs() <= 1.0,
         (Some(_), None) => true,
@@ -232,7 +232,7 @@ pub(crate) fn start(cx: &mut App) -> RenderQueue {
 }
 
 /// The engine, waiting for Chromium to start if this is the first visual.
-async fn engine(cx: &AsyncApp) -> Result<Rc<dyn Engine>, String> {
+pub(super) async fn engine(cx: &AsyncApp) -> Result<Rc<dyn Engine>, String> {
     let started = Instant::now();
     loop {
         match cx.update(Visuals::engine) {
