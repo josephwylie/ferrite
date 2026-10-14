@@ -8,7 +8,7 @@ use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use ferrite_core::cockpit::{RssSampler, SpawnRequest, Spawner};
+use ferrite_core::cockpit::{Preparation, RssSampler, SpawnRequest, Spawner};
 use ferrite_core::providers::{
     ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session, SettingAck,
 };
@@ -104,7 +104,7 @@ impl Spawner for Spawn {
                     match discovered {
                         Ok(found) => rows.extend(found),
                         Err(error) => {
-                            eprintln!("ferrite: native session discovery failed: {error}");
+                            ferrite_core::log!("native session discovery failed: {error}");
                             rows.extend(ferrite_core::import::candidates(&[(provider, root)], cap));
                         }
                     }
@@ -167,7 +167,7 @@ impl Spawner for Spawn {
                     Ok(models) => {
                         let _ = claude.send((Provider::Claude, models));
                     }
-                    Err(error) => eprintln!("ferrite: could not discover Claude models: {error}"),
+                    Err(error) => ferrite_core::log!("could not discover Claude models: {error}"),
                 }
             })
             .ok()?;
@@ -179,7 +179,7 @@ impl Spawner for Spawn {
                     Ok(models) => {
                         let _ = tx.send((Provider::Codex, models));
                     }
-                    Err(error) => eprintln!("ferrite: could not discover Codex models: {error}"),
+                    Err(error) => ferrite_core::log!("could not discover Codex models: {error}"),
                 }
             })
             .ok()?;
@@ -193,9 +193,22 @@ impl Spawner for Spawn {
     }
 
     fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
+        self.start_after(Box::new(|| Ok(())), request)
+    }
+
+    /// The preparation runs on the spawning thread, ahead of the CLI: a
+    /// revived Thread's stagger and git calls never hold the window.
+    fn start_after(
+        &mut self,
+        prepare: Preparation,
+        request: SpawnRequest,
+    ) -> io::Result<SessionLifecycle> {
         let config = self.config(request);
         let defaults = self.defaults.clone();
-        SessionLifecycle::background(move || config.spawn(defaults))
+        SessionLifecycle::background(move || {
+            prepare()?;
+            config.spawn(defaults)
+        })
     }
 }
 

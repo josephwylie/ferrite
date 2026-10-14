@@ -8,6 +8,7 @@ pub mod activity;
 pub mod cadence;
 pub mod clock;
 pub mod cockpit;
+pub mod diagnostics;
 pub mod docview;
 pub mod draft;
 pub mod followup;

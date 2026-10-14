@@ -6,6 +6,7 @@
 pub(crate) mod beside;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;
+mod leaving;
 mod palette;
 mod parts;
 pub(crate) mod subagents;
@@ -498,6 +499,10 @@ pub struct CockpitView {
     cli_updates: crate::cli_updates::CliUpdates,
     /// Whether the window has said the store is read-only (ADR 0009).
     read_only_told: bool,
+    /// Whether the window has said `settings.json` could not be used.
+    unreadable_told: bool,
+    /// Whether "Quit Ferrite?" is on screen (`leaving`).
+    leave_asked: bool,
     group_error: Option<SharedString>,
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
@@ -561,6 +566,9 @@ pub struct Preferences {
     /// them. False in the test and demo constructors, so no suite reaches
     /// the registry or runs an installer.
     pub cli_updates: bool,
+    /// Why `settings.json` could not be used, when it could not: the
+    /// window says so, and saves nothing over the file (`change_settings`).
+    pub unreadable: Option<String>,
 }
 
 impl Preferences {
@@ -575,6 +583,7 @@ impl Preferences {
             )),
             titler: false,
             cli_updates: false,
+            unreadable: None,
         }
     }
 }
@@ -1437,6 +1446,8 @@ impl CockpitView {
             shown_version: env!("CARGO_PKG_VERSION").into(),
             cli_updates: Default::default(),
             read_only_told: false,
+            unreadable_told: false,
+            leave_asked: false,
             group_error: None,
             bell: Bell::new(),
             floats: palette::Floats::new(cx),
@@ -1922,11 +1933,8 @@ impl CockpitView {
         let now = cx.background_executor().now();
         if now.duration_since(self.swept) >= SWEEP_INTERVAL {
             self.swept = now;
+            // The core logs each restart (`Cockpit::sweep`).
             for restart in self.cockpit.sweep() {
-                eprintln!(
-                    "ferrite: restarted thread {} after {} bytes resident",
-                    restart.thread, restart.rss
-                );
                 restarted.push(restart.thread);
             }
             // Redraw only for what moved: a fact, a working Thread's clock
@@ -2873,7 +2881,7 @@ impl CockpitView {
             None => return,
         };
         if !ready {
-            eprintln!("ferrite: {what}");
+            ferrite_core::log!("{what}");
             return;
         }
         for provider in self.cli_updates.ready() {
@@ -4221,9 +4229,64 @@ impl CockpitView {
         );
     }
 
-    /// Every change to the settings goes through here: saved at once, the
-    /// Session defaults the spawner reads refreshed, and the facts that
-    /// depend on a setting re-derived.
+    /// Settings › About's Diagnostics: what a bug report needs, on the
+    /// clipboard (`ferrite_core::diagnostics::report`).
+    fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let (claude, codex) = self
+            .cli_versions
+            .clone()
+            .unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+        let facts = [
+            (
+                "Version",
+                version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV),
+            ),
+            (
+                "Platform",
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            ),
+            ("Claude CLI", claude.to_string()),
+            ("Codex CLI", codex.to_string()),
+            ("Open Threads", self.cockpit.threads().len().to_string()),
+        ];
+        let report = ferrite_core::diagnostics::report(&self.prefs.dir, &facts);
+        cx.write_to_clipboard(ClipboardItem::new_string(report));
+        self.settings_copied = Some("Diagnostics");
+        cx.notify();
+    }
+
+    /// A `settings.json` that could not be used is said once and kept on
+    /// screen: the window runs on the defaults and saves nothing over the
+    /// file, so a change made now lasts only until Ferrite quits.
+    fn present_unreadable_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        if self.unreadable_told {
+            return;
+        }
+        let Some(reason) = &self.prefs.unreadable else {
+            return;
+        };
+        self.unreadable_told = true;
+        let path = self.prefs.dir.join(ferrite_core::settings::Settings::FILE);
+        window.push_notification(
+            Notification::new()
+                .title("Settings could not be read")
+                .message(format!(
+                    "{}: {reason}. Ferrite is using the defaults and will not save over \
+                     the file; fix or remove it, then relaunch.",
+                    path.display()
+                ))
+                .with_type(NotificationType::Warning)
+                .autohide(false),
+            cx,
+        );
+    }
+
+    /// Every change to the settings goes through here: saved at once
+    /// (unless the file on disk could not be read, which is kept as it
+    /// is), the Session defaults the spawner reads refreshed, and the facts
+    /// that depend on a setting re-derived.
     fn change_settings(
         &mut self,
         change: impl FnOnce(&mut ferrite_core::settings::Settings),
@@ -4232,8 +4295,10 @@ impl CockpitView {
         change(&mut self.prefs.settings);
         self.cockpit
             .set_suggestions_enabled(self.prefs.settings.placeholder_suggestions);
-        if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
-            self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
+        if self.prefs.unreadable.is_none() {
+            if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
+                self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
+            }
         }
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
@@ -4543,6 +4608,20 @@ impl CockpitView {
                     .to_string(),
                 copied == Some("Settings file"),
                 copy("Settings file", cx),
+            ),
+            prefs::action(
+                "settings-copy-diagnostics",
+                "Diagnostics",
+                "Version, platform, the CLIs, the newest crash report and the end of \
+                 the log, for a bug report",
+                self.prefs.dir.join("logs").display().to_string().into(),
+                Some(if copied == Some("Diagnostics") { "Copied" } else { "Copy" }.into()),
+                {
+                    let view = cx.entity().downgrade();
+                    move |cx| {
+                        let _ = view.update(cx, |view, cx| view.copy_diagnostics(cx));
+                    }
+                },
             ),
         ];
         let pages = vec![
@@ -5201,7 +5280,7 @@ impl CockpitView {
                     self.parked_changed(cx);
                 }
                 Err(error) => {
-                    eprintln!("ferrite: thread {thread} could not be woken: {error:?}")
+                    ferrite_core::log!("thread {thread} could not be woken: {error:?}")
                 }
             }
             cx.notify();
@@ -6797,8 +6876,8 @@ impl CockpitView {
                     // Durable but not on screen: the Thread sits in the
                     // nav's parked rows, exactly like a launch-time import
                     // that would not open.
-                    eprintln!(
-                        "ferrite: imported thread {} would not open: {error:?}",
+                    ferrite_core::log!(
+                        "imported thread {} would not open: {error:?}",
                         adopted.thread
                     );
                 } else if let Some(index) = from.draft().and_then(|_| self.index_of(from)) {
@@ -6808,7 +6887,7 @@ impl CockpitView {
                     self.panes[index].adopt_thread(adopted.thread);
                 }
                 if let Some(error) = &adopted.blank_kept {
-                    eprintln!("ferrite: the blank thread stayed open: {error}");
+                    ferrite_core::log!("the blank thread stayed open: {error}");
                 }
                 self.sync_panes(cx);
                 // A draft that became the import keeps its Pane, so the
@@ -7655,7 +7734,7 @@ impl CockpitView {
                     self.group_error = None;
                 }
                 if let Some(error) = done.refused_leave {
-                    eprintln!("ferrite: group change refused: {error}");
+                    ferrite_core::log!("group change refused: {error}");
                     self.group_error = Some(error.to_string().into());
                 }
                 if self.popover.as_ref().is_some_and(|open| {
@@ -8415,7 +8494,7 @@ impl CockpitView {
         match self.cockpit.drop(drag.drag, drag.origin, target) {
             Ok(()) => self.group_error = None,
             Err(error) => {
-                eprintln!("ferrite: group change refused: {error}");
+                ferrite_core::log!("group change refused: {error}");
                 self.group_error = Some(error.to_string().into());
             }
         }
@@ -8432,7 +8511,7 @@ impl CockpitView {
                 self.sync_panes(cx);
                 cx.notify();
             }
-            Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
+            Err(e) => ferrite_core::log!("thread {thread} could not be reopened: {e:?}"),
         }
     }
 
@@ -8503,7 +8582,7 @@ impl CockpitView {
                 cx.notify();
             }
             Some((thread, Err(e))) => {
-                eprintln!("ferrite: thread {thread} could not be reopened: {e:?}")
+                ferrite_core::log!("thread {thread} could not be reopened: {e:?}")
             }
             None => {}
         }
@@ -8555,10 +8634,10 @@ impl CockpitView {
                 }
             }
             Err(CloseError::Park(e)) => {
-                eprintln!("ferrite: pane {identity:?} did not park cleanly: {e}")
+                ferrite_core::log!("pane {identity:?} did not park cleanly: {e}")
             }
             Err(CloseError::Group(error)) => {
-                eprintln!("ferrite: group change refused: {error}");
+                ferrite_core::log!("group change refused: {error}");
                 self.group_error = Some(error.to_string().into());
             }
         }
@@ -9206,6 +9285,7 @@ impl CockpitView {
         self.present_notices(window, cx);
         self.present_cli_updates(window, cx);
         self.present_read_only(window, cx);
+        self.present_unreadable_settings(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -13220,9 +13300,11 @@ mod tests {
     mod composer_controls;
     mod core_transcript_parity;
     mod decisions_parity;
+    mod diagnostics;
     mod floats_parity;
     mod frame_parity;
     mod layout_polish;
+    mod leaving;
     mod loops_overlay;
     mod nav_parity;
     mod provider_controls;
@@ -22672,7 +22754,7 @@ mod tests {
         tick(cx);
         let size = |cx: &mut gpui::VisualTestContext| {
             view.read_with(cx, |view, _| {
-                let saved = Settings::load(&view.prefs.dir).reading_size;
+                let saved = Settings::load(&view.prefs.dir).unwrap().reading_size;
                 assert_eq!(saved, view.prefs.settings.reading_size, "saved at once");
                 saved
             })
@@ -22785,7 +22867,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.prefs.settings.default_provider, Provider::Codex);
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).default_provider,
+                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().default_provider,
                 Provider::Codex,
                 "the restyled component must save through the real settings action"
             );
@@ -22812,7 +22894,7 @@ mod tests {
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).reading_size,
+                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().reading_size,
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
         });
@@ -22829,7 +22911,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.prefs.settings.confirm_delete);
-            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).confirm_delete);
+            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().confirm_delete);
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes("escape");
@@ -22878,7 +22960,7 @@ mod tests {
                 cx,
             );
         });
-        let saved = ferrite_core::settings::Settings::load(&dir);
+        let saved = ferrite_core::settings::Settings::load(&dir).unwrap();
         assert_eq!(saved.default_provider, Provider::Codex, "saved on change");
         assert_eq!(saved.claude_permission_mode.as_deref(), Some("acceptEdits"));
         view.read_with(cx, |view, _| {

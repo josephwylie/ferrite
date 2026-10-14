@@ -143,8 +143,8 @@ impl CliUpdates {
                 *self.state_mut(provider) = State::Current(status);
             }
             Err(error) => {
-                eprintln!(
-                    "ferrite: could not check for a newer {}: {error}",
+                ferrite_core::log!(
+                    "could not check for a newer {}: {error}",
                     name(provider)
                 );
                 *self.state_mut(provider) = State::Unchecked;

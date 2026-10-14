@@ -147,7 +147,7 @@ impl Shelf {
             open_in_browser: Rc::new(move |_, cx| {
                 match write_standalone(&id, &html, &theme_css(reading)) {
                     Ok(path) => cx.open_url(&format!("file://{}", path.display())),
-                    Err(error) => eprintln!("ferrite: could not write the visual for a browser: {error}"),
+                    Err(error) => ferrite_core::log!("could not write the visual for a browser: {error}"),
                 }
             }),
             copy_html: Rc::new(move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string((*copied).clone()))),

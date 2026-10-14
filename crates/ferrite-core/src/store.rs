@@ -1758,6 +1758,30 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
     Some((meta.len(), modified))
 }
 
+/// Put `bytes` in place of a small whole-file document (the settings, the
+/// registry, the Groups) so that a crash or power cut at any moment leaves
+/// the old file or the new one, never a torn one: written beside, synced
+/// behind a barrier so the contents reach the drive before the rename can
+/// (ADR 0009), renamed over. A symlinked file is written through to its
+/// target, so the link the operator made survives.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        fs::canonicalize(path)?
+    } else {
+        path.to_path_buf()
+    };
+    let tmp = temp_beside(&path);
+    (|| {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        sync_ordered(&file)?;
+        rename_over(&tmp, &path)
+    })()
+    .inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
+}
+
 /// A name for a file written beside a log and renamed over it. Never a
 /// shared name: two writers must not truncate each other's temp file.
 fn temp_beside(path: &Path) -> PathBuf {

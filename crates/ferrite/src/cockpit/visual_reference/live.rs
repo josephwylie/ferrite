@@ -426,6 +426,7 @@ pub(crate) fn capture(output: String) {
         defaults,
         titler: true,
         cli_updates: false,
+        unreadable: None,
     };
     let window = cx
         .open_window(gpui::size(gpui::px(1440.), gpui::px(900.)), |window, cx| {

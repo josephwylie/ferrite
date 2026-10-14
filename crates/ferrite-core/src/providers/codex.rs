@@ -23,7 +23,7 @@ mod requests;
 pub(super) mod wire;
 pub(crate) use wire::file_change_diffs;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -284,7 +284,7 @@ impl CodexSession {
 
     fn spawn_once(program: &str, config: &CodexConfig) -> Result<Self, CodexSpawnError> {
         let mut command = Command::new(program);
-        command.arg("app-server").no_console_window();
+        command.arg("app-server").no_console_window().agent_environment();
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -1347,8 +1347,8 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
         });
     }
     if version >= CODEX_CLI_TESTED_BELOW {
-        eprintln!(
-            "ferrite: codex CLI {found} is newer than Ferrite is tested against \
+        crate::log!(
+            "codex CLI {found} is newer than Ferrite is tested against \
              (below {TESTED_BELOW_DISPLAY}); running it anyway"
         );
     }

@@ -17,7 +17,7 @@ mod shell_output;
 mod suggestions;
 pub(super) mod wire;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -221,7 +221,7 @@ impl ClaudeSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
-        command.no_console_window();
+        command.no_console_window().agent_environment();
         command.args([
             "-p",
             "--input-format",
@@ -1074,8 +1074,8 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
         });
     }
     if version >= CLAUDE_CLI_TESTED_BELOW {
-        eprintln!(
-            "ferrite: claude CLI {found} is newer than Ferrite is tested against \
+        crate::log!(
+            "claude CLI {found} is newer than Ferrite is tested against \
              (below {TESTED_BELOW_DISPLAY}); running it anyway"
         );
     }
