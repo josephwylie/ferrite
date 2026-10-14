@@ -162,11 +162,15 @@ impl CockpitView {
         };
         let review = review.downgrade();
         cx.spawn(async move |_, cx| {
-            let edits = parse_git_diff(&diff.await);
+            let diff = diff.await;
             review
                 .update(cx, |review, cx| {
-                    if review.scope() == scope {
-                        review.show(scope, edits, cx);
+                    if review.scope() != scope {
+                        return;
+                    }
+                    match diff {
+                        Ok(diff) => review.show(scope, parse_git_diff(&diff), cx),
+                        Err(error) => review.fail(error, cx),
                     }
                 })
                 .ok();
@@ -414,45 +418,56 @@ fn numbered_lines(
     .into_any_element()
 }
 
-/// `git diff --no-color base...HEAD` in `workspace`.
-fn git_diff(workspace: &Path, base: &str) -> String {
-    git_read(
-        workspace,
-        &["diff", "--no-color", &format!("{base}...HEAD")],
-    )
+/// `git diff --no-color base...HEAD` in `workspace`, against
+/// `origin/<base>` when only the remote has the branch.
+fn git_diff(workspace: &Path, base: &str) -> Result<String, String> {
+    let diff = |base: &str| {
+        git_read(
+            workspace,
+            &["diff", "--no-color", &format!("{base}...HEAD")],
+        )
+    };
+    diff(base).or_else(|error| diff(&format!("origin/{base}")).map_err(|_| error))
 }
 
 /// The checkout against its last commit, staged or not, and each untracked
 /// file as all-new (`git diff --no-index /dev/null <file>`).
-fn git_uncommitted(workspace: &Path) -> String {
-    let mut diff = git_read(workspace, &["diff", "--no-color", "HEAD"]);
+fn git_uncommitted(workspace: &Path) -> Result<String, String> {
+    let mut diff = git_read(workspace, &["diff", "--no-color", "HEAD"])?;
     let untracked = git_read(
         workspace,
         &["ls-files", "--others", "--exclude-standard", "-z"],
-    );
+    )?;
     for path in untracked.split('\0').filter(|path| !path.is_empty()) {
         diff.push_str(&git_read(
             workspace,
             &["diff", "--no-color", "--no-index", "--", "/dev/null", path],
-        ));
+        )?);
     }
-    diff
+    Ok(diff)
 }
 
-/// What a git read in `workspace` printed; empty when git is not there or
-/// refuses. Exit 1 still counts: `diff --no-index` says "they differ" so.
-fn git_read(workspace: &Path, args: &[&str]) -> String {
-    std::process::Command::new("git")
+/// What a git read in `workspace` printed, or the first line of why git
+/// refused. Exit 1 still counts: `diff --no-index` says "they differ" so.
+fn git_read(workspace: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
         .arg("-C")
         .arg(workspace)
         .args(args)
         // A read, never a lock on the index an agent may be writing.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
-        .ok()
-        .filter(|out| matches!(out.status.code(), Some(0 | 1)))
-        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-        .unwrap_or_default()
+        .map_err(|error| format!("git: {error}"))?;
+    if matches!(out.status.code(), Some(0 | 1)) {
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(stderr
+        .lines()
+        .next()
+        .unwrap_or("git failed")
+        .trim()
+        .to_string())
 }
 
 /// git's multi-file unified diff into file edits: one per `diff --git`
@@ -614,7 +629,7 @@ deleted file mode 100644
         std::fs::write(dir.join("kept.rs"), "two\n").unwrap();
         std::fs::write(dir.join("new file.rs"), "fresh\n").unwrap();
         std::fs::write(dir.join("target"), "built\n").unwrap();
-        let edits = parse_git_diff(&git_uncommitted(&dir));
+        let edits = parse_git_diff(&git_uncommitted(&dir).unwrap());
         let files: Vec<(&str, &[String])> = edits
             .iter()
             .map(|edit| (edit.path.as_str(), edit.hunks[0].lines.as_slice()))
@@ -626,6 +641,39 @@ deleted file mode 100644
                 ("new file.rs", &["+fresh".to_string()][..]),
             ]
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The branch scope falls back to the remote's base when the checkout
+    /// has no local one, and says why when neither resolves.
+    #[test]
+    fn the_branch_reads_against_the_remote_base_when_only_it_exists() {
+        let dir = std::env::temp_dir().join(format!("ferrite-branch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "operator@example.invalid"]);
+        git(&["config", "user.name", "operator"]);
+        std::fs::write(dir.join("a.rs"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "root"]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["checkout", "-q", "-b", "dev"]);
+        git(&["branch", "-q", "-D", "main"]);
+        std::fs::write(dir.join("a.rs"), "two\n").unwrap();
+        git(&["commit", "-q", "-am", "two"]);
+        let edits = parse_git_diff(&git_diff(&dir, "main").unwrap());
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].hunks[0].lines, ["-one", "+two"]);
+        assert!(git_diff(&dir, "trunk").is_err_and(|error| !error.is_empty()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

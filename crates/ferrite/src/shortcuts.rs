@@ -177,7 +177,9 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::ExtendPrevious"
         | "review::ExtendNext"
         | "review::Comment"
+        | "review::Uncomment"
         | "review::NextScope"
+        | "review::Reread"
         | "review::Close"
         | "review::SaveComment"
         | "review::CancelComment" => Hidden,

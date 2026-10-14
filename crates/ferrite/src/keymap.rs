@@ -374,16 +374,18 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ),
         // The Review slot (ADR 0021), while it holds the keyboard and no
         // field in it is open: ↑↓ walk the lines, ⇧↑↓ stretch the pick, c
-        // or ⏎ comment on it, ⇥ steps the scope, esc closes the slot. In
-        // its comment field ⏎ adds and esc cancels. Bound after the bare
-        // rows they shadow.
+        // or ⏎ comment on it, ⌫ takes a comment back, ⇥ steps the scope,
+        // r rereads it, esc closes the slot. In its comment field ⏎ adds
+        // and esc cancels. Bound after the bare rows they shadow.
         ("up".into(), "review::Previous", Some(REVIEW)),
         ("down".into(), "review::Next", Some(REVIEW)),
         ("shift-up".into(), "review::ExtendPrevious", Some(REVIEW)),
         ("shift-down".into(), "review::ExtendNext", Some(REVIEW)),
         ("c".into(), "review::Comment", Some(REVIEW)),
         ("enter".into(), "review::Comment", Some(REVIEW)),
+        ("backspace".into(), "review::Uncomment", Some(REVIEW)),
         ("tab".into(), "review::NextScope", Some(REVIEW)),
+        ("r".into(), "review::Reread", Some(REVIEW)),
         ("escape".into(), "review::Close", Some(REVIEW)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
         (
@@ -828,7 +830,9 @@ mod tests {
                 ("up", "review::Previous"),
                 ("shift-down", "review::ExtendNext"),
                 ("c", "review::Comment"),
+                ("backspace", "review::Uncomment"),
                 ("tab", "review::NextScope"),
+                ("r", "review::Reread"),
                 ("escape", "review::Close"),
             ] {
                 assert!(

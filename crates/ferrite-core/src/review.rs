@@ -108,6 +108,16 @@ pub struct Line {
     pub text: String,
 }
 
+impl Line {
+    /// Where the line sits: its new number, or its old one if removed.
+    pub fn place(&self) -> (Side, u32) {
+        match (self.new, self.old) {
+            (Some(new), _) => (Side::New, new),
+            (None, old) => (Side::Old, old.unwrap_or_default()),
+        }
+    }
+}
+
 /// Every diff line of `edits`, numbered, in drawing order.
 pub fn lines(edits: &[FileEdit]) -> Vec<Line> {
     let mut lines = Vec::new();
@@ -213,6 +223,9 @@ pub struct Comment {
     pub side: Side,
     pub start: u32,
     pub end: u32,
+    /// Where the selection's last line sits (`Line::place`): the row the
+    /// comment hangs under, which `end` misses when that line was removed.
+    pub last: (Side, u32),
     /// The selected diff lines, markers kept, so the agent sees exactly
     /// what was looked at.
     pub quote: Vec<String>,
@@ -230,7 +243,7 @@ impl Comment {
     ) -> Option<Self> {
         let text = text.trim();
         let picked = lines.get(selection.first()..=selection.last())?;
-        let first = picked.first()?;
+        let (first, last) = (picked.first()?, picked.last()?);
         if text.is_empty() {
             return None;
         }
@@ -248,23 +261,19 @@ impl Comment {
             side,
             start: *numbers.iter().min()?,
             end: *numbers.iter().max()?,
+            last: last.place(),
             quote: picked.iter().map(|line| line.text.clone()).collect(),
             text: text.to_string(),
         })
     }
 
     /// Whether this comment hangs under `line` of a review of `path`: the
-    /// line its range ends on, in its own numbering, reading as it did.
+    /// selection's last line, where it sits and reading as it did.
     /// A comment carries no scope or edit, so the same path, number and
     /// text elsewhere (another edit of the file in the last turn) takes it
     /// too; the text keeps it off every other line that shares the number.
     pub fn ends_at(&self, path: &str, line: &Line) -> bool {
-        let number = match self.side {
-            Side::New => line.new,
-            Side::Old if line.new.is_none() => line.old,
-            Side::Old => None,
-        };
-        self.path == path && number == Some(self.end) && self.quote.last() == Some(&line.text)
+        self.path == path && self.last == line.place() && self.quote.last() == Some(&line.text)
     }
 
     /// `src/a.rs:12-14`, or `src/a.rs:30 (removed)` for old-side lines.
@@ -422,6 +431,21 @@ mod tests {
         assert!(Comment::on(&edits, &lines, Selection::at(0), "  ").is_none());
     }
 
+    /// A range ending on a removed line is numbered on the new side, but
+    /// hangs under that removed line, and only there.
+    #[test]
+    fn a_comment_ending_on_a_removed_line_hangs_under_it() {
+        let edits = edits();
+        let lines = lines(&edits);
+        let comment =
+            Comment::on(&edits, &lines, Selection::at(0).extend_to(1, &lines), "hm").unwrap();
+        assert_eq!(comment.location(), "src/a.rs:10");
+        let under: Vec<usize> = (0..lines.len())
+            .filter(|at| comment.ends_at("src/a.rs", &lines[*at]))
+            .collect();
+        assert_eq!(under, [1]);
+    }
+
     /// The prompt keeps the operator's words first and quotes each
     /// comment's lines in a fence no quoted backticks can close.
     #[test]
@@ -431,6 +455,7 @@ mod tests {
             side: Side::New,
             start: 4,
             end: 4,
+            last: (Side::New, 4),
             quote: vec!["+```rust".into()],
             text: "Close this fence.".into(),
         };

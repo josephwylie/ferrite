@@ -9,18 +9,21 @@
 //! file's path over its first line and each hunk's section over its own.
 //! A click picks a line, a shift-click stretches the pick to a range in the
 //! same file; ↑↓ and ⇧↑↓ do the same from the keyboard. `c` (or ⏎, or the
-//! `+ comment` beside the pick) opens a one-line field under it; ⏎ there
-//! adds the comment to the Pane's Composer, where it waits on the shelf for
-//! the next send (`review::attach`). The cockpit loads each scope's edits
-//! (`cockpit/beside.rs`) and hands them over with `show`.
+//! `+ comment` beside the pick) opens a one-line field under it; ⏎ (or its
+//! `add`) there adds the comment to the Pane's Composer, where it waits on
+//! the shelf for the next send (`review::attach`). ⌫ (or a comment's `×`)
+//! takes back the latest comment under the pick. The cockpit loads each
+//! scope's edits (`cockpit/beside.rs`) and hands them over with `show`;
+//! they are a snapshot, read again on `r` or on picking the scope again.
 
 use ferrite_core::review::{self, Line, Scope, Selection};
 use ferrite_core::FileEdit;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, ScrollHandle, SharedString, StyledText, Window,
+    Focusable, HighlightStyle, ScrollHandle, SharedString, StyledText, Window,
 };
+use std::ops::Range;
 
 use crate::composer::{Composer, Role};
 use crate::pane::{DiffKind, Grid};
@@ -31,13 +34,16 @@ gpui::actions!(
     review,
     [
         // In the `Review` context: walk and stretch the pick, comment on
-        // it, step the scope, close the slot.
+        // it or take a comment back, step or reread the scope, close the
+        // slot.
         Next,
         Previous,
         ExtendNext,
         ExtendPrevious,
         Comment,
+        Uncomment,
         NextScope,
+        Reread,
         Close,
         // In the comment field's `ReviewComment` context.
         SaveComment,
@@ -46,11 +52,13 @@ gpui::actions!(
 );
 
 /// The slot's keys, as its footer spells them.
-const FOOTER: [(&str, &str); 5] = [
+const FOOTER: [(&str, &str); 7] = [
     ("\u{2191}\u{2193}", "line"),
     ("\u{21e7}\u{2191}\u{2193}", "range"),
     ("c", "comment"),
+    ("\u{232b}", "uncomment"),
     ("\u{21e5}", "scope"),
+    ("r", "reread"),
     ("esc", ""),
 ];
 
@@ -68,7 +76,11 @@ pub(crate) struct ReviewView {
     scope: Scope,
     /// `None` while the scope's edits are being read.
     edits: Option<Vec<FileEdit>>,
+    /// Why the scope could not be read (git's own words).
+    error: Option<String>,
     lines: Vec<Line>,
+    /// Each line's syntax colours, worked out once per read.
+    highlights: Vec<Vec<(Range<usize>, HighlightStyle)>>,
     selection: Option<Selection>,
     /// The comment being written under the pick.
     editor: Option<Entity<Composer>>,
@@ -90,7 +102,9 @@ impl ReviewView {
             scroll: ScrollHandle::new(),
             scope,
             edits: None,
+            error: None,
             lines: Vec::new(),
+            highlights: Vec::new(),
             selection: None,
             editor: None,
         }
@@ -133,10 +147,28 @@ impl ReviewView {
     pub(crate) fn show(&mut self, scope: Scope, edits: Vec<FileEdit>, cx: &mut Context<Self>) {
         self.scope = scope;
         self.lines = review::lines(&edits);
+        self.highlights = self
+            .lines
+            .iter()
+            .map(|line| {
+                let path = std::path::Path::new(&edits[line.edit].path);
+                let language = ferrite_core::transcript::language_for_path(path);
+                let body = line.text.get(1..).unwrap_or_default();
+                let tokens = ferrite_core::transcript::highlight_tokens(language, body);
+                crate::pane::code(body, Some(tokens.as_slice()))
+            })
+            .collect();
         self.edits = Some(edits);
+        self.error = None;
         self.selection = (!self.lines.is_empty()).then(|| Selection::at(0));
         self.editor = None;
         self.scroll.scroll_to_item(0);
+        cx.notify();
+    }
+
+    /// The scope asked for could not be read: say why in place of the diff.
+    pub(crate) fn fail(&mut self, error: String, cx: &mut Context<Self>) {
+        self.error = Some(error);
         cx.notify();
     }
 
@@ -145,7 +177,9 @@ impl ReviewView {
     pub(crate) fn pick_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
         self.scope = scope;
         self.edits = None;
+        self.error = None;
         self.lines.clear();
+        self.highlights.clear();
         self.selection = None;
         self.editor = None;
         cx.emit(ScopePicked(scope));
@@ -213,6 +247,26 @@ impl ReviewView {
         self.close_editor(window, cx);
     }
 
+    /// ⌫: the latest comment hanging under the pick's last line leaves the
+    /// Composer's shelf.
+    fn uncomment(&mut self, cx: &mut Context<Self>) {
+        let (Some(edits), Some(selection)) = (&self.edits, self.selection) else {
+            return;
+        };
+        let line = &self.lines[selection.last()];
+        let path = &edits[line.edit].path;
+        let latest = self
+            .composer
+            .read(cx)
+            .review_comments()
+            .iter()
+            .rposition(|comment| comment.ends_at(path, line));
+        if let Some(index) = latest {
+            self.composer
+                .update(cx, |composer, cx| composer.remove_review_comment(index, cx));
+        }
+    }
+
     /// One diff line's row, with whatever hangs off it: the file's path
     /// over its first line, its hunk's section over a hunk's first, and
     /// under it the comments that end on it and the open field.
@@ -234,10 +288,7 @@ impl ReviewView {
         let last_picked = self.selection.is_some_and(|picked| picked.last() == at);
         let ink = DiffKind::of(&line.text).paint();
         let body = line.text.get(1..).unwrap_or_default().to_string();
-        let language =
-            ferrite_core::transcript::language_for_path(std::path::Path::new(&edit.path));
-        let tokens = ferrite_core::transcript::highlight_tokens(language, &body);
-        let highlights = crate::pane::code(&body, Some(tokens.as_slice()));
+        let highlights = self.highlights[at].clone();
         let (cell, line_h, number_w) = (self.grid.cell(), self.grid.line, self.number_w());
         let number = |number: Option<u32>| {
             crate::components::tabular(
@@ -360,9 +411,28 @@ impl ReviewView {
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
                         div()
+                            .id("review-comment-save")
+                            .debug_selector(|| "review-comment-save".into())
                             .flex_shrink_0()
                             .text_color(rgb(TEXT_MUTED))
-                            .child("\u{21b5} add \u{b7} esc cancel"),
+                            .hover_control("review-comment-save")
+                            .child("\u{21b5} add")
+                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
+                                view.save(window, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("review-comment-cancel")
+                            .flex_shrink_0()
+                            .text_color(rgb(TEXT_MUTED))
+                            .hover_control("review-comment-cancel")
+                            .child("esc cancel")
+                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
+                                view.close_editor(window, cx);
+                            })),
                     ),
             );
         }
@@ -379,7 +449,6 @@ impl ReviewView {
     ) -> AnyElement {
         let cell = self.grid.cell();
         let composer = self.composer.clone();
-        let removed = comment.clone();
         div()
             .debug_selector(|| "review-comment".into())
             .flex()
@@ -405,9 +474,8 @@ impl ReviewView {
                     .child("\u{d7}")
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        composer.update(cx, |composer, cx| {
-                            composer.remove_review_comment(&removed, cx)
-                        });
+                        composer
+                            .update(cx, |composer, cx| composer.remove_review_comment(index, cx));
                     })),
             )
             .into_any_element()
@@ -462,13 +530,18 @@ impl Render for ReviewView {
                     .child(review::stat(edits))
             }));
         let comments = self.composer.read(cx).review_comments().to_vec();
-        let body = match &self.edits {
-            None => crate::menu::note("reading\u{2026}").into_any_element(),
-            Some(edits) if edits.is_empty() => {
+        let body = match (&self.edits, &self.error) {
+            (_, Some(error)) => crate::menu::note(format!(
+                "can\u{2019}t read {} \u{b7} {error}",
+                self.scope.label()
+            ))
+            .into_any_element(),
+            (None, None) => crate::menu::note("reading\u{2026}").into_any_element(),
+            (Some(edits), None) if edits.is_empty() => {
                 crate::menu::note(format!("nothing changed \u{b7} {}", self.scope.label()))
                     .into_any_element()
             }
-            Some(_) => div()
+            (Some(_), None) => div()
                 .id("review-lines")
                 .debug_selector(|| "review-lines".into())
                 .flex()
@@ -496,6 +569,8 @@ impl Render for ReviewView {
             .on_action(cx.listener(|view, _: &ExtendNext, _, cx| view.step(true, true, cx)))
             .on_action(cx.listener(|view, _: &ExtendPrevious, _, cx| view.step(false, true, cx)))
             .on_action(cx.listener(|view, _: &Comment, window, cx| view.open_editor(window, cx)))
+            .on_action(cx.listener(|view, _: &Uncomment, _, cx| view.uncomment(cx)))
+            .on_action(cx.listener(|view, _: &Reread, _, cx| view.pick_scope(view.scope, cx)))
             .on_action(
                 cx.listener(|view, _: &NextScope, _, cx| view.pick_scope(view.scope.next(), cx)),
             )
@@ -529,8 +604,9 @@ mod tests {
     }
 
     /// The keys walk and stretch the pick, `c` opens the field, ⏎ there
-    /// puts the comment on the Composer's shelf, and the next send carries
-    /// it after the prompt's own words.
+    /// (or its `↵ add`) puts the comment on the Composer's shelf, the next
+    /// send carries it after the prompt's own words, and ⌫ takes comments
+    /// back one at a time.
     #[gpui::test]
     fn a_comment_from_the_keys_rides_the_next_prompt(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -574,6 +650,25 @@ mod tests {
                 .prompt()
                 .starts_with("Review comments on your changes:\n\nsrc/a.rs:1-2\n```diff\n+let a = 2;\n a\n```\nwhy two?"));
         });
+        // A twin by the mouse: the field's `↵ add` saves it too, and ⌫
+        // takes back only the latest under the pick.
+        cx.simulate_keystrokes("c");
+        cx.simulate_input("why two?");
+        let add = cx
+            .debug_bounds("review-comment-save")
+            .expect("the field's add");
+        cx.simulate_click(add.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let count = |cx: &mut gpui::VisualTestContext| {
+            review.read_with(cx, |review, cx| {
+                review.composer.read(cx).review_comments().len()
+            })
+        };
+        assert_eq!(count(cx), 2);
+        cx.simulate_keystrokes("backspace");
+        assert_eq!(count(cx), 1);
+        cx.simulate_keystrokes("backspace backspace");
+        assert_eq!(count(cx), 0);
         cx.simulate_keystrokes("tab");
         review.read_with(cx, |review, _| {
             assert_eq!(review.scope(), Scope::Uncommitted, "⇥ steps the scope");

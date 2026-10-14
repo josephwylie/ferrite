@@ -279,9 +279,12 @@ impl Composer {
         self.edited(cx);
     }
 
-    pub fn remove_review_comment(&mut self, comment: &review::Comment, cx: &mut Context<Self>) {
-        self.review.retain(|kept| kept != comment);
-        self.edited(cx);
+    /// Drop the review comment at `index` on the shelf, and only that one.
+    pub fn remove_review_comment(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.review.len() {
+            self.review.remove(index);
+            self.edited(cx);
+        }
     }
 
     pub fn attachments(
