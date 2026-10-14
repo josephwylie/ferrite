@@ -28,7 +28,7 @@ pub fn adopt_login_environment() -> bool {
                 std::env::set_var(key, value);
             }
         }
-        Err(e) => ferrite_core::log!("the login shell's environment could not be read: {e}"),
+        Err(e) => crate::log!("the login shell's environment could not be read: {e}"),
     }
     true
 }

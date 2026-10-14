@@ -55,7 +55,7 @@ cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], 
 # The same engine on Windows, without `sandbox`: CEF's Windows sandbox only
 # runs inside its bootstrap launcher (ADR 0013), which Ferrite doesn't use.
 cef = { version = "=154.5.0", default-features = false, optional = true }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1", default-features = false }

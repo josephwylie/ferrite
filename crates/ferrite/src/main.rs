@@ -38,8 +38,6 @@ mod review;
 mod rich;
 mod scrollbar;
 mod select;
-mod session;
-mod shell;
 mod shortcuts;
 mod status;
 mod theme;
@@ -57,7 +55,7 @@ use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::ThreadId;
 
 use cockpit::CockpitView;
-use session::{ProcessRss, SessionDefaults};
+use ferrite_core::spawner::{self, ProcessRss, SessionDefaults};
 
 actions!(ferrite, [Quit]);
 
@@ -201,7 +199,7 @@ fn main() {
         .flatten();
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
-    let dock = shell::adopt_login_environment();
+    let dock = ferrite_core::login_shell::adopt_login_environment();
     let args: Vec<String> = std::env::args().collect();
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
@@ -279,7 +277,7 @@ fn main() {
                 // from the app's off-screen browser (ADR 0013).
                 let renderer: std::sync::Arc<dyn ferrite_core::visual::Renderer> =
                     std::sync::Arc::new(visual::renderer::start(cx));
-                Box::new(session::Spawn::new(defaults.clone(), Some(renderer)))
+                Box::new(spawner::Spawn::new(defaults.clone(), Some(renderer)))
             };
             let mut core = if parity {
                 demo::parity_world()

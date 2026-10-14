@@ -394,11 +394,11 @@ pub(crate) fn capture(output: String) {
     // No prediction turns: only what the scenario asks for is spent.
     settings.placeholder_suggestions = false;
     let defaults = std::sync::Arc::new(std::sync::Mutex::new(
-        crate::session::SessionDefaults::from_settings(&settings),
+        ferrite_core::spawner::SessionDefaults::from_settings(&settings),
     ));
     let mut core = Cockpit::try_new(
         Store::open(store_dir.clone()).expect("open the throwaway store"),
-        Box::new(crate::session::Spawn::new(defaults.clone(), None)),
+        Box::new(ferrite_core::spawner::Spawn::new(defaults.clone(), None)),
     )
     .expect("open the throwaway registry");
     core.set_suggestions_enabled(false);

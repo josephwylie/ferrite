@@ -624,7 +624,7 @@ enum RenameTarget {
 pub struct Preferences {
     pub settings: ferrite_core::settings::Settings,
     pub dir: std::path::PathBuf,
-    pub defaults: std::sync::Arc<std::sync::Mutex<crate::session::SessionDefaults>>,
+    pub defaults: std::sync::Arc<std::sync::Mutex<ferrite_core::spawner::SessionDefaults>>,
     /// Whether a model writes Thread titles (each Provider's own CLI, the
     /// cheap model, one turn). False in the test and demo constructors,
     /// so no suite ever spawns a real CLI for a name.
@@ -656,7 +656,7 @@ impl Preferences {
             settings: ferrite_core::settings::Settings::default(),
             dir: std::env::temp_dir().join(format!("ferrite-prefs-{}", std::process::id())),
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::session::SessionDefaults::default(),
+                ferrite_core::spawner::SessionDefaults::default(),
             )),
             titler: false,
             cli_updates: false,
@@ -4324,7 +4324,7 @@ impl CockpitView {
             }
         }
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
-            *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
+            *defaults = ferrite_core::spawner::SessionDefaults::from_settings(&self.prefs.settings);
         }
         crate::visual::diagram::set_enabled(
             self.prefs.settings.visuals != ferrite_core::visual::Level::Off,
@@ -13491,7 +13491,7 @@ fn expand_home(typed: &str) -> std::path::PathBuf {
 
 /// This process's resident memory, for the perf print.
 fn rss_mb() -> f64 {
-    crate::session::rss_bytes(std::process::id())
+    ferrite_core::spawner::rss_bytes(std::process::id())
         .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0)
 }
