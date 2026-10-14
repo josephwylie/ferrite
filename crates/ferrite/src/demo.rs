@@ -64,7 +64,7 @@ pub fn parity_world() -> Cockpit {
     // (the UI thread draws them; this runs on it, before the app starts).
     crate::pane::set_word_marks(parity::word_marks());
     if let Err(e) = std::env::set_current_dir(&world.launch) {
-        eprintln!("ferrite: cannot stand in the parity launch directory: {e}");
+        ferrite_core::log!("cannot stand in the parity launch directory: {e}");
     }
     world.core
 }
@@ -1096,7 +1096,7 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
     for thread in members.into_iter().take(revivable) {
         match core.revive(thread) {
             Ok(()) => open += 1,
-            Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
+            Err(e) => ferrite_core::log!("thread {thread} could not be revived: {e:?}"),
         }
     }
     let parked = core.parked().map(|threads| threads.len()).unwrap_or(0);
@@ -1114,7 +1114,7 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
         match core.open(provider, choice) {
             Ok(_) => open += 1,
             Err(e) => {
-                eprintln!("ferrite: could not open a thread: {e}");
+                ferrite_core::log!("could not open a thread: {e}");
                 break;
             }
         }
@@ -1168,13 +1168,13 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
                 let thread = pool.remove(at);
                 match cockpit.revive(thread) {
                     Ok(()) => shown.push(thread),
-                    Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
+                    Err(e) => ferrite_core::log!("thread {thread} could not be revived: {e:?}"),
                 }
             }
             None => match cockpit.open(want, WorkspaceChoice::Main { checkout: here() }) {
                 Ok(id) => shown.push(id),
                 Err(e) => {
-                    eprintln!("ferrite: could not open a thread: {e}");
+                    ferrite_core::log!("could not open a thread: {e}");
                     break;
                 }
             },
@@ -1218,12 +1218,12 @@ pub fn seed_groups(cockpit: &mut Cockpit, seeded: &[ThreadId], provider: Provide
                 // moment it exists, so the Cockpit stays the size it was
                 // asked for and the row is parked like the prototype's.
                 if let Err(e) = cockpit.park(id) {
-                    eprintln!("ferrite: thread {id} would not park: {e}");
+                    ferrite_core::log!("thread {id} would not park: {e}");
                 }
                 parked.push(id);
             }
             Err(e) => {
-                eprintln!("ferrite: could not open a thread: {e}");
+                ferrite_core::log!("could not open a thread: {e}");
                 break;
             }
         }
@@ -1257,7 +1257,7 @@ fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
     }) {
         Ok(applied) => applied.group,
         Err(e) => {
-            eprintln!("ferrite: could not group threads {seed} and {with}: {e}");
+            ferrite_core::log!("could not group threads {seed} and {with}: {e}");
             return;
         }
     };
@@ -1270,14 +1270,14 @@ fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
             group,
             index: None,
         }) {
-            eprintln!("ferrite: thread {thread} would not join the group: {e}");
+            ferrite_core::log!("thread {thread} would not join the group: {e}");
         }
     }
     if let Err(e) = cockpit.apply_group(GroupChange::Rename {
         group,
         title: title.to_string(),
     }) {
-        eprintln!("ferrite: could not name the group: {e}");
+        ferrite_core::log!("could not name the group: {e}");
     }
 }
 

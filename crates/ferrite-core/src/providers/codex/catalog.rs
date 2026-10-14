@@ -1,6 +1,6 @@
 //! Model discovery without a Thread: initialize, model/list, then exit.
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
@@ -31,6 +31,7 @@ pub(super) fn request_only<T: Send + 'static>(
     let mut child = Command::new(program)
         .arg("app-server")
         .no_console_window()
+        .agent_environment()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
