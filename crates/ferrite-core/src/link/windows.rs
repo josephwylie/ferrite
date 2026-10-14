@@ -288,15 +288,17 @@ fn instance(name: &[u16], first: bool) -> io::Result<Handle> {
 }
 
 /// One pipe per user and Store: the SID, and a hash of the Store's path.
+/// The hash is FNV-1a, which no toolchain changes: an app and a Server
+/// from different builds must name the same pipe.
 fn pipe_name(path: &Path) -> io::Result<Vec<u16>> {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut hasher);
-    let name = format!(
-        r"\\.\pipe\ferrite-server-{}-{:016x}",
-        user_sid()?,
-        hasher.finish()
-    );
+    let hash = path
+        .as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    let name = format!(r"\\.\pipe\ferrite-server-{}-{hash:016x}", user_sid()?);
     Ok(std::ffi::OsStr::new(&name)
         .encode_wide()
         .chain(Some(0))

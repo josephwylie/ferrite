@@ -1,5 +1,5 @@
 //! When the Server must stop on its own: SIGTERM and SIGINT (on Windows,
-//! the console's close and shutdown events), and on macOS loginwindow's
+//! the console's events and the session's end), and on macOS loginwindow's
 //! point of no return at logout or shutdown — which comes 15–20 s before
 //! launchd's SIGTERM, after loginwindow has begun killing the provider CLIs,
 //! so the flush must not wait for the signal (after Herdr's
@@ -53,25 +53,100 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
+    //! A console's Ctrl+C and close (a Server run by hand), and the end of
+    //! the session. The Server started for the app has no console, so the
+    //! end of the session reaches it only as `WM_ENDSESSION`, sent to every
+    //! top-level window: it keeps a hidden one for that.
+
     use super::{Ordering, SIGNALLED};
+    use std::ptr::null;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::Console::{
         SetConsoleCtrlHandler, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_SHUTDOWN_EVENT,
     };
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW, MSG,
+        WM_ENDSESSION, WNDCLASSW,
+    };
 
-    unsafe extern "system" fn signalled(event: u32) -> windows_sys::core::BOOL {
+    /// Ask the pump to stop, and hold the process up while it flushes:
+    /// Windows ends it when the handler returns. The pump's exit ends it
+    /// sooner.
+    fn stop_and_wait() {
+        SIGNALLED.store(true, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_secs(4));
+    }
+
+    unsafe extern "system" fn console(event: u32) -> windows_sys::core::BOOL {
         if matches!(event, CTRL_C_EVENT | CTRL_CLOSE_EVENT | CTRL_SHUTDOWN_EVENT) {
-            SIGNALLED.store(true, Ordering::SeqCst);
-            // Hold the process up while the pump flushes: Windows ends it
-            // when this returns for a close or shutdown.
-            std::thread::sleep(std::time::Duration::from_secs(4));
+            stop_and_wait();
             return 1;
         }
         0
     }
 
+    unsafe extern "system" fn window(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if message == WM_ENDSESSION && wparam != 0 {
+            stop_and_wait();
+            return 0;
+        }
+        // SAFETY: the arguments Windows passed this window procedure.
+        unsafe { DefWindowProcW(window, message, wparam, lparam) }
+    }
+
     pub(super) fn watch() {
         // SAFETY: registering a handler that only stores to an atomic.
-        unsafe { SetConsoleCtrlHandler(Some(signalled), 1) };
+        unsafe { SetConsoleCtrlHandler(Some(console), 1) };
+        let watcher = std::thread::Builder::new()
+            .name("ferrite-session-end".into())
+            .spawn(|| {
+                let class: Vec<u16> = "FerriteServer\0".encode_utf16().collect();
+                // SAFETY: a class and a never-shown window owned by this
+                // thread, whose messages it pumps until the process ends.
+                unsafe {
+                    let instance = GetModuleHandleW(null());
+                    let registered = RegisterClassW(&WNDCLASSW {
+                        lpfnWndProc: Some(window),
+                        hInstance: instance,
+                        lpszClassName: class.as_ptr(),
+                        ..Default::default()
+                    });
+                    let hidden = CreateWindowExW(
+                        0,
+                        class.as_ptr(),
+                        class.as_ptr(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        instance,
+                        null(),
+                    );
+                    if registered == 0 || hidden.is_null() {
+                        crate::log!(
+                            "server: cannot watch for the session's end: {}",
+                            std::io::Error::last_os_error()
+                        );
+                        return;
+                    }
+                    let mut message: MSG = std::mem::zeroed();
+                    while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+                        DispatchMessageW(&message);
+                    }
+                }
+            });
+        if let Err(error) = watcher {
+            crate::log!("server: cannot watch for the session's end: {error}");
+        }
     }
 }
 
