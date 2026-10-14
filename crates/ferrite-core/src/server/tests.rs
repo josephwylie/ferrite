@@ -261,6 +261,15 @@ fn decision() -> SessionEvent {
     }
 }
 
+/// The provider exits, as a real adapter reports it.
+fn exit(provider: Sender<SessionEvent>) {
+    provider
+        .send(SessionEvent::Closed {
+            reason: "exited".into(),
+        })
+        .unwrap();
+}
+
 fn text(text: &str) -> SessionEvent {
     SessionEvent::TextDelta { text: text.into() }
 }
@@ -389,7 +398,7 @@ fn an_answer_to_a_replaced_sessions_decision_is_refused() {
     provider.send(decision()).unwrap();
     window.until(|window| window.decisions.len() == 1);
     let replaced = pending_handle(&window, thread);
-    drop(provider);
+    exit(provider);
     window.until(|window| !window.closed().is_empty());
 
     window.command(
@@ -431,7 +440,7 @@ fn a_decision_closes_for_every_window_with_why() {
     let (_, provider) = open(&mut window, &harness);
     provider.send(decision()).unwrap();
     window.until(|window| window.decisions.len() == 1);
-    drop(provider);
+    exit(provider);
     window.until(|window| !window.closed().is_empty());
     assert_eq!(window.closed(), vec![ClosedBy::SessionEnded]);
 
@@ -591,11 +600,12 @@ fn a_resume_never_crosses_a_reopened_thread() {
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    for _ in 0..after + 2 {
+    let dots = ".".repeat(after as usize + 2);
+    for _ in 0..dots.len() {
         provider.send(text(".")).unwrap();
     }
     other.watch(thread, None);
-    other.until(|window| window.said(thread).iter().any(|said| said.contains("...")));
+    other.until(|window| window.said(thread).iter().any(|said| said.contains(&dots)));
 
     let mut back = attach(&harness.address);
     std::mem::swap(&mut back.mirrors, &mut mirrors);

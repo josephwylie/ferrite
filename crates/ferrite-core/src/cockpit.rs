@@ -524,7 +524,12 @@ impl Cockpit {
         .filter_map(PaneIdentity::thread)
         .collect();
         match &mut self.link {
-            Link::InProcess(engine) => engine.acknowledge_seen(&shown),
+            Link::InProcess(engine) => {
+                let read = engine.acknowledge_seen(&shown);
+                // The Notices read come back as the Engine's messages.
+                self.receive();
+                read
+            }
             Link::Server(_) => {
                 // Only what would read anything goes to the Server: this
                 // runs every frame.
@@ -1266,6 +1271,7 @@ impl Cockpit {
     pub fn halt_sessions(&mut self) {
         if let Link::InProcess(engine) = &mut self.link {
             engine.halt_sessions();
+            self.settle();
         }
     }
 
