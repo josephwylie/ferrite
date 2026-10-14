@@ -40,7 +40,9 @@ means:
   PowerShell's `SoundPlayer` on Windows (WAV only). The operator may choose
   a file for either (one that will not play falls back to the built-in),
   turn sounds off, or mute a provider; a provider's mute is its own switch,
-  kept while sounds are off. Alerts that ring together chime once,
+  kept while sounds are off. Muting is about noise, as the plan lists it
+  under sounds: a muted provider's Threads still toast and still post
+  system notifications, since a request still waits on the operator. Alerts that ring together chime once,
   needs-you over done, so Threads finishing at once never pile up chimes;
 - while the window is in the background, a **system notification**
   through GPUI's `show_system_notification` (`UNUserNotificationCenter` on
@@ -48,6 +50,10 @@ means:
   notifications on Windows). Its tag is the Thread's, so a newer one
   replaces it in the notification centre; clicking it brings the window
   forward and opens what it was about, and once read it is taken back out.
+  Only the test platform has checked this so far. A packaged Windows build
+  is unchecked, and an unpackaged AppUserModelID may need a Start-menu
+  shortcut before Windows shows its toasts. The package script makes no
+  shortcut yet.
 
 The timing lives in the window's `Bell` (fed `now` from the pump, so tests
 drive it with the executor's clock); the core keeps deciding what is

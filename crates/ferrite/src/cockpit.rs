@@ -12395,7 +12395,19 @@ impl CockpitView {
             .map(|notice| (notice.id.clone(), notice.read))
             .collect();
         self.bell.hear(fresh, requests, now);
-        if !self.bell.busy() && self.system_alerts.is_empty() {
+        // A system notification the operator has since read, or whose
+        // request resolved, is taken back out of the notification centre.
+        let stale: Vec<ThreadId> = self
+            .system_alerts
+            .iter()
+            .filter(|(_, target)| !target.wants(notifications))
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in stale {
+            self.system_alerts.remove(&thread);
+            cx.dismiss_system_notification(&system_tag(thread));
+        }
+        if !self.bell.busy() {
             return;
         }
         let present = self.cockpit.present();
@@ -12409,18 +12421,6 @@ impl CockpitView {
         let notifications = self.cockpit.notifications();
         let live = |target: &RowTarget| target.wants(notifications);
         let ring = self.bell.ring(now, &live, &in_view);
-        // A system notification the operator has since read, or whose
-        // request resolved, is taken back out of the notification centre.
-        let stale: Vec<ThreadId> = self
-            .system_alerts
-            .iter()
-            .filter(|(_, target)| !target.wants(notifications))
-            .map(|(thread, _)| *thread)
-            .collect();
-        for thread in stale {
-            self.system_alerts.remove(&thread);
-            cx.dismiss_system_notification(&system_tag(thread));
-        }
         // Alerts that ring together chime once, needs-you over done.
         let settings = &self.prefs.settings;
         let sound = ring
@@ -24629,6 +24629,47 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.bell.toasts().is_empty(), "both are in view now");
         });
+    }
+
+    /// ADR 0017: a request waiting while the window is away posts a system
+    /// notification too; clicking it lands on the request, and once read
+    /// it leaves the notification centre.
+    #[gpui::test]
+    fn clicking_a_request_s_system_notification_opens_it(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("system-notification-request", 2);
+        let group = group_all(&mut core);
+        cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        view.update(cx, |view, cx| view.set_window_active(false, cx));
+        fake.streams.borrow()[1].send(decision("away")).unwrap();
+        tick(cx);
+        ring(cx);
+        let tags = |cx: &mut gpui::VisualTestContext| {
+            cx.delivered_system_notifications()
+                .iter()
+                .map(|notification| notification.tag.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tags(cx), [system_tag(threads[1])]);
+        view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
+
+        cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+            tag: system_tag(threads[1]).into(),
+            action_id: None,
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 1, "the click landed on its Thread");
+            let request = view.cockpit.notifications().decisions().next().unwrap();
+            assert!(request.read);
+            assert!(view.bell.toasts().is_empty());
+        });
+        assert!(
+            tags(cx).is_empty(),
+            "read, it leaves the notification centre"
+        );
     }
 
     /// ADR 0017: alerts ringing together chime once, needs-you over done;

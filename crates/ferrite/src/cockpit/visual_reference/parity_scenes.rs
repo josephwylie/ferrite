@@ -37,7 +37,8 @@ enum Shot {
     SoloPicker,
     /// group.png: Perf sweep, four transcript Panes.
     Group,
-    /// group-toast.png: Close stale's request arriving as a toast.
+    /// group-toast.png: Close stale's request arriving as a toast, the
+    /// operator away.
     Toast,
     /// group-notes.png: the notifications list down.
     Notes,
@@ -221,6 +222,15 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
             Shot::Toast => {
                 board_scroll(view, &cast, cx);
                 // The one request that arrives while the window is up.
+                // Its Pane is on the board, and a request in view rings
+                // nothing while the operator is there (ADR 0017), so the
+                // Cockpit counts the operator away once the window's
+                // activation has landed. The window keeps the keyboard, so
+                // the caret still draws as the prototype's.
+                let cockpit = cx.entity();
+                window.on_next_frame(move |_, cx| {
+                    cockpit.update(cx, |view, _| view.cockpit.set_present(false));
+                });
                 if let Some((feed, event)) = held {
                     let _ = feed.send(event);
                     view.pump(cx);
