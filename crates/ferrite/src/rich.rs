@@ -1701,6 +1701,23 @@ mod file_link_tests {
         );
     }
 
+    /// A fence in a quote closes on a quoted line, and draws all the same.
+    #[gpui::test]
+    fn a_mermaid_fence_in_a_quote_draws(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, "> ```mermaid\n> graph TD\n> ```\n\nAfter");
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_some());
+    }
+
     /// Without an engine, or with visuals off, the fence stays code.
     #[gpui::test]
     fn a_mermaid_fence_stays_code_without_visuals(cx: &mut TestAppContext) {

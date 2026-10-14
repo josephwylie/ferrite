@@ -8,7 +8,7 @@ date: 2026-10-09
 Narrowly supersedes [ADR 0001](0001-gpui-renderer.md)'s "no browser engine, no
 webview, no JS layer anywhere" — for one surface only. Ferrite's own UI stays
 GPUI, one process, one language; this ADR changes nothing about how Ferrite
-draws itself. [ADR 0014](0014-mermaid-diagrams.md) adds a second surface:
+draws itself. [ADR 0016](0016-mermaid-diagrams.md) adds a second surface:
 Mermaid fences, drawn once by the same engine and kept as images.
 
 ## Context

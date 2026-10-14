@@ -28,7 +28,7 @@ selection calculation and copying of offscreen text remain unchanged.
   equivalent inline link rendering and selection support.
 
 - `TextView::code_block_view` lets Ferrite draw a fenced code block as
-  something else (a ` ```mermaid ` fence as its diagram, ADR 0014): the
+  something else (a ` ```mermaid ` fence as its diagram, ADR 0016): the
   callback receives the block and its native element (code, padding and
   actions) and returns what to draw in its place. The block stays in the
   document, so selection and copy keep its source. Remove when upstream

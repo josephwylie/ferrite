@@ -1,5 +1,5 @@
 //! Diagrams: a ` ```mermaid ` fence drawn as the diagram it describes, in an
-//! answer and in the reader (ADR 0014).
+//! answer and in the reader (ADR 0016).
 //!
 //! The same off-screen engine that draws agents' visuals (ADR 0013) renders
 //! the fence once, with the vendored `mermaid.js` inlined in the page and
@@ -8,14 +8,19 @@
 //! whenever it can't be (no engine in this build, visuals turned off, a
 //! fence mermaid refuses, a fence still streaming), the fence shows as code.
 //! A draw that fails for now (Chromium slow to start, a page that ran out of
-//! time) is asked for again the next time the fence is painted.
+//! time) is asked for again the next time the fence is painted, up to
+//! [`MISSES`] times.
 //!
 //! - **Lazy.** A fence asks for its diagram only once its code is painted
-//!   on screen; a long document draws what the operator scrolls to.
+//!   on screen; a long document draws what the operator scrolls to. Pages
+//!   are drawn one at a time, so a document full of fences doesn't open a
+//!   Chromium page (each parsing the whole bundle) per fence at once.
 //! - **Cached by content.** Drawn images are kept by a hash of the fence,
 //!   the reading size and the display scale, so a fence seen again (a
 //!   re-render, another Pane, the reader) costs nothing; the least recently
-//!   drawn go past [`BUDGET`].
+//!   shown go past [`BUDGET`], never one shown since the last draw landed
+//!   (it may be on screen, and letting it go would draw it again, and
+//!   evict another, without end).
 //! - **Sized like a fence.** The page is laid out at the fence's own measure
 //!   ([`theme::MEASURE_CH`] cells) and cropped to what the diagram drew; a
 //!   narrower column scales it down, never up.
@@ -26,6 +31,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ferrite_core::settings::ReadingSize;
+use futures::channel::mpsc;
+use futures::StreamExt;
 use gpui::prelude::*;
 use gpui::{canvas, div, img, px, AnyElement, App, AsyncApp, EntityId, Global, RenderImage, Window};
 use serde_json::{json, Value};
@@ -40,10 +47,15 @@ use crate::theme;
 pub(crate) const LANGUAGE: &str = "mermaid";
 
 /// mermaid.js, vendored (`assets/mermaid/README.md`).
+#[cfg(any(feature = "cef", test))]
 const MERMAID_JS: &str = include_str!("../../assets/mermaid/mermaid.min.js");
+/// A build without Chromium never draws a page, so it doesn't carry the
+/// bundle (~5.5 MB).
+#[cfg(not(any(feature = "cef", test)))]
+const MERMAID_JS: &str = "";
 
 /// What the drawn images may hold, in bytes, before the least recently
-/// drawn are let go (a diagram at the Standard measure on a 2x display is
+/// shown are let go (a diagram at the Standard measure on a 2x display is
 /// a few MB).
 const BUDGET: usize = 64 * 1024 * 1024;
 
@@ -54,12 +66,21 @@ const EMPTY: u32 = 1;
 /// which neither the empty page nor a diagram is.
 const REFUSED: u32 = 2;
 
+/// How many times a fence is drawn and fails for now before it stays code.
+const MISSES: u8 = 3;
+
 /// The page's script: draw the fence, or say it can't be drawn (see
-/// [`REFUSED`]). `CONFIG` and `SOURCE` are JSON.
+/// [`REFUSED`]). `CONFIG` and `SOURCE` are JSON. Mermaid measures labels
+/// as it lays nodes out, so the theme's face is loaded first (`@font-face`
+/// loads lazily, and the page has no text before mermaid's).
 const DRAW_SCRIPT: &str = r#"(async () => {
   const out = document.getElementById("diagram");
+  const config = CONFIG;
+  await document.fonts
+    .load(`${config.themeVariables.fontSize} ${config.fontFamily}`)
+    .catch(() => {});
   try {
-    mermaid.initialize(CONFIG);
+    mermaid.initialize(config);
     const { svg } = await mermaid.render("ferrite-diagram", SOURCE);
     out.innerHTML = svg;
   } catch (_) {
@@ -73,18 +94,35 @@ pub(crate) struct Diagrams {
     /// Visuals are on (Settings): off, every fence stays code.
     enabled: bool,
     entries: HashMap<u64, Entry>,
-    /// Bumped on every draw, so the least recently drawn can be found.
+    /// Bumped whenever a diagram is shown or lands, so the least recently
+    /// shown can be found.
     clock: u64,
+    /// The clock when the last draw landed: an image shown since is in use.
+    landed: u64,
+    /// Draws waiting their turn ([`init`]'s task draws one at a time).
+    queue: mpsc::UnboundedSender<Job>,
 }
 
 impl Global for Diagrams {}
 
 enum Entry {
-    /// Being drawn; these views painted the fence and redraw when it lands.
-    Drawing(Vec<EntityId>),
+    /// Being drawn (or waiting its turn); `views` painted the fence and
+    /// redraw when it lands. `misses` is how often it failed for now.
+    Drawing { views: Vec<EntityId>, misses: u8 },
     Drawn(Drawn),
-    /// Mermaid refused it, or there is no engine: it stays code.
+    /// Failed for now this many times: asked for again when next painted.
+    Missed(u8),
+    /// Mermaid refused it, there is no engine, or it missed [`MISSES`]
+    /// times: it stays code.
     Failed,
+}
+
+/// A fence to draw.
+struct Job {
+    key: u64,
+    code: String,
+    reading: ReadingSize,
+    scale: f32,
 }
 
 /// Why a fence wasn't drawn.
@@ -102,7 +140,8 @@ struct Drawn {
     /// Logical px.
     width: f32,
     height: f32,
-    drawn_at: u64,
+    /// The clock when it was last shown (or landed).
+    shown_at: u64,
 }
 
 impl Drawn {
@@ -111,9 +150,39 @@ impl Drawn {
     }
 }
 
-/// Install the global: `enabled` is whether visuals are on (Settings).
+/// Install the global and start the task that draws: `enabled` is whether
+/// visuals are on (Settings).
 pub(crate) fn init(enabled: bool, cx: &mut App) {
-    cx.set_global(Diagrams { enabled, entries: HashMap::new(), clock: 0 });
+    let (queue, mut jobs) = mpsc::unbounded::<Job>();
+    cx.spawn(async move |cx| {
+        while let Some(Job { key, code, reading, scale }) = jobs.next().await {
+            let drawn = match renderer::engine(cx).await {
+                Ok(engine) => draw(engine, page(&code, reading), width(reading), scale, cx).await,
+                // No engine in this build is for good; one still starting isn't.
+                Err(_) => match cx.update(Visuals::engine) {
+                    Availability::Unavailable(_) => Err(Failure::Final),
+                    _ => Err(Failure::Passing),
+                },
+            };
+            cx.update(|cx| land(key, drawn, cx));
+        }
+    })
+    .detach();
+    cx.set_global(Diagrams { enabled, entries: HashMap::new(), clock: 0, landed: 0, queue });
+}
+
+impl Diagrams {
+    /// The drawn diagram for `key`, noted as shown now.
+    fn show(&mut self, key: u64) -> Option<Drawn> {
+        self.clock += 1;
+        match self.entries.get_mut(&key) {
+            Some(Entry::Drawn(drawn)) => {
+                drawn.shown_at = self.clock;
+                Some(drawn.clone())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Turn diagrams on or off (Settings changed); fences drawn again follow.
@@ -144,17 +213,14 @@ pub(crate) fn or_code(
     let scale = window.scale_factor();
     let key = key(&code, reading, scale);
     let diagrams = cx.global_mut::<Diagrams>();
-    diagrams.clock += 1;
-    let now = diagrams.clock;
-    match diagrams.entries.get_mut(&key) {
-        Some(Entry::Drawn(drawn)) => {
-            drawn.drawn_at = now;
-            diagram(drawn.clone(), size)
-        }
+    if let Some(drawn) = diagrams.show(key) {
+        return diagram(drawn, size);
+    }
+    match diagrams.entries.get(&key) {
         Some(Entry::Failed) => element,
         // Asked for once its code is painted on screen (and waited on by
         // every view that paints it meanwhile).
-        Some(Entry::Drawing(_)) | None => div()
+        _ => div()
             .relative()
             .w_full()
             .min_w_0()
@@ -195,15 +261,16 @@ fn diagram(drawn: Drawn, size: f32) -> AnyElement {
 }
 
 /// Whether a fence's Markdown has its closing line: a fence still
-/// streaming in isn't drawn yet.
+/// streaming in isn't drawn yet. A fence in a quote carries the quote's
+/// `>` on every line but the first.
 pub(crate) fn closed(fence: &str) -> bool {
-    let mut lines = fence.trim_end().lines();
+    let mut lines = fence
+        .trim_end()
+        .lines()
+        .map(|line| line.trim_start_matches(|c: char| c == '>' || c.is_whitespace()).trim_end());
     let Some(open) = lines.next() else { return false };
-    let marker = if open.trim_start().starts_with("~~~") { '~' } else { '`' };
-    lines.last().is_some_and(|line| {
-        let line = line.trim();
-        line.len() >= 3 && line.chars().all(|c| c == marker)
-    })
+    let marker = if open.starts_with("~~~") { '~' } else { '`' };
+    lines.last().is_some_and(|line| line.len() >= 3 && line.chars().all(|c| c == marker))
 }
 
 /// The cache key: what the image depends on.
@@ -219,52 +286,44 @@ fn key(code: &str, reading: ReadingSize, scale: f32) -> u64 {
 /// already drawn or being drawn.
 fn request(key: u64, code: String, reading: ReadingSize, scale: f32, view: EntityId, cx: &mut App) {
     let diagrams = cx.global_mut::<Diagrams>();
-    match diagrams.entries.get_mut(&key) {
-        Some(Entry::Drawing(views)) => {
+    let misses = match diagrams.entries.get_mut(&key) {
+        Some(Entry::Drawing { views, .. }) => {
             if !views.contains(&view) {
                 views.push(view);
             }
             return;
         }
-        Some(_) => return,
-        None => {
-            diagrams.entries.insert(key, Entry::Drawing(vec![view]));
-        }
-    }
-    cx.spawn(async move |cx| {
-        let drawn = match renderer::engine(cx).await {
-            Ok(engine) => draw(engine, page(&code, reading), width(reading), scale, cx).await,
-            // No engine in this build is for good; one still starting isn't.
-            Err(_) => match cx.update(Visuals::engine) {
-                Availability::Unavailable(_) => Err(Failure::Final),
-                _ => Err(Failure::Passing),
-            },
-        };
-        cx.update(|cx| land(key, drawn, cx));
-    })
-    .detach();
+        Some(Entry::Drawn(_) | Entry::Failed) => return,
+        Some(Entry::Missed(misses)) => *misses,
+        None => 0,
+    };
+    diagrams.entries.insert(key, Entry::Drawing { views: vec![view], misses });
+    let _ = diagrams.queue.unbounded_send(Job { key, code, reading, scale });
 }
 
 /// A diagram finished drawing (or didn't): keep it, redraw the views that
-/// wait on it, and let the oldest go past the budget.
+/// wait on it, and let the least recently shown go past the budget.
 fn land(key: u64, drawn: Result<Drawn, Failure>, cx: &mut App) {
     let diagrams = cx.global_mut::<Diagrams>();
+    let (views, misses) = match diagrams.entries.remove(&key) {
+        Some(Entry::Drawing { views, misses }) => (views, misses),
+        _ => (Vec::new(), 0),
+    };
     diagrams.clock += 1;
     let entry = match drawn {
-        Ok(drawn) => Entry::Drawn(Drawn { drawn_at: diagrams.clock, ..drawn }),
-        Err(Failure::Final) => Entry::Failed,
+        Ok(drawn) => Entry::Drawn(Drawn { shown_at: diagrams.clock, ..drawn }),
         // It stays code, so nothing to redraw: asked for again the next
-        // time it is painted.
-        Err(Failure::Passing) => {
-            diagrams.entries.remove(&key);
+        // time it is painted...
+        Err(Failure::Passing) if misses + 1 < MISSES => {
+            diagrams.entries.insert(key, Entry::Missed(misses + 1));
             return;
         }
+        // ...unless that was its last chance.
+        Err(_) => Entry::Failed,
     };
-    let views = match diagrams.entries.insert(key, entry) {
-        Some(Entry::Drawing(views)) => views,
-        _ => Vec::new(),
-    };
-    let evicted = evict(&mut diagrams.entries, key);
+    diagrams.entries.insert(key, entry);
+    let evicted = evict(&mut diagrams.entries, diagrams.landed);
+    diagrams.landed = diagrams.clock;
     for view in views {
         cx.notify(view);
     }
@@ -281,25 +340,23 @@ fn land(key: u64, drawn: Result<Drawn, Failure>, cx: &mut App) {
     }
 }
 
-/// Let the least recently drawn images go until the rest fit [`BUDGET`],
-/// never `keep` (just drawn). Returns them.
-fn evict(entries: &mut HashMap<u64, Entry>, keep: u64) -> Vec<Arc<RenderImage>> {
+/// Let the least recently shown images go until the rest fit [`BUDGET`],
+/// never one shown (or landed) since `in_use` (the clock when the last draw
+/// landed): it may be on screen. Returns them.
+fn evict(entries: &mut HashMap<u64, Entry>, in_use: u64) -> Vec<Arc<RenderImage>> {
     let mut drawn: Vec<(u64, u64, usize)> = entries
         .iter()
         .filter_map(|(key, entry)| match entry {
-            Entry::Drawn(drawn) => Some((drawn.drawn_at, *key, drawn.bytes())),
+            Entry::Drawn(drawn) => Some((drawn.shown_at, *key, drawn.bytes())),
             _ => None,
         })
         .collect();
     let mut held: usize = drawn.iter().map(|(_, _, bytes)| bytes).sum();
     drawn.sort_unstable();
     let mut evicted = Vec::new();
-    for (_, key, bytes) in drawn {
-        if held <= BUDGET {
+    for (shown_at, key, bytes) in drawn {
+        if held <= BUDGET || shown_at >= in_use {
             break;
-        }
-        if key == keep {
-            continue;
         }
         if let Some(Entry::Drawn(drawn)) = entries.remove(&key) {
             evicted.push(drawn.image);
@@ -409,7 +466,7 @@ async fn draw(
         image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])),
         width,
         height,
-        drawn_at: 0,
+        shown_at: 0,
     })
 }
 
@@ -440,6 +497,7 @@ mod tests {
     use gpui::TestAppContext;
 
     use super::*;
+    use crate::visual::web::fake::{Call, FakeEngine};
     use crate::visual::web::{Input, Updates, View, Wake};
 
     /// An engine whose one page reports the heights the test gives it, when
@@ -540,18 +598,51 @@ mod tests {
         assert_eq!(drawn.err(), Some(Failure::Passing));
     }
 
+    /// Asked for again when next painted, until it misses [`MISSES`] times.
     #[gpui::test]
-    fn only_a_final_failure_is_kept(cx: &mut TestAppContext) {
+    fn a_failure_for_now_is_retried_a_few_times(cx: &mut TestAppContext) {
         cx.update(|cx| {
             init(true, cx);
-            for (key, failure) in [(1, Failure::Final), (2, Failure::Passing)] {
-                cx.global_mut::<Diagrams>().entries.insert(key, Entry::Drawing(Vec::new()));
-                land(key, Err(failure), cx);
+            let land_failing = |failure, cx: &mut App| {
+                let entries = &mut cx.global_mut::<Diagrams>().entries;
+                let misses = match entries.get(&1) {
+                    Some(Entry::Missed(misses)) => *misses,
+                    _ => 0,
+                };
+                entries.insert(1, Entry::Drawing { views: Vec::new(), misses });
+                land(1, Err(failure), cx);
+                matches!(cx.global::<Diagrams>().entries.get(&1), Some(Entry::Failed))
+            };
+            assert!(land_failing(Failure::Final, cx), "a refusal is for good");
+            cx.global_mut::<Diagrams>().entries.clear();
+            for miss in 1..MISSES {
+                assert!(!land_failing(Failure::Passing, cx), "miss {miss}: asked for again");
             }
-            let entries = &cx.global::<Diagrams>().entries;
-            assert!(matches!(entries.get(&1), Some(Entry::Failed)));
-            assert!(entries.get(&2).is_none(), "asked for again when next painted");
+            assert!(land_failing(Failure::Passing, cx), "then it stays code");
         });
+    }
+
+    /// Fences are drawn one page at a time.
+    #[gpui::test]
+    fn one_page_draws_at_a_time(cx: &mut TestAppContext) {
+        let engine = Rc::new(FakeEngine::new());
+        cx.update(|cx| {
+            Visuals::install(engine.clone(), cx);
+            init(true, cx);
+            let view = cx.new(|_| ()).entity_id();
+            for code in ["graph TD", "graph LR"] {
+                request(key(code, ReadingSize::STANDARD, 1.), code.into(), ReadingSize::STANDARD, 1., view, cx);
+            }
+        });
+        let opened = || engine.journal().iter().filter(|call| matches!(call, Call::Open(_))).count();
+        cx.run_until_parked();
+        assert_eq!((opened(), engine.live_views()), (1, 1));
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(opened(), 2, "the second once the first landed");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(engine.live_views(), 0);
     }
 
     #[test]
@@ -562,6 +653,8 @@ mod tests {
     #[test]
     fn only_a_closed_fence_is_drawn() {
         assert!(closed("```mermaid\ngraph TD\n  a --> b\n```"));
+        assert!(closed("```mermaid\n> graph TD\n> ```"), "in a quote");
+        assert!(!closed("```mermaid\n> graph TD\n>"), "in a quote, still streaming");
         assert!(closed("```mermaid\ngraph TD\n```\n"));
         assert!(closed("~~~mermaid\ngraph TD\n~~~"));
         assert!(!closed("```mermaid\ngraph TD\n  a --> b"), "still streaming");
@@ -624,23 +717,48 @@ mod tests {
         assert!(crop(blank, bg).is_none());
     }
 
+    /// A drawn diagram holding `share` of the budget.
+    fn drawn(share: f64) -> Drawn {
+        // 4 bytes a pixel, one pixel wide.
+        let height = (BUDGET as f64 * share / 4.) as u32 + 1;
+        let image = image::RgbaImage::new(1, height);
+        Drawn { image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])), width: 1., height: 1., shown_at: 0 }
+    }
+
     #[test]
-    fn the_least_recently_drawn_go_past_the_budget() {
-        let image = |side: u32| {
-            let buffer = image::RgbaImage::new(side, side);
-            Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
-        };
-        // Each image is 4 × side² bytes: three of a third of the budget each.
-        let side = ((BUDGET / 3 / 4) as f64).sqrt() as u32 + 1;
+    fn the_least_recently_shown_go_past_the_budget() {
         let mut entries = HashMap::new();
-        for (key, drawn_at) in [(1, 3), (2, 1), (3, 2)] {
-            let drawn = Drawn { image: image(side), width: 1., height: 1., drawn_at };
-            entries.insert(key, Entry::Drawn(drawn));
+        for (key, shown_at) in [(1, 3), (2, 1), (3, 2)] {
+            entries.insert(key, Entry::Drawn(Drawn { shown_at, ..drawn(1. / 3.) }));
         }
         entries.insert(4, Entry::Failed);
-        let evicted = evict(&mut entries, 2);
+        let evicted = evict(&mut entries, 3);
         assert_eq!(evicted.len(), 1);
-        assert!(!entries.contains_key(&3), "the oldest but the one kept");
-        assert!(entries.contains_key(&2) && entries.contains_key(&1) && entries.contains_key(&4));
+        assert!(!entries.contains_key(&2), "the least recently shown");
+        assert!(entries.contains_key(&1) && entries.contains_key(&3) && entries.contains_key(&4));
+    }
+
+    /// Two diagrams on screen together, past the budget between them: each
+    /// landing would otherwise let the other go, which redraws it, which
+    /// lets this one go, without end.
+    #[gpui::test]
+    fn a_diagram_shown_since_the_last_landing_is_kept(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init(true, cx);
+            let held = |cx: &App| {
+                let entries = &cx.global::<Diagrams>().entries;
+                [1, 2, 3, 4].map(|key| matches!(entries.get(&key), Some(Entry::Drawn(_))))
+            };
+            land(1, Ok(drawn(0.6)), cx);
+            land(2, Ok(drawn(0.6)), cx);
+            assert_eq!(held(cx), [true, true, false, false], "1 has only just landed");
+            // The view redraws with 1 shown (and 3 asked for).
+            assert!(cx.global_mut::<Diagrams>().show(1).is_some());
+            land(3, Ok(drawn(0.6)), cx);
+            assert_eq!(held(cx), [true, true, true, false], "1 is on screen, 2 only just landed");
+            // Nothing shown since: all but the last two to land go.
+            land(4, Ok(drawn(0.6)), cx);
+            assert_eq!(held(cx), [false, false, true, true]);
+        });
     }
 }

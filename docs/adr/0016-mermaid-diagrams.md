@@ -21,16 +21,25 @@ diagrams (a terminal can't draw them), and agents already write Mermaid.
    to what the diagram drew and kept as an image; the page closes. Nothing
    in a diagram is worth Chromium's memory while it is read, and an image
    scrolls, clips and caches like any other.
-3. **Lazy and cached by content.** A fence asks for its diagram the first
-   time its code is painted on screen; until it lands (and whenever it
-   can't: no engine in this build, Settings' visuals `off`, a fence mermaid
-   refuses, a fence still streaming) the fence shows as code. Images are
-   kept by a hash of the fence, the reading size and the display scale, and
-   the least recently drawn go past 64 MB.
+3. **Lazy, one at a time, and cached by content.** A fence asks for its
+   diagram the first time its code is painted on screen; until it lands
+   (and whenever it can't: no engine in this build, Settings' visuals
+   `off`, a fence mermaid refuses, a fence still streaming) the fence shows
+   as code. Diagrams are drawn one page at a time, in the order asked for,
+   so a document of many fences never has many pages (each parsing the
+   whole bundle) open at once, nor pages starving each other into the
+   timeout. They wait apart from agents' screenshots (ADR 0013), which an
+   agent is waiting on. Images are kept by a hash of the fence, the reading
+   size and the display scale, and the least recently shown go past 64 MB,
+   except any shown since the last diagram landed: that one may be on
+   screen, and letting it go would draw it again and let another go, a
+   loop that never ends. The budget is soft: what's on screen is kept even
+   past it.
 4. **Ferrite's look.** Mermaid's `base` theme is fed Ferrite's `--ferrite-*`
    values (`tokens.rs`): nodes on the raised band with the strong edge,
    lines and labels in the reading inks, Geist Mono at the reading size,
-   no drop shadows. The page is laid out at the fence's measure and drawn
+   no drop shadows (the face is loaded before mermaid measures its labels).
+   The page is laid out at the fence's measure and drawn
    on the fence's rule; a narrower column scales it down, never up.
 5. **One seam in the Markdown view.** `TextView::code_block_view` (a
    vendored gpui-base patch, `vendor/README.md`) hands the app each fence
@@ -40,8 +49,9 @@ diagrams (a terminal can't draw them), and agents already write Mermaid.
 
 ## Consequences
 
-- The binary grows by `mermaid.min.js` (~5.5 MB), in every build; only a
-  build with the `cef` feature draws with it.
+- A build with the `cef` feature (the released app) grows by
+  `mermaid.min.js` (~5.5 MB); a build without it never draws a page and
+  doesn't carry the bundle.
 - The page carries the whole bundle, so each diagram's first draw parses
   it (a few hundred ms in the renderer, off the UI thread); a cached
   diagram costs nothing.
@@ -53,9 +63,12 @@ diagrams (a terminal can't draw them), and agents already write Mermaid.
   past that placeholder height.
 - Only a refusal (or no engine in this build) keeps a fence as code for the
   process's life. A draw that fails for now (Chromium slow to start, a page
-  that drew nothing within 10 s) is forgotten and asked for again the next
-  time the fence is painted.
+  that drew nothing within 10 s) is asked for again the next time the fence
+  is painted, up to three times in all; then it stays code too.
 - A diagram taller than the engine's page cap (`MAX_HEIGHT` in
   `web/cef.rs`, 8000 logical px) is cut off at the cap.
-- A drawn diagram has no fence actions (Copy, the language tag); its source
-  is copied by selecting it. A reading-size change draws it again.
+- A fence in a quote or a list item is drawn like any other.
+- A drawn diagram has no fence actions (Copy, the language tag), and the
+  image can't be selected on its own: its source comes along in a selection
+  that spans the diagram (from the text before it to the text after). A
+  reading-size change draws it again.

@@ -15,7 +15,7 @@
 //! - [`collect_text`]: a Visual row's selectable text.
 //! - [`renderer`]: the screenshot an agent gets back, for core's
 //!   `VisualRenderer` seam.
-//! - [`diagram`]: a ` ```mermaid ` fence drawn as its diagram (ADR 0014),
+//! - [`diagram`]: a ` ```mermaid ` fence drawn as its diagram (ADR 0016),
 //!   by the same engine.
 //!
 //! Inside: the engine seam ([`web`]: `Engine`/`View`, the Chromium adapter

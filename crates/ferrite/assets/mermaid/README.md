@@ -4,7 +4,7 @@
 [`mermaid@12.2.0`](https://www.npmjs.com/package/mermaid/v/12.2.0), unchanged
 (MIT, `LICENSE` is the package's own; the licenses of the libraries it bundles
 are kept in the file's trailing comment). It draws ` ```mermaid ` fences as
-diagrams (`src/visual/diagram.rs`, ADR 0014), inlined into each diagram's page:
+diagrams (`src/visual/diagram.rs`, ADR 0016), inlined into each diagram's page:
 nothing is fetched.
 
 sha256 `a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b9f`
