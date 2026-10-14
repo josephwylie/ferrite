@@ -32,7 +32,7 @@ use crate::nav;
 /// A part of the Cockpit drawn as a cached view of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Part {
-    /// The nav's rows: the needs-you strip, the tree and the parked fold.
+    /// The nav's rows: the tree and the parked fold.
     Nav,
     /// One Pane's cell, wherever the board lays it out.
     Pane(PaneIdentity),
@@ -134,10 +134,17 @@ impl CockpitView {
     }
 
     /// The nav's rows at the column's content width, at `opacity`: their
-    /// cached part, or the rows themselves without parts.
-    pub(super) fn nav_rows(&self, opacity: f32, cx: &mut Context<Self>) -> Div {
+    /// cached part, or the rows themselves without parts, drawn from
+    /// `state` (built once, shared with the rail).
+    pub(super) fn nav_rows(
+        &self,
+        opacity: f32,
+        state: &std::cell::OnceCell<nav::NavState>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         if !self.parts.borrow().on {
-            return self.nav_content(cx).opacity(opacity);
+            let state = state.get_or_init(|| self.nav_state());
+            return self.nav_content(state, cx).opacity(opacity);
         }
         // The box `nav::content` has in the column.
         let frame = div()
@@ -179,7 +186,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match part {
-            Part::Nav => self.nav_content(cx).into_any_element(),
+            Part::Nav => self.nav_content(&self.nav_state(), cx).into_any_element(),
             Part::Status => {
                 let level = self.parts.borrow().status_level;
                 div()

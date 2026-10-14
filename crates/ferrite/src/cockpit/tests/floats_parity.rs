@@ -279,7 +279,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
         .find(|row| row.act == Act::Thread(threads[0]))
         .unwrap();
     assert_eq!(working.context.as_ref(), "perf sweep \u{b7} working");
-    assert_eq!(working.dot, Some(crate::palette::Dot::Working));
+    assert_eq!(working.status, Some(nav::RowStatus::Working));
 }
 
 /// FL-5: ⌘G opens the palette on the Groups alone; ⏎ enters the Group. ⌘⇧G
@@ -675,4 +675,138 @@ fn the_effort_ladder_always_has_a_chosen_step(cx: &mut TestAppContext) {
             None => assert!(model.efforts.is_empty(), "{} has no ladder", model.value),
         }
     }
+}
+
+/// Three Threads in one registered Project, the first focused: the third
+/// waits on a Bash approval, the second finished out of sight.
+fn palette_states<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<CockpitView>,
+    ProjectId,
+    Vec<ThreadId>,
+    &'a mut gpui::VisualTestContext,
+) {
+    let (mut core, fake) = cockpit(name, 0);
+    let project = core.register_project(&here()).unwrap();
+    for _ in 0..3 {
+        core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+    }
+    let mut threads = core.threads();
+    threads.sort();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    fake.streams.borrow()[2]
+        .send(bash("perm_3", "cargo test"))
+        .unwrap();
+    tick(cx);
+    (view, project, threads, cx)
+}
+
+/// The Threads the open palette shows, in order.
+fn palette_threads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        palette
+            .survivors()
+            .iter()
+            .filter_map(|row| match row.act {
+                Act::Thread(thread) => Some(thread),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// ⌘K's status filters: a line of one letter — `b` `w` `i` `d` — keeps
+/// one of the four states' Threads and says which at the input's right,
+/// `a` keeps every state, and commands stay throughout. Every key types:
+/// the next letter makes the line a search, the filter gone.
+#[gpui::test]
+fn a_one_letter_palette_line_filters_by_status(cx: &mut TestAppContext) {
+    let (view, _project, threads, cx) = palette_states("palette-filters", cx);
+    cx.simulate_keystrokes("cmd-k");
+    tick(cx);
+    assert_eq!(palette_threads(&view, cx), threads);
+    for (key, kept) in [
+        ("b", vec![threads[2]]),
+        ("d", vec![threads[1]]),
+        ("i", vec![threads[0]]),
+        ("w", vec![]),
+    ] {
+        cx.simulate_keystrokes(key);
+        tick(cx);
+        assert_eq!(palette_threads(&view, cx), kept, "{key}");
+        assert!(cx.debug_bounds("palette-filter").is_some(), "{key} says so");
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().unwrap().read(cx);
+            assert_eq!(palette.query(cx), key, "{key} types");
+            assert!(
+                palette
+                    .survivors()
+                    .iter()
+                    .any(|row| row.section == Section::Commands),
+                "{key}: commands have no state and stay"
+            );
+        });
+        cx.simulate_keystrokes("backspace");
+        tick(cx);
+    }
+    cx.simulate_keystrokes("a");
+    tick(cx);
+    assert_eq!(palette_threads(&view, cx), threads, "a: every state");
+    assert!(cx.debug_bounds("palette-filter").is_none());
+    cx.simulate_keystrokes("backspace d e");
+    tick(cx);
+    assert!(cx.debug_bounds("palette-filter").is_none(), "a search");
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        assert_eq!(palette.query(cx), "de", "no key is lost to a filter");
+    });
+}
+
+/// ⌘K jumps to a Project — its Thread that most needs the operator — and
+/// the cursor's Thread names its working directory in the footer.
+#[gpui::test]
+fn the_palette_jumps_to_a_project_and_names_a_threads_directory(cx: &mut TestAppContext) {
+    let (view, project, threads, cx) = palette_states("palette-jumps", cx);
+    cx.simulate_keystrokes("cmd-k");
+    tick(cx);
+    let (row, detail) = view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        let row = palette
+            .survivors()
+            .into_iter()
+            .find(|row| row.act == Act::Project(project))
+            .cloned()
+            .expect("a row per Project with an open Thread");
+        (row, palette.selected().and_then(|row| row.detail.clone()))
+    });
+    assert_eq!(row.section, Section::Projects);
+    assert_eq!(row.status, Some(nav::RowStatus::NeedsYou), "its roll-up");
+    assert_eq!(row.context.as_ref(), "3 threads");
+    let shown = home_relative(&here());
+    assert_eq!(detail.as_deref(), Some(shown.as_str()), "the cursor's cwd");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.run_palette_act(row.act, false, window, cx)
+        })
+    });
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+        Some(threads[2]),
+        "the Project's Thread that waits"
+    );
 }

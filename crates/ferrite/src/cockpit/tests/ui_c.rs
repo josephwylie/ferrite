@@ -446,6 +446,10 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
 fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (view, fake, cx, _group) = board("board-unread", 3, cx);
+    // On the board, a finish is unread only while the window is away.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.deactivate_window();
     for stream in 1..3 {
         for event in [
             SessionEvent::TextDelta {
@@ -467,7 +471,10 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
             .filter(|thread| view.cockpit.notifications().attention(*thread))
             .count()
     });
-    assert!(unread >= 2, "two Threads finished out of sight");
+    assert!(
+        unread >= 2,
+        "two Threads finished while the window was away"
+    );
     assert!(
         cx.debug_bounds("breathing-dot").is_none(),
         "unread never breathes"
@@ -768,16 +775,14 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         let row = view.thread_row(thread);
         assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
         assert_eq!(
-            thread_status(row.status.wall(), row.unread).ink,
+            row.status.face().ink,
             crate::theme::BLOCKED,
-            "and the nav and rail dot say it too"
+            "and the nav and rail mark say it too"
         );
-        let (face, word) = pane::thread_face(view.cockpit.thread(thread).unwrap(), None, false);
-        assert_eq!(word, Some(pane::HeadSlot::Failed));
         assert_eq!(
-            face.ink,
-            crate::theme::BLOCKED,
-            "the Group head's dot agrees"
+            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            Some(pane::HeadSlot::Failed),
+            "the Pane's word agrees"
         );
     });
 }

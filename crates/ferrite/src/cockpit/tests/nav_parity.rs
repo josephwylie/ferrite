@@ -276,8 +276,8 @@ fn one_seam_column_sits_right_of_the_nav(cx: &mut TestAppContext) {
     tick(cx);
     let seam = cx.debug_bounds("nav-seam").expect("the seam");
     assert!(
-        seam.left() < px(0.5),
-        "folded, the seam is at x = 0: {seam:?}"
+        (seam.left() - px(nav::FOLDED_WIDTH)).abs() < px(0.5),
+        "folded, the seam is beside the rail: {seam:?}"
     );
 }
 
@@ -334,4 +334,217 @@ fn the_content_fades_on_its_own_clock_while_the_width_rides(cx: &mut TestAppCont
 
     cx.executor().advance_clock(Duration::from_millis(200));
     assert_eq!(sample(&view, cx), (1.0, nav::WIDTH), "open at rest");
+}
+
+/// `sort: attention` (persisted) lifts what needs the operator: a Thread
+/// waiting on a Decision, then one that finished unseen, then the rest in
+/// creation order; the Project heading rolls its rows up to the most
+/// urgent, in the one heading style's lowercase label.
+#[gpui::test]
+fn sort_attention_lifts_what_needs_you_and_the_heading_rolls_it_up(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("nav-attention", 3);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    fake.streams.borrow()[2].send(decision("perm_3")).unwrap();
+    tick(cx);
+    let order = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.nav_state()
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(order(&view, cx), threads, "creation order by default");
+    view.update(cx, |view, cx| {
+        view.set_thread_order(ThreadListOrder::Attention, cx)
+    });
+    assert_eq!(
+        order(&view, cx),
+        vec![threads[2], threads[1], threads[0]],
+        "blocked, done, idle"
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.prefs.settings.thread_list_order,
+            ThreadListOrder::Attention
+        );
+        let state = view.nav_state();
+        let section = &state.sections[0];
+        assert_eq!(section.status, nav::RowStatus::NeedsYou, "the roll-up");
+    });
+}
+
+/// `sort: attention` ranks Groups too: the Group whose member waits
+/// rises above an older quiet one, and the waiting member leads its Group.
+#[gpui::test]
+fn sort_attention_ranks_groups_and_their_members(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("nav-attention-groups", 4);
+    let threads = sorted_threads(&core);
+    let mut group = |first, second| {
+        core.apply_group(GroupChange::Create { first, second })
+            .unwrap()
+            .group
+            .unwrap()
+    };
+    let quiet = group(threads[0], threads[1]);
+    let waiting = group(threads[2], threads[3]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    fake.streams.borrow()[3].send(decision("perm_4")).unwrap();
+    tick(cx);
+    let tree = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            state
+                .groups
+                .iter()
+                .map(|block| {
+                    let members: Vec<ThreadId> =
+                        block.members.iter().map(|row| row.thread).collect();
+                    (block.id, members)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        tree(&view, cx),
+        vec![
+            (quiet, vec![threads[0], threads[1]]),
+            (waiting, vec![threads[2], threads[3]]),
+        ],
+        "creation order by default"
+    );
+    view.update(cx, |view, cx| {
+        view.set_thread_order(ThreadListOrder::Attention, cx)
+    });
+    assert_eq!(
+        tree(&view, cx),
+        vec![
+            (waiting, vec![threads[3], threads[2]]),
+            (quiet, vec![threads[0], threads[1]]),
+        ],
+        "what waits first, then creation order"
+    );
+}
+
+/// A Group's row rolls its members up — folded too — and a folded
+/// Project heading still says what waits under it.
+#[gpui::test]
+fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("nav-roll-up", 3);
+    let threads = sorted_threads(&core);
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[1],
+            second: threads[2],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    tick(cx);
+    fake.streams.borrow()[2]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.set_nav_fold(NavFold::Group(group), true, cx)
+    });
+    view.read_with(cx, |view, _| {
+        let state = view.nav_state();
+        let block = state.groups.iter().find(|block| block.id == group).unwrap();
+        assert!(block.folded);
+        assert_eq!(
+            block.status,
+            nav::RowStatus::Done,
+            "a member finished unseen"
+        );
+        assert_eq!(state.sections[0].status, nav::RowStatus::Done);
+    });
+    fake.streams.borrow()[1].send(decision("perm_2")).unwrap();
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let state = view.nav_state();
+        let block = state.groups.iter().find(|block| block.id == group).unwrap();
+        assert_eq!(
+            block.status,
+            nav::RowStatus::NeedsYou,
+            "blocked outranks done"
+        );
+    });
+}
+
+/// Folded, the nav is the rail: one line per open Thread, each with its
+/// mark, beside the one seam; the board starts right of it, and a press on
+/// a line lands on its Thread. A line's digit is the ⌘ key that focuses
+/// it: Solo, only the Solo Pane's `1`.
+#[gpui::test]
+fn the_folded_nav_is_a_keyed_rail(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-rail", 3);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    assert!(cx.debug_bounds("nav-rail").is_none(), "open, no rail");
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    cx.executor().advance_clock(Duration::from_millis(400));
+    tick(cx);
+    let rail = cx.debug_bounds("nav-rail").expect("folded, the rail");
+    assert!((rail.size.width - px(nav::FOLDED_WIDTH)).abs() <= px(0.5));
+    let mut above = px(0.);
+    for thread in &threads {
+        let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
+        let line = cx.debug_bounds(id).expect("a line per open Thread");
+        assert_eq!(line.size.height, px(crate::theme::NAV_LINE));
+        assert!(line.top() >= above, "in the tree's order");
+        above = line.bottom();
+    }
+    let seam = cx.debug_bounds("nav-seam").expect("the seam beside it");
+    assert!((seam.left() - px(nav::FOLDED_WIDTH)).abs() <= px(0.5));
+    let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
+    assert!(
+        (board.x - (nav::FOLDED_WIDTH + crate::theme::CHROME_SEAM_W)).abs() <= 0.5,
+        "the board starts right of the rail: {board:?}"
+    );
+    let keyed = |cx: &mut gpui::VisualTestContext| {
+        assert!(
+            cx.debug_bounds("nav-rail-key-2").is_none(),
+            "one Pane, one key"
+        );
+        let key = cx.debug_bounds("nav-rail-key-1").expect("⌘1's line");
+        threads
+            .iter()
+            .copied()
+            .find(|thread| {
+                let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
+                cx.debug_bounds(id)
+                    .is_some_and(|line| line.top() <= key.top() && key.bottom() <= line.bottom())
+            })
+            .expect("on a Thread's line")
+    };
+    let focused = view.read_with(cx, |view, _| view.cockpit.roster().focused_thread());
+    assert_eq!(Some(keyed(cx)), focused);
+    let last: &'static str = format!("nav-rail-{}", threads[2].get()).leak();
+    let line = cx.debug_bounds(last).unwrap();
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+        Some(threads[2])
+    );
+    assert_eq!(keyed(cx), threads[2], "⌘1 follows the Solo Pane");
 }
