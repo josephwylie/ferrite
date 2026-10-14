@@ -153,6 +153,9 @@ pub(crate) enum Command {
     UpdateFerrite,
     DiscardDraft,
     ImportSession,
+    ResetKeys,
+    /// The operator's own command, by its place in Settings `commands`.
+    User(usize),
 }
 
 /// What a row does when it runs.
@@ -409,49 +412,18 @@ const NO_MATCHES: &str = "no matches";
 
 impl Render for Palette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The input row: `❯` in its 2-cell gutter (the accent, the typed
-        // prompt mark), the query in `TEXT_STRONG` with the block caret,
-        // a row and 12px tall over the float's rule.
-        let input = div()
-            .debug_selector(|| "palette-input".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .h(px(PALETTE_INPUT_H))
-            .px(px(FLOAT_PAD_X))
-            .border_b_1()
-            .border_color(FLOAT_RULE)
-            // Centred in the 31px over its rule, the line falls half a
-            // pixel off the grid: set where the browser sets it.
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .w(px(FLOAT_GUTTER))
-                    .child(components::prompt_mark(ACCENT)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .font_family(FONT_CODE)
-                    .line_height(px(LH_UI))
-                    .text_color(rgb(TEXT_STRONG))
-                    .child(self.input.clone()),
-            )
-            .children(
-                status_filter(self.scope, &self.query(cx))
-                    .flatten()
-                    .map(|filter| {
-                        div()
-                            .debug_selector(|| "palette-filter".into())
-                            .flex_shrink_0()
-                            .ml(px(FLOAT_DETAIL_GAP))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(filter_word(filter))
-                    }),
-            );
+        let input = input_row("palette-input", self.input.clone()).children(
+            status_filter(self.scope, &self.query(cx))
+                .flatten()
+                .map(|filter| {
+                    div()
+                        .debug_selector(|| "palette-filter".into())
+                        .flex_shrink_0()
+                        .ml(px(FLOAT_DETAIL_GAP))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(filter_word(filter))
+                }),
+        );
         let mut list = div()
             .id("palette-rows")
             .flex()
@@ -506,6 +478,41 @@ impl Render for Palette {
             .child(list)
             .child(crate::menu::footer_line(footer))
     }
+}
+
+/// A float's input row (the palette's, the shortcuts sheet's filter): `❯`
+/// in its 2-cell gutter (the accent, the typed prompt mark), the line in
+/// `TEXT_STRONG` with the block caret, a row and 12px tall over the float's
+/// rule.
+pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui::Div {
+    div()
+        .debug_selector(move || selector.into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(PALETTE_INPUT_H))
+        .px(px(FLOAT_PAD_X))
+        .border_b_1()
+        .border_color(FLOAT_RULE)
+        // Centred in the 31px over its rule, the line falls half a
+        // pixel off the grid: set where the browser sets it.
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .w(px(FLOAT_GUTTER))
+                .child(components::prompt_mark(ACCENT)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .font_family(FONT_CODE)
+                .line_height(px(LH_UI))
+                .text_color(rgb(TEXT_STRONG))
+                .child(input),
+        )
 }
 
 /// One palette row (the prototype's `.frow`): the gutter (`❯` on the

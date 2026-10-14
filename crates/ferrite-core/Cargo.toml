@@ -15,6 +15,10 @@ ureq = "3"
 # for the installer (`self_update`). Already in the tree via gpui.
 sha2 = "0.10"
 
+# Stopping an operator's command ends its process group (`user_commands`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # An npm-installed provider CLI on Windows is a `.cmd` shim: the Session's
 # child is cmd.exe with the real CLI beneath it, and only a Job Object can
 # kill or meter that whole tree. Threading is for the Windows CI tests that

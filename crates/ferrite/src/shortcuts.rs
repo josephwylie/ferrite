@@ -1,23 +1,29 @@
 //! The shortcuts sheet (`?`, FL-8): every key the cockpit binds, read from
-//! the key table (`keymap::bindings`) through one label table, in the float
-//! grammar at the palette's geometry and over its veil.
+//! the bound key table (`keymap::active`, the operator's keys included)
+//! through one label table, in the float grammar at the palette's geometry
+//! and over its veil.
 //!
-//! A head (`shortcuts`, `?` at its right), sections by where a key acts —
+//! A head (`shortcuts`, `?` at its right), a filter line under it (`❯`, the
+//! palette's input row), sections by where a key acts —
 //! `threads`, `board`, `composer`, `decision`, `wall`, `transcript` — rows
 //! with the label at the left and the chord at the right, and the footer
-//! `↑↓ scroll · esc`. The floats' own keys (the palette's, the list's, this
-//! sheet's) and the Review slot's are in their footers, so the sheet leaves
-//! them out; the label table still names them, so a key the table gains
-//! without a label fails `every_bound_action_has_a_label`.
+//! `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
+//! match, as the palette filters. The floats' own keys (the palette's, the
+//! list's, this sheet's) and the Review slot's are in their footers, so the
+//! sheet leaves them out; the label table still names them, so a key the
+//! table gains without a label fails `every_bound_action_has_a_label`.
+
+use std::ops::Range;
 
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, rgb, Context, FocusHandle, Focusable, IntoElement, ScrollHandle, SharedString,
+    div, point, px, rgb, Context, Entity, IntoElement, ScrollHandle, StyledText, Subscription,
     Window,
 };
 
 use crate::components;
-use crate::keymap::{self, Platform};
+use crate::composer::{Composer, Edited, Role};
+use crate::keymap::Binding;
 use crate::theme::*;
 
 gpui::actions!(shortcuts, [Toggle, ScrollUp, ScrollDown, Dismiss]);
@@ -200,13 +206,13 @@ pub(crate) struct SheetRow {
     pub keys: String,
 }
 
-/// The sheet's rows for `platform`, in section order, each action once (its
-/// first binding in a place wins: `⌘N` before `⌘T`). The pane digits and
-/// the answer digits read as one row each (`⌘1…9`, `1…3`).
-pub(crate) fn rows(platform: Platform) -> Vec<SheetRow> {
+/// The sheet's rows for a key table, in section order, each action once
+/// (its first binding in a place wins: `⌘N` before `⌘T`). The pane digits
+/// and the answer digits read as one row each (`⌘1…9`, `1…3`).
+pub(crate) fn rows(table: &[Binding]) -> Vec<SheetRow> {
     let mut rows: Vec<SheetRow> = Vec::new();
-    for (keys, action, context) in keymap::bindings(platform) {
-        let Some(Entry::Row(place, label)) = label(action, context) else {
+    for (keys, action, context) in table {
+        let Some(Entry::Row(place, label)) = label(action, *context) else {
             continue;
         };
         if rows
@@ -215,10 +221,10 @@ pub(crate) fn rows(platform: Platform) -> Vec<SheetRow> {
         {
             continue;
         }
-        let mut keys = components::spell_chord(&keys);
-        if matches!(action, "cockpit::FocusThread1") {
+        let mut keys = components::spell_chord(keys);
+        if matches!(*action, "cockpit::FocusThread1") {
             keys.push_str("\u{2026}9");
-        } else if matches!(action, "cockpit::PickOption1") {
+        } else if matches!(*action, "cockpit::PickOption1") {
             keys.push_str("\u{2026}3");
         }
         rows.push(SheetRow { place, label, keys });
@@ -227,24 +233,56 @@ pub(crate) fn rows(platform: Platform) -> Vec<SheetRow> {
     rows
 }
 
+/// The rows `query` keeps, in order, each with its label's lit ranges: the
+/// palette's filter over the label, then the section and the chord.
+fn filter<'a>(rows: &'a [SheetRow], query: &str) -> Vec<(&'a SheetRow, Vec<Range<usize>>)> {
+    rows.iter()
+        .filter_map(|row| {
+            let context = format!("{} {}", row.place.title(), row.keys);
+            crate::fuzzy::palette_match(query, row.label, &context).map(|lit| (row, lit))
+        })
+        .collect()
+}
+
 /// The sheet's footer, word for word.
 pub(crate) const FOOTER: &str = "\u{2191}\u{2193} scroll \u{b7} esc";
 
-/// The sheet: its rows, its scroll and the focus its keys ride
-/// (`Shortcuts` context).
+/// The sheet: its rows, its filter line (which holds the keyboard, its
+/// keys in the `Shortcuts` context) and its scroll.
 pub(crate) struct Shortcuts {
     rows: Vec<SheetRow>,
+    pub input: Entity<Composer>,
     scroll: ScrollHandle,
-    focus: FocusHandle,
+    _edited: Subscription,
 }
 
 impl Shortcuts {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| {
+            let mut line = Composer::new(cx);
+            line.set_role(Role::Field(Some("Shortcuts")), cx);
+            line.set_visible_row_limit(1, cx);
+            line
+        });
+        let edited = cx.subscribe(&input, |sheet: &mut Self, _, _: &Edited, cx| {
+            sheet.scroll.set_offset(point(px(0.), px(0.)));
+            cx.notify();
+        });
         Self {
-            rows: rows(keymap::PLATFORM),
+            rows: rows(&crate::keymap::active()),
+            input,
             scroll: ScrollHandle::new(),
-            focus: cx.focus_handle(),
+            _edited: edited,
         }
+    }
+
+    /// The rows the filter line keeps — what the tests read.
+    #[cfg(test)]
+    pub(crate) fn shown(&self, cx: &gpui::App) -> Vec<&SheetRow> {
+        filter(&self.rows, self.input.read(cx).text())
+            .into_iter()
+            .map(|(row, _)| row)
+            .collect()
     }
 
     /// ↑ / ↓: a row at a time, held inside the list.
@@ -257,14 +295,11 @@ impl Shortcuts {
     }
 }
 
-impl Focusable for Shortcuts {
-    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
-        self.focus.clone()
-    }
-}
-
 impl Render for Shortcuts {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = crate::palette::input_row("shortcuts-input", self.input.clone());
+        let query = self.input.read(cx).text().to_string();
+        let shown = filter(&self.rows, &query);
         let mut list = div()
             .id("shortcuts-rows")
             .flex()
@@ -274,7 +309,7 @@ impl Render for Shortcuts {
             .overflow_y_scroll()
             .track_scroll(&self.scroll);
         let mut place = None;
-        for (index, row) in self.rows.iter().enumerate() {
+        for (index, (row, lit)) in shown.iter().enumerate() {
             if place != Some(row.place) {
                 place = Some(row.place);
                 list = list.child(crate::menu::section(row.place.title(), None, None));
@@ -291,11 +326,10 @@ impl Render for Shortcuts {
                     .pr(px(FLOAT_PAD_X))
                     .whitespace_nowrap()
                     .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(TEXT))
-                            .child(SharedString::from(row.label)),
+                        div().min_w_0().truncate().text_color(rgb(TEXT)).child(
+                            StyledText::new(row.label)
+                                .with_highlights(components::match_highlights(lit, false)),
+                        ),
                     )
                     .child(
                         div()
@@ -305,13 +339,15 @@ impl Render for Shortcuts {
                     ),
             );
         }
+        if shown.is_empty() {
+            list = list.child(crate::menu::note("no matches").mt(px(FLOAT_SECTION_GAP)));
+        }
         crate::menu::float()
             .debug_selector(|| "shortcuts-sheet".into())
             .w(px(PALETTE_W))
-            .track_focus(&self.focus)
-            .key_context("Shortcuts")
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(crate::menu::head("shortcuts").child("?"))
+            .child(input)
             .child(list)
             .child(crate::menu::footer_line(FOOTER))
     }
@@ -320,6 +356,7 @@ impl Render for Shortcuts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keymap::{self, Platform};
 
     /// Every key the table binds has a label (or is named hidden), on both
     /// platforms: a new binding without one fails here.
@@ -340,7 +377,7 @@ mod tests {
     /// the editing keys included.
     #[test]
     fn the_sheet_lists_the_table_by_place() {
-        let rows = rows(Platform::Mac);
+        let rows = rows(&keymap::bindings(Platform::Mac));
         let find = |place: Place, label: &str| {
             rows.iter()
                 .find(|row| row.place == place && row.label == label)
@@ -384,5 +421,44 @@ mod tests {
         assert!(rows
             .iter()
             .all(|row| !row.label.is_empty() && !row.keys.is_empty()));
+    }
+
+    /// The filter keeps the rows whose label, section or chord match, in
+    /// order, lighting the label.
+    #[test]
+    fn the_filter_matches_label_section_and_chord() {
+        let rows = rows(&keymap::bindings(Platform::Mac));
+        let labels = |query: &str| -> Vec<&str> {
+            filter(&rows, query)
+                .into_iter()
+                .map(|(row, _)| row.label)
+                .collect()
+        };
+        assert_eq!(labels("").len(), rows.len());
+        assert!(labels("park").starts_with(&["park thread"]));
+        assert!(
+            labels("wall").contains(&"always allow"),
+            "a section matches"
+        );
+        assert!(labels("cmd-k").contains(&"commands"), "a chord matches");
+        assert!(labels("zzzz").is_empty());
+        let (_, lit) = filter(&rows, "park").remove(0);
+        assert_eq!(lit, [0..4]);
+    }
+
+    /// The sheet reads the operator's keys: a rebound action shows its new
+    /// chord, an unbound one is gone.
+    #[test]
+    fn the_sheet_shows_the_operators_keys() {
+        let keys = std::collections::BTreeMap::from([
+            ("palette::Toggle".to_string(), Some("cmd-p".to_string())),
+            ("cockpit::ToggleNav".to_string(), None),
+        ]);
+        let (table, refused) = keymap::with_user_keys(Platform::Mac, &keys);
+        assert!(refused.is_empty(), "{refused:?}");
+        let rows = rows(&table);
+        let commands = rows.iter().find(|row| row.label == "commands").unwrap();
+        assert_eq!(commands.keys, "cmd-P");
+        assert!(rows.iter().all(|row| row.label != "toggle sidebar"));
     }
 }

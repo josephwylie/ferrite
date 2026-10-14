@@ -258,9 +258,9 @@ fn main() {
             visual::init(cx);
             visual::diagram::init(settings.visuals != ferrite_core::visual::Level::Off, cx);
 
-            let bindings = load_bindings(keymap::PLATFORM, cx);
-            cx.bind_keys(bindings);
-            cx.set_menus(app_menus());
+            // A refused key is said by the window (`cockpit::user_commands`).
+            let (keys, keys_refused) = keymap::with_user_keys(keymap::PLATFORM, &settings.keys);
+            bind_keys(keys, cx);
 
             let (adopted, refused) = adopt(&store, &imports);
             for refusal in refused {
@@ -386,6 +386,7 @@ fn main() {
                                     ferrite_updates,
                                     whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
+                                    keys_refused: keys_refused.clone(),
                                 },
                                 cx,
                             );
@@ -539,13 +540,41 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.get(at + 1).map(String::as_str)
 }
 
-/// Where Threads live between runs.
-/// The platform key table (crate::keymap), built into live bindings. The
-/// table is data so both platforms' spellings stay testable; actions are
-/// rebuilt from their registered names here, and the test below keeps a
-/// renamed action from surviving to a launch panic.
-fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
-    keymap::bindings(platform)
+/// Marks the bindings Ferrite's key table made, apart from the ones the
+/// kit (its inputs, text views, dialogs) and `rich` bind for themselves.
+const KEY_TABLE: KeyBindingMetaIndex = KeyBindingMetaIndex(0);
+
+/// Bind `table` (the defaults with the operator's keys laid over them) in
+/// place of the key table bound before, and make it the table every drawn
+/// chord reads; the menu bar is set again so its key equivalents follow.
+///
+/// gpui removes no single binding, so the keymap is rebuilt: everyone
+/// else's bindings stay, in order, and the new table takes the old one's
+/// place (the end, the first time), keeping same-depth precedence.
+fn bind_keys(table: Vec<keymap::Binding>, cx: &mut App) {
+    keymap::install(table.clone());
+    let mut table = Some(load_bindings(table, cx));
+    let keymap = cx.key_bindings();
+    let mut rebuilt = Vec::new();
+    for binding in keymap.borrow().bindings() {
+        if binding.meta() == Some(KEY_TABLE) {
+            rebuilt.extend(table.take().into_iter().flatten());
+        } else {
+            rebuilt.push(binding.clone());
+        }
+    }
+    rebuilt.extend(table.into_iter().flatten());
+    cx.clear_key_bindings();
+    cx.bind_keys(rebuilt);
+    cx.set_menus(app_menus());
+}
+
+/// A key table (crate::keymap), built into live bindings. The table is
+/// data so both platforms' spellings stay testable; actions are rebuilt
+/// from their registered names here, and the test below keeps a renamed
+/// action from surviving to a launch panic.
+fn load_bindings(table: Vec<keymap::Binding>, cx: &mut App) -> Vec<KeyBinding> {
+    table
         .into_iter()
         .map(|(keystroke, action, context)| {
             let action = cx
@@ -565,6 +594,7 @@ fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
                 &DummyKeyboardMapper,
             )
             .expect("the keymap keystrokes parse")
+            .with_meta(KEY_TABLE)
         })
         .collect()
 }
@@ -656,6 +686,7 @@ fn settings_dir() -> std::path::PathBuf {
         .unwrap_or(store)
 }
 
+/// Where Threads live between runs.
 fn store_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("FERRITE_STORE") {
         return dir.into();
@@ -674,8 +705,8 @@ mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
-        adopt, app_menus, demo, dock_launch_dir, find, keep_mouse_cursor_visible, keymap,
-        load_bindings, revive_launch_threads,
+        adopt, app_menus, bind_keys, demo, dock_launch_dir, find, keep_mouse_cursor_visible,
+        keymap, load_bindings, revive_launch_threads, KEY_TABLE,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -688,10 +719,45 @@ mod tests {
         cx.update(|cx| {
             for platform in [keymap::Platform::Mac, keymap::Platform::Windows] {
                 assert_eq!(
-                    load_bindings(platform, cx).len(),
+                    load_bindings(keymap::bindings(platform), cx).len(),
                     keymap::bindings(platform).len()
                 );
             }
+        });
+    }
+
+    /// Binding the key table, at launch or on `reset keys`, replaces only
+    /// the table: the kit's own keys (an input's backspace, rich text's
+    /// copy) stay bound, and the table is never bound twice.
+    #[gpui::test]
+    fn binding_the_key_table_keeps_the_kits_keys(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init_components(cx);
+            let kit = |cx: &mut gpui::App| {
+                cx.key_bindings()
+                    .borrow()
+                    .bindings()
+                    .filter(|binding| binding.meta() != Some(KEY_TABLE))
+                    .count()
+            };
+            let ours = |cx: &mut gpui::App| {
+                cx.key_bindings()
+                    .borrow()
+                    .bindings()
+                    .filter(|binding| binding.meta() == Some(KEY_TABLE))
+                    .count()
+            };
+            let before = kit(cx);
+            // The defaults, as other tests read the installed table too.
+            bind_keys(keymap::bindings(keymap::PLATFORM), cx);
+            bind_keys(keymap::bindings(keymap::PLATFORM), cx);
+            assert_eq!(kit(cx), before);
+            assert_eq!(ours(cx), keymap::bindings(keymap::PLATFORM).len());
+            assert!(cx
+                .key_bindings()
+                .borrow()
+                .bindings()
+                .any(|binding| binding.action().name() == "input::Backspace"));
         });
     }
 

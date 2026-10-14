@@ -9,6 +9,7 @@
 //! operator whole than replaced by defaults they did not choose, and the
 //! window tells them so rather than silently running on the defaults.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -92,6 +93,14 @@ pub struct Settings {
     /// thread keeps the tool it started with. Off also leaves ```mermaid
     /// fences as code rather than diagrams. Default: When asked.
     pub visuals: crate::visual::Level,
+    /// The operator's own palette commands, in the order the palette
+    /// lists them (`user_commands`). Default: none.
+    pub commands: Vec<crate::user_commands::UserCommand>,
+    /// The operator's keys over the defaults: an action's name to the
+    /// keystroke that runs it instead (`"palette::Toggle": "cmd-p"`), or
+    /// `null` to unbind it. Read at launch; the palette's `reset keys`
+    /// clears it. Default: none.
+    pub keys: BTreeMap<String, Option<String>>,
     /// Whether a Thread that finished or needs you plays a sound (ADR
     /// 0017). Default: true.
     pub sounds: bool,
@@ -201,6 +210,8 @@ impl Default for Settings {
             show_thinking: false,
             smart_filtering: false,
             visuals: crate::visual::Level::WhenAsked,
+            commands: Vec::new(),
+            keys: BTreeMap::new(),
             sounds: true,
             done_sound: None,
             needs_you_sound: None,
@@ -375,6 +386,15 @@ mod tests {
             show_thinking: true,
             smart_filtering: true,
             visuals: crate::visual::Level::Automatic,
+            commands: vec![crate::user_commands::UserCommand {
+                name: "run tests".to_string(),
+                run: crate::user_commands::Run::Shell("cargo test".to_string()),
+                output: crate::user_commands::Output::Reader,
+            }],
+            keys: BTreeMap::from([
+                ("palette::Toggle".to_string(), Some("cmd-p".to_string())),
+                ("cockpit::ToggleNav".to_string(), None),
+            ]),
             sounds: false,
             done_sound: Some(PathBuf::from("/sounds/done.aiff")),
             needs_you_sound: Some(PathBuf::from("/sounds/needs-you.aiff")),

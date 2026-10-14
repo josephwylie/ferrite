@@ -398,6 +398,58 @@ fn question_mark_opens_the_shortcuts_sheet_on_an_empty_line(cx: &mut TestAppCont
     assert_eq!(resolves("?", cx), None, "a typed `?` is just a character");
 }
 
+/// The sheet's filter line holds the keyboard: typing keeps the rows that
+/// match (a `?` included, as text), ↑↓ still scroll, ⏎ sends nothing, esc
+/// still closes.
+#[gpui::test]
+fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("shortcuts-filter", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    cx.simulate_keystrokes("?");
+    tick(cx);
+    assert!(cx.debug_bounds("shortcuts-input").is_some());
+    cx.simulate_input("park");
+    tick(cx);
+    let labels = |cx: &mut gpui::VisualTestContext| -> Vec<&'static str> {
+        view.read_with(cx, |view, cx| {
+            let sheet = view.floats.shortcuts.as_ref().expect("open").read(cx);
+            sheet.shown(cx).into_iter().map(|row| row.label).collect()
+        })
+    };
+    let shown = labels(cx);
+    assert_eq!(shown.first(), Some(&"park thread"), "{shown:?}");
+    assert!(shown.contains(&"show parked"));
+    assert!(!shown.contains(&"new thread"));
+    assert_eq!(resolves("down", cx), Some("shortcuts::ScrollDown"));
+    // Through key dispatch: no binding claims `?` in the filter, so it is
+    // text there.
+    assert_eq!(resolves("?", cx), None);
+    cx.simulate_keystrokes("?");
+    tick(cx);
+    assert!(labels(cx).is_empty(), "`?` is typed, not a toggle");
+    assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_some()));
+    // ⏎ in the filter sends nothing: not the Pane's draft from under it.
+    view.update(cx, |view, cx| {
+        let composer = view.panes[view.focused()].composer.clone();
+        composer.update(cx, |composer, cx| composer.set("draft".into(), cx));
+    });
+    assert_eq!(resolves("enter", cx), None);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(fake.sent.borrow().is_empty());
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[view.focused()].composer.read(cx).text(), "draft");
+        assert!(view.floats.shortcuts.is_some());
+    });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_none()));
+    assert_eq!(*fake.interrupts.borrow(), 0);
+}
+
 /// FL-9: ⇧⇥ steps the Session's permission modes through its own control.
 #[gpui::test]
 fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {

@@ -1068,7 +1068,7 @@ pub fn bound_chord(action: &str) -> Option<String> {
 /// context), spelled as `bound_chord` spells it — for a key that only acts
 /// somewhere (⌘⌫ parks from an empty line: `ComposerEmpty`).
 pub fn bound_chord_in(action: &str, context: Option<&str>) -> Option<String> {
-    let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
+    let (keys, _, _) = crate::keymap::active()
         .into_iter()
         .find(|(_, bound, bound_context)| *bound == action && *bound_context == context)?;
     Some(spell_chord(&keys))

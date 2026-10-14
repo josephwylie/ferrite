@@ -142,6 +142,18 @@ impl Preview {
         true
     }
 
+    /// Show text no file holds (a command's output) in the reader, as if
+    /// read from `path`: the path picks the reader's chip and highlighting.
+    pub fn open_source(&self, path: PathBuf, title: String, source: String) {
+        self.state.lock().unwrap().document = Some(Document {
+            path,
+            title,
+            source,
+            line: None,
+            review: None,
+        });
+    }
+
     /// Show a review in the reader's slot, its head the workspace's name.
     pub fn open_review(
         &self,

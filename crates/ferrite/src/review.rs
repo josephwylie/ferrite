@@ -611,7 +611,8 @@ mod tests {
     fn a_comment_from_the_keys_rides_the_next_prompt(cx: &mut TestAppContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
-            let bindings = crate::load_bindings(crate::keymap::Platform::Mac, cx);
+            let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
+            let bindings = crate::load_bindings(table, cx);
             cx.bind_keys(bindings);
         });
         let window = cx.add_window(|_, cx| {

@@ -12,6 +12,7 @@ mod parts;
 pub(crate) mod subagents;
 mod transcript_glue;
 mod updating;
+mod user_commands;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =
@@ -545,6 +546,9 @@ pub struct CockpitView {
     read_only_told: bool,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
+    /// The operator's commands running, and what they and the keys have
+    /// still to say.
+    user_commands: user_commands::UserCommands,
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     group_error: Option<SharedString>,
@@ -639,6 +643,9 @@ pub struct Preferences {
     /// Why `settings.json` could not be used, when it could not: the
     /// window says so, and saves nothing over the file (`change_settings`).
     pub unreadable: Option<String>,
+    /// The keys in `settings.json` the launch refused, a sentence each
+    /// (`keymap::with_user_keys`): the window says them once.
+    pub keys_refused: Vec<String>,
 }
 
 impl Preferences {
@@ -656,6 +663,7 @@ impl Preferences {
             ferrite_updates: false,
             whats_new: None,
             unreadable: None,
+            keys_refused: Vec::new(),
         }
     }
 }
@@ -1539,6 +1547,7 @@ impl CockpitView {
             ferrite_update: Default::default(),
             read_only_told: false,
             unreadable_told: false,
+            user_commands: Default::default(),
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),
@@ -9355,6 +9364,7 @@ impl CockpitView {
         self.present_ferrite_update(window, cx);
         self.present_read_only(window, cx);
         self.present_unreadable_settings(window, cx);
+        self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
@@ -13565,6 +13575,7 @@ mod tests {
     mod ui_f;
     mod ui_g;
     mod updating;
+    mod user_commands;
     mod visuals;
     use super::*;
     use std::cell::RefCell;
@@ -20681,7 +20692,8 @@ mod tests {
     /// launch binds.
     fn bind_production_keys(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            let bindings = crate::load_bindings(crate::keymap::Platform::Mac, cx);
+            let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
+            let bindings = crate::load_bindings(table, cx);
             cx.bind_keys(bindings);
         });
     }

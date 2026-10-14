@@ -32,6 +32,7 @@ pub mod store;
 pub mod suggest;
 pub mod titler;
 pub mod transcript;
+pub mod user_commands;
 pub mod visual;
 pub mod workspace;
 
