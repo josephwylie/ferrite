@@ -1765,13 +1765,21 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
 /// (ADR 0009), renamed over, the rename made durable by syncing the
 /// directory. A symlinked file is written through to its target, so the
 /// link the operator made survives.
+///
+/// Each document has one writer (the UI thread), so its temp file has one
+/// fixed name: one a crash left behind is simply written over next time.
+/// Once the rename is done the new file is the answer; a directory that
+/// will not sync is logged, not returned, so a caller never rolls back to
+/// a state the disk no longer holds.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         fs::canonicalize(path)?
     } else {
         path.to_path_buf()
     };
-    let tmp = temp_beside(&path);
+    let mut tmp = path.clone().into_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     (|| {
         let mut file = File::create(&tmp)?;
         file.write_all(bytes)?;
@@ -1781,7 +1789,10 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     .inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
     })?;
-    sync_dir(path.parent().unwrap_or(Path::new(".")))
+    if let Err(error) = sync_dir(path.parent().unwrap_or(Path::new("."))) {
+        crate::log!("{} replaced but not synced: {error}", path.display());
+    }
+    Ok(())
 }
 
 /// A name for a file written beside a log and renamed over it. Never a

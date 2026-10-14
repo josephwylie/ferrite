@@ -115,7 +115,7 @@ pub trait Spawner {
         self.spawn(request).map(SessionLifecycle::ready)
     }
 
-    /// `start`, once `prepare` has run (ADR 0014). A ready adapter runs it
+    /// `start`, once `prepare` has run (ADR 0018). A ready adapter runs it
     /// here, on the caller's thread; production runs it first on the
     /// thread it starts the CLI on, so the caller waits for neither.
     fn start_after(
@@ -879,19 +879,22 @@ impl Cockpit {
         thread.session = None;
         thread.replacement = None;
         thread.replace_generation();
-        let spawned = self.spawner.start(SpawnRequest {
-            provider: thread.provider,
-            model: thread.model.as_deref(),
-            effort: thread.effort.as_deref(),
-            resume: resume.as_deref(),
-            cwd: cwd.as_deref(),
-            name: thread.title.as_deref(),
-            additional_directories: project_additional_directories(
-                &self.registry,
-                project,
-                cwd.as_deref(),
-            ),
-        });
+        let spawned = self.spawner.start_after(
+            placement(&self.registry, self.store.dir(), thread.workspace.as_ref(), id),
+            SpawnRequest {
+                provider: thread.provider,
+                model: thread.model.as_deref(),
+                effort: thread.effort.as_deref(),
+                resume: resume.as_deref(),
+                cwd: cwd.as_deref(),
+                name: thread.title.as_deref(),
+                additional_directories: project_additional_directories(
+                    &self.registry,
+                    project,
+                    cwd.as_deref(),
+                ),
+            },
+        );
         Some(spawned.map(|session| {
             thread.session = Some(session);
             // A fresh Session knows nothing: its first prompt must carry
@@ -1366,19 +1369,22 @@ impl Cockpit {
         };
         let session = self
             .spawner
-            .start(SpawnRequest {
-                provider,
-                model: model.as_deref(),
-                effort: effort.as_deref(),
-                resume,
-                cwd,
-                name: state.title.as_deref(),
-                additional_directories: project_additional_directories(
-                    &self.registry,
-                    project,
+            .start_after(
+                placement(&self.registry, self.store.dir(), state.workspace.as_ref(), thread),
+                SpawnRequest {
+                    provider,
+                    model: model.as_deref(),
+                    effort: effort.as_deref(),
+                    resume,
                     cwd,
-                ),
-            })
+                    name: state.title.as_deref(),
+                    additional_directories: project_additional_directories(
+                        &self.registry,
+                        project,
+                        cwd,
+                    ),
+                },
+            )
             .map_err(ProvisionError::Spawn)?;
         let mut replacement = Replacement {
             session,
@@ -1685,22 +1691,10 @@ impl Cockpit {
         // On demand also means back on demand: a worktree deleted while the
         // Thread was parked is recreated on its own branch before anything
         // spawns into it.
-        let worktree = match &workspace {
-            Some(WorkspaceBinding::Worktree { repo, path }) => Some((
-                repo.clone(),
-                path.clone(),
-                worktree_branch(&self.registry, path, thread),
-            )),
-            _ => None,
-        };
+        let place = placement(&self.registry, self.store.dir(), workspace.as_ref(), thread);
         let prepare: Preparation = Box::new(move || {
             std::thread::sleep(delay);
-            match worktree {
-                Some((repo, path, branch)) => {
-                    place_worktree(&repo, &path, &branch).map_err(io::Error::other)
-                }
-                None => Ok(()),
-            }
+            place()
         });
         let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
             .map(Path::to_path_buf);
@@ -1847,15 +1841,19 @@ impl Cockpit {
             .map(Path::to_path_buf);
             let additional_directories =
                 project_additional_directories(&self.registry, project, cwd.as_deref());
-            match self.spawner.start(SpawnRequest {
-                provider: state.provider,
-                model: state.model.as_deref(),
-                effort: state.effort.as_deref(),
-                resume: resume.as_deref(),
-                cwd: cwd.as_deref(),
-                name: state.title.as_deref(),
-                additional_directories,
-            }) {
+            let place = placement(&self.registry, self.store.dir(), state.workspace.as_ref(), thread);
+            match self.spawner.start_after(
+                place,
+                SpawnRequest {
+                    provider: state.provider,
+                    model: state.model.as_deref(),
+                    effort: state.effort.as_deref(),
+                    resume: resume.as_deref(),
+                    cwd: cwd.as_deref(),
+                    name: state.title.as_deref(),
+                    additional_directories,
+                },
+            ) {
                 Ok(session) => {
                     state.session = Some(session);
                     state.preface_pending = true;
@@ -4479,8 +4477,39 @@ fn worktree_branch(registry: &Registry, path: &Path, thread: ThreadId) -> String
         .unwrap_or_else(|| branch_name(thread))
 }
 
+/// What every start of an existing Thread's Session waits on (ADR 0018):
+/// its worktree checked if standing, or remade if missing and Ferrite's own
+/// (registered, or pre-registry under the store). A revive's start and any
+/// later one alike, so a worktree a revival could not place is tried again
+/// on the next send rather than spawned into while missing. The branch is
+/// looked up here; the git calls run wherever the spawner runs the
+/// preparation.
+fn placement(
+    registry: &Registry,
+    store_dir: &Path,
+    workspace: Option<&WorkspaceBinding>,
+    thread: ThreadId,
+) -> Preparation {
+    let worktree = match workspace {
+        Some(WorkspaceBinding::Worktree { repo, path })
+            if path.exists()
+                || registry.branch_for(path).is_some()
+                || path.starts_with(store_dir) =>
+        {
+            Some((repo.clone(), path.clone(), worktree_branch(registry, path, thread)))
+        }
+        _ => None,
+    };
+    Box::new(move || match worktree {
+        Some((repo, path, branch)) => {
+            place_worktree(&repo, &path, &branch).map_err(io::Error::other)
+        }
+        None => Ok(()),
+    })
+}
+
 /// `ensure_workspace`'s git half, which needs no registry: it can run off
-/// the UI thread (`revive_after`).
+/// the UI thread (`placement`).
 fn place_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), workspace::GitError> {
     // Anything already standing at the path must BE the worktree — a
     // directory that merely exists there (squatting where one was, or was
@@ -5765,7 +5794,7 @@ mod tests {
         );
     }
 
-    /// ADR 0014: a revived Thread's git calls are the spawner's to run,
+    /// ADR 0018: a revived Thread's git calls are the spawner's to run,
     /// ahead of the CLI, never the caller's. A spawner that holds the
     /// preparation back leaves the vanished worktree missing after
     /// `revive_after` returns; running the preparation brings it back.
@@ -5819,6 +5848,27 @@ mod tests {
         let prepare = held.borrow_mut().pop().expect("the spawner was handed it");
         prepare().unwrap();
         assert!(worktree.join(".git").exists(), "the preparation remakes it");
+    }
+
+    /// ADR 0018: a worktree a revival could not place is not given up on.
+    /// Every later start of the Thread's Session — here the watchdog's
+    /// restart — remakes a missing worktree before the CLI spawns into it.
+    #[test]
+    fn a_restart_remakes_a_missing_worktree_first() {
+        let root = scratch("restart-remakes");
+        let repo = init_repo(&root);
+        let (mut cockpit, _fake) = cockpit("restart-remakes-store");
+        let rss = Rc::new(RefCell::new(4 * 1024 * 1024 * 1024));
+        cockpit.watch_memory(Box::new(Meter(rss)), 1024 * 1024 * 1024);
+        let thread = cockpit
+            .open(Provider::Claude, WorkspaceChoice::NewWorktree { repo })
+            .unwrap();
+        let worktree = cockpit.thread(thread).unwrap().workspace().unwrap().cwd().to_path_buf();
+        std::fs::remove_dir_all(&worktree).unwrap();
+
+        assert_eq!(cockpit.sweep().len(), 1);
+
+        assert!(worktree.join(".git").exists(), "remade before the restart");
     }
 
     /// Registered central worktrees outlive every individual Thread. Two

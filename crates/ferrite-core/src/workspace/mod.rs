@@ -260,7 +260,7 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
         return Ok(());
     }
     // Revivals place their worktrees on spawning threads at once (ADR
-    // 0014). One at a time: a prune can remove another add's admin
+    // 0018). One at a time: a prune can remove another add's admin
     // directory in the instant before git marks it "initializing".
     static PLACING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _placing = PLACING.lock().unwrap_or_else(|e| e.into_inner());

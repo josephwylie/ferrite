@@ -36,6 +36,7 @@ fn copy_diagnostics_puts_the_report_on_the_clipboard(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
     view.update(cx, |view, cx| view.copy_diagnostics(cx));
+    cx.run_until_parked();
 
     let report = cx
         .read_from_clipboard()

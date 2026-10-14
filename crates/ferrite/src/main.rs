@@ -439,7 +439,7 @@ fn adopt(store: &Store, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
     (adopted, refused)
 }
 
-/// How far apart the launch starts the Sessions it restores (ADR 0014): a
+/// How far apart the launch starts the Sessions it restores (ADR 0018): a
 /// window of Threads coming back does not start every CLI in one instant.
 const LAUNCH_STAGGER: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -788,6 +788,74 @@ mod tests {
         revive_launch_threads(&mut restarted);
 
         assert_eq!(restarted.threads(), vec![first, second]);
+    }
+
+    /// ADR 0018: each restored Session starts `LAUNCH_STAGGER` after the
+    /// one before, the wait being its start's, not the launch's.
+    #[test]
+    fn a_launch_staggers_the_sessions_it_restores() {
+        use ferrite_core::cockpit::{Preparation, SpawnRequest, Spawner};
+        use ferrite_core::session::SessionLifecycle;
+        use std::time::{Duration, Instant};
+        struct Timing {
+            demo: demo::Spawn,
+            waits: std::rc::Rc<std::cell::RefCell<Vec<Duration>>>,
+        }
+        impl Spawner for Timing {
+            fn spawn(
+                &mut self,
+                request: SpawnRequest,
+            ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+                self.demo.spawn(request)
+            }
+            fn start_after(
+                &mut self,
+                prepare: Preparation,
+                request: SpawnRequest,
+            ) -> std::io::Result<SessionLifecycle> {
+                let started = Instant::now();
+                prepare()?;
+                self.waits.borrow_mut().push(started.elapsed());
+                self.start(request)
+            }
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-launch-{}-stagger",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let checkout = std::env::current_dir().unwrap();
+        let mut core = Cockpit::new(
+            Store::open(&dir).unwrap(),
+            Box::new(demo::Spawn::new(false)),
+        );
+        for _ in 0..3 {
+            core.open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        }
+        core.halt_sessions();
+        drop(core);
+
+        let waits = std::rc::Rc::default();
+        let mut restarted = Cockpit::new(
+            Store::open(&dir).unwrap(),
+            Box::new(Timing {
+                demo: demo::Spawn::new(false),
+                waits: std::rc::Rc::clone(&waits),
+            }),
+        );
+        revive_launch_threads(&mut restarted);
+
+        let waits = waits.borrow();
+        assert_eq!(waits.len(), 3);
+        for (nth, wait) in waits.iter().enumerate() {
+            assert!(*wait >= super::LAUNCH_STAGGER * nth as u32, "{waits:?}");
+        }
     }
 
     /// Leg 3: a file that is not a session file is refused in the operator's

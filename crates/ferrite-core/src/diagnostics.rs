@@ -1,4 +1,4 @@
-//! What Ferrite says about itself after the fact (ADR 0015): one capped,
+//! What Ferrite says about itself after the fact (ADR 0019): one capped,
 //! rotating log under `~/.ferrite/logs`, a crash report per panic beside
 //! it, and the text Settings › About copies for a bug report.
 //!
@@ -13,8 +13,6 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-/// The log's directory under the one `open` is given (`~/.ferrite`).
-const LOGS: &str = "logs";
 /// The live log's name under `logs/`; the one before it is `ferrite.log.1`.
 const LOG: &str = "ferrite.log";
 const PREVIOUS: &str = "ferrite.log.1";
@@ -38,7 +36,7 @@ static SINK: OnceLock<Mutex<Log>> = OnceLock::new();
 /// Start logging into `<dir>/logs`, and write a crash report there for
 /// every panic. Called once, at launch; before it lines reach stderr only.
 pub fn open(dir: &Path) {
-    let logs = dir.join(LOGS);
+    let logs = logs(dir);
     let log = Log::new(logs.clone(), CAP);
     if SINK.set(Mutex::new(log)).is_err() {
         return;
@@ -59,6 +57,11 @@ pub fn open(dir: &Path) {
     }));
 }
 
+/// Where the log and crash reports live under `dir` (`~/.ferrite`).
+pub fn logs(dir: &Path) -> PathBuf {
+    dir.join("logs")
+}
+
 /// What `log!` expands to.
 pub fn write(line: fmt::Arguments) {
     eprintln!("ferrite: {line}");
@@ -74,7 +77,7 @@ pub fn write(line: fmt::Arguments) {
 /// platform, the CLIs) one per line, then from `<dir>/logs` the newest
 /// crash report whole and the end of the log.
 pub fn report(dir: &Path, facts: &[(&str, String)]) -> String {
-    let dir = dir.join(LOGS);
+    let dir = logs(dir);
     let mut text = String::from("Ferrite diagnostics\n");
     for (key, value) in facts {
         text.push_str(&format!("{key}: {value}\n"));
@@ -231,7 +234,7 @@ mod tests {
     #[test]
     fn the_report_carries_facts_the_newest_crash_and_the_log() {
         let dir = scratch("report");
-        let logs = dir.join(LOGS);
+        let logs = logs(&dir);
         let mut log = Log::new(logs.clone(), CAP);
         log.append("thread 3: session ended: exit status 1")
             .unwrap();

@@ -4230,7 +4230,8 @@ impl CockpitView {
     }
 
     /// Settings › About's Diagnostics: what a bug report needs, on the
-    /// clipboard (`ferrite_core::diagnostics::report`).
+    /// clipboard (`ferrite_core::diagnostics::report`). The report reads
+    /// up to the whole log, so it is gathered in the background.
     fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
         let (claude, codex) = self
             .cli_versions
@@ -4249,10 +4250,20 @@ impl CockpitView {
             ("Codex CLI", codex.to_string()),
             ("Open Threads", self.cockpit.threads().len().to_string()),
         ];
-        let report = ferrite_core::diagnostics::report(&self.prefs.dir, &facts);
-        cx.write_to_clipboard(ClipboardItem::new_string(report));
-        self.settings_copied = Some("Diagnostics");
-        cx.notify();
+        let dir = self.prefs.dir.clone();
+        cx.spawn(async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn(async move { ferrite_core::diagnostics::report(&dir, &facts) })
+                .await;
+            this.update(cx, |view, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(report));
+                view.settings_copied = Some("Diagnostics");
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// A `settings.json` that could not be used is said once and kept on
@@ -4614,7 +4625,7 @@ impl CockpitView {
                 "Diagnostics",
                 "Version, platform, the CLIs, the newest crash report and the end of \
                  the log, for a bug report",
-                self.prefs.dir.join("logs").display().to_string().into(),
+                ferrite_core::diagnostics::logs(&self.prefs.dir).display().to_string().into(),
                 Some(if copied == Some("Diagnostics") { "Copied" } else { "Copy" }.into()),
                 {
                     let view = cx.entity().downgrade();

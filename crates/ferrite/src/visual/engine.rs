@@ -80,7 +80,7 @@ fn boot_state() -> State {
         Err(error) => {
             // Expected under `cargo run` on macOS; worth one line, never a
             // failure.
-            eprintln!("ferrite: visuals off: {error}");
+            ferrite_core::log!("visuals off: {error}");
             State::Unavailable(CHROMIUM_MISSING.into())
         }
     }
@@ -149,7 +149,7 @@ impl Visuals {
                 let state = match dormant.start() {
                     Ok(engine) => State::Ready(Rc::new(engine)),
                     Err(error) => {
-                        eprintln!("ferrite: Chromium failed to start: {error}");
+                        ferrite_core::log!("Chromium failed to start: {error}");
                         State::Unavailable(format!("Visuals failed to start: {error}").into())
                     }
                 };
