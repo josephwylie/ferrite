@@ -180,10 +180,20 @@ fn main() {
     // after is on record.
     let settings_dir = settings_dir();
     ferrite_core::diagnostics::open(&settings_dir);
+    // The store's claim is taken before anything installs: a second
+    // Ferrite, which only reads the store, leaves the update to the one
+    // whose agents it would end.
+    let store = match Store::open(store_dir()) {
+        Ok(store) => store,
+        Err(e) => {
+            ferrite_core::log!("cannot open the Thread store: {e}");
+            std::process::exit(1);
+        }
+    };
     // A Ferrite update the last run downloaded installs now, before any
     // Session exists for it to cut off (ADR 0020). A successful install
     // does not return here: the new Ferrite takes this process's place.
-    let ferrite_updates = ferrite_update::enabled();
+    let ferrite_updates = ferrite_update::enabled() && store.read_only().is_none();
     let whats_new = ferrite_updates
         .then(|| ferrite_update::at_launch(&settings_dir))
         .flatten();
@@ -250,13 +260,6 @@ fn main() {
             cx.bind_keys(bindings);
             cx.set_menus(app_menus());
 
-            let store = match Store::open(store_dir()) {
-                Ok(store) => store,
-                Err(e) => {
-                    ferrite_core::log!("cannot open the Thread store: {e}");
-                    std::process::exit(1);
-                }
-            };
             let (adopted, refused) = adopt(&store, &imports);
             for refusal in refused {
                 ferrite_core::log!("{refusal}");

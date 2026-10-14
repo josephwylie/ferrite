@@ -62,7 +62,8 @@ impl CockpitView {
     }
 
     /// Who is working and who waits on a Decision, or `None` when every
-    /// agent is idle.
+    /// agent is idle. Work behind Main (its Subagents, its background
+    /// tasks) counts: it outlives Main's turn, and leaving ends it too.
     pub(crate) fn in_flight(&self) -> Option<String> {
         let waiting = self.cockpit.blocked().len();
         let working = self
@@ -70,7 +71,9 @@ impl CockpitView {
             .threads()
             .into_iter()
             .filter_map(|thread| self.cockpit.thread(thread))
-            .filter(|thread| thread.working() && thread.pending().is_none())
+            .filter(|thread| {
+                (thread.working() || thread.background_work()) && thread.pending().is_none()
+            })
             .count();
         in_flight(working, waiting)
     }

@@ -362,6 +362,15 @@ pub fn hand_over(dir: &Path, staged: &Staged) -> io::Result<()> {
     platform::open(&staged.installer_in(dir))
 }
 
+/// Open the installer handed over earlier again, for an operator who
+/// closed it before finishing.
+pub fn reopen(dir: &Path) -> io::Result<()> {
+    let staged = read_manifest(&staging(dir))
+        .filter(Staged::handed_over)
+        .ok_or_else(|| io::Error::other("no installer was handed over"))?;
+    platform::open(&staged.installer_in(dir))
+}
+
 /// Start Ferrite again once this process has exited, so a restart for an
 /// update is one press: the new launch installs what is staged.
 pub fn relaunch_after_exit() -> io::Result<()> {
@@ -436,15 +445,10 @@ mod platform {
         if let Err(error) = detached {
             crate::log!("the update's disk image did not detach: {error}");
         }
-        let _ = fs::remove_dir_all(&old);
-        fs::rename(&bundle, &old)?;
-        if let Err(error) = fs::rename(&fresh, &bundle) {
-            let _ = fs::rename(&old, &bundle);
-            return Err(error);
-        }
+        swap(&bundle, &fresh, &old)?;
         // The disk image stays until the new Ferrite's first launch clears
         // the staging directory: should the `exec` fail, it is handed over.
-        let _ = fs::remove_dir_all(&old);
+        // The store's claim is closed on `exec`, so the new Ferrite takes it.
         Err(Command::new(exe).args(std::env::args_os().skip(1)).exec())
     }
 
@@ -488,11 +492,9 @@ mod platform {
     /// is the older Ferrite finding its attempt (`AtLaunch::Failed`).
     pub fn install(setup: &Path, _staging: &Path) -> io::Result<Infallible> {
         let exe = std::env::current_exe()?;
-        after_exit(&format!(
-            "Start-Process -Wait -FilePath {} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART'; \
-             Start-Process -FilePath {}",
-            quote(setup),
-            quote(&exe)
+        after_exit(&install_then_start(
+            &setup.to_string_lossy(),
+            &exe.to_string_lossy(),
         ))?;
         std::process::exit(0)
     }
@@ -503,7 +505,10 @@ mod platform {
 
     pub fn relaunch_after_exit() -> io::Result<()> {
         let exe = std::env::current_exe()?;
-        after_exit(&format!("Start-Process -FilePath {}", quote(&exe)))
+        after_exit(&format!(
+            "Start-Process -FilePath {}",
+            powershell_quote(&exe.to_string_lossy())
+        ))
     }
 
     fn after_exit(then: &str) -> io::Result<()> {
@@ -519,10 +524,6 @@ mod platform {
             "-Command",
             script.as_str(),
         ]))
-    }
-
-    fn quote(path: &Path) -> String {
-        super::powershell_quote(&path.to_string_lossy())
     }
 }
 
@@ -548,6 +549,32 @@ mod platform {
     pub fn relaunch_after_exit() -> io::Result<()> {
         Err(unsupported())
     }
+}
+
+/// Put the app at `fresh` in place of `bundle` by rename, through `old`:
+/// a failure puts `bundle` back, so a swap never leaves no app behind.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn swap(bundle: &Path, fresh: &Path, old: &Path) -> io::Result<()> {
+    let _ = fs::remove_dir_all(old);
+    fs::rename(bundle, old)?;
+    if let Err(error) = fs::rename(fresh, bundle) {
+        let _ = fs::rename(old, bundle);
+        return Err(error);
+    }
+    let _ = fs::remove_dir_all(old);
+    Ok(())
+}
+
+/// The PowerShell that runs `setup` silently, waiting for it, then starts
+/// `exe` whatever the setup's outcome.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn install_then_start(setup: &str, exe: &str) -> String {
+    format!(
+        "Start-Process -Wait -FilePath {} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART'; \
+         Start-Process -FilePath {}",
+        powershell_quote(setup),
+        powershell_quote(exe)
+    )
 }
 
 /// `text` as one PowerShell single-quoted string: a quote inside is
@@ -739,6 +766,48 @@ mod tests {
         staged_at(&dir, "0.5.0", Progress::Downloaded);
         assert_eq!(at_launch(&dir, "0.6.0"), AtLaunch::Nothing);
         assert!(!staging(&dir).exists());
+    }
+
+    #[test]
+    fn a_swap_puts_the_new_app_in_place() {
+        let dir = scratch("swap");
+        let (bundle, fresh, old) = (dir.join("Ferrite.app"), dir.join(".new"), dir.join(".old"));
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("version"), "0.4.0").unwrap();
+        fs::create_dir_all(&fresh).unwrap();
+        fs::write(fresh.join("version"), "0.5.0").unwrap();
+        fs::create_dir_all(&old).unwrap();
+        swap(&bundle, &fresh, &old).unwrap();
+        assert_eq!(fs::read_to_string(bundle.join("version")).unwrap(), "0.5.0");
+        assert!(!fresh.exists() && !old.exists());
+    }
+
+    /// The new app failing to move in puts the running one back.
+    #[test]
+    fn a_failed_swap_leaves_the_old_app_in_place() {
+        let dir = scratch("swap-failed");
+        let (bundle, fresh, old) = (dir.join("Ferrite.app"), dir.join(".new"), dir.join(".old"));
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("version"), "0.4.0").unwrap();
+        assert!(swap(&bundle, &fresh, &old).is_err());
+        assert_eq!(fs::read_to_string(bundle.join("version")).unwrap(), "0.4.0");
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn the_windows_install_runs_the_setup_silently_then_starts_ferrite() {
+        assert_eq!(
+            install_then_start(r"C:\u\setup.exe", r"C:\o'neil\ferrite.exe"),
+            r"Start-Process -Wait -FilePath 'C:\u\setup.exe' -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART'; Start-Process -FilePath 'C:\o''neil\ferrite.exe'"
+        );
+    }
+
+    /// A handed-over installer can be opened again; nothing else can.
+    #[test]
+    fn only_a_handed_over_installer_reopens() {
+        let dir = scratch("reopen");
+        staged_at(&dir, "0.5.0", Progress::Downloaded);
+        assert!(reopen(&dir).is_err());
     }
 
     #[test]

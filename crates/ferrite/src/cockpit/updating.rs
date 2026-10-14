@@ -76,7 +76,7 @@ impl CockpitView {
     /// Restart onto the ready release: at once when no agent is working
     /// or waiting, otherwise as soon as none is. Nothing is cut off.
     pub(crate) fn restart_to_update(&mut self, cx: &mut Context<Self>) {
-        if !self.ferrite_update.ready() {
+        if !self.ferrite_update.restart_offered() {
             return;
         }
         if self.in_flight().is_none() {
@@ -104,14 +104,18 @@ impl CockpitView {
     }
 
     /// Settings' update button: check, restart when idle, or — once
-    /// already waiting — restart now, asking first as ⌘Q does.
+    /// already waiting — restart now, asking first as ⌘Q does. A release
+    /// handed over gets its installer opened again.
     fn press_ferrite_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.ferrite_update.state() {
-            State::Unchecked
-            | State::UpToDate
-            | State::HandedOver { .. }
-            | State::Failed { .. } => {
+            State::Unchecked | State::UpToDate | State::Failed { .. } => {
                 self.check_for_ferrite_update(cx)
+            }
+            State::HandedOver { .. } => {
+                if let Err(error) = self_update::reopen(&self.prefs.dir) {
+                    self.ferrite_update.reopen_failed(error);
+                    cx.notify();
+                }
             }
             State::Ready {
                 when_idle: false, ..

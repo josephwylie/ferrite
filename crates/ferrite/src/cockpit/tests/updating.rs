@@ -89,3 +89,41 @@ fn a_ready_release_waits_for_working_agents(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// Work running behind Main outlives its turn: a background task keeps
+/// the restart waiting though Main itself is idle.
+#[gpui::test]
+fn background_work_keeps_a_restart_waiting(cx: &mut TestAppContext) {
+    use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
+    let (core, fake) = cockpit("update-waits-background", 1);
+    let thread = core.threads()[0];
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Progress {
+            event: ProgressEvent::BackgroundSnapshot {
+                tasks: vec![BackgroundTask {
+                    id: "task:1".into(),
+                    label: "cargo test --workspace".into(),
+                    detail: "local_bash".into(),
+                    status: TaskStatus::Working,
+                }],
+            },
+        })
+        .unwrap();
+    tick(cx);
+
+    view.update(cx, |view, cx| {
+        assert!(!view.cockpit.thread(thread).unwrap().working());
+        make_ready(view, "0.5.0");
+        view.restart_to_update(cx);
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.in_flight().as_deref(), Some("1 agent is working"));
+        assert!(!view.ferrite_update.restart_offered());
+        assert_eq!(
+            view.cockpit.threads(),
+            vec![thread],
+            "the Thread stays live"
+        );
+    });
+}

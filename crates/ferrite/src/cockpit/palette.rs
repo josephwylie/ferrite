@@ -851,7 +851,7 @@ impl CockpitView {
             Command::UpdateClis,
         );
         add(
-            self.ferrite_update.ready(),
+            self.ferrite_update.restart_offered(),
             "restart to update Ferrite".into(),
             "",
             None,

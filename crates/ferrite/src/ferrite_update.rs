@@ -171,8 +171,24 @@ impl FerriteUpdate {
         }
     }
 
-    pub fn ready(&self) -> bool {
-        matches!(self.state, State::Ready { .. })
+    /// Whether a restart onto a ready release is still to offer: not
+    /// once one waits for idle agents.
+    pub fn restart_offered(&self) -> bool {
+        matches!(
+            self.state,
+            State::Ready {
+                when_idle: false,
+                ..
+            }
+        )
+    }
+
+    /// The handed-over installer would not open again.
+    pub fn reopen_failed(&mut self, error: std::io::Error) {
+        ferrite_core::log!("could not open the Ferrite installer again: {error}");
+        self.state = State::Failed {
+            detail: format!("Could not open the installer: {error}"),
+        };
     }
 
     pub fn take_offer(&mut self) -> Option<String> {
@@ -213,11 +229,8 @@ impl FerriteUpdate {
                 Some("Restart now"),
             ),
             State::HandedOver { version } => (
-                format!(
-                    "{version} could not install itself. Install it from the installer \
-                     Ferrite opened for you"
-                ),
-                Some("Check now"),
+                format!("{version} could not install itself. Run its installer to finish"),
+                Some("Open installer"),
             ),
             State::Failed { detail } => (detail.clone(), Some("Try again")),
         };
@@ -259,7 +272,7 @@ mod tests {
     #[test]
     fn a_found_release_downloads_then_is_offered_once() {
         let mut update = ready("0.5.0");
-        assert!(update.ready());
+        assert!(update.restart_offered());
         assert_eq!(update.take_offer().as_deref(), Some("0.5.0"));
         assert_eq!(update.take_offer(), None);
     }
@@ -302,6 +315,7 @@ mod tests {
         );
         assert!(update.restart_when_idle());
         assert!(!update.restart_when_idle(), "already waiting");
+        assert!(!update.restart_offered(), "the palette offers it no more");
         assert_eq!(
             update.state(),
             &State::Ready {
@@ -340,6 +354,7 @@ mod tests {
         );
         assert_eq!(update.take_offer(), None);
         assert!(!update.restart_when_idle());
+        assert_eq!(update.describe(None).1.as_deref(), Some("Open installer"));
         assert!(update.begin_check());
     }
 

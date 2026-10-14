@@ -28,11 +28,21 @@ Setup `.exe` for Windows x64) and may go out unsigned.
   copy check (`ferrite_update::enabled`): a `cargo run` or a local
   `install-app.sh` build is a dev build and must not take the installed app's
   update.
+- Only the Ferrite holding the store's claim updates. `main` opens the store
+  before anything installs, and a second Ferrite (read-only, ADR 0009) neither
+  installs, checks nor downloads. Otherwise a second Start-menu click with a
+  release staged would run the setup, and Inno's `CloseApplications` closes
+  whatever holds its files without asking in silent mode: the first Ferrite,
+  agents and all. On macOS the same launch would swap the bundle under the
+  running first copy. On `exec` the claim's file is closed, so the new
+  Ferrite takes it.
 - Nothing is installed while Ferrite runs. A downloaded release is offered
   (a toast, Settings, the palette's `restart to update Ferrite`): restart now
-  if no agent is working or waiting, else restart as soon as none is. The
-  "Restart now" that follows asks first, as ⌘Q does. Declined, the release
-  installs at the next launch whenever that is.
+  if no agent is working or waiting, else restart as soon as none is. Work
+  behind Main counts as working (`Thread::background_work`: Subagents and
+  background tasks outlive Main's turn), so an unattended restart cuts
+  nothing off. The "Restart now" that follows asks first, as ⌘Q does.
+  Declined, the release installs at the next launch whenever that is.
 - The install is the first thing a launch does after opening the log, before
   any Session exists. macOS: mount the DMG, `ditto` its app beside the
   running bundle, swap the two by rename, and `exec` the new binary. Windows:
@@ -48,7 +58,8 @@ Setup `.exe` for Windows x64) and may go out unsigned.
   instead of downloading it, so Settings says it was handed over. Without
   the mark, every launch would re-download the installer and open it again.
   A newer release replaces it as usual; installing it by hand makes the next
-  launch the staged version, which shows What's New.
+  launch the staged version, which shows What's New. Settings' "Open
+  installer" opens it again for an operator who closed it.
 - The first launch of the installed version shows What's New: the release
   body, as Markdown, in the same reading dialog as the HTML preview. The
   staged directory is removed once read, so it shows once.
@@ -63,9 +74,14 @@ Setup `.exe` for Windows x64) and may go out unsigned.
   reported in Settings and never downloaded.
 - A handed-over installer (a few hundred MB) stays in `~/.ferrite/update`
   until the operator installs it or a newer release replaces it.
-- An update installed by hand without Ferrite having staged it shows no
-  What's New (there are no staged notes to read; no CHANGELOG is bundled,
-  the release body is the one source of notes), and a second Ferrite launched while the first runs would install
-  under it; macOS opening the running app instead of a second copy makes that
-  rare.
+- What's New shows the installed release's body only: the notes of releases
+  skipped on the way (0.4 to 0.6 skips 0.5's) are not shown, and an update
+  installed by hand without Ferrite having staged it shows none. No CHANGELOG
+  is bundled; the release body is the one source of notes.
+- A read-only second Ferrite still running when the claim holder's setup
+  runs on Windows is closed by it. It runs no agents, so nothing is lost.
+- macOS keys privacy grants (Full Disk Access, Automation, …) to the app's
+  code signature. An unsigned or ad-hoc-signed release is a new identity, so
+  those grants may need approving again after each update; a Developer ID
+  signed release keeps them.
 - Linux and Intel macOS have no installer and do not update themselves.

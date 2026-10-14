@@ -71,7 +71,9 @@ what's new. On macOS the new app replaces the old one in place; on Windows the
 installer runs without questions. If Ferrite can't install it itself (say, the
 app sits in a folder it can't write to), it opens the installer for you to
 finish. Turn the checks off in Settings › About. Builds from source never update
-themselves.
+themselves. On macOS, an unsigned build is a new app to the system after each
+update, so permissions you granted it (Full Disk Access, say) may need
+approving again.
 
 Maintainers: if no signing credentials are configured, releases go out unsigned.
 See [docs/release-signing.md](docs/release-signing.md) to set signing up.
