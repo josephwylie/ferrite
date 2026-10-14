@@ -3,6 +3,9 @@
 //! Cockpit owns roster and cross-pane commands. This module owns the expensive
 //! per-Subject row snapshot, native text, selection document and viewport.
 
+mod find;
+#[cfg(test)]
+pub(crate) use find::FindState;
 mod rows;
 pub(crate) use rows::gated;
 mod scroll;
@@ -35,7 +38,7 @@ use crate::{
     pane::{self, DisclosureId, DisclosureState, Grid},
     pointer::Pointer,
     rich::TextCache,
-    select::{TextRuns, TranscriptText},
+    select::{RunText, TextRuns, TranscriptText},
     theme,
 };
 use std::{cell::Cell, rc::Rc};
@@ -329,6 +332,10 @@ pub(crate) struct TranscriptView {
     /// The list's width as of the last layout (rows can't ask the list
     /// while it lays them out).
     list_w: Rc<Cell<f32>>,
+    /// The texts copy and find read, in row order, each with its row.
+    texts: Vec<(usize, RunText)>,
+    /// The find bar, while it is open (⌘F).
+    find: Option<find::TranscriptFind>,
 }
 
 /// The scroll room a band jump adds under the last row: the jump's row and
@@ -449,6 +456,8 @@ impl TranscriptView {
             runway: Rc::default(),
             visuals,
             list_w: Rc::default(),
+            texts: Vec::new(),
+            find: None,
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -795,6 +804,7 @@ impl TranscriptView {
                 self.rich.clone(),
             )
             .with_document(self.document.clone())
+            .with_find(self.find_marks())
     }
 
     /// Synchronize all logical native text fragments without mounting rows.
@@ -803,13 +813,19 @@ impl TranscriptView {
     /// them indefinitely. Only plain text wrappers may be made and dropped.
     fn sync_members(&mut self, cx: &mut Context<Self>) {
         let selection = self.text_runs();
-        let members = selection.capture_members(|| {
-            for row in self.rows.rows() {
+        let mut rows = Vec::new();
+        let (members, texts) = selection.capture_members(|| {
+            for (index, row) in self.rows.rows().iter().enumerate() {
                 selection.begin_row();
                 self.collect_row_text(row, &selection);
+                rows.resize(selection.captured(), index);
             }
         });
         self.document.sync_members(members, cx);
+        self.texts = rows.into_iter().zip(texts).collect();
+        if self.find.is_some() {
+            self.refind(cx);
+        }
     }
 
     /// An answer's Markdown with its path targets and issue refs linked
@@ -865,14 +881,14 @@ impl TranscriptView {
     #[cfg(test)]
     pub(crate) fn assert_text_projection(&self, cx: &mut Context<Self>) {
         let selection = self.text_runs();
-        selection.capture_members(|| {
+        let _ = selection.capture_members(|| {
             for row in self.rows.rows() {
                 selection.begin_row();
                 self.collect_row_text(row, &selection);
             }
         });
         let logical = self.selection_source.registered(self.input.thread);
-        selection.capture_members(|| {
+        let _ = selection.capture_members(|| {
             for row in self.rows.rows() {
                 selection.begin_row();
                 let _ = self.render_row(row, &selection, None, None, cx);
@@ -1829,6 +1845,7 @@ impl Render for TranscriptView {
         // The answers' file links are this transcript's path targets.
         self.rich.set_path_scope(self.input.namespace.clone());
         self.advance_glide(window, cx);
+        self.settle_found(window);
         let rows = self.rows.clone();
         let selection = self.text_runs();
         let view = cx.entity();
@@ -2097,6 +2114,7 @@ impl Render for TranscriptView {
             cx.notify();
         }
         let card = self.hover_card(window, cx);
+        let find_bar = self.find_bar();
         div()
             .relative()
             .flex()
@@ -2125,5 +2143,11 @@ impl Render for TranscriptView {
             .children(pinned)
             .children(minimap)
             .children(card)
+            .children(find_bar)
+            .on_action(cx.listener(|view, _: &crate::find::Next, _, cx| view.find_step(true, cx)))
+            .on_action(
+                cx.listener(|view, _: &crate::find::Previous, _, cx| view.find_step(false, cx)),
+            )
+            .on_action(cx.listener(|view, _: &crate::find::Close, _, cx| view.close_find(cx)))
     }
 }

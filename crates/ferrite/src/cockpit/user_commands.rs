@@ -55,7 +55,8 @@ impl CockpitView {
                         command.name.clone().into()
                     },
                     context: command.run.label().into(),
-                    dot: None,
+                    status: None,
+                    detail: None,
                     keys: None,
                     act: Act::Command(Command::User(index)),
                 }

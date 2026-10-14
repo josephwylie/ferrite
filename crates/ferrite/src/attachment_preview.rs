@@ -1,7 +1,7 @@
 //! Pane-owned file previews: images use a focused overlay while text files
 //! open in a reader that takes its own slot on the board, beside its Pane
 //! (`cockpit/beside.rs` draws it: numbered lines, the target line marked).
-//! A compare of the branch against its base rides the same slot. The kit
+//! A review of the Thread's changes (`review.rs`) rides the same slot. The kit
 //! owns dialog focus and dismissal; this module supplies the owning Pane's
 //! bounds, which place and size the image sheet, while the scrim covers the
 //! window like every modal's.
@@ -26,17 +26,10 @@ pub struct Document {
     /// The line the reader opened at (1-based): marked and scrolled into
     /// view (F-14). `None` opens at the top.
     pub line: Option<u32>,
-    /// A compare (F-15): the branch's diff against its base, drawn in the
-    /// reader's slot in place of a file. `source` is empty then.
-    pub compare: Option<Compare>,
-}
-
-/// A branch against its base, parsed from `git diff <base>...HEAD`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Compare {
-    /// `dev ↔ main · 3 files +40 −12`: the slot's head.
-    pub head: String,
-    pub edits: Vec<ferrite_core::FileEdit>,
+    /// A review (ADR 0021): the Thread's changes as a diff that takes
+    /// comments, drawn in the reader's slot in place of a file. `path` is
+    /// the workspace and `source` is empty then.
+    pub review: Option<gpui::Entity<crate::review::ReviewView>>,
 }
 
 #[derive(Default)]
@@ -123,7 +116,7 @@ impl Preview {
             title,
             source,
             line: None,
-            compare: None,
+            review: None,
         });
         window.refresh();
         true
@@ -144,7 +137,7 @@ impl Preview {
             title,
             source,
             line,
-            compare: None,
+            review: None,
         });
         true
     }
@@ -157,18 +150,23 @@ impl Preview {
             title,
             source,
             line: None,
-            compare: None,
+            review: None,
         });
     }
 
-    /// Show a compare in the reader's slot (F-15).
-    pub fn open_compare(&self, workspace: PathBuf, compare: Compare) {
+    /// Show a review in the reader's slot, its head the workspace's name.
+    pub fn open_review(
+        &self,
+        workspace: PathBuf,
+        title: String,
+        review: gpui::Entity<crate::review::ReviewView>,
+    ) {
         self.state.lock().unwrap().document = Some(Document {
             path: workspace,
-            title: compare.head.clone(),
+            title,
             source: String::new(),
             line: None,
-            compare: Some(compare),
+            review: Some(review),
         });
     }
 
@@ -199,6 +197,16 @@ impl Preview {
 
     pub fn document(&self) -> Option<Document> {
         self.state.lock().unwrap().document.clone()
+    }
+
+    /// The review in the reader slot, when that is what it shows.
+    pub fn review(&self) -> Option<gpui::Entity<crate::review::ReviewView>> {
+        self.state
+            .lock()
+            .unwrap()
+            .document
+            .as_ref()
+            .and_then(|document| document.review.clone())
     }
 
     fn close(&self, window: &mut Window, cx: &mut App) {
@@ -250,17 +258,17 @@ impl Preview {
     /// that moves the slot) and whose body is the rendered `body`. The head
     /// is the Group head's twin — `PANE_HEAD_H`, its `paint::LINE` rule, a
     /// cell in from each side — reading the file's path (its `title`) in
-    /// `PATH_INK` and its `:line` in `TEXT_MUTED`, or a compare's own head
-    /// line, with a dim × at the right. None while no document is open.
+    /// `PATH_INK` and its `:line` in `TEXT_MUTED`, or `review` and the
+    /// workspace, with a dim × at the right. None while no document is open.
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
         use crate::theme::*;
         let document = self.document()?;
-        let label = match &document.compare {
-            Some(compare) => div()
+        let label = match &document.review {
+            Some(_) => div()
                 .min_w_0()
                 .truncate()
                 .text_color(rgb(TEXT_MUTED))
-                .child(compare.head.clone()),
+                .child(format!("review \u{b7} {}", document.title)),
             None => div()
                 .flex()
                 .min_w_0()
@@ -363,6 +371,9 @@ impl Document {
     /// The reader's type chip: the language for a file the lexer knows, else
     /// the extension as a file card shows it, else just `FILE`.
     pub fn kind(&self) -> String {
+        if self.review.is_some() {
+            return "DIFF".into();
+        }
         if self.is_markdown() {
             return "MARKDOWN".into();
         }

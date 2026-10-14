@@ -426,6 +426,8 @@ pub(crate) fn capture(output: String) {
         defaults,
         titler: true,
         cli_updates: false,
+        ferrite_updates: false,
+        whats_new: None,
         unreadable: None,
         keys_refused: Vec::new(),
     };

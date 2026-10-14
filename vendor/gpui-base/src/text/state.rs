@@ -18,8 +18,9 @@ use crate::{
     input::{self, SelectAll},
     text::{
         CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
-        TableActionsFn, TextViewStyle,
+        TableActionsFn, TextFind, TextViewStyle,
         document::ParsedDocument,
+        find::FindTally,
         format,
         node::{self, NodeContext},
         selection_adapter::TextViewSelectionAdapter,
@@ -107,6 +108,9 @@ pub struct TextViewState {
     pub(super) link_renderer: Option<std::sync::Arc<super::text_view::LinkRendererFn>>,
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
+    // Ferrite: a find bar's marks, and their ordinals as this frame paints.
+    pub(super) find: Option<TextFind>,
+    pub(super) find_tally: std::cell::RefCell<FindTally>,
 
     pub(super) is_selecting: bool,
     multi_click_selection: Option<TextViewMultiClickSelection>,
@@ -208,6 +212,8 @@ impl TextViewState {
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
+            find: None,
+            find_tally: Default::default(),
             is_selecting: false,
             auto_scroll: AutoScroll::default(),
             selection_adapter,

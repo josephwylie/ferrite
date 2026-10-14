@@ -790,6 +790,33 @@ impl<M: InputModeKind> TextElement<M> {
         paths
     }
 
+    /// Ferrite: an outside find's washes (`InputBaseState::set_find`), the
+    /// active occurrence reporting where it paints.
+    fn layout_find(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Vec<(Path<Pixels>, Hsla)> {
+        let state = self.state.read(cx);
+        let Some(on) = &state.outside_find else {
+            return vec![];
+        };
+        let find = &on.find;
+        on.ranges
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, range)| {
+                let path = Self::layout_match_range(range.clone(), last_layout, bounds)?;
+                let active = find.active == Some(ordinal);
+                if active {
+                    find.report.revealed.set(Some(path.bounds));
+                }
+                Some((path, if active { find.active_wash } else { find.wash }))
+            })
+            .collect()
+    }
+
     fn layout_hover_highlight(
         &self,
         last_layout: &LastLayout,
@@ -1579,6 +1606,7 @@ pub(super) struct PrepaintState {
     selection_path: Option<Path<Pixels>>,
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
+    find_paths: Vec<(Path<Pixels>, Hsla)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -1992,6 +2020,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         last_layout.cursor_bounds = cursor_bounds;
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
+        let find_paths = self.layout_find(&last_layout, &bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, window, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let document_color_paths =
@@ -2073,6 +2102,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             current_row,
             selection_path,
             search_match_paths,
+            find_paths,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -2203,6 +2233,11 @@ impl<M: InputModeKind> Element for TextElement<M> {
         // Paint indent guides
         if let Some(path) = prepaint.indent_guides_path.take() {
             window.paint_path(path, editor_style.border.opacity(0.85));
+        }
+
+        // Ferrite: an outside find's washes, under the text.
+        for (path, wash) in prepaint.find_paths.drain(..) {
+            window.paint_path(path, wash);
         }
 
         // Paint selections

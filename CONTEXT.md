@@ -147,13 +147,29 @@ A ` ```mermaid ` fence in an answer or the reader, drawn as the picture it
 describes once it is on screen; until then, or when it can't be drawn, it
 reads as code. Not a Visual: nobody asked for it, and it is not live.
 
+**Review**
+A diff of a Thread's changes beside its Pane — uncommitted, the branch
+against its base, or the last turn — whose lines take comments. The
+comments wait on the Composer and go to the Thread with its next prompt.
+_Avoid_: compare (the read-only view it replaced), code review (a PR's).
+
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread
-until they land on the Thread; shown by the bell, a toast, and the Pane's
-pulsing ring. A Subagent finishing, an interrupt, or a held prompt going
-out is never a Notice.
+until it is **seen** — its Thread on screen while the window has focus —
+or opened from the bell; shown by the bell, a toast, a chime, the Pane's
+pulsing ring, the Thread's done mark, and, while the window is in the
+background, a system notification. A Subagent finishing, an interrupt, or
+a held prompt going out is never a Notice.
 _Avoid_: alert, ping, notification (the bell's whole surface is that).
+
+**Attention**
+Which of four states a Thread is in, most urgent first: **blocked** (a
+Decision waits), **done** (a Notice not yet seen), **working** (Main, or
+only its Subagents or background tasks), **idle**. What the nav sorts and
+rolls up by and the palette filters by; Ferrite's finer states (failing,
+background, failed, parked) are faces within these.
+_Avoid_: status (too broad), unread (that is the Notice's).
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its

@@ -423,7 +423,7 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
         cx.notify();
     });
     tick(cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
@@ -446,6 +446,10 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
 fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (view, fake, cx, _group) = board("board-unread", 3, cx);
+    // On the board, a finish is unread only while the window is away.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.deactivate_window();
     for stream in 1..3 {
         for event in [
             SessionEvent::TextDelta {
@@ -467,7 +471,10 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
             .filter(|thread| view.cockpit.notifications().attention(*thread))
             .count()
     });
-    assert!(unread >= 2, "two Threads finished out of sight");
+    assert!(
+        unread >= 2,
+        "two Threads finished while the window was away"
+    );
     assert!(
         cx.debug_bounds("breathing-dot").is_none(),
         "unread never breathes"
@@ -768,16 +775,14 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         let row = view.thread_row(thread);
         assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
         assert_eq!(
-            thread_status(row.status.wall(), row.unread).ink,
+            row.status.face().ink,
             crate::theme::BLOCKED,
-            "and the nav and rail dot say it too"
+            "and the nav and rail mark say it too"
         );
-        let (face, word) = pane::thread_face(view.cockpit.thread(thread).unwrap(), None, false);
-        assert_eq!(word, Some(pane::HeadSlot::Failed));
         assert_eq!(
-            face.ink,
-            crate::theme::BLOCKED,
-            "the Group head's dot agrees"
+            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            Some(pane::HeadSlot::Failed),
+            "the Pane's word agrees"
         );
     });
 }
@@ -892,7 +897,10 @@ fn an_unfocused_cell_counts_its_attachments_on_the_flat_line(cx: &mut TestAppCon
         "{facts:?} rides cell A's flat line {cell:?}"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).file_count()),
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .attachment_count()),
         1,
         "focus moves never touch the draft"
     );

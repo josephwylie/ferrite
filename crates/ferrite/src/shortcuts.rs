@@ -9,9 +9,9 @@
 //! with the label at the left and the chord at the right, and the footer
 //! `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
 //! match, as the palette filters. The floats' own keys (the palette's, the
-//! list's, this sheet's) are in their footers, so the sheet leaves them
-//! out; the label table still names them, so a key the table gains without
-//! a label fails `every_bound_action_has_a_label`.
+//! list's, this sheet's) and the Review slot's are in their footers, so the
+//! sheet leaves them out; the label table still names them, so a key the
+//! table gains without a label fails `every_bound_action_has_a_label`.
 
 use std::ops::Range;
 
@@ -76,7 +76,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::CloseThread" => Row(Threads, "park thread"),
         "cockpit::ReopenThread" => Row(Threads, "reopen last"),
         "palette::ShowParked" => Row(Threads, "show parked"),
-        "palette::CompareWithMain" => Row(Threads, "compare with main"),
+        "palette::ReviewBranch" => Row(Threads, "review branch"),
         "cockpit::NextDecision" => Row(Threads, "next request"),
         "cockpit::ToggleNotifications" => Row(Threads, "notifications"),
         "cockpit::OpenSettings" => Row(Threads, "settings"),
@@ -162,6 +162,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::CopySelection" => Row(Transcript, "copy selection"),
         "cockpit::ToggleTool" => Row(Transcript, "open or fold a tool call"),
         "cockpit::ToolCyclePrevious" => Row(Transcript, "previous tool call"),
+        "find::Open" => Row(Transcript, "find"),
+        "find::Next" => Row(Transcript, "find: next"),
+        "find::Previous" => Row(Transcript, "find: previous"),
+        "find::Close" => Row(Transcript, "find: close"),
         // The floats' own keys live in their footers.
         "palette::SelectNext"
         | "palette::SelectPrevious"
@@ -177,6 +181,18 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"
         | "zed::NoAction" => Hidden,
+        // So do the Review slot's.
+        "review::Previous"
+        | "review::Next"
+        | "review::ExtendPrevious"
+        | "review::ExtendNext"
+        | "review::Comment"
+        | "review::Uncomment"
+        | "review::NextScope"
+        | "review::Reread"
+        | "review::Close"
+        | "review::SaveComment"
+        | "review::CancelComment" => Hidden,
         _ => return None,
     })
 }
@@ -394,6 +410,10 @@ mod tests {
         assert_eq!(find(Place::Composer, "shortcuts"), "?");
         assert_eq!(find(Place::Composer, "delete word back"), "alt-\u{232b}");
         assert_eq!(find(Place::Transcript, "copy selection"), "cmd-C");
+        assert_eq!(find(Place::Transcript, "find"), "cmd-F");
+        assert_eq!(find(Place::Transcript, "find: next"), "\u{23ce}");
+        assert_eq!(find(Place::Transcript, "find: previous"), "shift-\u{23ce}");
+        assert_eq!(find(Place::Transcript, "find: close"), "esc");
         let places: Vec<Place> = rows.iter().map(|row| row.place).collect();
         let mut sorted = places.clone();
         sorted.sort();

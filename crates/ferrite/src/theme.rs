@@ -419,6 +419,12 @@ pub const ACCENT_EDGE: u32 = 0x8eb1f066;
 pub const ACCENT_WASH: u32 = 0x8eb1f024;
 /// `#8eb1f040` (25%) — native text selection, painted over glyphs.
 pub const TEXT_SELECTION_WASH: u32 = 0x8eb1f040;
+/// `#eda87933` (20%) — every occurrence a find (⌘F) marks, under its
+/// glyphs: orange, a hue no state wears, kept apart from the accent's
+/// selection and from yellow, which means "needs you".
+pub const FIND_WASH: u32 = 0xeda87933;
+/// `#eda87980` (50%) — the occurrence the find is on.
+pub const FIND_ACTIVE_WASH: u32 = 0xeda87980;
 /// The caret: the soft block in the focused Composer.
 pub const CARET: u32 = ACCENT;
 
@@ -440,6 +446,8 @@ pub const BLOCKED: u32 = RED;
 pub const BLOCKED_WASH: u32 = 0xef8a801f;
 /// The idle/parked dot: the muted ink in a dot role.
 pub const IDLE: u32 = TEXT_MUTED;
+/// Teal — a turn finished that the operator has not seen: the `✓`.
+pub const FINISHED: u32 = CYAN;
 /// The permission mode word in the status line (`accept edits`, `plan`).
 #[allow(dead_code)]
 pub const MODE_INK: u32 = MAGENTA;
@@ -468,6 +476,14 @@ pub mod words {
     pub const INTERRUPTED: &str = "interrupted";
     /// Live work.
     pub const WORKING: &str = "working";
+    /// Main is idle while its Subagents or background tasks still work.
+    pub const BACKGROUND: &str = "background";
+    /// What a waiting agent needs: its plan approved.
+    pub const PLAN: &str = "plan";
+    /// Not working and nothing unseen.
+    pub const IDLE: &str = "idle";
+    /// Waiting on the operator: the status filter's name for it.
+    pub const BLOCKED: &str = "blocked";
     /// Launched, not yet working.
     pub const STARTING: &str = "starting";
     /// Held by the operator.
@@ -1036,8 +1052,8 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    // A toast is the rail's voice only (C8): with the nav open the
-    // Needs-you strip is the queue, and a toast shows only while the nav is
+    // A toast is the rail's voice only (C8): with the nav open its rows'
+    // marks are the queue, and a toast shows only while the nav is
     // collapsed and its Thread is off the board (`Bell::present`). It
     // stands BottomRight, above the Composer, one at a time; the bell
     // holds the rest.
@@ -1349,9 +1365,9 @@ pub const CODE_ACTIONS_TOP: f32 = 0.0;
 pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-/// The html preview dialog: the reading column's width, and a height cap
-/// before its body scrolls.
-pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
+/// A reading dialog (the html preview, What's New): the reading column's
+/// width, and a height cap before its body scrolls.
+pub const READING_DIALOG_MAX_H: f32 = 520.0;
 pub const INLINE_FILE_MIN_W: f32 = CH;
 pub const INLINE_FILE_MAX_W: f32 = 280.0;
 /// **Scrollbars** are a thin overlay with no track, never in layout: a
@@ -1850,6 +1866,10 @@ pub const PALETTE_TOP: f32 = 56.0;
 pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
 pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
 pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
+/// **The find bar** (⌘F): a one-row float 40 cells wide, hung
+/// `FLOAT_OFFSET` under the top right of the text it searches — `❯`, the
+/// query, the count.
+pub const FIND_W: f32 = 40.0 * CH;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
@@ -2064,16 +2084,13 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // row is laid out in character cells from its 1ch inline padding
 // (`NAV_PAD_X`), the prototype's `.nrow` grammar:
 //
-//   strip     needs you 2 …………………………………… ⌘D
-//             ● title……………………………………… approval
-//   Project   ▾ ferrite………………………………………… dev
-//   Thread    ❯ ● title……………………………………… word
-//   Group     ❯ ▾ title……………………………………… 4
+//   Project   ▾ ● ferrite……………………………………… dev
+//   Thread    ❯ ● title……………………………… ↑2* word
+//   Group     ❯ ▾ ● title…………………………………… 4
 //   member        ├ ● title………………………………… word
 //   Parked    ▸ parked 3
 //
-// The needs-you strip opens the column, a half row above the tree. The
-// tree is one section per Project in creation order — its heading only
+// The tree is one section per Project in creation order — its heading only
 // while it has a row to show, its loose Threads, then its Groups (each
 // under the Project of its first member), a half row between sections —
 // then `Other` for Threads with no Project, the ground, and the Parked
@@ -2083,15 +2100,16 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // A Thread row's first 2ch cell is the cursor (`❯` in `ACCENT` on the
 // selected row, else blank), then a 2ch mark cell (the status dot, the
 // braille spinner of a working Thread), then the title, then one
-// right-aligned word 1ch after it. A Group row's mark is its disclosure
-// triangle; its members hang on faint tree glyphs (`├ ` / `└ ` at 3ch, the
+// right-aligned word 1ch after it, its checkout's facts before the word.
+// A Group row's triangle comes before its roll-up mark (as does a Project
+// heading's); its members hang on faint tree glyphs (`├ ` / `└ ` at 3ch, the
 // dot at 5ch, the title at 7ch). A Project heading and the Parked header
 // have no cursor cell, so their triangle sits where the cursor does. The
 // triangles fold for real (`CockpitView::set_nav_fold`). Every mark
 // centres on the first character of its cell, as a typed glyph would; the
-// dot sits at its cell's start. Hierarchy is ink and weight, never size: a
-// Project is `W_STRONG` `TEXT_STRONG`; every title is `TEXT`, read or
-// unread — only the selected row's reaches `TEXT_STRONG` — and a parked
+// dot sits at its cell's start. Hierarchy is ink, never size: every
+// heading is a lowercase label in `CHROME_MUTED`; every title is `TEXT` —
+// only the selected row's reaches `TEXT_STRONG` — and a parked
 // title is `TEXT_MUTED`; every right-hand word is `TEXT_MUTED` (the
 // prototype's `.nrow .s` outranks its state classes: the dot carries the
 // colour).
@@ -2107,10 +2125,11 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // Thread is a faint ring.
 //
 // **Folding (cmd-B).** The column rides its width from `NAV_WIDTH` to
-// nothing over `motion::RESIZE` (200ms) while its content fades
-// independently (`MOTION_NAV_FADE_MS`, CSS `ease`: 1 → 0 folding, 0 → 1
-// opening). The titlebar band over it says nothing, so it has nothing to
-// keep: folded, the traffic lights sit on the plane.
+// the rail (`NAV_FOLDED_W`) over `motion::RESIZE` (200ms) while its
+// content fades independently (`MOTION_NAV_FADE_MS`, CSS `ease`: 1 → 0
+// folding, 0 → 1 opening). The titlebar band over it says nothing, so it
+// has nothing to keep: folded, the traffic lights overhang the rail onto
+// the plane.
 
 /// 20px — one nav line, the pitch of every item in the column: a Thread, a
 /// Group, a member, a Project heading, the section headers.
@@ -2127,8 +2146,7 @@ pub const NAV_CELL: f32 = 2.0 * CH;
 pub const NAV_WORD_GAP: f32 = CH;
 /// 34ch — the text box of every row: the column less its inline padding.
 pub const NAV_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_PAD_X;
-/// A half row — under the Needs-you strip and between two Project
-/// sections (the prototype's `.half`).
+/// A half row — between two Project sections (the prototype's `.half`).
 pub const NAV_SECTION_GAP: f32 = HALF_ROW;
 /// The most cells a Project heading's branch takes before it truncates.
 pub const NAV_BRANCH_MAX_CH: usize = 16;
@@ -2140,8 +2158,9 @@ pub const NAV_DROP_BAND: f32 = SPACE_1;
 /// scrolls past this, so a hundred parked Threads never push the running
 /// tree out of sight.
 pub const NAV_PARKED_MAX_SHARE: f32 = 0.5;
-/// The column folded by cmd-B: nothing. The board takes the whole width.
-pub const NAV_FOLDED_W: f32 = 0.0;
+/// 6ch — the column folded by cmd-B: the rail, a cell of padding, a
+/// Thread's number in two cells, a space and its mark cell.
+pub const NAV_FOLDED_W: f32 = NAV_PAD_X + 3.0 * CH + NAV_CELL;
 /// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the
 /// board beside the full column would be narrower than this, or a board
 /// cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`). It unfolds only

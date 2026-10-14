@@ -66,3 +66,29 @@ fn claude_store_discovery_uses_native_titles_and_excludes_subagents() {
     );
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn claude_store_discovery_reads_newest_first_up_to_its_cap() {
+    let dir = std::env::temp_dir().join(format!("ferrite-claude-newest-{}", std::process::id()));
+    fs::create_dir_all(dir.join("project")).unwrap();
+    let now = std::time::SystemTime::now();
+    for (session, age) in [("old", 300), ("new", 10), ("middle", 100)] {
+        let path = dir.join(format!("project/{session}.jsonl"));
+        fs::write(
+            &path,
+            format!("{{\"type\":\"user\",\"sessionId\":\"{session}\",\"message\":{{\"role\":\"user\",\"content\":\"{session} prompt\"}}}}\n"),
+        )
+        .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(now - std::time::Duration::from_secs(age))
+            .unwrap();
+    }
+    let rows = ferrite_core::providers::claude_sessions(&dir, 2).unwrap();
+    let ids: Vec<_> = rows.iter().map(|row| row.session_id.as_deref()).collect();
+    assert_eq!(ids, [Some("new"), Some("middle")]);
+    assert_eq!(rows[0].title.as_deref(), Some("new prompt"));
+    fs::remove_dir_all(dir).unwrap();
+}

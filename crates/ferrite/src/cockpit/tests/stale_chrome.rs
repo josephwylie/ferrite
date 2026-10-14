@@ -88,12 +88,14 @@ fn centre(rect: &layout::Rect) -> gpui::Point<Pixels> {
     gpui::point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
 }
 
-/// Attention: a Thread out of sight finishes; its Pane and its nav row say
-/// so at once.
+/// Seen: a Thread on the board finishes while the window is away; its
+/// Pane's head and its nav row say done at once, and both redraw it read
+/// the moment the window comes back.
 #[gpui::test]
-fn a_finished_thread_out_of_sight_wears_attention(cx: &mut TestAppContext) {
+fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut TestAppContext) {
     let b = board("stale-attention", &[1], cx);
-    assert!(!b.pane(1).attention);
+    assert!(!b.pane(1).unread);
+    b.cx.deactivate_window();
     b.send(
         1,
         SessionEvent::TextDelta {
@@ -109,13 +111,21 @@ fn a_finished_thread_out_of_sight_wears_attention(cx: &mut TestAppContext) {
     );
     tick(b.cx);
     frames(b.cx, 300);
-    assert!(b.pane(1).attention, "the Pane draws its attention");
+    assert!(b.pane(1).unread, "the Pane draws it done");
     assert!(
-        drawn::row(b.threads[1]).contains("unread=true"),
+        drawn::row(b.threads[1]).starts_with("Done "),
         "and its nav row: {}",
         drawn::row(b.threads[1])
     );
-    assert!(!b.pane(0).attention, "the focused Pane never does");
+    b.cx.update(|window, _| window.activate_window());
+    tick(b.cx);
+    frames(b.cx, 300);
+    assert!(!b.pane(1).unread, "seen: the Pane redraws it read");
+    assert!(
+        drawn::row(b.threads[1]).starts_with("Idle "),
+        "and so does its nav row: {}",
+        drawn::row(b.threads[1])
+    );
 }
 
 /// Focus: a click moves the keyboard to another Pane; both Panes redraw

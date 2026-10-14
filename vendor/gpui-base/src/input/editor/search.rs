@@ -5,6 +5,16 @@ use ropey::Rope;
 use std::{ops::Range, rc::Rc};
 
 use super::{InputBaseState, Replace, RopeExt as _, Search, movement::MoveDirection};
+use crate::text::{TextFind, find_matches};
+
+/// Ferrite: an outside find's marks over an input (`set_find`).
+pub(crate) struct OutsideFind {
+    pub(crate) find: TextFind,
+    /// Its needle's occurrences in the whole text, as byte ranges.
+    pub(crate) ranges: Vec<Range<usize>>,
+    /// The active occurrence is still to be scrolled into view.
+    reveal: bool,
+}
 
 /// Stateful, presentation-independent search engine used by text inputs.
 #[derive(Debug, Clone)]
@@ -193,6 +203,49 @@ impl<M: InputModeKind> InputBaseState<M> {
 
     pub(super) fn update_search(&mut self, _cx: &mut gpui::App) {
         self.search_session.matcher.update(&self.text);
+        if let Some(on) = &mut self.outside_find {
+            on.ranges = find_matches(&self.text.to_string(), &on.find.needle, on.find.case_sensitive);
+        }
+    }
+
+    /// Ferrite: mark an outside find's occurrences (a find bar over a
+    /// read-only viewer), as a `TextView` marks its own: every occurrence
+    /// of the needle in the whole text washed, the active one (`active`,
+    /// its ordinal) more strongly, scrolled into view and reporting where it
+    /// painted. Its host calls this each time it draws the input; None
+    /// clears the marks.
+    pub fn set_find(&mut self, find: Option<TextFind>, cx: &mut Context<Self>) {
+        let Some(find) = find else {
+            self.outside_find = None;
+            return;
+        };
+        match &mut self.outside_find {
+            Some(on)
+                if on.find.needle == find.needle
+                    && on.find.case_sensitive == find.case_sensitive =>
+            {
+                on.reveal |= on.find.active != find.active;
+                on.find = find;
+            }
+            _ => {
+                self.outside_find = Some(OutsideFind {
+                    ranges: find_matches(&self.text.to_string(), &find.needle, find.case_sensitive),
+                    find,
+                    reveal: true,
+                });
+            }
+        }
+        // The text is laid out once before it can scroll.
+        if self.last_layout.is_none() {
+            return;
+        }
+        let Some(on) = self.outside_find.as_mut().filter(|on| on.reveal) else {
+            return;
+        };
+        on.reveal = false;
+        if let Some(start) = on.find.active.and_then(|at| on.ranges.get(at)).map(|range| range.start) {
+            self.scroll_to(start, None, cx);
+        }
     }
 
     pub(super) fn on_action_search(&mut self, _: &Search, _: &mut Window, cx: &mut Context<Self>) {

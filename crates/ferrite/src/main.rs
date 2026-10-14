@@ -13,7 +13,9 @@ mod composer;
 mod decision;
 mod demo;
 mod facts;
+mod ferrite_update;
 mod file_links;
+mod find;
 mod float;
 mod fuzzy;
 mod hover_card;
@@ -32,6 +34,7 @@ mod pointer;
 mod prefs;
 mod project_editor;
 mod prompt_drop;
+mod review;
 mod rich;
 mod scrollbar;
 mod select;
@@ -179,6 +182,23 @@ fn main() {
     // after is on record.
     let settings_dir = settings_dir();
     ferrite_core::diagnostics::open(&settings_dir);
+    // The store's claim is taken before anything installs: a second
+    // Ferrite, which only reads the store, leaves the update to the one
+    // whose agents it would end.
+    let store = match Store::open(store_dir()) {
+        Ok(store) => store,
+        Err(e) => {
+            ferrite_core::log!("cannot open the Thread store: {e}");
+            std::process::exit(1);
+        }
+    };
+    // A Ferrite update the last run downloaded installs now, before any
+    // Session exists for it to cut off (ADR 0023). A successful install
+    // does not return here: the new Ferrite takes this process's place.
+    let ferrite_updates = ferrite_update::enabled() && store.read_only().is_none();
+    let whats_new = ferrite_updates
+        .then(|| ferrite_update::at_launch(&settings_dir))
+        .flatten();
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = shell::adopt_login_environment();
@@ -242,13 +262,6 @@ fn main() {
             let (keys, keys_refused) = keymap::with_user_keys(keymap::PLATFORM, &settings.keys);
             bind_keys(keys, cx);
 
-            let store = match Store::open(store_dir()) {
-                Ok(store) => store,
-                Err(e) => {
-                    ferrite_core::log!("cannot open the Thread store: {e}");
-                    std::process::exit(1);
-                }
-            };
             let (adopted, refused) = adopt(&store, &imports);
             for refusal in refused {
                 ferrite_core::log!("{refusal}");
@@ -317,6 +330,9 @@ fn main() {
                 .then(|| core.groups().iter().next().map(|group| group.id))
                 .flatten();
 
+            // Who posts the system notifications (ADR 0017): the bundle's
+            // identifier, and on Windows the AppUserModelID.
+            cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite");
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
             let mut cockpit_view = None;
             let window = cx
@@ -367,6 +383,8 @@ fn main() {
                                     defaults: defaults.clone(),
                                     titler: true,
                                     cli_updates: true,
+                                    ferrite_updates,
+                                    whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
                                 },
@@ -628,6 +646,8 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
                 MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+                MenuItem::separator(),
+                MenuItem::action("Find\u{2026}", find::Open),
             ],
         },
         Menu {
@@ -635,7 +655,7 @@ fn app_menus() -> Vec<Menu> {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Commands\u{2026}", palette::Toggle),
-                MenuItem::action("Compare with Main", palette::CompareWithMain),
+                MenuItem::action("Review Branch", palette::ReviewBranch),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Notifications", ToggleNotifications),
@@ -685,8 +705,8 @@ mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
-        adopt, bind_keys, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap,
-        load_bindings, revive_launch_threads, KEY_TABLE,
+        adopt, app_menus, bind_keys, demo, dock_launch_dir, find, keep_mouse_cursor_visible,
+        keymap, load_bindings, revive_launch_threads, KEY_TABLE,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -739,6 +759,21 @@ mod tests {
                 .bindings()
                 .any(|binding| binding.action().name() == "input::Backspace"));
         });
+    }
+
+    /// The Edit menu finds, as ⌘F does: the menu bar spells the key from
+    /// the same action's binding.
+    #[test]
+    fn the_edit_menu_finds() {
+        let edit = app_menus()
+            .into_iter()
+            .find(|menu| menu.name == "Edit")
+            .expect("an Edit menu");
+        assert!(edit.items.iter().any(|item| matches!(
+            item,
+            gpui::MenuItem::Action { name, action, .. }
+                if name == "Find\u{2026}" && action.partial_eq(&find::Open)
+        )));
     }
 
     #[gpui::test]

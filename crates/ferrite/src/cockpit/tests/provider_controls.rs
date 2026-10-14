@@ -103,7 +103,8 @@ fn contract_session_controls_use_shared_native_handles(cx: &mut TestAppContext) 
         .contains(&ferrite_core::SessionControl::RefreshMcp));
     cx.simulate_keystrokes("cmd-k");
     cx.run_until_parked();
-    cx.simulate_input("background");
+    // `background` alone also finds the Thread whose word it is now.
+    cx.simulate_input("background tasks");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -272,8 +273,8 @@ fn contract_native_turn_diff_is_kept_without_a_fake_tool(cx: &mut TestAppContext
     view.read_with(cx, |v, _| {
         let thread = v.panes[0].thread().unwrap();
         let open = v.cockpit.thread(thread).unwrap();
-        // The turn's change set is the compare reader's to show; the
-        // transcript keeps it and draws no summary row for it.
+        // The transcript keeps the turn's change set and draws no summary
+        // row for it.
         assert_eq!(
             open.transcript()
                 .turn_diff()

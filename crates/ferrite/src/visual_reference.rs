@@ -349,6 +349,7 @@ const STATES: &[(&str, &[&str])] = &[
     ("toasts", &["app"]),
     ("settings-permissions", &["app"]),
     ("settings-behaviour", &["app"]),
+    ("settings-notifications", &["app"]),
     ("settings-about", &["app"]),
     ("settings-search", &["app"]),
     // (end WP-E)
@@ -634,11 +635,16 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        "settings" | "settings-permissions" | "settings-behaviour" | "settings-about" => {
+        "settings"
+        | "settings-permissions"
+        | "settings-behaviour"
+        | "settings-notifications"
+        | "settings-about" => {
             let scene = conversation(label);
             let page = match state {
                 "settings-permissions" => crate::prefs::PageKey::Permissions,
                 "settings-behaviour" => crate::prefs::PageKey::Behaviour,
+                "settings-notifications" => crate::prefs::PageKey::Notifications,
                 "settings-about" => crate::prefs::PageKey::About,
                 _ => crate::prefs::PageKey::NewThreads,
             };

@@ -637,6 +637,10 @@ pub struct Cockpit {
     /// The last subscription windows each provider reported — an account
     /// fact the transcript log deliberately does not replay.
     limit_cache: crate::providers::limits::LimitCache,
+    /// The use, in percent, at which a window rising past it warns the
+    /// operator (`Settings::allowance_warnings`); and the warnings due.
+    allowance_thresholds: Vec<u8>,
+    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
@@ -647,6 +651,12 @@ pub struct Cockpit {
     /// The Subject the window has actually selected in each open Thread.
     /// Main is implicit until the renderer records a child selection.
     visible_subjects: BTreeMap<ThreadId, Subject>,
+    /// Whether the window has the operator's focus: what is on screen is
+    /// seen only while it does (`acknowledge_seen`), so a finish or a
+    /// request on screen stays unread until they come back (ADR 0017). True
+    /// until the window says otherwise, so a headless Cockpit reads what it
+    /// shows.
+    window_active: bool,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -684,12 +694,15 @@ impl Cockpit {
             model_discovery,
             model_cache,
             limit_cache,
+            allowance_thresholds: Vec::new(),
+            allowance_warnings: Vec::new(),
             models_changed: false,
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
             history_loader: None,
             notifications: Notifications::default(),
             visible_subjects: BTreeMap::new(),
+            window_active: true,
             sampler: None,
             limit: u64::MAX,
             suggestions: channel(),
@@ -2567,13 +2580,23 @@ impl Cockpit {
                     continue;
                 }
                 if let SessionEvent::RateLimits { five_hour, weekly } = &event {
-                    self.limit_cache.remember(
+                    let before = self.limit_cache.get(thread.provider);
+                    let changed = self.limit_cache.remember(
                         thread.provider,
                         crate::transcript::RateLimits {
                             five_hour: *five_hour,
                             weekly: *weekly,
                         },
                     );
+                    if changed {
+                        self.allowance_warnings
+                            .extend(crate::providers::limits::warnings(
+                                thread.provider,
+                                before,
+                                self.limit_cache.get(thread.provider),
+                                &self.allowance_thresholds,
+                            ));
+                    }
                 }
                 if let SessionEvent::Models { models } = &event {
                     self.model_cache.remember(thread.provider, models);
@@ -2781,10 +2804,10 @@ impl Cockpit {
         for id in ended {
             self.request_suggestion(id);
         }
-        // The operator is on the focused Pane; whatever it had to say is
-        // seen. Here rather than only at the focus doors, so a focus that
-        // moved by a close or a Group entry reads the same.
-        self.acknowledge_focus();
+        // What is on screen while the window has focus is seen. Here
+        // rather than only at the focus doors, so a Thread that finishes in
+        // view, or a focus moved by a close or a Group entry, reads the same.
+        self.acknowledge_seen();
         for (thread, subject) in history_reloads {
             if let Err(error) = self.ensure_subject_history(thread, &subject) {
                 if let (Some(state), Subject::Subagent(key)) =
@@ -3108,6 +3131,17 @@ impl Cockpit {
         self.limit_cache.get(provider)
     }
 
+    /// The use, in percent, at which a rising window warns the operator.
+    /// Empty turns the warnings off.
+    pub fn set_allowance_thresholds(&mut self, thresholds: Vec<u8>) {
+        self.allowance_thresholds = thresholds;
+    }
+
+    /// The allowance warnings due since the last take, oldest first.
+    pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
+        std::mem::take(&mut self.allowance_warnings)
+    }
+
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,
@@ -3420,7 +3454,7 @@ impl Cockpit {
         if !self.focus_thread(thread) {
             self.reopen(thread).ok()?;
         }
-        self.acknowledge_focus();
+        self.acknowledge_seen();
         Some(thread)
     }
 
@@ -3443,7 +3477,7 @@ impl Cockpit {
         if !self.focus_thread(thread) {
             self.reopen(thread).ok()?;
         }
-        self.acknowledge_focus();
+        self.acknowledge_seen();
         Some(thread)
     }
 
@@ -3473,8 +3507,35 @@ impl Cockpit {
         self.notifications.fixture_push(thread, outcome);
     }
 
-    fn acknowledge_focus(&mut self) {
-        if let Some(thread) = self.roster.focused_thread() {
+    /// Whether the operator is looking: the window has the system's focus.
+    pub fn window_active(&self) -> bool {
+        self.window_active
+    }
+
+    /// The window gained or lost the operator's focus. Gaining it, what
+    /// is on screen is seen at once: true when that read anything.
+    pub fn set_window_active(&mut self, active: bool) -> bool {
+        if self.window_active == active {
+            return false;
+        }
+        self.window_active = active;
+        self.acknowledge_seen()
+    }
+
+    /// Everything on screen while the window has focus is seen: each
+    /// visible Thread's Notices are read, and so are the live Decisions of
+    /// the Subject its Pane shows. Fullscreen shows its one Pane. True when
+    /// anything was read.
+    fn acknowledge_seen(&mut self) -> bool {
+        if !self.window_active {
+            return false;
+        }
+        let mut read = false;
+        let shown = match self.roster.fullscreen() {
+            Some(fullscreen) => vec![fullscreen],
+            None => self.visible(),
+        };
+        for thread in shown.into_iter().filter_map(PaneIdentity::thread) {
             let subject = self
                 .visible_subjects
                 .get(&thread)
@@ -3493,8 +3554,9 @@ impl Cockpit {
             if subject == Subject::Main {
                 self.visible_subjects.remove(&thread);
             }
-            self.notifications.acknowledge_subject(thread, &subject);
+            read |= self.notifications.acknowledge_subject(thread, &subject);
         }
+        read
     }
 }
 
@@ -3624,6 +3686,13 @@ impl<'a> ThreadView<'a> {
         self.state.busy()
     }
 
+    /// Whether work runs behind Main: its Subagents, or its transcript's
+    /// background tasks.
+    pub fn background_work(&self) -> bool {
+        self.activity().working_descendants() > 0
+            || self.transcript().progress().working_background() > 0
+    }
+
     /// Whether a model or effort change waits on the provider's answer:
     /// the pickers hold until it lands.
     pub fn tuning(&self) -> bool {
@@ -3751,7 +3820,7 @@ impl Cockpit {
     /// open.
     pub fn focus(&mut self, identity: PaneIdentity) -> bool {
         let landed = self.roster.focus(identity);
-        self.acknowledge_focus();
+        self.acknowledge_seen();
         landed
     }
 
@@ -3764,7 +3833,7 @@ impl Cockpit {
         }
         self.roster.set_view(self.view_showing(thread));
         let landed = self.roster.focus(identity);
-        self.acknowledge_focus();
+        self.acknowledge_seen();
         landed
     }
 
@@ -3808,7 +3877,7 @@ impl Cockpit {
         } else {
             self.visible_subjects.insert(thread, subject);
         }
-        self.acknowledge_focus();
+        self.acknowledge_seen();
     }
 
     /// cmd-] / cmd-[: walk the visible Panes, wrapping.
@@ -3816,7 +3885,7 @@ impl Cockpit {
         self.roster.step(delta, &self.groups);
     }
 
-    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
     /// restores the grid.
     pub fn toggle_fullscreen(&mut self) {
         self.roster.toggle_fullscreen();
@@ -4205,17 +4274,17 @@ impl Cockpit {
         outcome
     }
 
-    /// Adopt a CLI session file (#11) in place of the Pane it was picked
-    /// from: a draft becomes the imported Thread; a still-blank Thread
-    /// yields its slot and is deleted — clean exactly while it is blank,
-    /// which the picker's own invariant guarantees and this re-checks.
-    /// Import creates the Thread; revive opens it — the same
-    /// replay-and-resume any parked Thread gets — and it takes focus. A
-    /// refusal is the import module's, unchanged, and no Thread was
-    /// created.
+    /// Adopt a CLI session file (#11), in place of the Pane it was picked
+    /// for or, with none, alongside the Panes shown: a draft becomes the
+    /// imported Thread; a still-blank Thread yields its slot and is deleted
+    /// — clean exactly while it is blank, which the picker's own invariant
+    /// guarantees and this re-checks. Import creates the Thread; revive
+    /// opens it — the same replay-and-resume any parked Thread gets — and
+    /// it takes focus. A refusal is the import module's, unchanged, and no
+    /// Thread was created.
     pub fn adopt_into(
         &mut self,
-        from: PaneIdentity,
+        into: Option<PaneIdentity>,
         path: &Path,
     ) -> Result<Adopted, crate::import::ImportError> {
         let thread = self.import(path)?;
@@ -4224,9 +4293,13 @@ impl Cockpit {
             not_opened: None,
             blank_kept: None,
         };
+        let Some(into) = into else {
+            adopted.not_opened = self.reopen(thread).err();
+            return Ok(adopted);
+        };
         match self.revive(thread) {
             Ok(()) => {
-                match from {
+                match into {
                     PaneIdentity::Draft(draft) => {
                         self.cancel_draft_start(draft)
                             .map_err(crate::import::ImportError::Io)?;
@@ -4292,7 +4365,6 @@ pub fn title_from_prompt(text: &str) -> String {
         cut
     }
 }
-
 
 /// The #24 guard: a session project root that no longer exists on disk
 /// refuses the send — readably, naming the path and the remedy — never a
@@ -6196,6 +6268,53 @@ mod tests {
             fake.suggest_calls().is_empty(),
             "an interruption buys no follow-up prediction"
         );
+    }
+
+    /// Seen means on screen while the window has focus: a Group's member
+    /// that finishes in view is read with no focus of its own, a finish
+    /// while the window is away stays unread until it comes back, and a
+    /// Thread off the board stays unread whatever the window does.
+    #[test]
+    fn a_finish_is_seen_when_it_is_on_screen_while_the_window_has_focus() {
+        let (mut cockpit, fake) = cockpit("seen-on-screen");
+        cockpit.set_notification_grace(Duration::ZERO);
+        let threads: Vec<ThreadId> = (0..3)
+            .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
+            .collect();
+        let group = cockpit
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        cockpit.enter_group(group).unwrap();
+        let finish = |cockpit: &mut Cockpit, at: usize| {
+            cockpit.send(threads[at], "work".into());
+            cockpit.pump();
+            fake.streams.borrow()[at]
+                .send(SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+            cockpit.pump();
+            cockpit.pump();
+        };
+        let unread = |cockpit: &Cockpit, at: usize| cockpit.notifications().attention(threads[at]);
+
+        finish(&mut cockpit, 1);
+        assert!(!unread(&cockpit, 1), "on the board, focused or not");
+        finish(&mut cockpit, 2);
+        assert!(unread(&cockpit, 2), "off the board");
+
+        cockpit.set_window_active(false);
+        finish(&mut cockpit, 0);
+        assert!(unread(&cockpit, 0), "on the board while the window is away");
+        cockpit.set_window_active(true);
+        assert!(!unread(&cockpit, 0), "seen the moment the window is back");
+        assert!(unread(&cockpit, 2), "and still not what is off the board");
     }
 
     #[test]

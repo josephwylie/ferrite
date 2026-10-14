@@ -105,6 +105,10 @@ pub struct PaneView {
     /// kept here so its position survives every frame, and so opening it at
     /// a line can scroll that line into view.
     pub reader_scroll: gpui::UniformListScrollHandle,
+    /// A rendered Markdown document's own scroll in the reader.
+    pub reader_markdown_scroll: gpui::ScrollHandle,
+    /// The reader's find bar, while it is open.
+    pub reader_find: Option<crate::cockpit::beside::ReaderFind>,
 }
 
 /// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
@@ -244,6 +248,8 @@ impl PaneView {
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
             reader_scroll: gpui::UniformListScrollHandle::new(),
+            reader_markdown_scroll: gpui::ScrollHandle::new(),
+            reader_find: None,
         }
     }
 
@@ -301,6 +307,8 @@ impl PaneView {
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
             reader_scroll: gpui::UniformListScrollHandle::new(),
+            reader_markdown_scroll: gpui::ScrollHandle::new(),
+            reader_find: None,
         }
     }
 
@@ -587,10 +595,9 @@ pub struct PaneFacts<'a> {
     /// Queue viewport derived from this Pane's actual available height.
     pub composer_queue_height: f32,
     pub focused: bool,
-    /// This Thread finished while the operator looked elsewhere and they
-    /// have not landed on it since (an unread Notice): the focus ring
-    /// pulses in its place until they do. Never true with `focused`.
-    pub attention: bool,
+    /// This Thread finished and the operator has not seen it since (an
+    /// unread Notice): its head's mark is the done check until they do.
+    pub unread: bool,
     /// The wall cell's folded reading, cached by the cockpit's facts —
     /// everything the L3 recipe needs that is not an O(1) transcript read.
     /// None for a Thread the facts have not met, which draws as empty.
@@ -1180,7 +1187,7 @@ pub fn render_pane(
         composer_files,
         composer_queue_height,
         focused,
-        attention,
+        unread,
         wall,
         reduce_motion,
         editing,
@@ -1261,7 +1268,12 @@ pub fn render_pane(
         show_focus.then(|| {
             let (dot, working) = head_dot(
                 view.is_main(),
-                dot_state(state, state_word(state, kind, wall, transcript).as_ref()),
+                dot_state(
+                    state,
+                    state_word(state, kind, wall, transcript, unread).as_ref(),
+                ),
+                unread,
+                thread.is_some_and(|thread| thread.background_work()),
                 status,
             );
             let head = group_head(GroupHead {
@@ -1293,6 +1305,7 @@ pub fn render_pane(
                     state,
                     kind,
                     transcript,
+                    unread,
                     quick_answers,
                     focused,
                     cell_width,
@@ -1320,7 +1333,7 @@ pub fn render_pane(
         editing,
         drop_target,
         starting: thread.is_some_and(|thread| thread.starting()),
-        unread: attention,
+        unread,
         grid: show_focus,
         attachments,
         background,
@@ -1916,6 +1929,8 @@ struct WallTile<'a> {
     state: WallState,
     kind: Option<&'static str>,
     transcript: Option<&'a Transcript>,
+    /// The tile's finish has not been seen: it reads `done`.
+    unread: bool,
     quick_answers: Option<AnyElement>,
     /// The tile holds the keyboard: its working clock keeps its seconds
     /// past a minute (`1m04s`); the others round to `1m`.
@@ -1940,6 +1955,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
         state,
         kind,
         transcript,
+        unread,
         quick_answers,
         focused,
         cell_width,
@@ -1947,7 +1963,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
     } = tile;
     let word = match state {
         WallState::Parked => Some(HeadSlot::Parked),
-        _ => match state_word(state, kind, card, transcript) {
+        _ => match state_word(state, kind, card, transcript, unread) {
             Some(HeadSlot::Working(_)) => {
                 Some(HeadSlot::Working(working_clock(transcript, focused)))
             }
@@ -2151,24 +2167,29 @@ pub(crate) fn cell_dot(state: WallState, unread: bool) -> Div {
     crate::cockpit::thread_status(state, unread).dot()
 }
 
-/// The Pane head's dot, and whether it is a working Thread's (drawn as the
-/// braille spinner). The main Thread's is the status truth the nav and the
-/// cells share (`thread_status`); a subagent tab's is that agent's own
-/// transcript state. Unread is the title's ink, never the dot's.
+/// The Pane head's mark, and whether it is a working Thread's (drawn as the
+/// braille spinner). The main Thread's is its nav row's face
+/// (`nav::RowStatus`): the done check while its finish is `unread`, the
+/// green ring while `background` work runs behind its idle Main. A
+/// subagent tab's is that agent's own transcript state.
 fn head_dot(
     main: bool,
     state: WallState,
+    unread: bool,
+    background: bool,
     subject: Option<Status>,
 ) -> (crate::cockpit::ThreadStatus, bool) {
-    let state = if main {
-        state
-    } else {
-        match subject {
-            Some(Status::Streaming) => WallState::Working,
-            Some(Status::Blocked) => WallState::Decision,
-            Some(Status::Closed) => WallState::Blocked,
-            _ => WallState::Idle,
-        }
+    if main {
+        return (
+            crate::nav::RowStatus::of(state, unread, background).face(),
+            state == WallState::Working,
+        );
+    }
+    let state = match subject {
+        Some(Status::Streaming) => WallState::Working,
+        Some(Status::Blocked) => WallState::Decision,
+        Some(Status::Closed) => WallState::Blocked,
+        _ => WallState::Idle,
     };
     (
         crate::cockpit::thread_status(state, false),
@@ -2176,10 +2197,13 @@ fn head_dot(
     )
 }
 
-/// What a pending request asks of the operator, as the lexicon names it.
+/// What a pending request asks of the operator, as the lexicon names it:
+/// a Question, a plan to approve (Claude's `ExitPlanMode`), or an approval.
 fn request_kind(decision: &Decision) -> &'static str {
     if questions_of(decision).is_some() {
         theme::words::QUESTION
+    } else if decision.tool_name == "ExitPlanMode" {
+        theme::words::PLAN
     } else {
         theme::words::APPROVAL
     }
@@ -2232,12 +2256,15 @@ impl HeadSlot {
 
 /// The state vocabulary, shared by the Group head and the wall:
 /// `needs you` > `failing` > `failed` > `working` > `done` > `interrupted`
-/// > `parked`; idle is nothing.
+/// > `parked`; idle is nothing. A finish is `done` only while `unread` (not
+/// yet seen), as the nav row's mark is (`nav::RowStatus::of`); seen, it is
+/// idle.
 fn state_word(
     state: WallState,
     kind: Option<&'static str>,
     card: &WallCard,
     transcript: Option<&Transcript>,
+    unread: bool,
 ) -> Option<HeadSlot> {
     use ferrite_core::TurnOutcome;
     // A request pending anywhere in the Thread (a subagent's too) is what
@@ -2255,11 +2282,11 @@ fn state_word(
                 .map(ferrite_core::progress::live_seconds)
                 .unwrap_or_default(),
         ),
-        WallState::Done => HeadSlot::Done,
         WallState::Parked => HeadSlot::Parked,
-        WallState::Idle => match transcript.and_then(Transcript::turn_outcome) {
-            Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
+        WallState::Done | WallState::Idle => match transcript.and_then(Transcript::turn_outcome) {
             Some(TurnOutcome::Error(_)) => HeadSlot::Failed,
+            _ if unread => HeadSlot::Done,
+            Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
             _ => return None,
         },
     })
@@ -2279,13 +2306,13 @@ pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState 
     }
 }
 
-/// A Thread's face away from its Pane: its status dot and its state word,
-/// read exactly as the Pane reads them.
-pub(crate) fn thread_face(
+/// A Thread's state word away from its Pane, read exactly as the Pane
+/// reads it.
+pub(crate) fn thread_word(
     open: ThreadView<'_>,
     card: Option<&WallCard>,
     unread: bool,
-) -> (crate::cockpit::ThreadStatus, Option<HeadSlot>) {
+) -> Option<HeadSlot> {
     let empty = WallCard::default();
     let card = card.unwrap_or(&empty);
     let transcript = open.transcript();
@@ -2303,11 +2330,7 @@ pub(crate) fn thread_face(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
-    let word = state_word(state, kind, card, Some(transcript));
-    (
-        crate::cockpit::thread_status(dot_state(state, word.as_ref()), unread),
-        word,
-    )
+    state_word(state, kind, card, Some(transcript), unread)
 }
 
 /// The Pane's foot while its question is too big for the body: `◆ needs
@@ -3183,6 +3206,7 @@ fn parked_body(parked_line: Option<SharedString>) -> Div {
         state: WallState::Parked,
         kind: None,
         transcript: None,
+        unread: false,
         quick_answers: None,
         focused: false,
         cell_width: 0.0,
@@ -3811,8 +3835,9 @@ fn ghost_row(ghost: Ghost) -> Div {
 /// #11: whether this Thread still offers adopting a CLI session — no
 /// conversation yet (nothing in the transcript beyond Ferrite's own notices
 /// and bookkeeping) and at rest. One predicate for every surface that opens
-/// the door — the placeholder hint, the `/` menu's local entry, and the
-/// pick that closes the blank Thread — so no two can disagree.
+/// the door — the placeholder hint, the import picker's choice of the
+/// Thread's place, and the pick that closes the blank Thread — so no two
+/// can disagree.
 pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }
@@ -4057,7 +4082,7 @@ pub(crate) fn approval_diff(
                 .w_full()
                 .min_w_0()
                 .flex_shrink_0()
-                .child(render_diff(None, diff, Grid::of(reading), false, true))
+                .child(render_diff(None, diff, Grid::of(reading), false))
                 .into_any_element(),
         );
     }
@@ -4090,7 +4115,7 @@ pub(crate) fn approval_diff(
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .child(render_diff(None, &diff, Grid::of(reading), false, true))
+            .child(render_diff(None, &diff, Grid::of(reading), false))
             .into_any_element(),
     )
 }
@@ -4133,6 +4158,7 @@ pub(crate) fn approval_input(
                 text: source.into(),
                 highlights: Vec::new(),
                 cache: cache.clone(),
+                find: None,
             })
             .into_any_element(),
     )
@@ -6144,7 +6170,7 @@ fn trail_duration(
 
 /// A change's size in a call's trail: `+7 −3`, the whole `+7` in `RUNNING`
 /// and the whole `−3` (U+2212) in `BLOCKED`.
-fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
+pub(crate) fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
     let added = format!("+{added}");
     let text = format!("{added} \u{2212}{removed}");
     let removed_at = added.len() + 1;
@@ -7048,7 +7074,6 @@ pub(crate) fn render_tool(
                     each,
                     grid,
                     row_cx.wide,
-                    true,
                 ));
             }
         }
@@ -8224,8 +8249,7 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
 }
 
 /// A diff under its call (the prototype's `.diff`, clean): no box, half a
-/// line under the call, on the content column (`inset`; the compare reader
-/// draws it flush). A `TEXT_MUTED` hunk header opens a hunk that names a
+/// line under the call, on the content column. A `TEXT_MUTED` hunk header opens a hunk that names a
 /// section (none otherwise); each row is `[number][sign][code]` (unified
 /// carries the old and the new number), the numbers `TEXT_MUTED`
 /// right-aligned in `DIFF_NUMBER_CELLS`, the sign in its hue, the code in
@@ -8239,17 +8263,16 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
 /// whole, however they are cut; numbers, signs and headers are chrome and
 /// never do (#27). Without a selection (`None`) nothing registers.
 ///
-/// Under a call the diff draws at most `HUNK_MAX_ROWS` lines and then names
-/// what it left out; the reader draws it all.
+/// The diff draws at most `HUNK_MAX_ROWS` lines and then names what it
+/// left out.
 fn render_diff(
     selection: Option<(&TextRuns, BlockId)>,
     diff: &Diff,
     grid: Grid,
     wide: bool,
-    inset: bool,
 ) -> impl IntoElement {
     let total: usize = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum();
-    let (cap, omitted) = if inset { hunk_rows(total) } else { (total, 0) };
+    let (cap, omitted) = hunk_rows(total);
     let cells = diff_number_cells(diff_max_number(diff, cap));
     let number_w = cells * grid.cell();
     let sign_w = theme::DIFF_SIGN_CELLS * grid.cell();
@@ -8344,12 +8367,7 @@ fn render_diff(
         .w_full()
         .min_w_0()
         .text_color(rgb(TEXT));
-    let rows = if inset {
-        preview_rows(diff, cap, wide)
-    } else {
-        diff_rows(diff, cap, wide)
-    };
-    for row in rows {
+    for row in preview_rows(diff, cap, wide) {
         lines = lines.child(match &row {
             DiffRow::Hunk(header) => div()
                 .debug_selector(|| "diff-hunk".into())
@@ -8403,20 +8421,16 @@ fn render_diff(
                 .child(SharedString::from(format!("\u{2026} +{omitted} lines"))),
         );
     }
-    if inset {
-        // The prototype's `.diff` keeps its 1px border, clear: the rows sit
-        // a pixel in from every side.
-        content_row(grid).pt(px(grid.half())).child(
-            div()
-                .w_full()
-                .min_w_0()
-                .border_1()
-                .border_color(gpui::transparent_black())
-                .child(lines),
-        )
-    } else {
-        div().w_full().min_w_0().child(lines)
-    }
+    // The prototype's `.diff` keeps its 1px border, clear: the rows sit a
+    // pixel in from every side.
+    content_row(grid).pt(px(grid.half())).child(
+        div()
+            .w_full()
+            .min_w_0()
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .child(lines),
+    )
 }
 
 /// A one-line code run cut at its column's edge as the prototype's
@@ -8659,64 +8673,6 @@ impl gpui::Element for CellCut {
     }
 }
 
-/// A change set as the compare reader shows it (frame's `Beside::Compare`):
-/// each file's head — its path in `TEXT_STRONG` at `W_LABEL`, `+N −M` at its
-/// right — then its whole diff, split when `wide`, on the transcript's grid
-/// at the reading size. Nothing in it registers with a selection.
-pub(crate) fn diff_document(
-    edits: &[ferrite_core::FileEdit],
-    reading: ferrite_core::settings::ReadingSize,
-    wide: bool,
-) -> AnyElement {
-    let grid = Grid::of(reading);
-    let mut column = div()
-        .debug_selector(|| "diff-document".into())
-        .flex()
-        .flex_col()
-        .w_full()
-        .min_w_0()
-        .font_family(theme::FONT_CODE)
-        .text_size(px(grid.size))
-        .line_height(px(grid.line))
-        .text_color(rgb(TEXT));
-    for edit in edits {
-        let lines = || edit.hunks.iter().flat_map(|hunk| hunk.lines.iter());
-        let diff = Diff {
-            path: edit.path.clone(),
-            hunks: edit.hunks.clone(),
-            added: lines().filter(|line| line.starts_with('+')).count(),
-            removed: lines().filter(|line| line.starts_with('-')).count(),
-        };
-        column = column
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .min_w_0()
-                    .h(px(grid.line))
-                    .mt(px(grid.half()))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(theme::W_LABEL)
-                            .text_color(rgb(TEXT_STRONG))
-                            .child(SharedString::from(diff.path.clone())),
-                    )
-                    .child(components::tabular(
-                        div()
-                            .flex_shrink_0()
-                            .pl(px(2.0 * grid.cell()))
-                            .child(trail_diff_stat(diff.added, diff.removed)),
-                    )),
-            )
-            .child(render_diff(None, &diff, grid, wide, false));
-    }
-    column.into_any_element()
-}
-
 /// How many of a diff's rows the card draws, and how many are left for
 /// the omission line to account for. Split out so the arithmetic the card
 /// depends on is assertable without a window.
@@ -8761,7 +8717,7 @@ fn diff_number_cells(max: usize) -> f32 {
 
 /// What a unified-diff line is, read from its first byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DiffKind {
+pub(crate) enum DiffKind {
     Added,
     Removed,
     Context,
@@ -8769,15 +8725,15 @@ pub(super) enum DiffKind {
 
 /// A diff row's colours: the sign column, the code, and the row's wash.
 #[derive(Debug, PartialEq, Eq)]
-struct DiffPaint {
-    sign: &'static str,
-    sign_color: u32,
-    code_color: u32,
-    wash: Option<u32>,
+pub(crate) struct DiffPaint {
+    pub sign: &'static str,
+    pub sign_color: u32,
+    pub code_color: u32,
+    pub wash: Option<u32>,
 }
 
 impl DiffKind {
-    fn of(line: &str) -> Self {
+    pub(crate) fn of(line: &str) -> Self {
         match line.chars().next() {
             Some('+') => Self::Added,
             Some('-') => Self::Removed,
@@ -8789,7 +8745,7 @@ impl DiffKind {
     /// hue (`DIFF_*_SIGN`); the code keeps body ink under its syntax
     /// colours on the row's wash; a context line is the same code with no
     /// wash.
-    fn paint(self) -> DiffPaint {
+    pub(crate) fn paint(self) -> DiffPaint {
         match self {
             Self::Added => DiffPaint {
                 sign: "+",
@@ -10832,15 +10788,27 @@ mod tests {
             WallState::Parked,
         ] {
             for kind in [None, Some(words::APPROVAL), Some(words::QUESTION)] {
-                if let Some(word) = state_word(state, kind, &failing, None) {
-                    said.push(word.text());
+                for unread in [false, true] {
+                    if let Some(word) = state_word(state, kind, &failing, None, unread) {
+                        said.push(word.text());
+                    }
                 }
             }
         }
         assert_eq!(
-            state_word(WallState::Idle, None, &failing, None),
+            state_word(WallState::Idle, None, &failing, None, false),
             None,
             "idle says nothing"
+        );
+        assert_eq!(
+            state_word(WallState::Done, None, &failing, None, false),
+            None,
+            "a finish already seen says nothing"
+        );
+        assert_eq!(
+            state_word(WallState::Done, None, &failing, None, true),
+            Some(HeadSlot::Done),
+            "a finish not yet seen is done"
         );
         assert!(said.contains(&"failing 2".to_string()));
         assert!(said.contains(&"needs you \u{b7} approval".to_string()));

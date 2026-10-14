@@ -333,6 +333,8 @@ pub struct Markdown {
     /// in this preview (`pane::prompt_chip`).
     chips: Option<crate::attachment_preview::Preview>,
     document: Option<gpui::base::TextSelectionDocument>,
+    /// A find's occurrences to mark (`crate::find`).
+    find: Option<gpui::base::text::TextFind>,
 }
 
 impl Markdown {
@@ -341,6 +343,11 @@ impl Markdown {
         document: Option<gpui::base::TextSelectionDocument>,
     ) -> Self {
         self.document = document;
+        self
+    }
+
+    pub fn find(mut self, find: Option<gpui::base::text::TextFind>) -> Self {
+        self.find = find;
         self
     }
 
@@ -371,6 +378,7 @@ impl Markdown {
             ink: None,
             chips: None,
             document: None,
+            find: None,
         }
     }
 }
@@ -461,6 +469,7 @@ impl gpui::RenderOnce for Markdown {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
+            .find(self.find)
             .font_family(face)
             // A line's trailing space hangs past its edge, as CSS lets it:
             // GPUI counts it when wrapping, so a word that ends within a
@@ -634,35 +643,13 @@ impl gpui::Render for CodeActions {
                     use gpui::component::WindowExt as _;
                     let html = code.clone();
                     window.open_dialog(cx, move |dialog, window, _| {
-                        // The sheet recipe: raised, the strong edge (the
-                        // kit's border), the Pane radius, a mono title.
-                        dialog
-                            .title(
-                                gpui::div()
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_UI))
-                                    .line_height(px(theme::LH_UI))
-                                    .font_weight(theme::W_LABEL)
-                                    .text_color(rgb(theme::TEXT_STRONG))
-                                    .child("HTML preview"),
-                            )
-                            .width(px(theme::READING_MAX_W))
-                            .bg(theme::paint::FLOAT)
-                            .rounded(px(theme::R_PANE))
-                            .child(
-                                gpui::div()
-                                    .id("html-preview")
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_PROSE))
-                                    .line_height(px(theme::LH_PROSE))
-                                    .text_color(rgb(theme::TEXT))
-                                    .max_h(px(theme::HTML_PREVIEW_MAX_H))
-                                    .overflow_y_scroll()
-                                    .child(
-                                        TextView::html("html-preview-text", html.clone())
-                                            .style(style(window.rem_size())),
-                                    ),
-                            )
+                        reading_dialog(
+                            dialog,
+                            "html-preview",
+                            "HTML preview",
+                            TextView::html("html-preview-text", html.clone())
+                                .style(style(window.rem_size())),
+                        )
                     });
                 },
             ));
@@ -944,6 +931,8 @@ pub struct Literal {
     pub highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
     pub cache: TextCache,
     pub document: Option<gpui::base::TextSelectionDocument>,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 /// The same literal document feeds native rendering and offscreen copy.
@@ -983,6 +972,7 @@ impl gpui::RenderOnce for Literal {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
+            .find(self.find)
             .w_full()
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
@@ -1011,6 +1001,8 @@ pub struct Output {
     pub cache: TextCache,
     pub aria_label: SharedString,
     pub fill: bool,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 impl gpui::RenderOnce for Output {
@@ -1021,6 +1013,7 @@ impl gpui::RenderOnce for Output {
         else {
             unreachable!("output has its own namespace")
         };
+        state.update(cx, |state, cx| state.set_find(self.find, cx));
         #[cfg(test)]
         testing::record_output(self.id, state.clone(), cx);
         Textarea::new(&state)
@@ -1038,11 +1031,48 @@ impl gpui::RenderOnce for Output {
     }
 }
 
+/// A dialog to read in (the HTML preview, What's New), on the sheet
+/// recipe: raised, the strong edge (the kit's border), the Pane radius, a
+/// mono title, over prose at reading width that scrolls past
+/// `READING_DIALOG_MAX_H`.
+pub fn reading_dialog(
+    dialog: gpui::component::dialog::Dialog,
+    id: &'static str,
+    title: impl Into<SharedString>,
+    body: impl IntoElement,
+) -> gpui::component::dialog::Dialog {
+    dialog
+        .title(
+            gpui::div()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::TEXT_STRONG))
+                .child(title.into()),
+        )
+        .width(px(theme::READING_MAX_W))
+        .bg(theme::paint::FLOAT)
+        .rounded(px(theme::R_PANE))
+        .child(
+            gpui::div()
+                .id(id)
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_PROSE))
+                .line_height(px(theme::LH_PROSE))
+                .text_color(rgb(theme::TEXT))
+                .max_h(px(theme::READING_DIALOG_MAX_H))
+                .overflow_y_scroll()
+                .child(body),
+        )
+}
+
 /// The reader's body for an open document: Markdown rendered, a file in a
 /// language the lexer knows coloured, anything else as plain text.
 pub fn document_body(
     document: crate::attachment_preview::Document,
     cache: TextCache,
+    find: Option<gpui::base::text::TextFind>,
 ) -> gpui::AnyElement {
     let id = SharedString::from(format!("file-{}", document.path.display()));
     if document.is_markdown() {
@@ -1051,6 +1081,7 @@ pub fn document_body(
             document.source,
             cache,
         )
+        .find(find)
         .into_any_element();
     }
     let aria_label = SharedString::from("File contents");
@@ -1069,6 +1100,7 @@ pub fn document_body(
             cache,
             aria_label,
             fill: true,
+            find: None,
         }
         .into_any_element(),
     }
@@ -1455,7 +1487,7 @@ mod file_link_tests {
             let document_body = self.preview.document().map(|document| {
                 self.document_cache
                     .file_context(document.path.parent(), &self.preview);
-                document_body(document, self.document_cache.clone())
+                document_body(document, self.document_cache.clone(), None)
             });
             use gpui::base::ElementExt;
             // The reader is a board slot of its own; beside the fixture's

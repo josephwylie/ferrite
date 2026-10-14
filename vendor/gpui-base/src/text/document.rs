@@ -46,6 +46,11 @@ impl ParsedDocument {
         text
     }
 
+    /// Ferrite: `text` with every source run on a line of its own.
+    pub(super) fn find_text(&self) -> String {
+        self.blocks.iter().map(|block| block.find_text()).collect()
+    }
+
     /// The selected text across all blocks, in `format`.
     ///
     /// In [`SelectionFormat::Source`] each block reconstructs its own Markdown

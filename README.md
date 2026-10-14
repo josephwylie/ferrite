@@ -61,6 +61,20 @@ so SmartScreen may complain — choose **More info → Run anyway**. It installs
 your user only, no admin needed, and adds itself to the Start menu and to the
 uninstall list in Windows Settings.
 
+### Updates
+
+Ferrite checks GitHub for a newer release every few hours and downloads it in
+the background, checked against the SHA-256 that GitHub publishes for the
+installer. It never restarts on its own: it offers to restart once no agent is
+working, and otherwise installs the update the next time it opens, then shows
+what's new. On macOS the new app replaces the old one in place; on Windows the
+installer runs without questions. If Ferrite can't install it itself (say, the
+app sits in a folder it can't write to), it opens the installer for you to
+finish. Turn the checks off in Settings › About. Builds from source never update
+themselves. On macOS, an unsigned build is a new app to the system after each
+update, so permissions you granted it (Full Disk Access, say) may need
+approving again.
+
 Maintainers: if no signing credentials are configured, releases go out unsigned.
 See [docs/release-signing.md](docs/release-signing.md) to set signing up.
 
@@ -81,14 +95,19 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
   worktrees or branches, or a new branch — in the checkout or in a fresh
   worktree.
 - `cmd-shift-n` — new Thread in its own git worktree
-- `cmd-g` — new Group: the focused Thread plus a new one beside it (the
+- `cmd-g` — open a Group: the command palette, scoped to Groups
+- `cmd-shift-g` — new Group: the focused Thread plus a new one beside it (the
   titlebar's **New Group**, when the Thread is in no Group yet)
 - `escape` — interrupt whatever's running
 - `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
   the focused Pane or from any Pane, however small.
 - `cmd-]` / `cmd-[` — next / previous Pane
 - `cmd-d` — jump to the next Decision
-- `cmd-f` — make the focused Pane fullscreen (and back)
+- `cmd-shift-enter` — make the focused Pane fullscreen (and back)
+- `cmd-f` — find in the focused Pane's transcript, or in its reader when you
+  last pressed there. A capital letter makes the search match case.
+  `enter` / `shift-enter` (or `cmd-g` / `cmd-shift-g`) — next / previous
+  match; `escape` closes the bar.
 - `cmd-=` / `cmd--` — bigger or smaller transcript text, 12–24px, in every Pane;
   `cmd-0` — back to 14px
 - `cmd-b` — hide the sidebar

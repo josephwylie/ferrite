@@ -176,7 +176,7 @@ mod tests {
         assert!(score("rev", "review") > score("rev", "prune-everything"));
     }
 
-    /// FL-3's worked example: `par` keeps three Threads and three commands
+    /// FL-3's worked example: `par` keeps four Threads and two commands
     /// and lights exactly the prototype's letters; `open a group` has no
     /// word starting with `p`, so it goes.
     #[test]
@@ -200,10 +200,7 @@ mod tests {
         );
         assert_eq!(lit("park thread", ""), Some(vec![0..3]));
         assert_eq!(lit("show parked", ""), Some(vec![5..8]));
-        assert_eq!(
-            lit("compare with main", "open the diff reader"),
-            Some(vec![3..6])
-        );
+        assert_eq!(lit("Compare runs", "ferrite \u{b7} done"), Some(vec![3..6]));
         for gone in [
             ("open a group", ""),
             ("Close stale issues", "perf sweep \u{b7} needs you"),

@@ -27,7 +27,7 @@ fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppC
         .send(super::decision("toast-side"))
         .unwrap();
     tick(cx);
-    tick(cx);
+    ring(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.bell.toasts().len(),
@@ -83,7 +83,7 @@ fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestA
         })
         .unwrap();
     tick(cx);
-    tick(cx);
+    ring(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.bell.toasts().len(), 1, "one toast, off the board")
     });
