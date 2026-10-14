@@ -19,7 +19,12 @@ pub fn ensure_running(store: &Path, executable: &Path) -> io::Result<()> {
     if link::connect(&address).is_ok() {
         return Ok(());
     }
-    start_detached(executable, &[])?;
+    // The LaunchAgent serves the operator's own Store; a dev or test Store
+    // (`FERRITE_STORE`) gets a Server of its own.
+    let launched = std::env::var_os("FERRITE_STORE").is_none() && kickstart();
+    if !launched {
+        start_detached(executable, &[])?;
+    }
     let deadline = Instant::now() + START;
     loop {
         match link::connect(&address) {
@@ -67,4 +72,182 @@ pub(super) fn start_detached(executable: &Path, args: &[&str]) -> io::Result<()>
     // Reaped whenever it ends, which is meant to be after this process.
     std::thread::spawn(move || child.wait());
     Ok(())
+}
+
+/// The LaunchAgent's label, and the Run key's value name on Windows.
+pub const LABEL: &str = "com.github.josephwylie.ferrite.server";
+
+/// The LaunchAgent: the Server at login, and again after a crash — not
+/// after a clean stop (`SuccessfulExit = false`). No `ProcessType`: a
+/// Background agent is throttled, and the agents' builds run under it.
+pub fn plist(executable: &Path) -> String {
+    let executable = executable
+        .display()
+        .to_string()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{executable}</string>
+		<string>server</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// Settings › Server › "Start at login". On: the LaunchAgent is written
+/// (rewritten when the bundle moved) and loaded, a label already loaded
+/// counting as done. Off: only the plist goes — `bootout` would SIGTERM
+/// the running Server, so the job stays loaded until logout and nothing
+/// starts it at the next login. On Windows the Run key, the same way.
+pub fn start_at_login(executable: &Path, on: bool) -> io::Result<()> {
+    platform::start_at_login(executable, on)
+}
+
+/// Start the installed LaunchAgent's Server; false when there is none.
+fn kickstart() -> bool {
+    platform::kickstart()
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use super::{plist, LABEL};
+
+    fn plist_path() -> io::Result<PathBuf> {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no HOME"))?;
+        Ok(PathBuf::from(home)
+            .join("Library/LaunchAgents")
+            .join(format!("{LABEL}.plist")))
+    }
+
+    fn domain() -> String {
+        // SAFETY: getuid has no preconditions and cannot fail.
+        format!("gui/{}", unsafe { libc::getuid() })
+    }
+
+    fn launchctl(args: &[&str]) -> io::Result<bool> {
+        Ok(Command::new("/bin/launchctl")
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?
+            .success())
+    }
+
+    pub(super) fn start_at_login(executable: &Path, on: bool) -> io::Result<()> {
+        let path = plist_path()?;
+        if !on {
+            return match std::fs::remove_file(&path) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            };
+        }
+        let wanted = plist(executable);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(wanted.as_str()) {
+            std::fs::create_dir_all(path.parent().expect("under LaunchAgents"))?;
+            crate::store::replace_file(&path, wanted.as_bytes())?;
+        }
+        let service = format!("{}/{LABEL}", domain());
+        if launchctl(&["print", &service])? {
+            return Ok(());
+        }
+        let path = path.to_string_lossy();
+        if launchctl(&["bootstrap", &domain(), &path])? {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "launchctl could not load the Ferrite server",
+            ))
+        }
+    }
+
+    pub(super) fn kickstart() -> bool {
+        plist_path().is_ok_and(|path| path.exists())
+            && launchctl(&["kickstart", &format!("{}/{LABEL}", domain())]).unwrap_or(false)
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use std::io;
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::LABEL;
+    use crate::spawn::NoConsoleWindow;
+
+    const RUN: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+    pub(super) fn start_at_login(executable: &Path, on: bool) -> io::Result<()> {
+        let mut reg = Command::new("reg");
+        if on {
+            let value = format!("\"{}\" server", executable.display());
+            reg.args(["add", RUN, "/v", LABEL, "/t", "REG_SZ", "/d", &value, "/f"]);
+        } else {
+            reg.args(["delete", RUN, "/v", LABEL, "/f"]);
+        }
+        let status = reg.no_console_window().status()?;
+        // Deleting a value that is not there is the state asked for.
+        if status.success() || !on {
+            Ok(())
+        } else {
+            Err(io::Error::other("the Run key could not be written"))
+        }
+    }
+
+    /// Windows has no supervisor to ask: the window starts the Server.
+    pub(super) fn kickstart() -> bool {
+        false
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+mod platform {
+    use std::io;
+    use std::path::Path;
+
+    pub(super) fn start_at_login(_: &Path, _: bool) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub(super) fn kickstart() -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The plist launchd reads, byte for byte: what it runs, when, and that
+    /// a clean stop stays stopped.
+    #[test]
+    fn the_launch_agent_plist_is_as_launchd_reads_it() {
+        let written = plist(Path::new(
+            "/Applications/Ferrite & Co.app/Contents/MacOS/ferrite",
+        ));
+        assert_eq!(written, include_str!("fixtures/launch_agent.plist"));
+    }
 }

@@ -76,6 +76,9 @@ pub struct Settings {
     /// Ferrite offers and never forces. Off, Settings checks on request.
     /// Default: true.
     pub check_for_updates: bool,
+    /// Whether the Server starts at login (ADR 0025): a LaunchAgent on
+    /// macOS, the Run key on Windows. Default: true.
+    pub start_at_login: bool,
     /// Whether a transcript shows the model's thinking (Claude's thinking,
     /// Codex's reasoning summaries) as `∴` rows between the calls. The
     /// approved transcript has none, so they are kept off it and shown from
@@ -207,6 +210,7 @@ impl Default for Settings {
             reading_size: ReadingSize::STANDARD,
             auto_update_clis: true,
             check_for_updates: true,
+            start_at_login: true,
             show_thinking: false,
             smart_filtering: false,
             visuals: crate::visual::Level::WhenAsked,
@@ -383,6 +387,7 @@ mod tests {
             reading_size: ReadingSize(18),
             auto_update_clis: false,
             check_for_updates: false,
+            start_at_login: false,
             show_thinking: true,
             smart_filtering: true,
             visuals: crate::visual::Level::Automatic,
