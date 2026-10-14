@@ -425,9 +425,13 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     assert!(shown.contains(&"show parked"));
     assert!(!shown.contains(&"new thread"));
     assert_eq!(resolves("down", cx), Some("shortcuts::ScrollDown"));
-    cx.simulate_input("?");
+    // Through key dispatch: no binding claims `?` in the filter, so it is
+    // text there.
+    assert_eq!(resolves("?", cx), None);
+    cx.simulate_keystrokes("?");
     tick(cx);
     assert!(labels(cx).is_empty(), "`?` is typed, not a toggle");
+    assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_some()));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_none()));

@@ -499,8 +499,9 @@ pub struct CockpitView {
     read_only_told: bool,
     /// Whether the window has said `settings.json` could not be used.
     unreadable_told: bool,
-    /// What the operator's commands and keys have still to say.
-    said: user_commands::Said,
+    /// The operator's commands running, and what they and the keys have
+    /// still to say.
+    user_commands: user_commands::UserCommands,
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     group_error: Option<SharedString>,
@@ -579,6 +580,9 @@ pub struct Preferences {
     /// Why `settings.json` could not be used, when it could not: the
     /// window says so, and saves nothing over the file (`change_settings`).
     pub unreadable: Option<String>,
+    /// The keys in `settings.json` the launch refused, a sentence each
+    /// (`keymap::with_user_keys`): the window says them once.
+    pub keys_refused: Vec<String>,
 }
 
 impl Preferences {
@@ -594,6 +598,7 @@ impl Preferences {
             titler: false,
             cli_updates: false,
             unreadable: None,
+            keys_refused: Vec::new(),
         }
     }
 }
@@ -1473,7 +1478,7 @@ impl CockpitView {
             cli_updates: Default::default(),
             read_only_told: false,
             unreadable_told: false,
-            said: Default::default(),
+            user_commands: Default::default(),
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),

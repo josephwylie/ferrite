@@ -18,6 +18,30 @@ fn command_rows(
     })
 }
 
+/// Tick until `done`: a command runs on a thread of its own, outside the
+/// test's executor.
+fn tick_until(
+    cx: &mut gpui::VisualTestContext,
+    mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,
+) {
+    for _ in 0..500 {
+        tick(cx);
+        if done(cx) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the command never finished");
+}
+
+fn run(view: &Entity<CockpitView>, index: usize, cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.run_palette_act(Act::Command(Command::User(index)), false, window, cx)
+        })
+    });
+}
+
 /// A command is a palette row named by the operator, its line after it;
 /// it runs in the focused Thread's directory, told the Thread's id, and a
 /// `reader` command's output opens beside the Pane.
@@ -40,12 +64,10 @@ fn a_user_command_runs_for_the_focused_thread_into_the_reader(cx: &mut TestAppCo
     let (name, act) = rows.last().expect("the operator's command is listed");
     assert_eq!(name, "where");
     assert_eq!(*act, Act::Command(Command::User(0)));
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.run_palette_act(Act::Command(Command::User(0)), false, window, cx)
-        })
+    run(&view, 0, cx);
+    tick_until(cx, |cx| {
+        view.read_with(cx, |view, _| view.panes[0].preview.document().is_some())
     });
-    tick(cx);
     let (document, cwd) = view.read_with(cx, |view, _| {
         (
             view.panes[0].preview.document().expect("the output opened"),
@@ -86,4 +108,35 @@ fn reset_keys_forgets_the_operators_keys(cx: &mut TestAppContext) {
         crate::keymap::active(),
         crate::keymap::bindings(crate::keymap::PLATFORM)
     );
+}
+
+/// A running command's row stops it, and the row comes back when it ends.
+#[cfg(unix)]
+#[gpui::test]
+fn a_running_commands_row_stops_it(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("user-command-stop", 1);
+    let mut prefs = Preferences::ephemeral();
+    prefs.settings.commands = vec![UserCommand {
+        name: "watch".into(),
+        run: Run::Shell("sleep 60".into()),
+        output: Output::Toast,
+    }];
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
+    tick(cx);
+    run(&view, 0, cx);
+    tick(cx);
+    let names = |cx: &mut gpui::VisualTestContext| -> Vec<String> {
+        command_rows(&view, cx)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    };
+    assert_eq!(names(cx).last().map(String::as_str), Some("stop watch"));
+    run(&view, 0, cx);
+    tick_until(cx, |cx| {
+        view.read_with(cx, |view, _| view.user_commands.running.is_empty())
+    });
+    assert_eq!(names(cx).last().map(String::as_str), Some("watch"));
 }

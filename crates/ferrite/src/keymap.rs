@@ -395,8 +395,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
 /// unbinds the action. The key is the operator's: a default of another
 /// action on the same keystroke in the same context gives it up. An
 /// action the table does not bind, a keystroke gpui cannot parse, `cmd` on
-/// Windows, or one keystroke given to two actions is refused, and that
-/// action keeps its defaults.
+/// Windows, one keystroke given to two actions, or a key that `types` for
+/// an action bound with no context is refused, and that action keeps its
+/// defaults.
 pub fn with_user_keys(
     platform: Platform,
     keys: &BTreeMap<String, Option<String>>,
@@ -430,6 +431,12 @@ pub fn with_user_keys(
             .filter(|(_, bound, _)| *bound == action)
             .map(|(_, _, context)| *context)
             .collect();
+        if contexts.contains(&None) && types(&strokes[0]) {
+            refused.push(format!(
+                "`{keys}` for {action} would take that key from typing; give it a modifier"
+            ));
+            continue;
+        }
         if let Some((_, _, other)) = taken
             .iter()
             .find(|(held, context, _)| *held == strokes && contexts.contains(context))
@@ -481,6 +488,15 @@ fn parse(keys: &str, platform: Platform) -> Result<Vec<Keystroke>, String> {
         return Err("Windows has no cmd key; use ctrl".into());
     }
     Ok(strokes)
+}
+
+/// Whether `stroke` types a character in a text field: a character or
+/// space, alone or with shift. Bound with no context it would outrank the
+/// typing in every Composer.
+fn types(stroke: &Keystroke) -> bool {
+    let modifiers = stroke.modifiers;
+    let held = modifiers.control || modifiers.alt || modifiers.platform || modifiers.function;
+    !held && (stroke.key.chars().count() == 1 || stroke.key == "space")
 }
 
 /// The table this launch bound: the defaults until `install` says
@@ -1030,9 +1046,11 @@ mod tests {
                 ("cockpit::PreviousPane", Some("cmd-j")),
                 ("cockpit::TextLarger", Some("ctrl-j")),
                 ("cockpit::TextSmaller", Some("ctrl-j")),
+                ("cockpit::ToggleNav", Some("j")),
+                ("cockpit::ToggleFullscreen", Some("shift-space")),
             ]),
         );
-        assert_eq!(refused.len(), 4, "{refused:?}");
+        assert_eq!(refused.len(), 6, "{refused:?}");
         let says = |words: &str| refused.iter().any(|refusal| refusal.contains(words));
         assert!(says("`cockpit::Nothing` is not an action"));
         assert!(says("`ctrl-j-k` for cockpit::NextPane"));
@@ -1040,6 +1058,12 @@ mod tests {
             "`cmd-j` for cockpit::PreviousPane: Windows has no cmd key"
         ));
         assert!(says("both cockpit::TextLarger and cockpit::TextSmaller"));
+        assert!(says(
+            "`j` for cockpit::ToggleNav would take that key from typing"
+        ));
+        assert!(says(
+            "`shift-space` for cockpit::ToggleFullscreen would take"
+        ));
         assert!(table.contains(&("ctrl-]".into(), "cockpit::NextPane", None)));
         assert!(table.contains(&("ctrl-[".into(), "cockpit::PreviousPane", None)));
         assert!(table.contains(&("ctrl-j".into(), "cockpit::TextLarger", None)));

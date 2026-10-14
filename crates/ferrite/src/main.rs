@@ -239,10 +239,8 @@ fn main() {
             visual::diagram::init(settings.visuals != ferrite_core::visual::Level::Off, cx);
 
             // A refused key is said by the window (`cockpit::user_commands`).
-            bind_keys(
-                keymap::with_user_keys(keymap::PLATFORM, &settings.keys).0,
-                cx,
-            );
+            let (keys, keys_refused) = keymap::with_user_keys(keymap::PLATFORM, &settings.keys);
+            bind_keys(keys, cx);
 
             let store = match Store::open(store_dir()) {
                 Ok(store) => store,
@@ -370,6 +368,7 @@ fn main() {
                                     titler: true,
                                     cli_updates: true,
                                     unreadable: unreadable.clone(),
+                                    keys_refused: keys_refused.clone(),
                                 },
                                 cx,
                             );
@@ -523,14 +522,32 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.get(at + 1).map(String::as_str)
 }
 
+/// Marks the bindings Ferrite's key table made, apart from the ones the
+/// kit (its inputs, text views, dialogs) and `rich` bind for themselves.
+const KEY_TABLE: KeyBindingMetaIndex = KeyBindingMetaIndex(0);
+
 /// Bind `table` (the defaults with the operator's keys laid over them) in
-/// place of whatever was bound, and make it the table every drawn chord
-/// reads; the menu bar is set again so its key equivalents follow.
+/// place of the key table bound before, and make it the table every drawn
+/// chord reads; the menu bar is set again so its key equivalents follow.
+///
+/// gpui removes no single binding, so the keymap is rebuilt: everyone
+/// else's bindings stay, in order, and the new table takes the old one's
+/// place (the end, the first time), keeping same-depth precedence.
 fn bind_keys(table: Vec<keymap::Binding>, cx: &mut App) {
     keymap::install(table.clone());
-    let bindings = load_bindings(table, cx);
+    let mut table = Some(load_bindings(table, cx));
+    let keymap = cx.key_bindings();
+    let mut rebuilt = Vec::new();
+    for binding in keymap.borrow().bindings() {
+        if binding.meta() == Some(KEY_TABLE) {
+            rebuilt.extend(table.take().into_iter().flatten());
+        } else {
+            rebuilt.push(binding.clone());
+        }
+    }
+    rebuilt.extend(table.into_iter().flatten());
     cx.clear_key_bindings();
-    cx.bind_keys(bindings);
+    cx.bind_keys(rebuilt);
     cx.set_menus(app_menus());
 }
 
@@ -559,6 +576,7 @@ fn load_bindings(table: Vec<keymap::Binding>, cx: &mut App) -> Vec<KeyBinding> {
                 &DummyKeyboardMapper,
             )
             .expect("the keymap keystrokes parse")
+            .with_meta(KEY_TABLE)
         })
         .collect()
 }
@@ -667,8 +685,8 @@ mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
-        adopt, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap, load_bindings,
-        revive_launch_threads,
+        adopt, bind_keys, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap,
+        load_bindings, revive_launch_threads, KEY_TABLE,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -685,6 +703,41 @@ mod tests {
                     keymap::bindings(platform).len()
                 );
             }
+        });
+    }
+
+    /// Binding the key table, at launch or on `reset keys`, replaces only
+    /// the table: the kit's own keys (an input's backspace, rich text's
+    /// copy) stay bound, and the table is never bound twice.
+    #[gpui::test]
+    fn binding_the_key_table_keeps_the_kits_keys(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init_components(cx);
+            let kit = |cx: &mut gpui::App| {
+                cx.key_bindings()
+                    .borrow()
+                    .bindings()
+                    .filter(|binding| binding.meta() != Some(KEY_TABLE))
+                    .count()
+            };
+            let ours = |cx: &mut gpui::App| {
+                cx.key_bindings()
+                    .borrow()
+                    .bindings()
+                    .filter(|binding| binding.meta() == Some(KEY_TABLE))
+                    .count()
+            };
+            let before = kit(cx);
+            // The defaults, as other tests read the installed table too.
+            bind_keys(keymap::bindings(keymap::PLATFORM), cx);
+            bind_keys(keymap::bindings(keymap::PLATFORM), cx);
+            assert_eq!(kit(cx), before);
+            assert_eq!(ours(cx), keymap::bindings(keymap::PLATFORM).len());
+            assert!(cx
+                .key_bindings()
+                .borrow()
+                .bindings()
+                .any(|binding| binding.action().name() == "input::Backspace"));
         });
     }
 

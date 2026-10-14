@@ -416,7 +416,7 @@ pub(crate) fn capture(output: String) {
         crate::theme::init_components(cx);
         crate::motion::init(cx);
         crate::register_fonts(cx);
-        let bindings = crate::load_bindings(crate::keymap::PLATFORM, cx);
+        let bindings = crate::load_bindings(crate::keymap::bindings(crate::keymap::PLATFORM), cx);
         cx.bind_keys(bindings);
     });
     let mut entity = None;
@@ -427,6 +427,7 @@ pub(crate) fn capture(output: String) {
         titler: true,
         cli_updates: false,
         unreadable: None,
+        keys_refused: Vec::new(),
     };
     let window = cx
         .open_window(gpui::size(gpui::px(1440.), gpui::px(900.)), |window, cx| {

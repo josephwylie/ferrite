@@ -480,11 +480,11 @@ impl CockpitView {
                     });
                 }
             };
-        let new_thread_t = crate::keymap::active()
+        // The last spelling of a new Thread (⌘T, after ⌘N), or the
+        // operator's one key for it.
+        let new_thread_in_group = crate::keymap::active()
             .into_iter()
-            .find(|(keys, action, context)| {
-                *action == "cockpit::NewThread" && context.is_none() && keys.ends_with("-t")
-            })
+            .rfind(|(_, action, context)| *action == "cockpit::NewThread" && context.is_none())
             .map(|(keys, _, _)| crate::components::spell_chord(&keys));
         add(
             focused.is_some(),
@@ -525,7 +525,7 @@ impl CockpitView {
             in_group,
             "new thread in this group".into(),
             "",
-            new_thread_t,
+            new_thread_in_group,
             Command::NewThreadInGroup,
         );
         add(

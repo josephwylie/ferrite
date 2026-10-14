@@ -30,12 +30,18 @@ a key that collides with their muscle memory.
   ```
   They are palette rows after the built-in commands, the run line muted
   after the name, offered while the focused Thread has a working directory.
-  A command runs there, off the UI thread, with `FERRITE_THREAD_ID` set and
+  A command runs there, on a thread of its own (a watcher may run all
+  session, so it holds no executor worker), with `FERRITE_THREAD_ID` set and
   stdin empty (no terminal: a program that would ask fails rather than
-  wait). A toast says it started; when it ends, a toast names it with the
-  output's last lines, or — `reader` — the whole output opens in the reader
-  beside the Pane it ran from (and a failure toasts as well). The running
-  half (`ferrite_core::user_commands`) is UI-free.
+  wait). There is no timeout — a test suite may rightly take minutes — but
+  while it runs its palette row reads `stop <name>`, and picking it kills
+  the command's whole process group on Unix (on Windows the child alone; a
+  pipe a survivor holds is waited on half a second at most). Only the last
+  1 MiB of each stream is kept. A toast says it started; when it ends, a
+  toast names it with the output's last lines, or — `reader` — the output
+  opens in the reader beside the Pane it ran from (and a failure or a stop
+  toasts as well). The running half (`ferrite_core::user_commands`) is
+  UI-free.
 - **Keys are an override map in Settings** (`keys`): an action's registered
   name to one keystroke, or `null` to unbind it.
   ```json
@@ -47,13 +53,20 @@ a key that collides with their muscle memory.
   (the order `keymap`'s tests pin) is untouched. The operator's key is
   theirs: another action's default on the same keystroke in the same
   context gives it up. An unknown action, a keystroke gpui cannot parse,
-  `cmd` on Windows, or one keystroke given to two actions is refused with a
+  `cmd` on Windows, one keystroke given to two actions, or a key that types
+  (a character or space, alone or with shift) for an action bound with no
+  context — it would outrank typing in every Composer — is refused with a
   sentence naming the entry and why; that action keeps its defaults, the
-  rest apply, and the window says the refusals once in a toast.
+  rest apply, and the window says the launch's refusals once in a toast.
 - **One bound table.** The applied table is installed process-wide
   (`keymap::install` / `keymap::active`); every drawn chord
   (`components::bound_chord`, palette keys) and the `?` sheet read it, so
   what the window prints is what the keys do.
+- **Binding replaces only the table.** Ferrite's rows are tagged
+  (`KeyBindingMetaIndex`); gpui removes no single binding, so binding a
+  table rebuilds the keymap with every other binding (the kit's inputs,
+  text views, dialogs; `rich`) kept in order and the new table in the old
+  one's place.
 - **Reset** is the palette's `reset keys` (shown while `keys` is not
   empty): it clears the map, saves, and rebinds the defaults at once.
 - **The `?` sheet filters.** A filter line under its head holds the
@@ -64,7 +77,9 @@ a key that collides with their muscle memory.
 ## Consequences
 
 - Keys are read at launch; an edit to `settings.json` applies on the next
-  launch (reset applies at once). A Settings page for keys, and binding a
+  launch (reset applies at once). No setting is read back from the file
+  while the window runs (the window is what writes it), so live keys would
+  need a file watcher the rest of Settings does not have. A Settings page for keys, and binding a
   key to a user command, are not built: commands are reached from the
   palette.
 - Action names (`cockpit::ToggleNav`) are the vocabulary of `keys`; they are
