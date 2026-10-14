@@ -133,6 +133,9 @@ struct Client {
     watching: BTreeSet<ThreadId>,
 }
 
+/// How a Server starts its successor, given the executable.
+type Relaunch = dyn FnMut(&std::path::Path) -> io::Result<()>;
+
 /// A file search a Session is answering: who asked, in which command.
 type Search = (
     ClientId,
@@ -156,7 +159,7 @@ struct Server {
     /// `restart` was asked for, likewise.
     restarting: Option<When>,
     /// How this Server starts its successor (`relaunch`; a test's own).
-    relaunch: Box<dyn FnMut(&std::path::Path) -> io::Result<()>>,
+    relaunch: Box<Relaunch>,
 }
 
 impl Server {

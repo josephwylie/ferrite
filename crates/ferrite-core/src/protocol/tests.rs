@@ -160,7 +160,9 @@ fn project_id() -> ProjectId {
 }
 
 fn record(input: Input) -> WireRecord {
-    WireRecord::Known(LogRecord::of(&input, None).expect("the log keeps it"))
+    WireRecord::Known(Box::new(
+        LogRecord::of(&input, None).expect("the log keeps it"),
+    ))
 }
 
 fn state() -> ThreadState {

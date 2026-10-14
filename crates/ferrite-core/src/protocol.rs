@@ -753,7 +753,7 @@ pub enum WireInput {
 /// and the window says it is older than its Server.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WireRecord {
-    Known(LogRecord),
+    Known(Box<LogRecord>),
     Unknown,
 }
 
@@ -769,7 +769,8 @@ impl Serialize for WireRecord {
 impl<'de> Deserialize<'de> for WireRecord {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(serde_json::from_value(value).map_or(Self::Unknown, Self::Known))
+        Ok(serde_json::from_value(value)
+            .map_or(Self::Unknown, |record| Self::Known(Box::new(record))))
     }
 }
 
@@ -1149,7 +1150,9 @@ pub fn outgoing(input: &ActivityInput, duration: Option<Duration>) -> Outgoing {
                 &Input::Event(SessionEvent::Activity(event.clone())),
                 duration,
             ) {
-                Some(record) => Outgoing::Input(WireInput::Record(WireRecord::Known(record))),
+                Some(record) => {
+                    Outgoing::Input(WireInput::Record(WireRecord::Known(Box::new(record))))
+                }
                 None => live_activity(event).map_or(Outgoing::Local, live),
             }
         }
@@ -1160,14 +1163,14 @@ pub fn outgoing(input: &ActivityInput, duration: Option<Duration>) -> Outgoing {
         }),
         ActivityInput::Replay(input) => LogRecord::of(input, None)
             .map_or(Outgoing::Local, |record| {
-                Outgoing::Input(WireInput::Replay(WireRecord::Known(record)))
+                Outgoing::Input(WireInput::Replay(WireRecord::Known(Box::new(record))))
             }),
         ActivityInput::ReplayEvent(event) => LogRecord::of(
             &Input::Event(SessionEvent::Activity(event.clone())),
             duration,
         )
         .map_or(Outgoing::Local, |record| {
-            Outgoing::Input(WireInput::Replay(WireRecord::Known(record)))
+            Outgoing::Input(WireInput::Replay(WireRecord::Known(Box::new(record))))
         }),
         ActivityInput::Connect { generation } => live(Live::Connect {
             generation: *generation,
@@ -1201,7 +1204,7 @@ pub fn outgoing(input: &ActivityInput, duration: Option<Duration>) -> Outgoing {
 
 fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
     if let Some(record) = LogRecord::of(input, duration) {
-        return Outgoing::Input(WireInput::Record(WireRecord::Known(record)));
+        return Outgoing::Input(WireInput::Record(WireRecord::Known(Box::new(record))));
     }
     let live = match input {
         Input::Notice(text) => Live::Notice {

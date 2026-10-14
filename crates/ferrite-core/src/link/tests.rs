@@ -19,13 +19,13 @@ fn text(thread: u64, seq: u64, text: &str) -> ServerMessage {
         thread: ThreadId::new(thread),
         seq,
         at_ms: seq,
-        input: WireInput::Record(WireRecord::Known(
+        input: WireInput::Record(WireRecord::Known(Box::new(
             LogRecord::of(
                 &Input::Event(SessionEvent::TextDelta { text: text.into() }),
                 None,
             )
             .unwrap(),
-        )),
+        ))),
     }
 }
 
