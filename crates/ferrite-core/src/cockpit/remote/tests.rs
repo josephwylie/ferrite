@@ -14,11 +14,12 @@ impl Spawner for NoDiscovery {
     }
 }
 
-/// A Server that welcomes the window, takes `commands` commands without
-/// answering any, then goes.
-fn server_answering_nothing(store: &std::path::Path, commands: usize) {
+/// A Server that welcomes every window and answers no command: it hands
+/// each one to the test, and lets the window go at the `drop_at`th.
+fn server_answering_nothing(store: &std::path::Path, drop_at: usize) -> Receiver<Op> {
     std::fs::create_dir_all(store).unwrap();
     let listener = link::listen(&link::address(store)).unwrap();
+    let (took, taken) = mpsc::channel();
     std::thread::spawn(move || {
         let (heard, hear) = mpsc::channel();
         // The window probes the socket before it attaches: serve every
@@ -34,7 +35,7 @@ fn server_answering_nothing(store: &std::path::Path, commands: usize) {
             }
         });
         let mut connections = BTreeMap::new();
-        let mut taken = 0;
+        let mut commands = 0;
         for heard in hear {
             match heard {
                 Heard::Joined(id, connection) => {
@@ -63,10 +64,12 @@ fn server_answering_nothing(store: &std::path::Path, commands: usize) {
                         }))
                         .unwrap();
                 }
-                Heard::Message(id, ClientMessage::Command(_)) => {
-                    taken += 1;
-                    if taken == commands {
+                Heard::Message(id, ClientMessage::Command(command)) => {
+                    commands += 1;
+                    if commands == drop_at {
                         connections.remove(&id);
+                    }
+                    if took.send(command.op).is_err() {
                         return;
                     }
                 }
@@ -74,18 +77,12 @@ fn server_answering_nothing(store: &std::path::Path, commands: usize) {
             }
         }
     });
+    taken
 }
 
-/// A first send in flight when an act finds the Server gone is settled
-/// at the next poll: its Draft hears it may not have started, and is no
-/// longer starting, so it can be sent again.
-#[test]
-fn a_first_send_the_connection_took_with_it_is_settled() {
-    let store = std::env::temp_dir().join(format!("fr-{}-gone", std::process::id()));
-    let _ = std::fs::remove_dir_all(&store);
-    server_answering_nothing(&store, 2);
-    let (mut remote, _) = Remote::new(Attach {
-        store: store.clone(),
+fn remote(store: &std::path::Path) -> Remote {
+    Remote::new(Attach {
+        store: store.to_path_buf(),
         executable: "/bin/false".into(),
         client: Peer {
             name: "test".into(),
@@ -93,7 +90,24 @@ fn a_first_send_the_connection_took_with_it_is_settled() {
         },
         renderer: None,
         discovery: Box::new(NoDiscovery),
-    });
+    })
+    .0
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let store = std::env::temp_dir().join(format!("fr-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&store);
+    store
+}
+
+/// A first send in flight when an act finds the Server gone is settled
+/// at the next poll: its Draft hears it may not have started, and is no
+/// longer starting, so it can be sent again.
+#[test]
+fn a_first_send_the_connection_took_with_it_is_settled() {
+    let store = scratch("gone");
+    let _taken = server_answering_nothing(&store, 2);
+    let mut remote = remote(&store);
     let draft = DraftId::new(1);
     remote
         .bootstrap(
@@ -128,5 +142,46 @@ fn a_first_send_the_connection_took_with_it_is_settled() {
     assert_eq!(settled[0].draft, Some(draft));
     assert!(settled[0].result.is_err());
     assert!(!remote.draft_starting(draft));
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+/// An answer in flight when the connection goes may have arrived: the
+/// window says so, attaches again, and never sends it again — the
+/// snapshot says whether the Decision is still pending.
+#[test]
+fn an_answer_in_flight_across_a_disconnect_is_not_resent() {
+    let store = scratch("answer");
+    let taken = server_answering_nothing(&store, 1);
+    let mut remote = remote(&store);
+
+    let answered = remote.execute(Op::Answer {
+        thread: ThreadId::new(1),
+        handle: protocol::WireHandle {
+            generation: 1,
+            serial: 1,
+            request_id: "perm_01".into(),
+        },
+        answer: protocol::WireAnswer::Allow {
+            input: serde_json::json!({}),
+        },
+    });
+    let error = answered.unwrap_err();
+    assert!(error.message.contains("may not have arrived"), "{error:?}");
+    assert!(matches!(
+        taken.recv_timeout(Duration::from_secs(5)),
+        Ok(Op::Answer { .. })
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(remote.state(), ServerState::Attached { .. }) {
+        assert!(Instant::now() < deadline, "never attached again");
+        remote.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    remote.poll();
+    assert!(
+        taken.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the answer was sent again"
+    );
     let _ = std::fs::remove_dir_all(&store);
 }

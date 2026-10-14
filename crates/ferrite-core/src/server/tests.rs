@@ -323,6 +323,105 @@ fn the_first_answer_wins_and_the_second_hears_already_answered() {
     }
 }
 
+/// The handle of the Decision `window` sees pending on `thread`.
+fn pending_handle(window: &Window, thread: ThreadId) -> protocol::WireHandle {
+    (&window.mirrors.view(thread).unwrap().activity().decisions()[0].handle).into()
+}
+
+fn allow(thread: ThreadId, handle: &protocol::WireHandle) -> Op {
+    Op::Answer {
+        thread,
+        handle: handle.clone(),
+        answer: WireAnswer::Allow {
+            input: serde_json::json!({}),
+        },
+    }
+}
+
+fn refused_with(reply: &ServerMessage, code: ErrorCode) -> bool {
+    matches!(reply, ServerMessage::Reply { error: Some(error), .. } if error.code == code)
+}
+
+/// An answer that does not fit its Decision is refused `invalid_answer`
+/// and never reaches the provider; the Decision stays pending, and the
+/// next valid answer wins.
+#[test]
+fn an_invalid_answer_leaves_the_decision_pending() {
+    let harness = start("invalid");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    provider.send(decision()).unwrap();
+    window.until(|window| window.decisions.len() == 1);
+    let handle = pending_handle(&window, thread);
+
+    let reply = window.command(
+        10,
+        Op::Answer {
+            thread,
+            handle: handle.clone(),
+            answer: WireAnswer::Form {
+                values: serde_json::json!({}),
+            },
+        },
+    );
+    assert!(refused_with(&reply, ErrorCode::InvalidAnswer), "{reply:?}");
+    assert!(harness.answers.lock().unwrap().is_empty());
+    let reply = window.command(11, allow(thread, &handle));
+    assert!(
+        matches!(reply, ServerMessage::Reply { error: None, .. }),
+        "{reply:?}"
+    );
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+    window.until(|window| !window.closed().is_empty());
+    assert_eq!(window.closed(), vec![ClosedBy::Answered { client: 1 }]);
+}
+
+/// A request id is unique only within one provider process: an answer to
+/// a replaced Session's Decision is refused even when its successor asks
+/// with the same id, and the successor's own Decision stays pending.
+#[test]
+fn an_answer_to_a_replaced_sessions_decision_is_refused() {
+    let harness = start("replaced");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    provider.send(decision()).unwrap();
+    window.until(|window| window.decisions.len() == 1);
+    let replaced = pending_handle(&window, thread);
+    drop(provider);
+    window.until(|window| !window.closed().is_empty());
+
+    window.command(
+        2,
+        Op::Send {
+            thread,
+            text: "again".into(),
+        },
+    );
+    let successor = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    successor.send(decision()).unwrap();
+    window.until(|window| window.decisions.len() == 3);
+    let current = pending_handle(&window, thread);
+    assert_eq!(current.request_id, replaced.request_id);
+    assert_ne!(current, replaced);
+
+    let reply = window.command(10, allow(thread, &replaced));
+    assert!(
+        refused_with(&reply, ErrorCode::AlreadyAnswered),
+        "{reply:?}"
+    );
+    assert!(harness.answers.lock().unwrap().is_empty());
+    let reply = window.command(11, allow(thread, &current));
+    assert!(
+        matches!(reply, ServerMessage::Reply { error: None, .. }),
+        "{reply:?}"
+    );
+}
+
 /// A Decision pending when its Session ends closes for every window as
 /// `session_ended`; one pending when the Server stops, as `server_restart`.
 #[test]

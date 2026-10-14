@@ -249,6 +249,42 @@ impl Remote {
         }
     }
 
+    /// Wait, until `deadline`, for a stopping Server to be gone: it lets
+    /// its windows go once the Store is flushed, and its socket stops
+    /// answering when its process ends. Nothing attaches again meanwhile.
+    pub(crate) fn wait_gone(&mut self, deadline: Instant) -> io::Result<()> {
+        if let Some(attachment) = &self.attachment {
+            while let Ok(message) = attachment
+                .client
+                .messages
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                self.inbox.push_back(message);
+            }
+        }
+        self.detach("the Ferrite server stopped");
+        let address = link::address(&self.attach.store);
+        loop {
+            match link::connect(&address) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    return Ok(())
+                }
+                _ if Instant::now() >= deadline => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the Ferrite server is still running",
+                    ))
+                }
+                _ => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    }
+
     /// A Draft's first send: answered when the Thread starts, in `poll`.
     pub(crate) fn bootstrap(&mut self, draft: DraftId, prompt: &str, op: Op) -> io::Result<()> {
         let id = self.send_command(op).map_err(io::Error::from)?;

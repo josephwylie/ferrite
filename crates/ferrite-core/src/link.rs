@@ -18,6 +18,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Instant;
 
 use serde::Serialize;
 
@@ -113,6 +114,8 @@ pub struct Outbox {
     lagged: bool,
     /// The Server let the connection go: the writer stops.
     closed: bool,
+    /// The writer thread has ended.
+    finished: bool,
 }
 
 /// Messages made only as they are sent, on the connection's writer thread:
@@ -400,10 +403,12 @@ impl Connection {
                         }
                     };
                     if !matches!(sent, Ok(true)) {
-                        let _ = writer.shutdown();
-                        return;
+                        break;
                     }
                 }
+                let _ = writer.shutdown();
+                lock.lock().unwrap_or_else(|e| e.into_inner()).finished = true;
+                ready.notify_all();
             })?;
         if heard.send(Heard::Joined(id, Self { shared })).is_err() {
             return Ok(());
@@ -436,8 +441,28 @@ impl Connection {
     fn queue(&self, push: impl FnOnce(&mut Outbox) -> Result<(), Lagged>) -> Result<(), Lagged> {
         let (lock, ready) = &*self.shared;
         let pushed = push(&mut lock.lock().unwrap_or_else(|e| e.into_inner()));
-        ready.notify_one();
+        ready.notify_all();
         pushed
+    }
+
+    /// Let the client go, as dropping does, and wait until its writer has
+    /// sent what was queued or `deadline` passes: a Server about to exit
+    /// says its last words (`stopping`, `restarting`) first.
+    pub fn finish(self, deadline: Instant) {
+        let (lock, ready) = &*self.shared;
+        let mut outbox = lock.lock().unwrap_or_else(|e| e.into_inner());
+        outbox.closed = true;
+        ready.notify_all();
+        while !outbox.finished {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            outbox = ready
+                .wait_timeout(outbox, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
     }
 }
 
@@ -448,7 +473,7 @@ impl Drop for Connection {
     fn drop(&mut self) {
         let (lock, ready) = &*self.shared;
         lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
-        ready.notify_one();
+        ready.notify_all();
     }
 }
 

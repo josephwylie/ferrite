@@ -137,6 +137,17 @@ impl Cockpit {
         self.server_command(Op::Stop { when })
     }
 
+    /// Stop the Server at once and wait, up to `within`, for it to be gone:
+    /// an installer is about to replace the executable it runs.
+    pub fn stop_server_and_wait(&mut self, within: Duration) -> io::Result<()> {
+        let deadline = Instant::now() + within;
+        let server = self.remote()?;
+        server
+            .execute(Op::Stop { when: When::Now })
+            .map_err(io::Error::from)?;
+        server.wait_gone(deadline)
+    }
+
     /// Restart the Server into its executable as it is on disk now — at
     /// once, or once every agent is idle — and resume every open Thread.
     pub fn restart_server(&mut self, when: When) -> io::Result<()> {
@@ -144,13 +155,20 @@ impl Cockpit {
     }
 
     fn server_command(&mut self, op: Op) -> io::Result<()> {
-        let Link::Server(server) = &mut self.link else {
-            return Err(io::Error::new(
+        self.remote()?
+            .execute(op)
+            .map(drop)
+            .map_err(io::Error::from)
+    }
+
+    fn remote(&mut self) -> io::Result<&mut remote::Remote> {
+        match &mut self.link {
+            Link::Server(server) => Ok(server),
+            Link::InProcess(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "this window runs its agents itself",
-            ));
-        };
-        server.execute(op).map(drop).map_err(io::Error::from)
+            )),
+        }
     }
 
     /// One act where the Engine runs: a direct call in this process, a
@@ -944,6 +962,9 @@ impl Cockpit {
         )
     }
 
+    /// A first send that blocks until its Thread opens: the tests' own.
+    /// A window sends a Draft's first message with `bootstrap_draft`.
+    #[cfg(test)]
     pub fn bootstrap(
         &mut self,
         choice: ProviderChoice,
@@ -955,6 +976,7 @@ impl Cockpit {
         started
     }
 
+    #[cfg(test)]
     pub fn bootstrap_in_group(
         &mut self,
         choice: ProviderChoice,
@@ -1016,6 +1038,8 @@ impl Cockpit {
         revived
     }
 
+    /// The tests' own: no window revives a whole Group.
+    #[cfg(test)]
     pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
         let revived = self.in_process().revive_group(group);
         self.settle();

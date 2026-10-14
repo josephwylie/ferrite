@@ -11,6 +11,10 @@ use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
 use gpui::PromptLevel;
 
+/// How long an update waits for the Server to end: past the Store's
+/// final syncs.
+const RELEASE_WAIT: Duration = Duration::from_secs(5);
+
 /// The no-Server band, so attaching again takes it down.
 struct Detached;
 /// The band saying the Server will update.
@@ -156,12 +160,12 @@ impl CockpitView {
     }
 
     /// Windows' installer cannot replace a running executable, and the
-    /// Server runs this one: an update stops it first (ADR 0025). Its
-    /// agents are idle by then, and the relaunched window starts the new
-    /// Server, which resumes their Threads.
+    /// Server runs this one: an update stops it first, and waits for it to
+    /// end (ADR 0025). Its agents are idle by then, and the relaunched
+    /// window starts the new Server, which resumes their Threads.
     pub(super) fn release_executable(&mut self) {
         if cfg!(windows) && self.cockpit.server().is_some() {
-            if let Err(error) = self.cockpit.stop_server(When::Now) {
+            if let Err(error) = self.cockpit.stop_server_and_wait(RELEASE_WAIT) {
                 ferrite_core::log!("the server was not stopped for the update: {error}");
             }
         }

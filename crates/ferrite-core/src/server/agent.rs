@@ -20,14 +20,21 @@ pub fn ensure_running(store: &Path, executable: &Path) -> io::Result<()> {
         return Ok(());
     }
     // The LaunchAgent serves the operator's own Store; a dev or test Store
-    // gets a Server of its own.
-    let launched = operators_store(store) && kickstart();
-    if !launched {
-        start_detached(executable, &[])?;
+    // gets a Server of its own. launchd runs the job it loaded, which can
+    // name a bundle that has since moved until the next login: when its
+    // Server never answers, start this one.
+    if operators_store(store) && kickstart() && answers(&address).is_ok() {
+        return Ok(());
     }
+    start_detached(executable, &[])?;
+    answers(&address)
+}
+
+/// Wait up to [`START`] for a Server to answer at `address`.
+fn answers(address: &Path) -> io::Result<()> {
     let deadline = Instant::now() + START;
     loop {
-        match link::connect(&address) {
+        match link::connect(address) {
             Ok(_) => return Ok(()),
             Err(error) if Instant::now() >= deadline => {
                 return Err(io::Error::new(

@@ -265,29 +265,35 @@ impl Engine {
             .threads
             .get(&thread)
             .ok_or_else(|| refused(ErrorCode::UnknownThread, "that Thread is not open"))?;
-        let Some(pending) = state.activity.view().decisions().iter().find(|pending| {
-            pending.handle.generation == handle.generation
-                && pending.handle.request_id == handle.request_id
-                && !pending.submitting
-        }) else {
+        let handle = DecisionHandle::from(handle);
+        let Some(pending) = state
+            .activity
+            .view()
+            .decisions()
+            .iter()
+            .find(|pending| pending.handle == handle && !pending.submitting)
+        else {
             return Err(refused(
                 ErrorCode::AlreadyAnswered,
                 "this request was already answered",
             ));
         };
-        if let (crate::DecisionKind::Form { fields }, crate::DecisionAnswer::Form { values }) =
-            (&pending.decision.kind, &answer)
-        {
-            crate::validate_form(fields, values)
-                .map_err(|reason| refused(ErrorCode::InvalidAnswer, reason))?;
-        }
-        let handle = pending.handle.clone();
+        pending
+            .decision
+            .kind
+            .validate_answer(&answer)
+            .map_err(|reason| refused(ErrorCode::InvalidAnswer, reason))?;
         match self.respond_decision(thread, &handle, answer) {
             Ok(true) => Ok(None),
             Ok(false) => Err(refused(
                 ErrorCode::AlreadyAnswered,
                 "this request was already answered",
             )),
+            // The provider refused what only it can judge (a choice it never
+            // offered); the Decision is still pending.
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                Err(refused(ErrorCode::InvalidAnswer, error))
+            }
             Err(error) => Err(failed(error)),
         }
     }

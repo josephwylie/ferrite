@@ -38,6 +38,8 @@ const IDLE: Duration = Duration::from_millis(250);
 const LAUNCH_STAGGER: Duration = Duration::from_millis(100);
 /// How often the memory watchdog samples the Sessions.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
+/// How long a going Server waits for its clients to hear it go.
+const LAST_WORDS: Duration = Duration::from_millis(500);
 
 pub struct Options {
     /// Where the Threads live (`FERRITE_STORE`, else `~/.ferrite/threads`).
@@ -324,9 +326,14 @@ impl Server {
                 let accepted = !matches!(welcome, ServerMessage::Welcome { error: Some(_), .. });
                 let _ = client.connection.send(welcome);
                 if accepted {
+                    // What is already published goes to the others: this
+                    // client's stream starts with its snapshot.
+                    self.broadcast();
+                    let Some(client) = self.clients.get_mut(&id) else {
+                        return;
+                    };
                     client.welcomed = true;
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
-                    self.broadcast();
                     let snapshot = self.engine.snapshot(&self.boot_id);
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
@@ -695,10 +702,14 @@ impl Server {
         }
     }
 
+    /// End every Session, then let every client go once it has heard the
+    /// last words, before the process takes them.
     fn halt(&mut self) {
         self.engine.halt_sessions();
-        // The writers' last lines, before the process takes them.
-        std::thread::sleep(Duration::from_millis(50));
+        let deadline = Instant::now() + LAST_WORDS;
+        for (_, client) in std::mem::take(&mut self.clients) {
+            client.connection.finish(deadline);
+        }
     }
 }
 

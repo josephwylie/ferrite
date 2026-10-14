@@ -113,7 +113,10 @@ builds) — then `launchctl bootstrap gui/<uid>` (a label already loaded
 counts as done). Turning it off only deletes the plist: `bootout` would
 SIGTERM the running Server, so the job stays loaded until logout and
 nothing starts it at the next login. Each launch rewrites the plist if
-the bundle moved. Provider CLIs stay in the Server's process group, so when a crashed
+the bundle moved; a job already loaded keeps the old path until logout
+(re-bootstrapping it would SIGTERM a Server that may be running), so
+when a kickstarted Server does not answer within 5 s, `ensure_running`
+starts the detached one and waits again. Provider CLIs stay in the Server's process group, so when a crashed
 Server's job ends launchd kills what it left (its default, no
 `AbandonProcessGroup`) before starting the next one: an orphaned Codex
 app-server would otherwise hold its thread's lock against the resume. A
@@ -262,8 +265,12 @@ and ends both its threads.
 request id), because a request id is unique only within one provider
 process, and a replaced Session may reuse one. It is checked on the pump
 thread: the Decision must be pending and not already submitting, the
-answer must fit its kind (`validate_form` for forms and questions), and
-the handle's generation must be the Session's. The first that passes is
+answer must fit its kind (`DecisionKind::validate_answer`: the variants
+each kind takes, a form's values and each question's picks), and the
+whole handle must match, so a replaced Session's Decision never matches
+its successor's. What only the provider's adapter can judge (a choice it
+never offered) is refused there, before anything is sent, and replied
+`invalid_answer` too. The first that passes is
 delivered to the provider, recorded, flushed, replied `ok`, and broadcast as
 `decision_closed {by: answered}` with the answering client. Every later
 answer is replied `already_answered`; an invalid one `invalid_answer`,
@@ -359,7 +366,9 @@ over live processes.
   cannot replace a running executable (and Inno's silent
   `CloseApplications` would kill the Server unflushed), so "restart to
   update", which already waits for every agent to be idle (or asks, for
-  "now"), sends `stop {when: now}` before the app quits; the relaunched
+  "now"), sends `stop {when: now}` and waits (up to 5 s) for the
+  Server to let its windows go and its pipe to vanish with its process
+  before the app quits; the relaunched
   app installs before it starts a Server, and the new Server resumes the
   Threads.
 - ADR 0023's gate, "only the Ferrite holding the Store's claim updates",
