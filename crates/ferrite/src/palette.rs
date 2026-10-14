@@ -197,7 +197,9 @@ impl Row {
     fn context_gap(&self) -> f32 {
         match self.section {
             Section::Commands => FLOAT_DETAIL_GAP,
-            Section::Threads | Section::Projects | Section::Groups | Section::Sessions => PALETTE_CONTEXT_GAP,
+            Section::Threads | Section::Projects | Section::Groups | Section::Sessions => {
+                PALETTE_CONTEXT_GAP
+            }
         }
     }
 
@@ -436,14 +438,18 @@ impl Render for Palette {
                     .text_color(rgb(TEXT_STRONG))
                     .child(self.input.clone()),
             )
-            .children(status_filter(self.scope, &self.query(cx)).flatten().map(|filter| {
-                div()
-                    .debug_selector(|| "palette-filter".into())
-                    .flex_shrink_0()
-                    .ml(px(FLOAT_DETAIL_GAP))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(filter_word(filter))
-            }));
+            .children(
+                status_filter(self.scope, &self.query(cx))
+                    .flatten()
+                    .map(|filter| {
+                        div()
+                            .debug_selector(|| "palette-filter".into())
+                            .flex_shrink_0()
+                            .ml(px(FLOAT_DETAIL_GAP))
+                            .text_color(rgb(TEXT_MUTED))
+                            .child(filter_word(filter))
+                    }),
+            );
         let mut list = div()
             .id("palette-rows")
             .flex()

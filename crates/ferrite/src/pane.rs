@@ -3835,8 +3835,9 @@ fn ghost_row(ghost: Ghost) -> Div {
 /// #11: whether this Thread still offers adopting a CLI session — no
 /// conversation yet (nothing in the transcript beyond Ferrite's own notices
 /// and bookkeeping) and at rest. One predicate for every surface that opens
-/// the door — the placeholder hint, the `/` menu's local entry, and the
-/// pick that closes the blank Thread — so no two can disagree.
+/// the door — the placeholder hint, the import picker's choice of the
+/// Thread's place, and the pick that closes the blank Thread — so no two
+/// can disagree.
 pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }

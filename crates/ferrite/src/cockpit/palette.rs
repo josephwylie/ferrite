@@ -99,7 +99,8 @@ fn session_row(
         section: PaletteSection::Sessions,
         name: name.into(),
         context: context.into(),
-        dot: None,
+        status: None,
+        detail: None,
         keys: None,
         act: Act::Adopt {
             path: candidate.path,
@@ -399,14 +400,13 @@ impl CockpitView {
     /// The focused Pane, when it is blank enough for an import to take its
     /// place: a draft with nothing typed, or a Thread that still offers
     /// import.
-    fn import_target(&self, cx: &gpui::App) -> Option<PaneIdentity> {
+    pub(super) fn import_target(&self, cx: &gpui::App) -> Option<PaneIdentity> {
         let pane = self.panes.get(self.focused())?;
         let blank = match pane.identity {
             PaneIdentity::Draft(_) => pane.composer.read(cx).is_empty(),
-            PaneIdentity::Thread(thread) => self
-                .cockpit
-                .thread(thread)
-                .is_some_and(|open| open.transcript().offers_import()),
+            PaneIdentity::Thread(thread) => {
+                pane::offers_import(self.cockpit.thread(thread).map(|open| open.transcript()))
+            }
         };
         blank.then_some(pane.identity)
     }

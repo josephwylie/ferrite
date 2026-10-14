@@ -8,8 +8,10 @@
 //! launch until the first turn of the first Thread happens to report.
 //!
 //! A remembered reading is served only while its window can still be the
-//! one it was measured in — see `fresh`. An expired window reverts to
+//! one it was measured in — see `window`. An expired window reverts to
 //! unknown rather than showing a percentage that has since rolled over.
+//! Each window is its own reading: a report naming only one (Claude's
+//! older flat events, a plan with one window) leaves the other as it was.
 //!
 //! A reading that rises across one of the operator's warning thresholds
 //! (`Settings::allowance_warnings`) is an `AllowanceWarning`: said once per
@@ -34,18 +36,21 @@ use crate::RateLimitWindow;
 const FIVE_HOUR: u64 = 5 * 60 * 60;
 const WEEKLY: u64 = 7 * 24 * 60 * 60;
 
+/// The cache file's shape. 2: each window keeps its own `saved_at`.
+const SCHEMA: u32 = 2;
+
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct Window {
     used_fraction: f32,
     resets_at: Option<u64>,
+    /// When this window was reported, in unix seconds — our own clock, so
+    /// freshness never depends on a provider's units.
+    saved_at: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct Snapshot {
     schema: u32,
-    /// When this reading was taken, in unix seconds — our own clock, so
-    /// freshness never depends on a provider's units.
-    saved_at: u64,
     five_hour: Option<Window>,
     weekly: Option<Window>,
 }
@@ -130,28 +135,33 @@ impl LimitCache {
         };
         let now = now();
         RateLimits {
-            five_hour: window(snapshot.five_hour, snapshot.saved_at, FIVE_HOUR, now),
-            weekly: window(snapshot.weekly, snapshot.saved_at, WEEKLY, now),
+            five_hour: window(snapshot.five_hour, FIVE_HOUR, now),
+            weekly: window(snapshot.weekly, WEEKLY, now),
         }
     }
 
-    /// A reported reading replaces the previous one. A report with neither
-    /// window says nothing and is ignored, so one empty announcement
-    /// cannot erase a usable reading. Disk failure must not discard the
-    /// live answer.
+    /// A reported window replaces the one remembered; a window the report
+    /// does not name is kept, so a report with neither says nothing and one
+    /// announcement cannot erase a usable reading. Disk failure must not
+    /// discard the live answer.
     pub(crate) fn remember(&mut self, provider: Provider, limits: RateLimits) -> bool {
         if limits.five_hour.is_none() && limits.weekly.is_none() {
             return false;
         }
-        let snapshot = Snapshot {
-            schema: 1,
-            saved_at: now(),
-            five_hour: limits.five_hour.map(store_window),
-            weekly: limits.weekly.map(store_window),
-        };
         let (known, name) = match provider {
             Provider::Claude => (&mut self.claude, "claude.json"),
             Provider::Codex => (&mut self.codex, "codex.json"),
+        };
+        let saved_at = now();
+        let merged = |reported: Option<RateLimitWindow>, kept: Option<Window>| {
+            reported
+                .map(|window| store_window(window, saved_at))
+                .or(kept)
+        };
+        let snapshot = Snapshot {
+            schema: SCHEMA,
+            five_hour: merged(limits.five_hour, known.and_then(|known| known.five_hour)),
+            weekly: merged(limits.weekly, known.and_then(|known| known.weekly)),
         };
         let unchanged = known.is_some_and(|known| {
             same(known.five_hour, snapshot.five_hour) && same(known.weekly, snapshot.weekly)
@@ -183,8 +193,9 @@ impl LimitCache {
 /// field's units, so a value that does not is not guessed at. Otherwise
 /// the window's own rolling span is the outer bound: a 5-hour reading is
 /// certainly stale five hours later, whatever the provider meant.
-fn window(saved: Option<Window>, saved_at: u64, span: u64, now: u64) -> Option<RateLimitWindow> {
+fn window(saved: Option<Window>, span: u64, now: u64) -> Option<RateLimitWindow> {
     let saved = saved?;
+    let saved_at = saved.saved_at;
     let expires = match saved.resets_at {
         Some(resets_at) if resets_at > saved_at => resets_at.min(saved_at.saturating_add(span)),
         _ => saved_at.saturating_add(span),
@@ -195,10 +206,11 @@ fn window(saved: Option<Window>, saved_at: u64, span: u64, now: u64) -> Option<R
     })
 }
 
-fn store_window(window: RateLimitWindow) -> Window {
+fn store_window(window: RateLimitWindow, saved_at: u64) -> Window {
     Window {
         used_fraction: window.used_fraction,
         resets_at: window.resets_at,
+        saved_at,
     }
 }
 
@@ -223,7 +235,7 @@ fn read(path: &Path) -> Option<Snapshot> {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok())
-        .filter(|snapshot| snapshot.schema == 1)
+        .filter(|snapshot| snapshot.schema == SCHEMA)
 }
 
 fn save(path: &Path, snapshot: &Snapshot) -> io::Result<()> {
@@ -291,17 +303,20 @@ mod tests {
 
     #[test]
     fn a_window_that_has_rolled_over_reads_as_unknown_again() {
-        let stale = now() - WEEKLY - 1;
-        let saved = Some(Window {
-            used_fraction: 0.9,
-            resets_at: None,
-        });
-        assert_eq!(window(saved, stale, FIVE_HOUR, now()), None);
-        assert_eq!(window(saved, stale, WEEKLY, now()), None);
+        let saved = |saved_at| {
+            Some(Window {
+                used_fraction: 0.9,
+                resets_at: None,
+                saved_at,
+            })
+        };
+        let stale = saved(now() - WEEKLY - 1);
+        assert_eq!(window(stale, FIVE_HOUR, now()), None);
+        assert_eq!(window(stale, WEEKLY, now()), None);
         // A fresh weekly reading outlives a five-hour one taken with it.
-        let recent = now() - FIVE_HOUR - 1;
-        assert_eq!(window(saved, recent, FIVE_HOUR, now()), None);
-        assert!(window(saved, recent, WEEKLY, now()).is_some());
+        let recent = saved(now() - FIVE_HOUR - 1);
+        assert_eq!(window(recent, FIVE_HOUR, now()), None);
+        assert!(window(recent, WEEKLY, now()).is_some());
     }
 
     #[test]
@@ -310,14 +325,16 @@ mod tests {
         let saved = Some(Window {
             used_fraction: 0.4,
             resets_at: Some(saved_at + 30),
+            saved_at,
         });
-        assert_eq!(window(saved, saved_at, FIVE_HOUR, now()), None);
+        assert_eq!(window(saved, FIVE_HOUR, now()), None);
         // A reset instant in units we cannot read is ignored, not obeyed.
         let opaque = Some(Window {
             used_fraction: 0.4,
             resets_at: Some(11),
+            saved_at,
         });
-        assert!(window(opaque, saved_at, FIVE_HOUR, now()).is_some());
+        assert!(window(opaque, FIVE_HOUR, now()).is_some());
     }
 
     #[test]
@@ -347,6 +364,26 @@ mod tests {
         cache.remember(Provider::Claude, limits(0.5, 0.1));
         assert!(!cache.remember(Provider::Claude, RateLimits::default()));
         assert_eq!(cache.get(Provider::Claude), limits(0.5, 0.1));
+    }
+
+    /// A report naming one window keeps the other, so the next report of
+    /// it at the same use is no new crossing.
+    #[test]
+    fn a_one_window_report_keeps_the_other_and_does_not_rewarn() {
+        let dir = scratch("one-window");
+        let mut cache = LimitCache::load(&dir);
+        cache.remember(Provider::Claude, limits(0.85, 0.1));
+        let weekly_only = RateLimits {
+            five_hour: None,
+            weekly: window_at(0.2),
+        };
+        assert!(cache.remember(Provider::Claude, weekly_only));
+        assert_eq!(cache.get(Provider::Claude), limits(0.85, 0.2));
+
+        let before = cache.get(Provider::Claude);
+        cache.remember(Provider::Claude, limits(0.85, 0.2));
+        let after = cache.get(Provider::Claude);
+        assert!(warnings(Provider::Claude, before, after, &[80, 95]).is_empty());
     }
 
     fn window_at(used_fraction: f32) -> Option<RateLimitWindow> {

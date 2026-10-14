@@ -1029,13 +1029,12 @@ fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target
 }
 
 /// The one popover the Composer's slot can hold — the `/` or `@` menu
-/// (#23), the provider picker (#25) or a
-/// draft's band chip (#29) — and everything it shows. At most one for the
-/// whole cockpit, always on the focused Pane's Composer: `pane` names that
-/// Pane by the roster's own identity. Rows
-/// are discovered when it opens and re-derived only by its kind's own
-/// rule, never per frame; each row carries what picking it does, so the
-/// two can never drift apart.
+/// (#23), the provider picker (#25) or a draft's band chip (#29) — and
+/// everything it shows. At most one for the whole cockpit, always on the
+/// focused Pane's Composer: `pane` names that Pane by the roster's own
+/// identity. Rows are discovered when it opens and re-derived only by its
+/// kind's own rule, never per frame; each row carries what picking it
+/// does, so the two can never drift apart.
 struct Popover {
     /// The Pane whose Composer holds it.
     pane: PaneIdentity,
@@ -6115,9 +6114,10 @@ impl CockpitView {
                 .collect();
             // Ferrite's local rows ride on top, through the same fuzzy
             // filter and under the same cap as every row. #11: `import`
-            // while the Thread still offers adoption. #25: `provider`
-            // always — live before the first prompt, and kept visible but
-            // inert after it, so the door's absence never reads as a bug.
+            // always — in the Thread's place while it is blank, else
+            // alongside. #25: `provider` always — live before the first
+            // prompt, and kept visible but inert after it, so the door's
+            // absence never reads as a bug.
             // A local row replaces a provider command of the same name
             // (Claude lists its own `effort`): Ferrite's opens the picker,
             // and the typed form (`/effort max`) still works — `submit`
@@ -6127,7 +6127,7 @@ impl CockpitView {
                 rows.insert(0, row);
                 rows.truncate(MENU_ROWS_MAX);
             };
-            if standalone && pane::offers_import(Some(open.transcript())) {
+            if standalone {
                 if let Some(row) =
                     local_row(filter, "import", "Resume a Claude or Codex session", false)
                 {
@@ -6482,10 +6482,16 @@ impl CockpitView {
                 }
             }
             Consequence::OpenImportPicker => {
-                if open.pane.thread().is_some() {
-                    splice_line(cx, "");
-                }
-                self.open_import_palette(Some(open.pane), window, cx);
+                // A draft's one line is the `/import` its pick replaces; a
+                // Thread is replaced only while it is blank.
+                let into = match open.pane {
+                    PaneIdentity::Draft(_) => Some(open.pane),
+                    PaneIdentity::Thread(_) => {
+                        splice_line(cx, "");
+                        self.import_target(cx)
+                    }
+                };
+                self.open_import_palette(into, window, cx);
             }
             Consequence::Mention(path) => {
                 let Kind::Files { token_start, .. } = &open.kind else {
@@ -6813,11 +6819,16 @@ impl CockpitView {
                         "imported thread {} would not open: {error:?}",
                         adopted.thread
                     );
-                } else if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
-                    self.panes[index].composer.update(cx, |composer, cx| {
-                        composer.take(cx);
-                    });
-                    self.panes[index].adopt_thread(adopted.thread);
+                } else {
+                    // The import has focus: an empty board shown over the
+                    // open Threads would hide it.
+                    self.empty_shown = false;
+                    if let Some(index) = draft.and_then(|draft| self.index_of(draft)) {
+                        self.panes[index].composer.update(cx, |composer, cx| {
+                            composer.take(cx);
+                        });
+                        self.panes[index].adopt_thread(adopted.thread);
+                    }
                 }
                 if let Some(error) = &adopted.blank_kept {
                     ferrite_core::log!("the blank thread stayed open: {error}");
@@ -9414,8 +9425,8 @@ impl CockpitView {
         // The popover belongs to the focused Pane's Composer at L1 (#23):
         // leaving that Pane, or zooming below L1, closes it here — and a
         // picker closes the moment its offer expires (#25): a band chip
-        // (#29) goes with the draft becoming a Thread. Render is the one chokepoint every
-        // open, pick, dismissal and heal passes.
+        // (#29) goes with the draft becoming a Thread. Render is the one
+        // chokepoint every open, pick, dismissal and heal passes.
         if self.popover.as_ref().is_some_and(|open| {
             let focused = self.panes.get(self.focused());
             level != Level::Transcript
@@ -21739,9 +21750,9 @@ mod tests {
             );
         });
 
-        // A conversation starts: the import door closes; the model row
-        // stays live — the model can change any time — and says what it
-        // does now that the provider is fixed.
+        // A conversation starts: import stays, opening alongside now; the
+        // model row stays live — the model can change any time — and says
+        // what it does now that the provider is fixed.
         cx.simulate_keystrokes("backspace");
         cx.simulate_input("hello");
         cx.simulate_keystrokes("enter");
@@ -21751,8 +21762,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             let menu = view.popover.as_ref().expect("the model menu still lists");
             assert!(
-                menu.rows.iter().all(|row| row.name.as_ref() != "/import"),
-                "a Thread with history offers no import"
+                menu.rows.iter().any(|row| row.name.as_ref() == "/import"),
+                "a Thread with history still offers import, alongside"
             );
             assert_eq!(menu.rows[0].name.as_ref(), "/model");
             assert!(!menu.rows[0].inert, "the model door stays open");
@@ -21761,7 +21772,7 @@ mod tests {
                 "Switch model or hand over to the other provider"
             );
             assert_eq!(menu.rows[1].name.as_ref(), "/effort");
-            assert_eq!(menu.rows.len(), 6);
+            assert_eq!(menu.rows.len(), 7);
         });
     }
 
@@ -22036,6 +22047,130 @@ mod tests {
                 view.cockpit.thread(busy).is_some(),
                 "the conversation it was opened over stays"
             );
+        });
+    }
+
+    /// `/import` over a conversation still offers the picker, and its pick
+    /// opens alongside: the conversation is not a blank Pane to replace.
+    #[gpui::test]
+    fn slash_import_over_a_conversation_opens_alongside(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-slash-alongside", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| {
+            view.session_file_roots = session_roots(&scratch("import-slash-alongside-roots"))
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        cx.simulate_input("/im");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().expect("the picker is open");
+            assert_eq!(
+                palette.read(cx).scope,
+                crate::palette::PaletteScope::Sessions
+            );
+            assert_eq!(view.import_target(cx), None, "nothing to replace");
+        });
+    }
+
+    /// ⌘K's import over the empty board shown on purpose lands on the
+    /// import, not on the board it was picked from.
+    #[gpui::test]
+    fn palette_import_from_the_empty_board_shows_the_import(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-empty-board", 1);
+        let base = scratch("import-empty-board-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[0].1.join("-workspace-alpha").join("board.jsonl"),
+            &claude_session_body("board"),
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.session_file_roots = roots;
+            view.show_empty_board(cx);
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let adopted = view.focused_thread().expect("the import is focused");
+            assert_eq!(
+                view.cockpit
+                    .thread(adopted)
+                    .unwrap()
+                    .transcript()
+                    .session_id(),
+                Some("board")
+            );
+            assert!(
+                !view.empty_board_shown(),
+                "the board gave way to the import"
+            );
+        });
+    }
+
+    /// A refused import with no Pane to speak in says so as a toast, and
+    /// leaves no Thread behind.
+    #[gpui::test]
+    fn a_refused_import_with_no_pane_toasts(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-refused-toast", 1);
+        let base = scratch("import-refused-toast-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[1].1.join("2026").join("junk.jsonl"),
+            "not a session file at all\n",
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.session_file_roots = roots);
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        let toasts = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                gpui::component::Root::read(window, cx)
+                    .notification
+                    .read(cx)
+                    .notifications()
+                    .len()
+            })
+        };
+        let before = toasts(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1, "no Thread was added");
+            assert!(view.cockpit.parked().unwrap().is_empty());
         });
     }
 
