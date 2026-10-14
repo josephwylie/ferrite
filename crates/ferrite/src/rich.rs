@@ -643,35 +643,13 @@ impl gpui::Render for CodeActions {
                     use gpui::component::WindowExt as _;
                     let html = code.clone();
                     window.open_dialog(cx, move |dialog, window, _| {
-                        // The sheet recipe: raised, the strong edge (the
-                        // kit's border), the Pane radius, a mono title.
-                        dialog
-                            .title(
-                                gpui::div()
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_UI))
-                                    .line_height(px(theme::LH_UI))
-                                    .font_weight(theme::W_LABEL)
-                                    .text_color(rgb(theme::TEXT_STRONG))
-                                    .child("HTML preview"),
-                            )
-                            .width(px(theme::READING_MAX_W))
-                            .bg(theme::paint::FLOAT)
-                            .rounded(px(theme::R_PANE))
-                            .child(
-                                gpui::div()
-                                    .id("html-preview")
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_PROSE))
-                                    .line_height(px(theme::LH_PROSE))
-                                    .text_color(rgb(theme::TEXT))
-                                    .max_h(px(theme::HTML_PREVIEW_MAX_H))
-                                    .overflow_y_scroll()
-                                    .child(
-                                        TextView::html("html-preview-text", html.clone())
-                                            .style(style(window.rem_size())),
-                                    ),
-                            )
+                        reading_dialog(
+                            dialog,
+                            "html-preview",
+                            "HTML preview",
+                            TextView::html("html-preview-text", html.clone())
+                                .style(style(window.rem_size())),
+                        )
                     });
                 },
             ));
@@ -1051,6 +1029,42 @@ impl gpui::RenderOnce for Output {
             .text_size(window.text_style().font_size.to_pixels(window.rem_size()))
             .text_color(window.text_style().color)
     }
+}
+
+/// A dialog to read in (the HTML preview, What's New), on the sheet
+/// recipe: raised, the strong edge (the kit's border), the Pane radius, a
+/// mono title, over prose at reading width that scrolls past
+/// `READING_DIALOG_MAX_H`.
+pub fn reading_dialog(
+    dialog: gpui::component::dialog::Dialog,
+    id: &'static str,
+    title: impl Into<SharedString>,
+    body: impl IntoElement,
+) -> gpui::component::dialog::Dialog {
+    dialog
+        .title(
+            gpui::div()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::TEXT_STRONG))
+                .child(title.into()),
+        )
+        .width(px(theme::READING_MAX_W))
+        .bg(theme::paint::FLOAT)
+        .rounded(px(theme::R_PANE))
+        .child(
+            gpui::div()
+                .id(id)
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_PROSE))
+                .line_height(px(theme::LH_PROSE))
+                .text_color(rgb(theme::TEXT))
+                .max_h(px(theme::READING_DIALOG_MAX_H))
+                .overflow_y_scroll()
+                .child(body),
+        )
 }
 
 /// The reader's body for an open document: Markdown rendered, a file in a

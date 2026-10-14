@@ -1365,9 +1365,9 @@ pub const CODE_ACTIONS_TOP: f32 = 0.0;
 pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-/// The html preview dialog: the reading column's width, and a height cap
-/// before its body scrolls.
-pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
+/// A reading dialog (the html preview, What's New): the reading column's
+/// width, and a height cap before its body scrolls.
+pub const READING_DIALOG_MAX_H: f32 = 520.0;
 pub const INLINE_FILE_MIN_W: f32 = CH;
 pub const INLINE_FILE_MAX_W: f32 = 280.0;
 /// **Scrollbars** are a thin overlay with no track, never in layout: a

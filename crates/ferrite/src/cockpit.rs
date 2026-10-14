@@ -11,6 +11,7 @@ mod palette;
 mod parts;
 pub(crate) mod subagents;
 mod transcript_glue;
+mod updating;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =
@@ -538,6 +539,8 @@ pub struct CockpitView {
     pub(crate) shown_version: SharedString,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
+    /// Where Ferrite's own update stands (ADR 0023).
+    ferrite_update: crate::ferrite_update::FerriteUpdate,
     /// Whether the window has said the store is read-only (ADR 0009).
     read_only_told: bool,
     /// Whether the window has said `settings.json` could not be used.
@@ -626,6 +629,13 @@ pub struct Preferences {
     /// them. False in the test and demo constructors, so no suite reaches
     /// the registry or runs an installer.
     pub cli_updates: bool,
+    /// Whether the window checks for a newer Ferrite and offers to restart
+    /// onto it (`ferrite_update::enabled`). False in the test and demo
+    /// constructors, so no suite reaches GitHub or stages an installer.
+    pub ferrite_updates: bool,
+    /// The release this launch installed, whose notes What's New shows
+    /// once (`ferrite_update::at_launch`).
+    pub whats_new: Option<ferrite_core::self_update::Staged>,
     /// Why `settings.json` could not be used, when it could not: the
     /// window says so, and saves nothing over the file (`change_settings`).
     pub unreadable: Option<String>,
@@ -643,6 +653,8 @@ impl Preferences {
             )),
             titler: false,
             cli_updates: false,
+            ferrite_updates: false,
+            whats_new: None,
             unreadable: None,
         }
     }
@@ -1426,6 +1438,9 @@ impl CockpitView {
             })
             .detach();
         }
+        if prefs.ferrite_updates {
+            updating::schedule_checks(cx);
+        }
         cx.on_app_quit(|view, _cx| {
             view.cockpit.halt_sessions();
             async {}
@@ -1521,6 +1536,7 @@ impl CockpitView {
             cli_probing: false,
             shown_version: env!("CARGO_PKG_VERSION").into(),
             cli_updates: Default::default(),
+            ferrite_update: Default::default(),
             read_only_told: false,
             unreadable_told: false,
             leave_asked: false,
@@ -4693,7 +4709,7 @@ impl CockpitView {
                 self.setting_change(cx, |s, v| s.auto_update_clis = v),
             ),
         ];
-        let about = vec![
+        let mut about = vec![
             prefs::fact(
                 "Version",
                 version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV).into(),
@@ -4729,6 +4745,7 @@ impl CockpitView {
                 },
             ),
         ];
+        about.splice(1..1, self.ferrite_update_rows(window, cx));
         let pages = vec![
             prefs::page(prefs::PageKey::NewThreads, new_thread_groups),
             prefs::page(
@@ -9335,6 +9352,7 @@ impl CockpitView {
         self.update_auto_rail(window);
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
+        self.present_ferrite_update(window, cx);
         self.present_read_only(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_allowance_warnings(window, cx);
@@ -13546,6 +13564,7 @@ mod tests {
     mod ui_e;
     mod ui_f;
     mod ui_g;
+    mod updating;
     mod visuals;
     use super::*;
     use std::cell::RefCell;

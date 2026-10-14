@@ -150,6 +150,7 @@ pub(crate) enum Command {
     ShowChecks,
     ShowPlan,
     UpdateClis,
+    UpdateFerrite,
     DiscardDraft,
     ImportSession,
 }

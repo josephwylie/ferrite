@@ -61,6 +61,20 @@ so SmartScreen may complain — choose **More info → Run anyway**. It installs
 your user only, no admin needed, and adds itself to the Start menu and to the
 uninstall list in Windows Settings.
 
+### Updates
+
+Ferrite checks GitHub for a newer release every few hours and downloads it in
+the background, checked against the SHA-256 that GitHub publishes for the
+installer. It never restarts on its own: it offers to restart once no agent is
+working, and otherwise installs the update the next time it opens, then shows
+what's new. On macOS the new app replaces the old one in place; on Windows the
+installer runs without questions. If Ferrite can't install it itself (say, the
+app sits in a folder it can't write to), it opens the installer for you to
+finish. Turn the checks off in Settings › About. Builds from source never update
+themselves. On macOS, an unsigned build is a new app to the system after each
+update, so permissions you granted it (Full Disk Access, say) may need
+approving again.
+
 Maintainers: if no signing credentials are configured, releases go out unsigned.
 See [docs/release-signing.md](docs/release-signing.md) to set signing up.
 
