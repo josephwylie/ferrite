@@ -779,12 +779,10 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
             crate::theme::BLOCKED,
             "and the nav and rail mark say it too"
         );
-        let (face, word) = pane::thread_face(view.cockpit.thread(thread).unwrap(), None, false);
-        assert_eq!(word, Some(pane::HeadSlot::Failed));
         assert_eq!(
-            face.ink,
-            crate::theme::BLOCKED,
-            "the Group head's dot agrees"
+            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            Some(pane::HeadSlot::Failed),
+            "the Pane's word agrees"
         );
     });
 }

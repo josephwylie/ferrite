@@ -49,15 +49,15 @@ struct NavSnapshot {
 
 /// Reorder `rows` by where they sat in `snapshot`, when the snapshot holds
 /// exactly the same Threads; `false` (and `rows` untouched) otherwise.
-fn hold_order(rows: &mut [ThreadId], snapshot: &[ThreadId]) -> bool {
+fn hold_order(rows: &mut [nav::ThreadRow], snapshot: &[ThreadId]) -> bool {
     if rows.len() != snapshot.len() {
         return false;
     }
-    let position = |thread: &ThreadId| snapshot.iter().position(|held| held == thread);
-    if rows.iter().any(|thread| position(thread).is_none()) {
+    let position = |row: &nav::ThreadRow| snapshot.iter().position(|held| *held == row.thread);
+    if rows.iter().any(|row| position(row).is_none()) {
         return false;
     }
-    rows.sort_by_key(|thread| position(thread));
+    rows.sort_by_key(position);
     true
 }
 
@@ -127,10 +127,10 @@ impl ThreadStatus {
 
 /// The four states every list sorts, filters and rolls up by, least
 /// urgent first (Herdr's model, read from the protocol rather than the
-/// screen): **Blocked** waits on the operator (or failed under them),
-/// **Done** finished and has not been seen, **Working** runs (Main, or
-/// only its background work), **Idle** is everything else. Ferrite's own
-/// states (failing, failed, parked, background) are faces within these.
+/// screen): **Blocked** waits on the operator, **Done** finished and has
+/// not been seen, **Working** runs (Main, or only its background work),
+/// **Idle** is everything else. Ferrite's own states (failing, failed,
+/// parked, background) are faces within these; failed is a red idle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Attention {
     Idle,
@@ -8021,25 +8021,26 @@ impl CockpitView {
         // order. Drafts are not rows (#29) — the grid is where a draft
         // lives — and a parked loose Thread waits in the Parked section.
         let homed = self.homed_threads();
-        let mut loose: Vec<ThreadId> = self
+        let mut threads: Vec<ThreadId> = self
             .panes
             .iter()
             .filter_map(PaneView::thread)
             .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
             .collect();
-        loose.sort();
-        loose.dedup();
+        threads.sort();
+        threads.dedup();
+        let mut loose: Vec<nav::ThreadRow> = threads.into_iter().map(row).collect();
         // Stable: Threads used at the same moment, or in the same state,
         // keep creation order.
         let order = self.prefs.settings.thread_list_order;
         match order {
             ThreadListOrder::Created => {}
             ThreadListOrder::Recent => {
-                loose.sort_by_key(|thread| std::cmp::Reverse(self.last_used(*thread)))
+                loose.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)))
             }
-            ThreadListOrder::Attention => loose.sort_by_cached_key(|thread| {
-                std::cmp::Reverse(self.thread_row(*thread).status.attention())
-            }),
+            ThreadListOrder::Attention => {
+                loose.sort_by_key(|row| std::cmp::Reverse(row.status.attention()))
+            }
         }
         // Never re-sort under the pointer (C8): while the pointer is inside
         // the column or a drag is live, the rows keep the order they were
@@ -8138,7 +8139,7 @@ impl CockpitView {
         // The Groups section, when any Group spans Projects, comes first.
         let mut keys: Vec<Option<ProjectId>> = loose
             .iter()
-            .map(|thread| project_of(*thread))
+            .map(|row| project_of(row.thread))
             .chain(placed.iter().filter_map(|(project, _)| *project))
             .collect();
         keys.sort_by_key(|key| (key.is_none(), *key));
@@ -8172,9 +8173,9 @@ impl CockpitView {
         }
         for key in keys {
             let mut section_solos = Vec::new();
-            for thread in loose.iter().filter(|thread| project_of(**thread) == key) {
+            for row in loose.iter().filter(|row| project_of(row.thread) == key) {
                 section_solos.push(solos.len());
-                solos.push(row(*thread));
+                solos.push(row.clone());
             }
             let mut section_groups = Vec::new();
             for (_, block) in placed.iter().filter(|(project, _)| *project == Some(key)) {
@@ -8183,7 +8184,7 @@ impl CockpitView {
             }
             let label = key
                 .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| SharedString::from(project.title.clone()))
+                .map(|project| SharedString::from(project.title.to_lowercase()))
                 .or_else(|| {
                     key.and_then(|_| {
                         section_solos
@@ -8194,7 +8195,8 @@ impl CockpitView {
                                     .iter()
                                     .flat_map(|index| groups[*index].members.iter()),
                             )
-                            .find_map(|row| row.project.clone())
+                            .find_map(|row| row.project.as_deref().map(str::to_lowercase))
+                            .map(SharedString::from)
                     })
                 })
                 .unwrap_or_else(|| SharedString::from("other"));
@@ -8263,7 +8265,7 @@ impl CockpitView {
                 Default::default()
             };
             *self.nav_snapshot.borrow_mut() = Some(NavSnapshot {
-                rows: loose,
+                rows: loose.iter().map(|row| row.thread).collect(),
                 focused,
                 ranks,
             });
@@ -8331,7 +8333,7 @@ impl CockpitView {
         // The tail reads the Pane's own head slot, so the nav and the Pane
         // never disagree about a Thread (C10).
         let slot =
-            open.and_then(|open| pane::thread_face(open, facts.map(|facts| &facts.wall), unread).1);
+            open.and_then(|open| pane::thread_word(open, facts.map(|facts| &facts.wall), unread));
         // The mark is squared with that word (`pane::dot_state`): a row whose
         // tail says `failed` never wears an idle dot.
         let status = match open {
@@ -9138,9 +9140,11 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
         // Seen is on screen while the window has focus: the Cockpit follows
-        // the window's activation from its first frame, and the window
-        // coming back reads what it shows, which every part then draws.
+        // the window's activation from its first frame — a window that opens
+        // unfocused sees nothing until it is focused — and the window coming
+        // back reads what it shows, which every part then draws.
         if self.activation.is_none() {
+            self.cockpit.set_window_active(window.is_window_active());
             self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
                 if view.cockpit.set_window_active(window.is_window_active()) {
                     cx.notify();
@@ -14965,7 +14969,19 @@ mod tests {
     }
 
     // Match main: Root mounts the toolkit selection layer, menus and dialogs.
+    // The window opens focused, as a launched one does; what is on screen
+    // is seen from its first frame.
     fn add_cockpit_window(
+        cx: &mut TestAppContext,
+        build: impl FnOnce(&mut Window, &mut Context<CockpitView>) -> CockpitView,
+    ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
+        let (view, cx) = add_unfocused_cockpit_window(cx, build);
+        cx.update(|window, _| window.activate_window());
+        (view, cx)
+    }
+
+    /// A Cockpit window that opens without the operator's focus.
+    fn add_unfocused_cockpit_window(
         cx: &mut TestAppContext,
         build: impl FnOnce(&mut Window, &mut Context<CockpitView>) -> CockpitView,
     ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
@@ -24260,6 +24276,31 @@ mod tests {
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
         assert_eq!(status(&view, cx), nav::RowStatus::Idle, "seen on return");
+    }
+
+    /// A window that opens without focus has seen nothing yet: a finish on
+    /// its one Pane is done until the window is focused.
+    #[gpui::test]
+    fn a_window_opened_unfocused_sees_nothing_until_focused(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("finished-unfocused", 1);
+        let (view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                view.thread_row(view.cockpit.threads()[0]).status
+            })
+        };
+        assert_eq!(status(&view, cx), nav::RowStatus::Done, "not yet seen");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(status(&view, cx), nav::RowStatus::Idle, "seen once focused");
     }
 
     /// A finish on the Pane the operator is already on is read as it is

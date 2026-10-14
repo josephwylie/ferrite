@@ -32,14 +32,17 @@ impl Floats {
 }
 
 /// A Thread's state as the palette's context word reads it: the lexicon's
-/// word for every state that has one, a parked Thread's age, nothing for
-/// idle.
+/// word for every state that has one — a waiting Thread's what it waits
+/// for, as its nav row says — a parked Thread's age, nothing for idle.
 fn state_word(row: &nav::ThreadRow, age: SharedString) -> SharedString {
     use crate::theme::words;
     match row.status {
         nav::RowStatus::Working => words::WORKING.into(),
         nav::RowStatus::Background => words::BACKGROUND.into(),
-        nav::RowStatus::NeedsYou => words::NEEDS_YOU.into(),
+        nav::RowStatus::NeedsYou => match row.tail {
+            nav::NavTail::Waiting(kind) => kind.into(),
+            _ => words::NEEDS_YOU.into(),
+        },
         nav::RowStatus::Failing => words::FAILING.into(),
         nav::RowStatus::Failed => words::FAILED.into(),
         nav::RowStatus::Done => words::DONE.into(),

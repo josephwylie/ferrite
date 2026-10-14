@@ -158,10 +158,10 @@ _Avoid_: alert, ping, notification (the bell's whole surface is that).
 
 **Attention**
 Which of four states a Thread is in, most urgent first: **blocked** (a
-Decision waits, or it failed), **done** (a Notice not yet seen),
-**working** (Main, or only its Subagents or background tasks), **idle**.
-What the nav sorts and rolls up by and the palette filters by; Ferrite's
-finer states (failing, parked, background) are faces within these.
+Decision waits), **done** (a Notice not yet seen), **working** (Main, or
+only its Subagents or background tasks), **idle**. What the nav sorts and
+rolls up by and the palette filters by; Ferrite's finer states (failing,
+background, failed, parked) are faces within these.
 _Avoid_: status (too broad), unread (that is the Notice's).
 
 **Draft**

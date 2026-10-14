@@ -1260,7 +1260,10 @@ pub fn render_pane(
         show_focus.then(|| {
             let (dot, working) = head_dot(
                 view.is_main(),
-                dot_state(state, state_word(state, kind, wall, transcript).as_ref()),
+                dot_state(
+                    state,
+                    state_word(state, kind, wall, transcript, unread).as_ref(),
+                ),
                 unread,
                 thread.is_some_and(|thread| thread.background_work()),
                 status,
@@ -1294,6 +1297,7 @@ pub fn render_pane(
                     state,
                     kind,
                     transcript,
+                    unread,
                     quick_answers,
                     focused,
                     cell_width,
@@ -1917,6 +1921,8 @@ struct WallTile<'a> {
     state: WallState,
     kind: Option<&'static str>,
     transcript: Option<&'a Transcript>,
+    /// The tile's finish has not been seen: it reads `done`.
+    unread: bool,
     quick_answers: Option<AnyElement>,
     /// The tile holds the keyboard: its working clock keeps its seconds
     /// past a minute (`1m04s`); the others round to `1m`.
@@ -1941,6 +1947,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
         state,
         kind,
         transcript,
+        unread,
         quick_answers,
         focused,
         cell_width,
@@ -1948,7 +1955,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
     } = tile;
     let word = match state {
         WallState::Parked => Some(HeadSlot::Parked),
-        _ => match state_word(state, kind, card, transcript) {
+        _ => match state_word(state, kind, card, transcript, unread) {
             Some(HeadSlot::Working(_)) => {
                 Some(HeadSlot::Working(working_clock(transcript, focused)))
             }
@@ -2241,12 +2248,15 @@ impl HeadSlot {
 
 /// The state vocabulary, shared by the Group head and the wall:
 /// `needs you` > `failing` > `failed` > `working` > `done` > `interrupted`
-/// > `parked`; idle is nothing.
+/// > `parked`; idle is nothing. A finish is `done` only while `unread` (not
+/// yet seen), as the nav row's mark is (`nav::RowStatus::of`); seen, it is
+/// idle.
 fn state_word(
     state: WallState,
     kind: Option<&'static str>,
     card: &WallCard,
     transcript: Option<&Transcript>,
+    unread: bool,
 ) -> Option<HeadSlot> {
     use ferrite_core::TurnOutcome;
     // A request pending anywhere in the Thread (a subagent's too) is what
@@ -2264,11 +2274,11 @@ fn state_word(
                 .map(ferrite_core::progress::live_seconds)
                 .unwrap_or_default(),
         ),
-        WallState::Done => HeadSlot::Done,
         WallState::Parked => HeadSlot::Parked,
-        WallState::Idle => match transcript.and_then(Transcript::turn_outcome) {
-            Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
+        WallState::Done | WallState::Idle => match transcript.and_then(Transcript::turn_outcome) {
             Some(TurnOutcome::Error(_)) => HeadSlot::Failed,
+            _ if unread => HeadSlot::Done,
+            Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
             _ => return None,
         },
     })
@@ -2288,13 +2298,13 @@ pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState 
     }
 }
 
-/// A Thread's face away from its Pane: its status dot and its state word,
-/// read exactly as the Pane reads them.
-pub(crate) fn thread_face(
+/// A Thread's state word away from its Pane, read exactly as the Pane
+/// reads it.
+pub(crate) fn thread_word(
     open: ThreadView<'_>,
     card: Option<&WallCard>,
     unread: bool,
-) -> (crate::cockpit::ThreadStatus, Option<HeadSlot>) {
+) -> Option<HeadSlot> {
     let empty = WallCard::default();
     let card = card.unwrap_or(&empty);
     let transcript = open.transcript();
@@ -2312,11 +2322,7 @@ pub(crate) fn thread_face(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
-    let word = state_word(state, kind, card, Some(transcript));
-    (
-        crate::cockpit::thread_status(dot_state(state, word.as_ref()), unread),
-        word,
-    )
+    state_word(state, kind, card, Some(transcript), unread)
 }
 
 /// The Pane's foot while its question is too big for the body: `◆ needs
@@ -3192,6 +3198,7 @@ fn parked_body(parked_line: Option<SharedString>) -> Div {
         state: WallState::Parked,
         kind: None,
         transcript: None,
+        unread: false,
         quick_answers: None,
         focused: false,
         cell_width: 0.0,
@@ -10841,15 +10848,27 @@ mod tests {
             WallState::Parked,
         ] {
             for kind in [None, Some(words::APPROVAL), Some(words::QUESTION)] {
-                if let Some(word) = state_word(state, kind, &failing, None) {
-                    said.push(word.text());
+                for unread in [false, true] {
+                    if let Some(word) = state_word(state, kind, &failing, None, unread) {
+                        said.push(word.text());
+                    }
                 }
             }
         }
         assert_eq!(
-            state_word(WallState::Idle, None, &failing, None),
+            state_word(WallState::Idle, None, &failing, None, false),
             None,
             "idle says nothing"
+        );
+        assert_eq!(
+            state_word(WallState::Done, None, &failing, None, false),
+            None,
+            "a finish already seen says nothing"
+        );
+        assert_eq!(
+            state_word(WallState::Done, None, &failing, None, true),
+            Some(HeadSlot::Done),
+            "a finish not yet seen is done"
         );
         assert!(said.contains(&"failing 2".to_string()));
         assert!(said.contains(&"needs you \u{b7} approval".to_string()));

@@ -561,7 +561,7 @@ mod tests {
         let rows = vec![
             thread("Nav rows jitter on stream start", "ferrite \u{b7} done", 1),
             thread("Perf: layout cache", "perf sweep \u{b7} working", 2),
-            thread("Close stale issues", "perf sweep \u{b7} needs you", 3),
+            thread("Close stale issues", "perf sweep \u{b7} question", 3),
             thread("Parked \u{b7} Release 0.5.0 notes", "ferrite \u{b7} 2h", 4),
             thread("Port onboarding flow", "zeron \u{b7} working", 5),
             command("park thread", "", Command::ParkThread),
@@ -589,7 +589,7 @@ mod tests {
     }
 
     /// A one-letter line keeps the rows in its one of the four states —
-    /// failed reads as blocked, background work as working — and every
+    /// failed reads as idle, background work as working — and every
     /// command, which has no state; `a` keeps every row.
     #[test]
     fn a_status_letter_keeps_its_states_rows_and_every_command() {
@@ -604,10 +604,10 @@ mod tests {
             command("settings", "", Command::Settings),
         ];
         let kept = |query| names(&rows, &filter(&rows, query));
-        assert_eq!(kept("b"), ["waits", "broke", "settings"]);
+        assert_eq!(kept("b"), ["waits", "settings"]);
         assert_eq!(kept("w"), ["runs", "behind", "settings"]);
         assert_eq!(kept("d"), ["finished", "settings"]);
-        assert_eq!(kept("i"), ["quiet", "shelved", "settings"]);
+        assert_eq!(kept("i"), ["broke", "quiet", "shelved", "settings"]);
         assert_eq!(kept("a").len(), rows.len());
     }
 

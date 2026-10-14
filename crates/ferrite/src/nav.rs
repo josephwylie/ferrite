@@ -172,6 +172,7 @@ pub struct ProjectSection {
     /// The Groups section: no Project, no loose rows, only Groups whose
     /// members span Projects.
     pub mixed: bool,
+    /// Lowercase: the one heading style.
     pub label: SharedString,
     /// The branch the heading names at its right: the checkout every row
     /// shares, else the Project's default. `None` says nothing.
@@ -314,10 +315,10 @@ pub enum NavTail {
 }
 
 impl NavTail {
-    /// The word from the Pane's own reading of the Thread (`pane::thread_face`
-    /// — the head's slot word), so the nav and the Pane never disagree, and
-    /// the row's own state for what only the row says: a finish not yet
-    /// seen, and background work.
+    /// The word from the Pane's own reading of the Thread (`pane::thread_word`
+    /// — the head's slot word, `done` only while unseen), so the nav and the
+    /// Pane never disagree, and the row's own state for what only the row
+    /// says: background work.
     pub fn of(status: RowStatus, slot: Option<&crate::pane::HeadSlot>, age: SharedString) -> Self {
         use crate::pane::HeadSlot;
         match slot {
@@ -328,7 +329,7 @@ impl NavTail {
             Some(HeadSlot::Failed) => NavTail::Failed,
             Some(HeadSlot::Working(elapsed)) if elapsed.is_empty() => NavTail::None,
             Some(HeadSlot::Working(elapsed)) => NavTail::Working(elapsed.clone().into()),
-            _ if status == RowStatus::Done => NavTail::Done,
+            Some(HeadSlot::Done) => NavTail::Done,
             _ if status == RowStatus::Background => NavTail::Background,
             _ => NavTail::Age(age),
         }
@@ -360,6 +361,9 @@ pub enum RowStatus {
     Parked,
     #[default]
     Idle,
+    /// The Session closed under it, or its turn failed: a secondary state
+    /// at rest, red on its own row, rolled up and ranked as idle.
+    Failed,
     /// Main is idle while its Subagents or background tasks still work.
     Background,
     Working,
@@ -367,8 +371,6 @@ pub enum RowStatus {
     Failing,
     /// A turn finished that the operator has not seen.
     Done,
-    /// The Session closed under it, or its turn failed.
-    Failed,
     /// A Decision waits on the operator.
     NeedsYou,
 }
@@ -394,10 +396,10 @@ impl RowStatus {
     /// Which of the four states this is.
     pub fn attention(self) -> Attention {
         match self {
-            RowStatus::NeedsYou | RowStatus::Failed => Attention::Blocked,
+            RowStatus::NeedsYou => Attention::Blocked,
             RowStatus::Done => Attention::Done,
             RowStatus::Working | RowStatus::Failing | RowStatus::Background => Attention::Working,
-            RowStatus::Idle | RowStatus::Parked => Attention::Idle,
+            RowStatus::Idle | RowStatus::Parked | RowStatus::Failed => Attention::Idle,
         }
     }
 
@@ -1014,7 +1016,7 @@ pub fn project_section(index: usize, section: &ProjectSection) -> Stateful<Div> 
             title_w(2.0, branch.as_deref()),
             CHROME_MUTED,
             W_BODY,
-            SharedString::from(section.label.to_lowercase()),
+            section.label.clone(),
         ))
         .child(word_cell(branch))
 }
@@ -1601,8 +1603,9 @@ mod tests {
 
     /// The word says one thing, in priority order, and the Pane's head slot
     /// decides it: what a waiting request waits for, red tests, a failure,
-    /// a working Thread's elapsed time; then the row's own state — a finish
-    /// not yet seen, background work; everything else is its age. Every
+    /// a working Thread's elapsed time, a finish not yet seen; then the
+    /// row's own background work; everything else is its age (a finish
+    /// already seen included: the Pane says nothing of it). Every
     /// word is the metadata ink: the mark carries the colour.
     #[test]
     fn the_word_is_one_fact_in_priority_order() {
@@ -1629,12 +1632,8 @@ mod tests {
         assert_eq!(of(Some(&HeadSlot::Working(String::new()))), NavTail::None);
         assert_eq!(
             of(Some(&HeadSlot::Done)),
-            NavTail::Age(age()),
-            "a finish already seen is just its age"
-        );
-        assert_eq!(
-            NavTail::of(RowStatus::Done, Some(&HeadSlot::Done), age()),
-            NavTail::Done
+            NavTail::Done,
+            "the Pane says done only while the finish is unseen"
         );
         assert_eq!(
             NavTail::of(RowStatus::Background, None, age()),
@@ -1767,7 +1766,7 @@ mod tests {
         assert_eq!(RowStatus::of(Blocked, true, false), RowStatus::Failed);
         for (status, attention) in [
             (RowStatus::NeedsYou, Attention::Blocked),
-            (RowStatus::Failed, Attention::Blocked),
+            (RowStatus::Failed, Attention::Idle),
             (RowStatus::Done, Attention::Done),
             (RowStatus::Working, Attention::Working),
             (RowStatus::Failing, Attention::Working),
@@ -1800,16 +1799,21 @@ mod tests {
             up(&[RowStatus::Parked, RowStatus::Background]),
             Some(RowStatus::Background)
         );
+        assert_eq!(
+            up(&[RowStatus::Failed, RowStatus::Working]),
+            Some(RowStatus::Working),
+            "a dead Session never outranks live work"
+        );
         // Ord and the four states agree, so the max is always the most
         // urgent state.
         let all = [
             RowStatus::Parked,
             RowStatus::Idle,
+            RowStatus::Failed,
             RowStatus::Background,
             RowStatus::Working,
             RowStatus::Failing,
             RowStatus::Done,
-            RowStatus::Failed,
             RowStatus::NeedsYou,
         ];
         for pair in all.windows(2) {

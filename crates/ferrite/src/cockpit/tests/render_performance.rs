@@ -1121,12 +1121,13 @@ fn pulse_parked(cx: &mut gpui::VisualTestContext) -> bool {
 }
 
 /// The motion kit's budget: with nothing animating, a window asks for no
-/// display frame and arms no clock, however long it sits.
+/// display frame and arms no clock, however long it sits. Unfocused, so
+/// the Composer's caret, which blinks on the clock, is still.
 #[gpui::test]
 fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (core, _fake) = cockpit("motion-idle", 2);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (_view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
@@ -1180,14 +1181,15 @@ fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut 
 
 /// A working Thread's loops — the working line's mark, the nav's breathing
 /// dot — ride the shared pulse clock instead of asking for every display
-/// frame, and the clock parks once the turn ends and its lease lapses.
+/// frame, and the clock parks once the turn ends and its lease lapses
+/// (unfocused, so the Composer's caret holds no lease of its own).
 #[gpui::test]
 fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-working", 1);
     let thread = core.threads()[0];
     core.send(thread, "Inspect progress".into());
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (_view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryDelta {
