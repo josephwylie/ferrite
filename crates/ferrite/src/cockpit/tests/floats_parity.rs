@@ -474,10 +474,10 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     let door = cx.debug_bounds("notifications-bell").unwrap();
     let panel = cx
         .debug_bounds("notifications-panel")
-        .expect("the list is down");
+        .expect("the list is up");
     assert!(
-        (panel.top() - (door.bottom() + px(crate::theme::NOTICE_PANEL_GAP))).abs() <= px(1.),
-        "4px under the bell: {panel:?} / {door:?}"
+        (panel.bottom() - (door.top() - px(crate::theme::NOTICE_PANEL_GAP))).abs() <= px(1.),
+        "4px over the bell: {panel:?} / {door:?}"
     );
     assert!(
         (panel.left() - door.left()).abs() <= px(1.),

@@ -1171,7 +1171,7 @@ impl CockpitView {
         Some(float::hang_element(
             list.into_any_element(),
             door,
-            FloatPlace::Below {
+            FloatPlace::Above {
                 gap: crate::theme::NOTICE_PANEL_GAP,
             },
         ))

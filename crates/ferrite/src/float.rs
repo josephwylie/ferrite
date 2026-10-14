@@ -18,8 +18,6 @@ use gpui::{
 /// How a float stands against its anchor's bounds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum FloatPlace {
-    /// Under the anchor, its left edge on the anchor's, `gap` below it.
-    Below { gap: f32 },
     /// Over the anchor, its left edge on the anchor's, its foot `gap` above.
     Above { gap: f32 },
     /// Centred on the anchor (the board), `width` wide, its head `top`
@@ -44,11 +42,6 @@ pub(crate) fn placement(
 ) -> (Anchor, gpui::Point<Pixels>, gpui::Point<Pixels>) {
     let zero = point(px(0.), px(0.));
     match place {
-        FloatPlace::Below { gap } => (
-            Anchor::TopLeft,
-            point(anchor.left(), anchor.bottom() + px(gap)),
-            zero,
-        ),
         FloatPlace::Above { gap } => (
             Anchor::BottomLeft,
             point(anchor.left(), anchor.top() - px(gap)),
@@ -196,11 +189,6 @@ mod tests {
         assert_eq!(corner, Anchor::TopLeft);
         assert_eq!(at, point(px(281.8 + 1158.2 / 2.), px(88.)));
         assert_eq!(offset, point(px(0.), px(0.)));
-
-        let bell = bounds(245., 4., 28., 24.);
-        let (corner, at, _) = placement(bell, FloatPlace::Below { gap: 4. });
-        assert_eq!(corner, Anchor::TopLeft);
-        assert_eq!(at, point(px(245.), px(32.)));
 
         let band = bounds(419., 815., 100., 0.);
         let (corner, at, _) = placement(band, FloatPlace::Above { gap: 5. });

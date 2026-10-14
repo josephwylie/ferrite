@@ -754,8 +754,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        // The Solo titlebar's `· #48 ●` with its checks card open under it:
-        // CI keeps a home when the Pane has no head.
+        // The palette's `checks` card open on a Solo Pane: CI keeps a home
+        // when the Pane has no head.
         "checkscard" => {
             let (scene, _) = legacy("live");
             let setup: Setup = Box::new(|view, _, cx| {

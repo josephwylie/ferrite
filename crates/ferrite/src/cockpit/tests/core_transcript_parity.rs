@@ -272,7 +272,7 @@ fn the_banner_heads_the_rows_and_a_later_edit_folds_its_diff(cx: &mut TestAppCon
     let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
     assert!(
         runs.iter()
-            .any(|(block, _, _, text)| *block == BlockId::BANNER && text.contains("1 turn")),
+            .any(|(block, _, _, text)| *block == BlockId::BANNER && text.contains("started")),
         "the banner's facts select like any row: {runs:?}"
     );
     assert!(

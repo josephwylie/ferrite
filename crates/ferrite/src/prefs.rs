@@ -1011,7 +1011,7 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// The nav chrome's gear: the door to this panel. Ground and glyph blend
+/// The bottom bar's gear: the door to this panel. Ground and glyph blend
 /// to their hover faces over the one 150ms blend (`TEXT_MUTED` → `TEXT`, as
 /// the collapse button does). `gear` hangs its tooltip, `Settings ⌘,`.
 pub fn gear_button(cx: &App) -> Button {
@@ -1028,7 +1028,7 @@ pub fn gear_button(cx: &App) -> Button {
     )
     .debug_selector(|| "settings-gear".into())
     .w(px(ICON_BUTTON))
-    .h(px(ICON_BUTTON))
+    .h_full()
     .p_0()
     .accessibility_label("Settings")
     .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
@@ -1040,6 +1040,7 @@ pub fn gear(button: Button, id: &'static str) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
+        .h_full()
         .tooltip(crate::menu::action_tooltip(
             "Settings",
             "cockpit::OpenSettings",
