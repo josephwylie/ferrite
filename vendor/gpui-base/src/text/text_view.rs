@@ -19,6 +19,11 @@ use crate::{GlobalState, TextSelection, TextSelectionDocument, text::TextViewSty
 pub(crate) type CodeBlockActionsFn =
     dyn Fn(&CodeBlock, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
+/// Ferrite: what a fenced code block draws as, given the block and its native
+/// element.
+pub(crate) type CodeBlockViewFn =
+    dyn Fn(&CodeBlock, AnyElement, &mut Window, &mut App) -> AnyElement + Send + Sync;
+
 pub(crate) type CodeBlockHighlighterFn =
     dyn Fn(&CodeBlock) -> Vec<(Range<usize>, gpui::HighlightStyle)> + Send + Sync;
 
@@ -134,6 +139,7 @@ pub struct TextView {
     scrollable: bool,
     max_lines: Option<usize>,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    code_block_view: Option<Arc<CodeBlockViewFn>>,
     code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     table_actions: Option<Arc<TableActionsFn>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
@@ -188,6 +194,7 @@ impl TextView {
             scrollable: false,
             max_lines: None,
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
@@ -211,6 +218,7 @@ impl TextView {
             scrollable: false,
             max_lines: None,
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
@@ -234,6 +242,7 @@ impl TextView {
             scrollable: false,
             max_lines: None,
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
@@ -326,6 +335,22 @@ impl TextView {
         self.code_block_actions = Some(Arc::new(move |code_block, window, cx| {
             f(&code_block, window, cx).into_any_element()
         }));
+        self
+    }
+
+    /// Ferrite: draw fenced code blocks through `view`, which receives the
+    /// [`CodeBlock`] and its native element (the code, its padding and its
+    /// actions) and returns what to draw in its place: the element itself,
+    /// wrapped, or something else entirely. The block's text stays in the
+    /// document for selection and copy either way.
+    pub fn code_block_view<F>(mut self, view: F) -> Self
+    where
+        F: Fn(&CodeBlock, AnyElement, &mut Window, &mut App) -> AnyElement
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.code_block_view = Some(Arc::new(view));
         self
     }
 
@@ -604,6 +629,7 @@ impl Element for TextView {
 
         state.update(cx, |state, cx| {
             state.code_block_actions = self.code_block_actions.clone();
+            state.code_block_view = self.code_block_view.clone();
             state.code_block_highlighter = code_block_highlighter.clone();
             state.table_actions = self.table_actions.clone();
             state.link_click_handler = self.link_click_handler.clone();

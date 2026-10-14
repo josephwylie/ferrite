@@ -142,6 +142,11 @@ screenshot so it can check its work. Offered at the operator's level —
 Off, When asked, or Automatic — and never a Decision.
 _Avoid_: artifact, widget, web view (that is how it is drawn).
 
+**Diagram**
+A ` ```mermaid ` fence in an answer or the reader, drawn as the picture it
+describes once it is on screen; until then, or when it can't be drawn, it
+reads as code. Not a Visual: nobody asked for it, and it is not live.
+
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread

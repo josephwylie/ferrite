@@ -82,7 +82,8 @@ pub struct Settings {
     /// Whether agents may show interactive visuals inline (Ferrite's own
     /// `show_visual` tool), and how readily: Off (not offered), When asked,
     /// or Automatic. Applies to Sessions started after it changes; a Codex
-    /// thread keeps the tool it started with. Default: When asked.
+    /// thread keeps the tool it started with. Off also leaves ```mermaid
+    /// fences as code rather than diagrams. Default: When asked.
     pub visuals: crate::visual::Level,
 }
 
