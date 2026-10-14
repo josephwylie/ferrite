@@ -897,7 +897,10 @@ fn an_unfocused_cell_counts_its_attachments_on_the_flat_line(cx: &mut TestAppCon
         "{facts:?} rides cell A's flat line {cell:?}"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).file_count()),
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .attachment_count()),
         1,
         "focus moves never touch the draft"
     );

@@ -33,6 +33,7 @@ mod pointer;
 mod prefs;
 mod project_editor;
 mod prompt_drop;
+mod review;
 mod rich;
 mod scrollbar;
 mod select;
@@ -611,7 +612,7 @@ fn app_menus() -> Vec<Menu> {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Commands\u{2026}", palette::Toggle),
-                MenuItem::action("Compare with Main", palette::CompareWithMain),
+                MenuItem::action("Review Branch", palette::ReviewBranch),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Notifications", ToggleNotifications),

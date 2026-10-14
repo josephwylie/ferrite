@@ -20,7 +20,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use ferrite_core::prompt_files;
+use ferrite_core::{prompt_files, review};
 
 use gpui::prelude::*;
 use gpui::{
@@ -138,6 +138,9 @@ pub struct Composer {
     files_focus: FocusHandle,
     line: Line,
     files: Vec<PathBuf>,
+    /// Review comments gathered from the reader beside this Pane (ADR
+    /// 0021): one attachment on the shelf, sent after the line's text.
+    review: Vec<review::Comment>,
     /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
     /// any occurrence still standing in the text paints as the comp's
     /// @-pill, whichever provider serves the Thread. Display only — the
@@ -204,6 +207,7 @@ impl Composer {
             files_focus: cx.focus_handle(),
             line: Line::default(),
             files: Vec::new(),
+            review: Vec::new(),
             mentions: Vec::new(),
             menu_open: false,
             history_available: false,
@@ -259,9 +263,28 @@ impl Composer {
     }
 
     /// Files stay separate from editable prose until the send/history seam.
-    /// How many files the draft holds.
-    pub fn file_count(&self) -> usize {
-        self.files.len()
+    /// How many attachments the draft holds: its files, and its review
+    /// comments as one.
+    pub fn attachment_count(&self) -> usize {
+        self.files.len() + usize::from(!self.review.is_empty())
+    }
+
+    /// The review comments waiting for the next send.
+    pub fn review_comments(&self) -> &[review::Comment] {
+        &self.review
+    }
+
+    pub fn add_review_comment(&mut self, comment: review::Comment, cx: &mut Context<Self>) {
+        self.review.push(comment);
+        self.edited(cx);
+    }
+
+    /// Drop the review comment at `index` on the shelf, and only that one.
+    pub fn remove_review_comment(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.review.len() {
+            self.review.remove(index);
+            self.edited(cx);
+        }
     }
 
     pub fn attachments(
@@ -270,12 +293,14 @@ impl Composer {
         cx: &App,
     ) -> Option<gpui::AnyElement> {
         let composer = entity.read(cx);
-        if composer.files.is_empty() {
+        if composer.attachment_count() == 0 {
             return None;
         }
         let files = composer.files.clone();
+        let comments = composer.review.len();
         let focus = composer.files_focus.clone();
-        let composer = entity.downgrade();
+        let remove_file = entity.downgrade();
+        let drop_review = entity.downgrade();
         Some(
             div()
                 .id("pending-attachment-tray")
@@ -284,10 +309,18 @@ impl Composer {
                 .tab_stop(true)
                 .child(
                     crate::attachments::Attachments::new("prompt-attachments", files, preview)
+                        .review(comments)
                         .in_island()
                         .on_remove(move |remove, window, cx| {
-                            let _ = composer.update(cx, |composer, cx| {
+                            let _ = remove_file.update(cx, |composer, cx| {
                                 composer.files.retain(|path| path != remove);
+                                composer.focus_handle.focus(window, cx);
+                                composer.edited(cx);
+                            });
+                        })
+                        .on_drop_review(move |window, cx| {
+                            let _ = drop_review.update(cx, |composer, cx| {
+                                composer.review.clear();
                                 composer.focus_handle.focus(window, cx);
                                 composer.edited(cx);
                             });
@@ -308,7 +341,7 @@ impl Composer {
     /// Visit the kit's attachment controls before the cockpit's band/tools.
     /// Leaving this Composer restores its caret and resumes normal traversal.
     pub fn cycle_files(&self, reverse: bool, window: &mut Window, cx: &mut App) -> bool {
-        if self.files.is_empty()
+        if self.attachment_count() == 0
             || (!self.focus_handle.is_focused(window)
                 && !self.files_focus.contains_focused(window, cx))
         {
@@ -352,7 +385,8 @@ impl Composer {
         }
     }
 
-    /// Put a line back into the Composer, ready to edit at its end.
+    /// Put a line back into the Composer, ready to edit at its end. The
+    /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
         let (text, files) = prompt_files::split(text);
         self.files = files;
@@ -365,6 +399,7 @@ impl Composer {
         let text = self.prompt();
         self.line.take();
         self.files.clear();
+        self.review.clear();
         self.mentions.clear();
         self.edited(cx);
         text
@@ -373,10 +408,17 @@ impl Composer {
     /// Whether the line holds no text — what gives Backspace its
     /// `⌫ unqueue` meaning up in the cockpit.
     pub fn is_empty(&self) -> bool {
-        self.line.text().is_empty() && self.files.is_empty()
+        self.line.text().is_empty() && self.attachment_count() == 0
     }
 
     pub fn prompt(&self) -> String {
+        prompt_files::compose(&review::attach(self.line.text(), &self.review), &self.files)
+    }
+
+    /// The line and its files without the review comments — what `set`
+    /// takes back, so a round trip through history or a merged held
+    /// prompt neither repeats the comments nor writes them into the line.
+    pub fn editable(&self) -> String {
         prompt_files::compose(self.line.text(), &self.files)
     }
 

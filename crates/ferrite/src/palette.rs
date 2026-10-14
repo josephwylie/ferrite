@@ -48,7 +48,7 @@ gpui::actions!(
         OpenGroups,
         // ⌘⇧P / ⌘⇧D: the palette's two keyed commands.
         ShowParked,
-        CompareWithMain,
+        ReviewBranch,
         // Its own keys, in the `Palette` context.
         SelectNext,
         SelectPrevious,
@@ -103,7 +103,8 @@ fn filter_word(filter: Attention) -> &'static str {
 pub(crate) enum Command {
     ParkThread,
     ShowParked,
-    CompareWithMain,
+    ReviewBranch,
+    ReviewChanges,
     NewThread,
     NewWorktreeThread,
     NewThreadInGroup,
@@ -567,9 +568,9 @@ mod tests {
             command("park thread", "", Command::ParkThread),
             command("show parked", "", Command::ShowParked),
             command(
-                "compare with main",
-                "open the diff reader",
-                Command::CompareWithMain,
+                "review branch",
+                "against the default branch",
+                Command::ReviewBranch,
             ),
             command("open a group", "", Command::OpenGroup),
         ];
@@ -582,7 +583,6 @@ mod tests {
                 "Port onboarding flow",
                 "park thread",
                 "show parked",
-                "compare with main",
             ]
         );
         assert_eq!(filter(&rows, "").len(), rows.len());

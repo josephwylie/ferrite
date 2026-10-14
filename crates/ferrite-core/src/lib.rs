@@ -21,6 +21,7 @@ pub mod prompt_files;
 mod prompt_history;
 pub mod providers;
 pub mod questions;
+pub mod review;
 pub mod roster;
 pub mod session;
 pub mod settings;

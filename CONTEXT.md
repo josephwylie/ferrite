@@ -147,6 +147,12 @@ A ` ```mermaid ` fence in an answer or the reader, drawn as the picture it
 describes once it is on screen; until then, or when it can't be drawn, it
 reads as code. Not a Visual: nobody asked for it, and it is not live.
 
+**Review**
+A diff of a Thread's changes beside its Pane — uncommitted, the branch
+against its base, or the last turn — whose lines take comments. The
+comments wait on the Composer and go to the Thread with its next prompt.
+_Avoid_: compare (the read-only view it replaced), code review (a PR's).
+
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread

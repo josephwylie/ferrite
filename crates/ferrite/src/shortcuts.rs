@@ -6,9 +6,9 @@
 //! `threads`, `board`, `composer`, `decision`, `wall`, `transcript` — rows
 //! with the label at the left and the chord at the right, and the footer
 //! `↑↓ scroll · esc`. The floats' own keys (the palette's, the list's, this
-//! sheet's) are in their footers, so the sheet leaves them out; the label
-//! table still names them, so a key the table gains without a label fails
-//! `every_bound_action_has_a_label`.
+//! sheet's) and the Review slot's are in their footers, so the sheet leaves
+//! them out; the label table still names them, so a key the table gains
+//! without a label fails `every_bound_action_has_a_label`.
 
 use gpui::prelude::*;
 use gpui::{
@@ -70,7 +70,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::CloseThread" => Row(Threads, "park thread"),
         "cockpit::ReopenThread" => Row(Threads, "reopen last"),
         "palette::ShowParked" => Row(Threads, "show parked"),
-        "palette::CompareWithMain" => Row(Threads, "compare with main"),
+        "palette::ReviewBranch" => Row(Threads, "review branch"),
         "cockpit::NextDecision" => Row(Threads, "next request"),
         "cockpit::ToggleNotifications" => Row(Threads, "notifications"),
         "cockpit::OpenSettings" => Row(Threads, "settings"),
@@ -175,6 +175,18 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"
         | "zed::NoAction" => Hidden,
+        // So do the Review slot's.
+        "review::Previous"
+        | "review::Next"
+        | "review::ExtendPrevious"
+        | "review::ExtendNext"
+        | "review::Comment"
+        | "review::Uncomment"
+        | "review::NextScope"
+        | "review::Reread"
+        | "review::Close"
+        | "review::SaveComment"
+        | "review::CancelComment" => Hidden,
         _ => return None,
     })
 }

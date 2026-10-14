@@ -243,9 +243,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // ⌘K: the command palette — every Thread, then every command.
         (with_primary("k"), "palette::Toggle", None),
         // The palette's two keyed commands: the parked Threads, and the
-        // focused Thread's diff against main in a reader beside it.
+        // focused Thread's branch in the Review beside it.
         (with_primary("shift-p"), "palette::ShowParked", None),
-        (with_primary("shift-d"), "palette::CompareWithMain", None),
+        (with_primary("shift-d"), "palette::ReviewBranch", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -380,6 +380,27 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "cockpit::MenuDismiss",
             Some("ComposerMenu"),
         ),
+        // The Review slot (ADR 0021), while it holds the keyboard and no
+        // field in it is open: ↑↓ walk the lines, ⇧↑↓ stretch the pick, c
+        // or ⏎ comment on it, ⌫ takes a comment back, ⇥ steps the scope,
+        // r rereads it, esc closes the slot. In its comment field ⏎ adds
+        // and esc cancels. Bound after the bare rows they shadow.
+        ("up".into(), "review::Previous", Some(REVIEW)),
+        ("down".into(), "review::Next", Some(REVIEW)),
+        ("shift-up".into(), "review::ExtendPrevious", Some(REVIEW)),
+        ("shift-down".into(), "review::ExtendNext", Some(REVIEW)),
+        ("c".into(), "review::Comment", Some(REVIEW)),
+        ("enter".into(), "review::Comment", Some(REVIEW)),
+        ("backspace".into(), "review::Uncomment", Some(REVIEW)),
+        ("tab".into(), "review::NextScope", Some(REVIEW)),
+        ("r".into(), "review::Reread", Some(REVIEW)),
+        ("escape".into(), "review::Close", Some(REVIEW)),
+        ("enter".into(), "review::SaveComment", Some("ReviewComment")),
+        (
+            "escape".into(),
+            "review::CancelComment",
+            Some("ReviewComment"),
+        ),
         // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
         // closes it. Last, so its context wins every same-depth tie: send,
         // the Composer's new line, Groups (⌘G, ⌘⇧G) and interrupt.
@@ -390,6 +411,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("escape".into(), "find::Close", Some("Find")),
     ]
 }
+
+/// The Review slot holds the keyboard itself, not a field inside it.
+const REVIEW: &str = "Review && !Composer";
 
 #[cfg(test)]
 mod tests {
@@ -431,7 +455,7 @@ mod tests {
             ("cockpit::NewGroup", "shift-g"),
             ("palette::Toggle", "k"),
             ("palette::ShowParked", "shift-p"),
-            ("palette::CompareWithMain", "shift-d"),
+            ("palette::ReviewBranch", "shift-d"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),
@@ -811,6 +835,44 @@ mod tests {
                 .unwrap()
         };
         assert!(at("composer::Copy") < at("cockpit::CopySelection"));
+    }
+
+    /// The Review slot's keys live in its own context — never while its
+    /// comment field takes text — and sit after the bare rows they shadow.
+    #[test]
+    fn the_review_keys_are_scoped_to_the_slot_and_its_field() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (key, action) in [
+                ("up", "review::Previous"),
+                ("shift-down", "review::ExtendNext"),
+                ("c", "review::Comment"),
+                ("backspace", "review::Uncomment"),
+                ("tab", "review::NextScope"),
+                ("r", "review::Reread"),
+                ("escape", "review::Close"),
+            ] {
+                assert!(
+                    table.contains(&(key.into(), action, Some("Review && !Composer"))),
+                    "{platform:?} is missing {key} for {action}"
+                );
+            }
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::Comment")
+            );
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::SaveComment")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "review::CancelComment")
+            );
+            assert!(table.contains(&(
+                "escape".into(),
+                "review::CancelComment",
+                Some("ReviewComment")
+            )));
+        }
     }
 
     /// A keystroke gpui cannot parse would panic at startup on one platform
