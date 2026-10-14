@@ -5,9 +5,10 @@
 //!
 //! What a connection is sent waits in its [`Outbox`]: one ordered queue
 //! that never drops. Adjacent deltas of one Thread merge while they wait;
-//! a state message (a Thread's state, the Roster, the Groups …) replaces
-//! the one of its kind still waiting, in place; and a client that falls
-//! more than [`LAGGED_BYTES`] behind is closed `lagged` and reconnects.
+//! a state message (a Thread's state, the Roster, the Groups …) supersedes
+//! the one of its kind still waiting and joins the back; and a client that
+//! falls more than [`LAGGED_BYTES`] behind is closed `lagged` and
+//! reconnects.
 //! A reconnecting client resumes each Thread from the [`Ring`], the last
 //! [`RING_BYTES`] of its inputs, or rebuilds it from history.
 
@@ -146,9 +147,9 @@ fn slot(message: &ServerMessage) -> Option<Slot> {
 }
 
 impl Outbox {
-    /// Queue a message: a state message replaces its waiting kind in
-    /// place; a delta merges into the one before it; anything else waits
-    /// its turn. `Err(Lagged)` once the client is too far behind — the
+    /// Queue a message: a state message drops its waiting kind and joins
+    /// the back, so it never overtakes what was queued before it; a delta
+    /// merges into the one before it; anything else waits its turn. `Err(Lagged)` once the client is too far behind — the
     /// connection then closes, and nothing more is queued.
     pub fn push(&mut self, message: ServerMessage) -> Result<(), Lagged> {
         if self.lagged {
@@ -156,14 +157,13 @@ impl Outbox {
         }
         let bytes = protocol::encode(&message).len();
         if let Some(slot) = slot(&message) {
-            if let Some(waiting) = self
+            if let Some(stale) = self
                 .queue
-                .iter_mut()
-                .find(|waiting| self::slot(&waiting.message).as_ref() == Some(&slot))
+                .iter()
+                .position(|waiting| self::slot(&waiting.message).as_ref() == Some(&slot))
             {
-                self.bytes = self.bytes - waiting.bytes + bytes;
-                *waiting = Waiting { message, bytes };
-                return Ok(());
+                let stale = self.queue.remove(stale).expect("found just now");
+                self.bytes -= stale.bytes;
             }
         }
         if let Some(last) = self.queue.back_mut() {

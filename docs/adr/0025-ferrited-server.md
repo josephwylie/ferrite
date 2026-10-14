@@ -233,8 +233,9 @@ loses text. Coalescing gives the same effect losslessly: adjacent text,
 thinking and tool-output deltas of one Thread are concatenated while they
 wait (the merged `input` carries the last `seq`). The latest-wins kinds
 (`thread`, `tool_draft` per tool, `roster`, `groups`, `registry`,
-`notices`, `providers`) take a keyed slot: a newer one replaces the one of
-its kind still waiting, in place. They share the one ordered queue
+`notices`, `providers`) take a keyed slot: a newer one drops the one of
+its kind still waiting and joins the back of the queue, so it is never
+delivered ahead of anything queued before it. They share the one ordered queue
 rather than a second one, as first written here, because order carries
 meaning between them: a `roster` that closes a Thread must not overtake
 that Thread's last inputs, nor a tool draft the start that settles it. A

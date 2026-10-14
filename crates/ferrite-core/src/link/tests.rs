@@ -88,15 +88,18 @@ fn waiting_deltas_of_one_thread_merge_without_loss() {
     );
 }
 
+/// A newer state supersedes the waiting one, but never overtakes what was
+/// queued after that one: a roster that closes a Thread arrives after the
+/// Thread's last inputs.
 #[test]
-fn a_state_message_replaces_its_waiting_kind_in_place() {
+fn a_state_message_supersedes_its_waiting_kind_without_overtaking() {
     let mut outbox = Outbox::default();
     outbox.push(roster(&[1], 1)).unwrap();
-    outbox.push(text(1, 1, "hi")).unwrap();
-    outbox.push(roster(&[1, 2], 2)).unwrap();
+    outbox.push(text(1, 9, "last words")).unwrap();
+    outbox.push(roster(&[], 2)).unwrap();
 
-    assert_eq!(outbox.pop(), Some(roster(&[1, 2], 2)));
-    assert_eq!(outbox.pop(), Some(text(1, 1, "hi")));
+    assert_eq!(outbox.pop(), Some(text(1, 9, "last words")));
+    assert_eq!(outbox.pop(), Some(roster(&[], 2)));
     assert_eq!(outbox.pop(), None);
 }
 
