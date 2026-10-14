@@ -283,7 +283,10 @@ mod tests {
         update.begin_check();
         update.checked(Err(std::io::Error::other("offline")));
         let (text, button) = update.describe(None);
-        assert_eq!(text.as_ref(), "Could not check for a newer Ferrite: offline");
+        assert_eq!(
+            text.as_ref(),
+            "Could not check for a newer Ferrite: offline"
+        );
         assert_eq!(button.as_deref(), Some("Try again"));
         assert!(update.begin_check());
     }
