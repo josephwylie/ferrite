@@ -13,7 +13,8 @@ search past Claude/Codex sessions and resume one, and warn when the
 
 1. **One picker, in the palette.** Importing a session opens the ⌘K
    palette scoped to sessions (`PaletteScope::Sessions`), reached from
-   its `import a session` command and from `/import` in any Pane.
+   its `import a session` command and from `/import` in any Pane —
+   its slash-menu row, or typed out with the menu muted.
    One-letter status filters (`b`, `w`, `i`, `d`, `a`) do not apply in
    this scope: a session has no state, so every line is a search. The Composer's
    popover picker it replaces listed eight files and could not be
@@ -42,7 +43,11 @@ search past Claude/Codex sessions and resume one, and warn when the
    (Claude's older flat event, a plan with one window) keeps the other
    rather than forgetting it and warning again. Because the remembered
    reading survives launches, a relaunch over a high window does not
-   warn again; a window that rolled over counts from nothing. The
+   warn again; a window that rolled over counts from nothing. A
+   repeat of a reading keeps its first sighting's time, in memory and
+   on disk alike, so a window expires a span after it was first seen at
+   that use, and the same use reported after that is a new window that
+   may warn again. The
    thresholds are configured in `settings.json` only; there is no
    Settings control for them.
    The warning is a toast, not a Notice: it belongs to the account, not

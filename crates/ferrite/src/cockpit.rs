@@ -5331,7 +5331,7 @@ impl CockpitView {
         self.panes.get_mut(focused).and_then(PaneView::draft_mut)
     }
 
-    fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         // The card's ↵ is its confirm: the only line on it is the name.
         if self.project_editor.is_some() {
             if self.project_editor_ready() {
@@ -5344,10 +5344,17 @@ impl CockpitView {
             return;
         }
         // A draft's ↵ (#29): on a band chip it opens that chip's popover;
-        // on the prompt line it is the first send — the bootstrap.
-        if let Some(draft) = self.panes.get(self.focused()).and_then(PaneView::draft) {
-            match draft.band_focus {
+        // on the prompt line it is the first send — the bootstrap — or a
+        // typed-out `/import`.
+        if let Some(band_focus) = self
+            .panes
+            .get(self.focused())
+            .and_then(PaneView::draft)
+            .map(|draft| draft.band_focus)
+        {
+            match band_focus {
                 Some(chip) => self.open_band_popover(chip, cx),
+                None if self.typed_import(window, cx) => {}
                 None => self.bootstrap_draft(cx),
             }
             return;
@@ -5377,6 +5384,9 @@ impl CockpitView {
         // ↵ on an empty line sends a pending question whose every question
         // is answered (digits toggled a multi-select; ↵ sends it).
         if self.panes[self.focused()].composer.read(cx).is_empty() && self.send_ready_question(cx) {
+            return;
+        }
+        if self.typed_import(window, cx) {
             return;
         }
         let composer = self.panes[self.focused()].composer.clone();
@@ -10700,6 +10710,28 @@ impl CockpitView {
                 .clone()
                 .update(cx, |composer, cx| composer.insert(digit, cx));
         }
+    }
+
+    /// A typed-out `/import` (the slash menu muted) opens the import
+    /// picker, as its menu row does, rather than going to the provider as
+    /// text.
+    fn typed_import(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(pane) = self.panes.get(self.focused()) else {
+            return false;
+        };
+        let (identity, composer) = (pane.identity, pane.composer.clone());
+        if composer.read(cx).prompt().trim() != "/import" {
+            return false;
+        }
+        let into = match identity {
+            PaneIdentity::Draft(_) => Some(identity),
+            PaneIdentity::Thread(_) => {
+                composer.update(cx, |composer, cx| composer.take(cx));
+                self.import_target(cx)
+            }
+        };
+        self.open_import_palette(into, window, cx);
+        true
     }
 
     /// A typed `/effort <level>` or `/model <name>` the cockpit itself can
@@ -22078,6 +22110,119 @@ mod tests {
             );
             assert_eq!(view.import_target(cx), None, "nothing to replace");
         });
+    }
+
+    /// `/import` typed out with the slash menu muted is the picker too,
+    /// like `/effort` and `/model` typed out: it never reaches the
+    /// provider as a prompt.
+    #[gpui::test]
+    fn typed_import_with_the_menu_muted_opens_the_picker(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-typed", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| {
+            view.session_file_roots = session_roots(&scratch("import-typed-roots"))
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        cx.simulate_input("/import");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.menu_muted));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        assert_eq!(composer_text(&view, cx), "");
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().expect("the picker is open");
+            assert_eq!(
+                palette.read(cx).scope,
+                crate::palette::PaletteScope::Sessions
+            );
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
+            assert!(
+                !transcript
+                    .blocks()
+                    .iter()
+                    .any(|block| matches!(block.body, Body::Prompt(_))),
+                "a typed /import must not prompt the provider"
+            );
+        });
+    }
+
+    /// ⇥ previews a Thread beside; on a session row it does nothing, and
+    /// the picker stays.
+    #[gpui::test]
+    fn tab_on_a_session_row_does_nothing(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("import-tab", 1);
+        let base = scratch("import-tab-roots");
+        let roots = session_roots(&base);
+        write_session_file(
+            &roots[0].1.join("-workspace-alpha").join("tab.jsonl"),
+            &claude_session_body("tab"),
+            60,
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.session_file_roots = roots);
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_input("/im");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(session_rows(&view, cx).len(), 1);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+
+        assert_eq!(session_rows(&view, cx).len(), 1, "the picker stays open");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1, "nothing opened beside");
+            assert_eq!(view.cockpit.threads().len(), 1, "nothing imported");
+        });
+    }
+
+    /// A listing that answers after its picker closed, and the palette
+    /// reopened in another scope, is dropped rather than filling it.
+    #[gpui::test]
+    fn a_late_listing_is_dropped_by_a_palette_reopened_elsewhere(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("import-late", 1);
+        let (tx, rx) = mpsc::channel();
+        *fake.session_discovery.borrow_mut() = Some(rx);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+        cx.simulate_input("import a session");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        cx.simulate_keystrokes("cmd-k");
+        tick(cx);
+
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().expect("⌘K is open").read(cx);
+            assert_ne!(palette.scope, crate::palette::PaletteScope::Sessions);
+            assert!(view.pending_discovery.is_none(), "the listing was let go");
+        });
+        let late = tx.send(Ok(vec![ferrite_core::import::Candidate {
+            provider: Provider::Claude,
+            path: "/sessions/late.jsonl".into(),
+            title: Some("Too late".into()),
+            cwd: None,
+            session_id: Some("late".into()),
+            modified: None,
+        }]));
+        assert!(late.is_err(), "its answer has nowhere to land");
     }
 
     /// ⌘K's import over the empty board shown on purpose lands on the

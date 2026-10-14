@@ -39,7 +39,7 @@ const WEEKLY: u64 = 7 * 24 * 60 * 60;
 /// The cache file's shape. 2: each window keeps its own `saved_at`.
 const SCHEMA: u32 = 2;
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 struct Window {
     used_fraction: f32,
     resets_at: Option<u64>,
@@ -48,7 +48,7 @@ struct Window {
     saved_at: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 struct Snapshot {
     schema: u32,
     five_hour: Option<Window>,
@@ -152,26 +152,32 @@ impl LimitCache {
             Provider::Claude => (&mut self.claude, "claude.json"),
             Provider::Codex => (&mut self.codex, "codex.json"),
         };
-        let saved_at = now();
-        let merged = |reported: Option<RateLimitWindow>, kept: Option<Window>| {
-            reported
-                .map(|window| store_window(window, saved_at))
-                .or(kept)
+        let now = now();
+        // A repeat of a reading still served is that reading, first
+        // sighting and all: the window has certainly rolled over a span
+        // after it, and memory stays what disk holds. A repeat of one
+        // that has expired is a new reading of a new window.
+        let merged = |reported: Option<RateLimitWindow>, kept: Option<Window>, span| match reported
+        {
+            Some(reported) if window(kept, span, now) == Some(reported) => kept,
+            Some(reported) => Some(store_window(reported, now)),
+            None => kept,
         };
         let snapshot = Snapshot {
             schema: SCHEMA,
-            five_hour: merged(limits.five_hour, known.and_then(|known| known.five_hour)),
-            weekly: merged(limits.weekly, known.and_then(|known| known.weekly)),
+            five_hour: merged(
+                limits.five_hour,
+                known.and_then(|known| known.five_hour),
+                FIVE_HOUR,
+            ),
+            weekly: merged(limits.weekly, known.and_then(|known| known.weekly), WEEKLY),
         };
-        let unchanged = known.is_some_and(|known| {
-            same(known.five_hour, snapshot.five_hour) && same(known.weekly, snapshot.weekly)
-        });
-        *known = Some(snapshot);
         // Providers repeat the same reading every turn; only a changed one
         // is worth the write, and only a changed one is worth a repaint.
-        if unchanged {
+        if *known == Some(snapshot) {
             return false;
         }
+        *known = Some(snapshot);
         if let Err(error) = save(&self.dir.join(name), &snapshot) {
             crate::log!("could not save {provider:?} rate limits: {error}");
         }
@@ -211,16 +217,6 @@ fn store_window(window: RateLimitWindow, saved_at: u64) -> Window {
         used_fraction: window.used_fraction,
         resets_at: window.resets_at,
         saved_at,
-    }
-}
-
-fn same(left: Option<Window>, right: Option<Window>) -> bool {
-    match (left, right) {
-        (None, None) => true,
-        (Some(left), Some(right)) => {
-            left.used_fraction == right.used_fraction && left.resets_at == right.resets_at
-        }
-        _ => false,
     }
 }
 
@@ -384,6 +380,37 @@ mod tests {
         cache.remember(Provider::Claude, limits(0.85, 0.2));
         let after = cache.get(Provider::Claude);
         assert!(warnings(Provider::Claude, before, after, &[80, 95]).is_empty());
+    }
+
+    /// A repeat keeps the first sighting, on disk as in memory; once that
+    /// window has rolled over, the same use reported again is a new window
+    /// and a new crossing.
+    #[test]
+    fn a_repeat_of_an_expired_window_is_a_new_reading() {
+        let dir = scratch("expired-repeat");
+        let mut cache = LimitCache::load(&dir);
+        cache.remember(Provider::Claude, limits(0.85, 0.1));
+        let first = cache.claude;
+        assert!(!cache.remember(Provider::Claude, limits(0.85, 0.1)));
+        assert!(LimitCache::load(&dir).claude == first);
+
+        let rolled_over = now() - FIVE_HOUR - 1;
+        if let Some(snapshot) = cache.claude.as_mut() {
+            snapshot.five_hour = snapshot.five_hour.map(|window| Window {
+                saved_at: rolled_over,
+                ..window
+            });
+        }
+        let before = cache.get(Provider::Claude);
+        assert!(cache.remember(Provider::Claude, limits(0.85, 0.1)));
+        let after = cache.get(Provider::Claude);
+        assert_eq!(
+            warnings(Provider::Claude, before, after, &[80, 95])
+                .into_iter()
+                .map(|warning| (warning.window, warning.threshold))
+                .collect::<Vec<_>>(),
+            [(LimitWindow::FiveHour, 80)]
+        );
     }
 
     fn window_at(used_fraction: f32) -> Option<RateLimitWindow> {
