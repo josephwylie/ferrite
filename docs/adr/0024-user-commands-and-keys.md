@@ -21,7 +21,9 @@ a key that collides with their muscle memory.
 
 - **Commands live in Settings** (`settings.json` `commands`), each a `name`,
   a `run` that is a shell line (`sh -c`, `cmd /d /c` on Windows) or an argv
-  array, and an `output`: `toast` (the default) or `reader`.
+  array, and an `output`: `toast` (the default) or `reader`. On Windows an
+  argv's bare program found on PATH only as a `.cmd`/`.bat` shim (`code`,
+  the npm tools) runs as that shim, as the provider CLIs do.
   ```json
   "commands": [
     { "name": "open in editor", "run": ["code", "."] },
@@ -47,17 +49,24 @@ a key that collides with their muscle memory.
   ```json
   "keys": { "palette::Toggle": "cmd-p", "cockpit::ToggleNav": null }
   ```
-  `keymap::with_user_keys` lays it over the defaults at launch. A key
-  replaces every default spelling of its action **in place**, in each
-  context the action is bound in, so the table's same-depth precedence
-  (the order `keymap`'s tests pin) is untouched. The operator's key is
-  theirs: another action's default on the same keystroke in the same
-  context gives it up. An unknown action, a keystroke gpui cannot parse,
-  `cmd` on Windows, one keystroke given to two actions, or a key that types
-  (a character or space, alone or with shift) for an action bound with no
-  context — it would outrank typing in every Composer — is refused with a
-  sentence naming the entry and why; that action keeps its defaults, the
-  rest apply, and the window says the launch's refusals once in a toast.
+  `keymap::with_user_keys` lays it over the defaults at launch, every
+  `null` first. A key replaces every default spelling of its action **in
+  place**, in each context the action is bound in, so the table's
+  same-depth precedence (the order `keymap`'s tests pin) is untouched. The
+  operator's key is theirs: another action's default on the same keystroke
+  in the same context gives it up. Refused, with a sentence naming the
+  entry and why: an unknown action, a keystroke gpui cannot parse, `cmd` on
+  Windows, one keystroke given to two actions; a key that types (a
+  character or space, alone or with shift) for an action bound anywhere a
+  text field may hold the keyboard — only the no-text-field root, the
+  Review slot, a Decision and the wall take plain keys; and a key another
+  action holds where one of the two is bound with no context
+  (`cockpit::ToggleNav` on `cmd-a`, which `composer::SelectAll` holds in a
+  Composer). gpui's precedence there turns on depth and table order, so
+  one of the two would silently lose; the sentence names the other action,
+  and unbinding it (`null`) frees the key. A refused action keeps its
+  defaults, the rest apply, and the window says the launch's refusals once
+  in a toast.
 - **One bound table.** The applied table is installed process-wide
   (`keymap::install` / `keymap::active`); every drawn chord
   (`components::bound_chord`, palette keys) and the `?` sheet read it, so
@@ -71,7 +80,8 @@ a key that collides with their muscle memory.
   empty): it clears the map, saves, and rebinds the defaults at once.
 - **The `?` sheet filters.** A filter line under its head holds the
   keyboard; typing keeps the rows whose label, section or chord match (the
-  palette's matcher), ↑↓ still scroll and esc still closes. A typed `?` is
+  palette's matcher), ↑↓ still scroll, ⏎ does nothing (the bare row would
+  send the Pane's draft from under the sheet) and esc still closes. A typed `?` is
   text there, so `?` no longer closes the sheet; esc does.
 
 ## Consequences
@@ -79,9 +89,13 @@ a key that collides with their muscle memory.
 - Keys are read at launch; an edit to `settings.json` applies on the next
   launch (reset applies at once). No setting is read back from the file
   while the window runs (the window is what writes it), so live keys would
-  need a file watcher the rest of Settings does not have. A Settings page for keys, and binding a
-  key to a user command, are not built: commands are reached from the
-  palette.
+  need a file watcher the rest of Settings does not have. A Settings page
+  for keys, binding a key to a user command, and binding an action the
+  default table does not bind are not built: commands are reached from
+  the palette, and `keys` only moves keys the table already has.
+- Two keys in different named contexts that meet on one focused node (a
+  Palette's field is also a Composer) are left to the table's order; only
+  a clash with a no-context key is refused.
 - Action names (`cockpit::ToggleNav`) are the vocabulary of `keys`; they are
   the registered names the key table already used, so a rename now also
   breaks the operator's settings (it is refused and said, never a panic).

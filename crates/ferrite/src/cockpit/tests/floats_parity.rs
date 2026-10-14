@@ -399,7 +399,8 @@ fn question_mark_opens_the_shortcuts_sheet_on_an_empty_line(cx: &mut TestAppCont
 }
 
 /// The sheet's filter line holds the keyboard: typing keeps the rows that
-/// match (a `?` included, as text), ↑↓ still scroll, esc still closes.
+/// match (a `?` included, as text), ↑↓ still scroll, ⏎ sends nothing, esc
+/// still closes.
 #[gpui::test]
 fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("shortcuts-filter", 1);
@@ -430,6 +431,19 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
     tick(cx);
     assert!(labels(cx).is_empty(), "`?` is typed, not a toggle");
     assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_some()));
+    // ⏎ in the filter sends nothing: not the Pane's draft from under it.
+    view.update(cx, |view, cx| {
+        let composer = view.panes[view.focused()].composer.clone();
+        composer.update(cx, |composer, cx| composer.set("draft".into(), cx));
+    });
+    assert_eq!(resolves("enter", cx), None);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(fake.sent.borrow().is_empty());
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[view.focused()].composer.read(cx).text(), "draft");
+        assert!(view.floats.shortcuts.is_some());
+    });
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_none()));

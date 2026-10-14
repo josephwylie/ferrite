@@ -1,5 +1,5 @@
 //! The operator's own commands and keys (Settings `commands` and `keys`,
-//! ADR 0022): a command runs for the focused Thread, in its working
+//! ADR 0024): a command runs for the focused Thread, in its working
 //! directory, on a thread of its own, until it ends or its palette row
 //! stops it, and says how it went in a toast or shows its output in the
 //! reader beside that Thread's Pane; a key the launch refused is said
@@ -104,7 +104,12 @@ impl CockpitView {
             let ran = match ended.try_recv() {
                 Ok(ran) => ran,
                 Err(std::sync::mpsc::TryRecvError::Empty) => continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                // Its thread died without a word: still an end to say,
+                // and the row freed to run it again.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Ran {
+                    ok: false,
+                    output: "the command was lost before it could say how it went".into(),
+                },
             };
             this.update(cx, |view, cx| {
                 view.user_command_ran(index, &command, cwd, owner, ran, cx)

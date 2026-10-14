@@ -1,4 +1,4 @@
-//! The operator's own palette commands and keys (ADR 0022).
+//! The operator's own palette commands and keys (ADR 0024).
 use super::*;
 use crate::palette::{Act, Command};
 use ferrite_core::user_commands::{Output, Run, UserCommand};

@@ -9,6 +9,7 @@
 //! test) runs until the operator stops it; only the end of each stream is
 //! kept, so a chatty one cannot fill memory.
 
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::providers::spawnable_program;
 use crate::spawn::NoConsoleWindow as _;
 use crate::ThreadId;
 
@@ -34,7 +36,8 @@ pub struct UserCommand {
 }
 
 /// What a command runs: a line for the platform shell (`sh -c`, `cmd /d
-/// /c`), or an argv whose first word is the program.
+/// /c`), or an argv whose first word is the program (on Windows, a bare
+/// name found as a `.cmd` or `.bat` shim on PATH runs as that shim).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Run {
@@ -84,7 +87,8 @@ impl Run {
             }
             Run::Argv(argv) => {
                 let (program, args) = argv.split_first()?;
-                let mut command = Command::new(program);
+                // `code` is `code.cmd` on Windows, as the npm CLIs are.
+                let mut command = Command::new(spawnable_program(program));
                 command.args(args);
                 Some(command)
             }
@@ -107,25 +111,27 @@ enum Stream {
     Err,
 }
 
-/// The end of one stream: the last `KEPT` bytes, and whether any were let go.
+/// The end of one stream: the last `KEPT` bytes, and whether any were let
+/// go. A ring, so letting the front go moves nothing that is kept.
 #[derive(Default)]
 struct Tail {
-    bytes: Vec<u8>,
+    bytes: VecDeque<u8>,
     cut: bool,
 }
 
 impl Tail {
     fn push(&mut self, chunk: &[u8]) {
-        self.bytes.extend_from_slice(chunk);
-        if self.bytes.len() > KEPT {
-            self.bytes.drain(..self.bytes.len() - KEPT);
+        self.bytes.extend(chunk);
+        let over = self.bytes.len().saturating_sub(KEPT);
+        if over > 0 {
+            self.bytes.drain(..over);
             self.cut = true;
         }
     }
 
     /// The kept text, trimmed; a cut starts at the first whole line.
-    fn text(&self) -> String {
-        let text = String::from_utf8_lossy(&self.bytes);
+    fn text(mut self) -> String {
+        let text = String::from_utf8_lossy(self.bytes.make_contiguous());
         if !self.cut {
             return text.trim().to_string();
         }

@@ -372,6 +372,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
+        // Enter in the sheet's filter line submits nothing: the bare row
+        // would send the Pane's draft from under the sheet.
+        ("enter".into(), NO_ACTION, Some("Shortcuts")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie
@@ -424,25 +427,37 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     ]
 }
 
+/// The Review slot holds the keyboard itself, not a field inside it.
+const REVIEW: &str = "Review && !Composer";
+
+/// The contexts where no text field takes typing (a Decision answers its
+/// own letters), so a plain key may act there.
+const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, "Decision", "Wall"];
+
+/// gpui's "no action": a row that keeps a key from the bindings under it.
+const NO_ACTION: &str = "zed::NoAction";
+
 /// The operator's keys (Settings `keys`) laid over the defaults, and a
 /// sentence for each one refused.
 ///
-/// A key replaces every default spelling of its action, in each context
-/// the action is bound in, so the table's precedence order holds; `None`
-/// unbinds the action. The key is the operator's: a default of another
-/// action on the same keystroke in the same context gives it up. An
+/// `None` unbinds an action; every unbinding applies first, so a key may
+/// take a keystroke from an action the operator unbinds. A key replaces
+/// every default spelling of its action, in each context the action is
+/// bound in, so the table's precedence order holds. The key is the
+/// operator's: a default of another action on the same keystroke in the
+/// same context gives it up. Refused, the action keeping its defaults: an
 /// action the table does not bind, a keystroke gpui cannot parse, `cmd` on
-/// Windows, one keystroke given to two actions, or a key that `types` for
-/// an action bound with no context is refused, and that action keeps its
-/// defaults.
+/// Windows, one keystroke given to two actions, a key that `types` for an
+/// action bound anywhere a text field may hold the keyboard, and a key
+/// another action holds where one of the two is bound with no context —
+/// the other would act there instead, or lose its key unsaid.
 pub fn with_user_keys(
     platform: Platform,
     keys: &BTreeMap<String, Option<String>>,
 ) -> (Vec<Binding>, Vec<String>) {
     let mut table = bindings(platform);
     let mut refused = Vec::new();
-    // Each user binding, parsed, by the contexts it holds.
-    let mut taken: Vec<(Vec<Keystroke>, Option<&'static str>, &'static str)> = Vec::new();
+    let mut rebound = Vec::new();
     for (name, keys) in keys {
         let Some(action) = table
             .iter()
@@ -452,10 +467,14 @@ pub fn with_user_keys(
             refused.push(format!("`{name}` is not an action Ferrite binds"));
             continue;
         };
-        let Some(keys) = keys else {
-            table.retain(|(_, bound, _)| *bound != action);
-            continue;
-        };
+        match keys {
+            Some(keys) => rebound.push((action, keys)),
+            None => table.retain(|(_, bound, _)| *bound != action),
+        }
+    }
+    // Each user binding, parsed, by the contexts it holds.
+    let mut taken: Vec<(Vec<Keystroke>, Option<&'static str>, &'static str)> = Vec::new();
+    for (action, keys) in rebound {
         let strokes = match parse(keys, platform) {
             Ok(strokes) => strokes,
             Err(why) => {
@@ -468,7 +487,10 @@ pub fn with_user_keys(
             .filter(|(_, bound, _)| *bound == action)
             .map(|(_, _, context)| *context)
             .collect();
-        if contexts.contains(&None) && types(&strokes[0]) {
+        let lettered = |context: &Option<&str>| {
+            context.is_some_and(|context| LETTER_CONTEXTS.contains(&context))
+        };
+        if types(&strokes[0]) && !contexts.iter().all(lettered) {
             refused.push(format!(
                 "`{keys}` for {action} would take that key from typing; give it a modifier"
             ));
@@ -480,6 +502,20 @@ pub fn with_user_keys(
         {
             refused.push(format!(
                 "`{keys}` is given to both {other} and {action}; {action} keeps its default"
+            ));
+            continue;
+        }
+        let clash = table.iter().find(|(spelled, bound, context)| {
+            *bound != action
+                && *bound != NO_ACTION
+                && !contexts.contains(context)
+                && (context.is_none() || contexts.contains(&None))
+                && parse(spelled, platform).ok().as_ref() == Some(&strokes)
+        });
+        if let Some((_, other, context)) = clash {
+            refused.push(format!(
+                "`{keys}` for {action} is {other}'s {}; pick another key, or unbind {other}",
+                context.map_or("everywhere".to_string(), |context| format!("in {context}"))
             ));
             continue;
         }
@@ -528,8 +564,8 @@ fn parse(keys: &str, platform: Platform) -> Result<Vec<Keystroke>, String> {
 }
 
 /// Whether `stroke` types a character in a text field: a character or
-/// space, alone or with shift. Bound with no context it would outrank the
-/// typing in every Composer.
+/// space, alone or with shift. Bound where a text field may hold the
+/// keyboard it would outrank the typing there.
 fn types(stroke: &Keystroke) -> bool {
     let modifiers = stroke.modifiers;
     let held = modifiers.control || modifiers.alt || modifiers.platform || modifiers.function;
@@ -556,8 +592,6 @@ pub fn active() -> Vec<Binding> {
         .clone()
         .unwrap_or_else(|| bindings(PLATFORM))
 }
-/// The Review slot holds the keyboard itself, not a field inside it.
-const REVIEW: &str = "Review && !Composer";
 
 #[cfg(test)]
 mod tests {
@@ -782,6 +816,7 @@ mod tests {
                 ("up", "shortcuts::ScrollUp", "Shortcuts"),
                 ("down", "shortcuts::ScrollDown", "Shortcuts"),
                 ("escape", "shortcuts::Dismiss", "Shortcuts"),
+                ("enter", NO_ACTION, "Shortcuts"),
                 ("up", "empty_board::Previous", "EmptyBoard"),
                 ("down", "empty_board::Next", "EmptyBoard"),
                 ("enter", "empty_board::Run", "EmptyBoard"),
@@ -1101,15 +1136,69 @@ mod tests {
                 .any(|(_, action, _)| *action == "palette::Toggle"),
             "the palette gave cmd-k up"
         );
-        // A different context keeps its own meaning of the key.
-        let (table, _) = with_user_keys(
+    }
+
+    /// A key another action holds where one of the two acts everywhere is
+    /// refused, naming that action: one would shadow the other. Unbinding
+    /// the other frees the key, whatever the order of the entries.
+    #[test]
+    fn a_key_held_in_another_context_is_refused_until_unbound() {
+        let (table, refused) = with_user_keys(
             Platform::Mac,
-            &user_keys(&[("cockpit::NextPane", Some("enter"))]),
+            &user_keys(&[
+                ("cockpit::ToggleNav", Some("cmd-a")),
+                ("palette::SelectNext", Some("cmd-]")),
+            ]),
         );
-        assert!(!table
-            .iter()
-            .any(|(_, action, _)| *action == "cockpit::Submit"));
-        assert!(table.contains(&("enter".into(), "palette::Confirm", Some("Palette"))));
+        assert_eq!(
+            refused,
+            [
+                "`cmd-a` for cockpit::ToggleNav is composer::SelectAll's in Composer; \
+                 pick another key, or unbind composer::SelectAll",
+                "`cmd-]` for palette::SelectNext is cockpit::NextPane's everywhere; \
+                 pick another key, or unbind cockpit::NextPane",
+            ]
+        );
+        assert!(table.contains(&("cmd-b".into(), "cockpit::ToggleNav", None)));
+        assert!(table.contains(&("cmd-a".into(), "composer::SelectAll", Some("Composer"))));
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("cockpit::ToggleNav", Some("cmd-a")),
+                ("composer::SelectAll", None),
+            ]),
+        );
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(table.contains(&("cmd-a".into(), "cockpit::ToggleNav", None)));
+    }
+
+    /// A plain key may go only to an action that acts where no text field
+    /// holds the keyboard; anywhere a field may, it would eat the letter.
+    #[test]
+    fn a_typing_key_goes_only_where_nothing_is_typed() {
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("composer::Home", Some("j")),
+                ("shortcuts::ScrollDown", Some("j")),
+                ("palette::SelectNext", Some("shift-j")),
+                ("cockpit::Allow", Some("o")),
+                ("review::Reread", Some("g")),
+            ]),
+        );
+        assert_eq!(refused.len(), 3, "{refused:?}");
+        for action in [
+            "composer::Home",
+            "shortcuts::ScrollDown",
+            "palette::SelectNext",
+        ] {
+            assert!(refused
+                .iter()
+                .any(|refusal| refusal.contains(&format!("for {action} would take that key"))));
+        }
+        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Decision"))));
+        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Wall"))));
+        assert!(table.contains(&("g".into(), "review::Reread", Some(REVIEW))));
     }
 
     /// Each refusal says which entry and why, and leaves that action on
