@@ -1,6 +1,7 @@
 //! The command palette (⌘K, the prototype's `#palette`): every Thread, the
 //! Projects and Groups to jump to, then every command, filtered as the
-//! operator types (FL-1…FL-5).
+//! operator types (FL-1…FL-5). Scoped, it is also ⌘G's Group list and the
+//! session import picker.
 //!
 //! The view holds what it shows — the rows, the filter's survivors and the
 //! cursor — and draws it in the float grammar: the input row (`❯`, the query
@@ -24,6 +25,7 @@
 use std::ops::Range;
 
 use ferrite_core::groups::GroupId;
+use ferrite_core::roster::PaneIdentity;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 use gpui::prelude::*;
@@ -58,11 +60,13 @@ gpui::actions!(
     ]
 );
 
-/// What the palette lists: everything (⌘K), or the Groups alone (⌘G).
+/// What the palette lists: everything (⌘K), the Groups alone (⌘G), or the
+/// CLI sessions there are to import (`import a session`, `/import`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaletteScope {
     All,
     Groups,
+    Sessions,
 }
 
 /// A row's section, in the order the palette draws them.
@@ -72,6 +76,7 @@ pub(crate) enum Section {
     Projects,
     Groups,
     Commands,
+    Sessions,
 }
 
 impl Section {
@@ -81,6 +86,7 @@ impl Section {
             Section::Projects => "projects",
             Section::Groups => "groups",
             Section::Commands => "commands",
+            Section::Sessions => "sessions",
         }
     }
 }
@@ -144,6 +150,7 @@ pub(crate) enum Command {
     ShowPlan,
     UpdateClis,
     DiscardDraft,
+    ImportSession,
 }
 
 /// What a row does when it runs.
@@ -156,6 +163,12 @@ pub(crate) enum Act {
     /// Land on the Project's Thread that most needs the operator.
     Project(ProjectId),
     Command(Command),
+    /// Import the session file and resume it: in place of `into` (a blank
+    /// Pane the picker was opened for), else alongside.
+    Adopt {
+        path: std::path::PathBuf,
+        into: Option<PaneIdentity>,
+    },
 }
 
 /// One palette row, ready to draw and to run.
@@ -184,7 +197,7 @@ impl Row {
     fn context_gap(&self) -> f32 {
         match self.section {
             Section::Commands => FLOAT_DETAIL_GAP,
-            Section::Threads | Section::Projects | Section::Groups => PALETTE_CONTEXT_GAP,
+            Section::Threads | Section::Projects | Section::Groups | Section::Sessions => PALETTE_CONTEXT_GAP,
         }
     }
 
@@ -211,6 +224,9 @@ pub(crate) struct Palette {
     rows: Vec<Row>,
     shown: Vec<Shown>,
     cursor: usize,
+    /// What the list says while it holds no rows at all — a list the query
+    /// emptied says `no matches`.
+    empty: SharedString,
     pub input: Entity<Composer>,
     scroll: ScrollHandle,
     _edited: Subscription,
@@ -243,12 +259,21 @@ impl Palette {
             rows,
             shown: Vec::new(),
             cursor: 0,
+            empty: NO_MATCHES.into(),
             input,
             scroll: ScrollHandle::new(),
             _edited: edited,
         };
         palette.refilter(cx);
         palette
+    }
+
+    /// Replace the rows (a list that arrives after the palette opened) and
+    /// what an empty list says; the query stands and filters them.
+    pub(crate) fn set_rows(&mut self, rows: Vec<Row>, empty: SharedString, cx: &mut Context<Self>) {
+        self.rows = rows;
+        self.empty = empty;
+        self.refilter(cx);
     }
 
     /// What the line holds now.
@@ -261,7 +286,7 @@ impl Palette {
     /// cursor returns to the first.
     pub(crate) fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
-        self.shown = filter(&self.rows, &query);
+        self.shown = filter(&self.rows, &query, self.scope);
         self.cursor = 0;
         self.scroll.scroll_to_item(0);
         cx.notify();
@@ -302,6 +327,12 @@ impl Palette {
             .collect()
     }
 
+    /// What the list says while it holds no rows — what the tests read.
+    #[cfg(test)]
+    pub(crate) fn empty_note(&self) -> &str {
+        &self.empty
+    }
+
     /// The lit ranges of survivor `at`'s name — what the tests read.
     #[cfg(test)]
     pub(crate) fn lit(&self, at: usize) -> Option<&[Range<usize>]> {
@@ -329,8 +360,12 @@ impl Palette {
 }
 
 /// The status filter a one-letter line asks for: `Some(None)` for `a`,
-/// every state. Any other line is a search.
-fn status_filter(query: &str) -> Option<Option<Attention>> {
+/// every state. Any other line is a search, and so is every line in the
+/// import picker, whose sessions have no state.
+fn status_filter(scope: PaletteScope, query: &str) -> Option<Option<Attention>> {
+    if scope == PaletteScope::Sessions {
+        return None;
+    }
     match query {
         "b" => Some(Some(Attention::Blocked)),
         "w" => Some(Some(Attention::Working)),
@@ -343,8 +378,8 @@ fn status_filter(query: &str) -> Option<Option<Attention>> {
 
 /// The rows the line keeps — a status filter's, or the search's — with
 /// their names' lit ranges.
-fn filter(rows: &[Row], query: &str) -> Vec<Shown> {
-    let (query, status) = match status_filter(query) {
+fn filter(rows: &[Row], query: &str, scope: PaletteScope) -> Vec<Shown> {
+    let (query, status) = match status_filter(scope, query) {
         Some(status) => ("", status),
         None => (query, None),
     };
@@ -363,6 +398,10 @@ pub(crate) const FOOTER: &str =
     "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} \u{21e5} preview in a pane \u{b7} esc";
 /// ⌘G's footer: a Group has no pane to preview in.
 pub(crate) const GROUPS_FOOTER: &str = "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} esc";
+/// The import picker's footer: ⏎ imports the session and resumes it.
+pub(crate) const SESSIONS_FOOTER: &str =
+    "\u{2191}\u{2193} select \u{b7} \u{23ce} import \u{b7} esc";
+const NO_MATCHES: &str = "no matches";
 
 impl Render for Palette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -397,7 +436,7 @@ impl Render for Palette {
                     .text_color(rgb(TEXT_STRONG))
                     .child(self.input.clone()),
             )
-            .children(status_filter(&self.query(cx)).flatten().map(|filter| {
+            .children(status_filter(self.scope, &self.query(cx)).flatten().map(|filter| {
                 div()
                     .debug_selector(|| "palette-filter".into())
                     .flex_shrink_0()
@@ -434,7 +473,12 @@ impl Render for Palette {
             );
         }
         if self.shown.is_empty() {
-            list = list.child(crate::menu::note("no matches").mt(px(FLOAT_SECTION_GAP)));
+            let note = if self.rows.is_empty() {
+                self.empty.clone()
+            } else {
+                NO_MATCHES.into()
+            };
+            list = list.child(crate::menu::note(note).mt(px(FLOAT_SECTION_GAP)));
         }
         let footer = match (
             self.selected().and_then(|row| row.detail.clone()),
@@ -443,6 +487,7 @@ impl Render for Palette {
             (Some(detail), _) => detail,
             (None, PaletteScope::All) => FOOTER.into(),
             (None, PaletteScope::Groups) => GROUPS_FOOTER.into(),
+            (None, PaletteScope::Sessions) => SESSIONS_FOOTER.into(),
         };
         crate::menu::float()
             .debug_selector(|| "palette".into())
@@ -548,6 +593,21 @@ mod tests {
         }
     }
 
+    fn session(name: &str, context: &str) -> Row {
+        Row {
+            section: Section::Sessions,
+            name: name.to_string().into(),
+            context: context.to_string().into(),
+            status: None,
+            detail: None,
+            keys: None,
+            act: Act::Adopt {
+                path: name.into(),
+                into: None,
+            },
+        }
+    }
+
     fn names<'a>(rows: &'a [Row], shown: &[Shown]) -> Vec<&'a str> {
         shown
             .iter()
@@ -573,7 +633,7 @@ mod tests {
             ),
             command("open a group", "", Command::OpenGroup),
         ];
-        let shown = filter(&rows, "par");
+        let shown = filter(&rows, "par", PaletteScope::All);
         assert_eq!(
             names(&rows, &shown),
             [
@@ -585,7 +645,7 @@ mod tests {
                 "compare with main",
             ]
         );
-        assert_eq!(filter(&rows, "").len(), rows.len());
+        assert_eq!(filter(&rows, "", PaletteScope::All).len(), rows.len());
     }
 
     /// A one-letter line keeps the rows in its one of the four states —
@@ -603,7 +663,7 @@ mod tests {
             state_thread("shelved", "", 7, RowStatus::Parked),
             command("settings", "", Command::Settings),
         ];
-        let kept = |query| names(&rows, &filter(&rows, query));
+        let kept = |query| names(&rows, &filter(&rows, query, PaletteScope::All));
         assert_eq!(kept("b"), ["waits", "settings"]);
         assert_eq!(kept("w"), ["runs", "behind", "settings"]);
         assert_eq!(kept("d"), ["finished", "settings"]);
@@ -619,9 +679,21 @@ mod tests {
             state_thread("debug crash", "", 1, RowStatus::Idle),
             state_thread("wire up", "", 2, RowStatus::Done),
         ];
-        let kept = |query| names(&rows, &filter(&rows, query));
+        let kept = |query| names(&rows, &filter(&rows, query, PaletteScope::All));
         assert_eq!(kept("d"), ["wire up"]);
         assert_eq!(kept("de"), ["debug crash"]);
         assert_eq!(kept("wi"), ["wire up"]);
+    }
+
+    /// In the import picker a status letter is a search: a session has no
+    /// state for it to filter by.
+    #[test]
+    fn a_status_letter_searches_the_import_picker() {
+        let rows = vec![
+            session("deploy script", "ferrite"),
+            session("fix the nav", "zeron"),
+        ];
+        let shown = filter(&rows, "d", PaletteScope::Sessions);
+        assert_eq!(names(&rows, &shown), ["deploy script"]);
     }
 }

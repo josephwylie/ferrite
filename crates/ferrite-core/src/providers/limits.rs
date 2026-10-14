@@ -10,6 +10,11 @@
 //! A remembered reading is served only while its window can still be the
 //! one it was measured in — see `fresh`. An expired window reverts to
 //! unknown rather than showing a percentage that has since rolled over.
+//!
+//! A reading that rises across one of the operator's warning thresholds
+//! (`Settings::allowance_warnings`) is an `AllowanceWarning`: said once per
+//! crossing, because the remembered reading it is compared with survives
+//! launches too.
 
 use std::fs;
 use std::io;
@@ -43,6 +48,60 @@ struct Snapshot {
     saved_at: u64,
     five_hour: Option<Window>,
     weekly: Option<Window>,
+}
+
+/// One of a provider's two subscription windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitWindow {
+    FiveHour,
+    Weekly,
+}
+
+/// A window's use rising across one of the operator's thresholds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AllowanceWarning {
+    pub provider: Provider,
+    pub window: LimitWindow,
+    /// The highest threshold crossed, in percent.
+    pub threshold: u8,
+    pub used_fraction: f32,
+}
+
+/// The warnings one change of reading earns: per window, the highest
+/// threshold `before` was under and `after` reaches — one, however many a
+/// jump passes. A window unknown before (the first reading, or a fresh
+/// window after the last rolled over) counts from nothing; one unknown
+/// after says nothing.
+pub(crate) fn warnings(
+    provider: Provider,
+    before: RateLimits,
+    after: RateLimits,
+    thresholds: &[u8],
+) -> Vec<AllowanceWarning> {
+    [
+        (LimitWindow::FiveHour, before.five_hour, after.five_hour),
+        (LimitWindow::Weekly, before.weekly, after.weekly),
+    ]
+    .into_iter()
+    .filter_map(|(window, before, after)| {
+        let after = after?.used_fraction;
+        let before = before.map_or(0.0, |before| before.used_fraction);
+        let threshold = thresholds
+            .iter()
+            .copied()
+            .filter(|percent| {
+                let at = f32::from(*percent) / 100.0;
+                before < at && after >= at
+            })
+            .max()?;
+        Some(AllowanceWarning {
+            provider,
+            window,
+            threshold,
+            used_fraction: after,
+        })
+    })
+    .collect()
 }
 
 pub(crate) struct LimitCache {
@@ -288,5 +347,66 @@ mod tests {
         cache.remember(Provider::Claude, limits(0.5, 0.1));
         assert!(!cache.remember(Provider::Claude, RateLimits::default()));
         assert_eq!(cache.get(Provider::Claude), limits(0.5, 0.1));
+    }
+
+    fn window_at(used_fraction: f32) -> Option<RateLimitWindow> {
+        Some(RateLimitWindow {
+            used_fraction,
+            resets_at: None,
+        })
+    }
+
+    #[test]
+    fn a_rising_window_warns_once_per_threshold_it_crosses() {
+        let thresholds = [80, 95];
+        let reading = |five, weekly| RateLimits {
+            five_hour: window_at(five),
+            weekly: window_at(weekly),
+        };
+        let crossed = |before, after| {
+            warnings(Provider::Claude, before, after, &thresholds)
+                .into_iter()
+                .map(|warning| (warning.window, warning.threshold))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(crossed(reading(0.5, 0.1), reading(0.79, 0.1)), []);
+        assert_eq!(
+            crossed(reading(0.79, 0.1), reading(0.8, 0.1)),
+            [(LimitWindow::FiveHour, 80)]
+        );
+        // Already past it: the next report is not a second crossing.
+        assert_eq!(crossed(reading(0.8, 0.1), reading(0.9, 0.1)), []);
+        // A jump past both says the higher one, once.
+        assert_eq!(
+            crossed(reading(0.5, 0.5), reading(0.5, 0.97)),
+            [(LimitWindow::Weekly, 95)]
+        );
+        // Falling back (a reset) is no warning; rising again is a new one.
+        assert_eq!(crossed(reading(0.9, 0.1), reading(0.1, 0.1)), []);
+        assert_eq!(
+            crossed(reading(0.1, 0.1), reading(0.85, 0.1)),
+            [(LimitWindow::FiveHour, 80)]
+        );
+    }
+
+    #[test]
+    fn an_unknown_window_counts_from_nothing_and_says_nothing_after() {
+        let first = RateLimits {
+            five_hour: window_at(0.83),
+            weekly: None,
+        };
+        let warned = warnings(Provider::Codex, RateLimits::default(), first, &[80, 95]);
+        assert_eq!(
+            warned,
+            [AllowanceWarning {
+                provider: Provider::Codex,
+                window: LimitWindow::FiveHour,
+                threshold: 80,
+                used_fraction: 0.83,
+            }]
+        );
+        assert!(warnings(Provider::Codex, first, RateLimits::default(), &[80]).is_empty());
+        // No thresholds: the warnings are off.
+        assert!(warnings(Provider::Codex, RateLimits::default(), first, &[]).is_empty());
     }
 }

@@ -61,6 +61,53 @@ fn context_words(scope: Option<SharedString>, word: SharedString) -> SharedStrin
     }
 }
 
+/// One importable session as the picker lists it: its title (or first
+/// prompt) as a Title would read it, then its project, provider and age.
+fn session_row(
+    candidate: ferrite_core::import::Candidate,
+    into: Option<PaneIdentity>,
+    now: std::time::SystemTime,
+) -> PaletteRow {
+    let name = candidate
+        .title
+        .as_deref()
+        .map(ferrite_core::cockpit::title_from_prompt)
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| {
+            candidate
+                .path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+    let project = candidate
+        .cwd
+        .as_deref()
+        .and_then(std::path::Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned());
+    let age = candidate
+        .modified
+        .map(|at| crate::facts::since_label(at, now).to_string())
+        .filter(|age| !age.is_empty());
+    let context = project
+        .into_iter()
+        .chain([provider_label(candidate.provider).to_string()])
+        .chain(age)
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    PaletteRow {
+        section: PaletteSection::Sessions,
+        name: name.into(),
+        context: context.into(),
+        dot: None,
+        keys: None,
+        act: Act::Adopt {
+            path: candidate.path,
+            into,
+        },
+    }
+}
+
 impl CockpitView {
     /// The floats' hook on the cockpit's root: the palette's, the shortcuts
     /// sheet's, the status line's and the notifications list's actions.
@@ -173,6 +220,8 @@ impl CockpitView {
                 rows
             }
             PaletteScope::Groups => self.palette_group_rows(),
+            // Listed off the UI thread: `open_import_palette`.
+            PaletteScope::Sessions => Vec::new(),
         };
         self.clear_for_float();
         let palette = cx.new(|cx| Palette::new(scope, rows, query, cx));
@@ -234,7 +283,132 @@ impl CockpitView {
                 }
             }
             Act::Command(command) => self.run_command(command, window, cx),
+            Act::Adopt { path, into } => self.adopt_file(into, &path, window, cx),
         }
+    }
+
+    // ------------------------------------------------------ session import
+
+    /// The import picker (`import a session`, `/import`): the palette over
+    /// the CLI sessions there are to resume, newest first and searched like
+    /// any palette row — title, project, provider. The listing runs off the
+    /// UI thread, so the picker opens at once and fills when it answers.
+    /// `into` is the blank Pane a pick takes the place of, if any.
+    pub(super) fn open_import_palette(
+        &mut self,
+        into: Option<PaneIdentity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_palette(PaletteScope::Sessions, "", window, cx);
+        self.discovery_request = self.discovery_request.wrapping_add(1);
+        let roots = self.session_file_roots.clone();
+        match self.cockpit.discover_sessions(roots, IMPORT_ROWS_MAX) {
+            Some(reply) => {
+                self.pending_discovery = Some(PendingDiscovery {
+                    into,
+                    request_id: self.discovery_request,
+                    started: std::time::Instant::now(),
+                    reply,
+                });
+                self.show_sessions(Vec::new(), "searching sessions\u{2026}".into(), cx);
+            }
+            // No listing thread to be had: the plain walk, here.
+            None => {
+                let found =
+                    ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
+                self.list_sessions(into, Ok(found), cx);
+            }
+        }
+    }
+
+    /// The listing's answer, once it lands — and only into the picker that
+    /// asked for it: one closed or reopened since drops it.
+    pub(super) fn poll_session_discovery(&mut self, cx: &mut Context<Self>) {
+        use std::sync::mpsc::TryRecvError;
+        let Some(pending) = self.pending_discovery.take() else {
+            return;
+        };
+        let current = self.discovery_request == pending.request_id
+            && self
+                .floats
+                .palette
+                .as_ref()
+                .is_some_and(|palette| palette.read(cx).scope == PaletteScope::Sessions);
+        if !current {
+            return;
+        }
+        let found = match pending.reply.try_recv() {
+            Ok(found) => found.map_err(|error| error.to_string()),
+            Err(TryRecvError::Empty) if pending.started.elapsed() < Duration::from_secs(15) => {
+                self.pending_discovery = Some(pending);
+                return;
+            }
+            Err(TryRecvError::Empty) => Err("the listing timed out".into()),
+            Err(error) => Err(error.to_string()),
+        };
+        self.list_sessions(pending.into, found, cx);
+    }
+
+    /// Fill the import picker: a row per session, or what the empty list
+    /// means.
+    fn list_sessions(
+        &mut self,
+        into: Option<PaneIdentity>,
+        found: Result<Vec<ferrite_core::import::Candidate>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let now = ferrite_core::clock::system_time();
+        match found {
+            Ok(found) => {
+                let roots = self
+                    .session_file_roots
+                    .iter()
+                    .map(|(_, root)| root.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                let rows = found
+                    .into_iter()
+                    .map(|candidate| session_row(candidate, into, now))
+                    .collect();
+                self.show_sessions(
+                    rows,
+                    format!("no CLI sessions found under {roots}").into(),
+                    cx,
+                );
+            }
+            Err(error) => self.show_sessions(
+                Vec::new(),
+                format!("could not list sessions: {error}").into(),
+                cx,
+            ),
+        }
+    }
+
+    fn show_sessions(
+        &mut self,
+        rows: Vec<PaletteRow>,
+        empty: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(palette) = self.floats.palette.clone() {
+            palette.update(cx, |palette, cx| palette.set_rows(rows, empty, cx));
+        }
+    }
+
+    /// The focused Pane, when it is blank enough for an import to take its
+    /// place: a draft with nothing typed, or a Thread that still offers
+    /// import.
+    fn import_target(&self, cx: &gpui::App) -> Option<PaneIdentity> {
+        let pane = self.panes.get(self.focused())?;
+        let blank = match pane.identity {
+            PaneIdentity::Draft(_) => pane.composer.read(cx).is_empty(),
+            PaneIdentity::Thread(thread) => self
+                .cockpit
+                .thread(thread)
+                .is_some_and(|open| open.transcript().offers_import()),
+        };
+        blank.then_some(pane.identity)
     }
 
     /// The shown board's Panes in head order: reading order, top to bottom
@@ -589,6 +763,13 @@ impl CockpitView {
             "",
             bound_chord("cockpit::NewWorktreeThread"),
             Command::NewWorktreeThread,
+        );
+        add(
+            true,
+            "import a session".into(),
+            "/import",
+            None,
+            Command::ImportSession,
         );
         add(
             in_group,
@@ -988,6 +1169,10 @@ impl CockpitView {
             Command::ShowChecks => self.open_checks(window, cx),
             Command::ShowPlan => self.open_plan(window, cx),
             Command::UpdateClis => self.install_cli_updates(cx),
+            Command::ImportSession => {
+                let into = self.import_target(cx);
+                self.open_import_palette(into, window, cx);
+            }
             Command::DiscardDraft => {
                 if let Some(identity) = self.panes.get(self.focused()).map(|pane| pane.identity) {
                     if identity.thread().is_none() {

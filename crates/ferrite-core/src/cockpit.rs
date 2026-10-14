@@ -637,6 +637,10 @@ pub struct Cockpit {
     /// The last subscription windows each provider reported — an account
     /// fact the transcript log deliberately does not replay.
     limit_cache: crate::providers::limits::LimitCache,
+    /// The use, in percent, at which a window rising past it warns the
+    /// operator (`Settings::allowance_warnings`); and the warnings due.
+    allowance_thresholds: Vec<u8>,
+    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
@@ -690,6 +694,8 @@ impl Cockpit {
             model_discovery,
             model_cache,
             limit_cache,
+            allowance_thresholds: Vec::new(),
+            allowance_warnings: Vec::new(),
             models_changed: false,
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
@@ -2574,13 +2580,23 @@ impl Cockpit {
                     continue;
                 }
                 if let SessionEvent::RateLimits { five_hour, weekly } = &event {
-                    self.limit_cache.remember(
+                    let before = self.limit_cache.get(thread.provider);
+                    let changed = self.limit_cache.remember(
                         thread.provider,
                         crate::transcript::RateLimits {
                             five_hour: *five_hour,
                             weekly: *weekly,
                         },
                     );
+                    if changed {
+                        self.allowance_warnings
+                            .extend(crate::providers::limits::warnings(
+                                thread.provider,
+                                before,
+                                self.limit_cache.get(thread.provider),
+                                &self.allowance_thresholds,
+                            ));
+                    }
                 }
                 if let SessionEvent::Models { models } = &event {
                     self.model_cache.remember(thread.provider, models);
@@ -3113,6 +3129,17 @@ impl Cockpit {
     /// Account-wide, so every Thread on the provider reads the same meter.
     pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
         self.limit_cache.get(provider)
+    }
+
+    /// The use, in percent, at which a rising window warns the operator.
+    /// Empty turns the warnings off.
+    pub fn set_allowance_thresholds(&mut self, thresholds: Vec<u8>) {
+        self.allowance_thresholds = thresholds;
+    }
+
+    /// The allowance warnings due since the last take, oldest first.
+    pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
+        std::mem::take(&mut self.allowance_warnings)
     }
 
     /// Request workspace commands without creating a Thread or Session.
@@ -4247,17 +4274,17 @@ impl Cockpit {
         outcome
     }
 
-    /// Adopt a CLI session file (#11) in place of the Pane it was picked
-    /// from: a draft becomes the imported Thread; a still-blank Thread
-    /// yields its slot and is deleted — clean exactly while it is blank,
-    /// which the picker's own invariant guarantees and this re-checks.
-    /// Import creates the Thread; revive opens it — the same
-    /// replay-and-resume any parked Thread gets — and it takes focus. A
-    /// refusal is the import module's, unchanged, and no Thread was
-    /// created.
+    /// Adopt a CLI session file (#11), in place of the Pane it was picked
+    /// for or, with none, alongside the Panes shown: a draft becomes the
+    /// imported Thread; a still-blank Thread yields its slot and is deleted
+    /// — clean exactly while it is blank, which the picker's own invariant
+    /// guarantees and this re-checks. Import creates the Thread; revive
+    /// opens it — the same replay-and-resume any parked Thread gets — and
+    /// it takes focus. A refusal is the import module's, unchanged, and no
+    /// Thread was created.
     pub fn adopt_into(
         &mut self,
-        from: PaneIdentity,
+        into: Option<PaneIdentity>,
         path: &Path,
     ) -> Result<Adopted, crate::import::ImportError> {
         let thread = self.import(path)?;
@@ -4266,9 +4293,13 @@ impl Cockpit {
             not_opened: None,
             blank_kept: None,
         };
+        let Some(into) = into else {
+            adopted.not_opened = self.reopen(thread).err();
+            return Ok(adopted);
+        };
         match self.revive(thread) {
             Ok(()) => {
-                match from {
+                match into {
                     PaneIdentity::Draft(draft) => {
                         self.cancel_draft_start(draft)
                             .map_err(crate::import::ImportError::Io)?;
