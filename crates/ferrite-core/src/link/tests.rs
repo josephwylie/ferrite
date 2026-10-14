@@ -153,6 +153,18 @@ fn the_ring_resumes_only_a_gap_it_still_holds() {
     assert!(ring.since(8).is_some());
 }
 
+/// A client that last saw the Activity before a reset holds a Thread that
+/// no longer exists: it rebuilds, however close its `seq`.
+#[test]
+fn the_ring_never_resumes_across_a_reset() {
+    let mut ring = Ring::after(5);
+    assert_eq!(ring.since(4), None, "saw only the old Activity");
+    assert_eq!(ring.since(5), Some(Vec::new()), "saw the reset");
+    ring.push(6, text(1, 6, "new"));
+    assert_eq!(ring.since(4), None);
+    assert_eq!(ring.since(5), Some(vec![text(1, 6, "new")]));
+}
+
 #[cfg(unix)]
 #[test]
 fn the_socket_is_the_owners_alone_and_a_stale_one_is_replaced() {

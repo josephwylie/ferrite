@@ -375,6 +375,47 @@ fn a_resume_the_server_cannot_meet_rebuilds_from_history() {
         .any(|said| said.contains("from the log")));
 }
 
+/// A Thread closed and opened again while a window was away is a new
+/// Activity: the window's `seq` from before cannot resume into it.
+#[test]
+fn a_resume_never_crosses_a_reopened_thread() {
+    let harness = start("reopen");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    provider.send(text("first life")).unwrap();
+    window.until(|window| {
+        window
+            .said(thread)
+            .iter()
+            .any(|said| said.contains("first life"))
+    });
+    let Window {
+        mut mirrors,
+        boot_id,
+        ..
+    } = window;
+    let after = mirrors.seq(thread).unwrap();
+
+    let mut other = attach(&harness.address);
+    other.command(2, Op::Park { thread });
+    other.command(3, Op::Revive { thread });
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    for _ in 0..after + 2 {
+        provider.send(text(".")).unwrap();
+    }
+    other.watch(thread, None);
+    other.until(|window| window.said(thread).iter().any(|said| said.contains("...")));
+
+    let mut back = attach(&harness.address);
+    std::mem::swap(&mut back.mirrors, &mut mirrors);
+    back.watch(thread, Some(Resume { boot_id, after }));
+    back.until(|window| window.said(thread) == other.said(thread));
+}
+
 #[test]
 fn a_command_this_server_does_not_know_is_answered_unsupported() {
     let harness = start("unknown");

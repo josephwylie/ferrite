@@ -600,6 +600,8 @@ fn next_generation() -> u64 {
 /// What a Thread's clients were last told.
 #[derive(Default)]
 struct Published {
+    /// The Thread's last input this boot, counted across every reset and
+    /// reopen, so a `seq` names one moment of one Activity.
     seq: u64,
     state: Option<protocol::ThreadState>,
 }
@@ -3786,6 +3788,9 @@ impl Engine {
         for (&id, thread) in &mut self.threads {
             let published = self.published.entry(id).or_default();
             if std::mem::take(&mut thread.activity.reset) {
+                // The reset takes a `seq` of its own, so a client that saw
+                // it is told apart from one that did not.
+                published.seq += 1;
                 self.outbox.push(ServerMessage::History {
                     thread: id,
                     after: 0,
@@ -3843,7 +3848,13 @@ impl Engine {
             }
         }
         if self.open != self.published_open {
-            self.published.retain(|id, _| self.threads.contains_key(id));
+            // A Thread that closed keeps counting where it left off, so no
+            // `seq` of its earlier life names one of a later life.
+            for (id, published) in &mut self.published {
+                if !self.threads.contains_key(id) {
+                    published.state = None;
+                }
+            }
             self.published_open = self.open.clone();
             self.revision += 1;
             self.outbox.push(ServerMessage::Roster {

@@ -238,11 +238,22 @@ fn merge(last: &mut ServerMessage, next: &ServerMessage) -> bool {
 /// client reconnecting within this boot resumes from.
 #[derive(Default)]
 pub struct Ring {
+    /// The `seq` the Thread's current Activity began at: a client behind
+    /// it holds the Activity before, and must rebuild, not resume.
+    floor: u64,
     entries: VecDeque<(u64, ServerMessage, usize)>,
     bytes: usize,
 }
 
 impl Ring {
+    /// The ring of an Activity that began at `seq`.
+    pub fn after(seq: u64) -> Self {
+        Self {
+            floor: seq,
+            ..Self::default()
+        }
+    }
+
     pub fn push(&mut self, seq: u64, message: ServerMessage) {
         let bytes = protocol::encode(&message).len();
         self.entries.push_back((seq, message, bytes));
@@ -256,9 +267,12 @@ impl Ring {
     }
 
     /// Every input after `after`, or `None` when the ring no longer holds
-    /// the one right after it.
+    /// the one right after it, or `after` is from before the Activity began.
     pub fn since(&self, after: u64) -> Option<Vec<ServerMessage>> {
-        let newest = self.entries.back().map_or(0, |(seq, _, _)| *seq);
+        if after < self.floor {
+            return None;
+        }
+        let newest = self.entries.back().map_or(self.floor, |(seq, _, _)| *seq);
         if after >= newest {
             return (after == newest).then(Vec::new);
         }

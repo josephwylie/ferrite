@@ -468,8 +468,8 @@ impl Server {
                         .push(*seq, message.clone());
                 }
                 // A new Activity: a resume cannot cross its start.
-                ServerMessage::History { thread, .. } => {
-                    self.rings.remove(thread);
+                ServerMessage::HistoryEnd { thread, seq, .. } => {
+                    self.rings.insert(*thread, Ring::after(*seq));
                 }
                 ServerMessage::Roster { roster, .. } => {
                     self.rings.retain(|thread, _| roster.open.contains(thread));
