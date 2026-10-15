@@ -200,6 +200,64 @@ As the coordinator, name yourself with `--current`:
 many saw it); `thread focus` brings a Thread on screen. Focus a Thread only
 when the user asked to see it: it moves their view.
 
+## Stop, close and clean up
+
+```bash
+"$F" agent interrupt 14
+"$F" thread close 14
+"$F" worktree remove ~/src/.worktrees/app/my-task
+```
+
+`agent interrupt` stops the running turn, as the user's Esc does.
+`thread close` parks a Thread: its agent stops, its history stays.
+`worktree remove` removes a worktree by its directory (a Thread's
+`worktree`), parking the Threads in it; its branch stays. It is never
+forced: a worktree with modified or untracked files is refused
+`dirty_worktree_requires_force` and left whole. Close or remove only what
+the user asked you to.
+
+## Projects
+
+A **Project** is a directory (usually a repository) the user's Threads
+work in; every Thread names its `project` by id. `thread get` also says
+whether the user is looking at the Thread (`focused`), whether they have
+unsent text in its prompt box (`draft`: do not prompt it then), its
+prompts `held_prompt` and `queued_prompts`, its `worktree` and `branch`,
+its agent's own conversation id (`provider_session`), and
+`attention_seq`, which grows with every change of attention. There are
+no trust or permission screens to read: whatever the agent asks the user
+is a Decision, and its Thread is `blocked` until it is answered.
+
+```bash
+"$F" project list
+"$F" project get 3
+"$F" project open --cwd ~/src/app --label app
+"$F" project rename 3 billing
+"$F" project close 3
+"$F" worktree create --branch my-task --base main
+```
+
+`project open` answers the Project holding a directory, registering one
+when there is none. `project close` parks every open Thread of it.
+Start a Thread in a Project with `thread start --project 3`, on a new
+branch with `--worktree --branch my-task --base main`, in a worktree that
+stands (one `worktree create` made) with `--cwd` its path, or carrying on
+an agent's own conversation with `--resume <provider_session>`. Add
+`--ready` to be answered only once its agent is ready for a prompt
+(`agent_not_ready` names the Thread otherwise). To be told as soon as a
+prompt was taken, rather than when the turn ends:
+
+```bash
+"$F" agent prompt 14 "Go on." --until working --until blocked --timeout-ms 8000
+```
+
+`"$F" machine list` names the saved machines `--machine` can ask, and
+`"$F" notification show "Ready" --sound done` rings a chime with the
+toast (`--important` keeps it up). `"$F" nav focus --project <slug>`
+shows only that Projects project's block in the user's nav, and
+`"$F" nav focus` all of them again: Projects' `focus` and `unfocus` do
+it for you.
+
 ## Another machine
 
 Only when the user asks for work on one of their saved machines (Ferrite's

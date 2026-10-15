@@ -4,7 +4,8 @@
 //! the declared positional parameters in order, every other one as a
 //! `--flag` typed by its JSON Schema, and after `--` every word is an
 //! argument. `--current` names the calling Thread (`FERRITE_THREAD_ID`); a
-//! `cwd` not given is the CLI's own. `--machine <name>` asks a saved
+//! `cwd` not given is the CLI's own, and a relative `cwd` or `path` is read
+//! from it. `--machine <name>` asks a saved
 //! machine's Server instead, over the window's ssh (ADR 0026): there this
 //! computer's directory means nothing, so a `cwd` is given whole.
 //!
@@ -42,6 +43,10 @@ pub fn run(args: &[String], store: &Path, settings_dir: &Path) -> Option<i32> {
         }
     };
     Some(match (machine, words.as_slice()) {
+        (None, ["--version"]) => {
+            println!("{}", version());
+            0
+        }
         (None, ["--skill"]) => {
             print!("{SKILL}");
             0
@@ -114,6 +119,12 @@ pub fn machine_flag<'a>(words: &[&'a str]) -> Result<(Option<&'a str>, Vec<&'a s
         );
     }
     Ok((machine, rest))
+}
+
+/// `ferrite --version`: `ferrite <semver>`, Herdr's shape, which a caller
+/// gates on.
+pub fn version() -> String {
+    format!("ferrite {}", env!("CARGO_PKG_VERSION"))
 }
 
 /// The saved machine `name` names, by its name or else its ssh target:
@@ -289,6 +300,14 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
         };
         params.insert("cwd".into(), json!(cwd));
     }
+    // A `path` is a directory as well: read from where the CLI runs.
+    let path = params
+        .get("path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
+    if let (Some(here), Some(path)) = (&context.cwd, path) {
+        params.insert("path".into(), json!(here.join(path)));
+    }
     serde_json::from_value(json!({ "id": "1", "method": op.name, "params": params }))
         .map_err(|error| error.to_string())
 }
@@ -380,7 +399,8 @@ pub fn usage(group: Option<&str>) -> String {
     if group.is_none() {
         out.push_str(
             "\n  ferrite --skill [install]\n      Print the agent skill, or install it for Claude and Codex.\n  \
-             ferrite --schema\n      The API's JSON Schema.\n",
+             ferrite --schema\n      The API's JSON Schema.\n  \
+             ferrite --version\n      This build's version, as `ferrite <semver>`.\n",
         );
     }
     out.push_str(

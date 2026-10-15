@@ -206,6 +206,7 @@ fn pr_feedback_is_sent_once_and_waits_out_a_decision() {
             text: "Carry on.".into(),
             wait: false,
             timeout_ms: None,
+            until: Vec::new(),
         })
         .unwrap();
     provider.send(decision()).unwrap();

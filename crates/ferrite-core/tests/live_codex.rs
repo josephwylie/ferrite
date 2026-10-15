@@ -40,6 +40,7 @@ fn live_config() -> CodexConfig {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        args: Vec::new(),
     }
 }
 

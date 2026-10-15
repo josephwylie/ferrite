@@ -448,6 +448,7 @@ impl Server {
             }
             Heard::Gone(id) => {
                 self.clients.remove(&id);
+                self.engine.window_gone(id);
                 self.renders.client_gone(id);
                 self.list_parked();
             }
@@ -612,6 +613,10 @@ impl Server {
                     }))
                 });
                 return;
+            }
+            Op::Focused { .. } | Op::Composing { .. } => {
+                self.engine.window_says(id, &op);
+                Ok(None)
             }
             Op::Bootstrap { .. } => {
                 self.next_start += 1;

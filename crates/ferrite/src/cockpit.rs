@@ -2069,6 +2069,17 @@ impl CockpitView {
         if slash_token(state.text(), state.cursor()).is_none() {
             self.draft_commands = None;
         }
+        // The API reports it as the Thread's `draft` (ADR 0030), so no
+        // agent types over the operator.
+        let unsent = !state.is_empty();
+        if let Some(thread) = self
+            .panes
+            .iter()
+            .find(|pane| pane.composer == composer)
+            .and_then(PaneView::thread)
+        {
+            self.cockpit.set_composing(thread, unsent);
+        }
         // A picker or a band chip is not text-derived (#11, #25, #29):
         // writing a prompt on its line dismisses it — while the clearing
         // splice that opened it leaves the line empty, and keeps it. The
@@ -4530,8 +4541,9 @@ impl CockpitView {
     }
 
     /// What an agent or a script asked of the windows through the API
-    /// (ADR 0027): to land on a Thread, as its nav row would, or a toast,
-    /// which fades as a finished turn's does.
+    /// (ADR 0027): to land on a Thread, as its nav row would; a toast,
+    /// which fades as a finished turn's does unless important, with its
+    /// chime; or the nav focused on one Projects project (ADR 0030).
     fn present_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use ferrite_core::cockpit::Asked;
         use gpui::component::notification::{Notification, NotificationType};
@@ -4539,16 +4551,25 @@ impl CockpitView {
         for asked in self.cockpit.take_asked() {
             match asked {
                 Asked::Focus(thread) => self.land_on_thread(thread, cx),
-                Asked::Notification { title, body } => {
+                Asked::Notification {
+                    title,
+                    body,
+                    sound,
+                    important,
+                } => {
                     let mut toast = Notification::new()
                         .title(title)
                         .with_type(NotificationType::Info)
-                        .autohide(true);
+                        .autohide(!important);
                     if let Some(body) = body {
                         toast = toast.message(body);
                     }
                     window.push_notification(toast, cx);
+                    if let Some(sound) = sound {
+                        self.chime(sound);
+                    }
                 }
+                Asked::NavFocus(slug) => self.focus_nav_on_project(slug, cx),
             }
         }
     }

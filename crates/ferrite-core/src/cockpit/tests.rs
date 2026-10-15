@@ -4926,3 +4926,49 @@ fn local_thread_revival_probe() {
         );
     }
 }
+
+/// What only the window knows reaches the Engine for the API (ADR 0030):
+/// the Thread its focused Pane shows while it has the operator's focus,
+/// and which Composers hold unsent text.
+#[test]
+fn a_window_tells_which_thread_it_shows_and_which_composer_holds_text() {
+    let (mut core, _fake) = cockpit("window-says");
+    let first = core.open(Provider::Claude, main_choice()).unwrap();
+    let second = core.open(Provider::Claude, main_choice()).unwrap();
+    assert!(core.focus_thread(second));
+    core.pump();
+    assert_eq!(core.engine().focused_thread(), Some(second));
+
+    core.set_window_active(false);
+    core.pump();
+    assert_eq!(core.engine().focused_thread(), None);
+
+    core.set_composing(first, true);
+    core.pump();
+    assert!(core.engine().composing(first));
+    assert!(!core.engine().composing(second));
+    core.set_composing(first, false);
+    core.pump();
+    assert!(!core.engine().composing(first));
+}
+
+/// `thread.start --resume` (ADR 0030): the first Session carries on the
+/// provider's own conversation, and the Thread reports it as its own.
+#[test]
+fn a_thread_started_on_a_provider_conversation_resumes_it() {
+    let (mut core, fake) = cockpit("launch-resume");
+    let launch = crate::engine::Launch {
+        args: Vec::new(),
+        resume: Some("sess-9".into()),
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch)
+        .unwrap();
+    assert_eq!(
+        fake.resumed.borrow().last().unwrap().as_deref(),
+        Some("sess-9")
+    );
+    let view = core.engine().thread(thread).unwrap();
+    assert_eq!(view.provider_session(), Some("sess-9"));
+}

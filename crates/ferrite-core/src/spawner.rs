@@ -349,6 +349,7 @@ impl Spawn {
         let resume = request.resume.map(|target| target.to_string());
         let name = request.name.map(|name| name.to_string());
         let additional_directories = request.additional_directories;
+        let args = request.args.to_vec();
         let env = crate::api::caller_environment(request.thread, self.api.as_deref());
         let defaults = self
             .defaults
@@ -377,6 +378,7 @@ impl Spawn {
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),
                 env,
+                args,
                 ..Default::default()
             }),
             Provider::Codex => SessionConfig::Codex(CodexConfig {
@@ -392,6 +394,7 @@ impl Spawn {
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),
                 env,
+                args,
                 ..Default::default()
             }),
         }
@@ -504,6 +507,7 @@ mod tests {
             name: None,
             cwd: None,
             additional_directories: Vec::new(),
+            args: &[],
         };
         let served = Spawn {
             api: Some(PathBuf::from("/store/api.sock")),

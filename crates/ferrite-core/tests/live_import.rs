@@ -167,6 +167,7 @@ fn an_imported_codex_session_continues_on_the_next_prompt() {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        args: Vec::new(),
     };
 
     let mut session = CodexSession::spawn(config.clone()).unwrap();

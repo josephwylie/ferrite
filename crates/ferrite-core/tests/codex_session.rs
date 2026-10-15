@@ -893,6 +893,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        args: vec!["-c".into(), "model_verbosity=low".into()],
     })
     .unwrap();
     session.send("hi").unwrap();
@@ -901,7 +902,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
 
     let recorded = read_lines(&log, 9);
     drop(session);
-    assert_eq!(recorded[0], "app-server");
+    assert_eq!(recorded[0], "app-server -c model_verbosity=low");
     let sent: Vec<Value> = recorded[1..]
         .iter()
         .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))

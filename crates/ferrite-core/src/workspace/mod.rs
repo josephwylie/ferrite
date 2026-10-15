@@ -61,11 +61,30 @@ impl WorkspaceBinding {
 /// choice into a `WorkspaceBinding`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
-    Main { checkout: PathBuf },
-    Branch { checkout: PathBuf, branch: String },
-    NewBranch { checkout: PathBuf },
-    NewWorktree { repo: PathBuf },
-    ExistingWorktree { repo: PathBuf, path: PathBuf },
+    Main {
+        checkout: PathBuf,
+    },
+    Branch {
+        checkout: PathBuf,
+        branch: String,
+    },
+    NewBranch {
+        checkout: PathBuf,
+    },
+    NewWorktree {
+        repo: PathBuf,
+    },
+    /// A fresh worktree on a new branch the caller names, made from `base`
+    /// (the repo's HEAD when none): the API's `thread.start --branch`.
+    NamedWorktree {
+        repo: PathBuf,
+        branch: String,
+        base: Option<String>,
+    },
+    ExistingWorktree {
+        repo: PathBuf,
+        path: PathBuf,
+    },
 }
 
 impl WorkspaceChoice {
@@ -75,7 +94,7 @@ impl WorkspaceChoice {
         match self {
             Self::Main { checkout } => checkout,
             Self::Branch { checkout, .. } | Self::NewBranch { checkout } => checkout,
-            Self::NewWorktree { repo } => repo,
+            Self::NewWorktree { repo } | Self::NamedWorktree { repo, .. } => repo,
             Self::ExistingWorktree { path, .. } => path,
         }
     }
@@ -324,6 +343,68 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
         git(repo, &["worktree", "add", path, branch])?;
     }
     Ok(())
+}
+
+/// Add a worktree at `path` on a new branch `branch`, made from `base` (the
+/// repo's HEAD when none). Git refuses a branch that already exists: a new
+/// worktree never takes over another's work.
+pub fn add_worktree(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<(), GitError> {
+    git(repo, &["worktree", "prune"])?;
+    let mut args = vec!["worktree", "add", "-b", branch, path_str(path)?];
+    args.extend(base);
+    git(repo, &args).map(|_| ())
+}
+
+/// Which repository the checkout at `root` belongs to, read from its `.git`
+/// without running git: a main checkout's is a directory; a linked
+/// worktree's is a file naming its admin directory, which holds the
+/// `commondir` it shares with the main checkout. `None` outside git. A
+/// submodule's `.git` file has no `commondir`: it is a checkout of its own.
+pub fn checkout_of(root: &Path) -> Option<Checkout> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(Checkout {
+            repo: root.to_path_buf(),
+            linked: false,
+        });
+    }
+    let pointer = fs::read_to_string(&dot_git).ok()?;
+    let admin = root.join(pointer.trim().strip_prefix("gitdir:")?.trim());
+    let Ok(common) = fs::read_to_string(admin.join("commondir")) else {
+        return Some(Checkout {
+            repo: root.to_path_buf(),
+            linked: false,
+        });
+    };
+    let common = fs::canonicalize(admin.join(common.trim())).ok()?;
+    Some(Checkout {
+        repo: common.parent()?.to_path_buf(),
+        linked: true,
+    })
+}
+
+/// Whether `a` and `b` are one directory, however spelled (a symlink, a
+/// trailing `.`); paths not on disk are compared as written.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (fs::canonicalize(a), fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// A checkout, as `checkout_of` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkout {
+    /// The repository's main checkout.
+    pub repo: PathBuf,
+    /// A linked worktree of `repo`, not the main checkout itself.
+    pub linked: bool,
 }
 
 /// Command arguments are strings; a path that is not UTF-8 cannot be handed
@@ -1725,5 +1806,63 @@ mod tests {
             fs::read(&index).unwrap() == before,
             "reading the checkout rewrote its index"
         );
+    }
+
+    /// A named worktree starts from the base it was given, on its own new
+    /// branch; a branch that already exists is git's refusal, not a reuse.
+    #[test]
+    fn a_named_worktree_is_a_new_branch_from_its_base() {
+        let root = scratch("named");
+        let repo = init_repo(&root);
+        let base = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("file.txt"), "moved on\n").unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qam",
+                "later",
+            ],
+        )
+        .unwrap();
+        let tree = root.join("tree");
+
+        add_worktree(&repo, &tree, "feature/named", Some(base.trim())).unwrap();
+
+        assert_eq!(branch_of(&tree), "feature/named");
+        assert_eq!(fs::read_to_string(tree.join("file.txt")).unwrap(), "base\n");
+        let again = add_worktree(&repo, &root.join("again"), "feature/named", None);
+        assert!(again.is_err(), "an existing branch is never taken over");
+    }
+
+    /// A checkout's repository is read from its `.git` alone: the main
+    /// checkout is its own, a linked worktree names the main checkout, and
+    /// a plain directory is no checkout.
+    #[test]
+    fn a_checkout_names_its_repository_without_running_git() {
+        let root = scratch("checkout-of");
+        let repo = init_repo(&root);
+        let tree = root.join("linked");
+        ensure_worktree(&repo, &tree, "ferrite/linked").unwrap();
+
+        assert_eq!(
+            checkout_of(&repo),
+            Some(Checkout {
+                repo: repo.clone(),
+                linked: false,
+            })
+        );
+        assert_eq!(
+            checkout_of(&tree),
+            Some(Checkout {
+                repo: fs::canonicalize(&repo).unwrap(),
+                linked: true,
+            })
+        );
+        assert_eq!(checkout_of(&root), None);
     }
 }

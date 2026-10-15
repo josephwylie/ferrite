@@ -211,6 +211,7 @@ impl Server {
             text,
             wait: false,
             timeout_ms: None,
+            until: Vec::new(),
         });
         if let Err(error) = told {
             crate::log!(
@@ -641,6 +642,7 @@ impl Server {
             text,
             wait: false,
             timeout_ms: None,
+            until: Vec::new(),
         });
         if let Err(error) = told {
             crate::log!(
@@ -674,6 +676,7 @@ impl Server {
                 text,
                 wait: false,
                 timeout_ms: None,
+                until: Vec::new(),
             });
             match sent {
                 Ok(()) => {

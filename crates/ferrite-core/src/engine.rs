@@ -40,6 +40,20 @@ use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 mod commands;
 mod history;
 mod queue;
+mod windows;
+
+pub use windows::WindowId;
+
+/// How a Thread's first Session starts, beyond its provider and checkout
+/// (`thread.start`, ADR 0030).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Launch {
+    /// Extra arguments for the provider's CLI, after Ferrite's own, for
+    /// every Session of that provider while the Thread is open.
+    pub args: Vec<String>,
+    /// The provider's own id of a conversation to carry on.
+    pub resume: Option<String>,
+}
 
 /// Everything one spawn needs, in one struct: every path that starts a
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
@@ -69,6 +83,10 @@ pub struct SpawnRequest<'a> {
     /// Other roots in the same Project. Providers expose these alongside
     /// `cwd`; they never change which directory the Session starts in.
     pub additional_directories: Vec<PathBuf>,
+    /// Extra arguments for the provider's CLI, after Ferrite's own
+    /// (`thread.start --args`, ADR 0030): what the operator's safety
+    /// settings add, a model flag.
+    pub args: &'a [String],
 }
 
 fn project_additional_directories(
@@ -536,9 +554,23 @@ struct Thread {
     /// replacement Session drops it, since its answer would be the old
     /// Session's.
     tuning: Option<Tuning>,
+    /// The extra CLI arguments the Thread was started with, and the
+    /// Provider they were written for (`thread.start --args`). Every
+    /// Session of that Provider starts with them while the Thread is open;
+    /// not durable: a revive starts without them.
+    agent_args: Option<(Provider, Vec<String>)>,
 }
 
 impl Thread {
+    /// The extra CLI arguments a Session of `provider` starts with: the
+    /// ones the Thread was started with, for their Provider only.
+    fn agent_args(&self, provider: Provider) -> &[String] {
+        match &self.agent_args {
+            Some((given, args)) if *given == provider => args,
+            _ => &[],
+        }
+    }
+
     /// A Thread ready to serve: its own Lexer, a fresh Transcript, a live
     /// Session. Revival replays history into the Transcript afterwards.
     fn fresh(
@@ -586,6 +618,7 @@ impl Thread {
             suggestion_revision: 0,
             permission_mode: None,
             tuning: None,
+            agent_args: None,
         };
         if let Some(notice) = state.native_queue.take_unreadable() {
             state.apply(Input::Notice(notice));
@@ -880,6 +913,10 @@ pub struct Engine {
     /// Threads whose Session runs a CLI since replaced on disk. Each is
     /// restarted on its own conversation at the first frame it is idle.
     stale_sessions: BTreeSet<ThreadId>,
+    /// What the windows said of themselves, for the API (ADR 0030).
+    windows: windows::Windows,
+    /// Each open Thread's Attention changes, counted for the API.
+    attention_count: windows::AttentionCount,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
@@ -925,6 +962,8 @@ impl Engine {
             suggestions: channel(),
             suggestions_enabled: true,
             stale_sessions: BTreeSet::new(),
+            windows: Default::default(),
+            attention_count: Default::default(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
         })
@@ -1127,6 +1166,7 @@ impl Engine {
                     project,
                     cwd.as_deref(),
                 ),
+                args: thread.agent_args(thread.provider),
             },
         );
         Some(spawned.map(|session| {
@@ -1192,6 +1232,17 @@ impl Engine {
     /// by the registry's central layout on a branch it mints; an existing
     /// worktree passes the adoption conflict check and skips creation.
     pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
+        self.open_with(provider, workspace, Launch::default())
+    }
+
+    /// `open`, its first Session started as `launch` says
+    /// (`thread.start --args --resume`).
+    pub fn open_with(
+        &mut self,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+        launch: Launch,
+    ) -> io::Result<ThreadId> {
         self.open_choice(
             ProviderChoice {
                 provider,
@@ -1199,7 +1250,25 @@ impl Engine {
             },
             workspace,
             None,
+            launch,
         )
+    }
+
+    /// Make a worktree of `repo` on the new `branch`, from `base` (the
+    /// repo's HEAD when none), placed and registered as the registry's own
+    /// are; its Project and path. Git refuses a branch that already
+    /// exists.
+    pub fn create_worktree(
+        &mut self,
+        repo: &Path,
+        branch: &str,
+        base: Option<&str>,
+    ) -> io::Result<(ProjectId, PathBuf)> {
+        let project = self.registry.register(repo)?;
+        let path = self.registry.place(project, branch);
+        workspace::add_worktree(repo, &path, branch, base).map_err(io::Error::other)?;
+        self.registry.register_worktree(project, branch, &path)?;
+        Ok((project, path))
     }
 
     /// `effort` is the Thread's own reasoning level from its first breath
@@ -1209,16 +1278,19 @@ impl Engine {
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         effort: Option<String>,
+        launch: Launch,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
-        let root = match &workspace {
-            WorkspaceChoice::Main { checkout } => checkout,
-            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
-                checkout
-            }
-            WorkspaceChoice::NewWorktree { repo } => repo,
-            WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
-        };
+        let Launch { args, resume } = launch;
+        let root =
+            match &workspace {
+                WorkspaceChoice::Main { checkout } => checkout,
+                WorkspaceChoice::Branch { checkout, .. }
+                | WorkspaceChoice::NewBranch { checkout } => checkout,
+                WorkspaceChoice::NewWorktree { repo }
+                | WorkspaceChoice::NamedWorktree { repo, .. } => repo,
+                WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
+            };
         let project = self.registry.register(root)?;
         match &workspace {
             WorkspaceChoice::Branch { checkout, branch } => {
@@ -1244,6 +1316,10 @@ impl Engine {
                     },
                     Some(entry.branch),
                 )
+            }
+            WorkspaceChoice::NamedWorktree { repo, branch, base } => {
+                let (_, path) = self.create_worktree(&repo, &branch, base.as_deref())?;
+                (WorkspaceBinding::Worktree { repo, path }, Some(branch))
             }
             WorkspaceChoice::ExistingWorktree { repo, path } => {
                 (WorkspaceBinding::Worktree { repo, path }, None)
@@ -1288,7 +1364,7 @@ impl Engine {
             provider,
             model: model.as_deref(),
             effort: effort.as_deref(),
-            resume: None,
+            resume: resume.as_deref(),
             cwd: workspace::effective_cwd(None, Some(&binding)),
             name: None,
             additional_directories: project_additional_directories(
@@ -1296,6 +1372,7 @@ impl Engine {
                 Some(project),
                 Some(binding.cwd()),
             ),
+            args: &args,
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -1314,12 +1391,17 @@ impl Engine {
                 provider,
                 model,
                 effort,
-                None,
+                resume,
                 Some(binding),
                 None,
                 self.store.dir().join(id.to_string()).join("queue.json"),
             ),
         );
+        if !args.is_empty() {
+            if let Some(state) = self.threads.get_mut(&id) {
+                state.agent_args = Some((provider, args));
+            }
+        }
         self.note_open(id);
         Ok(id)
     }
@@ -1383,7 +1465,7 @@ impl Engine {
         group: Option<GroupId>,
         new_group_with: Option<ThreadId>,
     ) -> io::Result<ThreadId> {
-        let id = self.open_choice(choice, workspace, effort)?;
+        let id = self.open_choice(choice, workspace, effort, Launch::default())?;
         let pending = PendingBootstrap {
             prompt: prompt.to_string(),
             group,
@@ -1617,6 +1699,7 @@ impl Engine {
                         project,
                         cwd,
                     ),
+                    args: state.agent_args(provider),
                 },
             )
             .map_err(ProvisionError::Spawn)?;
@@ -1948,6 +2031,7 @@ impl Engine {
                     cwd: cwd.as_deref(),
                     name: title.as_deref(),
                     additional_directories,
+                    args: &[],
                 },
             )
             .map_err(LoadError::Io)?;
@@ -2096,6 +2180,7 @@ impl Engine {
                     cwd: cwd.as_deref(),
                     name: state.title.as_deref(),
                     additional_directories,
+                    args: state.agent_args(state.provider),
                 },
             ) {
                 Ok(session) => {
@@ -2347,6 +2432,36 @@ impl Engine {
             .set_workspace(thread, &main, None)
             .map_err(io::Error::other)?;
         self.registry.remove_worktree(&path)
+    }
+
+    /// Every Thread, open or parked, working in the worktree at `path`,
+    /// however the path is spelled: what `worktree.remove` parks and
+    /// retires. Read while the tree is still on disk.
+    pub fn threads_in_worktree(&self, path: &Path) -> io::Result<Vec<ThreadId>> {
+        let here = |binding: Option<&WorkspaceBinding>| match binding {
+            Some(WorkspaceBinding::Worktree { path: bound, .. }) => {
+                workspace::same_dir(bound, path)
+            }
+            _ => false,
+        };
+        let mut threads: Vec<ThreadId> = self
+            .threads
+            .iter()
+            .filter(|(_, state)| here(state.workspace.as_ref()))
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in self.parked()? {
+            if here(self.parked_workspace(thread).as_ref()) {
+                threads.push(thread);
+            }
+        }
+        Ok(threads)
+    }
+
+    /// The registry forgets the worktree at `path`, removed for good with
+    /// no Thread bound to it (`retire_worktree` forgets the others').
+    pub fn forget_worktree(&mut self, path: &Path) -> io::Result<()> {
+        self.registry.remove_worktree(path)
     }
 
     /// Whether some Thread's Main just finished making a worktree and is
@@ -3798,6 +3913,7 @@ impl Engine {
     }
 
     fn publish(&mut self) {
+        self.count_attention();
         let now = protocol::ms_since(crate::clock::instant(), self.boot);
         for (&id, thread) in &mut self.threads {
             let published = self.published.entry(id).or_default();
@@ -4292,6 +4408,17 @@ impl<'a> ThreadView<'a> {
     /// Whether the provider holds a queued prompt, or is still taking one.
     pub fn queue_pending(&self) -> bool {
         self.state.native_queue.pending()
+    }
+
+    /// How many prompts wait in the provider's own queue.
+    pub fn provider_queue_len(&self) -> usize {
+        self.state.native_queue.items.len()
+    }
+
+    /// The provider's own id for the conversation, which it resumes from:
+    /// the latest its Session announced.
+    pub fn provider_session(&self) -> Option<&'a str> {
+        self.state.resume.as_deref()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.

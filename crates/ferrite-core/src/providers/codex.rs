@@ -129,6 +129,9 @@ pub struct CodexConfig {
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited.
     pub env: Vec<(&'static str, std::ffi::OsString)>,
+    /// Extra arguments to `codex app-server` (`thread.start --args`):
+    /// a `-c key=value` override, say.
+    pub args: Vec<String>,
 }
 
 impl Default for CodexConfig {
@@ -144,6 +147,7 @@ impl Default for CodexConfig {
             resume: None,
             visuals: None,
             env: Vec::new(),
+            args: Vec::new(),
         }
     }
 }
@@ -290,6 +294,7 @@ impl CodexSession {
         let mut command = Command::new(program);
         command
             .arg("app-server")
+            .args(&config.args)
             .no_console_window()
             .agent_environment()
             .envs(config.env.iter().cloned());

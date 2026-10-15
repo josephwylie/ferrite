@@ -4,13 +4,34 @@
 //! parses by, and the JSON Schema (`ferrite --schema`) all come from that
 //! one declaration. Names are append-only, as the client contract's are:
 //! never renamed or removed; a new parameter is optional.
+//!
+//! A refusal's `code` is one of these, stable as the names are:
+//!
+//! - `invalid_request`, `unknown_method`: the line, or its parameters.
+//! - `thread_not_found`, `project_not_found`, `unknown_decision`: no such
+//!   open Thread, Project, or pending Decision on the Thread.
+//! - `agent_blocked`: a Decision waits; nothing was sent.
+//! - `agent_starting`: the Session is starting and holds a prompt already.
+//! - `agent_not_ready`: `thread.start --ready` found the agent blocked, or
+//!   not up within its time; the refusal names the Thread, which stays.
+//! - `agent_prompt_stalled`, `timeout`: a wait gave up; nothing was undone.
+//! - `thread_closed`: the Thread closed while a wait ran.
+//! - `worktree_not_found`: no linked worktree is at that path.
+//! - `dirty_worktree_requires_force`: the worktree holds changes; nothing
+//!   was removed (there is no force).
+//! - `already_answered`, `invalid_answer`: a Decision's answer.
+//! - `failed`: anything else, in its own words.
+//! - `server_unavailable`: the CLI's own, no Server answered.
+//!
+//! Thread ids are the Store's, so they hold across a Server's restart
+//! (ADR 0029); a Thread's `attention_seq` counts from the Server's start.
 
 use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::WireAnswer;
+use crate::protocol::{WireAnswer, WireSound};
 use crate::store::Provider;
 use crate::{Attention, ThreadId};
 
@@ -73,16 +94,38 @@ operations! {
         "Land every Ferrite window on a Thread.";
     ThreadRename(ThreadRenameParams) => "thread.rename", ["thread", "title"],
         "Give a Thread a title.";
+    ThreadClose(ThreadParams) => "thread.close", ["thread"],
+        "Park a Thread: its Session ends, its history stays.";
     AgentPrompt(AgentPromptParams) => "agent.prompt", ["thread", "text"],
         "Send a Thread's agent a prompt; with wait, until it settles.";
     AgentWait(AgentWaitParams) => "agent.wait", ["thread"],
         "Wait until a Thread's agent settles, or reaches one Attention.";
     AgentRead(AgentReadParams) => "agent.read", ["thread"],
         "The tail of a Thread's transcript, as plain text.";
+    AgentInterrupt(ThreadParams) => "agent.interrupt", ["thread"],
+        "Stop a Thread's running turn, as the operator's Esc does.";
     DecisionList(DecisionListParams) => "decision.list", [],
         "The pending Decisions, of every Thread or of one.";
     DecisionAnswer(DecisionAnswerParams) => "decision.answer", ["thread", "decision"],
         "Answer a pending Decision. Only on the operator's word.";
+    ProjectList(Empty) => "project.list", [],
+        "List the Projects, how many open Threads each has, and the focused one.";
+    ProjectGet(ProjectParams) => "project.get", ["project"],
+        "One Project.";
+    ProjectOpen(ProjectOpenParams) => "project.open", [],
+        "The Project holding a directory, registered if there is none.";
+    ProjectRename(ProjectRenameParams) => "project.rename", ["project", "label"],
+        "Give a Project a label.";
+    ProjectClose(ProjectParams) => "project.close", ["project"],
+        "Park every open Thread of a Project.";
+    WorktreeCreate(WorktreeCreateParams) => "worktree.create", [],
+        "Make a new worktree of a repository on a new branch, for a Thread to start in.";
+    WorktreeRemove(WorktreeRemoveParams) => "worktree.remove", ["path"],
+        "Remove a clean worktree, parking the Threads in it; its branch stays. Never forced.";
+    MachineList(Empty) => "machine.list", [],
+        "The saved machines another Server is asked on (--machine).";
+    NavFocus(NavFocusParams) => "nav.focus", [],
+        "Show only one Projects project's block in every window's nav; without one, all.";
     EventsSubscribe(EventsSubscribeParams) => "events.subscribe", [],
         "What the Threads are now, then every change as it happens.";
     NotificationShow(NotificationShowParams) => "notification.show", ["title"],
@@ -109,11 +152,44 @@ pub struct ThreadStartParams {
     /// The operator's default Provider when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<Provider>,
-    /// Work in a fresh worktree of `cwd`'s repository instead.
+    /// Work in a fresh worktree of `cwd`'s repository instead. A `cwd`
+    /// that is a linked worktree already is worked in as one, either way.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Land every window on it once started.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub focus: bool,
+    /// Extra arguments for the provider's CLI, after Ferrite's own, for
+    /// every Session the Thread has while open (not after a revive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// With `worktree`: the new worktree's branch, which must not exist;
+    /// one Ferrite names when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// With `branch`: what it starts from; the repository's HEAD when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Open it in this Project (`project.list`'s `id`): `cwd` must lie in
+    /// one of the Project's directories, and the Thread works in that
+    /// directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Answer only once the agent is up and ready for a prompt (idle or
+    /// done); `agent_not_ready` when it is blocked or not up in time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ready: bool,
+    /// With `ready`: how long to give it, from the request; 20 s when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// The provider's own id of a conversation to carry on
+    /// (`provider_session`), rather than a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -138,6 +214,11 @@ pub struct AgentPromptParams {
     /// Give up `timeout` after this long, counted from the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Answer as soon as the agent is seen in one of these after the
+    /// prompt, not once it settles (`working` and `blocked` confirm the
+    /// prompt was taken). Implies `wait`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub until: Vec<Attention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -184,6 +265,64 @@ pub struct NotificationShowParams {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// The chime the windows ring with it; none when absent.
+    #[serde(default, skip_serializing_if = "WireSound::is_none")]
+    pub sound: WireSound,
+    /// Left up until dismissed, rather than fading.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub important: bool,
+}
+
+/// A Project, by the `id` `project.list` gives it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectParams {
+    pub project: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectOpenParams {
+    /// A directory of the Project. The CLI sends its own when none is
+    /// given, except with `--machine`.
+    pub cwd: PathBuf,
+    /// The label a Project registered by this request starts with; one
+    /// already there keeps its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Land every window on the Project's first open Thread, if it has one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub focus: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectRenameParams {
+    pub project: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NavFocusParams {
+    /// The slug of the Projects project (ADR 0030) whose block the nav
+    /// shows alone, coordinator first; every block when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeCreateParams {
+    /// A checkout of the repository. The CLI sends its own when none is
+    /// given, except with `--machine`.
+    pub cwd: PathBuf,
+    /// The new worktree's branch, which must not exist yet.
+    pub branch: String,
+    /// What the branch starts from; the repository's HEAD when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorktreeRemoveParams {
+    /// The linked worktree's directory.
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -27,6 +27,7 @@ fn live_config() -> ClaudeConfig {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        args: Vec::new(),
     }
 }
 
