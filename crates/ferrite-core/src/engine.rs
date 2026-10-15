@@ -39,6 +39,7 @@ use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 mod commands;
 mod history;
+mod launch_args;
 mod queue;
 mod windows;
 
@@ -556,19 +557,16 @@ struct Thread {
     tuning: Option<Tuning>,
     /// The extra CLI arguments the Thread was started with, and the
     /// Provider they were written for (`thread.start --args`). Every
-    /// Session of that Provider starts with them while the Thread is open;
-    /// not durable: a revive starts without them.
-    agent_args: Option<(Provider, Vec<String>)>,
+    /// Session of that Provider starts with them; saved, so a revive does
+    /// too (`launch_args`).
+    agent_args: Option<launch_args::LaunchArgs>,
 }
 
 impl Thread {
     /// The extra CLI arguments a Session of `provider` starts with: the
     /// ones the Thread was started with, for their Provider only.
     fn agent_args(&self, provider: Provider) -> &[String] {
-        match &self.agent_args {
-            Some((given, args)) if *given == provider => args,
-            _ => &[],
-        }
+        launch_args::for_provider(self.agent_args.as_ref(), provider)
     }
 
     /// A Thread ready to serve: its own Lexer, a fresh Transcript, a live
@@ -1359,6 +1357,17 @@ impl Engine {
                 return Err(io::Error::other(e.to_string()));
             }
         }
+        let agent_args = (!args.is_empty()).then(|| launch_args::LaunchArgs {
+            provider,
+            args,
+        });
+        if let Some(saved) = &agent_args {
+            if let Err(e) = launch_args::save(&launch_args::path(self.store.dir(), id), saved) {
+                let _ = self.store.delete(id);
+                return Err(e);
+            }
+        }
+        let args = agent_args.as_ref().map_or(&[][..], |saved| &saved.args);
         let session = match self.spawner.start(SpawnRequest {
             thread: id,
             provider,
@@ -1372,7 +1381,7 @@ impl Engine {
                 Some(project),
                 Some(binding.cwd()),
             ),
-            args: &args,
+            args,
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -1397,10 +1406,8 @@ impl Engine {
                 self.store.dir().join(id.to_string()).join("queue.json"),
             ),
         );
-        if !args.is_empty() {
-            if let Some(state) = self.threads.get_mut(&id) {
-                state.agent_args = Some((provider, args));
-            }
+        if let Some(state) = self.threads.get_mut(&id) {
+            state.agent_args = agent_args;
         }
         self.note_open(id);
         Ok(id)
@@ -2018,6 +2025,12 @@ impl Engine {
             .map(Path::to_path_buf);
         let additional_directories =
             project_additional_directories(&self.registry, project_id, cwd.as_deref());
+        let (agent_args, unreadable_args) =
+            match launch_args::load(&launch_args::path(self.store.dir(), thread)) {
+                Ok(saved) => (saved, None),
+                Err(error) => (None, Some(error)),
+            };
+        let args = launch_args::for_provider(agent_args.as_ref(), provider);
         let session = self
             .spawner
             .start_after(
@@ -2031,7 +2044,7 @@ impl Engine {
                     cwd: cwd.as_deref(),
                     name: title.as_deref(),
                     additional_directories,
-                    args: &[],
+                    args,
                 },
             )
             .map_err(LoadError::Io)?;
@@ -2050,6 +2063,13 @@ impl Engine {
             self.store.dir().join(thread.to_string()).join("queue.json"),
         );
         state.title = title;
+        state.agent_args = agent_args;
+        if let Some(error) = unreadable_args {
+            state.apply(Input::Notice(format!(
+                "the launch arguments saved for this Thread could not be read ({error}); \
+                 its agent started without them"
+            )));
+        }
         // A switch whose carry never went out (parked before the next
         // prompt) still owes it: the new Provider has heard nothing yet.
         if let Some(handover) = revival.owed_handover() {
@@ -3914,6 +3934,7 @@ impl Engine {
 
     fn publish(&mut self) {
         self.count_attention();
+        self.forget_closed_composing();
         let now = protocol::ms_since(crate::clock::instant(), self.boot);
         for (&id, thread) in &mut self.threads {
             let published = self.published.entry(id).or_default();

@@ -419,6 +419,11 @@ impl Cockpit {
     /// Thread its focused Pane shows while it has the operator's focus, and
     /// its Composers holding unsent text.
     fn tell_window(&mut self) {
+        // A Pane that left took its Composer, and the unsent text with it:
+        // a Thread revived later starts with an empty one.
+        let roster = &self.roster;
+        self.composing
+            .retain(|thread| roster.pane_of(*thread).is_some());
         let now = Told {
             focused: self
                 .window_active

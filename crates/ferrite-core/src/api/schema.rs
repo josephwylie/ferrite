@@ -8,7 +8,7 @@
 //! A refusal's `code` is one of these, stable as the names are:
 //!
 //! - `invalid_request`, `unknown_method`: the line, or its parameters.
-//! - `thread_not_found`, `project_not_found`, `unknown_decision`: no such
+//! - `unknown_thread`, `project_not_found`, `unknown_decision`: no such
 //!   open Thread, Project, or pending Decision on the Thread.
 //! - `agent_blocked`: a Decision waits; nothing was sent.
 //! - `agent_starting`: the Session is starting and holds a prompt already.
@@ -162,7 +162,7 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub focus: bool,
     /// Extra arguments for the provider's CLI, after Ferrite's own, for
-    /// every Session the Thread has while open (not after a revive).
+    /// every Session of that provider the Thread has, revived ones too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
     /// With `worktree`: the new worktree's branch, which must not exist;

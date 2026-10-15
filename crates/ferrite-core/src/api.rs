@@ -122,7 +122,7 @@ pub enum Code {
     InvalidRequest,
     UnknownMethod,
     /// No open Thread has that id (Herdr's `pane_not_found`).
-    ThreadNotFound,
+    UnknownThread,
     /// No Project has that id.
     ProjectNotFound,
     /// The Thread has no pending Decision with that id.
@@ -158,7 +158,7 @@ pub enum Code {
 impl From<WireError> for ApiError {
     fn from(error: WireError) -> Self {
         let code = match error.code {
-            ErrorCode::UnknownThread => Code::ThreadNotFound,
+            ErrorCode::UnknownThread => Code::UnknownThread,
             ErrorCode::AlreadyAnswered => Code::AlreadyAnswered,
             ErrorCode::InvalidAnswer => Code::InvalidAnswer,
             _ => Code::Failed,
@@ -298,7 +298,7 @@ pub fn thread_result(engine: &Engine, thread: ThreadId) -> Result<Value, ApiErro
 }
 
 pub fn unknown_thread() -> ApiError {
-    ApiError::new(Code::ThreadNotFound, "no open Thread has that id")
+    ApiError::new(Code::UnknownThread, "no open Thread has that id")
 }
 
 /// What a subscription hears.

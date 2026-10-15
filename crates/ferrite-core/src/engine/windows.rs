@@ -43,7 +43,8 @@ impl Engine {
                 }
             }
             Op::Composing { thread, unsent } => {
-                if *unsent {
+                // Said late, of a Thread that has closed: nothing to hold.
+                if *unsent && self.threads.contains_key(thread) {
                     windows.composing.insert((window, *thread));
                 } else {
                     windows.composing.remove(&(window, *thread));
@@ -63,6 +64,15 @@ impl Engine {
             windows.focused = None;
         }
         windows.composing.retain(|(said, _)| *said != window);
+    }
+
+    /// A closed Thread's Composers went with its Panes: no window holds a
+    /// draft for it, and none is reported when it is revived.
+    pub(super) fn forget_closed_composing(&mut self) {
+        let threads = &self.threads;
+        self.windows
+            .composing
+            .retain(|(_, thread)| threads.contains_key(thread));
     }
 
     /// The Thread the operator is looking at: shown in the focused Pane of

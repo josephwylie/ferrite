@@ -84,7 +84,7 @@ Added for Projects (ADR 0030), each what herdr-projects asks of Herdr:
 
 | Operation | Does |
 |---|---|
-| `thread.start` | gains `focus`, `args` (the CLI's, after Ferrite's own, while the Thread is open), `resume` (the provider's own conversation id to carry on), `branch`/`base` (a new worktree on that branch; a `cwd` that is a linked worktree already is opened as one), `project`, and `ready` with `timeout_ms` (answered once the agent is up and idle or done, else `agent_not_ready` naming the Thread; 20 s by default) |
+| `thread.start` | gains `focus`, `args` (the CLI's, after Ferrite's own, for every Session of that provider; saved beside the Thread's log, so a revive or a Server restart keeps them), `resume` (the provider's own conversation id to carry on), `branch`/`base` (a new worktree on that branch; a `cwd` that is a linked worktree already is opened as one), `project`, and `ready` with `timeout_ms` (answered once the agent is up and idle or done, else `agent_not_ready` naming the Thread; 20 s by default) |
 | `thread.close` | the window's `park` |
 | `agent.prompt` | gains `until`: answered as soon as the agent is seen in one of those states after the prompt (`working`, `blocked`: the prompt was taken) |
 | `agent.interrupt` | the window's `interrupt` |
@@ -94,7 +94,7 @@ Added for Projects (ADR 0030), each what herdr-projects asks of Herdr:
 | `worktree.create` | `git worktree add -b branch` from `base` in the registry's layout, for a Thread to start in; `{worktree {path, branch}, project}` |
 | `worktree.remove` | by `path`: `worktree_not_found` unless a linked worktree is there; refuse `dirty_worktree_requires_force` unless `git status` is clean, then park its open Threads, `git worktree remove` (never forced), bind its Threads to the main checkout; the branch stays |
 | `machine.list` | the enabled saved machines, `{id, label, target}` by name |
-| `nav.focus` | `nav_focus {project}` to every window: only that Projects project's block in the nav (by its slug, passed on unread), or all |
+| `nav.focus` | `nav_focus {project}` to every window: only that Projects project's block in the nav (by its slug, passed on unread), or all; the Server holds it and tells each window that arrives later, as Herdr's view holds (not across a Server restart) |
 
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the
@@ -106,8 +106,9 @@ has counted since it started; Thread ids hold across a restart, ADR
 Herdr-projects reads a Terminal's screen for a draft in the prompt box
 and for trust dialogs; Ferrite answers the first with `draft` and has no
 second: whatever an agent asks the operator is a Decision, so `blocked`. `ferrite
---version` prints `ferrite <semver>`. `unknown_thread` is now
-`thread_not_found`, beside `project_not_found`, `worktree_not_found`,
+--version` prints `ferrite <semver>`. No open Thread stays
+`unknown_thread` (Herdr's `pane_not_found`; codes are append-only like
+names), beside the new `project_not_found`, `worktree_not_found`,
 `dirty_worktree_requires_force` and `agent_not_ready`; the codes are
 listed in `api::schema`.
 

@@ -195,7 +195,7 @@ impl Server {
             .count()
     }
 
-    /// An open Thread, or `thread_not_found`.
+    /// An open Thread, or `unknown_thread`.
     fn open_thread(&self, thread: ThreadId) -> Result<ThreadId, ApiError> {
         self.engine
             .thread(thread)

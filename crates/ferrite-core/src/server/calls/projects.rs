@@ -204,8 +204,11 @@ impl Server {
     }
 
     /// Every window's nav shows only one Projects project's block, or all
-    /// again. The slug is Projects' own; the Server passes it on unread.
+    /// again, until told otherwise: a window that arrives later is told on
+    /// its welcome. The slug is Projects' own; the Server passes it on
+    /// unread.
     pub(super) fn focus_nav(&mut self, params: NavFocusParams) -> Result<Value, ApiError> {
+        self.nav_focus = params.project.clone();
         let windows = self.windows();
         self.say(ServerMessage::NavFocus {
             project: params.project.clone(),

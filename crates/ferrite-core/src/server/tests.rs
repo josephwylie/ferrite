@@ -1661,7 +1661,7 @@ fn focus_and_toasts_reach_the_windows() {
         ]
     );
     let unknown = caller.answer("3", "thread.focus", serde_json::json!({ "thread": 999 }));
-    assert_eq!(unknown["error"]["code"], "thread_not_found", "{unknown}");
+    assert_eq!(unknown["error"]["code"], "unknown_thread", "{unknown}");
 }
 
 /// A line that is not a request is answered with why, and the connection
@@ -2029,13 +2029,13 @@ fn a_thread_is_interrupted_and_closed_by_id() {
         "{closed}"
     );
     let again = caller.answer("4", "thread.close", serde_json::json!({ "thread": thread }));
-    assert_eq!(again["error"]["code"], "thread_not_found", "{again}");
+    assert_eq!(again["error"]["code"], "unknown_thread", "{again}");
     let gone = caller.answer(
         "5",
         "agent.interrupt",
         serde_json::json!({ "thread": thread }),
     );
-    assert_eq!(gone["error"]["code"], "thread_not_found", "{gone}");
+    assert_eq!(gone["error"]["code"], "unknown_thread", "{gone}");
 }
 
 /// Herdr's Spaces are Ferrite's Projects: opened by directory (once),
@@ -2115,6 +2115,19 @@ fn projects_are_opened_renamed_focused_and_closed() {
         told(&mut window, nav_focus),
         ServerMessage::NavFocus { project: None }
     );
+    // The focus holds: a window that arrives later is told it.
+    caller.answer(
+        "9",
+        "nav.focus",
+        serde_json::json!({ "project": "billing" }),
+    );
+    let mut later = attach(&harness.address);
+    assert_eq!(
+        told(&mut later, nav_focus),
+        ServerMessage::NavFocus {
+            project: Some("billing".into())
+        }
+    );
 
     let closed = caller.answer("10", "project.close", serde_json::json!({ "project": id }));
     assert_eq!(
@@ -2124,7 +2137,7 @@ fn projects_are_opened_renamed_focused_and_closed() {
     );
     assert_eq!(closed["result"]["project"]["thread_count"], 0, "{closed}");
     let parked = caller.answer("11", "thread.get", serde_json::json!({ "thread": thread }));
-    assert_eq!(parked["error"]["code"], "thread_not_found", "{parked}");
+    assert_eq!(parked["error"]["code"], "unknown_thread", "{parked}");
     let missing = caller.answer("12", "project.get", serde_json::json!({ "project": "999" }));
     assert_eq!(missing["error"]["code"], "project_not_found", "{missing}");
 }
@@ -2208,7 +2221,7 @@ fn a_worktree_is_removed_only_when_clean_and_its_branch_stays() {
         .trim()
         .is_empty());
     let parked = caller.answer("6", "thread.get", serde_json::json!({ "thread": thread }));
-    assert_eq!(parked["error"]["code"], "thread_not_found", "{parked}");
+    assert_eq!(parked["error"]["code"], "unknown_thread", "{parked}");
     let again = caller.answer("6", "worktree.remove", serde_json::json!({ "path": tree }));
     assert_eq!(again["error"]["code"], "worktree_not_found", "{again}");
     let main = caller.answer("6", "worktree.remove", serde_json::json!({ "path": repo }));
@@ -2379,7 +2392,7 @@ fn the_cli_prints_answers_refusals_and_events() {
         serde_json::json!({ "thread": 999 }),
     );
     assert_eq!((status, said.len()), (1, 0), "{said:?}");
-    assert_eq!(refused[0]["error"]["code"], "thread_not_found");
+    assert_eq!(refused[0]["error"]["code"], "unknown_thread");
 
     let (status, _, refused) = cli(
         &harness.dir.join("nobody.sock"),
