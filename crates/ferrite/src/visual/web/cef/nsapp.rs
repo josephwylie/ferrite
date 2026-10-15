@@ -129,11 +129,9 @@ pub(super) fn adopt_cef_app_protocol() -> Result<(), String> {
         }
         let app_class = object_getClass(app);
         if class_conformsToProtocol(app_class, cef_protocol) == 0 {
-            return Err(
-                "NSApp already existed as a class without CefAppProtocol; \
+            return Err("NSApp already existed as a class without CefAppProtocol; \
                  call web::cef::boot() before anything touches NSApp"
-                    .into(),
-            );
+                .into());
         }
         Ok(())
     }

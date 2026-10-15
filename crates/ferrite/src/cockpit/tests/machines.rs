@@ -419,7 +419,9 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
 fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAppContext) {
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch("machine-parked");
-    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let dial =
+        ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
+            .unwrap();
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
@@ -504,7 +506,11 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         })
     });
     view.read_with(cx, |view, _| {
-        assert_eq!(view.panes[0].thread(), Some(named), "revived on the machine");
+        assert_eq!(
+            view.panes[0].thread(),
+            Some(named),
+            "revived on the machine"
+        );
     });
 }
 

@@ -113,7 +113,12 @@ pub(crate) fn observed(store: &Store, id: ThreadId) -> String {
         meta.effort,
     )
     .unwrap();
-    writeln!(out, "first prompt {:?}", store.peek_first_prompt(id).unwrap()).unwrap();
+    writeln!(
+        out,
+        "first prompt {:?}",
+        store.peek_first_prompt(id).unwrap()
+    )
+    .unwrap();
     writeln!(out, "resume {:?}", snapshot.resume_target()).unwrap();
     let handover = snapshot
         .last_handover()
@@ -343,7 +348,9 @@ fn invariant_every_logged_event_is_still_logged_in_order() {
                 model: "claude-opus-5".into(),
             },
             SessionEvent::TextDelta { text: "par".into() },
-            SessionEvent::TextDelta { text: "tial".into() },
+            SessionEvent::TextDelta {
+                text: "tial".into(),
+            },
             SessionEvent::ToolStarted {
                 id: format!("toolu_{round}"),
                 name: "Bash".into(),
@@ -485,7 +492,11 @@ fn invariant_hand_over_receives_every_exchange() {
         .map(|n| (format!("question {n}"), answer(n)))
         .collect();
     assert_eq!(handover.exchanges.len(), expected.len());
-    assert!(handover.exchanges == expected, "an exchange was lost or changed");    let _ = fs::remove_dir_all(&dir);
+    assert!(
+        handover.exchanges == expected,
+        "an exchange was lost or changed"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// The bytes of every record a log holds, as written: what no rewrite may
@@ -558,7 +569,12 @@ fn a_peek_reads_only_the_start_of_a_long_log() {
         .open(dir.join("5").join("log.jsonl"))
         .unwrap();
     for n in 0..2000 {
-        writeln!(log, r#"{{"type":"text","text":"line {n} {}"}}"#, "y".repeat(1000)).unwrap();
+        writeln!(
+            log,
+            r#"{{"type":"text","text":"line {n} {}"}}"#,
+            "y".repeat(1000)
+        )
+        .unwrap();
     }
     let store = Store::open(&dir).unwrap();
     let start = store.bytes_read();

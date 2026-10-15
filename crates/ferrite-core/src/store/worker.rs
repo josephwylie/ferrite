@@ -260,7 +260,10 @@ impl WriterState {
             .as_ref()
             .map(|append| append.bytes[append.written..].to_vec())
             .unwrap_or_default();
-        let frozen = self.pending_flush.as_ref().map_or(0, |append| append.records);
+        let frozen = self
+            .pending_flush
+            .as_ref()
+            .map_or(0, |append| append.records);
         for record in &self.buffer[frozen..] {
             if let Ok(line) = super::line(record) {
                 bytes.extend_from_slice(line.as_bytes());

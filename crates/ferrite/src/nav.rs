@@ -58,13 +58,13 @@ use gpui::{
 };
 
 use crate::cockpit::{thread_status, Attention, ThreadStatus};
-use crate::machines::{Connection, MachineRow};
-use ferrite_core::cockpit::StatusRow;
 use crate::components;
 use crate::icons::{self, icon};
+use crate::machines::{Connection, MachineRow};
 use crate::motion::{self, MotionSpec};
 use crate::pane::WallState;
 use crate::theme::*;
+use ferrite_core::cockpit::StatusRow;
 
 /// The nav's two widths — 36ch open, and the 6ch rail folded (cmd-B).
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
@@ -1160,7 +1160,11 @@ pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div
         .child(cell(glyph))
         .child(fitted(
             title_w(2.0, word.as_deref()),
-            if row.selected { TEXT_STRONG } else { CHROME_MUTED },
+            if row.selected {
+                TEXT_STRONG
+            } else {
+                CHROME_MUTED
+            },
             W_BODY,
             SharedString::from(row.name.clone()),
         ))

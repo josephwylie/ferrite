@@ -250,10 +250,7 @@ fn main() {
     }
     // `--remote <ssh target>`: start on that machine (ADR 0026).
     let remote = flag(&args, "--remote").map(str::to_string);
-    if let Some(Err(e)) = remote
-        .as_deref()
-        .map(ferrite_core::machine::check_target)
-    {
+    if let Some(Err(e)) = remote.as_deref().map(ferrite_core::machine::check_target) {
         eprintln!("ferrite: --remote: {e}");
         std::process::exit(2);
     }

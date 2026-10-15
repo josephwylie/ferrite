@@ -45,9 +45,9 @@ use futures::channel::mpsc;
 use futures::StreamExt;
 use gpui::{
     fill, hsla, px, relative, size, App, AppContext, Bounds, Context, Corners, CursorStyle,
-    DispatchPhase, Element, ElementId, Entity, EventEmitter, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, RenderImage, Style, Window,
+    DispatchPhase, Element, ElementId, Entity, EventEmitter, GlobalElementId, Hitbox,
+    HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseExitEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, Style, Window,
 };
 
 use crate::visual::web::{self, Cursor, Engine, Frame, Input, Page, View, Viewport};
@@ -161,7 +161,10 @@ impl WebView {
                 self.inner.near.set(true);
                 let width = f32::from(width).round();
                 if width >= 1.0 && !self.inner.painted.get() {
-                    self.inner.show_at(Viewport { width: width as u32, scale: window.scale_factor() });
+                    self.inner.show_at(Viewport {
+                        width: width as u32,
+                        scale: window.scale_factor(),
+                    });
                 }
             }
             Reach::Far => {
@@ -185,7 +188,9 @@ impl Render for WebView {
         if self.inner.take_updates() {
             cx.emit(HeightChanged);
         }
-        WebViewElement { inner: self.inner.clone() }
+        WebViewElement {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -250,7 +255,10 @@ impl Inner {
             self.frames.set(self.frames.get() + 1);
             FRAMES_TAKEN.with(|n| n.set(n.get() + 1));
             let scale = self.viewport.get().map_or(1.0, |v| v.scale);
-            let shown = Shown { image: to_image(frame), scale };
+            let shown = Shown {
+                image: to_image(frame),
+                scale,
+            };
             if let Some(old) = self.image.borrow_mut().replace(shown) {
                 self.retired.borrow_mut().push(old.image);
             }
@@ -270,11 +278,11 @@ impl Inner {
             }
             Some(open) => {
                 if self.viewport.get() != Some(viewport) {
-                        open.resize(viewport);
+                    open.resize(viewport);
                     self.viewport.set(Some(viewport));
                 }
                 if !self.visible.get() {
-                        open.set_visible(true);
+                    open.set_visible(true);
                     self.visible.set(true);
                 }
             }
@@ -308,7 +316,9 @@ impl Inner {
     }
 
     fn height(&self) -> f32 {
-        self.content_height.get().map_or(PLACEHOLDER_HEIGHT, |h| h as f32)
+        self.content_height
+            .get()
+            .map_or(PLACEHOLDER_HEIGHT, |h| h as f32)
     }
 }
 
@@ -375,12 +385,16 @@ impl Element for WebViewElement {
         let width = f32::from(bounds.size.width).round();
         if width >= 1.0 {
             self.inner.painted.set(true);
-            self.inner.show_at(Viewport { width: width as u32, scale: window.scale_factor() });
+            self.inner.show_at(Viewport {
+                width: width as u32,
+                scale: window.scale_factor(),
+            });
         }
         let weak = Rc::downgrade(&self.inner);
-        window.with_element_state::<Presence, _>(id.expect("web views have an id"), |presence, _| {
-            ((), presence.unwrap_or_else(|| Presence(weak)))
-        });
+        window
+            .with_element_state::<Presence, _>(id.expect("web views have an id"), |presence, _| {
+                ((), presence.unwrap_or_else(|| Presence(weak)))
+            });
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -405,7 +419,10 @@ impl Element for WebViewElement {
                     px(image_size.width.0 as f32 / shown.scale),
                     px(image_size.height.0 as f32 / shown.scale),
                 );
-                let image_bounds = Bounds { origin: bounds.origin, size: logical };
+                let image_bounds = Bounds {
+                    origin: bounds.origin,
+                    size: logical,
+                };
                 let _ = window.paint_image(
                     bounds,
                     image_bounds,
@@ -435,7 +452,11 @@ impl Element for WebViewElement {
             if hb.is_hovered(window) || inner.pressed.get() {
                 inner.hovered.set(true);
                 let (x, y) = local(event.position);
-                inner.input(Input::Move { x, y, modifiers: modifiers(event.modifiers) });
+                inner.input(Input::Move {
+                    x,
+                    y,
+                    modifiers: modifiers(event.modifiers),
+                });
             } else if inner.hovered.replace(false) {
                 inner.input(Input::Leave);
             }
@@ -454,7 +475,9 @@ impl Element for WebViewElement {
             if phase != DispatchPhase::Bubble || !hb.is_hovered(window) {
                 return;
             }
-            let Some(button) = button(event.button) else { return };
+            let Some(button) = button(event.button) else {
+                return;
+            };
             inner.pressed.set(true);
             let (x, y) = local(event.position);
             inner.input(Input::Down {
@@ -473,7 +496,9 @@ impl Element for WebViewElement {
             if phase != DispatchPhase::Bubble || !(captured || hb.is_hovered(window)) {
                 return;
             }
-            let Some(button) = button(event.button) else { return };
+            let Some(button) = button(event.button) else {
+                return;
+            };
             let (x, y) = local(event.position);
             inner.input(Input::Up {
                 x,
@@ -516,7 +541,12 @@ fn button(button: gpui::MouseButton) -> Option<web::MouseButton> {
 }
 
 fn modifiers(m: gpui::Modifiers) -> web::Modifiers {
-    web::Modifiers { shift: m.shift, control: m.control, alt: m.alt, command: m.platform }
+    web::Modifiers {
+        shift: m.shift,
+        control: m.control,
+        alt: m.alt,
+        command: m.platform,
+    }
 }
 
 thread_local! {
@@ -558,14 +588,22 @@ mod tests {
 
     impl Render for Host {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let root = div().size_full().flex().flex_col().pl(px(LEFT)).pr(px(10.)).pt(px(TOP));
-            if self.shown { root.child(self.web.clone()) } else { root }
+            let root = div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .pl(px(LEFT))
+                .pr(px(10.))
+                .pt(px(TOP));
+            if self.shown {
+                root.child(self.web.clone())
+            } else {
+                root
+            }
         }
     }
 
-    fn fixture(
-        cx: &mut TestAppContext,
-    ) -> (Rc<FakeEngine>, Entity<Host>, &mut VisualTestContext) {
+    fn fixture(cx: &mut TestAppContext) -> (Rc<FakeEngine>, Entity<Host>, &mut VisualTestContext) {
         fixture_with(cx, FakeEngine::new(), true)
     }
 
@@ -576,8 +614,14 @@ mod tests {
     ) -> (Rc<FakeEngine>, Entity<Host>, &mut VisualTestContext) {
         let engine = Rc::new(engine);
         let dyn_engine: Rc<dyn Engine> = engine.clone();
-        let page = Page { html: String::new(), theme_css: ":root{--ferrite-bg:#000}".into() };
-        let (host, cx) = cx.add_window_view(|_, cx| Host { web: WebView::new(dyn_engine, page, cx), shown });
+        let page = Page {
+            html: String::new(),
+            theme_css: ":root{--ferrite-bg:#000}".into(),
+        };
+        let (host, cx) = cx.add_window_view(|_, cx| Host {
+            web: WebView::new(dyn_engine, page, cx),
+            shown,
+        });
         cx.simulate_resize(size(px(400.), px(600.)));
         cx.run_until_parked();
         (engine, host, cx)
@@ -598,7 +642,10 @@ mod tests {
     }
 
     /// The element's frame and height, as it would draw them now.
-    fn on_screen(host: &Entity<Host>, cx: &mut VisualTestContext) -> (Option<Arc<RenderImage>>, f32) {
+    fn on_screen(
+        host: &Entity<Host>,
+        cx: &mut VisualTestContext,
+    ) -> (Option<Arc<RenderImage>>, f32) {
         let web = host.read_with(cx, |h, _| h.web.clone());
         cx.update(|_, cx| {
             let inner = web.read(cx).inner.clone();
@@ -645,7 +692,13 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(viewport, Viewport { width: 400 - 30 - 10, scale });
+        assert_eq!(
+            viewport,
+            Viewport {
+                width: 400 - 30 - 10,
+                scale
+            }
+        );
         let web = host.read_with(cx, |h, _| h.web.clone());
         assert!(web.read_with(cx, |w, _| w.frames()) >= 1);
         let (height, painted) = cx.update(|window, cx| {
@@ -653,7 +706,10 @@ mod tests {
             let image = inner.image.borrow().as_ref().unwrap().image.clone();
             (inner.height(), window.has_image_atlas_entry(&image))
         });
-        assert_eq!(height, CONTENT_HEIGHT as f32, "sized by the page, not the placeholder");
+        assert_eq!(
+            height, CONTENT_HEIGHT as f32,
+            "sized by the page, not the placeholder"
+        );
         assert!(painted, "the frame was uploaded and drawn");
     }
 
@@ -661,12 +717,20 @@ mod tests {
     fn it_forwards_moves_in_view_coordinates_and_leaves(cx: &mut TestAppContext) {
         let (engine, _host, cx) = fixture(cx);
         let _ = opened(&engine);
-        cx.simulate_mouse_move(point(px(LEFT + 15.), px(TOP + 20.)), None, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(px(LEFT + 15.), px(TOP + 20.)),
+            None,
+            Modifiers::default(),
+        );
         cx.simulate_mouse_move(point(px(5.), px(5.)), None, Modifiers::default());
         assert_eq!(
             inputs(&engine),
             [
-                Input::Move { x: 15., y: 20., modifiers: web::Modifiers::default() },
+                Input::Move {
+                    x: 15.,
+                    y: 20.,
+                    modifiers: web::Modifiers::default()
+                },
                 Input::Leave,
             ]
         );
@@ -676,14 +740,28 @@ mod tests {
     fn clicks_carry_view_coordinates_and_count(cx: &mut TestAppContext) {
         let (engine, _host, cx) = fixture(cx);
         cx.simulate_click(point(px(LEFT + 40.), px(TOP + 2.)), Modifiers::default());
-        let clicks: Vec<_> =
-            inputs(&engine).into_iter().filter(|i| !matches!(i, Input::Move { .. })).collect();
+        let clicks: Vec<_> = inputs(&engine)
+            .into_iter()
+            .filter(|i| !matches!(i, Input::Move { .. }))
+            .collect();
         let m = web::Modifiers::default();
         assert_eq!(
             clicks,
             [
-                Input::Down { x: 40., y: 2., button: web::MouseButton::Left, clicks: 1, modifiers: m },
-                Input::Up { x: 40., y: 2., button: web::MouseButton::Left, clicks: 1, modifiers: m },
+                Input::Down {
+                    x: 40.,
+                    y: 2.,
+                    button: web::MouseButton::Left,
+                    clicks: 1,
+                    modifiers: m
+                },
+                Input::Up {
+                    x: 40.,
+                    y: 2.,
+                    button: web::MouseButton::Left,
+                    clicks: 1,
+                    modifiers: m
+                },
             ]
         );
     }
@@ -703,38 +781,75 @@ mod tests {
         });
         cx.run_until_parked();
         assert!(engine.journal().contains(&Call::Visible(true)));
-        assert!(!engine.journal().contains(&Call::Close), "hidden, not closed");
+        assert!(
+            !engine.journal().contains(&Call::Close),
+            "hidden, not closed"
+        );
     }
 
     #[gpui::test]
     fn a_near_view_opens_before_it_is_painted_with_its_height_ready(cx: &mut TestAppContext) {
         let (engine, host, cx) = fixture_with(cx, FakeEngine::new(), false);
-        assert!(engine.journal().is_empty(), "not painted, not near: nothing opened");
+        assert!(
+            engine.journal().is_empty(),
+            "not painted, not near: nothing opened"
+        );
         let web = host.read_with(cx, |h, _| h.web.clone());
         let heights = Rc::new(Cell::new(0));
         let counter = heights.clone();
-        let _subscription = cx.update(|_, cx| cx.subscribe(&web, move |_, _: &HeightChanged, _| counter.set(counter.get() + 1)));
+        let _subscription = cx.update(|_, cx| {
+            cx.subscribe(&web, move |_, _: &HeightChanged, _| {
+                counter.set(counter.get() + 1)
+            })
+        });
 
-        set_reach(&host, Reach::Near { width: px(LAID_OUT) }, cx);
+        set_reach(
+            &host,
+            Reach::Near {
+                width: px(LAID_OUT),
+            },
+            cx,
+        );
         let scale = cx.update(|window, _| window.scale_factor());
-        assert_eq!(engine.journal(), [Call::Open(Viewport { width: LAID_OUT as u32, scale })]);
+        assert_eq!(
+            engine.journal(),
+            [Call::Open(Viewport {
+                width: LAID_OUT as u32,
+                scale
+            })]
+        );
         let (image, height) = on_screen(&host, cx);
-        assert!(image.is_some(), "the first frame is taken before the view is ever painted");
+        assert!(
+            image.is_some(),
+            "the first frame is taken before the view is ever painted"
+        );
         assert_eq!(height, CONTENT_HEIGHT as f32);
         assert_eq!(heights.get(), 1, "the list is told to remeasure the row");
 
         // Scrolling in at that width costs nothing: no resize, no new frame.
         set_shown(&host, true, cx);
         assert_eq!(engine.journal().len(), 1, "{:?}", engine.journal());
-        assert!(Arc::ptr_eq(&on_screen(&host, cx).0.unwrap(), &image.unwrap()));
+        assert!(Arc::ptr_eq(
+            &on_screen(&host, cx).0.unwrap(),
+            &image.unwrap()
+        ));
     }
 
     #[gpui::test]
     fn a_near_view_stays_live_when_scrolled_out_and_a_far_one_is_hidden(cx: &mut TestAppContext) {
         let (engine, host, cx) = fixture(cx);
-        set_reach(&host, Reach::Near { width: px(LAID_OUT) }, cx);
+        set_reach(
+            &host,
+            Reach::Near {
+                width: px(LAID_OUT),
+            },
+            cx,
+        );
         set_shown(&host, false, cx);
-        assert!(!engine.journal().contains(&Call::Visible(false)), "near: still live");
+        assert!(
+            !engine.journal().contains(&Call::Visible(false)),
+            "near: still live"
+        );
         set_reach(&host, Reach::Far, cx);
         assert_eq!(engine.journal().last(), Some(&Call::Visible(false)));
         // Painted again while far: shown (painting wins).
@@ -751,15 +866,27 @@ mod tests {
         assert!(engine.journal().contains(&Call::Released));
         assert_eq!(engine.live_views(), 0);
         let (image, kept) = on_screen(&host, cx);
-        assert!(Arc::ptr_eq(&image.unwrap(), frozen.as_ref().unwrap()), "the last frame is kept");
+        assert!(
+            Arc::ptr_eq(&image.unwrap(), frozen.as_ref().unwrap()),
+            "the last frame is kept"
+        );
         assert_eq!(kept, height);
 
         // Pre-opening brings it back before it is painted.
-        set_reach(&host, Reach::Near { width: px(LAID_OUT) }, cx);
+        set_reach(
+            &host,
+            Reach::Near {
+                width: px(LAID_OUT),
+            },
+            cx,
+        );
         assert_eq!(engine.journal().last(), Some(&Call::Reopened));
         assert_eq!(engine.live_views(), 1);
         let (reloaded, after) = on_screen(&host, cx);
-        assert!(!Arc::ptr_eq(&reloaded.unwrap(), &frozen.unwrap()), "a fresh frame replaced it");
+        assert!(
+            !Arc::ptr_eq(&reloaded.unwrap(), &frozen.unwrap()),
+            "a fresh frame replaced it"
+        );
         assert_eq!(after, height, "no height jump");
         assert!(!engine.journal().contains(&Call::Close));
     }
@@ -774,7 +901,12 @@ mod tests {
             host.update(cx, |_, cx| cx.notify());
             cx.run_until_parked();
         }
-        assert_eq!(engine.journal().len(), calls, "{:?}", &engine.journal()[calls..]);
+        assert_eq!(
+            engine.journal().len(),
+            calls,
+            "{:?}",
+            &engine.journal()[calls..]
+        );
         assert_eq!(web.read_with(cx, |w, _| w.frames()), frames);
     }
 
@@ -784,6 +916,8 @@ mod tests {
         cx.simulate_resize(size(px(500.), px(600.)));
         cx.run_until_parked();
         let scale = cx.update(|window, _| window.scale_factor());
-        assert!(engine.journal().contains(&Call::Resize(Viewport { width: 460, scale })));
+        assert!(engine
+            .journal()
+            .contains(&Call::Resize(Viewport { width: 460, scale })));
     }
 }

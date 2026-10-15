@@ -70,7 +70,10 @@ fn the_memory_keeps_each_lesson_once() {
     let book = Coordinators::load(&dir).unwrap();
     assert_eq!(book.memory(project()), "");
     let added = book
-        .remember(project(), &["Run cargo check".into(), "Run cargo check".into()])
+        .remember(
+            project(),
+            &["Run cargo check".into(), "Run cargo check".into()],
+        )
         .unwrap();
     assert_eq!(added, ["Run cargo check"]);
     fs::write(
@@ -79,7 +82,10 @@ fn the_memory_keeps_each_lesson_once() {
     )
     .unwrap();
     let added = book
-        .remember(project(), &["Run cargo check".into(), "Never touch main".into()])
+        .remember(
+            project(),
+            &["Run cargo check".into(), "Never touch main".into()],
+        )
         .unwrap();
     assert_eq!(added, ["Never touch main"]);
     assert_eq!(

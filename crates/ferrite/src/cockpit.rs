@@ -377,7 +377,10 @@ pub struct CockpitView {
     repo_listing: Option<(ProjectId, RepoListing)>,
     /// On a machine, the listing its Server is reading for the popover or
     /// a draft's chip.
-    asking_repo: Option<(ProjectId, std::sync::mpsc::Receiver<std::io::Result<RepoListing>>)>,
+    asking_repo: Option<(
+        ProjectId,
+        std::sync::mpsc::Receiver<std::io::Result<RepoListing>>,
+    )>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     native_copy: Option<String>,
@@ -4863,8 +4866,18 @@ impl CockpitView {
                 "Diagnostics",
                 "Version, platform, the CLIs, the newest crash report and the end of \
                  the log, for a bug report",
-                ferrite_core::diagnostics::logs(&self.prefs.dir).display().to_string().into(),
-                Some(if copied == Some("Diagnostics") { "Copied" } else { "Copy" }.into()),
+                ferrite_core::diagnostics::logs(&self.prefs.dir)
+                    .display()
+                    .to_string()
+                    .into(),
+                Some(
+                    if copied == Some("Diagnostics") {
+                        "Copied"
+                    } else {
+                        "Copy"
+                    }
+                    .into(),
+                ),
                 {
                     let view = cx.entity().downgrade();
                     move |cx| {
@@ -23670,7 +23683,9 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.prefs.settings.default_provider, Provider::Codex);
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().default_provider,
+                ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .default_provider,
                 Provider::Codex,
                 "the restyled component must save through the real settings action"
             );
@@ -23697,7 +23712,9 @@ mod tests {
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().reading_size,
+                ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .reading_size,
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
         });
@@ -23714,7 +23731,11 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.prefs.settings.confirm_delete);
-            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().confirm_delete);
+            assert!(
+                !ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .confirm_delete
+            );
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes("escape");

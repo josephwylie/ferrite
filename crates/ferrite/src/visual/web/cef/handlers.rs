@@ -126,7 +126,12 @@ wrap_browser_process_handler! {
 // Per-view client.
 
 /// The handlers for one browser of a view; `generation` is that browser's.
-pub(super) fn client(state: Arc<ViewState>, page: Arc<PageDoc>, global: Arc<Global>, generation: u64) -> Client {
+pub(super) fn client(
+    state: Arc<ViewState>,
+    page: Arc<PageDoc>,
+    global: Arc<Global>,
+    generation: u64,
+) -> Client {
     ViewClient::new(
         ViewRender::new(state.clone(), generation),
         ViewDisplay::new(state, generation),
@@ -552,7 +557,9 @@ wrap_jsdialog_handler! {
 
 /// The bundled font a request names: `ferrite-view://page/font/…`.
 fn font_of(url: &str) -> Option<&'static [u8]> {
-    let path = without_fragment(url).strip_prefix(SCHEME)?.strip_prefix("://page")?;
+    let path = without_fragment(url)
+        .strip_prefix(SCHEME)?
+        .strip_prefix("://page")?;
     document::font(path)
 }
 

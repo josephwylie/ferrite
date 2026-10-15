@@ -83,12 +83,21 @@ impl FakeEngine {
 
     /// Release views hidden for `grace` (zero: on the next pump).
     pub fn with_grace(grace: Duration) -> Self {
-        Self { journal: Rc::default(), grace, views: RefCell::default() }
+        Self {
+            journal: Rc::default(),
+            grace,
+            views: RefCell::default(),
+        }
     }
 
     /// Views that are open and not released.
     pub fn live_views(&self) -> usize {
-        self.views.borrow().iter().filter_map(Weak::upgrade).filter(|v| !v.state.borrow().released).count()
+        self.views
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|v| !v.state.borrow().released)
+            .count()
     }
 
     /// Everything every view of this engine was told, oldest first.
@@ -140,7 +149,11 @@ impl Engine for FakeEngine {
                 view.log(Call::Released);
             }
         }
-        if views.is_empty() { Duration::from_millis(250) } else { self.grace.min(Duration::from_millis(250)) }
+        if views.is_empty() {
+            Duration::from_millis(250)
+        } else {
+            self.grace.min(Duration::from_millis(250))
+        }
     }
 }
 
@@ -264,7 +277,11 @@ impl FakeView {
             s.viewport.width as f32
         };
         let over_block = hover.is_some_and(|(x, y)| block_at(width, x, y).is_some());
-        self.set_cursor(if over_block { Cursor::Pointer } else { Cursor::Arrow });
+        self.set_cursor(if over_block {
+            Cursor::Pointer
+        } else {
+            Cursor::Arrow
+        });
         self.render();
     }
 
@@ -357,15 +374,26 @@ fn draw(viewport: Viewport, bg: [u8; 3], hover: Option<(f32, f32)>) -> Frame {
         let r = HOVER_SIDE / 2.0;
         fill(x - r, y - r, x + r, y + r, HOVER);
     }
-    Frame { width, height, bgra }
+    Frame {
+        width,
+        height,
+        bgra,
+    }
 }
 
 /// `--ferrite-bg: #rrggbb` (or `#rgb`) from a theme block.
 fn parse_bg(css: &str) -> [u8; 3] {
     let parse = || -> Option<[u8; 3]> {
         let rest = &css[css.find("--ferrite-bg")? + "--ferrite-bg".len()..];
-        let value = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('#')?;
-        let hex: String = value.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        let value = rest
+            .trim_start()
+            .strip_prefix(':')?
+            .trim_start()
+            .strip_prefix('#')?;
+        let hex: String = value
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
         let byte = |s: &str| u8::from_str_radix(s, 16).ok();
         match hex.len() {
             6 => Some([byte(&hex[0..2])?, byte(&hex[2..4])?, byte(&hex[4..6])?]),
@@ -385,16 +413,26 @@ mod tests {
     use crate::visual::web::Modifiers;
     use std::cell::Cell;
 
-    const VIEWPORT: Viewport = Viewport { width: 200, scale: 2.0 };
+    const VIEWPORT: Viewport = Viewport {
+        width: 200,
+        scale: 2.0,
+    };
 
     fn page(bg: &str) -> Page {
-        Page { html: "<p>hi</p>".into(), theme_css: format!(":root {{ --ferrite-bg: {bg}; }}") }
+        Page {
+            html: "<p>hi</p>".into(),
+            theme_css: format!(":root {{ --ferrite-bg: {bg}; }}"),
+        }
     }
 
     fn open(engine: &FakeEngine) -> (Box<dyn View>, Rc<Cell<u32>>) {
         let wakes = Rc::new(Cell::new(0));
         let counter = wakes.clone();
-        let view = engine.open(page("#102030"), VIEWPORT, Box::new(move || counter.set(counter.get() + 1)));
+        let view = engine.open(
+            page("#102030"),
+            VIEWPORT,
+            Box::new(move || counter.set(counter.get() + 1)),
+        );
         (view, wakes)
     }
 
@@ -404,7 +442,11 @@ mod tests {
     }
 
     fn moved(x: f32, y: f32) -> Input {
-        Input::Move { x, y, modifiers: Modifiers::default() }
+        Input::Move {
+            x,
+            y,
+            modifiers: Modifiers::default(),
+        }
     }
 
     #[test]
@@ -455,7 +497,10 @@ mod tests {
         view.set_visible(false);
         let woken = wakes.get();
         view.input(moved(10.0, 10.0));
-        view.resize(Viewport { width: 300, scale: 2.0 });
+        view.resize(Viewport {
+            width: 300,
+            scale: 2.0,
+        });
         assert_eq!(view.take().frame, None);
         view.set_visible(true);
         assert!(wakes.get() > woken);
@@ -475,12 +520,19 @@ mod tests {
         let (view, _) = open(&engine);
         view.take();
         engine.pump();
-        assert_eq!((engine.live_views(), released_and_reopened(&engine)), (1, (0, 0)), "visible: kept");
+        assert_eq!(
+            (engine.live_views(), released_and_reopened(&engine)),
+            (1, (0, 0)),
+            "visible: kept"
+        );
         view.set_visible(false);
         engine.pump();
         assert_eq!(engine.live_views(), 0);
         assert_eq!(released_and_reopened(&engine), (1, 0));
-        assert!(!engine.journal().contains(&Call::Close), "released, not closed: the host still holds it");
+        assert!(
+            !engine.journal().contains(&Call::Close),
+            "released, not closed: the host still holds it"
+        );
         engine.pump();
         assert_eq!(released_and_reopened(&engine), (1, 0), "released once");
     }
@@ -496,7 +548,11 @@ mod tests {
         view.set_visible(true);
         assert_eq!(released_and_reopened(&engine), (0, 0));
         let frame = view.take().frame.expect("showing repaints");
-        assert_eq!(pixel(&frame, 200, 10), [0xff, 0xff, 0xff, 0xff], "in-page state kept");
+        assert_eq!(
+            pixel(&frame, 200, 10),
+            [0xff, 0xff, 0xff, 0xff],
+            "in-page state kept"
+        );
     }
 
     #[test]
@@ -511,7 +567,10 @@ mod tests {
         // Told things while released: kept, applied on reload.
         view.input(moved(50.0, 50.0));
         view.set_theme(":root { --ferrite-bg: #123456; }");
-        view.resize(Viewport { width: 300, scale: 2.0 });
+        view.resize(Viewport {
+            width: 300,
+            scale: 2.0,
+        });
         assert!(view.take().is_empty(), "nothing while released");
         let woken = wakes.get();
         view.set_visible(true);
@@ -522,9 +581,21 @@ mod tests {
         assert_eq!(updates.content_height, Some(CONTENT_HEIGHT));
         let frame = updates.frame.expect("a fresh first frame");
         assert_eq!(frame.width, 600, "latest viewport");
-        assert_eq!(pixel(&frame, 0, 0), [0x56, 0x34, 0x12, 0xff], "latest theme");
-        assert_eq!(pixel(&frame, 200, 10), [0x56, 0x34, 0x12, 0xff], "no hover square: in-page state is gone");
-        assert_ne!(pixel(&frame, 100, 100), [0xff, 0xff, 0xff, 0xff], "nor the move sent while released");
+        assert_eq!(
+            pixel(&frame, 0, 0),
+            [0x56, 0x34, 0x12, 0xff],
+            "latest theme"
+        );
+        assert_eq!(
+            pixel(&frame, 200, 10),
+            [0x56, 0x34, 0x12, 0xff],
+            "no hover square: in-page state is gone"
+        );
+        assert_ne!(
+            pixel(&frame, 100, 100),
+            [0xff, 0xff, 0xff, 0xff],
+            "nor the move sent while released"
+        );
         assert_ne!(frame, loaded);
     }
 
@@ -551,7 +622,10 @@ mod tests {
         let (view, _) = open(&engine);
         view.take();
         view.set_theme(":root { --ferrite-bg: #fff; }");
-        assert_eq!(pixel(&view.take().frame.unwrap(), 0, 0), [0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            pixel(&view.take().frame.unwrap(), 0, 0),
+            [0xff, 0xff, 0xff, 0xff]
+        );
         view.set_theme(":root { --ferrite-bg: nonsense; }");
         let fallback = [FALLBACK_BG[2], FALLBACK_BG[1], FALLBACK_BG[0], 0xff];
         assert_eq!(pixel(&view.take().frame.unwrap(), 0, 0), fallback);

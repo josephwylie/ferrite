@@ -293,7 +293,6 @@ pub struct Groups {
     next_id: u64,
 }
 
-
 impl Groups {
     pub fn load(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
@@ -979,7 +978,9 @@ mod tests {
             unreachable!()
         };
         let mut groups = Groups::load(&dir).unwrap();
-        let group = groups.enlist(coordinator, first, " app coordinator ").unwrap();
+        let group = groups
+            .enlist(coordinator, first, " app coordinator ")
+            .unwrap();
         assert_eq!(groups.enlist(coordinator, second, "ignored"), Ok(group));
         let led = groups.led_by(coordinator).unwrap();
         assert_eq!(led.id, group);

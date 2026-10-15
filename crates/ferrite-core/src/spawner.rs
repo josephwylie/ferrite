@@ -90,7 +90,9 @@ impl Spawn {
     /// The tool as this spawn offers it: the operator's level and the
     /// renderer (none without one).
     fn visuals(&self, level: crate::visual::Level) -> Option<crate::visual::Visuals> {
-        self.renderer.clone().map(|renderer| crate::visual::Visuals { level, renderer })
+        self.renderer
+            .clone()
+            .map(|renderer| crate::visual::Visuals { level, renderer })
     }
 }
 
@@ -149,9 +151,7 @@ impl Spawner for Spawn {
             .name("ferrite-command-discovery".into())
             .spawn(move || {
                 let program = crate::providers::discover::program(provider);
-                let _ = tx.send(crate::providers::commands::list(
-                    &program, provider, &cwd,
-                ));
+                let _ = tx.send(crate::providers::commands::list(&program, provider, &cwd));
             })
         {
             let _ = failures.send(Err(error));
@@ -324,11 +324,7 @@ impl Session for SessionWithDefaults {
         self.inner.interrupt()
     }
 
-    fn respond_to_decision(
-        &mut self,
-        id: &str,
-        answer: crate::DecisionAnswer,
-    ) -> io::Result<()> {
+    fn respond_to_decision(&mut self, id: &str, answer: crate::DecisionAnswer) -> io::Result<()> {
         self.inner.respond_to_decision(id, answer)
     }
 
@@ -570,11 +566,7 @@ mod tests {
         fn interrupt(&mut self) -> io::Result<()> {
             Ok(())
         }
-        fn respond_to_decision(
-            &mut self,
-            _: &str,
-            _: crate::DecisionAnswer,
-        ) -> io::Result<()> {
+        fn respond_to_decision(&mut self, _: &str, _: crate::DecisionAnswer) -> io::Result<()> {
             Ok(())
         }
         fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
@@ -774,11 +766,7 @@ mod tests {
             fn interrupt(&mut self) -> io::Result<()> {
                 Ok(())
             }
-            fn respond_to_decision(
-                &mut self,
-                _: &str,
-                _: crate::DecisionAnswer,
-            ) -> io::Result<()> {
+            fn respond_to_decision(&mut self, _: &str, _: crate::DecisionAnswer) -> io::Result<()> {
                 Ok(())
             }
             fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {

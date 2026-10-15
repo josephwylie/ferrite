@@ -751,7 +751,10 @@ fn a_coordinator_starts_workers_and_switches_follow_up_as_itself() {
             follow_prs: Some(false),
         }))
     );
-    match parse("coordinator.start", &["--goal", "Ship billing", "--follow-prs"]) {
+    match parse(
+        "coordinator.start",
+        &["--goal", "Ship billing", "--follow-prs"],
+    ) {
         Ok(Method::CoordinatorStart(params)) => {
             assert_eq!(params.cwd, PathBuf::from("/work/app"));
             assert_eq!(params.goal.as_deref(), Some("Ship billing"));

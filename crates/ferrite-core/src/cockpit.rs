@@ -450,7 +450,12 @@ impl Cockpit {
         self.load_subject(thread, subject, true)
     }
 
-    fn load_subject(&mut self, thread: ThreadId, subject: &Subject, retry: bool) -> io::Result<bool> {
+    fn load_subject(
+        &mut self,
+        thread: ThreadId,
+        subject: &Subject,
+        retry: bool,
+    ) -> io::Result<bool> {
         self.act(
             |engine| {
                 if retry {
@@ -487,7 +492,11 @@ impl Cockpit {
     /// it, reviving a parked one. The Thread landed on, or None when it
     /// is gone.
     pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
-        let known = self.shared.notifications.get(id).map(|notice| notice.thread);
+        let known = self
+            .shared
+            .notifications
+            .get(id)
+            .map(|notice| notice.thread);
         let thread = self.act(
             |engine| engine.open_notice(id),
             |server| {
@@ -633,7 +642,6 @@ fn notice(server: &mut remote::Remote, action: NoticeAction) {
     }
 }
 
-
 /// Mirror parity (ADR 0025): after every message, each open Thread's
 /// mirror reads exactly as the Engine's own Thread does. Every Cockpit
 /// test checks it as it runs.
@@ -667,10 +675,7 @@ impl Cockpit {
         };
         let engine: &Engine = engine;
         assert_eq!(self.shared.groups.to_wire(), engine.groups().to_wire());
-        assert_eq!(
-            self.shared.registry.to_wire(),
-            engine.registry().to_wire()
-        );
+        assert_eq!(self.shared.registry.to_wire(), engine.registry().to_wire());
         assert_eq!(
             self.shared.notifications.to_wire(),
             engine.notifications().to_wire()
@@ -1380,9 +1385,7 @@ impl Cockpit {
         if !auto {
             return numbered();
         }
-        self.parked
-            .prompt_title(thread)
-            .unwrap_or_else(numbered)
+        self.parked.prompt_title(thread).unwrap_or_else(numbered)
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {

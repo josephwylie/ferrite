@@ -242,7 +242,10 @@ mod tests {
             assert_eq!(draft.project(), fixture.two);
             assert_eq!(draft.target(), &DraftTarget::Main);
             assert_eq!(
-                draft.resolve(&fixture.registry, true).unwrap().source_root(),
+                draft
+                    .resolve(&fixture.registry, true)
+                    .unwrap()
+                    .source_root(),
                 fixture.registry.project(fixture.two).unwrap().root,
             );
         }
@@ -301,7 +304,10 @@ mod tests {
             path: other_tree.path.clone(),
         });
         assert_eq!(
-            draft.resolve(&fixture.registry, true).unwrap().source_root(),
+            draft
+                .resolve(&fixture.registry, true)
+                .unwrap()
+                .source_root(),
             other_tree.path
         );
     }

@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use crate::api::Api;
 use crate::engine::Engine;
 use crate::link::{self, ClientId, Connection, Heard, Ring};
-use crate::roster::DraftId;
 use crate::protocol::{
     self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
     ServerMessage, When, WireError, WireFile, WireHandle,
 };
+use crate::roster::DraftId;
 use crate::settings::Settings;
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use crate::store::{Provider, Store};

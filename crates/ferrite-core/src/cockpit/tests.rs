@@ -16,8 +16,7 @@ use crate::TurnOutcome;
 
 /// A fresh per-test scratch directory.
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("ferrite-cockpit-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ferrite-cockpit-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
 }
@@ -502,7 +501,8 @@ fn a_move_drops_child_history_reads_in_flight() {
         .unwrap();
     cockpit.pump();
     cockpit
-        .engine_mut().threads
+        .engine_mut()
+        .threads
         .get_mut(&thread)
         .unwrap()
         .activity
@@ -1110,7 +1110,13 @@ fn revive_leaves_the_worktree_to_the_spawners_preparation() {
     let thread = cockpit
         .open(Provider::Claude, WorkspaceChoice::NewWorktree { repo })
         .unwrap();
-    let worktree = cockpit.thread(thread).unwrap().workspace().unwrap().cwd().to_path_buf();
+    let worktree = cockpit
+        .thread(thread)
+        .unwrap()
+        .workspace()
+        .unwrap()
+        .cwd()
+        .to_path_buf();
     cockpit.park(thread).unwrap();
     drop(cockpit);
     std::fs::remove_dir_all(&worktree).unwrap();
@@ -1146,7 +1152,13 @@ fn a_restart_remakes_a_missing_worktree_first() {
     let thread = cockpit
         .open(Provider::Claude, WorkspaceChoice::NewWorktree { repo })
         .unwrap();
-    let worktree = cockpit.thread(thread).unwrap().workspace().unwrap().cwd().to_path_buf();
+    let worktree = cockpit
+        .thread(thread)
+        .unwrap()
+        .workspace()
+        .unwrap()
+        .cwd()
+        .to_path_buf();
     std::fs::remove_dir_all(&worktree).unwrap();
 
     assert_eq!(cockpit.sweep().len(), 1);
@@ -1651,7 +1663,8 @@ fn a_stale_prediction_is_dropped() {
     let generation = cockpit.engine().threads[&thread].generation;
 
     cockpit
-        .engine().suggestions
+        .engine()
+        .suggestions
         .0
         .send(Suggestion {
             thread,
@@ -1668,7 +1681,8 @@ fn a_stale_prediction_is_dropped() {
     );
 
     cockpit
-        .engine().suggestions
+        .engine()
+        .suggestions
         .0
         .send(Suggestion {
             thread,
@@ -1702,7 +1716,8 @@ fn a_new_turn_drops_the_previous_prediction() {
         .unwrap();
     cockpit.pump();
     cockpit
-        .engine().suggestions
+        .engine()
+        .suggestions
         .0
         .send(Suggestion {
             thread,
@@ -2043,7 +2058,8 @@ fn child_completion_survives_a_history_read_already_in_flight() {
     cockpit.pump();
     // Arrange the normal evicted-child state, and gate the disk boundary.
     cockpit
-        .engine_mut().threads
+        .engine_mut()
+        .threads
         .get_mut(&thread)
         .unwrap()
         .activity
@@ -2095,7 +2111,8 @@ fn child_completion_survives_a_history_read_already_in_flight() {
     // A later ordinary reload must use the same persisted observation,
     // after the in-flight buffer that supplied it above has been consumed.
     cockpit
-        .engine_mut().threads
+        .engine_mut()
+        .threads
         .get_mut(&thread)
         .unwrap()
         .activity
@@ -2155,7 +2172,8 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
         }
         cockpit.pump();
         cockpit
-            .engine_mut().threads
+            .engine_mut()
+            .threads
             .get_mut(&thread)
             .unwrap()
             .activity
@@ -2196,7 +2214,8 @@ fn child_tool_duration_survives_a_history_read_already_in_flight() {
         // Reload from disk without the live-tail buffer: both paths must
         // agree, allowing the log's millisecond precision.
         cockpit
-            .engine_mut().threads
+            .engine_mut()
+            .threads
             .get_mut(&thread)
             .unwrap()
             .activity
@@ -2320,9 +2339,7 @@ fn a_sent_prompt_reaches_the_provider_the_transcript_and_the_log() {
         .blocks()
         .last()
         .cloned();
-    assert!(
-        matches!(echoed.map(|b| b.body), Some(Body::Prompt(line)) if line == "run the tests")
-    );
+    assert!(matches!(echoed.map(|b| b.body), Some(Body::Prompt(line)) if line == "run the tests"));
     // And durably: a restart must not lose what the operator asked for.
     cockpit.park(thread).unwrap();
     cockpit.revive(thread).unwrap();
@@ -3893,9 +3910,7 @@ fn the_carry_digest_keeps_the_newest_pairs_within_budget() {
         .map(|n| (format!("q{n}"), format!("a{n}")))
         .collect();
     let digest = carry_digest(Provider::Codex, &exchanges);
-    assert!(
-        digest.starts_with("Earlier in this Thread (on Codex):\n\nUser: q3\nAssistant: a3\n\n")
-    );
+    assert!(digest.starts_with("Earlier in this Thread (on Codex):\n\nUser: q3\nAssistant: a3\n\n"));
     assert!(digest.ends_with("User: q14\nAssistant: a14"));
     assert!(!digest.contains("q2\n"), "only the newest twelve");
 

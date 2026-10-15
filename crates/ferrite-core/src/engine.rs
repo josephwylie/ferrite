@@ -25,6 +25,7 @@ use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId,
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
+use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
 use crate::providers::{Session, SettingAck};
 use crate::roster::{DraftId, DraftScope};
 use crate::session::SessionLifecycle;
@@ -34,7 +35,6 @@ use crate::transcript::{BlockId, Input, Transcript, Update};
 use crate::workspace::follow::{self, Follow, Move};
 use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
-use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 mod commands;
@@ -1111,7 +1111,12 @@ impl Engine {
         thread.replacement = None;
         thread.replace_generation();
         let spawned = self.spawner.start_after(
-            placement(&self.registry, self.store.dir(), thread.workspace.as_ref(), id),
+            placement(
+                &self.registry,
+                self.store.dir(),
+                thread.workspace.as_ref(),
+                id,
+            ),
             SpawnRequest {
                 thread: id,
                 provider: thread.provider,
@@ -1596,7 +1601,12 @@ impl Engine {
         let session = self
             .spawner
             .start_after(
-                placement(&self.registry, self.store.dir(), state.workspace.as_ref(), thread),
+                placement(
+                    &self.registry,
+                    self.store.dir(),
+                    state.workspace.as_ref(),
+                    thread,
+                ),
                 SpawnRequest {
                     thread,
                     provider,
@@ -2072,7 +2082,12 @@ impl Engine {
             .map(Path::to_path_buf);
             let additional_directories =
                 project_additional_directories(&self.registry, project, cwd.as_deref());
-            let place = placement(&self.registry, self.store.dir(), state.workspace.as_ref(), thread);
+            let place = placement(
+                &self.registry,
+                self.store.dir(),
+                state.workspace.as_ref(),
+                thread,
+            );
             match self.spawner.start_after(
                 place,
                 SpawnRequest {
@@ -2363,7 +2378,11 @@ impl Engine {
     /// Threads stay as they are — their logs are durable — and the Cockpit
     /// is not used again.
     pub fn halt_sessions(&mut self) {
-        let live = self.threads.values().filter(|state| state.session.is_some()).count();
+        let live = self
+            .threads
+            .values()
+            .filter(|state| state.session.is_some())
+            .count();
         crate::log!("quitting: {live} sessions ended");
         self.bootstraps.clear();
         for state in self.threads.values_mut() {
@@ -3482,7 +3501,6 @@ impl Engine {
         let provider = state.provider;
         self.replace_session(thread, provider, model, effort, ReplacementKind::Retune)
     }
-
 }
 
 impl Engine {
@@ -3727,7 +3745,10 @@ impl Engine {
             thread,
             log,
             live,
-            seq: self.published.get(&thread).map_or(0, |published| published.seq),
+            seq: self
+                .published
+                .get(&thread)
+                .map_or(0, |published| published.seq),
         })
     }
 
@@ -3785,14 +3806,16 @@ impl Engine {
                             input,
                         });
                     }
-                    Outgoing::ToolDraft { id: tool, name, input } => {
-                        self.outbox.push(ServerMessage::ToolDraft {
-                            thread: id,
-                            id: tool,
-                            name,
-                            input,
-                        })
-                    }
+                    Outgoing::ToolDraft {
+                        id: tool,
+                        name,
+                        input,
+                    } => self.outbox.push(ServerMessage::ToolDraft {
+                        thread: id,
+                        id: tool,
+                        name,
+                        input,
+                    }),
                     Outgoing::Local => {}
                 }
             }
@@ -4532,7 +4555,11 @@ fn placement(
                 || registry.branch_for(path).is_some()
                 || path.starts_with(store_dir) =>
         {
-            Some((repo.clone(), path.clone(), worktree_branch(registry, path, thread)))
+            Some((
+                repo.clone(),
+                path.clone(),
+                worktree_branch(registry, path, thread),
+            ))
         }
         _ => None,
     };

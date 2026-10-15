@@ -77,7 +77,10 @@ impl CockpitView {
                 if std::mem::take(&mut self.server_bands.updating) {
                     window.remove_notification::<Updating>(cx);
                 }
-                let machine = self.cockpit.machine().map(|bridge| bridge.name().to_string());
+                let machine = self
+                    .cockpit
+                    .machine()
+                    .map(|bridge| bridge.name().to_string());
                 let gone = match (&machine, attention) {
                     (None, _) => Gone::NoServer,
                     (Some(_), Some(Failure::SignIn)) => Gone::SignIn,

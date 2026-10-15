@@ -60,7 +60,10 @@ fn failed(error: impl ToString) -> ApiError {
 }
 
 fn not_a_coordinator() -> ApiError {
-    ApiError::new(Code::NotACoordinator, "that Thread is no Project's coordinator")
+    ApiError::new(
+        Code::NotACoordinator,
+        "that Thread is no Project's coordinator",
+    )
 }
 
 impl Server {
@@ -110,9 +113,10 @@ impl Server {
                     self.execute(Op::Revive { thread })?;
                 }
                 let rebriefed = change.goal.as_ref().is_some_and(|goal| *goal != kept.goal)
-                    || change.instructions.as_ref().is_some_and(|instructions| {
-                        *instructions != kept.instructions
-                    });
+                    || change
+                        .instructions
+                        .as_ref()
+                        .is_some_and(|instructions| *instructions != kept.instructions);
                 self.coordinating
                     .book
                     .update(thread, |coordination| change.apply(coordination))
@@ -439,7 +443,9 @@ impl Server {
             .spawn(move || {
                 let read = followed
                     .into_iter()
-                    .filter_map(|(thread, cwd)| Some((thread, crate::workspace::pr_feedback(&cwd)?)))
+                    .filter_map(|(thread, cwd)| {
+                        Some((thread, crate::workspace::pr_feedback(&cwd)?))
+                    })
                     .collect();
                 let _ = tell.send(read);
             });

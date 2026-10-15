@@ -9,7 +9,9 @@ use crate::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityLimits, AgentInfo, AgentKey, AgentStatus,
     ExecutionEvent, Subject,
 };
-use crate::progress::{BackgroundTask, Phase, PlanStep, PlanTask, ProgressEvent, StepStatus, TaskStatus};
+use crate::progress::{
+    BackgroundTask, Phase, PlanStep, PlanTask, ProgressEvent, StepStatus, TaskStatus,
+};
 
 /// A small world: a window of 4 KB, so a few hundred KB of log is long.
 fn limits() -> ActivityLimits {
@@ -25,14 +27,19 @@ struct Rng(u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0 >> 33
     }
     fn below(&mut self, n: u64) -> u64 {
         self.next() % n
     }
     fn text(&mut self, max: u64) -> String {
-        let words = ["log", "mark", "base", "turn", "carry", "retain", "café", "naïve", "\n", "**bold**"];
+        let words = [
+            "log", "mark", "base", "turn", "carry", "retain", "café", "naïve", "\n", "**bold**",
+        ];
         (0..1 + self.below(max / 4))
             .map(|_| words[self.below(words.len() as u64) as usize])
             .collect::<Vec<_>>()
@@ -71,8 +78,18 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
         for step in 0..1 + rng.below(6) {
             let tool = format!("t-{turn}-{step}");
             match rng.below(16) {
-                0..=3 => event(&mut writer, SessionEvent::TextDelta { text: rng.text(400) }),
-                4 => event(&mut writer, SessionEvent::ThinkingDelta { text: rng.text(200) }),
+                0..=3 => event(
+                    &mut writer,
+                    SessionEvent::TextDelta {
+                        text: rng.text(400),
+                    },
+                ),
+                4 => event(
+                    &mut writer,
+                    SessionEvent::ThinkingDelta {
+                        text: rng.text(200),
+                    },
+                ),
                 5 => {
                     event(
                         &mut writer,
@@ -180,26 +197,39 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
                 ),
                 8 | 9 => {
                     let activity = if children.len() < 6 && rng.below(3) == 0 {
-                        let key = AgentKey::new(Provider::Claude, "root", &format!("agent-{}", children.len()));
+                        let key = AgentKey::new(
+                            Provider::Claude,
+                            "root",
+                            &format!("agent-{}", children.len()),
+                        );
                         children.push(key.clone());
                         let mut info = AgentInfo::new(key);
                         info.parent = Some(Subject::Main);
                         info.name = Some(rng.text(8));
                         ActivityEvent::Discovered(info)
-                    } else if let Some(key) = children.get(rng.below(children.len().max(1) as u64) as usize) {
+                    } else if let Some(key) =
+                        children.get(rng.below(children.len().max(1) as u64) as usize)
+                    {
                         match rng.below(3) {
                             0 => ActivityEvent::Status {
                                 key: key.clone(),
-                                state: [AgentStatus::Working, AgentStatus::Idle][rng.below(2) as usize],
+                                state: [AgentStatus::Working, AgentStatus::Idle]
+                                    [rng.below(2) as usize],
                             },
                             1 => ActivityEvent::Alias {
-                                from: AgentKey::new(Provider::Claude, "root", &format!("toolu-{turn}-{step}")),
+                                from: AgentKey::new(
+                                    Provider::Claude,
+                                    "root",
+                                    &format!("toolu-{turn}-{step}"),
+                                ),
                                 to: key.clone(),
                             },
                             _ => ActivityEvent::Content {
                                 key: key.clone(),
                                 id: Some(format!("c-{turn}-{step}")),
-                                event: ExecutionEvent::Text { text: rng.text(200) },
+                                event: ExecutionEvent::Text {
+                                    text: rng.text(200),
+                                },
                             },
                         }
                     } else {
@@ -207,9 +237,19 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
                     };
                     event(&mut writer, SessionEvent::Activity(activity));
                 }
-                10 => event(&mut writer, SessionEvent::ModelChanged { model: format!("m-{}", rng.below(5)) }),
+                10 => event(
+                    &mut writer,
+                    SessionEvent::ModelChanged {
+                        model: format!("m-{}", rng.below(5)),
+                    },
+                ),
                 11 => writer.record_prompt(&format!("queued {turn}")).unwrap(),
-                12 => event(&mut writer, SessionEvent::RunState { state: crate::RunState::Running }),
+                12 => event(
+                    &mut writer,
+                    SessionEvent::RunState {
+                        state: crate::RunState::Running,
+                    },
+                ),
                 13 => event(
                     &mut writer,
                     SessionEvent::TurnDiff {
@@ -217,14 +257,21 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
                         diff: rng.text(60),
                     },
                 ),
-                _ => event(&mut writer, SessionEvent::TextDelta { text: rng.text(100) }),
+                _ => event(
+                    &mut writer,
+                    SessionEvent::TextDelta {
+                        text: rng.text(100),
+                    },
+                ),
             }
         }
         event(
             &mut writer,
             SessionEvent::TurnEnded {
-                outcome: [crate::TurnOutcome::Completed, crate::TurnOutcome::Interrupted]
-                    [rng.below(2) as usize]
+                outcome: [
+                    crate::TurnOutcome::Completed,
+                    crate::TurnOutcome::Interrupted,
+                ][rng.below(2) as usize]
                     .clone(),
                 cost_usd: Some(0.01),
             },
@@ -308,9 +355,17 @@ fn seen(activity: &Activity, evicted: &[&str]) -> String {
     }
     for child in activity.view().children() {
         let key = child.key().as_str();
-        out.push_str(&format!("child {key} {:?} status={:?}\n", child.info(), child.status()));
+        out.push_str(&format!(
+            "child {key} {:?} status={:?}\n",
+            child.info(),
+            child.status()
+        ));
         if !evicted.contains(&key) {
-            out.push_str(&format!("  coverage={:?} retained={}\n", child.coverage(), child.retained()));
+            out.push_str(&format!(
+                "  coverage={:?} retained={}\n",
+                child.coverage(),
+                child.retained()
+            ));
             for block in child.transcript().blocks() {
                 out.push_str(&format!("    {:?}\n", block.body));
             }
@@ -349,17 +404,25 @@ fn a_bounded_revive_shows_what_a_full_replay_shows() {
             );
         }
         let snapshot = revival.snapshot();
-        assert_eq!(snapshot.resume_target(), full.resume_target(), "seed {seed}");
+        assert_eq!(
+            snapshot.resume_target(),
+            full.resume_target(),
+            "seed {seed}"
+        );
         assert_eq!(snapshot.prompt_texts(), full.prompt_texts(), "seed {seed}");
         assert_eq!(
             revival.prompted(),
-            full.records.iter().any(|record| matches!(record, Record::Prompt { .. })),
+            full.records
+                .iter()
+                .any(|record| matches!(record, Record::Prompt { .. })),
             "seed {seed}"
         );
         assert_eq!(snapshot.provider(), full.provider(), "seed {seed}");
         assert_eq!(snapshot.model(), full.model(), "seed {seed}");
         assert_eq!(
-            revival.owed_handover().map(|h| (h.from, h.exchanges.clone())),
+            revival
+                .owed_handover()
+                .map(|h| (h.from, h.exchanges.clone())),
             full.last_handover()
                 .filter(|h| !h.delivered)
                 .map(|h| (h.from, h.exchanges)),
@@ -386,7 +449,12 @@ fn a_long_thread_revives_from_its_tail() {
     for turn in 0..400 {
         writer.record_prompt(&format!("turn {turn}")).unwrap();
         writer
-            .record_event(&SessionEvent::TextDelta { text: "w".repeat(10_000) }, None)
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "w".repeat(10_000),
+                },
+                None,
+            )
             .unwrap();
         writer
             .record_event(
@@ -408,7 +476,11 @@ fn a_long_thread_revives_from_its_tail() {
     let read = store.bytes_read() - read;
     assert!(size > 4_000_000);
     assert!(read < 512 * 1024, "the revive read {read} of {size} bytes");
-    assert_eq!(revival.snapshot().prompt_texts().len(), 400, "recall is whole");
+    assert_eq!(
+        revival.snapshot().prompt_texts().len(),
+        400,
+        "recall is whole"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -425,7 +497,12 @@ fn a_log_ending_mid_turn_revives_as_interrupted() {
     let (id, mut writer) = store.create(Provider::Claude, None, binding).unwrap();
     writer.record_prompt("cut off").unwrap();
     writer
-        .record_event(&SessionEvent::TextDelta { text: "half a thou".into() }, None)
+        .record_event(
+            &SessionEvent::TextDelta {
+                text: "half a thou".into(),
+            },
+            None,
+        )
         .unwrap();
     writer.flush_fully().unwrap();
     drop(writer);
@@ -468,7 +545,10 @@ fn a_real_log_revives_bounded_and_identical() {
 
     let started = Instant::now();
     drop(store.revive(id).unwrap());
-    eprintln!("LAB first revive (upgrade + bounded read) ms={:.1}", ms(started));
+    eprintln!(
+        "LAB first revive (upgrade + bounded read) ms={:.1}",
+        ms(started)
+    );
     let started = Instant::now();
     let read = store.bytes_read();
     let revival = store.revive(id).unwrap();

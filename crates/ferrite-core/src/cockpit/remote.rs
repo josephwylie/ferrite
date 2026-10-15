@@ -91,7 +91,10 @@ pub(crate) enum Arrival {
     Message(ServerMessage),
     /// Attached afresh: the shared state is this snapshot's. `new_boot`
     /// means a different Server than before, so every mirror starts over.
-    Attached { snapshot: Snapshot, new_boot: bool },
+    Attached {
+        snapshot: Snapshot,
+        new_boot: bool,
+    },
     /// A first send settled: its Thread, or why not.
     Started(BootstrapResult),
 }
@@ -358,7 +361,9 @@ impl Remote {
     }
 
     pub(crate) fn draft_starting(&self, draft: DraftId) -> bool {
-        self.starting.values().any(|(starting, _)| *starting == draft)
+        self.starting
+            .values()
+            .any(|(starting, _)| *starting == draft)
     }
 
     /// Take back a first send still starting. True when one was.
@@ -573,7 +578,9 @@ impl Remote {
     fn heard(&mut self, message: ServerMessage) -> Vec<Arrival> {
         match message {
             ServerMessage::Reply { id, ok, error } => {
-                if let Some(error) = error.as_ref().filter(|error| error.code == ErrorCode::Lagged)
+                if let Some(error) = error
+                    .as_ref()
+                    .filter(|error| error.code == ErrorCode::Lagged)
                 {
                     self.detach(&error.message);
                     return Vec::new();
@@ -598,16 +605,18 @@ impl Remote {
                     })];
                 }
                 if let Some(answer) = self.searches.remove(&id) {
-                    let _ = answer.send(result.map(|done| match done {
-                        Some(Done::Files { files }) => files
-                            .into_iter()
-                            .map(|file| FileSuggestion {
-                                path: file.path,
-                                is_directory: file.is_directory,
-                                matched: file.matched,
-                            })
-                            .collect(),
-                        _ => Vec::new(),
+                    let _ = answer.send(result.map(|done| {
+                        match done {
+                            Some(Done::Files { files }) => files
+                                .into_iter()
+                                .map(|file| FileSuggestion {
+                                    path: file.path,
+                                    is_directory: file.is_directory,
+                                    matched: file.matched,
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        }
                     }));
                 } else if let Some(answer) = self.answers.remove(&id) {
                     answer(result);
@@ -676,8 +685,7 @@ impl Remote {
                     Ok(Ok(rendered)) => ClientMessage::Rendered {
                         request,
                         png: Some(WirePng {
-                            base64: base64::engine::general_purpose::STANDARD
-                                .encode(rendered.png),
+                            base64: base64::engine::general_purpose::STANDARD.encode(rendered.png),
                             width: rendered.width,
                             height: rendered.height,
                         }),

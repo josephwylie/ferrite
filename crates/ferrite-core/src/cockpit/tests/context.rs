@@ -222,7 +222,9 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
         .unwrap();
     // Fewer events than one pump drains (256), each large.
     for n in 0..40 {
-        live(&fake).send(text(&format!("{n} {}", "y".repeat(100_000)))).unwrap();
+        live(&fake)
+            .send(text(&format!("{n} {}", "y".repeat(100_000))))
+            .unwrap();
     }
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
@@ -234,9 +236,16 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     let read = cockpit.engine().store.bytes_read();
     assert_eq!(reader.subagent_count(thread).unwrap(), live_count);
     assert_eq!(reader.turn_count(thread).unwrap(), 1);
-    let size = std::fs::metadata(cockpit.engine().store.dir().join(thread.to_string()).join("log.jsonl"))
-        .unwrap()
-        .len();
+    let size = std::fs::metadata(
+        cockpit
+            .engine()
+            .store
+            .dir()
+            .join(thread.to_string())
+            .join("log.jsonl"),
+    )
+    .unwrap()
+    .len();
     assert!(size > 3_000_000);
     // Each lookup: the header line and one chunk back from the end.
     assert!(
@@ -264,10 +273,15 @@ fn parking_never_waits_for_the_drive() {
     assert!(started.elapsed() < std::time::Duration::from_millis(150));
     cockpit.revive(thread).unwrap();
     assert_eq!(
-        cockpit.peek(thread).unwrap().summary.map(|summary| summary.turns),
+        cockpit
+            .peek(thread)
+            .unwrap()
+            .summary
+            .map(|summary| summary.turns),
         Some(1)
     );
-    *crate::store::worker_lock(&cockpit.engine().store.faults().sync_delay) = std::time::Duration::ZERO;
+    *crate::store::worker_lock(&cockpit.engine().store.faults().sync_delay) =
+        std::time::Duration::ZERO;
 }
 
 /// A log the worker cannot sync holds the Session's events where they wait
@@ -278,24 +292,42 @@ fn a_failed_sync_holds_the_session_until_it_succeeds() {
     let (mut cockpit, fake) = cockpit("sync-failure");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     cockpit.send(thread, "one".into());
-    cockpit.engine().store.faults().fail_sync.store(true, Ordering::SeqCst);
+    cockpit
+        .engine()
+        .store
+        .faults()
+        .fail_sync
+        .store(true, Ordering::SeqCst);
     live(&fake).send(text("before")).unwrap();
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
     // The worker fails the turn's sync; the pump then holds the next events.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while cockpit.thread(thread).unwrap().store_error().is_none() {
-        assert!(std::time::Instant::now() < deadline, "the failure never surfaced");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the failure never surfaced"
+        );
         cockpit.pump();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     live(&fake).send(text("held")).unwrap();
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
-    let log = cockpit.engine().store.dir().join(thread.to_string()).join("log.jsonl");
+    let log = cockpit
+        .engine()
+        .store
+        .dir()
+        .join(thread.to_string())
+        .join("log.jsonl");
     assert!(!std::fs::read_to_string(&log).unwrap().contains("held"));
 
-    cockpit.engine().store.faults().fail_sync.store(false, Ordering::SeqCst);
+    cockpit
+        .engine()
+        .store
+        .faults()
+        .fail_sync
+        .store(false, Ordering::SeqCst);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !std::fs::read_to_string(&log).unwrap().contains("held") {
         assert!(std::time::Instant::now() < deadline, "never drained");
@@ -317,12 +349,28 @@ fn quitting_writes_every_accepted_record() {
     cockpit.pump();
     let (_, full) = cockpit.engine().store.syncs();
     cockpit.halt_sessions();
-    let log = cockpit.engine().store.dir().join(thread.to_string()).join("log.jsonl");
+    let log = cockpit
+        .engine()
+        .store
+        .dir()
+        .join(thread.to_string())
+        .join("log.jsonl");
     let written = std::fs::read_to_string(&log).unwrap();
     assert!(written.contains("still streaming"), "lost at quit");
-    assert!(written.lines().last().unwrap().starts_with(r#"{"type":"mark""#));
-    assert!(cockpit.engine().store.syncs().1 > full, "synced through the drive's cache");
-    assert_eq!(cockpit.engine().store.open_threads().unwrap(), vec![thread], "reopened next launch");
+    assert!(written
+        .lines()
+        .last()
+        .unwrap()
+        .starts_with(r#"{"type":"mark""#));
+    assert!(
+        cockpit.engine().store.syncs().1 > full,
+        "synced through the drive's cache"
+    );
+    assert_eq!(
+        cockpit.engine().store.open_threads().unwrap(),
+        vec![thread],
+        "reopened next launch"
+    );
 }
 
 /// A writer that cannot write at quit keeps what it holds beside its log,
@@ -339,7 +387,9 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
     cockpit.halt_sessions();
     let kept = cockpit.engine().store.pending_records(thread);
     assert_eq!(kept.len(), 1);
-    assert!(std::fs::read_to_string(&kept[0]).unwrap().contains("unsaved words"));
+    assert!(std::fs::read_to_string(&kept[0])
+        .unwrap()
+        .contains("unsaved words"));
 
     let dir = cockpit.engine().store.dir().to_path_buf();
     drop(cockpit);
@@ -388,7 +438,10 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
             },
         )
         .unwrap();
-    assert!(cockpit.thread(thread).unwrap().starting(), "pending on its read");
+    assert!(
+        cockpit.thread(thread).unwrap().starting(),
+        "pending on its read"
+    );
     // The old Session's late word waits; the switch drops it with the Session.
     old.send(SessionEvent::Init {
         session_id: "late-claude".into(),
@@ -397,7 +450,10 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
     .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while cockpit.thread(thread).unwrap().starting() {
-        assert!(std::time::Instant::now() < deadline, "the switch never committed");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the switch never committed"
+        );
         cockpit.pump();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -406,9 +462,19 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
         fake.sent.borrow().last().unwrap(),
         &format!("{}\n\nnext", carry_digest(Provider::Claude, &exchanges))
     );
-    let log = std::fs::read_to_string(cockpit.engine().store.dir().join(thread.to_string()).join("log.jsonl"))
-        .unwrap();
-    assert!(!log.contains("late-claude"), "no old word after the switch's line");
+    let log = std::fs::read_to_string(
+        cockpit
+            .engine()
+            .store
+            .dir()
+            .join(thread.to_string())
+            .join("log.jsonl"),
+    )
+    .unwrap();
+    assert!(
+        !log.contains("late-claude"),
+        "no old word after the switch's line"
+    );
     let _ = std::fs::remove_dir_all(cockpit.engine().store.dir());
 }
 
@@ -422,7 +488,12 @@ fn an_unreadable_saved_queue_is_said_not_silently_dropped() {
     cockpit.pump();
     cockpit.park(thread).unwrap();
     std::fs::write(
-        cockpit.engine().store.dir().join(thread.to_string()).join("queue.json"),
+        cockpit
+            .engine()
+            .store
+            .dir()
+            .join(thread.to_string())
+            .join("queue.json"),
         "{ not json",
     )
     .unwrap();

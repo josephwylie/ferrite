@@ -34,7 +34,9 @@ use ferrite_core::settings::ReadingSize;
 use futures::channel::mpsc;
 use futures::StreamExt;
 use gpui::prelude::*;
-use gpui::{canvas, div, img, px, AnyElement, App, AsyncApp, EntityId, Global, RenderImage, Window};
+use gpui::{
+    canvas, div, img, px, AnyElement, App, AsyncApp, EntityId, Global, RenderImage, Window,
+};
 use serde_json::{json, Value};
 
 use super::engine::{Availability, Visuals};
@@ -108,7 +110,10 @@ impl Global for Diagrams {}
 enum Entry {
     /// Being drawn (or waiting its turn); `views` painted the fence and
     /// redraw when it lands. `misses` is how often it failed for now.
-    Drawing { views: Vec<EntityId>, misses: u8 },
+    Drawing {
+        views: Vec<EntityId>,
+        misses: u8,
+    },
     Drawn(Drawn),
     /// Failed for now this many times: asked for again when next painted.
     Missed(u8),
@@ -155,7 +160,13 @@ impl Drawn {
 pub(crate) fn init(enabled: bool, cx: &mut App) {
     let (queue, mut jobs) = mpsc::unbounded::<Job>();
     cx.spawn(async move |cx| {
-        while let Some(Job { key, code, reading, scale }) = jobs.next().await {
+        while let Some(Job {
+            key,
+            code,
+            reading,
+            scale,
+        }) = jobs.next().await
+        {
             let drawn = match renderer::engine(cx).await {
                 Ok(engine) => draw(engine, page(&code, reading), width(reading), scale, cx).await,
                 // No engine in this build is for good; one still starting isn't.
@@ -168,7 +179,13 @@ pub(crate) fn init(enabled: bool, cx: &mut App) {
         }
     })
     .detach();
-    cx.set_global(Diagrams { enabled, entries: HashMap::new(), clock: 0, landed: 0, queue });
+    cx.set_global(Diagrams {
+        enabled,
+        entries: HashMap::new(),
+        clock: 0,
+        landed: 0,
+        queue,
+    });
 }
 
 impl Diagrams {
@@ -187,7 +204,10 @@ impl Diagrams {
 
 /// Turn diagrams on or off (Settings changed); fences drawn again follow.
 pub(crate) fn set_enabled(enabled: bool, cx: &mut App) {
-    if cx.try_global::<Diagrams>().is_some_and(|diagrams| diagrams.enabled != enabled) {
+    if cx
+        .try_global::<Diagrams>()
+        .is_some_and(|diagrams| diagrams.enabled != enabled)
+    {
         cx.global_mut::<Diagrams>().enabled = enabled;
         cx.refresh_windows();
     }
@@ -205,7 +225,9 @@ pub(crate) fn or_code(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let enabled = cx.try_global::<Diagrams>().is_some_and(|diagrams| diagrams.enabled);
+    let enabled = cx
+        .try_global::<Diagrams>()
+        .is_some_and(|diagrams| diagrams.enabled);
     if !enabled || !closed(fence) || code.trim().is_empty() {
         return element;
     }
@@ -264,13 +286,17 @@ fn diagram(drawn: Drawn, size: f32) -> AnyElement {
 /// streaming in isn't drawn yet. A fence in a quote carries the quote's
 /// `>` on every line but the first.
 pub(crate) fn closed(fence: &str) -> bool {
-    let mut lines = fence
-        .trim_end()
-        .lines()
-        .map(|line| line.trim_start_matches(|c: char| c == '>' || c.is_whitespace()).trim_end());
-    let Some(open) = lines.next() else { return false };
+    let mut lines = fence.trim_end().lines().map(|line| {
+        line.trim_start_matches(|c: char| c == '>' || c.is_whitespace())
+            .trim_end()
+    });
+    let Some(open) = lines.next() else {
+        return false;
+    };
     let marker = if open.starts_with("~~~") { '~' } else { '`' };
-    lines.last().is_some_and(|line| line.len() >= 3 && line.chars().all(|c| c == marker))
+    lines
+        .last()
+        .is_some_and(|line| line.len() >= 3 && line.chars().all(|c| c == marker))
 }
 
 /// The cache key: what the image depends on.
@@ -297,8 +323,19 @@ fn request(key: u64, code: String, reading: ReadingSize, scale: f32, view: Entit
         Some(Entry::Missed(misses)) => *misses,
         None => 0,
     };
-    diagrams.entries.insert(key, Entry::Drawing { views: vec![view], misses });
-    let _ = diagrams.queue.unbounded_send(Job { key, code, reading, scale });
+    diagrams.entries.insert(
+        key,
+        Entry::Drawing {
+            views: vec![view],
+            misses,
+        },
+    );
+    let _ = diagrams.queue.unbounded_send(Job {
+        key,
+        code,
+        reading,
+        scale,
+    });
 }
 
 /// A diagram finished drawing (or didn't): keep it, redraw the views that
@@ -311,7 +348,10 @@ fn land(key: u64, drawn: Result<Drawn, Failure>, cx: &mut App) {
     };
     diagrams.clock += 1;
     let entry = match drawn {
-        Ok(drawn) => Entry::Drawn(Drawn { shown_at: diagrams.clock, ..drawn }),
+        Ok(drawn) => Entry::Drawn(Drawn {
+            shown_at: diagrams.clock,
+            ..drawn
+        }),
         // It stays code, so nothing to redraw: asked for again the next
         // time it is painted...
         Err(Failure::Passing) if misses + 1 < MISSES => {
@@ -449,9 +489,10 @@ async fn draw(
     cx: &AsyncApp,
 ) -> Result<Drawn, Failure> {
     let drawing_done = |height: Option<u32>| height.is_some_and(|height| height > EMPTY);
-    let Settled { frame, height } = renderer::settle(engine, page, Viewport { width, scale }, drawing_done, cx)
-        .await
-        .map_err(|_| Failure::Passing)?;
+    let Settled { frame, height } =
+        renderer::settle(engine, page, Viewport { width, scale }, drawing_done, cx)
+            .await
+            .map_err(|_| Failure::Passing)?;
     if height == Some(REFUSED) {
         return Err(Failure::Final);
     }
@@ -461,7 +502,8 @@ async fn draw(
     }
     let frame = crop(frame, background()).ok_or(Failure::Passing)?;
     let (width, height) = (frame.width as f32 / scale, frame.height as f32 / scale);
-    let image = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra).ok_or(Failure::Passing)?;
+    let image = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
+        .ok_or(Failure::Passing)?;
     Ok(Drawn {
         image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])),
         width,
@@ -482,11 +524,23 @@ fn background() -> [u8; 3] {
 fn crop(frame: Frame, bg: [u8; 3]) -> Option<Frame> {
     let stride = frame.width as usize * 4;
     let drawn = |x: usize| {
-        frame.bgra.chunks_exact(stride).any(|row| row[x * 4..x * 4 + 3] != bg)
+        frame
+            .bgra
+            .chunks_exact(stride)
+            .any(|row| row[x * 4..x * 4 + 3] != bg)
     };
     let width = (0..frame.width as usize).rev().find(|x| drawn(*x))? + 1;
-    let bgra = frame.bgra.chunks_exact(stride).flat_map(|row| &row[..width * 4]).copied().collect();
-    Some(Frame { width: width as u32, height: frame.height, bgra })
+    let bgra = frame
+        .bgra
+        .chunks_exact(stride)
+        .flat_map(|row| &row[..width * 4])
+        .copied()
+        .collect();
+    Some(Frame {
+        width: width as u32,
+        height: frame.height,
+        bgra,
+    })
 }
 
 #[cfg(test)]
@@ -520,7 +574,11 @@ mod tests {
                 bgra[..4].copy_from_slice(&[0, 0, 0, 255]);
             }
             *self.pending.borrow_mut() = Updates {
-                frame: Some(Frame { width: PAGE, height, bgra }),
+                frame: Some(Frame {
+                    width: PAGE,
+                    height,
+                    bgra,
+                }),
                 content_height: Some(height),
                 cursor: None,
             };
@@ -580,7 +638,11 @@ mod tests {
             page.report(40, true);
         });
         let drawn = drawn.expect("drawn once mermaid has drawn");
-        assert_eq!((drawn.width, drawn.height), (1., 40.), "cropped to what it drew");
+        assert_eq!(
+            (drawn.width, drawn.height),
+            (1., 40.),
+            "cropped to what it drew"
+        );
     }
 
     #[gpui::test]
@@ -609,14 +671,23 @@ mod tests {
                     Some(Entry::Missed(misses)) => *misses,
                     _ => 0,
                 };
-                entries.insert(1, Entry::Drawing { views: Vec::new(), misses });
+                entries.insert(
+                    1,
+                    Entry::Drawing {
+                        views: Vec::new(),
+                        misses,
+                    },
+                );
                 land(1, Err(failure), cx);
                 matches!(cx.global::<Diagrams>().entries.get(&1), Some(Entry::Failed))
             };
             assert!(land_failing(Failure::Final, cx), "a refusal is for good");
             cx.global_mut::<Diagrams>().entries.clear();
             for miss in 1..MISSES {
-                assert!(!land_failing(Failure::Passing, cx), "miss {miss}: asked for again");
+                assert!(
+                    !land_failing(Failure::Passing, cx),
+                    "miss {miss}: asked for again"
+                );
             }
             assert!(land_failing(Failure::Passing, cx), "then it stays code");
         });
@@ -631,10 +702,23 @@ mod tests {
             init(true, cx);
             let view = cx.new(|_| ()).entity_id();
             for code in ["graph TD", "graph LR"] {
-                request(key(code, ReadingSize::STANDARD, 1.), code.into(), ReadingSize::STANDARD, 1., view, cx);
+                request(
+                    key(code, ReadingSize::STANDARD, 1.),
+                    code.into(),
+                    ReadingSize::STANDARD,
+                    1.,
+                    view,
+                    cx,
+                );
             }
         });
-        let opened = || engine.journal().iter().filter(|call| matches!(call, Call::Open(_))).count();
+        let opened = || {
+            engine
+                .journal()
+                .iter()
+                .filter(|call| matches!(call, Call::Open(_)))
+                .count()
+        };
         cx.run_until_parked();
         assert_eq!((opened(), engine.live_views()), (1, 1));
         cx.executor().advance_clock(Duration::from_secs(1));
@@ -654,10 +738,16 @@ mod tests {
     fn only_a_closed_fence_is_drawn() {
         assert!(closed("```mermaid\ngraph TD\n  a --> b\n```"));
         assert!(closed("```mermaid\n> graph TD\n> ```"), "in a quote");
-        assert!(!closed("```mermaid\n> graph TD\n>"), "in a quote, still streaming");
+        assert!(
+            !closed("```mermaid\n> graph TD\n>"),
+            "in a quote, still streaming"
+        );
         assert!(closed("```mermaid\ngraph TD\n```\n"));
         assert!(closed("~~~mermaid\ngraph TD\n~~~"));
-        assert!(!closed("```mermaid\ngraph TD\n  a --> b"), "still streaming");
+        assert!(
+            !closed("```mermaid\ngraph TD\n  a --> b"),
+            "still streaming"
+        );
         assert!(!closed("```mermaid"));
         assert!(!closed("```mermaid\ngraph TD\n~~~"), "the other marker");
         assert!(!closed(""));
@@ -676,12 +766,30 @@ mod tests {
     fn the_page_inlines_mermaid_and_the_fence_and_fetches_nothing() {
         let code = "graph TD\n  a[\"</script><b>\"] --> b";
         let page = page(code, ReadingSize::STANDARD);
-        assert!(page.html.contains("globalThis[\"mermaid\"]"), "the bundle is inlined");
-        assert_eq!(page.html.matches("</script>").count(), 2, "the fence can't close a script");
-        let escaped = Value::from(code).to_string().replace('<', &format!("{}u003c", '\\'));
-        assert!(page.html.contains(&escaped), "the fence, as a JSON string with no `<`");
-        assert!(!page.html.replace(MERMAID_JS, "").contains("src="), "nothing is fetched");
-        assert_eq!(page.theme_css, tokens::theme_css(Scheme::APP, ReadingSize::STANDARD));
+        assert!(
+            page.html.contains("globalThis[\"mermaid\"]"),
+            "the bundle is inlined"
+        );
+        assert_eq!(
+            page.html.matches("</script>").count(),
+            2,
+            "the fence can't close a script"
+        );
+        let escaped = Value::from(code)
+            .to_string()
+            .replace('<', &format!("{}u003c", '\\'));
+        assert!(
+            page.html.contains(&escaped),
+            "the fence, as a JSON string with no `<`"
+        );
+        assert!(
+            !page.html.replace(MERMAID_JS, "").contains("src="),
+            "nothing is fetched"
+        );
+        assert_eq!(
+            page.theme_css,
+            tokens::theme_css(Scheme::APP, ReadingSize::STANDARD)
+        );
     }
 
     #[test]
@@ -707,13 +815,44 @@ mod tests {
     #[test]
     fn a_frame_is_cropped_to_what_it_drew() {
         let bg = [1, 2, 3];
-        let px = |drawn: bool| if drawn { [9, 9, 9, 255] } else { [1, 2, 3, 255] };
+        let px = |drawn: bool| {
+            if drawn {
+                [9, 9, 9, 255]
+            } else {
+                [1, 2, 3, 255]
+            }
+        };
         // Two rows of four: something at x = 0 and, lower, at x = 1.
-        let bgra = [px(true), px(false), px(false), px(false), px(false), px(true), px(false), px(false)].concat();
-        let cropped = crop(Frame { width: 4, height: 2, bgra }, bg).unwrap();
+        let bgra = [
+            px(true),
+            px(false),
+            px(false),
+            px(false),
+            px(false),
+            px(true),
+            px(false),
+            px(false),
+        ]
+        .concat();
+        let cropped = crop(
+            Frame {
+                width: 4,
+                height: 2,
+                bgra,
+            },
+            bg,
+        )
+        .unwrap();
         assert_eq!((cropped.width, cropped.height), (2, 2));
-        assert_eq!(cropped.bgra, [px(true), px(false), px(false), px(true)].concat());
-        let blank = Frame { width: 2, height: 1, bgra: [px(false), px(false)].concat() };
+        assert_eq!(
+            cropped.bgra,
+            [px(true), px(false), px(false), px(true)].concat()
+        );
+        let blank = Frame {
+            width: 2,
+            height: 1,
+            bgra: [px(false), px(false)].concat(),
+        };
         assert!(crop(blank, bg).is_none());
     }
 
@@ -722,14 +861,25 @@ mod tests {
         // 4 bytes a pixel, one pixel wide.
         let height = (BUDGET as f64 * share / 4.) as u32 + 1;
         let image = image::RgbaImage::new(1, height);
-        Drawn { image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])), width: 1., height: 1., shown_at: 0 }
+        Drawn {
+            image: Arc::new(RenderImage::new(vec![image::Frame::new(image)])),
+            width: 1.,
+            height: 1.,
+            shown_at: 0,
+        }
     }
 
     #[test]
     fn the_least_recently_shown_go_past_the_budget() {
         let mut entries = HashMap::new();
         for (key, shown_at) in [(1, 3), (2, 1), (3, 2)] {
-            entries.insert(key, Entry::Drawn(Drawn { shown_at, ..drawn(1. / 3.) }));
+            entries.insert(
+                key,
+                Entry::Drawn(Drawn {
+                    shown_at,
+                    ..drawn(1. / 3.)
+                }),
+            );
         }
         entries.insert(4, Entry::Failed);
         let evicted = evict(&mut entries, 3);
@@ -751,11 +901,19 @@ mod tests {
             };
             land(1, Ok(drawn(0.6)), cx);
             land(2, Ok(drawn(0.6)), cx);
-            assert_eq!(held(cx), [true, true, false, false], "1 has only just landed");
+            assert_eq!(
+                held(cx),
+                [true, true, false, false],
+                "1 has only just landed"
+            );
             // The view redraws with 1 shown (and 3 asked for).
             assert!(cx.global_mut::<Diagrams>().show(1).is_some());
             land(3, Ok(drawn(0.6)), cx);
-            assert_eq!(held(cx), [true, true, true, false], "1 is on screen, 2 only just landed");
+            assert_eq!(
+                held(cx),
+                [true, true, true, false],
+                "1 is on screen, 2 only just landed"
+            );
             // Nothing shown since: all but the last two to land go.
             land(4, Ok(drawn(0.6)), cx);
             assert_eq!(held(cx), [false, false, true, true]);

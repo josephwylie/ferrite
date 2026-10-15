@@ -269,7 +269,10 @@ fn a_repair_that_cannot_keep_the_damage_cuts_nothing() {
     fs::create_dir(dir.join("4").join(format!("log.damaged-{readable}.jsonl"))).unwrap();
     let store = Store::open(&dir).unwrap();
     assert!(store.writer(ThreadId::new(4)).is_err());
-    assert_eq!(fs::read_to_string(dir.join("4").join("log.jsonl")).unwrap(), planted);
+    assert_eq!(
+        fs::read_to_string(dir.join("4").join("log.jsonl")).unwrap(),
+        planted
+    );
 }
 
 fn temps(dir: &Path) -> Vec<String> {
@@ -388,7 +391,9 @@ fn an_amendment_appends_and_moves_no_earlier_byte() {
     #[cfg(unix)]
     let inode_before = inode(&log);
 
-    store.set_title(id, "live".into(), Some(&mut writer)).unwrap();
+    store
+        .set_title(id, "live".into(), Some(&mut writer))
+        .unwrap();
     drop(writer);
     store.set_title(id, "parked".into(), None).unwrap();
 
@@ -402,7 +407,11 @@ fn an_amendment_appends_and_moves_no_earlier_byte() {
     assert_eq!(store.load(id).unwrap().title(), Some("parked"));
     assert_eq!(
         lines(&log)[0],
-        before.split(|b| *b == b'\n').next().map(|l| String::from_utf8_lossy(l).into_owned()).unwrap(),
+        before
+            .split(|b| *b == b'\n')
+            .next()
+            .map(|l| String::from_utf8_lossy(l).into_owned())
+            .unwrap(),
         "the header line is never rewritten"
     );
 }
@@ -432,7 +441,10 @@ fn peeks_amendments_and_reopens_read_only_the_tail_of_a_long_log() {
         let start = store.bytes_read();
         act();
         let read = store.bytes_read() - start;
-        assert!(read <= bound, "{what} read {read} bytes of a {size} byte log");
+        assert!(
+            read <= bound,
+            "{what} read {read} bytes of a {size} byte log"
+        );
     }
     assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("renamed"));
 }
@@ -482,7 +494,10 @@ fn a_handover_line_alone_commits_the_switch() {
     drop(writer);
     let log = dir.join(id.to_string()).join("log.jsonl");
     let all = lines(&log);
-    assert!(all[0].contains(r#""provider":"claude""#), "the header is never rewritten");
+    assert!(
+        all[0].contains(r#""provider":"claude""#),
+        "the header is never rewritten"
+    );
     let switch = all
         .iter()
         .position(|line| line.starts_with(r#"{"type":"handover""#))
@@ -541,7 +556,10 @@ fn a_failed_rollback_closes_the_writer_until_reopened() {
     let mut reopened = store.writer(id).unwrap();
     reopened.record_prompt("after the reopen").unwrap();
     reopened.flush().unwrap();
-    assert_eq!(store.load(id).unwrap().prompt_texts(), vec!["after the reopen"]);
+    assert_eq!(
+        store.load(id).unwrap().prompt_texts(),
+        vec!["after the reopen"]
+    );
 }
 
 /// Marks are bookkeeping: each restates the facts as the log has them at
@@ -552,14 +570,21 @@ fn marks_restate_the_facts_and_change_nothing_a_reader_sees() {
     let dir = scratch("marks-derived");
     let store = Store::open(&dir).unwrap();
     let (id, mut writer) = long_thread(&store, 2);
-    store.set_title(id, "midway".into(), Some(&mut writer)).unwrap();
+    store
+        .set_title(id, "midway".into(), Some(&mut writer))
+        .unwrap();
     for turn in 0..150 {
         if turn % 25 == 0 {
             store.settle_all();
         }
         writer.record_prompt(&format!("more {turn}")).unwrap();
         writer
-            .record_event(&SessionEvent::TextDelta { text: "m".repeat(10_000) }, None)
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "m".repeat(10_000),
+                },
+                None,
+            )
             .unwrap();
         writer.record_event(&turn_end(), None).unwrap();
     }
@@ -571,7 +596,10 @@ fn marks_restate_the_facts_and_change_nothing_a_reader_sees() {
     let mut marks = 0;
     for line in &all[1..] {
         let record: Record = serde_json::from_str(line).unwrap();
-        if let Record::Mark { facts: restated, .. } = &record {
+        if let Record::Mark {
+            facts: restated, ..
+        } = &record
+        {
             assert_eq!(restated, &facts, "a mark restates the fold");
             marks += 1;
         } else if let Some(changed) = record.facts() {
@@ -588,9 +616,17 @@ fn marks_restate_the_facts_and_change_nothing_a_reader_sees() {
     super::compat_tests::plant(
         &bare,
         id.get(),
-        &(unmarked.iter().map(|line| line.as_str()).collect::<Vec<_>>().join("\n") + "\n"),
+        &(unmarked
+            .iter()
+            .map(|line| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"),
     );
-    assert_eq!(observed(&Store::open(&bare).unwrap(), id), observed(&store, id));
+    assert_eq!(
+        observed(&Store::open(&bare).unwrap(), id),
+        observed(&store, id)
+    );
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&bare);
 }
@@ -605,7 +641,8 @@ fn a_reopen_repairs_what_follows_the_newest_mark() {
     drop(writer);
     let log = dir.join(id.to_string()).join("log.jsonl");
     let good = fs::read(&log).unwrap();
-    let damage = "\0\0\0\0 a hole a power cut left\n{\"type\":\"prompt\",\"text\":\"after the hole\"}\n";
+    let damage =
+        "\0\0\0\0 a hole a power cut left\n{\"type\":\"prompt\",\"text\":\"after the hole\"}\n";
     let mut file = OpenOptions::new().append(true).open(&log).unwrap();
     file.write_all(damage.as_bytes()).unwrap();
     drop(file);
@@ -643,7 +680,11 @@ fn an_old_log_upgrades_once_and_ends_in_a_mark() {
         panic!("the upgrade ends in a mark: {}", all.last().unwrap());
     };
     assert_eq!(facts.provider, Provider::Codex);
-    assert_eq!(facts.model.as_deref(), Some("gpt-5.4"), "the old handover is not refolded");
+    assert_eq!(
+        facts.model.as_deref(),
+        Some("gpt-5.4"),
+        "the old handover is not refolded"
+    );
     #[cfg(unix)]
     let before = inode(&log);
     drop(store.writer(id).unwrap());
@@ -673,7 +714,10 @@ fn a_parked_thread_s_counts_come_from_its_tail() {
     writer.note_subagents(4);
     writer.flush_fully().unwrap();
     let summary = store.peek(id).unwrap().summary.unwrap();
-    assert_eq!((summary.turns, summary.prompted, summary.subagents), (1, true, Some(4)));
+    assert_eq!(
+        (summary.turns, summary.prompted, summary.subagents),
+        (1, true, Some(4))
+    );
 
     // After the last mark: counted from the lines that follow it.
     writer.record_prompt("five").unwrap();
@@ -691,7 +735,9 @@ fn tail_counts_agree_with_a_full_load() {
         let dir = scratch(&format!("summary-property-{seed}"));
         let store = Store::open(&dir).unwrap();
         let (id, mut writer) = store.create(Provider::Codex, None, main()).unwrap();
-        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         for step in 0..60 {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
             match (state >> 33) % 7 {
@@ -714,7 +760,10 @@ fn tail_counts_agree_with_a_full_load() {
         assert_eq!(summary.turns, snapshot.prompt_texts().len(), "seed {seed}");
         assert_eq!(
             summary.prompted,
-            snapshot.inputs().iter().any(|input| matches!(input, Input::Prompt(_))),
+            snapshot
+                .inputs()
+                .iter()
+                .any(|input| matches!(input, Input::Prompt(_))),
             "seed {seed}"
         );
         let _ = fs::remove_dir_all(&dir);
@@ -741,7 +790,10 @@ fn an_old_parked_log_is_counted_once_and_the_count_survives_its_upgrade() {
     let again = store.summary(id, count).unwrap();
     assert_eq!(again, first);
     assert_eq!(replays.get(), 1, "remembered, not replayed again");
-    assert!(store.bytes_read() - read <= 64 * 1024, "only the header was read");
+    assert!(
+        store.bytes_read() - read <= 64 * 1024,
+        "only the header was read"
+    );
     assert!(dir.join(SUMMARIES).is_file());
 
     // The first rename upgrades the log; its mark keeps the count.
@@ -779,7 +831,11 @@ fn a_boundary_never_waits_for_its_sync() {
     writer.record_prompt("go").unwrap();
     writer.record_event(&turn_end(), None).unwrap();
     assert!(started.elapsed() < std::time::Duration::from_millis(150));
-    assert_eq!(store.load(id).unwrap().prompt_texts(), vec!["go"], "written at once");
+    assert_eq!(
+        store.load(id).unwrap().prompt_texts(),
+        vec!["go"],
+        "written at once"
+    );
     store.settle_all();
     assert_eq!(store.syncs().0, barriers + 1, "synced by the worker");
     *worker::lock(&store.faults().sync_delay) = std::time::Duration::ZERO;
@@ -821,13 +877,20 @@ fn a_panic_rescue_writes_what_writers_hold() {
     let store = Store::open(&dir).unwrap();
     let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
     writer
-        .record_event(&SessionEvent::TextDelta { text: "mid-turn".into() }, None)
+        .record_event(
+            &SessionEvent::TextDelta {
+                text: "mid-turn".into(),
+            },
+            None,
+        )
         .unwrap();
     assert!(store.load(id).unwrap().inputs().is_empty(), "only buffered");
     store.rescue();
     assert_eq!(
         store.load(id).unwrap().inputs(),
-        vec![Input::Event(SessionEvent::TextDelta { text: "mid-turn".into() })]
+        vec![Input::Event(SessionEvent::TextDelta {
+            text: "mid-turn".into()
+        })]
     );
     drop(writer);
 }
@@ -844,7 +907,9 @@ fn an_amendment_never_waits_for_the_drive() {
     store.settle_all();
     *worker::lock(&store.faults().sync_delay) = std::time::Duration::from_millis(400);
     let started = std::time::Instant::now();
-    store.set_title(id, "live".into(), Some(&mut writer)).unwrap();
+    store
+        .set_title(id, "live".into(), Some(&mut writer))
+        .unwrap();
     store.set_title(parked, "parked".into(), None).unwrap();
     assert!(started.elapsed() < std::time::Duration::from_millis(250));
     assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("live"));
@@ -897,7 +962,10 @@ fn deleting_a_parking_thread_lets_go_of_its_log() {
     let path = store.log_path(id);
     let worker = store.shared.worker.get().unwrap();
     assert!(
-        worker.held().iter().all(|writer| worker::lock(writer).path != path),
+        worker
+            .held()
+            .iter()
+            .all(|writer| worker::lock(writer).path != path),
         "a writer still holds the deleted Thread's log"
     );
     assert!(!dir.join(id.to_string()).exists());

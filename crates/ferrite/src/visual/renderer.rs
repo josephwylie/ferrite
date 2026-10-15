@@ -81,9 +81,23 @@ pub(crate) async fn snapshot(
 ) -> Result<Snapshot, String> {
     let theme_css = tokens::theme_css(scheme, ReadingSize::STANDARD);
     let page = Page { html, theme_css };
-    let Settled { frame, height } = settle(engine, page, Viewport { width: width.max(1), scale }, |_| true, cx).await?;
+    let Settled { frame, height } = settle(
+        engine,
+        page,
+        Viewport {
+            width: width.max(1),
+            scale,
+        },
+        |_| true,
+        cx,
+    )
+    .await?;
     let height = height.unwrap_or_else(|| (frame.height as f32 / scale).round() as u32);
-    Ok(Snapshot { png: encode_png(&frame, background(scheme))?, width, height })
+    Ok(Snapshot {
+        png: encode_png(&frame, background(scheme))?,
+        width,
+        height,
+    })
 }
 
 /// A page that has settled: its last frame, and the height it last reported.
@@ -123,7 +137,11 @@ pub(super) async fn settle(
         if elapsed >= TIMEOUT {
             break;
         }
-        let quiet = if first_ready.is_some() { SETTLE } else { TIMEOUT - elapsed };
+        let quiet = if first_ready.is_some() {
+            SETTLE
+        } else {
+            TIMEOUT - elapsed
+        };
         let timer = executor.timer(quiet.min(TIMEOUT - elapsed));
         futures::select_biased! {
             woke = rx.next() => {
@@ -154,7 +172,8 @@ pub(super) async fn settle(
         }
     }
     drop(view);
-    let frame = frame.ok_or_else(|| format!("the page didn't draw within {} s", TIMEOUT.as_secs()))?;
+    let frame =
+        frame.ok_or_else(|| format!("the page didn't draw within {} s", TIMEOUT.as_secs()))?;
     Ok(Settled { frame, height })
 }
 
@@ -184,7 +203,8 @@ pub(crate) fn encode_png(frame: &Frame, bg: [u8; 3]) -> Result<Vec<u8>, String> 
             rgb.push((src as u32 + (under as u32 * (255 - a) + 127) / 255).min(255) as u8);
         }
     }
-    let image = image::RgbImage::from_raw(frame.width, frame.height, rgb).ok_or("a frame is width × height × 4 bytes")?;
+    let image = image::RgbImage::from_raw(frame.width, frame.height, rgb)
+        .ok_or("a frame is width × height × 4 bytes")?;
     let mut png = Vec::new();
     image
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -222,7 +242,11 @@ impl RenderQueue {
 /// Core's seam (`ferrite_core::visual::Renderer`): called on a provider's
 /// reader thread, it only queues; the reply goes back from the main thread.
 impl ferrite_core::visual::Renderer for RenderQueue {
-    fn render(&self, request: ferrite_core::visual::RenderRequest, reply: ferrite_core::visual::Reply) {
+    fn render(
+        &self,
+        request: ferrite_core::visual::RenderRequest,
+        reply: ferrite_core::visual::Reply,
+    ) {
         self.render(Request {
             html: request.html,
             width: page_width(),
@@ -246,7 +270,9 @@ pub(crate) fn start(cx: &mut App) -> RenderQueue {
             // Each render waits on its own page; they run side by side.
             cx.spawn(async move |cx| {
                 let result = match engine(cx).await {
-                    Ok(engine) => snapshot(engine, request.html, request.width, 1.0, request.scheme, cx).await,
+                    Ok(engine) => {
+                        snapshot(engine, request.html, request.width, 1.0, request.scheme, cx).await
+                    }
                     Err(why) => Err(why),
                 };
                 (request.reply)(result);
@@ -266,7 +292,9 @@ pub(super) async fn engine(cx: &AsyncApp) -> Result<Rc<dyn Engine>, String> {
             Availability::Ready(engine) => return Ok(engine),
             Availability::Unavailable(why) => return Err(why.to_string()),
             Availability::Starting if started.elapsed() < START_TIMEOUT => {
-                cx.background_executor().timer(Duration::from_millis(50)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
             }
             Availability::Starting => return Err("Chromium didn't start in time".into()),
         }
@@ -282,7 +310,11 @@ mod tests {
     #[test]
     fn a_frame_becomes_an_opaque_png_composited_over_the_background() {
         // One opaque red pixel, one transparent one.
-        let frame = Frame { width: 2, height: 1, bgra: vec![0, 0, 255, 255, 0, 0, 0, 0] };
+        let frame = Frame {
+            width: 2,
+            height: 1,
+            bgra: vec![0, 0, 255, 255, 0, 0, 0, 0],
+        };
         let png = encode_png(&frame, [0x1b, 0x1b, 0x1c]).unwrap();
         let decoded = image::load_from_memory(&png).unwrap().to_rgb8();
         assert_eq!(decoded.get_pixel(0, 0).0, [255, 0, 0]);
@@ -292,7 +324,9 @@ mod tests {
     #[gpui::test]
     async fn a_snapshot_is_the_laid_out_page(cx: &mut TestAppContext) {
         let engine: Rc<dyn Engine> = Rc::new(FakeEngine::new());
-        let task = cx.spawn(async move |cx| snapshot(engine, "<p>hi</p>".into(), 300, 1.0, Scheme::Dark, &cx).await);
+        let task = cx.spawn(async move |cx| {
+            snapshot(engine, "<p>hi</p>".into(), 300, 1.0, Scheme::Dark, &cx).await
+        });
         cx.run_until_parked();
         cx.executor().advance_clock(SETTLE * 2);
         let shot = task.await.unwrap();

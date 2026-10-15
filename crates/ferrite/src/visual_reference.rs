@@ -1447,15 +1447,28 @@ fn visuals(label: &str) -> Scene {
         ),
     )
     .ok("v-mock", "Shown to the operator inline.")
-    .tool("v-bad", VISUAL, visual_input("Repo size by directory", "", "<p>"))
-    .done("v-bad", "The visual did not finish rendering within 45s.", true, ToolResult::Opaque)
+    .tool(
+        "v-bad",
+        VISUAL,
+        visual_input("Repo size by directory", "", "<p>"),
+    )
+    .done(
+        "v-bad",
+        "The visual did not finish rendering within 45s.",
+        true,
+        ToolResult::Opaque,
+    )
     .text("That one timed out; drawing it again as a treemap.");
     // Half of the treemap's HTML has streamed in.
     let half = &TREEMAP_PAGE[..TREEMAP_PAGE.len() / 2];
     feed.ev(SessionEvent::ToolDraft {
         id: "v-tree".into(),
         name: VISUAL.into(),
-        input: visual_input("Repo size by directory", "Lines of code; click to zoom", half),
+        input: visual_input(
+            "Repo size by directory",
+            "Lines of code; click to zoom",
+            half,
+        ),
     });
     scene
 }
@@ -1468,11 +1481,19 @@ fn visuals_group() -> (Scene, Setup) {
     let threads = members(
         &mut scene,
         &ferrite,
-        &["Token spend", "Notice options", "Theme retune", "Fold regression"],
+        &[
+            "Token spend",
+            "Notice options",
+            "Theme retune",
+            "Fold regression",
+        ],
     );
-    for (index, (title, page)) in [("Token usage", STATS_PAGE), ("Notice options", MOCKUPS_PAGE)]
-        .into_iter()
-        .enumerate()
+    for (index, (title, page)) in [
+        ("Token usage", STATS_PAGE),
+        ("Notice options", MOCKUPS_PAGE),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let feed = Feed(scene.feeds.borrow()[index].clone());
         feed.text("Here it is.")

@@ -112,9 +112,13 @@ impl CockpitWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Subscription {
-        cx.subscribe_in(cockpit, window, |this, _, going: &GoToMachine, window, cx| {
-            this.go_to(going.index, going.open.clone(), window, cx)
-        })
+        cx.subscribe_in(
+            cockpit,
+            window,
+            |this, _, going: &GoToMachine, window, cx| {
+                this.go_to(going.index, going.open.clone(), window, cx)
+            },
+        )
     }
 
     /// Put the window on machine `index`: a Cockpit attached there, with
@@ -133,7 +137,11 @@ impl CockpitWindow {
             let Some(machines) = view.machines() else {
                 return;
             };
-            (machines, view.successor_preferences(), view.launch_provider())
+            (
+                machines,
+                view.successor_preferences(),
+                view.launch_provider(),
+            )
         };
         let left = machines.read(cx).selected_key();
         let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
@@ -157,7 +165,8 @@ impl CockpitWindow {
                 .with_landing(open, until)
         });
         view.update(cx, |view, _| view.set_parts(self.overlay.is_some()));
-        self.cockpit.update(cx, |left, cx| left.take_server_bands(window, cx));
+        self.cockpit
+            .update(cx, |left, cx| left.take_server_bands(window, cx));
         self._going = Self::follow(&view, window, cx);
         self.cockpit = view;
         cx.notify();

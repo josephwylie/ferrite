@@ -520,7 +520,9 @@ fn find_counts_a_fence_drawn_as_its_diagram(cx: &mut TestAppContext) {
     let (count, painted) = reader_state(&view, cx).unwrap();
     assert_eq!(count.as_deref(), Some("1/2"));
     assert!(
-        painted.expect("the diagram reports").contains(&diagram.center()),
+        painted
+            .expect("the diagram reports")
+            .contains(&diagram.center()),
         "the fence's occurrence is its diagram"
     );
     cx.simulate_keystrokes("enter");
@@ -528,7 +530,10 @@ fn find_counts_a_fence_drawn_as_its_diagram(cx: &mut TestAppContext) {
     let (count, painted) = reader_state(&view, cx).unwrap();
     assert_eq!(count.as_deref(), Some("2/2"));
     let painted = painted.expect("the last occurrence painted");
-    assert!(painted.size.height < diagram.size.height, "a line, not the diagram");
+    assert!(
+        painted.size.height < diagram.size.height,
+        "a line, not the diagram"
+    );
     assert!(reader_shows(&view, painted, cx));
 }
 

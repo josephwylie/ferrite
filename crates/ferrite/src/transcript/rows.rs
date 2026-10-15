@@ -214,7 +214,10 @@ impl TranscriptRows {
     /// for answers at `reading` px.
     pub(crate) fn new(blocks: &[Block], shape: &RowShape, reading: f32) -> Self {
         let rows = project(blocks, shape, reading);
-        Self { visuals: visual_indices(&rows), rows: rows.into() }
+        Self {
+            visuals: visual_indices(&rows),
+            rows: rows.into(),
+        }
     }
 
     /// The indices of the rows that are visuals.

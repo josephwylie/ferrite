@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use cef::args::Args;
 use cef::MainArgs;
 use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows_sys::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 pub(super) const SANDBOXED: bool = false;
 
@@ -25,7 +27,10 @@ pub(super) struct Library;
 
 impl Library {
     pub(super) fn load(exe: &Path) -> Result<Self, String> {
-        let dll = exe.parent().ok_or("executable has no parent directory")?.join("libcef.dll");
+        let dll = exe
+            .parent()
+            .ok_or("executable has no parent directory")?
+            .join("libcef.dll");
         if !dll.exists() {
             return Err(format!(
                 "{} not found (visuals need Chromium beside ferrite.exe, as the installer lays it out)",

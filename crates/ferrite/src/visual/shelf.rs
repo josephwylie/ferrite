@@ -72,7 +72,12 @@ fn theme_css(reading: ReadingSize) -> String {
 
 impl Shelf {
     pub(crate) fn new(on_height: OnHeight) -> Self {
-        Self { inner: Rc::new(RefCell::new(Inner { slots: HashMap::new() })), on_height }
+        Self {
+            inner: Rc::new(RefCell::new(Inner {
+                slots: HashMap::new(),
+            })),
+            on_height,
+        }
     }
 
     /// The live view for `visual`, opened (unpainted) if it has none, and
@@ -87,7 +92,12 @@ impl Shelf {
             Availability::Starting | Availability::Unavailable(_) => return None,
         };
         let theme = theme_css(reading);
-        let existing = self.inner.borrow().slots.get(&visual.id).map(|slot| slot.web.clone());
+        let existing = self
+            .inner
+            .borrow()
+            .slots
+            .get(&visual.id)
+            .map(|slot| slot.web.clone());
         if let Some(web) = existing {
             web.update(cx, |web, cx| {
                 web.set_html(visual.html.clone(), cx);
@@ -95,13 +105,24 @@ impl Shelf {
             });
             return Some(web);
         }
-        let web = WebView::new(engine, Page { html: visual.html.clone(), theme_css: theme }, cx);
+        let web = WebView::new(
+            engine,
+            Page {
+                html: visual.html.clone(),
+                theme_css: theme,
+            },
+            cx,
+        );
         let on_height = self.on_height.clone();
         let id = visual.id.clone();
         let subscription = cx.subscribe(&web, move |_, _: &HeightChanged, cx| on_height(&id, cx));
         self.inner.borrow_mut().slots.insert(
             visual.id.clone(),
-            Slot { web: web.clone(), near: false, _height: subscription },
+            Slot {
+                web: web.clone(),
+                near: false,
+                _height: subscription,
+            },
         );
         Some(web)
     }
@@ -136,7 +157,14 @@ impl Shelf {
                 None => Stage::Waiting,
             },
         };
-        card::render(block, visual, stage, self.actions(visual, reading), grid, selection)
+        card::render(
+            block,
+            visual,
+            stage,
+            self.actions(visual, reading),
+            grid,
+            selection,
+        )
     }
 
     fn actions(&self, visual: &Visual, reading: ReadingSize) -> Actions {
@@ -147,10 +175,14 @@ impl Shelf {
             open_in_browser: Rc::new(move |_, cx| {
                 match write_standalone(&id, &html, &theme_css(reading)) {
                     Ok(path) => cx.open_url(&format!("file://{}", path.display())),
-                    Err(error) => ferrite_core::log!("could not write the visual for a browser: {error}"),
+                    Err(error) => {
+                        ferrite_core::log!("could not write the visual for a browser: {error}")
+                    }
                 }
             }),
-            copy_html: Rc::new(move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string((*copied).clone()))),
+            copy_html: Rc::new(move |_, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string((*copied).clone()))
+            }),
         }
     }
 
@@ -173,7 +205,8 @@ impl Shelf {
             return;
         }
         let grid = Grid::of(reading);
-        let content = f32::from(viewport.size.width) - crate::theme::TX_PAD_L - crate::theme::TX_PAD_R;
+        let content =
+            f32::from(viewport.size.width) - crate::theme::TX_PAD_L - crate::theme::TX_PAD_R;
         let width = page_width(content, grid);
         let live_width = width >= MIN_LIVE_WIDTH;
         if live_width {
@@ -181,8 +214,18 @@ impl Shelf {
         }
         for (index, visual) in rows.iter().filter(|(_, visual)| shows_page(visual)) {
             let distance = distance(list, *index, span * FAR, height_of);
-            let was = self.inner.borrow().slots.get(&visual.id).is_some_and(|slot| slot.near);
-            let near = live_width && if was { distance <= span * FAR } else { distance <= span * NEAR };
+            let was = self
+                .inner
+                .borrow()
+                .slots
+                .get(&visual.id)
+                .is_some_and(|slot| slot.near);
+            let near = live_width
+                && if was {
+                    distance <= span * FAR
+                } else {
+                    distance <= span * NEAR
+                };
             if near == was {
                 continue;
             }
@@ -190,13 +233,21 @@ impl Shelf {
             let web = if near {
                 self.view(visual, reading, cx)
             } else {
-                self.inner.borrow().slots.get(&visual.id).map(|slot| slot.web.clone())
+                self.inner
+                    .borrow()
+                    .slots
+                    .get(&visual.id)
+                    .map(|slot| slot.web.clone())
             };
             let Some(web) = web else { continue };
             if let Some(slot) = self.inner.borrow_mut().slots.get_mut(&visual.id) {
                 slot.near = near;
             }
-            let reach = if near { Reach::Near { width: px(width) } } else { Reach::Far };
+            let reach = if near {
+                Reach::Near { width: px(width) }
+            } else {
+                Reach::Far
+            };
             web.update(cx, |web, cx| web.set_reach(reach, window, cx));
         }
     }
@@ -231,7 +282,12 @@ pub(crate) fn page_width(content: f32, grid: Grid) -> f32 {
 /// summed no further than `cap`. `ListState` places only measured rows at or
 /// below its top row; the rest are summed from `height_of`, else
 /// [`ROW_ESTIMATE`].
-fn distance(list: &ListState, index: usize, cap: f32, height_of: &dyn Fn(usize) -> Option<f32>) -> f32 {
+fn distance(
+    list: &ListState,
+    index: usize,
+    cap: f32,
+    height_of: &dyn Fn(usize) -> Option<f32>,
+) -> f32 {
     let viewport = list.viewport_bounds();
     let top = list.logical_scroll_top();
     let height = |ix: usize| -> f32 {
@@ -252,7 +308,9 @@ fn distance(list: &ListState, index: usize, cap: f32, height_of: &dyn Fn(usize) 
         return d;
     }
     if let Some(b) = list.bounds_for_item(index) {
-        let gap: Pixels = (b.top() - viewport.bottom()).max(viewport.top() - b.bottom()).max(px(0.));
+        let gap: Pixels = (b.top() - viewport.bottom())
+            .max(viewport.top() - b.bottom())
+            .max(px(0.));
         return f32::from(gap);
     }
     // Below and not laid out: walk down from the top row.
@@ -273,7 +331,16 @@ fn distance(list: &ListState, index: usize, cap: f32, height_of: &dyn Fn(usize) 
 fn write_standalone(id: &str, html: &str, theme_css: &str) -> std::io::Result<std::path::PathBuf> {
     let dir = std::env::temp_dir().join("ferrite-visuals");
     std::fs::create_dir_all(&dir)?;
-    let name: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let name: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let path = dir.join(format!("{name}.html"));
     std::fs::write(&path, standalone(html, theme_css))?;
     Ok(path)

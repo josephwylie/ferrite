@@ -986,7 +986,9 @@ pub fn reply() -> Vec<Step> {
 /// agent answers with a visual.
 fn asks_for_a_visual(prompt: &str) -> bool {
     let prompt = prompt.to_lowercase();
-    ["show me", "visual", "chart", "mock up"].iter().any(|ask| prompt.contains(ask))
+    ["show me", "visual", "chart", "mock up"]
+        .iter()
+        .any(|ask| prompt.contains(ask))
 }
 
 /// The demo agent's visual (ADR 0013): one line, then a `show_visual` call
@@ -1014,13 +1016,21 @@ fn visual_reply() -> Vec<Step> {
         }
         steps.push(Step::new(
             160,
-            SessionEvent::ToolDraft { id: ID.into(), name: name.into(), input: input(&PAGE[..end]) },
+            SessionEvent::ToolDraft {
+                id: ID.into(),
+                name: name.into(),
+                input: input(&PAGE[..end]),
+            },
         ));
         end += chunk;
     }
     steps.push(Step::new(
         120,
-        SessionEvent::ToolStarted { id: ID.into(), name: name.into(), input: input(PAGE) },
+        SessionEvent::ToolStarted {
+            id: ID.into(),
+            name: name.into(),
+            input: input(PAGE),
+        },
     ));
     steps.push(Step::new(
         900,
@@ -1031,10 +1041,16 @@ fn visual_reply() -> Vec<Step> {
             result: ferrite_core::ToolResult::Opaque,
         },
     ));
-    prose(&mut steps, "Spend peaks on the nights the Group runs; Opus is most of it.");
+    prose(
+        &mut steps,
+        "Spend peaks on the nights the Group runs; Opus is most of it.",
+    );
     steps.push(Step::new(
         30,
-        SessionEvent::TurnEnded { outcome: TurnOutcome::Completed, cost_usd: Some(0.0124) },
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: Some(0.0124),
+        },
     ));
     steps
 }

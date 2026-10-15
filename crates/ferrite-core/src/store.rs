@@ -25,9 +25,9 @@ use activity::{Execution as PersistedExecution, PersistedActivity};
 mod base;
 use base::{Base, Tracker};
 mod worker;
-use worker::Worker;
 #[cfg(test)]
 pub(crate) use worker::lock as worker_lock;
+use worker::Worker;
 #[cfg(test)]
 mod activity_tests;
 #[cfg(test)]
@@ -120,9 +120,7 @@ const READER: &str = "this window reads its Threads; the Ferrite server writes t
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Claude,
@@ -497,7 +495,9 @@ enum Record {
         facts: Option<Facts>,
     },
     /// Schema 13: the header facts after a change, restated whole.
-    Facts { facts: Facts },
+    Facts {
+        facts: Facts,
+    },
     /// Schema 13: a bookmark the store writes for itself. It restates the
     /// facts at this point, so a peek or a reopen reads back from the end
     /// to the newest one instead of the whole log, and certifies that every
@@ -2057,7 +2057,8 @@ impl Store {
             flush_interval,
             full_sync_interval: FULL_SYNC_INTERVAL,
             mark_spacing: MARK_SPACING,
-            base_cost: 2 * crate::activity::ActivityLimits::default().content_bytes_per_subject as u64,
+            base_cost: 2 * crate::activity::ActivityLimits::default().content_bytes_per_subject
+                as u64,
             shared,
             #[cfg(test)]
             fail_create: false,
@@ -2108,7 +2109,11 @@ impl Store {
     /// Marks this far apart at least, and replay bases sized for an
     /// Activity with these limits: a small world for a test.
     #[cfg(test)]
-    pub(crate) fn scaled(mut self, mark_spacing: u64, limits: crate::activity::ActivityLimits) -> Self {
+    pub(crate) fn scaled(
+        mut self,
+        mark_spacing: u64,
+        limits: crate::activity::ActivityLimits,
+    ) -> Self {
         self.mark_spacing = mark_spacing;
         self.base_cost = 2 * limits.content_bytes_per_subject as u64;
         self
@@ -2271,7 +2276,10 @@ impl Store {
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while std::time::Instant::now() < deadline {
-            let held_done = worker.held().iter().all(|writer| worker::lock(writer).finished());
+            let held_done = worker
+                .held()
+                .iter()
+                .all(|writer| worker::lock(writer).finished());
             let live = worker.queue().live_writers();
             let live_done = live.iter().all(|writer| {
                 let state = worker::lock(writer);
@@ -2567,7 +2575,11 @@ impl Store {
             None => Some(after),
             Some(None) => None,
             Some(Some(mark)) => Some(Summary {
-                turns: if reset { after.turns } else { mark.turns + after.turns },
+                turns: if reset {
+                    after.turns
+                } else {
+                    mark.turns + after.turns
+                },
                 prompted: mark.prompted || after.prompted,
                 subagents: mark.subagents,
             }),
@@ -3047,20 +3059,27 @@ impl Store {
 
     /// Upgrade an older log to the current schema before anything is
     /// appended (`rewrite_from`), ending it with a mark.
-    fn upgrade(&self, id: ThreadId, bytes: &[u8], parsed: Parsed) -> Result<ThreadWriter, LoadError> {
+    fn upgrade(
+        &self,
+        id: ThreadId,
+        bytes: &[u8],
+        parsed: Parsed,
+    ) -> Result<ThreadWriter, LoadError> {
         let facts = parsed.snapshot.facts();
         let mut summary = Summary::default();
         for record in &parsed.snapshot.records {
             summary.observe(record);
         }
         // A parked row counted this log's subagents once already: keep it.
-        summary.subagents = self
-            .cached_summary(id)
-            .and_then(|cached| cached.subagents);
+        summary.subagents = self.cached_summary(id).and_then(|cached| cached.subagents);
         // Follow every record where it will sit in the upgraded log — the
         // same bytes after a new header line — so the upgrade's mark names
         // a base, and a long Thread's first revive is already bounded.
-        let old_header = parsed.offsets.first().copied().unwrap_or(parsed.readable as u64);
+        let old_header = parsed
+            .offsets
+            .first()
+            .copied()
+            .unwrap_or(parsed.readable as u64);
         let new_header = line(&Header::of(facts.clone()))?.len() as u64;
         let mut tracker = Tracker::new(self.base_cost);
         for (at, record) in parsed.offsets.iter().zip(&parsed.snapshot.records) {
@@ -3201,7 +3220,10 @@ impl Store {
             Some(handover) if !handover.delivered => self.load(id)?.last_handover(),
             _ => None,
         };
-        let prompted = writer.summary.as_ref().is_some_and(|summary| summary.prompted)
+        let prompted = writer
+            .summary
+            .as_ref()
+            .is_some_and(|summary| summary.prompted)
             || snapshot
                 .records
                 .iter()
@@ -4301,9 +4323,7 @@ impl WriterState {
 
     /// Bytes written since the newest mark (or the header).
     fn since_mark(&self) -> u64 {
-        let marked = self
-            .last_mark
-            .map_or(0, |at| at + self.mark_len as u64);
+        let marked = self.last_mark.map_or(0, |at| at + self.mark_len as u64);
         self.len.saturating_sub(marked)
     }
 

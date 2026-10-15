@@ -398,7 +398,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 },
             ),
         ),
-        ("command_take_recovered", command(30, Op::TakeRecovered { thread })),
+        (
+            "command_take_recovered",
+            command(30, Op::TakeRecovered { thread }),
+        ),
         (
             "command_recall",
             command(
@@ -410,7 +413,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 },
             ),
         ),
-        ("command_revive_group", command(32, Op::ReviveGroup { group })),
+        (
+            "command_revive_group",
+            command(32, Op::ReviveGroup { group }),
+        ),
         (
             "command_cli_replaced",
             command(

@@ -108,7 +108,11 @@ pub(super) fn theme_script(theme_css: &str) -> String {
 
 /// The height carried by a console line, if it is one of ours.
 pub(super) fn parse_height(console_message: &str) -> Option<u32> {
-    console_message.strip_prefix(HEIGHT_PREFIX)?.trim().parse().ok()
+    console_message
+        .strip_prefix(HEIGHT_PREFIX)?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// `text` as a double-quoted JavaScript string literal.
@@ -138,7 +142,10 @@ mod tests {
 
     #[test]
     fn theme_comes_before_the_page() {
-        let doc = assemble(&Page { html: "<p>hi</p>".into(), theme_css: ":root{--a:1}".into() });
+        let doc = assemble(&Page {
+            html: "<p>hi</p>".into(),
+            theme_css: ":root{--a:1}".into(),
+        });
         let theme = doc.find(":root{--a:1}").unwrap();
         let body = doc.find("<p>hi</p>").unwrap();
         assert!(theme < body);

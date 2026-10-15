@@ -50,7 +50,11 @@ pub(super) fn button_type(button: MouseButton) -> MouseButtonType {
 
 /// A mouse event at view position (`x`, `y`) in logical pixels (CEF's DIPs).
 pub(super) fn mouse_event(x: f32, y: f32, flags: u32) -> MouseEvent {
-    MouseEvent { x: x.round() as i32, y: y.round() as i32, modifiers: flags }
+    MouseEvent {
+        x: x.round() as i32,
+        y: y.round() as i32,
+        modifiers: flags,
+    }
 }
 
 /// The CEF events for one key press or release.
@@ -58,14 +62,23 @@ pub(super) fn mouse_event(x: f32, y: f32, flags: u32) -> MouseEvent {
 /// Down: a `RAWKEYDOWN` for the physical key, then one `CHAR` per UTF-16 unit
 /// of `text` (a windowless browser doesn't derive text from raw keys). Up: a
 /// `KEYUP`.
-pub(super) fn key_events(key: &str, text: Option<&str>, down: bool, modifiers: Modifiers) -> Vec<KeyEvent> {
+pub(super) fn key_events(
+    key: &str,
+    text: Option<&str>,
+    down: bool,
+    modifiers: Modifiers,
+) -> Vec<KeyEvent> {
     let flags = modifier_flags(modifiers);
     let (windows_key_code, mac_key_code) = key_codes(key);
     let native_key_code = native_key_code(windows_key_code, mac_key_code, down);
     let unmodified = first_utf16(key);
     let character = text.map(first_utf16).unwrap_or(unmodified);
     let physical = KeyEvent {
-        type_: if down { KeyEventType::RAWKEYDOWN } else { KeyEventType::KEYUP },
+        type_: if down {
+            KeyEventType::RAWKEYDOWN
+        } else {
+            KeyEventType::KEYUP
+        },
         modifiers: flags,
         windows_key_code,
         native_key_code,
@@ -78,7 +91,11 @@ pub(super) fn key_events(key: &str, text: Option<&str>, down: bool, modifiers: M
         for unit in text.unwrap_or_default().encode_utf16() {
             // AppKit reports Return as LF; Chromium's CHAR path wants CR
             // (as Windows' own WM_CHAR has it).
-            let unit = if unit == b'\n' as u16 { b'\r' as u16 } else { unit };
+            let unit = if unit == b'\n' as u16 {
+                b'\r' as u16
+            } else {
+                unit
+            };
             events.push(KeyEvent {
                 type_: KeyEventType::CHAR,
                 modifiers: flags,
@@ -176,7 +193,10 @@ fn key_codes(key: &str) -> (i32, i32) {
         ];
         const MAC_DIGITS: [i32; 10] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25];
         if c.is_ascii_lowercase() {
-            return (c.to_ascii_uppercase() as i32, MAC_LETTERS[(c as u8 - b'a') as usize]);
+            return (
+                c.to_ascii_uppercase() as i32,
+                MAC_LETTERS[(c as u8 - b'a') as usize],
+            );
         }
         if c.is_ascii_digit() {
             return (c as i32, MAC_DIGITS[(c as u8 - b'0') as usize]);

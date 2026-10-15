@@ -104,7 +104,10 @@ impl Coordinators {
                 if persisted.version != SCHEMA_VERSION {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("coordinators version {} is not supported", persisted.version),
+                        format!(
+                            "coordinators version {} is not supported",
+                            persisted.version
+                        ),
                     ));
                 }
                 persisted.projects
@@ -336,12 +339,7 @@ pub fn brief_changed_prompt(brief: &Brief) -> String {
 /// A worker's first prompt: the Project's brief and its one task. Where
 /// the Project follows PRs, the worker opens one for its branch, so its
 /// checks and reviews have somewhere to come from.
-pub fn worker_prompt(
-    brief: &Brief,
-    coordinator: ThreadId,
-    task: &str,
-    follow_prs: bool,
-) -> String {
+pub fn worker_prompt(brief: &Brief, coordinator: ThreadId, task: &str, follow_prs: bool) -> String {
     let deliver = if follow_prs {
         " When your work is ready, push your branch and open a pull request for it \
          (`gh pr create`): its failing checks and review comments will be sent back to you."
@@ -446,7 +444,10 @@ pub fn feedback(pr: &PrFeedback) -> Vec<Feedback> {
 
 /// The prompt that sends a PR's new feedback back to its worker.
 pub fn feedback_prompt(number: u64, items: &[&Feedback]) -> String {
-    let list: Vec<String> = items.iter().map(|item| format!("- {}", item.text)).collect();
+    let list: Vec<String> = items
+        .iter()
+        .map(|item| format!("- {}", item.text))
+        .collect();
     format!(
         "Your pull request #{number} has new feedback. Fix what it asks for on your \
          branch, push, and report back as before.\n\n{}",

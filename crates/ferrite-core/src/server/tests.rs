@@ -1988,7 +1988,10 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let again = caller.answer("2", "coordinator.start", serde_json::json!({ "cwd": repo }));
-    assert_eq!(again["result"]["coordinator"]["thread"], coordinator, "{again}");
+    assert_eq!(
+        again["result"]["coordinator"]["thread"], coordinator,
+        "{again}"
+    );
     let briefed = caller.answer(
         "3",
         "agent.read",
@@ -2011,9 +2014,15 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         serde_json::json!({ "thread": coordinator, "task": "Add invoices", "title": "invoices" }),
     );
     let info = &worker["result"]["thread"];
-    let thread = info["thread"].as_u64().unwrap_or_else(|| panic!("{worker}"));
+    let thread = info["thread"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{worker}"));
     assert_eq!(info["title"], "invoices");
-    assert_ne!(info["cwd"], serde_json::json!(repo), "a worktree of its own");
+    assert_ne!(
+        info["cwd"],
+        serde_json::json!(repo),
+        "a worktree of its own"
+    );
     let provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
@@ -2024,7 +2033,12 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         serde_json::json!({ "thread": thread, "lines": 400 }),
     );
     let briefed = briefed["result"]["text"].as_str().unwrap();
-    for part in ["## Your task", "Add invoices", "Ship billing", "## Remember"] {
+    for part in [
+        "## Your task",
+        "Add invoices",
+        "Ship billing",
+        "## Remember",
+    ] {
         assert!(briefed.contains(part), "{part:?} in {briefed}");
     }
     let groups = std::fs::read_to_string(harness.dir.join("threads").join("groups.json")).unwrap();

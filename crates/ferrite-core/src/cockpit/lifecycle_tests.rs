@@ -2,8 +2,8 @@
 //! Gates decide readiness; no CLI, timing assumptions, or worker-side sends.
 use super::*;
 use crate::cockpit::Cockpit;
-use crate::roster::PaneIdentity;
 use crate::providers::applied;
+use crate::roster::PaneIdentity;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -175,7 +175,8 @@ fn delayed_draft_success_delivers_once_and_preserves_unrelated_roster_actions() 
     assert!(!cockpit.thread(provisional).unwrap().first_prompt_sent());
     assert!(!cockpit.thread(provisional).unwrap().has_prompt_history());
     assert!(cockpit
-        .engine().store
+        .engine()
+        .store
         .load(provisional)
         .unwrap()
         .prompt_texts()
@@ -313,7 +314,8 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
         .unwrap();
     cockpit.send(thread, "after".into());
     assert!(cockpit
-        .engine().store
+        .engine()
+        .store
         .load(thread)
         .unwrap()
         .last_handover()
@@ -329,7 +331,8 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
     assert!(
         !cockpit
-            .engine().store
+            .engine()
+            .store
             .load(thread)
             .unwrap()
             .last_handover()
@@ -347,7 +350,8 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
     cockpit.park(thread).unwrap();
     assert!(
         cockpit
-            .engine().store
+            .engine()
+            .store
             .load(thread)
             .unwrap()
             .last_handover()
@@ -369,7 +373,8 @@ fn failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving() {
         .set_provider(thread, choice(Provider::Codex))
         .unwrap();
     cockpit
-        .engine().store
+        .engine()
+        .store
         .faults()
         .fail_commit
         .store(true, Ordering::SeqCst);
@@ -479,7 +484,8 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
     assert_eq!(*replacement.efforts.lock().unwrap(), [Some("high".into())]);
     assert!(
         !cockpit
-            .engine().store
+            .engine()
+            .store
             .load(thread)
             .unwrap()
             .last_handover()

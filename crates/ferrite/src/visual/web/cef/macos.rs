@@ -53,7 +53,11 @@ impl Helper {
             sandbox
         });
         let loader = loader(exe, true)?;
-        Ok(Self { _loader: loader, _sandbox: sandbox, args })
+        Ok(Self {
+            _loader: loader,
+            _sandbox: sandbox,
+            args,
+        })
     }
 
     pub(super) fn args(&self) -> &MainArgs {
@@ -65,7 +69,11 @@ fn loader(exe: &Path, helper: bool) -> Result<LibraryLoader, String> {
     let exe_dir = exe.parent().ok_or("executable has no parent directory")?;
     // CEF's loader aborts the process if the framework is missing, so check
     // first: `cargo run` outside the bundle should get an error, not a crash.
-    let frameworks = if helper { exe_dir.join("../../..") } else { exe_dir.join("../Frameworks") };
+    let frameworks = if helper {
+        exe_dir.join("../../..")
+    } else {
+        exe_dir.join("../Frameworks")
+    };
     let framework = frameworks.join("Chromium Embedded Framework.framework");
     if !framework.join("Chromium Embedded Framework").exists() {
         return Err(format!(
