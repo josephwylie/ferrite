@@ -80,7 +80,8 @@ pub fn settings_dir() -> PathBuf {
 
 /// `ferrited` (ADR 0026): the Server alone, for a machine a window reaches
 /// over ssh — no window, so none of its libraries. `ferrited server` runs
-/// it; `ferrited bridge` is what the window's ssh runs.
+/// it; `ferrited bridge` is what the window's ssh runs; on Linux,
+/// `ferrited service install|uninstall` has systemd keep it running.
 pub fn ferrited(args: &[String]) -> i32 {
     let executable = std::env::current_exe().unwrap_or_else(|_| "ferrited".into());
     match args.get(1).map(String::as_str) {
@@ -95,16 +96,24 @@ pub fn ferrited(args: &[String]) -> i32 {
                 .and_then(|pid| pid.parse().ok()),
         }),
         Some("bridge") => bridge::run(&store_dir(), &executable),
+        #[cfg(target_os = "linux")]
+        Some("service") => agent::service(&executable, args.get(2).map(String::as_str)),
         _ => {
-            eprintln!("usage: ferrited server | ferrited bridge");
+            eprintln!("usage: ferrited server | ferrited bridge{USAGE_SERVICE}");
             2
         }
     }
 }
 
+/// `ferrited service`, where there is one.
+#[cfg(target_os = "linux")]
+const USAGE_SERVICE: &str = " | ferrited service install|uninstall";
+#[cfg(not(target_os = "linux"))]
+const USAGE_SERVICE: &str = "";
+
 /// Run the Server until it is stopped. The process's exit code: 0 for a
 /// clean stop, and for a second Server that found the Store taken — a
-/// failure would have launchd start it again and again.
+/// failure would have launchd (or systemd) start it again and again.
 pub fn run(options: Options) -> i32 {
     crate::diagnostics::open_as(&options.settings_dir, "server.log");
     crate::login_shell::adopt_login_environment();
@@ -829,8 +838,8 @@ impl Server {
         match (self.relaunch)(&executable) {
             Ok(()) => Some(0),
             Err(error) => {
-                // Sessions are already gone: a failure exit has launchd (or
-                // the next window) start a Server again.
+                // Sessions are already gone: a failure exit has launchd or
+                // systemd (or the next window) start a Server again.
                 crate::log!("server: could not restart: {error}");
                 Some(1)
             }
@@ -839,7 +848,7 @@ impl Server {
 }
 
 /// Start the successor. On Unix the same process becomes it (`exec`: same
-/// pid, so launchd sees no exit; the Store's claim is close-on-exec, so the
+/// pid, so launchd and systemd see no exit; the Store's claim is close-on-exec, so the
 /// new image takes it). On Windows, a detached Server that waits for this
 /// one to exit before it claims the Store.
 fn relaunch(executable: &std::path::Path) -> io::Result<()> {
