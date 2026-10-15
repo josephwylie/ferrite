@@ -226,6 +226,30 @@ fn pr_feedback_is_sent_once_and_waits_out_a_decision() {
     assert!(server.coordinating.reading.is_none(), "nothing is read");
 }
 
+/// A line comment on the diff reaches the worker once, where it is
+/// on the diff in front of it.
+#[test]
+fn a_line_comment_is_sent_once_with_its_place() {
+    let (mut server, project, providers) = boot("coordinate-line-comment");
+    let (worker, provider) = coordinated(&mut server, project, &providers, true);
+    let reading = review("PRRC_1", "`src/bill.rs:12`: Rename `total`.");
+
+    server.send_feedback(vec![(worker, reading.clone())]);
+    server.engine.pump();
+    assert_eq!(sent(&server, worker), ["remark:PRRC_1"]);
+    provider.send(text("Renamed.")).unwrap();
+    turn_ends(&provider);
+    server.engine.pump();
+    server.send_feedback(vec![(worker, reading)]);
+    server.engine.pump();
+    let told = said(&server, worker);
+    assert_eq!(
+        told.matches("`src/bill.rs:12`: Rename `total`.").count(),
+        1,
+        "{told}"
+    );
+}
+
 /// Lessons are read whenever the worker is at rest with something new:
 /// a turn that waited on a Decision on the way, and a turn that came and
 /// went between two passes.
