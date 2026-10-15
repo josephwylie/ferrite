@@ -3,22 +3,31 @@
 //! ↑↓ tab ↵ esc. It reads the files the ticker and the coordinator keep, and
 //! every key runs a CLI command of this binary, so the popup can do nothing
 //! the CLI cannot. It redraws every two seconds.
+//!
+//! Ferrite: the popup is a state and its screen ([`Popup::screen`]); Ferrite's
+//! window delivers its keys and draws its lines (ADR 0030, Seam 3).
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
-use crossterm::{cursor, execute, queue, terminal};
 
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers};
 use crate::paths::Ctx;
 use crate::profiles::Role;
 use crate::project::{self, Project, Status};
 use crate::thread::{self, Group, Thread};
 
-const REFRESH: Duration = Duration::from_secs(2);
+pub const REFRESH: Duration = Duration::from_secs(2);
+
+/// Ferrite: the colours rows carry (crossterm's names).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Color {
+    Red,
+    Yellow,
+    Green,
+    DarkGrey,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Section {
@@ -30,10 +39,10 @@ pub enum Section {
     Memory,
 }
 
-const SECTIONS: [Section; 6] = [Section::Threads, Section::Tasks, Section::Inbox, Section::Routines, Section::Settings, Section::Memory];
+pub const SECTIONS: [Section; 6] = [Section::Threads, Section::Tasks, Section::Inbox, Section::Routines, Section::Settings, Section::Memory];
 
 impl Section {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Section::Threads => "threads",
             Section::Tasks => "tasks",
@@ -44,7 +53,7 @@ impl Section {
         }
     }
 
-    fn keys(self) -> &'static str {
+    pub fn keys(self) -> &'static str {
         match self {
             Section::Threads => "↵ jump  1-9 next  s stop  r restart  a ack  x resolve  o PR  i detail  c coordinator  S sweep",
             Section::Tasks => "↵ jump  i notes  d delegate  m done  D drop",
@@ -537,10 +546,10 @@ fn allowed_text(ctx: &Ctx, project: Option<&Project>, role: Role) -> String {
 
 /// One field of the profile form: free text, or a choice cycled with ←→.
 #[derive(Debug, Clone)]
-struct Field {
-    label: &'static str,
-    value: String,
-    options: Vec<String>,
+pub struct Field {
+    pub label: &'static str,
+    pub value: String,
+    pub options: Vec<String>,
 }
 
 /// The effort choices for a harness: its default, then its own values.
@@ -567,7 +576,7 @@ pub fn summary(root: &Path) -> String {
 
 // ---------------------------------------------------------------- the loop
 
-enum Mode {
+pub enum Mode {
     List,
     /// A scrollable text; `files` are selectable lines that open with ↵.
     Detail { title: String, lines: Vec<String>, files: Vec<PathBuf>, selected: usize, scroll: usize },
@@ -585,26 +594,61 @@ enum Mode {
 
 pub struct Popup<'a> {
     ctx: &'a Ctx<'a>,
-    scope: Option<String>,
-    section: usize,
-    selected: usize,
-    rows: Vec<Row>,
-    mode: Mode,
-    message: String,
-    workspace: String,
-    quit: bool,
+    pub scope: Option<String>,
+    pub section: usize,
+    pub selected: usize,
+    pub rows: Vec<Row>,
+    pub mode: Mode,
+    pub message: String,
+    pub quit: bool,
     /// A pane to focus once the popup has closed: (socket, machine, pane).
-    jump: Option<(String, String, String)>,
+    pub jump: Option<(String, String, String)>,
+    /// Ferrite: what the popup asks of the window it is drawn in.
+    pub requests: Vec<Request>,
+}
+
+/// Ferrite: what only the window can do: open a file (text in its reader,
+/// anything else with the system opener) or put text on the clipboard.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Request {
+    OpenFile(PathBuf),
+    Copy(String),
+}
+
+/// Ferrite: how a line of the popup's screen is drawn: crossterm's
+/// attributes, by name.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Style {
+    pub bold: bool,
+    pub dim: bool,
+    pub reverse: bool,
+    pub color: Option<Color>,
+}
+
+const PLAIN: Style = Style { bold: false, dim: false, reverse: false, color: None };
+const BOLD: Style = Style { bold: true, ..PLAIN };
+const DIM: Style = Style { dim: true, ..PLAIN };
+const REVERSE: Style = Style { reverse: true, ..PLAIN };
+
+/// Ferrite: one line of the popup's screen: its text, a part at the right,
+/// or a rule across.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Line {
+    pub text: String,
+    pub style: Style,
+    pub right: Option<(String, Style)>,
+    pub rule: bool,
 }
 
 impl<'a> Popup<'a> {
-    pub fn new(ctx: &'a Ctx<'a>, scope: Option<String>, workspace: String) -> Self {
-        let mut popup = Popup { ctx, scope, section: 0, selected: 0, rows: Vec::new(), mode: Mode::List, message: String::new(), workspace, quit: false, jump: None };
+    /// Ferrite: `_workspace` was where `open-file` added its Herdr tab.
+    pub fn new(ctx: &'a Ctx<'a>, scope: Option<String>, _workspace: String) -> Self {
+        let mut popup = Popup { ctx, scope, section: 0, selected: 0, rows: Vec::new(), mode: Mode::List, message: String::new(), quit: false, jump: None, requests: Vec::new() };
         popup.reload();
         popup
     }
 
-    fn reload(&mut self) {
+    pub fn reload(&mut self) {
         self.rows = build(self.ctx, SECTIONS[self.section], self.scope.as_deref());
         if SECTIONS[self.section] == Section::Settings {
             self.rows.extend(safety_rows(self.ctx, self.scope.as_deref()));
@@ -665,7 +709,7 @@ impl<'a> Popup<'a> {
         vec!["thread".into(), command.into(), row.slug.clone(), row.thread.id.clone()]
     }
 
-    fn key(&mut self, key: KeyEvent) {
+    pub fn key(&mut self, key: KeyEvent) {
         let mode = std::mem::replace(&mut self.mode, Mode::List);
         self.mode = match mode {
             Mode::List => {
@@ -693,17 +737,15 @@ impl<'a> Popup<'a> {
                 KeyCode::PageDown => Mode::Detail { title, lines, files, selected, scroll: scroll + 20 },
                 KeyCode::PageUp => Mode::Detail { title, lines, files, selected, scroll: scroll.saturating_sub(20) },
                 KeyCode::Enter if !files.is_empty() => {
-                    let mut args = vec!["open-file".to_string(), files[selected].to_string_lossy().into_owned()];
-                    if !self.workspace.is_empty() {
-                        args.extend(["--workspace".into(), self.workspace.clone()]);
-                    }
-                    if self.run(&args, None) && self.message.contains("new tab") {
-                        self.quit = true;
-                    }
+                    // Ferrite: the window opens it (`open-file` opened a Herdr tab).
+                    self.requests.push(Request::OpenFile(files[selected].clone()));
                     Mode::Detail { title, lines, files, selected, scroll }
                 }
                 KeyCode::Char('y') if !files.is_empty() => {
-                    self.message = copy(&files[selected].to_string_lossy());
+                    // Ferrite: the window's clipboard, on every platform.
+                    let text = files[selected].to_string_lossy().into_owned();
+                    self.message = format!("copied {text}");
+                    self.requests.push(Request::Copy(text));
                     Mode::Detail { title, lines, files, selected, scroll }
                 }
                 _ => Mode::Detail { title, lines, files, selected, scroll },
@@ -1248,10 +1290,16 @@ impl<'a> Popup<'a> {
 
     // ------------------------------------------------------------ drawing
 
-    fn draw(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-        let (width, height) = terminal::size().unwrap_or((100, 30));
-        let (width, height) = (width as usize, height as usize);
-        queue!(out, terminal::Clear(terminal::ClearType::All), cursor::MoveTo(0, 0))?;
+    /// Ferrite: the screen `width` cells by `height` lines, as the terminal
+    /// drew it: the header and its rule, the body, the footer's rule and line.
+    pub fn screen(&self, width: usize, height: usize) -> Vec<Line> {
+        let mut out = vec![Line::default(); height.max(4)];
+        let mut put = |y: usize, text: String, style: Style| {
+            if let Some(line) = out.get_mut(y) {
+                line.text = text;
+                line.style = style;
+            }
+        };
         // Header: section tabs and a right-aligned summary.
         let mut tabs = String::new();
         for (i, section) in SECTIONS.iter().enumerate() {
@@ -1272,69 +1320,55 @@ impl<'a> Popup<'a> {
         let right = summary(&self.ctx.root);
         let pad = width.saturating_sub(left.chars().count() + right.chars().count() + 1);
         let left_text: String = left.chars().take(width).collect();
-        queue!(out, SetAttribute(Attribute::Bold), Print(left_text), SetAttribute(Attribute::Reset))?;
+        put(0, left_text, BOLD);
+        let mut header_right = None;
         if pad > 0 {
-            queue!(out, Print(" ".repeat(pad)), SetAttribute(Attribute::Dim), Print(&right), SetAttribute(Attribute::Reset))?;
+            header_right = Some((right, DIM));
         }
-        queue!(out, cursor::MoveTo(0, 1), Print("─".repeat(width)))?;
 
         let body_top = 2;
         let body_height = height.saturating_sub(4);
+        let mut more = None;
         match &self.mode {
             Mode::Detail { title, lines, files, selected, scroll } => {
-                queue!(out, cursor::MoveTo(0, body_top as u16), SetAttribute(Attribute::Bold), Print(fit(&format!(" {title}"), width)), SetAttribute(Attribute::Reset))?;
+                put(body_top, fit(&format!(" {title}"), width), BOLD);
                 let file_start = lines.len();
                 let all: Vec<String> = lines.iter().cloned().chain(files.iter().map(|f| format!("  {}", f.display()))).collect();
                 let start = if files.is_empty() { *scroll } else { (file_start + selected).saturating_sub(body_height.saturating_sub(2)) };
                 for (i, line) in all.iter().skip(start).take(body_height.saturating_sub(1)).enumerate() {
                     let index = start + i;
-                    queue!(out, cursor::MoveTo(0, (body_top + 1 + i) as u16))?;
-                    if !files.is_empty() && index == file_start + selected {
-                        queue!(out, SetAttribute(Attribute::Reverse), Print(fit(line, width)), SetAttribute(Attribute::Reset))?;
-                    } else {
-                        queue!(out, Print(fit(line, width)))?;
-                    }
+                    let style = if !files.is_empty() && index == file_start + selected { REVERSE } else { PLAIN };
+                    put(body_top + 1 + i, fit(line, width), style);
                 }
             }
             Mode::Confirm { lines, .. } if !lines.is_empty() => {
-                queue!(out, cursor::MoveTo(0, body_top as u16), SetAttribute(Attribute::Bold), Print(fit(" This would remove:", width)), SetAttribute(Attribute::Reset))?;
+                put(body_top, fit(" This would remove:", width), BOLD);
                 for (i, line) in lines.iter().take(body_height.saturating_sub(2)).enumerate() {
-                    queue!(out, cursor::MoveTo(0, (body_top + 1 + i) as u16), Print(fit(&format!("  {line}"), width)))?;
+                    put(body_top + 1 + i, fit(&format!("  {line}"), width), PLAIN);
                 }
                 if lines.len() > body_height.saturating_sub(2) {
-                    queue!(out, cursor::MoveTo(0, (body_top + body_height - 1) as u16), Print(fit(&format!("  … and {} more (run `sweep --dry-run` to see all)", lines.len() - body_height + 2), width)))?;
+                    put(body_top + body_height - 1, fit(&format!("  … and {} more (run `sweep --dry-run` to see all)", lines.len() - body_height + 2), width), PLAIN);
                 }
             }
             Mode::Pick { label, options, selected, .. } => {
-                queue!(out, cursor::MoveTo(0, body_top as u16), SetAttribute(Attribute::Bold), Print(fit(&format!(" {label}"), width)), SetAttribute(Attribute::Reset))?;
+                put(body_top, fit(&format!(" {label}"), width), BOLD);
                 let start = selected.saturating_sub(body_height.saturating_sub(2));
                 for (i, option) in options.iter().enumerate().skip(start).take(body_height.saturating_sub(1)) {
-                    queue!(out, cursor::MoveTo(0, (body_top + 1 + i - start) as u16))?;
                     let text = fit(&format!("  {option}"), width);
-                    if i == *selected {
-                        queue!(out, SetAttribute(Attribute::Reverse), Print(text), SetAttribute(Attribute::Reset))?;
-                    } else {
-                        queue!(out, Print(text))?;
-                    }
+                    put(body_top + 1 + i - start, text, if i == *selected { REVERSE } else { PLAIN });
                 }
             }
             Mode::Toggle { label, options, selected, .. } => {
-                queue!(out, cursor::MoveTo(0, body_top as u16), SetAttribute(Attribute::Bold), Print(fit(&format!(" {label}"), width)), SetAttribute(Attribute::Reset))?;
+                put(body_top, fit(&format!(" {label}"), width), BOLD);
                 let start = selected.saturating_sub(body_height.saturating_sub(2));
                 for (i, (option, on)) in options.iter().enumerate().skip(start).take(body_height.saturating_sub(1)) {
-                    queue!(out, cursor::MoveTo(0, (body_top + 1 + i - start) as u16))?;
                     let text = fit(&format!("  [{}] {option}", if *on { "x" } else { " " }), width);
-                    if i == *selected {
-                        queue!(out, SetAttribute(Attribute::Reverse), Print(text), SetAttribute(Attribute::Reset))?;
-                    } else {
-                        queue!(out, Print(text))?;
-                    }
+                    put(body_top + 1 + i - start, text, if i == *selected { REVERSE } else { PLAIN });
                 }
             }
             Mode::Form { title, fields, selected, editing } => {
-                queue!(out, cursor::MoveTo(0, body_top as u16), SetAttribute(Attribute::Bold), Print(fit(&format!(" {title}"), width)), SetAttribute(Attribute::Reset))?;
+                put(body_top, fit(&format!(" {title}"), width), BOLD);
                 for (i, field) in fields.iter().enumerate() {
-                    queue!(out, cursor::MoveTo(0, (body_top + 2 + i) as u16))?;
                     let value = if field.options.is_empty() {
                         let cursor = if i == *selected && !(*editing && i == 0) { "▏" } else { "" };
                         format!("{}{cursor}", field.value)
@@ -1342,11 +1376,7 @@ impl<'a> Popup<'a> {
                         format!("‹ {} ›", if field.value.is_empty() { "(default)" } else { &field.value })
                     };
                     let text = fit(&format!("  {:<12} {value}", field.label), width);
-                    if i == *selected {
-                        queue!(out, SetAttribute(Attribute::Reverse), Print(text), SetAttribute(Attribute::Reset))?;
-                    } else {
-                        queue!(out, Print(text))?;
-                    }
+                    put(body_top + 2 + i, text, if i == *selected { REVERSE } else { PLAIN });
                 }
                 let help = [
                     "",
@@ -1355,7 +1385,7 @@ impl<'a> Popup<'a> {
                     "  Profiles live in ~/.config/herdr-projects/config.toml, which agents cannot change.",
                 ];
                 for (i, line) in help.iter().enumerate() {
-                    queue!(out, cursor::MoveTo(0, (body_top + 2 + fields.len() + i) as u16), SetAttribute(Attribute::Dim), Print(fit(line, width)), SetAttribute(Attribute::Reset))?;
+                    put(body_top + 2 + fields.len() + i, fit(line, width), DIM);
                 }
             }
             Mode::Projects(picker) => {
@@ -1363,54 +1393,38 @@ impl<'a> Popup<'a> {
                     Some(filter) => format!(" Switch to project  / {filter}▏"),
                     None => " Switch to project".to_string(),
                 };
-                queue!(out, cursor::MoveTo(0, body_top as u16), SetAttribute(Attribute::Bold), Print(fit(&title, width)), SetAttribute(Attribute::Reset))?;
+                put(body_top, fit(&title, width), BOLD);
                 let visible = picker.visible();
                 if visible.is_empty() {
-                    queue!(out, cursor::MoveTo(0, (body_top + 1) as u16), SetAttribute(Attribute::Dim), Print(fit("  no projects match", width)), SetAttribute(Attribute::Reset))?;
+                    put(body_top + 1, fit("  no projects match", width), DIM);
                 }
                 let start = picker.selected.saturating_sub(body_height.saturating_sub(2));
                 for (i, row) in visible.iter().enumerate().skip(start).take(body_height.saturating_sub(1)) {
-                    queue!(out, cursor::MoveTo(0, (body_top + 1 + i - start) as u16))?;
                     let current = if row.slug == self.scope { "•" } else { " " };
                     let label = match &row.slug {
                         Some(slug) if *slug != row.name => format!("{} ({slug})", row.name),
                         _ => row.name.clone(),
                     };
                     let text = fit(&format!(" {current} {label} · {}", row.status), width);
-                    if i == picker.selected {
-                        queue!(out, SetAttribute(Attribute::Reverse), Print(text), SetAttribute(Attribute::Reset))?;
-                    } else {
-                        queue!(out, Print(text))?;
-                    }
+                    put(body_top + 1 + i - start, text, if i == picker.selected { REVERSE } else { PLAIN });
                 }
             }
             _ => {
                 let start = self.selected.saturating_sub(body_height.saturating_sub(1) / 2).min(self.rows.len().saturating_sub(body_height));
                 for (i, row) in self.rows.iter().enumerate().skip(start).take(body_height) {
-                    queue!(out, cursor::MoveTo(0, (body_top + i - start) as u16))?;
                     let marker = if i == self.selected && !row.header { "▌" } else { " " };
                     let text = fit(&format!("{marker}{}", row.text), width);
-                    if row.header {
-                        queue!(out, SetAttribute(Attribute::Bold), Print(text), SetAttribute(Attribute::Reset))?;
-                    } else {
-                        if i == self.selected {
-                            queue!(out, SetAttribute(Attribute::Reverse))?;
-                        }
-                        if let Some(color) = row.color {
-                            queue!(out, SetForegroundColor(color))?;
-                        }
-                        queue!(out, Print(text), ResetColor, SetAttribute(Attribute::Reset))?;
-                    }
+                    let style = if row.header { BOLD } else { Style { reverse: i == self.selected, color: row.color, ..PLAIN } };
+                    put(body_top + i - start, text, style);
                 }
                 if self.rows.len() > start + body_height {
-                    queue!(out, cursor::MoveTo(width.saturating_sub(10) as u16, (body_top + body_height - 1) as u16), SetAttribute(Attribute::Dim), Print("↓ more"), SetAttribute(Attribute::Reset))?;
+                    more = Some(body_top + body_height - 1);
                 }
             }
         }
 
         // Footer: the message or prompt, then the keys.
-        let footer = height.saturating_sub(2) as u16;
-        queue!(out, cursor::MoveTo(0, footer), Print("─".repeat(width)), cursor::MoveTo(0, footer + 1))?;
+        let footer = height.saturating_sub(2);
         let hint = match &self.mode {
             Mode::List => format!("{}  P project  / find  tab section  esc close", SECTIONS[self.section].keys()),
             Mode::Projects(Picker { filter: Some(_), .. }) => "type to filter  ↑↓ choose  ↵ switch  esc clear/close".into(),
@@ -1424,8 +1438,15 @@ impl<'a> Popup<'a> {
             Mode::Form { .. } => "↑↓/tab field  type to edit  ←→ choose  ↵ save  esc cancel".into(),
         };
         let line = if self.message.is_empty() || matches!(self.mode, Mode::Confirm { .. } | Mode::Edit { .. }) { hint } else { format!("{}  │  {hint}", self.message) };
-        queue!(out, SetAttribute(Attribute::Dim), Print(fit(&format!(" {line}"), width)), SetAttribute(Attribute::Reset))?;
-        out.flush()
+        put(footer + 1, fit(&format!(" {line}"), width), DIM);
+        out[0].right = header_right;
+        out[1].rule = true;
+        out[footer].rule = true;
+        if let Some(y) = more {
+            out[y].right = Some(("↓ more".into(), DIM));
+        }
+        out.truncate(height);
+        out
     }
 }
 
@@ -1472,32 +1493,22 @@ fn fit(text: &str, width: usize) -> String {
     }
 }
 
-/// Copies text to the clipboard with the platform's tool.
-fn copy(text: &str) -> String {
-    use std::process::{Command, Stdio};
-    let tools: &[(&str, &[&str])] = if cfg!(target_os = "macos") { &[("pbcopy", &[])] } else { &[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"]), ("xsel", &["--clipboard", "--input"])] };
-    for (tool, args) in tools {
-        if let Ok(mut child) = Command::new(tool).args(*args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            if child.wait().is_ok_and(|s| s.success()) {
-                return format!("copied {text}");
-            }
-        }
-    }
-    format!("no clipboard tool found; the path is {text}")
-}
-
 /// Runs this binary with the same root; (success, last line of output).
 pub fn run_hp(ctx: &Ctx, args: &[String], stdin: Option<&str>) -> (bool, String) {
-    let Ok(binary) = std::env::current_exe() else {
+    let Some(binary) = binary() else {
         return (false, "could not find this binary".into());
     };
     // Sweep and resolve may remove many worktrees; allow them time.
     let mut cmd = crate::runner::Cmd::new(binary.to_string_lossy(), Duration::from_secs(600)).arg("--root").arg(ctx.root.to_string_lossy()).args(args.iter().cloned());
     if let Some(text) = stdin {
         cmd = cmd.stdin(text);
+    }
+    // Ferrite: inside Ferrite's window, the adapter's `ferrite` is the window's own.
+    if ctx.env.var("FERRITE_BIN").is_none()
+        && let Ok(ferrite) = std::env::current_exe()
+        && ferrite != binary
+    {
+        cmd = cmd.env("FERRITE_BIN", ferrite.to_string_lossy());
     }
     match ctx.runner.run(&cmd) {
         Ok(out) => {
@@ -1509,73 +1520,16 @@ pub fn run_hp(ctx: &Ctx, args: &[String], stdin: Option<&str>) -> (bool, String)
     }
 }
 
-/// Focuses a pane after the popup closed. Herdr's docs do not say focus is
-/// refused while a popup is up; if it is, a detached child retries shortly
-/// after this process (and with it the popup) has exited.
-fn focus(ctx: &Ctx, socket: &str, machine: &str, pane: &str) {
-    let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), socket, ctx.runner).on_machine(machine);
-    if herdr.agent_focus(pane).is_ok() {
-        return;
+/// Ferrite: this binary, or, run from Ferrite's window, the `ferrite-projects`
+/// beside it (else on `PATH`).
+fn binary() -> Option<PathBuf> {
+    const NAME: &str = "ferrite-projects";
+    let exe = std::env::current_exe().ok()?;
+    if exe.file_stem().is_some_and(|stem| stem == NAME) {
+        return Some(exe);
     }
-    use std::os::unix::process::CommandExt;
-    let mut args = Vec::new();
-    if !machine.is_empty() {
-        args.extend(["--machine".to_string(), machine.to_string()]);
-    }
-    args.extend(["agent".to_string(), "focus".to_string(), pane.to_string()]);
-    let mut command = std::process::Command::new("/bin/sh");
-    command
-        .args(["-c", "sleep 0.2; exec \"$@\"", "sh", &ctx.env.herdr_bin()])
-        .args(&args)
-        .env("HERDR_SOCKET_PATH", socket)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    unsafe {
-        command.pre_exec(|| {
-            unsafe extern "C" {
-                fn setsid() -> i32;
-            }
-            setsid();
-            Ok(())
-        });
-    }
-    let _ = command.spawn();
-}
-
-/// The popup's loop, on the terminal Herdr gives the popup (or any terminal,
-/// through `popup [slug]`).
-pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
-    let mut popup = Popup::new(ctx, scope, workspace);
-    let mut out = std::io::stdout();
-    terminal::enable_raw_mode()?;
-    execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
-    let result = (|| -> Result<()> {
-        let mut last = Instant::now();
-        popup.draw(&mut out)?;
-        while !popup.quit {
-            if event::poll(Duration::from_millis(250))? {
-                match event::read()? {
-                    Event::Key(key) if key.kind != KeyEventKind::Release => popup.key(key),
-                    Event::Resize(..) => {}
-                    _ => continue,
-                }
-                popup.draw(&mut out)?;
-            }
-            if last.elapsed() >= REFRESH && matches!(popup.mode, Mode::List) {
-                popup.reload();
-                popup.draw(&mut out)?;
-                last = Instant::now();
-            }
-        }
-        Ok(())
-    })();
-    let _ = execute!(out, cursor::Show, terminal::LeaveAlternateScreen);
-    let _ = terminal::disable_raw_mode();
-    if let Some((socket, machine, pane)) = popup.jump.take() {
-        focus(ctx, &socket, &machine, &pane);
-    }
-    result
+    let beside = exe.with_file_name(format!("{NAME}{}", std::env::consts::EXE_SUFFIX));
+    Some(if beside.is_file() { beside } else { PathBuf::from(NAME) })
 }
 
 #[cfg(test)]

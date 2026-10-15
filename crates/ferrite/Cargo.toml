@@ -23,6 +23,8 @@ cef = ["dep:cef"]
 ferrite-core = { path = "../ferrite-core" }
 # System notifications: herdr-focus-notify, vendored (its README).
 ferrite-focus-notify = { path = "../ferrite-focus-notify" }
+# Projects (ADR 0030): herdr-projects, vendored; the window draws its data.
+ferrite-projects = { path = "../ferrite-projects" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }

@@ -116,6 +116,10 @@ pub(crate) enum NavFold {
 pub struct NavState {
     /// Smart filtering's sections over the tree, or `None` while it is off.
     pub smart: Option<SmartSections>,
+    /// Projects' blocks (ADR 0030), first in the tree: each project's
+    /// coordinator, then its Threads by need. Their Threads are in no
+    /// section below.
+    pub projects: Vec<ProjectBlock>,
     /// One section per Project with a row to show, in creation order, then
     /// `Other` for Threads whose Project cannot be read.
     pub sections: Vec<ProjectSection>,
@@ -188,6 +192,31 @@ pub struct ProjectSection {
     pub solos: Vec<usize>,
     /// Indices into `NavState::groups`.
     pub groups: Vec<usize>,
+}
+
+/// One project of Projects (herdr-projects' sidebar rows, ADR 0030): its
+/// head — the coordinator's row, named with the project's name in bold,
+/// its summary (`2 need you · 3 working`, `paused`) at the right — then its
+/// Threads by need, then id, each `t-0002 · title` over a dim sub-line.
+#[derive(Clone)]
+pub struct ProjectBlock {
+    pub slug: SharedString,
+    pub name: SharedString,
+    pub summary: SharedString,
+    /// The coordinator's row, when it is a Thread here.
+    pub head: Option<ThreadRow>,
+    pub head_sub: Option<SharedString>,
+    pub rows: Vec<(ThreadRow, Option<SharedString>)>,
+}
+
+impl ProjectBlock {
+    /// Every Thread the block draws.
+    pub fn threads(&self) -> impl Iterator<Item = ThreadId> + '_ {
+        self.head
+            .iter()
+            .map(|row| row.thread)
+            .chain(self.rows.iter().map(|(row, _)| row.thread))
+    }
 }
 
 /// Smart filtering (`Settings::smart_filtering`): two sections over the
@@ -993,6 +1022,40 @@ fn title_ink(selected: bool, parked: bool) -> u32 {
 }
 
 // ------------------------------------------------------------- Projects
+
+/// A project's head row: the cursor cell, its coordinator's mark, the
+/// project's name in bold (the one bold title in the column) and its
+/// summary at the right. Selected while the board shows the coordinator.
+pub fn project_head(index: usize, block: &ProjectBlock) -> Stateful<Div> {
+    let selected = block.head.as_ref().is_some_and(|row| row.selected);
+    let key = SharedString::from(format!("nav-projects-head-{}", block.slug));
+    let summary = Some(block.summary.clone()).filter(|summary| !summary.is_empty());
+    let mark = match &block.head {
+        Some(row) => cell(status_mark(row.status)),
+        None => blank_cell(),
+    };
+    row_frame(("nav-projects-head", index), key, selected)
+        .debug_selector(move || format!("nav-projects-head-{index}"))
+        .child(cursor_cell(selected))
+        .child(mark)
+        .child(fitted(
+            title_w(2.0, summary.as_deref()),
+            title_ink(selected, false),
+            W_STRONG,
+            block.name.clone(),
+        ))
+        .child(word_cell(summary))
+}
+
+/// The dim line under a project's row: what its state line adds and its
+/// fresh activity (`~40% · Writing tests`, `review · PR #4`), at the
+/// title's edge.
+pub fn sub_line(text: SharedString) -> Div {
+    line()
+        .pl(px(NAV_PAD_X + 2.0 * NAV_CELL))
+        .text_color(rgb(CHROME_MUTED))
+        .child(fitted(title_w(2.0, None), CHROME_MUTED, W_BODY, text))
+}
 
 /// A Project heading (or the `groups` heading), one line: its triangle
 /// where a row's cursor sits (`▾` open, `▸` folded), its rows' roll-up mark

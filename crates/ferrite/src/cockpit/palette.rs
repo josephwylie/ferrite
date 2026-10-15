@@ -140,6 +140,11 @@ impl CockpitView {
         }))
         .on_action(cx.listener(|view, _: &palette::Dismiss, _, cx| view.close_palette(cx)))
         .on_action(
+            cx.listener(|view, _: &crate::projects::Toggle, window, cx| {
+                view.toggle_projects(window, cx)
+            }),
+        )
+        .on_action(
             cx.listener(|view, _: &shortcuts::Toggle, window, cx| {
                 view.toggle_shortcuts(window, cx)
             }),
@@ -170,16 +175,21 @@ impl CockpitView {
     /// the shortcuts sheet, the notifications list): render's focus rule
     /// leaves it alone.
     pub(super) fn floats_hold_focus(&self) -> bool {
-        self.floats.palette.is_some() || self.floats.shortcuts.is_some() || self.bell.open
+        self.floats.palette.is_some()
+            || self.floats.shortcuts.is_some()
+            || self.projects.sheet.is_some()
+            || self.bell.open
     }
 
     /// Whether the palette or the shortcuts sheet is up (the veil is).
     pub(super) fn sheet_float_open(&self) -> bool {
-        self.floats.palette.is_some() || self.floats.shortcuts.is_some()
+        self.floats.palette.is_some()
+            || self.floats.shortcuts.is_some()
+            || self.projects.sheet.is_some()
     }
 
     /// Close every other surface a float opening replaces.
-    fn clear_for_float(&mut self) {
+    pub(super) fn clear_for_float(&mut self) {
         self.popover = None;
         self.context_menu = None;
         self.session_controls = None;
@@ -189,6 +199,7 @@ impl CockpitView {
         self.changed_files_card = None;
         self.bell.open = false;
         self.floats.shortcuts = None;
+        self.projects.drop_sheet();
     }
 
     // ------------------------------------------------------------ palette
@@ -1083,6 +1094,7 @@ impl CockpitView {
             Command::ResetKeys,
         );
         let _ = cx;
+        rows.extend(self.palette_projects_rows());
         rows.extend(self.user_command_rows());
         rows
     }
@@ -1244,6 +1256,7 @@ impl CockpitView {
             }
             Command::ResetKeys => self.reset_keys(cx),
             Command::User(index) => self.run_user_command(index, cx),
+            Command::Projects(command) => self.run_projects_command(command, window, cx),
         }
         cx.notify();
     }

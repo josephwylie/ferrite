@@ -10,6 +10,7 @@ mod leaving;
 mod machines;
 mod palette;
 mod parts;
+mod projects;
 mod server;
 pub(crate) mod subagents;
 mod transcript_glue;
@@ -577,6 +578,7 @@ pub struct CockpitView {
     /// The operator's commands running, and what they and the keys have
     /// still to say.
     user_commands: user_commands::UserCommands,
+    projects: projects::ProjectsState,
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     group_error: Option<SharedString>,
@@ -696,6 +698,9 @@ pub struct Preferences {
     /// The keys in `settings.json` the launch refused, a sentence each
     /// (`keymap::with_user_keys`): the window says them once.
     pub keys_refused: Vec<String>,
+    /// Where Projects keeps its projects (ADR 0030). `None` in the test and
+    /// demo constructors, so no suite reads the operator's own.
+    pub projects: Option<crate::projects::Place>,
 }
 
 impl Preferences {
@@ -714,6 +719,7 @@ impl Preferences {
             whats_new: None,
             unreadable: None,
             keys_refused: Vec::new(),
+            projects: None,
         }
     }
 }
@@ -1512,6 +1518,10 @@ impl CockpitView {
         if prefs.ferrite_updates {
             updating::schedule_checks(cx);
         }
+        let projects_place = prefs.projects.clone();
+        if let Some(place) = projects_place.clone() {
+            Self::start_projects_refresh(place, cx);
+        }
         cx.on_app_quit(|view, _cx| {
             view.cockpit.halt_sessions();
             async {}
@@ -1612,6 +1622,7 @@ impl CockpitView {
             server_bands: Default::default(),
             unreadable_told: false,
             user_commands: Default::default(),
+            projects: projects::ProjectsState::new(projects_place),
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),
@@ -1711,6 +1722,7 @@ impl CockpitView {
             whats_new: None,
             unreadable: self.prefs.unreadable.clone(),
             keys_refused: Vec::new(),
+            projects: self.prefs.projects.clone(),
         }
     }
 
@@ -8434,6 +8446,11 @@ impl CockpitView {
             selected: solo == Some(thread),
             ..self.thread_row(thread)
         };
+        // Projects' blocks come first, and their Threads are theirs alone;
+        // focused on one, the nav shows that block and nothing else.
+        let blocks = self.project_blocks(&row);
+        let claimed = projects::claimed(&blocks);
+        let project_focus = projects::focused(&self.projects, &blocks);
 
         // The loose rows: open Threads with no home Group, in creation
         // order. Drafts are not rows (#29) — the grid is where a draft
@@ -8443,7 +8460,9 @@ impl CockpitView {
             .panes
             .iter()
             .filter_map(PaneView::thread)
-            .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
+            .filter(|thread| {
+                !homed.contains(thread) && !claimed.contains(thread) && self.admitted(*thread)
+            })
             .collect();
         threads.sort();
         threads.dedup();
@@ -8508,7 +8527,7 @@ impl CockpitView {
                 let mut shown: Vec<nav::ThreadRow> = members
                     .iter()
                     .copied()
-                    .filter(|thread| self.admitted(*thread))
+                    .filter(|thread| !claimed.contains(thread) && self.admitted(*thread))
                     .map(row)
                     .collect();
                 if shown.is_empty() {
@@ -8698,8 +8717,12 @@ impl CockpitView {
             .smart_filtering
             .then(|| self.smart_sections());
 
+        if project_focus {
+            sections.clear();
+        }
         nav::NavState {
             smart,
+            projects: blocks,
             sections,
             groups,
             solos,
@@ -9669,6 +9692,7 @@ impl CockpitView {
         self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);
         self.present_asked(window, cx);
+        self.present_projects_toasts(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -10322,6 +10346,7 @@ impl CockpitView {
             .children(self.notices_float(cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
+            .children(self.projects_float(window, cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
     }
@@ -10675,12 +10700,17 @@ impl CockpitView {
                 .into_any_element(),
             );
         }
-        let usage = [Provider::Claude, Provider::Codex]
+        let usage = self
+            .projects_bar_word(cx)
             .into_iter()
-            .filter_map(|provider| {
-                crate::titlebar::bar_usage(provider, &self.cockpit.account_limits(provider))
-            })
-            .map(IntoElement::into_any_element)
+            .chain(
+                [Provider::Claude, Provider::Codex]
+                    .into_iter()
+                    .filter_map(|provider| {
+                        crate::titlebar::bar_usage(provider, &self.cockpit.account_limits(provider))
+                    })
+                    .map(IntoElement::into_any_element),
+            )
             .collect();
         let gear = prefs::gear(
             prefs::gear_button(cx).on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
@@ -13237,6 +13267,25 @@ impl CockpitView {
         let focused = self.cockpit.roster().focused_thread();
         let mut rows: Vec<nav::RailRow> = Vec::new();
         let mut listed = std::collections::HashSet::new();
+        let project_rows = state.projects.iter().flat_map(|block| {
+            block
+                .head
+                .iter()
+                .chain(block.rows.iter().map(|(row, _)| row))
+        });
+        for row in project_rows {
+            if listed.insert(row.thread) {
+                rows.push(nav::RailRow {
+                    key: keyed
+                        .iter()
+                        .position(|shown| *shown == Some(row.thread))
+                        .map(|at| at + 1),
+                    thread: row.thread,
+                    status: row.status,
+                    selected: row.selected,
+                });
+            }
+        }
         for section in &state.sections {
             let solos = section
                 .solos
@@ -13344,10 +13393,13 @@ impl CockpitView {
         if let Some(smart) = state.smart.as_ref().filter(|_| !folded) {
             own.push(self.smart_sections_element(smart, cx).into_any_element());
         }
+        if !folded {
+            own.extend(self.project_blocks_element(&state.projects, cx));
+        }
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
-            let mut block =
-                nav::section(index == 0).child(self.project_heading(index, section, cx));
+            let first = index == 0 && state.projects.is_empty();
+            let mut block = nav::section(first).child(self.project_heading(index, section, cx));
             if !section.folded {
                 if !section.solos.is_empty() {
                     let rows = section
@@ -13368,7 +13420,7 @@ impl CockpitView {
         }
         // An empty tree says so at its top, before the ground. It names the
         // Project the filter chose.
-        if state.sections.is_empty() && !folded {
+        if state.sections.is_empty() && state.projects.is_empty() && !folded {
             let filtered = self
                 .nav_filter
                 .and_then(|project| self.cockpit.registry().project(project))
@@ -13873,6 +13925,7 @@ mod tests {
     mod machines;
     mod nav_parity;
     mod pr;
+    mod projects;
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;

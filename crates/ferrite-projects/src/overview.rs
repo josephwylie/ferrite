@@ -102,7 +102,8 @@ pub fn require_slug(ctx: &Ctx, slug: Option<&str>) -> Result<String> {
     }
 }
 
-fn visible_slugs(ctx: &Ctx) -> Vec<String> {
+// Ferrite: public, for the window's project picker.
+pub fn visible_slugs(ctx: &Ctx) -> Vec<String> {
     project::list_slugs(&ctx.root)
         .into_iter()
         .filter(|slug| Project::load(&ctx.root, slug).is_ok_and(|p| p.status() != Status::Archived))
@@ -173,7 +174,7 @@ pub fn render(project: &Project, rows: &[Row]) -> String {
     out
 }
 
-pub fn run(ctx: &Ctx, slug: Option<&str>, wait: bool) -> Result<()> {
+pub fn run(ctx: &Ctx, slug: Option<&str>) -> Result<()> {
     let slugs = match resolve_slug(ctx, slug)? {
         Resolved::Slug(slug) => vec![slug],
         Resolved::All => visible_slugs(ctx),
@@ -187,13 +188,6 @@ pub fn run(ctx: &Ctx, slug: Option<&str>, wait: bool) -> Result<()> {
             println!();
         }
         print!("{}", render(&project, &threads::rows(ctx, &project)));
-    }
-    // Only a popup wants to be held open; an agent calling this never waits.
-    if wait && std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        print!("\nPress Enter to close ");
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        let _ = std::io::stdin().lock().read_line(&mut line);
     }
     Ok(())
 }
