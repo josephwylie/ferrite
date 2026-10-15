@@ -755,8 +755,9 @@ fn launch_pass(ctx: &Ctx, project: &Project, herdr: &Herdr, threads: &[thread::T
                 let (model, refused) = crate::agents::split_model_args(&t.agent, &t.agent_args);
                 if !refused.is_empty() {
                     thread::update(project, &t.id, |t| t.agent_args = model.clone())?;
+                    // Ferrite: the binary is ferrite-projects.
                     let summary = format!(
-                        "{}: launched without agent arguments that are not a model flag: {}. Launch flags belong in a profile, which only the user sets (`herdr-projects profile list`)",
+                        "{}: launched without agent arguments that are not a model flag: {}. Launch flags belong in a profile, which only the user sets (`ferrite-projects profile list`)",
                         t.id,
                         refused.join(" "),
                     );
@@ -802,7 +803,22 @@ fn launch_pass(ctx: &Ctx, project: &Project, herdr: &Herdr, threads: &[thread::T
                 args = crate::profiles::expand_home(&args, &ctx.env.home);
             }
             let args = safety.launch_args(&kind, &args);
-            herdr.on_machine(&t.machine).agent_start(&t.agent_name, &kind, &t.pane_id, &args)?;
+            // Ferrite: a Thread started but not ready yet is the pane already.
+            let agent = herdr.on_machine(&t.machine).agent_start(&t.agent_name, &kind, &t.pane_id, &args).or_else(|error| {
+                if let Some(pane) = &error.thread {
+                    thread::update(project, &t.id, |t| {
+                        t.tab_id = pane.clone();
+                        t.pane_id = pane.clone();
+                    })?;
+                }
+                Err(anyhow::Error::new(error))
+            })?;
+            // Ferrite: the Thread started in the staged pane is the pane now.
+            thread::update(project, &t.id, |t| {
+                t.workspace_id = agent.workspace_id.clone();
+                t.tab_id = agent.tab_id.clone();
+                t.pane_id = agent.pane_id.clone();
+            })?;
             Ok(())
         })();
         errors.extend(launched.err().map(|e| e.context(format!("{}: launch", t.id))));
@@ -1083,9 +1099,10 @@ mod tests {
         assert!(!stop_path(root.path()).exists());
     }
 
-    const AGENT_READY: &str = r#"{"result":{"agents":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","name":"hpc-demo","agent":"claude","agent_status":"idle","cwd":"CWD","state_change_seq":4,"agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"sess-1"}}]}}"#;
-    const NO_AGENTS: &str = r#"{"result":{"agents":[]}}"#;
-    const PANE: &str = r#"{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","cwd":"CWD"}]}}"#;
+    // Ferrite: one `thread list` answers both the agents and the panes; a
+    // pane is a Thread, never a bare shell.
+    const AGENT_READY: &str = r#"{"result":{"threads":[{"thread":"w1:p1","title":"hpc-demo","provider":"claude","attention":"idle","cwd":"CWD","project":"w1","attention_seq":4,"provider_session":"sess-1"}]}}"#;
+    const NO_AGENTS: &str = r#"{"result":{"threads":[]}}"#;
 
     struct Fixture {
         _home: tempfile::TempDir,
@@ -1125,22 +1142,22 @@ mod tests {
         let f = fixture();
         let runner = FakeRunner::new();
         // Two agents in the project folder, one of them unnamed (started by hand).
-        let two = with_cwd(&AGENT_READY.replace(r#"]}}"#, r#",{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1","name":"","agent":"codex","agent_status":"working","cwd":"CWD","state_change_seq":9,"agent_session":{"value":"sess-2"}}]}}"#), &f);
-        runner.on("agent list", ok(&two));
-        runner.on("pane list", ok(&with_cwd(PANE, &f)));
-        runner.on("report-metadata", ok("{}"));
+        let two = with_cwd(&AGENT_READY.replace(r#"]}}"#, r#",{"thread":"w1:p2","title":"","provider":"codex","attention":"working","cwd":"CWD","project":"w1","attention_seq":9,"provider_session":"sess-2"}]}}"#), &f);
+        // Ferrite: one `thread list` answers agents and panes; no metadata is pushed.
+        runner.on("thread list", ok(&two));
         let ctx = Ctx { env: &f.env, root: f.root.clone(), config_dir: f.root.join("cfg"), runner: &runner, detached_ticker: false };
         assert!(tick_project(&ctx, &f.project).unwrap());
         assert_eq!(runner.count("agent prompt"), 0);
-        assert_eq!(runner.count("agent start"), 0);
+        // Ferrite: `agent start` is `thread start`.
+        assert_eq!(runner.count("thread start"), 0);
         let live = coordinator::live(&f.project);
         assert_eq!(live.len(), 2);
         assert_eq!(live[1].agent, "codex");
         assert_eq!(live[1].agent_session, "sess-2");
         assert!(!live[0].pair_since.is_empty());
-        // Both coordinator panes get tokens.
-        assert_eq!(runner.count("report-metadata w1:p1"), 1);
-        assert_eq!(runner.count("report-metadata w1:p2"), 1);
+        // Both coordinator panes get tokens. Ferrite: the nav draws both rows
+        // from `coordinator::live`; nothing is pushed.
+        assert_eq!(runner.count("report-metadata"), 0);
         // The primary pane's native session id is recorded for a later resume.
         assert_eq!(f.project.coordinator().unwrap().agent_session, "sess-1");
     }
@@ -1149,13 +1166,14 @@ mod tests {
     fn a_shell_prompt_pane_is_not_launched_by_the_ticker() {
         let f = fixture();
         let runner = FakeRunner::new();
-        runner.on("agent list", ok(NO_AGENTS));
-        runner.on("pane list", ok(&with_cwd(PANE, &f)));
+        // Ferrite: no pane without a Thread.
+        runner.on("thread list", ok(NO_AGENTS));
         let ctx = Ctx { env: &f.env, root: f.root.clone(), config_dir: f.root.join("cfg"), runner: &runner, detached_ticker: false };
         for _ in 0..3 {
             let _ = tick_project(&ctx, &f.project);
         }
-        assert_eq!(runner.count("agent start"), 0);
+        // Ferrite: `agent start` is `thread start`.
+        assert_eq!(runner.count("thread start"), 0);
         assert_eq!(runner.count("agent prompt"), 0);
         assert!(coordinator::live(&f.project).is_empty());
     }
@@ -1165,12 +1183,13 @@ mod tests {
         let f = fixture();
         let runner = FakeRunner::new();
         // Same ids, different working directory: not our pane.
-        runner.on("agent list", ok(&AGENT_READY.replace("CWD", "/somewhere/else")));
-        runner.on("pane list", ok(&PANE.replace("CWD", "/somewhere/else")));
+        // Ferrite: one `thread list` answers agents and panes.
+        runner.on("thread list", ok(&AGENT_READY.replace("CWD", "/somewhere/else")));
         let ctx = Ctx { env: &f.env, root: f.root.clone(), config_dir: f.root.join("cfg"), runner: &runner, detached_ticker: false };
         assert!(tick_project(&ctx, &f.project).unwrap());
         assert_eq!(runner.count("agent prompt"), 0);
-        assert_eq!(runner.count("agent start"), 0);
+        // Ferrite: `agent start` is `thread start`.
+        assert_eq!(runner.count("thread start"), 0);
         assert_eq!(runner.count("report-metadata"), 0);
     }
 
@@ -1178,7 +1197,8 @@ mod tests {
     fn unreachable_session_reads_no_state() {
         let f = fixture();
         let runner = FakeRunner::new();
-        runner.on("agent list", fail(1, "connection refused"));
+        // Ferrite: the CLI's refusal when no Server answers.
+        runner.on("thread list", fail(1, r#"{"error":{"code":"server_unavailable","message":"connection refused"}}"#));
         let ctx = Ctx { env: &f.env, root: f.root.clone(), config_dir: f.root.join("cfg"), runner: &runner, detached_ticker: false };
         assert!(!tick_project(&ctx, &f.project).unwrap());
 
@@ -1190,7 +1210,8 @@ mod tests {
         let ctx = Ctx { env: &f.env, root: f.root.clone(), config_dir: f.root.join("cfg"), runner: &runner, detached_ticker: false };
         assert!(!tick_project(&ctx, &f.project).unwrap());
         assert!(runner.calls.borrow().iter().all(|c| !c.env.iter().any(|(_, v)| *v == gone)));
-        assert_eq!(runner.count("agent list"), 0);
+        // Ferrite: `agent list` is `thread list`.
+        assert_eq!(runner.count("thread list"), 0);
     }
 
     #[test]

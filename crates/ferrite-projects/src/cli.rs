@@ -9,10 +9,11 @@ use crate::paths::{self, Ctx, Env, SessionFlags};
 use crate::project::{self, Project, Status};
 use crate::runner::RealRunner;
 use crate::threads::{self, ResolveArgs, StartArgs};
-use crate::{actions, adopt, doctor, inbox, lifecycle, overview, routine, ticker};
+use crate::{adopt, doctor, inbox, lifecycle, overview, routine, ticker};
 
 #[derive(Parser)]
-#[command(name = "herdr-projects", version = crate::VERSION, about = "Projects for herdr")]
+// Ferrite: the binary is ferrite-projects, Ferrite's Projects.
+#[command(name = "ferrite-projects", version = crate::VERSION, about = "Projects for Ferrite")]
 struct Cli {
     /// Projects root (default: $HERDR_PROJECTS_ROOT, then config.toml, then ~/.herdr-projects)
     #[arg(long, global = true, value_name = "DIR")]
@@ -58,14 +59,18 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         coordinator_profile: Option<String>,
     },
+    /// Ferrite: turn Ferrite's own coordinators into projects, once (ADR 0030)
+    #[command(hide = true)]
+    MigrateFerriteCoordinators { file: PathBuf },
     /// List projects
     List {
         /// Include archived projects
         #[arg(long)]
         all: bool,
     },
+    // Ferrite: panes are Ferrite's.
     /// Open a project: start a coordinator agent in its folder, in this pane when
-    /// run from a shell pane inside Herdr, else in the project's workspace
+    /// run from a shell pane inside Ferrite, else in the project's workspace
     Open {
         slug: String,
         /// The coordinator's profile, one the project allows (default: coordinator_profile in PROJECT.md); `profile list` shows them
@@ -74,8 +79,9 @@ enum Command {
         /// Start another coordinator even though one is running
         #[arg(long)]
         new: bool,
+        // Ferrite: panes are Ferrite's.
         /// Start the coordinator in a new tab even when run from a shell pane
-        /// inside Herdr (by default it starts in that pane)
+        /// inside Ferrite (by default it starts in that pane)
         #[arg(long)]
         tab: bool,
         /// Move the project to this session when its recorded socket no longer exists
@@ -107,12 +113,7 @@ enum Command {
         check: Option<String>,
     },
     /// Print threads grouped by what needs you
-    Overview {
-        slug: Option<String>,
-        /// Wait for Enter before exiting (only when on a terminal; used by the popup)
-        #[arg(long)]
-        wait: bool,
-    },
+    Overview { slug: Option<String> },
     /// Show only one project's panes in the sidebar, sorted by attention
     Focus { slug: Option<String> },
     /// Clear the sidebar view (herdr holds one, so this clears any tool's view)
@@ -182,12 +183,6 @@ enum Command {
         #[command(flatten)]
         session: SessionArgs,
     },
-    /// Run by herdr's action menu
-    #[command(hide = true)]
-    Action { id: String },
-    /// Run inside a plugin popup pane
-    #[command(hide = true)]
-    Pane { id: String },
     /// Agent profiles: named launch setups (harness, model, effort, flags) and which ones threads and coordinators may use
     Profile {
         #[command(subcommand)]
@@ -220,7 +215,7 @@ enum Command {
     },
     /// Change one setting in PROJECT.md (name, goal, coordinator_profile, thread_profile, max_parallel_threads, auto_resolve_days, nudge, mute, repos.add, repos.remove)
     Set { slug: String, key: String, value: String },
-    /// Open a file: text in a new Herdr tab running $EDITOR, anything else with the system opener
+    /// Open a file: text in $VISUAL when set, anything else with the system opener
     OpenFile {
         path: PathBuf,
         /// The workspace to add the tab to (default: the current one)
@@ -229,12 +224,7 @@ enum Command {
     },
     /// Open a URL (a pull request) in the browser
     OpenUrl { url: String },
-    /// The projects popup, in this terminal
-    Popup {
-        /// Scope it to one project (default: the current workspace's, else all)
-        slug: Option<String>,
-    },
-    /// Install the plugin's progress hooks (Claude Code, Codex, Droid, Gemini CLI, Copilot CLI) and its `autoproject` skill (Claude Code, Codex)
+    /// Install the progress hooks (Claude Code, Codex, Droid, Gemini CLI, Copilot CLI) and the `autoproject` skill (Claude Code, Codex)
     Configure {
         /// Harnesses to configure, comma-separated: claude, codex, droid, gemini, copilot (default: those installed)
         #[arg(long, value_delimiter = ',', value_parser = crate::setup::AGENTS)]
@@ -246,24 +236,16 @@ enum Command {
         /// Print what would change and change nothing
         #[arg(long)]
         dry_run: bool,
-        /// The key that opens the projects popup (default: prefix+a)
-        #[arg(long, value_name = "KEY")]
-        key: Option<String>,
-        /// Only the hooks: leave Herdr's config.toml alone
-        #[arg(long)]
-        hooks_only: bool,
     },
     /// Print `projects: N need you` for the tab bar (nothing when none, or when the ticker is not running)
     NeedsYou {
         #[arg(long)]
         line: bool,
     },
-    /// Run by Herdr at startup: the ticker and the default sidebar order
-    #[command(hide = true)]
-    Startup,
     /// Remove exactly what `configure` added
     Unconfigure,
-    /// Report your progress (run by an agent in its own Herdr pane)
+    // Ferrite: panes are Ferrite's.
+    /// Report your progress (run by an agent in its own Ferrite pane)
     Report {
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100), required_unless_present = "unknown", conflicts_with = "unknown")]
         percent: Option<u8>,
@@ -282,12 +264,6 @@ enum Command {
     Progress {
         #[arg(long, value_name = "ID")]
         pane: Option<String>,
-    },
-    /// Update the plugin to the newest release: fetch, rebuild, `doctor --fix`, restart the ticker
-    Update {
-        /// Print the installed and the newest version and change nothing
-        #[arg(long)]
-        check: bool,
     },
     /// The background ticker
     Ticker {
@@ -501,7 +477,8 @@ enum ProfileCommand {
     /// Add a profile (a person at a terminal only)
     Add {
         name: String,
-        /// The harness: a Herdr agent kind (claude, codex, cursor, gemini, opencode, copilot, omp, pi, ...)
+        // Ferrite: agent kinds are Ferrite's.
+        /// The harness: a Ferrite agent kind (claude, codex, cursor, gemini, opencode, copilot, omp, pi, ...)
         #[arg(long, value_name = "KIND")]
         agent: String,
         #[command(flatten)]
@@ -656,6 +633,7 @@ pub fn run() -> Result<()> {
             println!("next: {prefix} open {}", project.slug);
             Ok(())
         }
+        Command::MigrateFerriteCoordinators { file } => crate::ferrite_migrate::run(&ctx, &file),
         Command::List { all } => {
             for slug in project::list_slugs(&ctx.root) {
                 let project = Project::load(&ctx.root, &slug)?;
@@ -693,7 +671,7 @@ pub fn run() -> Result<()> {
         },
         Command::Context { slug, peek } => coordinator::context(&ctx, &slug, peek),
         Command::Assignable { slug, refresh, check } => crate::assign::run(&ctx, &slug, refresh, check.as_deref()),
-        Command::Overview { slug, wait } => overview::run(&ctx, slug.as_deref(), wait),
+        Command::Overview { slug } => overview::run(&ctx, slug.as_deref()),
         Command::Focus { slug } => overview::focus(&ctx, slug.as_deref()),
         Command::Unfocus { session } => overview::unfocus(&ctx, &session.into()),
         Command::Inbox { command } => match command {
@@ -762,17 +740,6 @@ pub fn run() -> Result<()> {
             }
             crate::settings::system_open(&ctx, &url)
         }
-        Command::Popup { slug } => {
-            let scope = match slug {
-                Some(slug) => Some(slug),
-                None => match overview::resolve_slug_quiet(&ctx) {
-                    Some(slug) => Some(slug),
-                    None => None,
-                },
-            };
-            let workspace = ctx.env.var("HERDR_WORKSPACE_ID").unwrap_or("").to_string();
-            crate::popup::run(&ctx, scope, workspace)
-        }
         Command::Routine { command } => match command {
             RoutineCommand::Toggle { slug, name, on, off } => crate::settings::routine_toggle(&ctx, &slug, &name, if on { Some(true) } else if off { Some(false) } else { None }),
             RoutineCommand::Approve { slug, name } => {
@@ -802,8 +769,6 @@ pub fn run() -> Result<()> {
         Command::AdoptWorkspace { name, goal, pane, workspace_cwd, session } => {
             adopt::adopt_workspace(&ctx, &adopt::AdoptWorkspace { name, goal, pane, workspace_cwd, session: session.into() })
         }
-        Command::Action { id } => actions::run_action(&ctx, &id),
-        Command::Pane { id } => actions::run_pane(&ctx, &id),
         Command::Profile { command } => {
             if let ProfileCommand::Resolve { name } = &command {
                 println!("{}", crate::profiles::resolve_json(&ctx, name.as_deref())?);
@@ -842,13 +807,17 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         Command::Doctor { fix, session } => {
-            if !doctor::run(&ctx, &session.into(), fix)? {
+            let (text, healthy) = doctor::run(&ctx, &session.into(), fix);
+            print!("{text}");
+            if !healthy {
                 bail!("some checks failed");
             }
             Ok(())
         }
-        Command::Configure { clients, claude_home, codex_home, dry_run, key, hooks_only } => {
-            let options = crate::setup::ConfigureOptions { clients, claude_home, codex_home, dry_run, hooks: true, sidebar: !hooks_only, key, herdr_config: None, skill: crate::setup::skill_source() };
+        Command::Configure { clients, claude_home, codex_home, dry_run } => {
+            // Ferrite: the bundled skill is written out by a real run only.
+            let skill = if dry_run { crate::setup::skill_source(&ctx.config_dir) } else { crate::setup::install_skill(&ctx.config_dir)? };
+            let options = crate::setup::ConfigureOptions { clients, claude_home, codex_home, dry_run, hooks: true, skill: Some(skill) };
             for note in crate::setup::configure(&ctx, &options)? {
                 println!("{note}");
             }
@@ -857,9 +826,6 @@ pub fn run() -> Result<()> {
                 return Ok(());
             }
             println!("configured. `unconfigure` removes exactly these entries.");
-            if !hooks_only {
-                crate::setup::apply_live(&ctx);
-            }
             Ok(())
         }
         Command::NeedsYou { line: _ } => {
@@ -868,22 +834,10 @@ pub fn run() -> Result<()> {
             }
             Ok(())
         }
-        Command::Startup => {
-            // Herdr may reinstall into another folder: keep the command's link current.
-            if let Ok(binary) = crate::paths::binary()
-                && crate::command_link::installable(&binary)
-            {
-                let _ = crate::command_link::ensure(ctx.env, &binary);
-            }
-            ticker::start(&ctx)?;
-            crate::setup::apply_view(&ctx);
-            Ok(())
-        }
         Command::Unconfigure => {
             for note in crate::setup::unconfigure(&ctx)? {
                 println!("{note}");
             }
-            crate::setup::reload_config(&ctx);
             Ok(())
         }
         Command::Report { percent, unknown: _, activity } => crate::progress::report(&ctx, percent, &activity),
@@ -893,7 +847,6 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         Command::Progress { pane } => crate::progress::print(&ctx, pane.as_deref()),
-        Command::Update { check } => crate::update::run(&ctx, check),
         Command::Ticker { command } => match command {
             TickerCommand::Start => ticker::start(&ctx),
             TickerCommand::Run => ticker::run(&ctx),

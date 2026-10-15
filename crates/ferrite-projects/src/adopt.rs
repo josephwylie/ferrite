@@ -12,12 +12,13 @@ use crate::runner::Cmd;
 use crate::thread::{self, Kind, Status, Thread};
 use crate::{coordinator, threads, ticker};
 
-const DEFAULT_TASK: &str = "Continue the work you were already doing in this pane. It now belongs to the project described above: follow its instructions, and when you finish or stop to wait for the user, write the report.";
+pub(crate) const DEFAULT_TASK: &str = "Continue the work you were already doing in this pane. It now belongs to the project described above: follow its instructions, and when you finish or stop to wait for the user, write the report.";
 
 /// The refusals shared by `thread adopt` and `adopt-workspace`, checked before
 /// anything is created. Returns the agent herdr detects in the pane.
 pub fn adoptable_agent(ctx: &Ctx, herdr: &Herdr, socket: &str, pane: &str) -> Result<Agent> {
-    let agents = herdr.agent_list().map_err(|e| anyhow::anyhow!("the herdr session at {socket} is not reachable: {e}"))?;
+    // Ferrite: the session is Ferrite's Server.
+    let agents = herdr.agent_list().map_err(|e| anyhow::anyhow!("Ferrite's Server at {socket} is not reachable: {e}"))?;
     let agent = agents
         .into_iter()
         .find(|a| a.pane_id == pane)
@@ -198,7 +199,8 @@ mod tests {
         let brief = std::fs::read_to_string(format!("{}/brief.md", t.thread_dir)).unwrap();
         assert!(brief.contains("Finish the refactor."));
         assert_eq!(world.runner.count("agent prompt"), 1);
-        assert_eq!(world.runner.count("agent start"), 0);
+        // Ferrite: `agent start` is `thread start`.
+        assert_eq!(world.runner.count("thread start"), 0);
 
         // A second pane in the same directory gets its own thread directory.
         let second = adopt(&world.ctx(), "demo", "w5:p2", "Second", None).unwrap();
@@ -222,7 +224,8 @@ mod tests {
         assert_eq!(world.runner.count("agent prompt"), 1);
         assert!(!thread::load(&project, "t-0001").unwrap().prompt_pending);
         // The ticker never tries to start an agent in an adopted pane it found busy.
-        assert_eq!(world.runner.count("agent start"), 0);
+        // Ferrite: `agent start` is `thread start`.
+        assert_eq!(world.runner.count("thread start"), 0);
     }
 
     #[test]

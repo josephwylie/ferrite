@@ -1616,6 +1616,50 @@ fn a_blocked_agent_refuses_prompts_and_its_decision_is_answered_once() {
     ));
 }
 
+/// A Decision whose answer is being submitted (an async one's, which the
+/// provider closes later) is answered already: `decision.list` no longer
+/// offers it, so a key meant for the next Decision never answers it twice.
+#[test]
+fn a_decision_whose_answer_is_being_submitted_is_not_listed() {
+    let harness = start("api-submitting");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    let mut caller = call(&harness);
+
+    let SessionEvent::DecisionRequested { mut decision } = decision() else {
+        unreachable!()
+    };
+    decision.delivery = crate::DecisionDelivery::Async;
+    provider
+        .send(SessionEvent::DecisionRequested { decision })
+        .unwrap();
+    window.until(|window| !window.decisions.is_empty());
+    let listed = caller.answer("1", "decision.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["decisions"][0]["decision"]["id"], "perm_01",
+        "{listed}"
+    );
+
+    let answered = caller.answer(
+        "2",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread,
+            "decision": "perm_01",
+            "answer": { "kind": "allow", "input": {} },
+        }),
+    );
+    assert!(answered.get("result").is_some(), "{answered}");
+    let listed = caller.answer("3", "decision.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["decisions"],
+        serde_json::json!([]),
+        "{listed}"
+    );
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+}
+
 /// Subscribed before the snapshot is read: the first answer is the state
 /// now, and every change after it follows as an event under the same id.
 #[test]
@@ -1687,6 +1731,8 @@ fn focus_and_toasts_reach_the_windows() {
             ServerMessage::Notification {
                 title: "Review ready".into(),
                 body: None,
+                sound: protocol::WireSound::None,
+                important: false,
             },
         ]
     );
@@ -1868,6 +1914,498 @@ fn a_half_closed_caller_still_hears_its_wait() {
     assert_ne!(
         settled["result"]["thread"]["attention"], "working",
         "{settled}"
+    );
+}
+
+/// A window's own word about itself, as its Cockpit says it.
+fn tell(window: &mut Window, id: u64, op: Op) {
+    let reply = window.command(id, op);
+    assert!(
+        matches!(reply, ServerMessage::Reply { error: None, .. }),
+        "{reply:?}"
+    );
+}
+
+/// The next message of one kind a window is told, within five seconds.
+fn told(window: &mut Window, wanted: impl Fn(&ServerMessage) -> bool) -> ServerMessage {
+    loop {
+        let message = window
+            .client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a message within five seconds");
+        if wanted(&message) {
+            return message;
+        }
+    }
+}
+
+/// What herdr-projects reads of an agent (ADR 0030): a Thread started
+/// `ready` answers once it is up, landing the windows on it; the windows
+/// say which Thread the operator is looking at and which Composer holds
+/// unsent text; Attention changes are counted; a prompt `until` working
+/// answers as soon as the agent took it.
+#[test]
+fn a_thread_reports_what_a_coordinator_reads_of_it() {
+    let harness = start("api-facts");
+    let mut window = attach(&harness.address);
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "ready": true, "focus": true }),
+    );
+    let info = &started["result"]["thread"];
+    let thread = info["thread"].as_u64().unwrap();
+    assert_eq!(info["attention"], "idle", "{started}");
+    assert!(info["project"].is_string(), "{started}");
+    for (fact, value) in [
+        ("focused", serde_json::json!(false)),
+        ("draft", serde_json::json!(false)),
+        ("held_prompt", serde_json::json!(false)),
+        ("queued_prompts", serde_json::json!(0)),
+        ("attention_seq", serde_json::json!(0)),
+    ] {
+        assert_eq!(info[fact], value, "{fact}: {started}");
+    }
+    assert!(info.get("worktree").is_none(), "{started}");
+    let _provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let thread_id = ThreadId::new(thread);
+    assert_eq!(
+        told(&mut window, |message| matches!(
+            message,
+            ServerMessage::Focus { .. }
+        )),
+        ServerMessage::Focus { thread: thread_id }
+    );
+
+    tell(
+        &mut window,
+        50,
+        Op::Focused {
+            thread: Some(thread_id),
+        },
+    );
+    tell(
+        &mut window,
+        51,
+        Op::Composing {
+            thread: thread_id,
+            unsent: true,
+        },
+    );
+    let got = caller.answer("2", "thread.get", serde_json::json!({ "thread": thread }));
+    assert_eq!(got["result"]["thread"]["focused"], true, "{got}");
+    assert_eq!(got["result"]["thread"]["draft"], true, "{got}");
+    let projects = caller.answer("3", "project.list", serde_json::json!({}));
+    let project = &projects["result"]["projects"][0];
+    assert_eq!(
+        project["id"], got["result"]["thread"]["project"],
+        "{projects}"
+    );
+    assert_eq!(project["focused"], true, "{projects}");
+    assert_eq!(project["thread_count"], 1, "{projects}");
+
+    let confirmed = caller.answer(
+        "4",
+        "agent.prompt",
+        serde_json::json!({
+            "thread": thread,
+            "text": "go",
+            "until": ["working", "blocked"],
+            "timeout_ms": 8000,
+        }),
+    );
+    assert_eq!(
+        confirmed["result"]["thread"]["attention"], "working",
+        "{confirmed}"
+    );
+    let counted = caller.answer("5", "thread.get", serde_json::json!({ "thread": thread }));
+    assert_eq!(counted["result"]["thread"]["attention_seq"], 1, "{counted}");
+
+    // A window that left takes what it said with it.
+    drop(window);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let away = loop {
+        let got = caller.answer("6", "thread.get", serde_json::json!({ "thread": thread }));
+        if got["result"]["thread"]["focused"] == false || Instant::now() >= deadline {
+            break got;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(away["result"]["thread"]["focused"], false, "{away}");
+    assert_eq!(away["result"]["thread"]["draft"], false, "{away}");
+}
+
+/// Herdr's trust dialog: an agent blocked as it starts is not ready, and
+/// the refusal names the Thread, which stays.
+#[test]
+fn a_thread_blocked_as_it_starts_is_not_ready() {
+    let (harness, gate) = start_gated("api-not-ready");
+    let mut caller = call(&harness);
+    caller.ask(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "ready": true, "timeout_ms": 10000 }),
+    );
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    caller.quiet();
+    provider.send(decision()).unwrap();
+    gate.send(()).unwrap();
+    let refused = caller.next();
+    assert_eq!(refused["error"]["code"], "agent_not_ready", "{refused}");
+    let thread = refused["error"]["thread"].clone();
+    let got = caller.answer("2", "thread.get", serde_json::json!({ "thread": thread }));
+    assert_eq!(got["result"]["thread"]["attention"], "blocked", "{got}");
+}
+
+/// An agent not up within its time is not ready either.
+#[test]
+fn a_thread_not_up_in_time_is_not_ready() {
+    let (harness, _gate) = start_gated("api-not-up");
+    let mut caller = call(&harness);
+    let refused = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "ready": true, "timeout_ms": 200 }),
+    );
+    assert_eq!(refused["error"]["code"], "agent_not_ready", "{refused}");
+    assert!(refused["error"]["thread"].is_u64(), "{refused}");
+}
+
+/// A Thread is interrupted and closed by id, as Herdr's `send-keys esc`
+/// and pane close; a closed one is not found.
+#[test]
+fn a_thread_is_interrupted_and_closed_by_id() {
+    let harness = start("api-close");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut caller = call(&harness);
+    caller.answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+    let stopped = caller.answer(
+        "2",
+        "agent.interrupt",
+        serde_json::json!({ "thread": thread }),
+    );
+    assert!(stopped.get("result").is_some(), "{stopped}");
+    let closed = caller.answer("3", "thread.close", serde_json::json!({ "thread": thread }));
+    assert_eq!(
+        closed["result"]["thread"],
+        serde_json::json!(thread),
+        "{closed}"
+    );
+    let again = caller.answer("4", "thread.close", serde_json::json!({ "thread": thread }));
+    assert_eq!(again["error"]["code"], "unknown_thread", "{again}");
+    let gone = caller.answer(
+        "5",
+        "agent.interrupt",
+        serde_json::json!({ "thread": thread }),
+    );
+    assert_eq!(gone["error"]["code"], "unknown_thread", "{gone}");
+}
+
+/// Herdr's Spaces are Ferrite's Projects: opened by directory (once),
+/// labelled, renamed, started in, focused in the nav, and closed, which
+/// parks their Threads.
+#[test]
+fn projects_are_opened_renamed_focused_and_closed() {
+    let harness = start("api-projects");
+    let mut window = attach(&harness.address);
+    let mut caller = call(&harness);
+    let home = harness.dir.join("demo");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let opened = caller.answer(
+        "1",
+        "project.open",
+        serde_json::json!({ "cwd": home, "label": "demo" }),
+    );
+    let project = opened["result"]["project"].clone();
+    assert_eq!(project["label"], "demo", "{opened}");
+    assert_eq!(project["thread_count"], 0, "{opened}");
+    assert!(project["worktree"].is_null(), "{opened}");
+    let id = project["id"].as_str().unwrap().to_string();
+    let again = caller.answer(
+        "2",
+        "project.open",
+        serde_json::json!({ "cwd": home, "label": "other" }),
+    );
+    assert_eq!(again["result"]["project"]["id"], id.as_str(), "{again}");
+    assert_eq!(again["result"]["project"]["label"], "demo", "{again}");
+
+    let renamed = caller.answer(
+        "3",
+        "project.rename",
+        serde_json::json!({ "project": id, "label": "billing" }),
+    );
+    assert_eq!(
+        renamed["result"]["project"]["label"], "billing",
+        "{renamed}"
+    );
+
+    let started = caller.answer(
+        "4",
+        "thread.start",
+        serde_json::json!({ "cwd": home, "project": id }),
+    );
+    let thread = started["result"]["thread"]["thread"].clone();
+    assert_eq!(
+        started["result"]["thread"]["project"],
+        id.as_str(),
+        "{started}"
+    );
+    // As Herdr's tab starts in its cwd, a Thread started in a directory
+    // inside the Project works there, in that Project.
+    let inside = home.join("crates").join("api");
+    std::fs::create_dir_all(&inside).unwrap();
+    let nested = caller.answer(
+        "4b",
+        "thread.start",
+        serde_json::json!({ "cwd": inside, "project": id }),
+    );
+    assert_eq!(
+        nested["result"]["thread"]["project"],
+        id.as_str(),
+        "{nested}"
+    );
+    assert_eq!(
+        nested["result"]["thread"]["cwd"],
+        std::fs::canonicalize(&inside)
+            .unwrap()
+            .display()
+            .to_string(),
+        "{nested}"
+    );
+    let elsewhere = caller.answer(
+        "5",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "project": id }),
+    );
+    assert_eq!(elsewhere["error"]["code"], "invalid_request", "{elsewhere}");
+    let got = caller.answer("6", "project.get", serde_json::json!({ "project": id }));
+    assert_eq!(got["result"]["project"]["thread_count"], 2, "{got}");
+
+    // The nav's focus is by a Projects project's slug, passed on unread.
+    caller.answer(
+        "7",
+        "nav.focus",
+        serde_json::json!({ "project": "billing" }),
+    );
+    caller.answer("8", "nav.focus", serde_json::json!({}));
+    let nav_focus = |message: &ServerMessage| matches!(message, ServerMessage::NavFocus { .. });
+    assert_eq!(
+        told(&mut window, nav_focus),
+        ServerMessage::NavFocus {
+            project: Some("billing".into())
+        }
+    );
+    assert_eq!(
+        told(&mut window, nav_focus),
+        ServerMessage::NavFocus { project: None }
+    );
+    // The focus holds: a window that arrives later is told it.
+    caller.answer(
+        "9",
+        "nav.focus",
+        serde_json::json!({ "project": "billing" }),
+    );
+    let mut later = attach(&harness.address);
+    assert_eq!(
+        told(&mut later, nav_focus),
+        ServerMessage::NavFocus {
+            project: Some("billing".into())
+        }
+    );
+
+    let closed = caller.answer("10", "project.close", serde_json::json!({ "project": id }));
+    assert_eq!(
+        closed["result"]["parked"],
+        serde_json::json!([thread, nested["result"]["thread"]["thread"]]),
+        "{closed}"
+    );
+    assert_eq!(closed["result"]["project"]["thread_count"], 0, "{closed}");
+    let parked = caller.answer("11", "thread.get", serde_json::json!({ "thread": thread }));
+    assert_eq!(parked["error"]["code"], "unknown_thread", "{parked}");
+    let missing = caller.answer("12", "project.get", serde_json::json!({ "project": "999" }));
+    assert_eq!(missing["error"]["code"], "project_not_found", "{missing}");
+}
+
+/// A repository with one commit on `main`, under `dir`.
+fn repo_in(dir: &Path) -> PathBuf {
+    use crate::workspace::git_for_tests as git;
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("file.txt"), "base\n").unwrap();
+    git(&repo, &["add", "file.txt"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-qm",
+            "base",
+        ],
+    );
+    repo
+}
+
+/// Herdr's worktree rules: a Thread starts in a new worktree on the branch
+/// it names, or opens one that stands; its worktree is removed only when
+/// clean, never forced, and its branch stays.
+#[test]
+fn a_worktree_is_removed_only_when_clean_and_its_branch_stays() {
+    use crate::workspace::git_for_tests as git;
+    let harness = start("api-worktree");
+    let repo = repo_in(&harness.dir);
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({
+            "cwd": repo,
+            "worktree": true,
+            "branch": "hp/demo/t-0001",
+            "base": "main",
+        }),
+    );
+    let info = &started["result"]["thread"];
+    let thread = info["thread"].clone();
+    let tree = PathBuf::from(info["worktree"].as_str().expect("a worktree"));
+    assert_eq!(info["cwd"], info["worktree"], "{started}");
+    assert_eq!(info["branch"], "hp/demo/t-0001", "{started}");
+    assert!(tree.join("file.txt").exists(), "{started}");
+    let projects = caller.answer("2", "project.list", serde_json::json!({}));
+    assert_eq!(
+        projects["result"]["projects"][0]["worktree"]["is_linked_worktree"], false,
+        "{projects}"
+    );
+
+    std::fs::write(tree.join("notes.txt"), "mine\n").unwrap();
+    let dirty = caller.answer("3", "worktree.remove", serde_json::json!({ "path": tree }));
+    assert_eq!(
+        dirty["error"]["code"], "dirty_worktree_requires_force",
+        "{dirty}"
+    );
+    assert!(tree.exists());
+    let still = caller.answer("4", "thread.get", serde_json::json!({ "thread": thread }));
+    assert!(
+        still.get("result").is_some(),
+        "a refusal leaves the Thread open: {still}"
+    );
+
+    std::fs::remove_file(tree.join("notes.txt")).unwrap();
+    let removed = caller.answer("5", "worktree.remove", serde_json::json!({ "path": tree }));
+    assert_eq!(
+        removed["result"]["parked"],
+        serde_json::json!([thread]),
+        "{removed}"
+    );
+    assert!(!tree.exists());
+    assert!(!git(&repo, &["branch", "--list", "hp/demo/t-0001"])
+        .trim()
+        .is_empty());
+    let parked = caller.answer("6", "thread.get", serde_json::json!({ "thread": thread }));
+    assert_eq!(parked["error"]["code"], "unknown_thread", "{parked}");
+    let again = caller.answer("6", "worktree.remove", serde_json::json!({ "path": tree }));
+    assert_eq!(again["error"]["code"], "worktree_not_found", "{again}");
+    let main = caller.answer("6", "worktree.remove", serde_json::json!({ "path": repo }));
+    assert_eq!(main["error"]["code"], "worktree_not_found", "{main}");
+
+    let standing = harness.dir.join("standing");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "standing",
+            standing.to_str().unwrap(),
+        ],
+    );
+    let opened = caller.answer(
+        "7",
+        "thread.start",
+        serde_json::json!({ "cwd": standing, "worktree": true }),
+    );
+    assert_eq!(
+        opened["result"]["thread"]["worktree"],
+        serde_json::json!(standing),
+        "{opened}"
+    );
+
+    // Herdr's `worktree create`, then the agent started in it: the Thread
+    // opens the worktree that stands.
+    let created = caller.answer(
+        "8",
+        "worktree.create",
+        serde_json::json!({ "cwd": repo, "branch": "hp/demo/t-0002", "base": "main" }),
+    );
+    let made = PathBuf::from(created["result"]["worktree"]["path"].as_str().unwrap());
+    assert_eq!(
+        created["result"]["worktree"]["branch"], "hp/demo/t-0002",
+        "{created}"
+    );
+    assert!(created["result"]["project"].is_string(), "{created}");
+    assert!(made.join("file.txt").exists(), "{created}");
+    let taken = caller.answer(
+        "9",
+        "worktree.create",
+        serde_json::json!({ "cwd": repo, "branch": "hp/demo/t-0002" }),
+    );
+    assert_eq!(
+        taken["error"]["code"], "failed",
+        "an existing branch is never taken over: {taken}"
+    );
+    let started = caller.answer("10", "thread.start", serde_json::json!({ "cwd": made }));
+    assert_eq!(
+        started["result"]["thread"]["worktree"],
+        serde_json::json!(made),
+        "{started}"
+    );
+    assert_eq!(
+        started["result"]["thread"]["branch"], "hp/demo/t-0002",
+        "{started}"
+    );
+    // Nothing bound to it is lost: the Thread is parked with it.
+    let thread = started["result"]["thread"]["thread"].clone();
+    let removed = caller.answer("11", "worktree.remove", serde_json::json!({ "path": made }));
+    assert_eq!(
+        removed["result"]["parked"],
+        serde_json::json!([thread]),
+        "{removed}"
+    );
+}
+
+/// The saved machines a coordinator can ask, by name, as Herdr's
+/// `machine list` gives them; one turned off is never asked.
+#[test]
+fn the_saved_machines_are_listed_by_name() {
+    let harness = start("api-machines");
+    std::fs::write(
+        harness.dir.join("settings.json"),
+        r#"{"machines":[{"name":"box","target":"me@box"},{"name":"off","target":"me@off","enabled":false}]}"#,
+    )
+    .unwrap();
+    let listed = call(&harness).answer("1", "machine.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["machines"],
+        serde_json::json!([{ "id": "box", "label": "box", "target": "me@box" }]),
+        "{listed}"
     );
 }
 
@@ -2061,9 +2599,9 @@ fn the_api_bridge_with_no_server_fails_without_starting_one() {
     let _ = std::fs::remove_dir_all(&store);
 }
 
-/// A repository with one commit, under `dir`: a Project workers can make
+/// A repository with one commit, under `dir`: a Project Threads can make
 /// worktrees of.
-pub(super) fn repository(dir: &Path) -> PathBuf {
+fn repository(dir: &Path) -> PathBuf {
     let repo = dir.join("app");
     std::fs::create_dir_all(&repo).unwrap();
     let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
@@ -2080,121 +2618,4 @@ pub(super) fn repository(dir: &Path) -> PathBuf {
         "base",
     ]);
     repo
-}
-
-/// ADR 0028 over the API: a Project's coordinator starts briefed (and a
-/// second start answers the same one); only a coordinator starts workers;
-/// a worker works in a new worktree, briefed with its task, seated in the
-/// coordinator's Group; and what its finished turn lists under
-/// `## Remember` joins the Project's memory.
-#[test]
-fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
-    let harness = start("api-coordinator");
-    let repo = repository(&harness.dir);
-    let mut caller = call(&harness);
-    let started = caller.answer(
-        "1",
-        "coordinator.start",
-        serde_json::json!({ "cwd": repo, "goal": "Ship billing" }),
-    );
-    let coordinator = started["result"]["coordinator"]["thread"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("{started}"));
-    assert_eq!(started["result"]["coordinator"]["title"], "app coordinator");
-    assert_eq!(started["result"]["goal"], "Ship billing");
-    harness
-        .sessions
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
-    let again = caller.answer("2", "coordinator.start", serde_json::json!({ "cwd": repo }));
-    assert_eq!(
-        again["result"]["coordinator"]["thread"], coordinator,
-        "{again}"
-    );
-    let briefed = caller.answer(
-        "3",
-        "agent.read",
-        serde_json::json!({ "thread": coordinator, "lines": 400 }),
-    );
-    let briefed = briefed["result"]["text"].as_str().unwrap();
-    assert!(briefed.contains("never do the work yourself"), "{briefed}");
-    assert!(briefed.contains("Ship billing"), "{briefed}");
-
-    let refused = caller.answer(
-        "4",
-        "worker.start",
-        serde_json::json!({ "thread": 999, "task": "Add invoices" }),
-    );
-    assert_eq!(refused["error"]["code"], "not_a_coordinator", "{refused}");
-
-    let worker = caller.answer(
-        "5",
-        "worker.start",
-        serde_json::json!({ "thread": coordinator, "task": "Add invoices", "title": "invoices" }),
-    );
-    let info = &worker["result"]["thread"];
-    let thread = info["thread"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("{worker}"));
-    assert_eq!(info["title"], "invoices");
-    assert_ne!(
-        info["cwd"],
-        serde_json::json!(repo),
-        "a worktree of its own"
-    );
-    let provider = harness
-        .sessions
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
-    let briefed = caller.answer(
-        "6",
-        "agent.read",
-        serde_json::json!({ "thread": thread, "lines": 400 }),
-    );
-    let briefed = briefed["result"]["text"].as_str().unwrap();
-    for part in [
-        "## Your task",
-        "Add invoices",
-        "Ship billing",
-        "## Remember",
-    ] {
-        assert!(briefed.contains(part), "{part:?} in {briefed}");
-    }
-    let groups = std::fs::read_to_string(harness.dir.join("threads").join("groups.json")).unwrap();
-    let groups: serde_json::Value = serde_json::from_str(&groups).unwrap();
-    assert_eq!(
-        groups["groups"][0]["members"],
-        serde_json::json!([coordinator, thread])
-    );
-    assert_eq!(groups["groups"][0]["coordinator"], coordinator);
-
-    let got = caller.answer(
-        "7",
-        "coordinator.get",
-        serde_json::json!({ "thread": coordinator }),
-    );
-    assert_eq!(got["result"]["workers"][0]["task"], "Add invoices", "{got}");
-    assert_eq!(got["result"]["workers"][0]["need"], "working", "{got}");
-
-    provider
-        .send(text(
-            "Invoices render.\n\n## Remember\n\n- Invoices live in app/billing\n",
-        ))
-        .unwrap();
-    turn_ends(&provider);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let got = caller.answer(
-            "8",
-            "coordinator.get",
-            serde_json::json!({ "thread": coordinator }),
-        );
-        let memory = got["result"]["memory"]["text"].as_str().unwrap_or_default();
-        if memory.contains("- Invoices live in app/billing") {
-            assert_eq!(got["result"]["workers"][0]["need"], "ready_for_review");
-            break;
-        }
-        assert!(Instant::now() < deadline, "never remembered: {got}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }

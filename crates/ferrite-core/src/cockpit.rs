@@ -69,7 +69,25 @@ pub struct Cockpit {
     /// until the window says otherwise, so a headless Cockpit reads what it
     /// shows.
     window_active: bool,
+    /// The Threads whose Composer in this window holds unsent text, as the
+    /// window says (`set_composing`).
+    composing: std::collections::BTreeSet<ThreadId>,
+    /// What the Engine was last told of this window (`tell_window`); `None`
+    /// until told, and again after every attach: a Server forgets a window
+    /// that left.
+    told: Option<Told>,
 }
+
+/// What only a window knows and the API reports (ADR 0030): the Thread it
+/// shows the operator, and its Composers holding unsent text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Told {
+    focused: Option<ThreadId>,
+    composing: std::collections::BTreeSet<ThreadId>,
+}
+
+/// The window number an Engine in this process knows its one window by.
+const IN_PROCESS_WINDOW: u64 = 0;
 
 /// Where the Engine this window drives runs.
 enum Link {
@@ -130,6 +148,8 @@ impl Cockpit {
             asked: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
+            composing: std::collections::BTreeSet::new(),
+            told: None,
         }
     }
 
@@ -288,6 +308,7 @@ impl Cockpit {
             match arrival {
                 remote::Arrival::Message(message) => self.message(message, boot),
                 remote::Arrival::Attached { snapshot, new_boot } => {
+                    self.told = None;
                     if new_boot {
                         self.mirrors = mirror::Mirrors::default();
                     }
@@ -344,10 +365,20 @@ impl Cockpit {
         }
         match &message {
             ServerMessage::Focus { thread } => self.asked.push(Asked::Focus(*thread)),
-            ServerMessage::Notification { title, body } => self.asked.push(Asked::Notification {
+            ServerMessage::Notification {
+                title,
+                body,
+                sound,
+                important,
+            } => self.asked.push(Asked::Notification {
                 title: title.clone(),
                 body: body.clone(),
+                sound: sound.sound(),
+                important: *important,
             }),
+            ServerMessage::NavFocus { project } => {
+                self.asked.push(Asked::NavFocus(project.clone()))
+            }
             _ => {}
         }
         self.shared.receive(&message);
@@ -369,7 +400,60 @@ impl Cockpit {
         // rather than only at the focus doors, so a Thread that finishes in
         // view, or a focus moved by a close or a Group entry, reads the same.
         self.acknowledge_seen();
+        self.tell_window();
         self.mirrors.take_updates()
+    }
+
+    /// Whether this window's Composer for `thread` holds text not yet sent:
+    /// the window says so as it changes, and the API reports it as the
+    /// Thread's `draft` (ADR 0030), so nothing types over the operator.
+    pub fn set_composing(&mut self, thread: ThreadId, unsent: bool) {
+        if unsent {
+            self.composing.insert(thread);
+        } else {
+            self.composing.remove(&thread);
+        }
+    }
+
+    /// Tell the Engine what changed of what only this window knows: the
+    /// Thread its focused Pane shows while it has the operator's focus, and
+    /// its Composers holding unsent text.
+    fn tell_window(&mut self) {
+        // A Pane that left took its Composer, and the unsent text with it:
+        // a Thread revived later starts with an empty one.
+        let roster = &self.roster;
+        self.composing
+            .retain(|thread| roster.pane_of(*thread).is_some());
+        let now = Told {
+            focused: self
+                .window_active
+                .then(|| self.roster.focused_thread())
+                .flatten(),
+            composing: self.composing.clone(),
+        };
+        let before = self.told.replace(now.clone());
+        let mut said = Vec::new();
+        if before.as_ref().map(|told| told.focused) != Some(now.focused) {
+            said.push(Op::Focused {
+                thread: now.focused,
+            });
+        }
+        let composed = before.map(|told| told.composing).unwrap_or_default();
+        for (threads, unsent) in [
+            (now.composing.difference(&composed), true),
+            (composed.difference(&now.composing), false),
+        ] {
+            said.extend(threads.map(|thread| Op::Composing {
+                thread: *thread,
+                unsent,
+            }));
+        }
+        for op in said {
+            match &mut self.link {
+                Link::InProcess(engine) => engine.window_says(IN_PROCESS_WINDOW, &op),
+                Link::Server(server) => server.tell(op),
+            }
+        }
     }
 
     /// An open Thread's facts, as this window's mirror holds them.
@@ -1114,15 +1198,6 @@ impl Cockpit {
         )
     }
 
-    /// Start a Project's coordinator, or land on the one it has (ADR
-    /// 0028). Only a Server coordinates.
-    pub fn coordinate(&mut self, project: ProjectId, provider: Provider) -> io::Result<ThreadId> {
-        self.act(
-            |_| Err(io::Error::other("coordinators run on the Server")),
-            |server| started(server.execute(Op::Coordinate { project, provider })),
-        )
-    }
-
     pub fn send(&mut self, thread: ThreadId, text: String) {
         self.act(
             |engine| engine.send(thread, text.clone()),
@@ -1834,19 +1909,6 @@ impl Cockpit {
         self.settle();
     }
 
-    /// A coordinator's worker seated in its Group, as the Server's
-    /// `worker.start` seats one.
-    pub fn fixture_enlist(
-        &mut self,
-        coordinator: ThreadId,
-        worker: ThreadId,
-        title: &str,
-    ) -> Result<GroupId, ApplyError> {
-        let enlisted = self.in_process().enlist(coordinator, worker, title);
-        self.settle();
-        enlisted
-    }
-
     pub fn draft_starting(&self, draft: DraftId) -> bool {
         match &self.link {
             Link::InProcess(engine) => engine.draft_starting(draft),
@@ -1892,8 +1954,17 @@ fn provisioned(executed: Result<Option<Done>, WireError>) -> Result<(), Provisio
 pub enum Asked {
     /// Land on this Thread (`thread.focus`).
     Focus(ThreadId),
-    /// Show a toast (`notification.show`).
-    Notification { title: String, body: Option<String> },
+    /// Show a toast (`notification.show`), ringing its chime; an
+    /// important one stays up until dismissed.
+    Notification {
+        title: String,
+        body: Option<String>,
+        sound: Option<crate::sound::Sound>,
+        important: bool,
+    },
+    /// Show only this Projects project's block in the nav, by its slug,
+    /// its coordinator first; none shows them all (`nav.focus`).
+    NavFocus(Option<String>),
 }
 
 /// What `Cockpit::close` can refuse: the park that ends a Solo Thread's

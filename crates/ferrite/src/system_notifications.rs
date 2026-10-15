@@ -71,10 +71,13 @@ pub fn withdraw(tag: &str, cx: &mut App) {
     cx.dismiss_system_notification(tag);
 }
 
+/// What runs when the operator clicks a notification, given its tag.
+type ClickHandler = Rc<dyn Fn(&str, &mut App)>;
+
 /// Hears the operator click a notification, by its tag. A later handler
 /// replaces this one, as GPUI's does.
 pub fn on_click(handler: impl Fn(&str, &mut App) + 'static, cx: &mut App) {
-    let handler: Rc<dyn Fn(&str, &mut App)> = Rc::new(handler);
+    let handler: ClickHandler = Rc::new(handler);
     #[cfg(all(target_os = "macos", not(any(test, feature = "visual-reference"))))]
     alerter::set_handler(handler.clone(), cx);
     cx.on_system_notification_response(move |response, cx| handler(&response.tag, cx));
@@ -93,7 +96,7 @@ mod alerter {
 
     use super::Posting;
 
-    type Handler = Rc<RefCell<Option<Rc<dyn Fn(&str, &mut App)>>>>;
+    type Handler = Rc<RefCell<Option<super::ClickHandler>>>;
 
     /// The app's alerter, found once. Clicks arrive from the threads that
     /// wait on alerter and are handed to the handler on the main thread.
@@ -140,7 +143,7 @@ mod alerter {
         cx.global::<Installed>().0.as_ref()
     }
 
-    pub(super) fn set_handler(handler: Rc<dyn Fn(&str, &mut App)>, cx: &mut App) {
+    pub(super) fn set_handler(handler: super::ClickHandler, cx: &mut App) {
         if let Some(alerter) = get(cx) {
             alerter.handler.replace(Some(handler));
         }

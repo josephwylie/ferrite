@@ -53,7 +53,7 @@ impl Cmd {
         self
     }
 
-    #[allow(dead_code)] // Ferrite: the adapter (herdr.rs) has no use for it yet.
+    #[allow(dead_code)] // Ferrite: unused by design: the adapter (herdr.rs) only runs the `ferrite` CLI, which needs no variable removed and no socket line.
     pub fn env_remove(mut self, key: impl Into<String>) -> Self {
         self.env_remove.push(key.into());
         self
@@ -122,7 +122,7 @@ pub trait Runner {
     /// One JSON line to a herdr socket, one line back. The single exception to
     /// "talk to herdr through its CLI" (client decision during the build):
     /// herdr 0.9.1 has no CLI command for `agent.view.set` / `agent.view.clear`.
-    #[allow(dead_code)] // Ferrite: the adapter (herdr.rs) has no use for it yet.
+    #[allow(dead_code)] // Ferrite: unused by design: the adapter (herdr.rs) only runs the `ferrite` CLI, which needs no variable removed and no socket line.
     fn socket_request(&self, socket: &Path, line: &str, timeout: Duration) -> Result<String>;
 
     /// Runs `cmd` on this process's terminal (an agent `open` starts in its own
@@ -278,7 +278,7 @@ impl Drop for IgnoreInterrupts {
     }
 }
 
-#[allow(dead_code)] // Ferrite: the adapter (herdr.rs) has no use for it yet.
+#[allow(dead_code)] // Ferrite: unused by design: the adapter (herdr.rs) only runs the `ferrite` CLI, which needs no variable removed and no socket line.
 fn socket_round_trip(socket: &Path, line: &str, timeout: Duration) -> Result<String> {
     use std::io::{BufRead, BufReader};
     use std::os::unix::net::UnixStream;

@@ -207,6 +207,8 @@ impl Engine {
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
+            | Op::Focused { .. }
+            | Op::Composing { .. }
             | Op::ListDir { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
@@ -215,7 +217,6 @@ impl Engine {
             | Op::ReadFile { .. }
             | Op::ReviewPullRequest { .. }
             | Op::PullRequest { .. }
-            | Op::Coordinate { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Unknown => Err(unknown()),

@@ -86,8 +86,9 @@ pub fn empty(ctx: &Ctx, project: &Project, herdr: &Herdr, include_focused: bool)
         let key = space.worktree.as_ref().map(|t| t.repo_key.as_str()).unwrap_or_default();
         let has_children = workspaces.iter().any(|w| w.worktree.as_ref().is_some_and(|t| t.is_linked_worktree && t.repo_key == key));
         let own: Vec<_> = panes.iter().filter(|p| p.workspace_id == id).collect();
+        // Ferrite: a Project with no Thread in it is empty: there is no
+        // shell left behind to wait for.
         if has_children
-            || own.is_empty()
             || own.len() != space.pane_count
             || agents.iter().any(|a| a.workspace_id == id)
             || (!include_focused && (space.focused || own.iter().any(|p| p.focused)))
@@ -147,28 +148,36 @@ mod tests {
 
     use super::*;
     use crate::runner::fake::ok;
-    use crate::scenarios::{World, agent_json, pane_json};
+    // Ferrite: no bare shell pane to fake.
+    use crate::scenarios::{World, agent_json};
 
+    // Ferrite: a Space is a Ferrite Project (`project list`), and a pane a
+    // Thread; nothing is left behind as a shell, so a repository's Project
+    // with no Thread in it is empty, and a Thread in it, at work or not,
+    // keeps it.
     struct Fixture {
         world: World,
         project: Project,
         repo: String,
-        /// `workspace list` entries, changeable mid-test.
+        // Ferrite: no `busy` panes: a Thread is never a shell.
+        /// `project list` entries, changeable mid-test.
         workspaces: Rc<RefCell<Vec<String>>>,
-        /// Panes whose foreground process is not the shell.
-        busy: Rc<RefCell<Vec<String>>>,
     }
 
+    // Ferrite: as `project list` answers it.
     fn primary_json(id: &str, repo: &str, focused: bool) -> String {
-        format!(r#"{{"workspace_id":"{id}","label":"repo","focused":{focused},"pane_count":1,"worktree":{{"repo_key":"{repo}/.git","checkout_path":"{repo}","is_linked_worktree":false}}}}"#)
+        format!(r#"{{"id":"{id}","label":"repo","focused":{focused},"thread_count":0,"worktree":{{"repo_key":"{repo}/.git","checkout_path":"{repo}","is_linked_worktree":false}}}}"#)
     }
 
-    fn child_json(id: &str, repo: &str) -> String {
-        format!(r#"{{"workspace_id":"{id}","label":"x","pane_count":1,"worktree":{{"repo_key":"{repo}/.git","checkout_path":"/wt/{id}","is_linked_worktree":true}}}}"#)
+    /// Ferrite: a Thread working in a linked worktree of the repository, in
+    /// its Project `w9`.
+    fn child_json(id: &str) -> String {
+        format!(r#"{{"pane_id":"{id}:p1","tab_id":"{id}:p1","workspace_id":"/wt/{id}","project":"w9","cwd":"/wt/{id}","name":"x","agent":"claude","agent_status":"idle"}}"#)
     }
 
     /// A resolved worktree thread that recorded `w9`, the repository's primary
-    /// Space, now one idle shell in the main checkout.
+    // Ferrite: no shell is left in it.
+    /// Space, now with no Thread in it.
     fn fixture() -> Fixture {
         let world = World::new();
         let project = world.project("demo", "a.sock");
@@ -181,29 +190,21 @@ mod tests {
             t.status = Status::Resolved;
             t.repo_workspace = "w9".into();
         });
-        *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(&project), pane_json("w9", "w9:t1", "w9:p1", &repo));
-        let workspaces = Rc::new(RefCell::new(vec![r#"{"workspace_id":"w1","label":"Demo","pane_count":1}"#.to_string(), primary_json("w9", &repo, false)]));
+        // Ferrite: Spaces are `project list`'s Projects, closed by `project
+        // close`; there is no process-info to ask.
+        let workspaces = Rc::new(RefCell::new(vec![r#"{"id":"w1","label":"Demo","focused":false,"thread_count":0,"worktree":null}"#.to_string(), primary_json("w9", &repo, false)]));
         let list = workspaces.clone();
-        world.runner.on_fn(|c| c.display().contains("workspace list"), move |_| Ok(ok(&format!(r#"{{"result":{{"workspaces":[{}]}}}}"#, list.borrow().join(",")))));
-        let busy = Rc::new(RefCell::new(Vec::<String>::new()));
-        let running = busy.clone();
-        world.runner.on_fn(
-            |c| c.display().contains("process-info"),
-            move |c| {
-                let pane = c.args.last().cloned().unwrap_or_default();
-                let group = if running.borrow().contains(&pane) { 200 } else { 100 };
-                Ok(ok(&format!(r#"{{"result":{{"process_info":{{"pane_id":"{pane}","shell_pid":100,"foreground_process_group_id":{group},"foreground_processes":[{{"pid":{group},"name":"zsh"}}]}}}}}}"#)))
-            },
-        );
-        world.runner.on("workspace close", ok(r#"{"result":{}}"#));
-        Fixture { world, project, repo, workspaces, busy }
+        world.runner.on_fn(|c| c.display().contains("project list"), move |_| Ok(ok(&format!(r#"{{"result":{{"projects":[{}]}}}}"#, list.borrow().join(",")))));
+        world.runner.on("project close", ok(r#"{"result":{}}"#));
+        Fixture { world, project, repo, workspaces }
     }
 
     fn close(f: &Fixture) -> usize {
         let ctx = f.world.ctx();
         let herdr = Herdr::new(f.world.env.herdr_bin(), f.project.coordinator().unwrap().socket, &f.world.runner);
         assert!(close_empty(&ctx, &f.project, &herdr).is_empty());
-        f.world.runner.count("workspace close")
+        // Ferrite: a Space closes with `project close`.
+        f.world.runner.count("project close")
     }
 
     fn items(f: &Fixture) -> Vec<String> {
@@ -215,8 +216,9 @@ mod tests {
         let f = fixture();
         assert_eq!(close(&f), 1);
         let calls = f.world.runner.calls.borrow();
-        let closed = calls.iter().find(|c| c.display().contains("workspace close")).unwrap();
-        assert!(closed.args.ends_with(&["close".to_string(), "w9".to_string()]), "{}", closed.display());
+        // Ferrite: a Space closes with `project close --project`.
+        let closed = calls.iter().find(|c| c.display().contains("project close")).unwrap();
+        assert!(closed.args.ends_with(&["--project".to_string(), "w9".to_string()]), "{}", closed.display());
         assert!(!closed.args.contains(&"--group".to_string()));
         drop(calls);
         assert_eq!(items(&f), ["closed empty Space repo (w9)"]);
@@ -228,14 +230,15 @@ mod tests {
     #[test]
     fn a_busy_shell_or_an_agent_keeps_it_silently() {
         let f = fixture();
-        f.busy.borrow_mut().push("w9:p1".into());
-        assert_eq!(close(&f), 0);
-        f.busy.borrow_mut().clear();
-        *f.world.agents.borrow_mut() = format!("[{}]", agent_json("w9", "w9:t1", "w9:p1", &f.repo, "", "idle"));
-        assert_eq!(close(&f), 0);
+        // Ferrite: a pane is a Thread, busy or idle; either keeps it.
+        for state in ["working", "idle"] {
+            *f.world.agents.borrow_mut() = format!("[{}]", agent_json("w9", "w9:t1", "w9:p1", &f.repo, "", state));
+            assert_eq!(close(&f), 0, "{state}");
+        }
         assert!(items(&f).is_empty());
         assert_eq!(thread::load(&f.project, "t-0001").unwrap().repo_workspace, "w9");
-        // Once idle again, a later tick closes it.
+        // Once idle again, a later tick closes it. Ferrite: idle again is
+        // its Threads gone.
         *f.world.agents.borrow_mut() = "[]".into();
         assert_eq!(close(&f), 1);
     }
@@ -243,9 +246,8 @@ mod tests {
     #[test]
     fn a_second_pane_must_be_idle_too() {
         let f = fixture();
-        f.workspaces.borrow_mut()[1] = primary_json("w9", &f.repo, false).replace(r#""pane_count":1"#, r#""pane_count":2"#);
-        *f.world.panes.borrow_mut() = format!("[{},{},{}]", f.world.coordinator_pane(&f.project), pane_json("w9", "w9:t1", "w9:p1", &f.repo), pane_json("w9", "w9:t2", "w9:p2", "/tmp"));
-        f.busy.borrow_mut().push("w9:p2".into());
+        // Ferrite: a second Thread, working elsewhere in it, keeps it too.
+        *f.world.agents.borrow_mut() = format!("[{}]", agent_json("w9", "w9:t2", "w9:p2", "/tmp", "", "working"));
         assert_eq!(close(&f), 0);
     }
 
@@ -257,7 +259,8 @@ mod tests {
         assert_eq!(close(&f), 0);
         // Recorded, but herdr now shows that id as something else (a reused id).
         thread::update(&f.project, "t-0001", |t| t.repo_workspace = "w9".into()).unwrap();
-        f.workspaces.borrow_mut()[1] = r#"{"workspace_id":"w9","label":"mine","pane_count":1}"#.into();
+        // Ferrite: as `project list` answers it.
+        f.workspaces.borrow_mut()[1] = r#"{"id":"w9","label":"mine","focused":false,"thread_count":0,"worktree":null}"#.into();
         assert_eq!(close(&f), 0);
     }
 
@@ -274,9 +277,11 @@ mod tests {
         // A worktree Space under it that no thread recorded keeps it too.
         thread::update(&other, "t-0001", |t| t.status = Status::Resolved).unwrap();
         thread::update(&other, "t-0001", |t| t.repo_workspace.clear()).unwrap();
-        f.workspaces.borrow_mut().push(child_json("w5", &f.repo));
+        // Ferrite: a worktree Space is a Thread working in the worktree.
+        *f.world.agents.borrow_mut() = format!("[{}]", child_json("w5"));
         assert_eq!(close(&f), 0);
-        f.workspaces.borrow_mut().pop();
+        // Ferrite: its Thread gone, the worktree Space is gone.
+        *f.world.agents.borrow_mut() = "[]".into();
         assert_eq!(close(&f), 1);
     }
 
@@ -300,7 +305,7 @@ mod tests {
         thread::update(&f.project, "t-0001", |t| t.repo_workspace = "w1".into()).unwrap();
         f.workspaces.borrow_mut()[0] = primary_json("w1", &f.repo, false);
         f.workspaces.borrow_mut().pop();
-        *f.world.panes.borrow_mut() = format!("[{}]", f.world.coordinator_pane(&f.project));
+        // Ferrite: no panes to set; the coordinator's Space is kept as such.
         assert_eq!(close(&f), 0);
     }
 

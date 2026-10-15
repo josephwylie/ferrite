@@ -44,22 +44,35 @@ struct SavedMachine {
     target: String,
 }
 
+/// Ferrite: `ferrite machine list` answers `{"result": {"machines": [machine, …]}}`.
+#[derive(Deserialize)]
+struct Listed {
+    result: Machines,
+}
+
+#[derive(Deserialize)]
+struct Machines {
+    machines: Vec<SavedMachine>,
+}
+
 fn saved(runner: &dyn Runner, herdr_bin: &str) -> Vec<SavedMachine> {
     runner
-        .run(&Cmd::new(herdr_bin, SSH_TIMEOUT).args(["machine", "list", "--json"]))
+        .run(&Cmd::new(herdr_bin, SSH_TIMEOUT).args(["machine", "list"]))
         .ok()
         .filter(Output::success)
-        .and_then(|out| serde_json::from_str::<Vec<SavedMachine>>(&out.stdout).ok())
+        .and_then(|out| serde_json::from_str::<Listed>(&out.stdout).ok())
+        // Ferrite: under `machines`.
+        .map(|listed| listed.result.machines)
         .unwrap_or_default()
 }
 
-/// `(label, ssh target)` of every machine `herdr machine list` saves.
+/// `(label, ssh target)` of every machine `ferrite machine list` saves.
 pub fn saved_machines(runner: &dyn Runner, herdr_bin: &str) -> Vec<(String, String)> {
     saved(runner, herdr_bin).into_iter().map(|m| (if m.label.is_empty() { m.id } else { m.label }, m.target)).collect()
 }
 
-/// The SSH target of a saved machine: from `herdr machine list --json`, else
-/// `[machines.<label>] ssh` in `config.toml`.
+/// The SSH target of a saved machine: from `ferrite machine list`
+/// (Ferrite's saved machines), else `[machines.<label>] ssh` in `config.toml`.
 pub fn ssh_target(runner: &dyn Runner, herdr_bin: &str, config_dir: &Path, machine: &str) -> Result<String> {
     let listed = saved(runner, herdr_bin);
     if let Some(found) = listed.iter().find(|m| m.label == machine || m.id == machine)
@@ -68,7 +81,7 @@ pub fn ssh_target(runner: &dyn Runner, herdr_bin: &str, config_dir: &Path, machi
         return Ok(found.target.clone());
     }
     configured_target(config_dir, machine)
-        .with_context(|| format!("machine `{machine}` has no SSH target: it is not in `herdr machine list`, and config.toml has no [machines.{machine}] ssh"))
+        .with_context(|| format!("machine `{machine}` has no SSH target: it is not in `ferrite machine list`, and config.toml has no [machines.{machine}] ssh"))
 }
 
 fn configured_target(config_dir: &Path, machine: &str) -> Option<String> {
@@ -106,7 +119,7 @@ pub fn ssh(runner: &dyn Runner, target: &str, script: &str, stdin: Option<&str>,
     runner.run(&cmd)
 }
 
-/// Puts the usual install folders of `herdr-projects` on `PATH` for a
+/// Puts the usual install folders of `ferrite-projects` on `PATH` for a
 /// non-interactive ssh shell.
 pub const HP_PATH: &str = "PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"";
 
@@ -120,21 +133,23 @@ pub struct RemoteProfile {
 }
 
 /// Looks up `name` (or that machine's default thread profile) with
-/// `herdr-projects profile resolve` on the machine. One ssh call.
+/// `ferrite-projects profile resolve` on the machine. One ssh call.
 pub fn resolve_profile(runner: &dyn Runner, target: &str, machine: &str, name: Option<&str>) -> Result<RemoteProfile> {
-    let script = format!("{HP_PATH}\nherdr-projects profile resolve{}", name.map(|n| format!(" -- {}", quote(n))).unwrap_or_default());
+    // Ferrite: the binary ships as `ferrite-projects`, beside `ferrited`.
+    let script = format!("{HP_PATH}\nferrite-projects profile resolve{}", name.map(|n| format!(" -- {}", quote(n))).unwrap_or_default());
     let out = ssh(runner, target, &script, None, SSH_TIMEOUT)?;
     if !out.success() {
         let error = out.error_text();
-        if error.contains("unrecognized subcommand") || error.contains("not found") && error.contains("herdr-projects") {
-            bail!("herdr-projects on `{machine}` cannot resolve profiles; run `herdr-projects update` there: {}", error.trim());
+        if error.contains("unrecognized subcommand") || error.contains("not found") && error.contains("ferrite-projects") {
+            bail!("ferrite-projects on `{machine}` cannot resolve profiles; update Ferrite there: {}", error.trim());
         }
         bail!("`{machine}`: {}", error.trim());
     }
     let profile: RemoteProfile = serde_json::from_str(out.stdout.trim()).with_context(|| format!("`{machine}` answered `profile resolve` with something that is not a profile"))?;
     crate::profiles::validate_name(&profile.name)?;
     if !crate::agents::is_kind(&profile.agent) {
-        bail!("profile `{}` on `{machine}` runs `{}`, which is not a Herdr agent kind", profile.name, profile.agent);
+        // Ferrite: agent kinds are Ferrite's.
+        bail!("profile `{}` on `{machine}` runs `{}`, which is not a Ferrite agent kind", profile.name, profile.agent);
     }
     Ok(profile)
 }
@@ -401,18 +416,19 @@ mod tests {
     }
 
     #[test]
-    fn target_comes_from_herdr_then_from_config() {
+    fn target_comes_from_ferrite_then_from_config() {
         let config = tempfile::tempdir().unwrap();
         std::fs::write(config.path().join("config.toml"), "[machines.box]\nssh = \"me@box.local\"\n").unwrap();
         let runner = FakeRunner::new();
-        runner.on("machine list --json", ok(r#"[{"id":"abc","label":"m1","target":"m1.local","session":"default"}]"#));
+        // Ferrite: `ferrite machine list` answers its machines under `machines`.
+        runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"abc","label":"m1","target":"m1.local"}]}}"#));
         assert_eq!(ssh_target(&runner, "herdr", config.path(), "m1").unwrap(), "m1.local");
         assert_eq!(ssh_target(&runner, "herdr", config.path(), "abc").unwrap(), "m1.local");
         assert_eq!(ssh_target(&runner, "herdr", config.path(), "box").unwrap(), "me@box.local");
-        assert!(ssh_target(&runner, "herdr", config.path(), "nope").is_err());
+        assert!(ssh_target(&runner, "herdr", config.path(), "nope").unwrap_err().to_string().contains("it is not in `ferrite machine list`"));
 
         let broken = FakeRunner::new();
-        broken.on("machine list --json", fail(1, "no"));
+        broken.on("machine list", fail(1, "no"));
         assert_eq!(ssh_target(&broken, "herdr", config.path(), "box").unwrap(), "me@box.local");
     }
 
@@ -421,17 +437,20 @@ mod tests {
         let runner = FakeRunner::new();
         runner.on("resolve -- fast", ok(r#"{"name":"fast","agent":"codex","args":["--model","gpt-5.5","--config","/Users/me/x.toml"]}"#));
         runner.on("resolve -- bad", ok(r#"{"name":"bad","agent":"rm","args":[]}"#));
-        runner.on("resolve -- gone", fail(1, "herdr-projects: there is no profile `gone` on this machine"));
+        runner.on("resolve -- gone", fail(1, "ferrite-projects: there is no profile `gone` on this machine"));
         runner.on("profile resolve", ok(r#"{"name":"claude","agent":"claude","args":[]}"#));
         let fast = resolve_profile(&runner, "me@m1", "m1", Some("fast")).unwrap();
         assert_eq!((fast.agent.as_str(), fast.args.len()), ("codex", 4));
-        assert!(runner.calls.borrow()[0].args.last().unwrap().contains("herdr-projects profile resolve -- fast"));
+        assert!(runner.calls.borrow()[0].args.last().unwrap().contains("ferrite-projects profile resolve -- fast"));
         assert_eq!(resolve_profile(&runner, "me@m1", "m1", None).unwrap().name, "claude");
-        assert!(resolve_profile(&runner, "me@m1", "m1", Some("bad")).unwrap_err().to_string().contains("not a Herdr agent kind"));
+        assert!(resolve_profile(&runner, "me@m1", "m1", Some("bad")).unwrap_err().to_string().contains("not a Ferrite agent kind")); // Ferrite: agent kinds are Ferrite's.
         assert!(resolve_profile(&runner, "me@m1", "m1", Some("gone")).unwrap_err().to_string().contains("no profile `gone`"));
         let old = FakeRunner::new();
         old.on("ssh", fail(2, "error: unrecognized subcommand 'resolve'"));
-        assert!(resolve_profile(&old, "me@m1", "m1", None).unwrap_err().to_string().contains("herdr-projects update"));
+        assert!(resolve_profile(&old, "me@m1", "m1", None).unwrap_err().to_string().contains("update Ferrite there"));
+        let missing = FakeRunner::new();
+        missing.on("ssh", fail(127, "sh: ferrite-projects: not found"));
+        assert!(resolve_profile(&missing, "me@m1", "m1", None).unwrap_err().to_string().contains("update Ferrite there"));
     }
 
     #[test]

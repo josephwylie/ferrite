@@ -396,7 +396,8 @@ pub fn compose_brief(input: &BriefInput) -> String {
 
     brief.push_str("\n# Progress\n\n");
     if input.report_prefix.is_empty() {
-        brief.push_str("Report progress with `herdr-projects report --percent N --activity '...'` if that command exists on this machine (use `--activity 'Waiting for you'` before asking the user something, and `--percent 100` when done); otherwise skip it.\n");
+        // Ferrite: the binary is ferrite-projects.
+        brief.push_str("Report progress with `ferrite-projects report --percent N --activity '...'` if that command exists on this machine (use `--activity 'Waiting for you'` before asking the user something, and `--percent 100` when done); otherwise skip it.\n");
     } else {
         brief.push_str(&crate::progress::guidance(input.report_prefix, None));
         brief.push('\n');
@@ -643,7 +644,8 @@ pub fn needs_rename(thread: &Thread, agent: &Agent) -> bool {
 /// it when the live state equals the recorded one and zero otherwise.
 pub fn live_state(thread: &Thread, agents: &[Agent], panes: &[Pane], now: jiff::Timestamp) -> Live {
     let agent = agents.iter().find(|a| agent_matches(thread, a));
-    let pane_exists = agent.is_some() || panes.iter().any(|p| pane_matches(thread, p));
+    // Ferrite: a staged pane is there until its agent starts in it.
+    let pane_exists = agent.is_some() || panes.iter().any(|p| pane_matches(thread, p)) || crate::herdr::staged(&thread.pane_id);
     // A pane whose ids match but which holds someone else's agent is not ours.
     let foreign = agent.is_none() && agents.iter().any(|a| a.pane_id == thread.pane_id) && thread.kind != Kind::Adopted;
     let agent_state = agent.map(|a| a.agent_status.clone());

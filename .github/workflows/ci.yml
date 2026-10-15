@@ -36,6 +36,9 @@ jobs:
         run: cargo test -p ferrite-core --locked
       - name: Test the vendored review core
         run: cargo test -p ferrite-reviewr --locked
+      # Projects (vendored herdr-projects) is Unix-only, so macOS alone.
+      - name: Test Projects
+        run: cargo test -p ferrite-projects --locked
       - name: Build app
         run: cargo build -p ferrite --locked
       # The Chromium adapter is shared with Windows: keep it compiling here.

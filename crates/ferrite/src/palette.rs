@@ -118,8 +118,6 @@ pub(crate) enum Command {
     OpenGroup,
     ReopenLast,
     NewThreadIn(ProjectId),
-    /// Start the Project's coordinator, or land on it (ADR 0028).
-    Coordinate(ProjectId),
     FilterAll,
     FilterProject(ProjectId),
     SortCreated,
@@ -160,6 +158,8 @@ pub(crate) enum Command {
     ResetKeys,
     /// The operator's own command, by its place in Settings `commands`.
     User(usize),
+    /// One of Projects' commands (ADR 0030).
+    Projects(crate::projects::Command),
 }
 
 /// What a row does when it runs.

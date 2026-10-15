@@ -310,7 +310,8 @@ mod tests {
         let calls = world.runner.calls.borrow();
         let sent = calls.iter().find(|c| c.display().contains("agent prompt")).unwrap();
         assert_eq!(prompt_text(sent), line());
-        assert!(sent.display().ends_with("--wait --until working --until blocked --timeout 8000"), "{}", sent.display());
+        // Ferrite: `ferrite agent prompt` waits with `--until` alone.
+        assert!(sent.display().ends_with("--until working --until blocked --timeout-ms 8000"), "{}", sent.display());
         drop(calls);
         let t = record(&project);
         assert!(!t.prompt_pending && t.brief_claimed.is_empty());
@@ -328,17 +329,20 @@ mod tests {
         let t = record(&project);
         assert!(t.prompt_pending);
         assert_eq!(t.brief_attempts, 1);
-        // The line sits in the box: Enter, not the text again.
+        // The line sits in the box: Enter, not the text again. Ferrite: a
+        // prompt is sent whole, never left typed in a box, so there is
+        // nothing to press Enter on: it waits, and is never typed again.
         *world.screen.borrow_mut() = claude_screen(Some(&line()));
         assert!(pass(&ctx));
-        assert_eq!((prompts(&world), world.runner.count("agent send-keys w2:p1 enter")), (1, 1));
+        assert_eq!((prompts(&world), world.runner.count("decision answer")), (1, 0));
         // Now it is in the conversation and the agent works: delivered.
         set_state(&world, "working");
         *world.screen.borrow_mut() = taken_screen();
         assert!(!pass(&ctx));
         let t = record(&project);
         assert!(!t.prompt_pending);
-        assert_eq!((prompts(&world), world.runner.count("send-keys")), (1, 1));
+        // Ferrite: no key is pressed; a menu key would answer a Decision.
+        assert_eq!((prompts(&world), world.runner.count("decision answer")), (1, 0));
         // The next tick sends nothing either.
         crate::ticker::tick_project(&ctx, &project).unwrap();
         assert_eq!(prompts(&world), 1);

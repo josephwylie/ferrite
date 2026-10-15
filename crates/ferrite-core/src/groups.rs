@@ -52,10 +52,6 @@ pub struct Group {
     /// older files load) means the even grid. Always names exactly the
     /// members — see `Groups::layout` for the fitted view.
     pub layout: Option<Tree>,
-    /// The coordinator Thread that leads this Group (ADR 0028): its first
-    /// member, the rest its workers, read in the order of what needs the
-    /// operator. Always a member.
-    pub coordinator: Option<ThreadId>,
 }
 
 impl Group {
@@ -277,8 +273,6 @@ struct PersistedGroup {
     guests: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<Tree>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    coordinator: Option<u64>,
 }
 
 /// The one owning module for membership and its durable order.
@@ -364,18 +358,12 @@ impl Groups {
                 .clone()
                 .and_then(|mut tree| tree.fit(&members).then_some(tree));
             healed |= layout != stored.layout;
-            let coordinator = stored
-                .coordinator
-                .map(ThreadId::new)
-                .filter(|thread| members.contains(thread));
-            healed |= coordinator.map(ThreadId::get) != stored.coordinator;
             groups.push(Group {
                 id: stored.id,
                 title: stored.title.clone(),
                 members,
                 guests,
                 layout,
-                coordinator,
             });
         }
         let next_id = groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1;
@@ -487,70 +475,18 @@ impl Groups {
 
     pub fn apply(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
         self.validate_change(&change)?;
-        self.transact(|groups| groups.apply_in_memory(change))
-    }
-
-    /// The Group `coordinator` leads, if it has one.
-    pub fn led_by(&self, coordinator: ThreadId) -> Option<&Group> {
-        self.groups
-            .iter()
-            .find(|group| group.coordinator == Some(coordinator))
-    }
-
-    /// Bring `worker` home to the Group `coordinator` leads (ADR 0028),
-    /// last; a coordinator with none yet makes it with this first worker,
-    /// itself first and the Group titled `title`.
-    pub fn enlist(
-        &mut self,
-        coordinator: ThreadId,
-        worker: ThreadId,
-        title: &str,
-    ) -> Result<GroupId, ApplyError> {
-        if let Some(group) = self.led_by(coordinator).map(|group| group.id) {
-            return self
-                .apply(GroupChange::Join {
-                    thread: worker,
-                    group,
-                    index: None,
-                })
-                .map(|_| group);
-        }
-        let change = GroupChange::Create {
-            first: coordinator,
-            second: worker,
-        };
-        self.validate_change(&change)?;
-        self.transact(|groups| {
-            let id = groups
-                .apply_in_memory(change)?
-                .group
-                .ok_or(ApplyError::MissingGroup)?;
-            let group = groups
-                .groups
-                .iter_mut()
-                .find(|group| group.id == id)
-                .ok_or(ApplyError::MissingGroup)?;
-            group.coordinator = Some(coordinator);
-            group.title = title.trim().to_string();
-            Ok(id)
-        })
-    }
-
-    /// Change the Groups in memory and write them; on any failure they
-    /// stay as they were.
-    fn transact<T>(
-        &mut self,
-        change: impl FnOnce(&mut Self) -> Result<T, ApplyError>,
-    ) -> Result<T, ApplyError> {
         let before = self.groups.clone();
         let before_id = self.next_id;
-        let result = change(self).and_then(|value| {
-            self.persist()?;
-            Ok(value)
-        });
+        let result = self.apply_in_memory(change);
         if result.is_err() {
             self.groups = before;
             self.next_id = before_id;
+            return result;
+        }
+        if let Err(error) = self.persist() {
+            self.groups = before;
+            self.next_id = before_id;
+            return Err(error.into());
         }
         result
     }
@@ -621,7 +557,6 @@ impl Groups {
                     // No stored tree: the default grid is drawn until the
                     // operator drags a seam, swaps or splits.
                     layout: None,
-                    coordinator: None,
                 });
                 Ok(Applied {
                     group: Some(id),
@@ -768,9 +703,6 @@ impl Groups {
         let group = &mut self.groups[index];
         group.members.retain(|member| *member != thread);
         group.guests.remove(&thread);
-        if group.coordinator == Some(thread) {
-            group.coordinator = None;
-        }
         if group.members.len() < 2 {
             let group = self.groups.remove(index);
             Some(Dissolved {
@@ -844,7 +776,6 @@ impl Groups {
                 members: stored.members.into_iter().map(ThreadId::new).collect(),
                 guests: stored.guests.into_iter().map(ThreadId::new).collect(),
                 layout: stored.layout,
-                coordinator: stored.coordinator.map(ThreadId::new),
             })
             .collect();
         Ok(Self {
@@ -871,7 +802,6 @@ impl Groups {
                     members: group.members.iter().map(|thread| thread.get()).collect(),
                     guests: group.guests.iter().map(|thread| thread.get()).collect(),
                     layout: group.layout.clone(),
-                    coordinator: group.coordinator.map(ThreadId::get),
                 })
                 .collect(),
         }
@@ -965,48 +895,6 @@ mod tests {
             groups.reset_layout(GroupId::new(99)),
             Err(ApplyError::MissingGroup)
         );
-    }
-
-    /// A coordinator's first worker makes its Group — the coordinator
-    /// first, titled, marked as leading it — and later workers join it.
-    /// The mark survives a reload and leaves with the coordinator.
-    #[test]
-    fn a_coordinator_leads_the_group_its_workers_join() {
-        let dir = scratch("coordinator");
-        let (threads, _writers) = stored_threads(&dir, 4);
-        let [coordinator, first, second, other] = threads[..] else {
-            unreachable!()
-        };
-        let mut groups = Groups::load(&dir).unwrap();
-        let group = groups
-            .enlist(coordinator, first, " app coordinator ")
-            .unwrap();
-        assert_eq!(groups.enlist(coordinator, second, "ignored"), Ok(group));
-        let led = groups.led_by(coordinator).unwrap();
-        assert_eq!(led.id, group);
-        assert_eq!(led.title, "app coordinator");
-        assert_eq!(led.members, [coordinator, first, second]);
-        assert_eq!(led.coordinator, Some(coordinator));
-
-        let reloaded = Groups::load(&dir).unwrap();
-        assert_eq!(reloaded.led_by(coordinator).map(|led| led.id), Some(group));
-        let wired = Groups::from_wire(groups.to_wire(), &dir, true).unwrap();
-        assert_eq!(wired.get(group).unwrap().coordinator, Some(coordinator));
-
-        groups
-            .apply(GroupChange::Join {
-                thread: other,
-                group,
-                index: None,
-            })
-            .unwrap();
-        groups
-            .apply(GroupChange::Leave {
-                thread: coordinator,
-            })
-            .unwrap();
-        assert_eq!(groups.get(group).unwrap().coordinator, None);
-        assert!(groups.led_by(coordinator).is_none());
     }
 
     #[test]

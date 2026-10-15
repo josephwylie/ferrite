@@ -319,6 +319,12 @@ impl Remote {
         }
     }
 
+    /// One act whose reply nobody waits for: `poll` passes it over. Not
+    /// sent while detached; the caller tells it again once attached.
+    pub(crate) fn tell(&mut self, op: Op) {
+        let _ = self.send_command(op);
+    }
+
     /// Wait, until `deadline`, for a stopping Server to be gone: it lets
     /// its windows go once the Store is flushed, and its socket stops
     /// answering when its process ends. Nothing attaches again meanwhile.

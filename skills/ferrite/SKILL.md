@@ -1,6 +1,6 @@
 ---
 name: ferrite
-description: "Drive other Ferrite Threads: start an agent, prompt it, wait for it, read its transcript, coordinate a project's workers. Use only when the user asks to delegate work to, coordinate with, or check on another Ferrite Thread or agent, or when you are a project's coordinator. Requires FERRITE_THREAD_ID and FERRITE_SOCKET, which Ferrite sets for every agent it runs."
+description: "Drive other Ferrite Threads: start an agent, prompt it, wait for it, read its transcript. Use only when the user asks to delegate work to, coordinate with, or check on another Ferrite Thread or agent. Requires FERRITE_THREAD_ID and FERRITE_SOCKET, which Ferrite sets for every agent it runs."
 ---
 
 # Ferrite
@@ -149,45 +149,7 @@ it. Prefer `agent wait` when you only need to know when a Thread settles.
 
 ## Coordinate a project
 
-A **coordinator** is a Thread that leads one project: it never does the
-work itself, it proposes tasks and starts one **worker** Thread per task
-the user agreed to. Ferrite briefs it when it starts; the user starts one
-from Ferrite's palette (`coordinate <project>`), or:
-
-```bash
-"$F" coordinator start --goal "Ship billing" --follow-prs
-```
-
-A project has one coordinator: `coordinator start` from any directory or
-worktree of a project that has one answers that one, records the
-`--goal`, `--instructions` or `--follow-prs` given on it, and sends the
-running coordinator its changed brief.
-
-As the coordinator, name yourself with `--current`:
-
-```bash
-"$F" coordinator update --current --goal "…" --instructions "…"
-"$F" worker start --current "Add the invoice table to app/billing, with tests." --title invoices
-"$F" coordinator get --current
-```
-
-- `worker start` opens a Thread in a new worktree and branch of the
-  project, seats it in your Group, and sends it a brief: the project's
-  goal, standing instructions and memory, then its task. Write the task so
-  it stands on its own: the worker knows nothing else. Start a worker only
-  on the user's go-ahead for that task; each costs them money.
-- `coordinator get` answers the goal, the instructions, the memory, and
-  your workers: what needs the user first (`needs_you`), then what is
-  `ready_for_review`, then what is `working`.
-- A worker ends its report with a `## Remember` section; Ferrite adds
-  those lessons to the project's memory for the next worker.
-- With `--follow-prs` (or `coordinator update --current --follow-prs`),
-  workers are briefed to push their branch and open a pull request, and
-  failing checks and review remarks on it are sent back to that worker;
-  `--follow-prs=false` stops it. Once a worker's PR merges and it has
-  finished, Ferrite parks it, removes its worktree (and its branch when
-  nothing on it would be lost), and tells you: plan the next task. It is
-  listed under `closed` with its `merged` PR.
+A project's coordinator and its threads are Projects' (ADR 0030), not this skill's: the project folder's AGENTS.md names the full `ferrite-projects --root …` command; run its `skill` subcommand and follow what it prints.
 
 ## Tell the user
 
@@ -199,6 +161,69 @@ As the coordinator, name yourself with `--current`:
 `notification show` puts a toast in every Ferrite window (`windows` says how
 many saw it); `thread focus` brings a Thread on screen. Focus a Thread only
 when the user asked to see it: it moves their view.
+
+## Stop, close and clean up
+
+```bash
+"$F" agent interrupt 14
+"$F" thread close 14
+"$F" worktree remove ~/src/.worktrees/app/my-task
+```
+
+`agent interrupt` stops the running turn, as the user's Esc does.
+`thread close` parks a Thread: its agent stops, its history stays.
+`worktree remove` removes a worktree by its directory (a Thread's
+`worktree`), parking the Threads in it; its branch stays. It is never
+forced: a worktree with modified or untracked files is refused
+`dirty_worktree_requires_force` and left whole. Close or remove only what
+the user asked you to.
+
+## Projects
+
+A **Project** is a directory (usually a repository) the user's Threads
+work in; every Thread names its `project` by id. `thread get` also says
+whether the user is looking at the Thread (`focused`), whether they have
+unsent text in its prompt box (`draft`: do not prompt it then), its
+prompts `held_prompt` and `queued_prompts`, its `worktree` and `branch`,
+its agent's own conversation id (`provider_session`), and
+`attention_seq`, which grows with every change of attention. There are
+no trust or permission screens to read: whatever the agent asks the user
+is a Decision, and its Thread is `blocked` until it is answered.
+
+```bash
+"$F" project list
+"$F" project get 3
+"$F" project open --cwd ~/src/app --label app
+"$F" project rename 3 billing
+"$F" project close 3
+"$F" worktree create --branch my-task --base main
+```
+
+`project open` answers the Project holding a directory, registering one
+when there is none. `project close` parks every open Thread of it.
+Start a Thread in a Project with `thread start --project 3` (it works in
+`--cwd` itself, any directory inside the Project), on a new
+branch with `--worktree --branch my-task --base main`, in a worktree that
+stands (one `worktree create` made) with `--cwd` its path, or carrying on
+an agent's own conversation with `--resume <provider_session>`. `--args`
+are written as for the agent's terminal UI; Codex's `--model`, `-m`,
+`-c model_reasoning_effort=…`, `-a`, `-s` and
+`--dangerously-bypass-approvals-and-sandbox` become its app-server's
+settings. Add
+`--ready` to be answered only once its agent is ready for a prompt
+(`agent_not_ready` names the Thread otherwise). To be told as soon as a
+prompt was taken, rather than when the turn ends:
+
+```bash
+"$F" agent prompt 14 "Go on." --until working --until blocked --timeout-ms 8000
+```
+
+`"$F" machine list` names the saved machines `--machine` can ask, and
+`"$F" notification show "Ready" --sound done` rings a chime with the
+toast (`--important` keeps it up). `"$F" nav focus --project <slug>`
+shows only that Projects project's block in the user's nav, and
+`"$F" nav focus` all of them again: Projects' `focus` and `unfocus` do
+it for you.
 
 ## Another machine
 

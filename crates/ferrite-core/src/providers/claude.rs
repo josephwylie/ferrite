@@ -102,6 +102,8 @@ pub struct ClaudeConfig {
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited.
     pub env: Vec<(&'static str, std::ffi::OsString)>,
+    /// Extra arguments, after Ferrite's own (`thread.start --args`).
+    pub args: Vec<String>,
 }
 
 impl Default for ClaudeConfig {
@@ -118,6 +120,7 @@ impl Default for ClaudeConfig {
             resume: None,
             visuals: None,
             env: Vec::new(),
+            args: Vec::new(),
         }
     }
 }
@@ -290,6 +293,7 @@ impl ClaudeSession {
             // permission mode asks for it (verified on 2.1.292 in `default`).
             command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
         }
+        command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

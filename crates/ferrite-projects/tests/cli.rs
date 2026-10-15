@@ -76,3 +76,24 @@ fn ticker_start_without_projects_creates_nothing() {
     assert!(!home.path().join(".herdr-projects").exists());
     assert!(!home.path().join(".config").exists());
 }
+
+/// Ferrite: the shipped binary is named by `FERRITE_PROJECTS_BIN` when it
+/// is set, so `AGENTS.md` and hooks name it even when `ferrite` runs this code.
+#[test]
+fn the_prefix_names_ferrite_projects_bin_when_it_is_set() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("root");
+    let root_arg = root.to_str().unwrap();
+    assert!(hp(home.path(), &["--root", root_arg, "new", "demo"]).status.success());
+    let shipped = home.path().join("Ferrite.app/Contents/MacOS/ferrite-projects");
+    let out = Command::new(BIN)
+        .env_clear()
+        .env("HOME", home.path())
+        .env("FERRITE_PROJECTS_BIN", &shipped)
+        .args(["--root", root_arg, "context", "demo", "--peek"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text.lines().next().unwrap(), format!("Commands: {} --root {root_arg}", shipped.display()));
+}

@@ -44,9 +44,10 @@ pub fn session_view<'a>(ctx: &'a Ctx, project: &Project) -> Option<SessionView<'
 }
 
 fn require_session<'a>(ctx: &'a Ctx, project: &Project) -> Result<SessionView<'a>> {
+    // Ferrite: the session is Ferrite's Server.
     session_view(ctx, project).with_context(|| {
         format!(
-            "the herdr session of `{}` is not reachable; run `open {}` first",
+            "Ferrite's Server for `{}` is not reachable; run `open {}` first",
             project.slug, project.slug
         )
     })

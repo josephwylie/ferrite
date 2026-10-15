@@ -46,12 +46,15 @@ Its calls go to the Server through the `ferrite` CLI: `bin` is
 `$FERRITE_BIN`, the socket is `$FERRITE_SOCKET`, `--machine` is the CLI's
 own (ADR 0027), and a pane, tab or agent id is a Thread id. Herdr's agent
 states and Ferrite's Attention are the same four words, so an agent's
-status is its Thread's Attention. `Herdr::call` takes upstream's herdr
-argv and translates it to a `ferrite` command line by one table
-(`ferrite_args`); a call with no Ferrite operation yet is refused with
-the code `not_wired` before anything runs, which callers already treat as
-any refusal. Each refusal is retired by wiring it, not by working round
-it in a caller.
+status is its Thread's Attention. `Herdr::call` takes the herdr argv
+callers build themselves and answers it from a `ferrite` command line;
+the typed methods do the same for theirs. A call with no Ferrite meaning
+is refused with the code `not_wired` before anything runs, which callers
+already treat as any refusal. Each refusal is retired by wiring it, not
+by working round it in a caller. A Thread is born with its agent, so a
+placement (`tab create`, `workspace create`, `worktree create`, `worktree
+open`) stages where it will start and `agent start` starts it; the
+crate's README lists every mapping and what is still refused.
 
 Screen reading (`agent read --format ansi`: `prompt_box`, `trust_screen`,
 the brief and steps checks) has no Ferrite counterpart and gets none:
@@ -91,14 +94,25 @@ their fixtures, the coordinator palette and nav code, and the skill's
 coordinator section go. The API's names are append-only once released;
 these four never were (the API is not on `main`), so they are removed
 rather than kept as aliases. CONTEXT.md's Coordinator, Worker and Memory
-entries are rewritten to herdr-projects' terms when that lands.
+entries are rewritten to herdr-projects' terms.
 
 A one-time migration runs on first start when `coordinators.json` is
 beside the Store: each entry becomes a project under the Projects root
-(`PROJECT.md` from its goal and standing instructions, `MEMORY.md` from
-its memory file, the `pr-followup` routine when it followed PRs, a thread
-record per open worker naming its Thread), and the file is renamed
-`coordinators.json.migrated`. With no file there is nothing to do.
+(`PROJECT.md` from its goal, standing instructions and the configured
+default profiles, `MEMORY.md` from its memory file, the `pr-followup`
+routine enabled when it followed PRs, and each open worker adopted as
+`thread adopt` would, from the Server's own `thread.list`, re-briefed once
+it is ready). The Server must answer first; the file is then renamed
+`coordinators.json.migrated` before anything is created, so the migration
+never runs twice, and an entry or worker that fails becomes a note: a
+parked worker Thread is not listed, so it is left for `thread adopt` once
+it runs. With no file there is nothing to do. A name a project under the
+root or an earlier entry already slugs is numbered (`app`, `app-2`). The
+old coordinator Thread works in its repository, not the project folder,
+so it is not carried over as a coordinator, nor prompted; `open` starts
+one. The Server runs it at start as `ferrite-projects
+migrate-ferrite-coordinators <store_dir>/coordinators.json`, logs its
+notes and shows them as one toast once a window is there to show it.
 
 ### Upstream updates
 
@@ -107,7 +121,7 @@ To take an upstream release: diff upstream from the recorded commit to the
 new one, apply it to the crate (`git apply --3way` on the crate's path),
 resolve conflicts at the `Ferrite:` seams, record the new commit, and run
 the crate's tests. A new herdr call upstream starts using lands in
-`ferrite_args` (or a refusal) before it ships.
+`herdr.rs` (or a refusal) before it ships.
 
 ## Consequences
 

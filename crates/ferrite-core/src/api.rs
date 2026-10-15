@@ -29,6 +29,8 @@ use crate::protocol::{
     self, ClosedBy, ErrorCode, PendingEntry, ServerMessage, WireError, WireHandle,
 };
 use crate::store::Provider;
+use crate::workspace::registry::ProjectId;
+use crate::workspace::WorkspaceBinding;
 use crate::{Attention, ThreadId};
 
 pub mod cli;
@@ -91,6 +93,9 @@ pub enum Response {
 pub struct ApiError {
     pub code: Code,
     pub message: String,
+    /// The Thread a refusal leaves behind (`agent_not_ready`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
 }
 
 impl ApiError {
@@ -98,6 +103,14 @@ impl ApiError {
         Self {
             code,
             message: message.into(),
+            thread: None,
+        }
+    }
+
+    fn on(self, thread: ThreadId) -> Self {
+        Self {
+            thread: Some(thread),
+            ..self
         }
     }
 }
@@ -108,8 +121,10 @@ pub enum Code {
     /// The line is not a request, or its parameters are not valid.
     InvalidRequest,
     UnknownMethod,
-    /// No open Thread has that id.
+    /// No open Thread has that id (Herdr's `pane_not_found`).
     UnknownThread,
+    /// No Project has that id.
+    ProjectNotFound,
     /// The Thread has no pending Decision with that id.
     UnknownDecision,
     /// A Decision waits on the Thread: the prompt was not sent.
@@ -120,14 +135,19 @@ pub enum Code {
     /// The agent was not seen at work within [`STALL`] of its prompt. The
     /// prompt may still have arrived.
     AgentPromptStalled,
+    /// A Thread started with `ready` is blocked, or was not up in time. It
+    /// stays; the refusal names it.
+    AgentNotReady,
+    /// The Thread works in no worktree, or its worktree is gone.
+    WorktreeNotFound,
+    /// The worktree holds modified or untracked files: nothing was removed.
+    DirtyWorktreeRequiresForce,
     /// The caller's timeout ran out. Nothing was undone.
     Timeout,
     /// The Thread closed (parked or deleted) while the wait ran.
     ThreadClosed,
     AlreadyAnswered,
     InvalidAnswer,
-    /// The Thread leads no Project's workers.
-    NotACoordinator,
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,
@@ -155,17 +175,117 @@ pub struct ThreadInfo {
     pub attention: Attention,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Shown in the focused Pane of the window that has the operator's
+    /// focus.
+    pub focused: bool,
+    /// The Project it belongs to, by `project.list`'s `id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The provider's own id for the conversation, which it resumes from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_session: Option<String>,
+    /// How many times its Attention changed since the Server started: a
+    /// different number means something happened in between.
+    pub attention_seq: u64,
+    /// A prompt is held for its starting Session.
+    pub held_prompt: bool,
+    /// Prompts waiting in the provider's queue.
+    pub queued_prompts: u32,
+    /// A window's Composer for it holds text not yet sent.
+    pub draft: bool,
+    /// The worktree it works in, when it works in one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<PathBuf>,
+    /// The branch of that worktree, when Ferrite made it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
     let view = engine.thread(thread)?;
+    let worktree = match view.workspace() {
+        Some(WorkspaceBinding::Worktree { path, .. }) => Some(path),
+        _ => None,
+    };
     Some(ThreadInfo {
         thread,
         title: view.title().map(Into::into),
         provider: view.provider(),
         attention: engine.attention(thread)?,
         cwd: view.workspace().map(|binding| binding.cwd().to_path_buf()),
+        focused: engine.focused_thread() == Some(thread),
+        project: engine.project_id(thread).map(project_id),
+        provider_session: view.provider_session().map(Into::into),
+        attention_seq: engine.attention_seq(thread),
+        held_prompt: engine.holds_prompt(thread),
+        queued_prompts: view.provider_queue_len().try_into().unwrap_or(u32::MAX),
+        draft: engine.composing(thread),
+        worktree: worktree.cloned(),
+        branch: worktree
+            .and_then(|path| engine.registry().branch_for(path))
+            .map(Into::into),
     })
+}
+
+/// A Project's id as the API spells it: a string, as Herdr's workspace
+/// ids are.
+pub fn project_id(project: ProjectId) -> String {
+    project.get().to_string()
+}
+
+/// One Project (Herdr's Space), as every answer about one names it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProjectInfo {
+    pub id: String,
+    /// What the nav calls it.
+    pub label: String,
+    /// It holds the Thread the operator is looking at.
+    pub focused: bool,
+    /// Its open Threads.
+    pub thread_count: usize,
+    /// The git checkout its first directory is; `None` outside git.
+    pub worktree: Option<ProjectCheckout>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProjectCheckout {
+    /// The repository's main checkout, which every worktree of it shares.
+    pub repo_key: PathBuf,
+    pub checkout_path: PathBuf,
+    /// The directory is a linked worktree, not the main checkout.
+    pub is_linked_worktree: bool,
+}
+
+/// Every Project, as `project.list` answers. Each open Thread's Project is
+/// read once.
+pub fn project_infos(engine: &Engine) -> Vec<ProjectInfo> {
+    let mut threads: BTreeMap<ProjectId, usize> = BTreeMap::new();
+    for thread in engine.open_threads() {
+        if let Some(project) = engine.project_id(*thread) {
+            *threads.entry(project).or_default() += 1;
+        }
+    }
+    let focused = engine
+        .focused_thread()
+        .and_then(|thread| engine.project_id(thread));
+    engine
+        .registry()
+        .projects()
+        .iter()
+        .map(|project| ProjectInfo {
+            id: project_id(project.id),
+            label: project.title.clone(),
+            focused: focused == Some(project.id),
+            thread_count: threads.get(&project.id).copied().unwrap_or(0),
+            worktree: crate::workspace::checkout_of(&project.root).map(|checkout| {
+                ProjectCheckout {
+                    repo_key: checkout.repo,
+                    checkout_path: project.root.clone(),
+                    is_linked_worktree: checkout.linked,
+                }
+            }),
+        })
+        .collect()
 }
 
 /// `{"thread": …}`: what every operation on one Thread answers.
@@ -243,19 +363,31 @@ pub fn decode(line: &[u8]) -> Result<Request, Response> {
 
 // ------------------------------------------------------------ waiting
 
+/// How long `thread.start --ready` gives its agent when not told: Herdr's
+/// `agent start --timeout 20000`.
+pub const READY: Duration = Duration::from_secs(20);
+
 /// What a wait waits for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Until {
     /// Idle, done or blocked: anything but working.
     Settled,
     Attention(Attention),
+    /// Any one of these (`agent.prompt --until working --until blocked`).
+    AnyOf(Vec<Attention>),
+    /// Up and ready for a prompt: its Session started, and idle or done.
+    Ready,
 }
 
 impl Until {
-    fn reached(self, attention: Attention) -> bool {
+    fn reached(&self, seen: Seen) -> bool {
         match self {
-            Until::Settled => attention != Attention::Working,
-            Until::Attention(wanted) => attention == wanted,
+            Until::Settled => seen.attention != Attention::Working,
+            Until::Attention(wanted) => seen.attention == *wanted,
+            Until::AnyOf(wanted) => wanted.contains(&seen.attention),
+            Until::Ready => {
+                !seen.starting && matches!(seen.attention, Attention::Idle | Attention::Done)
+            }
         }
     }
 }
@@ -273,6 +405,8 @@ pub enum Settled {
     Reached,
     Stalled,
     TimedOut,
+    /// A wait for `Ready` found the agent blocked, or ran out of time.
+    NotReady,
 }
 
 /// `agent.wait`, and `agent.prompt` with `wait`, as Herdr waits: a prompt's
@@ -302,9 +436,15 @@ impl Wait {
     }
 
     pub fn after_prompt(timeout: Option<Duration>, now: Instant) -> Self {
+        Self::after_prompt_until(Until::Settled, timeout, now)
+    }
+
+    /// A prompt's wait for `until` rather than for its agent to settle:
+    /// still never answered by what the agent was before the prompt.
+    pub fn after_prompt_until(until: Until, timeout: Option<Duration>, now: Instant) -> Self {
         Self {
             unseen: true,
-            ..Self::until(Until::Settled, timeout, now)
+            ..Self::until(until, timeout, now)
         }
     }
 
@@ -313,11 +453,19 @@ impl Wait {
         if matches!(seen.attention, Attention::Working | Attention::Blocked) {
             self.unseen = false;
         }
-        if !self.unseen && self.until.reached(seen.attention) {
+        if !self.unseen && self.until.reached(seen) {
             return Some(Settled::Reached);
         }
+        let ready = self.until == Until::Ready;
+        if ready && seen.attention == Attention::Blocked {
+            return Some(Settled::NotReady);
+        }
         if self.deadline.is_some_and(|deadline| now >= deadline) {
-            return Some(Settled::TimedOut);
+            return Some(if ready {
+                Settled::NotReady
+            } else {
+                Settled::TimedOut
+            });
         }
         if self.unseen && !seen.starting {
             let from = *self.stall_from.get_or_insert(now);
@@ -688,6 +836,18 @@ fn settle(engine: &Engine, waiting: &mut Waiting, now: Instant) -> Option<Result
             Code::Timeout,
             "the timeout ran out; this does not mean the prompt was not delivered",
         )),
+        Settled::NotReady => Err(ApiError::new(
+            Code::AgentNotReady,
+            format!(
+                "Thread {} started, but its agent is {}; the Thread stays",
+                waiting.thread,
+                match attention {
+                    Attention::Blocked => "blocked: a Decision waits",
+                    _ => "not ready in time",
+                }
+            ),
+        )
+        .on(waiting.thread)),
     })
 }
 

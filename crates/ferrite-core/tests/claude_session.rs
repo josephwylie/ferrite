@@ -723,6 +723,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        args: vec!["--dangerously-skip-permissions".into()],
     })
     .unwrap();
     session.send("hi").unwrap();
@@ -745,7 +746,8 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --model haiku --permission-mode default --name CI flake --add-dir /extra/project"
+         --model haiku --permission-mode default --name CI flake --add-dir /extra/project \
+         --dangerously-skip-permissions"
     );
     assert_eq!(sent.len(), 6);
     // Feature detection comes first, before a word of the Thread.
