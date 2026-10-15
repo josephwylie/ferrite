@@ -41,3 +41,6 @@ consumer, present or future, can trust an id to name one Thread only.
 - A `next-id` deleted by hand is seeded again from the Threads held, so
   the ids of deleted Threads above the highest held one could be reused,
   as before this ADR.
+- A `next-id` that does not hold a number fails every Thread creation with
+  an error naming the file, until it is fixed or deleted by hand. Guessing
+  a mark could hand out an id twice, so the Store refuses instead.
