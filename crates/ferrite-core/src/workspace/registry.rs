@@ -328,6 +328,17 @@ impl Registry {
         self.projects.iter().find(|project| project.id == id)
     }
 
+    /// The Project with a directory holding `path` (canonical), the nearest
+    /// one where directories nest.
+    pub fn containing(&self, path: &Path) -> Option<ProjectId> {
+        self.projects
+            .iter()
+            .flat_map(|project| project.directories().map(move |root| (project.id, root)))
+            .filter(|(_, root)| path.starts_with(root))
+            .max_by_key(|(_, root)| root.components().count())
+            .map(|(id, _)| id)
+    }
+
     /// Add roots to one Project atomically. Paths are canonicalized and no
     /// directory may belong to two Projects; repeats already on this Project
     /// are harmless.

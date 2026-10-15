@@ -158,9 +158,10 @@ from Ferrite's palette (`coordinate <project>`), or:
 "$F" coordinator start --goal "Ship billing" --follow-prs
 ```
 
-A project has one coordinator: `coordinator start` for a project that has
-one answers that one, and records the `--goal`, `--instructions` or
-`--follow-prs` given on it.
+A project has one coordinator: `coordinator start` from any directory or
+worktree of a project that has one answers that one, records the
+`--goal`, `--instructions` or `--follow-prs` given on it, and sends the
+running coordinator its changed brief.
 
 As the coordinator, name yourself with `--current`:
 
@@ -181,8 +182,9 @@ As the coordinator, name yourself with `--current`:
 - A worker ends its report with a `## Remember` section; Ferrite adds
   those lessons to the project's memory for the next worker.
 - With `--follow-prs` (or `coordinator update --current --follow-prs`),
-  failing checks and review remarks on a worker's pull request are sent
-  back to that worker; `--follow-prs=false` stops it.
+  workers are briefed to push their branch and open a pull request, and
+  failing checks and review remarks on it are sent back to that worker;
+  `--follow-prs=false` stops it.
 
 ## Tell the user
 

@@ -323,12 +323,35 @@ pub fn coordinator_prompt(brief: &Brief) -> String {
     )
 }
 
-/// A worker's first prompt: the Project's brief and its one task.
-pub fn worker_prompt(brief: &Brief, coordinator: ThreadId, task: &str) -> String {
+/// What a running coordinator is told when the operator changes the
+/// Project's brief under it.
+pub fn brief_changed_prompt(brief: &Brief) -> String {
+    format!(
+        "The user changed the project's brief. Plan with it from now on; every worker \
+         you start is briefed with it.\n\n{}",
+        brief.sections()
+    )
+}
+
+/// A worker's first prompt: the Project's brief and its one task. Where
+/// the Project follows PRs, the worker opens one for its branch, so its
+/// checks and reviews have somewhere to come from.
+pub fn worker_prompt(
+    brief: &Brief,
+    coordinator: ThreadId,
+    task: &str,
+    follow_prs: bool,
+) -> String {
+    let deliver = if follow_prs {
+        " When your work is ready, push your branch and open a pull request for it \
+         (`gh pr create`): its failing checks and review comments will be sent back to you."
+    } else {
+        ""
+    };
     format!(
         "You are a worker in the project \"{project}\" in Ferrite, started by its \
          coordinator (Thread {coordinator}). Work only on your task, in this worktree, on \
-         its own branch, and commit your work there.\n\
+         its own branch, and commit your work there.{deliver}\n\
          \n\
          {sections}\n\
          \n\

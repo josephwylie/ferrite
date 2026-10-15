@@ -64,36 +64,65 @@ fn not_a_coordinator() -> ApiError {
 }
 
 impl Server {
+    /// The Project `cwd` belongs to, so a start from any directory of a
+    /// Project, or from one of its worktrees, finds its one coordinator:
+    /// the registered Project holding `cwd` or its repository's main
+    /// checkout; else that checkout (`cwd` outside a repository),
+    /// registered.
+    pub(super) fn project_at(&mut self, cwd: &Path) -> Result<ProjectId, ApiError> {
+        let cwd = std::fs::canonicalize(cwd).map_err(failed)?;
+        if let Some(project) = self.engine.registry().containing(&cwd) {
+            return Ok(project);
+        }
+        let main = crate::workspace::worktrees(&cwd)
+            .ok()
+            .and_then(|listed| listed.into_iter().next())
+            .map_or(cwd, |main| main.path);
+        match self.engine.registry().containing(&main) {
+            Some(project) => Ok(project),
+            None => self.engine.register_project(&main).map_err(failed),
+        }
+    }
+
     /// The Project's coordinator, started in its main checkout and briefed;
-    /// or the one it has, reopened when parked. Either way `change` is made
-    /// to the Project's brief. A coordinator that was deleted is replaced:
-    /// its successor keeps the brief and the workers.
+    /// or the one it has, reopened when parked and told of a goal or
+    /// instructions `change` makes. Either way `change` is made to the
+    /// Project's brief. A coordinator that was deleted is replaced: its
+    /// successor keeps the brief and the workers.
     pub(super) fn start_coordinator(
         &mut self,
         project: ProjectId,
         provider: Provider,
         change: BriefChange,
     ) -> Result<ThreadId, ApiError> {
-        let kept = self.coordinating.book.of_project(project).cloned();
-        if let Some(thread) = kept.as_ref().map(|kept| kept.coordinator) {
-            let open = self.engine.thread(thread).is_some();
-            if open || self.engine.parked().map_err(failed)?.contains(&thread) {
-                if !open {
-                    self.execute(Op::Revive { thread })?;
-                }
-                self.coordinating
-                    .book
-                    .update(thread, |coordination| change.apply(coordination))
-                    .map_err(failed)?;
-                return Ok(thread);
-            }
-        }
         let (root, title) = self
             .engine
             .registry()
             .project(project)
             .map(|entry| (entry.root.clone(), entry.title.clone()))
             .ok_or_else(|| failed("no such Project"))?;
+        let kept = self.coordinating.book.of_project(project).cloned();
+        if let Some(kept) = &kept {
+            let thread = kept.coordinator;
+            let open = self.engine.thread(thread).is_some();
+            if open || self.engine.parked().map_err(failed)?.contains(&thread) {
+                if !open {
+                    self.execute(Op::Revive { thread })?;
+                }
+                let rebriefed = change.goal.as_ref().is_some_and(|goal| *goal != kept.goal)
+                    || change.instructions.as_ref().is_some_and(|instructions| {
+                        *instructions != kept.instructions
+                    });
+                self.coordinating
+                    .book
+                    .update(thread, |coordination| change.apply(coordination))
+                    .map_err(failed)?;
+                if rebriefed {
+                    self.tell_brief(thread, project, &title);
+                }
+                return Ok(thread);
+            }
+        }
         let Some(Done::Thread { thread }) = self.execute(Op::Open {
             provider,
             workspace: WireChoice::Main { checkout: root },
@@ -130,6 +159,33 @@ impl Server {
             text: prompt,
         })?;
         Ok(thread)
+    }
+
+    /// The coordinator is sent its Project's brief as it now stands, by
+    /// `agent.prompt`'s rules; one that cannot be sent (a Decision waits)
+    /// is logged: the coordinator reads the brief with `coordinator get`.
+    fn tell_brief(&mut self, thread: ThreadId, project: ProjectId, title: &str) {
+        let Some(coordination) = self.coordinating.book.of_project(project) else {
+            return;
+        };
+        let text = coordinator::brief_changed_prompt(&Brief {
+            project: title,
+            goal: &coordination.goal,
+            instructions: &coordination.instructions,
+            memory: &self.coordinating.book.memory(project),
+        });
+        let told = self.prompt(&AgentPromptParams {
+            thread,
+            text,
+            wait: false,
+            timeout_ms: None,
+        });
+        if let Err(error) = told {
+            crate::log!(
+                "coordinator {thread}: its new brief was not sent: {}",
+                error.message
+            );
+        }
     }
 
     /// `coordinator.get`: the brief, the memory, and the workers — the open
@@ -200,6 +256,19 @@ impl Server {
     /// its coordinator's Group and briefed with its task. Once it has
     /// started it is the coordinator's, whatever fails after.
     pub(super) fn start_worker(&mut self, params: WorkerStartParams) -> Result<Value, ApiError> {
+        if params.task.trim().is_empty() {
+            return Err(ApiError::new(Code::InvalidRequest, "a worker needs a task"));
+        }
+        if params
+            .title
+            .as_deref()
+            .is_some_and(|title| title.trim().is_empty())
+        {
+            return Err(ApiError::new(
+                Code::InvalidRequest,
+                "a worker's title cannot be blank",
+            ));
+        }
         let coordinator = params.thread;
         let coordination = self
             .coordinating
@@ -239,7 +308,12 @@ impl Server {
             crate::log!("coordinator {coordinator}: worker {thread} joined no Group: {error}");
         }
         if let Some(title) = params.title {
-            self.execute(Op::Rename { thread, title })?;
+            if let Err(error) = self.execute(Op::Rename { thread, title }) {
+                crate::log!(
+                    "coordinator {coordinator}: worker {thread} kept its title: {}",
+                    error.message
+                );
+            }
         }
         let prompt = coordinator::worker_prompt(
             &Brief {
@@ -250,6 +324,7 @@ impl Server {
             },
             coordinator,
             &params.task,
+            coordination.follow_prs,
         );
         self.execute(Op::Send {
             thread,
@@ -269,7 +344,8 @@ impl Server {
     /// again — every turn in between, queued or blocked on the way — is
     /// read for its `## Remember` lessons, which join the memory. A worker
     /// first seen at rest has nothing new; one first seen mid-turn is read
-    /// from that turn's prompt.
+    /// from that turn's prompt. Lessons the memory could not take are read
+    /// again on the next pass.
     fn remember_lessons(&mut self) {
         let workers: Vec<(ProjectId, ThreadId)> = self
             .coordinating
@@ -308,15 +384,16 @@ impl Server {
                 read.insert(thread, from);
                 continue;
             }
-            read.insert(thread, last);
             let unread = &blocks[blocks.partition_point(|block| Some(block.id) <= from)..];
             let lessons = coordinator::remembered(&crate::transcript::plain_text(unread));
-            if lessons.is_empty() {
-                continue;
-            }
-            if let Err(error) = self.coordinating.book.remember(project, &lessons) {
-                crate::log!("worker {thread}: its lessons were not remembered: {error}");
-            }
+            let next = match self.coordinating.book.remember(project, &lessons) {
+                Ok(_) => last,
+                Err(error) => {
+                    crate::log!("worker {thread}: its lessons wait to be remembered: {error}");
+                    from
+                }
+            };
+            read.insert(thread, next);
         }
         self.coordinating.read = read;
     }

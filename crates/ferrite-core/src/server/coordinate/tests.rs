@@ -102,7 +102,7 @@ fn review(id: &str, body: &str) -> PrFeedback {
 }
 
 /// A start for a Project with a coordinator records the brief it is
-/// given on that coordinator; one whose coordinator was deleted starts a
+/// given on that coordinator and tells it; one whose coordinator was deleted starts a
 /// successor that keeps the brief, the workers and what each was sent.
 #[test]
 fn a_start_records_its_brief_and_a_successor_keeps_the_book() {
@@ -117,7 +117,11 @@ fn a_start_records_its_brief_and_a_successor_keeps_the_book() {
             },
         )
         .unwrap();
-    let _first = provider(&providers);
+    let first_provider = provider(&providers);
+    server.engine.pump();
+    first_provider.send(text("What first?")).unwrap();
+    turn_ends(&first_provider);
+    server.engine.pump();
     let again = server
         .start_coordinator(
             project,
@@ -130,6 +134,12 @@ fn a_start_records_its_brief_and_a_successor_keeps_the_book() {
         )
         .unwrap();
     assert_eq!(again, first);
+    server.engine.pump();
+    let told = said(&server, first);
+    assert!(
+        told.contains("Never push to main."),
+        "a new brief is told: {told}"
+    );
     let book = &server.coordinating.book;
     let entry = book.of_project(project).unwrap();
     assert_eq!(entry.goal, "Ship billing");
@@ -261,5 +271,108 @@ fn lessons_are_read_from_every_turn_that_ended() {
     assert_eq!(
         memory(&server),
         "- Invoices live in app/billing\n- Totals round half up\n"
+    );
+}
+
+/// A start from a subdirectory or a worktree of a Project answers that
+/// Project; one from a repository no Project holds registers its main
+/// checkout.
+#[test]
+fn a_start_from_anywhere_in_a_project_finds_it() {
+    let (mut server, project, _providers) = boot("coordinate-project-at");
+    let repo = server
+        .engine
+        .registry()
+        .project(project)
+        .unwrap()
+        .root
+        .clone();
+    let sub = repo.join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+    assert_eq!(server.project_at(&sub).unwrap(), project);
+    let tree = server.settings_dir.join("tree");
+    crate::workspace::git_for_tests(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "side",
+            tree.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(server.project_at(&tree).unwrap(), project);
+
+    let other = crate::server::tests::repository(&server.settings_dir.join("other"));
+    let inner = other.join("lib");
+    std::fs::create_dir_all(&inner).unwrap();
+    let registered = server.project_at(&inner).unwrap();
+    assert_ne!(registered, project);
+    let root = &server.engine.registry().project(registered).unwrap().root;
+    assert_eq!(*root, std::fs::canonicalize(&other).unwrap());
+}
+
+/// A blank task or title is refused before a worker exists, so a refused
+/// start leaves nothing to brief.
+#[test]
+fn a_blank_task_or_title_starts_no_worker() {
+    let (mut server, project, providers) = boot("coordinate-blank");
+    let coordinator = server
+        .start_coordinator(project, Provider::Claude, BriefChange::default())
+        .unwrap();
+    let _coordinator = provider(&providers);
+    let threads = server.engine.threads();
+    for (task, title) in [
+        (" ", None),
+        ("Add invoices", Some(" ")),
+        ("Add invoices", Some("")),
+    ] {
+        let refused = server
+            .start_worker(WorkerStartParams {
+                thread: coordinator,
+                task: task.into(),
+                title: title.map(String::from),
+                provider: None,
+            })
+            .unwrap_err();
+        assert_eq!(refused.code, Code::InvalidRequest, "{task:?} {title:?}");
+    }
+    assert_eq!(server.engine.threads(), threads);
+    let entry = server.coordinating.book.of_project(project).unwrap();
+    assert!(entry.workers.is_empty());
+}
+
+/// Lessons the memory could not take are read again once it can.
+#[test]
+fn lessons_not_remembered_are_read_again() {
+    let (mut server, project, providers) = boot("coordinate-lessons-retry");
+    let (worker, provider) = coordinated(&mut server, project, &providers, false);
+    server.remember_lessons();
+    let memory = server.coordinating.book.memory_path(project);
+    let blocker = memory.parent().unwrap().to_path_buf();
+    std::fs::write(&blocker, "not a directory").unwrap();
+
+    server
+        .execute(Op::Send {
+            thread: worker,
+            text: "Add invoices.".into(),
+        })
+        .unwrap();
+    provider
+        .send(text(
+            "Done.\n\n## Remember\n\n- Invoices live in app/billing\n",
+        ))
+        .unwrap();
+    turn_ends(&provider);
+    server.engine.pump();
+    server.remember_lessons();
+    assert!(server.coordinating.book.memory(project).is_empty());
+
+    std::fs::remove_file(&blocker).unwrap();
+    server.remember_lessons();
+    assert_eq!(
+        server.coordinating.book.memory(project),
+        "- Invoices live in app/billing\n"
     );
 }

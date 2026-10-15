@@ -142,8 +142,9 @@ fn lessons_are_the_bullets_under_remember() {
 }
 
 /// Every brief carries the Project's goal, instructions and memory; the
-/// worker's its task and the `## Remember` contract, the coordinator's
-/// the commands it delegates with.
+/// worker's its task, the `## Remember` contract and, where PRs are
+/// followed, a PR to open; the coordinator's the commands it delegates
+/// with.
 #[test]
 fn briefs_carry_the_project_and_the_contract() {
     let brief = Brief {
@@ -152,7 +153,7 @@ fn briefs_carry_the_project_and_the_contract() {
         instructions: "Never push to main.",
         memory: "- Run cargo check\n",
     };
-    let worker = worker_prompt(&brief, ThreadId::new(7), " Add invoices \n");
+    let worker = worker_prompt(&brief, ThreadId::new(7), " Add invoices \n", false);
     for part in [
         "\"app\"",
         "Thread 7",
@@ -164,6 +165,14 @@ fn briefs_carry_the_project_and_the_contract() {
     ] {
         assert!(worker.contains(part), "{part:?} in {worker}");
     }
+    assert!(!worker.contains("gh pr create"), "{worker}");
+    let following = worker_prompt(&brief, ThreadId::new(7), "Add invoices", true);
+    assert!(
+        following.contains("push your branch and open a pull request"),
+        "{following}"
+    );
+    let changed = brief_changed_prompt(&brief);
+    assert!(changed.contains("## Goal\n\nShip billing"), "{changed}");
     let coordinator = coordinator_prompt(&brief);
     for part in [
         "never do the work yourself",

@@ -36,11 +36,18 @@ operator can read and edit it; never inside a repo.
 Starting a coordinator for a Project that has one answers that one
 (reopened when parked): a Project has one goal and one memory, and two
 coordinators would brief workers from the same memory at cross purposes.
-A goal, instructions or `follow_prs` given with the start are recorded
-either way, as `coordinator.update` records them, never dropped. When the
-Project's coordinator Thread was deleted, a start opens its successor,
-which takes over the entry: the brief, the workers and what each was
-sent stay, so the old workers' lessons and PR feedback keep flowing.
+A start names its Project by a directory: the registered Project holding
+it, or holding its repository's main checkout (a start from a worktree),
+and only when none does is that main checkout registered, so a start from
+a subdirectory never makes a second Project. A goal, instructions or
+`follow_prs` given with the start are recorded either way, as
+`coordinator.update` records them, never dropped; a running coordinator
+whose goal or instructions a start changed is sent its new brief, by
+`agent.prompt`'s rules (one a Decision blocks is logged, and reads it with
+`coordinator get`). `coordinator.update` tells it nothing: the coordinator
+is the one that calls it. When the Project's coordinator Thread was
+deleted, a start opens its successor, which takes over the entry: the
+brief, the workers and what each was sent stay, so the old workers' lessons and PR feedback keep flowing.
 
 ### Driven through the API, so the coordinator agent drives it
 
@@ -54,9 +61,11 @@ Four operations join the API's table, append-only:
 | `worker.start` | a Thread in a new worktree of the Project, seated in the coordinator's Group, briefed with the Project's brief and its task |
 
 `worker.start` refuses `not_a_coordinator` for a Thread that leads no
-Project. A worker that has started is the coordinator's whatever fails
-after (its Group seat, its title): the coordinator is told only of a
-failure it could act on, so it never starts the same task twice.
+Project, and `invalid_request` for a blank task or title, before any
+worker exists. A worker that has started is the coordinator's whatever
+fails after (its Group seat, its title, both logged): the coordinator is
+told only of a failure it could act on, so it never starts the same task
+twice.
 
 The skill teaches the commands; the coordinator's brief tells it how to
 work. The **go-ahead** is the coordinator's own Decision: it proposes the
@@ -95,7 +104,9 @@ loose, and `coordinator get` lists it among the workers.
 
 ### Lessons flow back through `## Remember`
 
-A worker's brief asks it to end its report with a `## Remember` section,
+A worker's brief asks it to commit on its branch and, where the Project
+follows PRs, to push it and open a pull request, so the feedback below has
+a PR to come from. It ends its report with a `## Remember` section,
 one lesson per bullet. The Server keeps, per worker, the last transcript
 Block it read. Whenever the worker is at rest (done or idle) and has
 written past that Block, everything since is read as the API's
@@ -104,8 +115,9 @@ appended. Reading by Block rather than by watching Attention change
 catches every turn: one shorter than a pump pass, one blocked on a
 Decision on the way, and one that ran straight into a queued prompt. A
 worker first seen at rest (a Server restart) has nothing new; one first
-seen mid-turn is read from that turn's prompt. Later briefs carry the
-memory as it is then.
+seen mid-turn is read from that turn's prompt. Lessons the memory file
+could not take are read again on the next pass, not dropped. Later briefs
+carry the memory as it is then.
 
 ### PR feedback, opt-in
 

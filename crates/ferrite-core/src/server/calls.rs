@@ -113,9 +113,7 @@ impl Server {
                 Ok(json!({ "windows": windows }))
             }
             Method::CoordinatorStart(params) => self
-                .engine
-                .register_project(&params.cwd)
-                .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
+                .project_at(&params.cwd)
                 .and_then(|project| {
                     self.start_coordinator(
                         project,

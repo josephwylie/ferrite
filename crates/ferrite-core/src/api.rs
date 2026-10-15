@@ -105,7 +105,7 @@ impl ApiError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Code {
-    /// The line is not a request.
+    /// The line is not a request, or its parameters are not valid.
     InvalidRequest,
     UnknownMethod,
     /// No open Thread has that id.
