@@ -307,7 +307,7 @@ type Search = (
 );
 
 /// A read off the pump — git's for a `list_repo` or a review's commands
-/// (`review_diff`, `list_commits`, `search_repo`, `read_file`,
+/// (`review_read`, `review_diff`, `list_commits`, `search_repo`, `read_file`,
 /// `review_pull_request`, `list_files`, `list_bases`, `pick_base`), `gh`'s for a `pull_request`, a folder's for a
 /// `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
@@ -589,6 +589,26 @@ impl Server {
                 return;
             }
             Op::ReviewDiff {
+                path,
+                scope,
+                commit,
+            } => match scope.read(commit.clone(), None) {
+                Some(read) => {
+                    let path = path.clone();
+                    self.read_off_pump(id, request, move || {
+                        ferrite_reviewr::ferrite::review(&path, &read)
+                            .map(|files| {
+                                Some(Done::Diff {
+                                    text: crate::protocol::unified(&files),
+                                })
+                            })
+                            .map_err(failed)
+                    });
+                    return;
+                }
+                None => Err(failed("this server cannot read that scope")),
+            },
+            Op::ReviewRead {
                 path,
                 scope,
                 commit,

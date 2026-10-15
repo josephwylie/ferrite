@@ -31,6 +31,10 @@ use crate::workspace::{
 };
 use crate::ThreadId;
 use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
+
+/// Where a review's read goes, and what it read: asked again as a
+/// `review_diff` of a Server from before `review_read`.
+type Review = (PathBuf, Read, Sender<io::Result<Vec<FileSides>>>);
 use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
 use ferrite_reviewr::search::SearchResults;
 
@@ -138,6 +142,8 @@ pub(crate) struct Remote {
     /// Commands whose reply the window takes later, each with where its
     /// answer goes (`ask`).
     answers: BTreeMap<u64, Answer>,
+    /// `review_read`s in flight, by command.
+    reviews: BTreeMap<u64, Review>,
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
     rendered: (Sender<ClientMessage>, Receiver<ClientMessage>),
@@ -165,6 +171,7 @@ impl Remote {
             abandoned: Vec::new(),
             searches: BTreeMap::new(),
             answers: BTreeMap::new(),
+            reviews: BTreeMap::new(),
             watching: BTreeSet::new(),
             rendered: mpsc::channel(),
         }
@@ -459,10 +466,53 @@ impl Remote {
         path: &Path,
         read: &Read,
     ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
-        self.ask(Op::review_diff(path, read), |done| match done {
-            Done::Review { files } => Some(files.into_iter().map(Into::into).collect()),
-            _ => None,
-        })
+        let id = self
+            .send_command(Op::review_read(path, read))
+            .map_err(io::Error::from)?;
+        let (answer, answered) = mpsc::channel();
+        self.reviews
+            .insert(id, (path.to_path_buf(), read.clone(), answer));
+        Ok(answered)
+    }
+
+    /// A `review_read`'s reply: its files, or — from a Server that does
+    /// not know the command — what its `review_diff` answers.
+    fn reviewed(&mut self, (path, read, answer): Review, reply: Result<Option<Done>, WireError>) {
+        let files = match reply {
+            Err(error) if error.code == ErrorCode::Unsupported => {
+                return self.review_as_before(&path, &read, answer);
+            }
+            Err(error) => Err(error.into()),
+            Ok(Some(Done::Review { files })) => Ok(files.into_iter().map(Into::into).collect()),
+            Ok(_) => Err(io::Error::other("the server answered something else")),
+        };
+        let _ = answer.send(files);
+    }
+
+    /// `read` by a Server from before `review_read`: its `review_diff`'s
+    /// hunks as the files' sides. A last turn or a run of commits it cannot
+    /// read, so it is never asked one as something else.
+    fn review_as_before(
+        &mut self,
+        path: &Path,
+        read: &Read,
+        answer: Sender<io::Result<Vec<FileSides>>>,
+    ) {
+        let Some(op) = Op::review_diff(path, read) else {
+            let _ = answer.send(Err(io::Error::other(
+                "this Ferrite server is too old to review that: update it",
+            )));
+            return;
+        };
+        match self.send_command(op) {
+            Ok(id) => self.answer(id, answer, |done| match done {
+                Done::Diff { text } => Some(protocol::sides_of_unified(&text)),
+                _ => None,
+            }),
+            Err(error) => {
+                let _ = answer.send(Err(error.into()));
+            }
+        }
     }
 
     pub(crate) fn review_commits(
@@ -590,6 +640,17 @@ impl Remote {
     ) -> io::Result<Receiver<io::Result<T>>> {
         let id = self.send_command(op).map_err(io::Error::from)?;
         let (answer, answered) = mpsc::channel();
+        self.answer(id, answer, read);
+        Ok(answered)
+    }
+
+    /// Command `id`'s reply, read by `read`, goes to `answer`.
+    fn answer<T: Send + 'static>(
+        &mut self,
+        id: u64,
+        answer: Sender<io::Result<T>>,
+        read: fn(Done) -> Option<T>,
+    ) {
         self.answers.insert(
             id,
             Box::new(move |result| {
@@ -600,7 +661,6 @@ impl Remote {
                 let _ = answer.send(read);
             }),
         );
-        Ok(answered)
     }
 
     /// Stream every open Thread to this window: from where its mirror left
@@ -712,6 +772,7 @@ impl Remote {
         self.watching.clear();
         self.searches.clear();
         self.answers.clear();
+        self.reviews.clear();
         self.abandon_starting();
     }
 
@@ -723,6 +784,11 @@ impl Remote {
                     .filter(|error| error.code == ErrorCode::Lagged)
                 {
                     self.detach(&error.message);
+                    return Vec::new();
+                }
+                if let Some(review) = self.reviews.remove(&id) {
+                    let reply = error.map_or(Ok(ok), Err);
+                    self.reviewed(review, reply);
                     return Vec::new();
                 }
                 let result = match error {

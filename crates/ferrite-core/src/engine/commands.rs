@@ -212,6 +212,7 @@ impl Engine {
             | Op::ListDir { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
+            | Op::ReviewRead { .. }
             | Op::ListCommits { .. }
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }

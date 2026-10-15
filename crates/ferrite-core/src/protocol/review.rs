@@ -14,7 +14,7 @@ use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 
 use super::Done;
 
-/// One changed file of a `review_diff`, with both its sides — or the
+/// One changed file of a `review_read`, with both its sides — or the
 /// notice that stands in for them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireReviewFile {
@@ -122,6 +122,176 @@ impl From<WireReviewFile> for FileSides {
             sides,
         }
     }
+}
+
+/// A review's files as the git-style unified diff a `review_diff` answers,
+/// for a window from before `review_read`: each file with both sides, its
+/// sides' changes with three lines around them. A file shown by a notice
+/// is left out, as git's text left a binary one out of that window.
+pub fn unified(files: &[FileSides]) -> String {
+    let mut text = String::new();
+    for FileSides { file, sides } in files {
+        let Ok((old, new)) = sides else { continue };
+        let from = file.previous_path.as_deref().unwrap_or(&file.path);
+        let (old_name, new_name) = match file.kind {
+            ChangeKind::Added | ChangeKind::Untracked => {
+                ("/dev/null".into(), format!("b/{}", file.path))
+            }
+            ChangeKind::Deleted => (format!("a/{from}"), "/dev/null".into()),
+            _ => (format!("a/{from}"), format!("b/{}", file.path)),
+        };
+        let diff = similar::TextDiff::from_lines(old, new);
+        let hunks = diff
+            .unified_diff()
+            .context_radius(3)
+            .header(&old_name, &new_name)
+            .to_string();
+        if hunks.is_empty() {
+            continue;
+        }
+        text.push_str(&format!("diff --git a/{from} b/{}\n", file.path));
+        text.push_str(&hunks);
+    }
+    text
+}
+
+/// A `review_diff`'s unified diff as a review's files, for a Server from
+/// before `review_read`. The text carries only the lines around each
+/// change, so each side is its hunks' lines with the lines between them
+/// left blank: every line keeps its number, and a fold the window opens
+/// shows blank lines. A file with no hunks (binary, or a bare rename) is
+/// left out.
+pub fn sides_of_unified(text: &str) -> Vec<FileSides> {
+    #[derive(Default)]
+    struct Building {
+        old_path: Option<String>,
+        new_path: Option<String>,
+        old: String,
+        new: String,
+        old_lines: u32,
+        new_lines: u32,
+        additions: u32,
+        deletions: u32,
+        hunks: bool,
+    }
+    fn finish(building: Building, files: &mut Vec<FileSides>) {
+        if !building.hunks {
+            return;
+        }
+        let (kind, path, previous_path) = match (building.old_path, building.new_path) {
+            (None, Some(path)) => (ChangeKind::Added, path, None),
+            (Some(path), None) => (ChangeKind::Deleted, path, None),
+            (Some(old), Some(new)) if old != new => (ChangeKind::Renamed, new, Some(old)),
+            (_, Some(path)) => (ChangeKind::Modified, path, None),
+            (None, None) => return,
+        };
+        files.push(FileSides {
+            file: ChangedFile {
+                path,
+                kind,
+                additions: building.additions,
+                deletions: building.deletions,
+                previous_path,
+                binary: false,
+                old_size: 0,
+                new_size: None,
+            },
+            sides: Ok((building.old, building.new)),
+        });
+    }
+    // git ends a path holding a space with a tab on the `---`/`+++` lines.
+    let named = |path: &str, prefix: &str| {
+        path.trim_end_matches('\t')
+            .strip_prefix(prefix)
+            .map(str::to_string)
+    };
+    let pad = |side: &mut String, lines: &mut u32, to: u32| {
+        while *lines < to {
+            side.push('\n');
+            *lines += 1;
+        }
+    };
+    let mut files = Vec::new();
+    let mut building = Building::default();
+    let mut in_hunk = false;
+    for line in text.lines() {
+        if line.starts_with("diff --git ") {
+            finish(std::mem::take(&mut building), &mut files);
+            in_hunk = false;
+            continue;
+        }
+        if !in_hunk {
+            if let Some(path) = line.strip_prefix("--- ") {
+                building.old_path = named(path, "a/");
+                continue;
+            }
+            if let Some(path) = line.strip_prefix("+++ ") {
+                building.new_path = named(path, "b/");
+                continue;
+            }
+        }
+        if let Some((old_start, old_count, new_start, new_count)) = hunk_header(line) {
+            // A side the hunk adds nothing to names the line it follows.
+            let before = |start: u32, count: u32| {
+                if count == 0 {
+                    start
+                } else {
+                    start.saturating_sub(1)
+                }
+            };
+            pad(
+                &mut building.old,
+                &mut building.old_lines,
+                before(old_start, old_count),
+            );
+            pad(
+                &mut building.new,
+                &mut building.new_lines,
+                before(new_start, new_count),
+            );
+            building.hunks = true;
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        let (marker, body) = line.split_at(line.len().min(1));
+        let push = |side: &mut String, lines: &mut u32| {
+            side.push_str(body);
+            side.push('\n');
+            *lines += 1;
+        };
+        match marker {
+            " " | "" => {
+                push(&mut building.old, &mut building.old_lines);
+                push(&mut building.new, &mut building.new_lines);
+            }
+            "-" => {
+                push(&mut building.old, &mut building.old_lines);
+                building.deletions += 1;
+            }
+            "+" => {
+                push(&mut building.new, &mut building.new_lines);
+                building.additions += 1;
+            }
+            _ => {}
+        }
+    }
+    finish(building, &mut files);
+    files
+}
+
+/// A hunk header's ranges: `@@ -88,6 +88,9 @@ fn draw` → (88, 6, 88, 9).
+fn hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let (old, rest) = line.strip_prefix("@@ -")?.split_once(" +")?;
+    let (new, _) = rest.split_once(" @@")?;
+    let range = |range: &str| -> Option<(u32, u32)> {
+        let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+        Some((start.parse().ok()?, count.parse().ok()?))
+    };
+    let ((old_start, old_count), (new_start, new_count)) = (range(old)?, range(new)?);
+    Some((old_start, old_count, new_start, new_count))
 }
 
 /// A `search_repo` path match: the path, and the byte spans that matched.
@@ -562,6 +732,89 @@ mod tests {
             let wire = WireReviewFile::from(read.clone());
             assert_eq!(FileSides::from(wire), read);
         }
+    }
+
+    fn changed(
+        path: &str,
+        kind: ChangeKind,
+        previous_path: Option<&str>,
+        old: &str,
+        new: &str,
+    ) -> FileSides {
+        FileSides {
+            file: ChangedFile {
+                path: path.into(),
+                kind,
+                additions: 0,
+                deletions: 0,
+                previous_path: previous_path.map(str::to_string),
+                binary: false,
+                old_size: 0,
+                new_size: None,
+            },
+            sides: Ok((old.into(), new.into())),
+        }
+    }
+
+    /// A `review_diff`'s text, read back by a window from before or after
+    /// `review_read`, gives the same changes at the same line numbers;
+    /// only the lines far from a change are left blank.
+    #[test]
+    fn a_unified_diff_reads_back_as_the_same_changes() {
+        let old: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        let new = old
+            .replace("line 5\n", "five\n")
+            .replace("line 25\n", "line 25\nadded\n");
+        let files = vec![
+            changed("src/a.rs", ChangeKind::Modified, None, &old, &new),
+            changed(
+                "src/b.rs",
+                ChangeKind::Renamed,
+                Some("src/old.rs"),
+                "x\n",
+                "y\n",
+            ),
+            changed("new.txt", ChangeKind::Untracked, None, "", "hello\n"),
+            changed("gone.txt", ChangeKind::Deleted, None, "bye\n", ""),
+            FileSides {
+                sides: Err(Notice::Binary),
+                ..changed("logo.png", ChangeKind::Modified, None, "", "")
+            },
+        ];
+        let text = unified(&files);
+        let read = sides_of_unified(&text);
+        assert_eq!(unified(&read), text, "the same hunks");
+        let shape: Vec<_> = read
+            .iter()
+            .map(|f| {
+                (
+                    f.file.path.as_str(),
+                    f.file.kind,
+                    f.file.previous_path.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("src/a.rs", ChangeKind::Modified, None),
+                ("src/b.rs", ChangeKind::Renamed, Some("src/old.rs")),
+                ("new.txt", ChangeKind::Added, None),
+                ("gone.txt", ChangeKind::Deleted, None),
+            ]
+        );
+        let Ok((old_side, new_side)) = &read[0].sides else {
+            panic!("sides");
+        };
+        assert_eq!(old_side.lines().nth(4), Some("line 5"));
+        assert_eq!(new_side.lines().nth(4), Some("five"));
+        assert_eq!(new_side.lines().nth(25), Some("added"));
+        assert_eq!(
+            old_side.lines().next(),
+            Some(""),
+            "far from a change: blank"
+        );
+        assert_eq!((read[0].file.additions, read[0].file.deletions), (2, 1));
     }
 
     /// A pull request's snapshot becomes the wire's; with none, the note

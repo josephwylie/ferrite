@@ -648,7 +648,6 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::Uncommitted,
                     commit: None,
-                    since: None,
                 },
             ),
         ),
@@ -660,15 +659,14 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::Commit,
                     commit: Some("9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into()),
-                    since: None,
                 },
             ),
         ),
         (
-            "command_review_diff_commits",
+            "command_review_read_commits",
             command(
                 47,
-                Op::ReviewDiff {
+                Op::ReviewRead {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::Commit,
                     commit: Some("9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into()),
@@ -686,10 +684,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
-            "command_review_diff_last_turn",
+            "command_review_read_last_turn",
             command(
                 43,
-                Op::ReviewDiff {
+                Op::ReviewRead {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::LastTurn,
                     commit: None,
@@ -2056,7 +2054,7 @@ fn a_review_reads_only_commit_ids() {
 /// A run of commits goes over the wire as its two ends and comes back the
 /// same pick; one commit sends no `since`.
 #[test]
-fn a_commit_run_round_trips_through_review_diff() {
+fn a_commit_run_round_trips_through_review_read() {
     let path = Path::new("/home/me/src/ferrite");
     for pick in [
         CommitPick::single("9a31c76e"),
@@ -2066,15 +2064,35 @@ fn a_commit_run_round_trips_through_review_diff() {
         },
     ] {
         let read = Read::Commits(pick);
-        let Op::ReviewDiff {
+        let Op::ReviewRead {
             scope,
             commit,
             since,
             ..
-        } = Op::review_diff(path, &read)
+        } = Op::review_read(path, &read)
         else {
-            unreachable!("review_diff builds a ReviewDiff");
+            unreachable!("review_read builds a ReviewRead");
         };
         assert_eq!(scope.read(commit, since), Some(read));
     }
+}
+
+/// A `review_diff` names only what a Server from before `review_read`
+/// reads: a last turn or a run of commits is never sent as something less.
+#[test]
+fn review_diff_names_only_what_an_older_server_reads() {
+    let path = Path::new("/home/me/src/ferrite");
+    let single = Read::Commits(CommitPick::single("9a31c76e"));
+    for read in [Read::Uncommitted, Read::Branch, single] {
+        let Some(Op::ReviewDiff { scope, commit, .. }) = Op::review_diff(path, &read) else {
+            panic!("{read:?} is a review_diff");
+        };
+        assert_eq!(scope.read(commit, None), Some(read));
+    }
+    let run = Read::Commits(CommitPick {
+        oldest: "1f2e3d4c".into(),
+        newest: "9a31c76e".into(),
+    });
+    assert_eq!(Op::review_diff(path, &run), None);
+    assert_eq!(Op::review_diff(path, &Read::LastTurn), None);
 }

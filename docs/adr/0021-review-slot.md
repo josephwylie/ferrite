@@ -50,9 +50,9 @@ take reviewr itself instead, so its fixes and features keep arriving.
    newest), and the scope again (or `r`) goes back to the list. Each file comes with both its sides (one full-context `git
    diff`), and the window builds its rows with reviewr's model. These reads
    run on the computer that has the code: the Server that owns the Thread
-   answers `review_diff {path, scope, commit?, since?}` (scopes
-   `uncommitted`, `branch`, `commit`, and now `last_turn`; `since`, new, the
-   oldest commit of a run, absent for one commit) with `review {files[{path,
+   answers `review_read {path, scope, commit?, since?}` (scopes
+   `uncommitted`, `branch`, `commit` and `last_turn`; `since` the oldest
+   commit of a run, absent for one commit) with `review {files[{path,
    change, previous_path?, additions, deletions, old?, new?, notice?}]}` and
    `list_commits {path}` with `commits {commits[{id, subject, author?,
    time?}]}`, gen-1 additions (ADR 0025), off its pump as `list_repo` is.
@@ -61,7 +61,14 @@ take reviewr itself instead, so its fixes and features keep arriving.
    thread of its own. A file over reviewr's budget (2 MB, 50 000 lines) or
    past 8 MB of carried text in all, a binary one, or one that fails to
    read comes as its notice instead of its sides. A path that is no repo
-   says so. An older Server's `diff` answer reads as no answer. A read
+   says so. `review_diff {path, scope, commit?}` keeps its gen-1 meaning
+   for a window from before `review_read`: the Server answers it `diff
+   {text}`, the same read's sides as a git-style unified diff. Against a
+   Server from before `review_read`, which answers it `unsupported`, the
+   window asks `review_diff` instead and reads the diff's hunks as the
+   sides, the lines far from a change left blank so every line keeps its
+   number; a last turn or a run of commits that Server cannot read is
+   refused (update it), never shown as one commit or as something else. A read
    that lands after the operator moved on is dropped; each read is a
    snapshot, read afresh on `r` or on picking the scope again.
 4. **The last turn is reviewr's turn tracking, fed Ferrite's agents.**
@@ -129,7 +136,8 @@ take reviewr itself instead, so its fixes and features keep arriving.
    query}` and answered `found {files[{path, spans}], code[{path, line,
    text, spans}], file_total, code_more}`; ↑↓ walk the results, ⏎ or a
    click opens one. A result opens its file whole (`read_file {path,
-   file}`, answered `text`, inside the checkout only): every line a
+   file}`, answered `text`, inside the checkout only, a symlink pointing out
+   of it refused too): every line a
    context row that takes comments as a diff's do, a found line picked;
    esc goes back to the diff. ⌘F finds in the rows shown (the
    transcript's bar, `crate::find`). `m` renders each Markdown file's new

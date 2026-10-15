@@ -221,10 +221,17 @@ fn worktree_content(repo: &Path, path: &str) -> Result<String, Notice> {
 }
 
 /// The worktree file `path` (relative, inside `repo`) for the file view: its text, or the
-/// notice in its place. A path that climbs out of the repo reads as unreadable.
+/// notice in its place. A path that climbs out of the repo, or a symlink that points out of
+/// it, reads as unreadable.
 pub fn read_file(repo: &Path, path: &str) -> Result<String, Notice> {
     let inside = Path::new(path).components().all(|c| matches!(c, Component::Normal(_)));
     if !inside {
+        return Err(Notice::Unreadable);
+    }
+    // A missing file fails to resolve and reads as empty, as a gone file does.
+    if let (Ok(root), Ok(at)) = (repo.canonicalize(), repo.join(path).canonicalize())
+        && !at.starts_with(root)
+    {
         return Err(Notice::Unreadable);
     }
     worktree_content(repo, path)
@@ -772,6 +779,16 @@ mod tests {
         assert_eq!(read_file(dir.path(), "../a.md"), Err(Notice::Unreadable));
         assert_eq!(read_file(dir.path(), "/etc/hosts"), Err(Notice::Unreadable));
         assert_eq!(read_file(dir.path(), "gone.md"), Ok(String::new()));
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::fs::write(elsewhere.path().join("secret"), "out\n").unwrap();
+            std::os::unix::fs::symlink(elsewhere.path().join("secret"), dir.path().join("out"))
+                .unwrap();
+            std::os::unix::fs::symlink("a.md", dir.path().join("in")).unwrap();
+            assert_eq!(read_file(dir.path(), "out"), Err(Notice::Unreadable));
+            assert_eq!(read_file(dir.path(), "in"), Ok("# A\nbody\n".into()));
+        }
         let rows = file_rows("a.md", "# A\nbody\n").rows;
         assert_eq!(rows.iter().map(Row::text).collect::<Vec<_>>(), ["# A", "body"]);
     }

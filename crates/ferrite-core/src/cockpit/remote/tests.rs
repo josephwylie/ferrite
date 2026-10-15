@@ -17,6 +17,17 @@ impl Spawner for NoDiscovery {
 /// A Server that welcomes every window and answers no command: it hands
 /// each one to the test, and lets the window go at the `drop_at`th.
 fn server_answering_nothing(store: &std::path::Path, drop_at: usize) -> Receiver<Op> {
+    server_answering(store, drop_at, |_| None)
+}
+
+/// A Server that welcomes every window and hands each command to the
+/// test, replying what `reply` makes of it; it lets the window go at the
+/// `drop_at`th.
+fn server_answering(
+    store: &std::path::Path,
+    drop_at: usize,
+    reply: fn(&Op) -> Option<Result<Done, WireError>>,
+) -> Receiver<Op> {
     std::fs::create_dir_all(store).unwrap();
     let listener = link::listen(&link::address(store)).unwrap();
     let (took, taken) = mpsc::channel();
@@ -69,6 +80,18 @@ fn server_answering_nothing(store: &std::path::Path, drop_at: usize) -> Receiver
                     commands += 1;
                     if commands == drop_at {
                         connections.remove(&id);
+                    }
+                    if let (Some(connection), Some(answer)) =
+                        (connections.get(&id), reply(&command.op))
+                    {
+                        let (ok, error) = match answer {
+                            Ok(done) => (Some(done), None),
+                            Err(error) => (None, Some(error)),
+                        };
+                        let id = command.id;
+                        connection
+                            .send(ServerMessage::Reply { id, ok, error })
+                            .unwrap();
                     }
                     if took.send(command.op).is_err() {
                         return;
@@ -251,4 +274,66 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
         remote.poll();
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// A Server from before `review_read` answers it `unsupported`: the window
+/// asks its `review_diff` instead and reads the diff's hunks as the files'
+/// sides. A last turn or a run of commits it cannot read is refused, never
+/// asked as something less.
+#[test]
+fn a_review_falls_back_to_review_diff_on_an_older_server() {
+    use ferrite_reviewr::ferrite::Read;
+    use ferrite_reviewr::model::CommitPick;
+    let store = scratch("older-review");
+    let taken = server_answering(&store, 0, |op| match op {
+        Op::ReviewDiff { .. } => Some(Ok(Done::Diff {
+            text: "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2 +2 @@\n-one\n+two\n"
+                .into(),
+        })),
+        _ => Some(Err(WireError {
+            code: ErrorCode::Unsupported,
+            message: "this server does not know that".into(),
+        })),
+    });
+    let mut remote = remote(&store);
+    let read = |remote: &mut Remote, read: Read| {
+        let answered = remote.review_diff(Path::new("/repo"), &read).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(Instant::now() < deadline, "never answered");
+            remote.poll();
+            if let Ok(files) = answered.try_recv() {
+                return files;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    let files = read(&mut remote, Read::Uncommitted).unwrap();
+    assert!(matches!(taken.recv().unwrap(), Op::ReviewRead { .. }));
+    assert!(matches!(
+        taken.recv().unwrap(),
+        Op::ReviewDiff {
+            scope: protocol::WireScope::Uncommitted,
+            ..
+        }
+    ));
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].file.path, "a.rs");
+    assert_eq!(files[0].sides, Ok(("\none\n".into(), "\ntwo\n".into())));
+
+    let run = Read::Commits(CommitPick {
+        oldest: "1f2e3d4c".into(),
+        newest: "9a31c76e".into(),
+    });
+    for refused in [run, Read::LastTurn] {
+        let error = read(&mut remote, refused).unwrap_err();
+        assert!(error.to_string().contains("too old"), "{error}");
+        assert!(matches!(taken.recv().unwrap(), Op::ReviewRead { .. }));
+    }
+    assert!(
+        taken.recv_timeout(Duration::from_millis(100)).is_err(),
+        "a run or a last turn is never asked as a review_diff"
+    );
+    let _ = std::fs::remove_dir_all(&store);
 }

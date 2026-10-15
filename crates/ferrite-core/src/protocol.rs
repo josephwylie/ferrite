@@ -302,9 +302,18 @@ pub enum Op {
         project: ProjectId,
     },
     /// A review's git scope of the checkout at `path`, read by git on the
-    /// Server's computer: how a window reviews a Thread's checkout, on
-    /// this computer or a machine (ADR 0021). Replied `review`.
+    /// Server's computer (ADR 0021). Replied `diff`: what a window from
+    /// before `review_read` reviews with.
     ReviewDiff {
+        path: PathBuf,
+        scope: WireScope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
+    /// A review's scope of the checkout at `path`, read by the review core
+    /// on the Server's computer: how a window reviews a Thread's checkout,
+    /// on this computer or a machine (ADR 0021). Replied `review`.
+    ReviewRead {
         path: PathBuf,
         scope: WireScope,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,7 +389,7 @@ pub enum WireDirection {
     Unknown,
 }
 
-/// What a `review_diff` reads.
+/// What a `review_read` (or `review_diff`) reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireScope {
@@ -395,7 +404,7 @@ pub enum WireScope {
 }
 
 impl Op {
-    pub fn review_diff(path: &Path, read: &Read) -> Op {
+    pub fn review_read(path: &Path, read: &Read) -> Op {
         let (scope, commit, since) = match read {
             Read::Uncommitted => (WireScope::Uncommitted, None, None),
             Read::Branch => (WireScope::Branch, None, None),
@@ -406,12 +415,30 @@ impl Op {
                 (!pick.is_single()).then(|| pick.oldest.clone()),
             ),
         };
-        Op::ReviewDiff {
+        Op::ReviewRead {
             path: path.to_path_buf(),
             scope,
             commit,
             since,
         }
+    }
+
+    /// The `review_diff` a Server from before `review_read` reads `read`
+    /// with, unless it cannot: a last turn, or a run of commits.
+    pub fn review_diff(path: &Path, read: &Read) -> Option<Op> {
+        let (scope, commit) = match read {
+            Read::Uncommitted => (WireScope::Uncommitted, None),
+            Read::Branch => (WireScope::Branch, None),
+            Read::Commits(pick) if pick.is_single() => {
+                (WireScope::Commit, Some(pick.newest.clone()))
+            }
+            Read::LastTurn | Read::Commits(_) => return None,
+        };
+        Some(Op::ReviewDiff {
+            path: path.to_path_buf(),
+            scope,
+            commit,
+        })
     }
 }
 
@@ -924,9 +951,7 @@ pub enum Done {
         worktrees: Vec<WireWorktree>,
         branches: Vec<String>,
     },
-    /// What a Server before the vendored review core answered a
-    /// `review_diff` with: git's unified diff. A window reads it as no
-    /// answer (`review` replaced it).
+    /// A `review_diff`'s changes as a git-style unified diff.
     Diff {
         text: String,
     },
@@ -934,7 +959,7 @@ pub enum Done {
     Commits {
         commits: Vec<WireCommit>,
     },
-    /// A `review_diff`'s changed files, in path order, each with its sides.
+    /// A `review_read`'s changed files, in path order, each with its sides.
     Review {
         files: Vec<WireReviewFile>,
     },
