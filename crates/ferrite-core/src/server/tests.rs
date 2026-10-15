@@ -10,7 +10,7 @@ use super::*;
 use crate::cockpit::mirror::Mirrors;
 use crate::engine::{SpawnRequest, Spawner};
 use crate::link::{Attached, Client};
-use crate::protocol::{Peer, Resume, WireAnswer, WireChoice};
+use crate::protocol::{Peer, Resume, WireAnswer, WireChoice, WireEntry};
 use crate::providers::Session;
 use crate::store::Provider;
 use crate::transcript::Body;
@@ -435,6 +435,54 @@ fn an_invalid_answer_leaves_the_decision_pending() {
     assert_eq!(harness.answers.lock().unwrap().len(), 1);
     window.until(|window| !window.closed().is_empty());
     assert_eq!(window.closed(), vec![ClosedBy::Answered { client: 1 }]);
+}
+
+/// A window on a machine browses the machine's folders through its Server
+/// (ADR 0026): `list_dir` answers the directory's entries in name order,
+/// each saying whether it is a directory.
+#[test]
+fn list_dir_answers_a_directory_on_the_servers_computer() {
+    let harness = start("list-dir");
+    let folder = harness.dir.join("src");
+    std::fs::create_dir_all(folder.join("ferrite")).unwrap();
+    std::fs::write(folder.join("notes.md"), "").unwrap();
+    let mut window = attach(&harness.address);
+
+    let reply = window.command(
+        1,
+        Op::ListDir {
+            path: folder.clone(),
+        },
+    );
+    let ServerMessage::Reply {
+        ok: Some(Done::Listing { path, entries }),
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}");
+    };
+    assert_eq!(path, folder);
+    assert_eq!(
+        entries,
+        [
+            WireEntry {
+                name: "ferrite".into(),
+                directory: true,
+            },
+            WireEntry {
+                name: "notes.md".into(),
+                directory: false,
+            },
+        ]
+    );
+
+    let reply = window.command(
+        2,
+        Op::ListDir {
+            path: folder.join("nowhere"),
+        },
+    );
+    assert!(refused_with(&reply, ErrorCode::Failed), "{reply:?}");
 }
 
 /// A request id is unique only within one provider process: an answer to
@@ -1725,7 +1773,10 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let again = caller.answer("2", "coordinator.start", serde_json::json!({ "cwd": repo }));
-    assert_eq!(again["result"]["coordinator"]["thread"], coordinator, "{again}");
+    assert_eq!(
+        again["result"]["coordinator"]["thread"], coordinator,
+        "{again}"
+    );
     let briefed = caller.answer(
         "3",
         "agent.read",
@@ -1748,9 +1799,15 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         serde_json::json!({ "thread": coordinator, "task": "Add invoices", "title": "invoices" }),
     );
     let info = &worker["result"]["thread"];
-    let thread = info["thread"].as_u64().unwrap_or_else(|| panic!("{worker}"));
+    let thread = info["thread"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{worker}"));
     assert_eq!(info["title"], "invoices");
-    assert_ne!(info["cwd"], serde_json::json!(repo), "a worktree of its own");
+    assert_ne!(
+        info["cwd"],
+        serde_json::json!(repo),
+        "a worktree of its own"
+    );
     let provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
@@ -1761,7 +1818,12 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         serde_json::json!({ "thread": thread, "lines": 400 }),
     );
     let briefed = briefed["result"]["text"].as_str().unwrap();
-    for part in ["## Your task", "Add invoices", "Ship billing", "## Remember"] {
+    for part in [
+        "## Your task",
+        "Add invoices",
+        "Ship billing",
+        "## Remember",
+    ] {
         assert!(briefed.contains(part), "{part:?} in {briefed}");
     }
     let groups = std::fs::read_to_string(harness.dir.join("threads").join("groups.json")).unwrap();

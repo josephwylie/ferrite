@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use crate::api::Api;
 use crate::engine::Engine;
 use crate::link::{self, ClientId, Connection, Heard, Ring};
-use crate::roster::DraftId;
 use crate::protocol::{
     self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
     ServerMessage, When, WireError, WireFile, WireHandle,
 };
+use crate::roster::DraftId;
 use crate::settings::Settings;
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use crate::store::{Provider, Store};
@@ -185,6 +185,31 @@ pub fn run(options: Options) -> i32 {
         server.boot_id
     );
     server.serve(hear)
+}
+
+/// A Server for the Store in `store`, in a thread of this process, its
+/// Sessions from `spawner`: what the window's tests reach through a fake
+/// machine (ADR 0026). Listening when this returns.
+#[cfg(feature = "test-support")]
+pub fn serve_in_thread(
+    store: PathBuf,
+    spawner: Box<dyn crate::engine::Spawner + Send>,
+) -> io::Result<()> {
+    let listener = link::listen(&link::address(&store))?;
+    let (heard, hear) = mpsc::channel();
+    link::accept_all(listener, heard)?;
+    std::thread::spawn(move || {
+        let engine = Engine::try_new(Store::open(&store).expect("the Store"), spawner)
+            .expect("the registry");
+        let info = ServerInfo {
+            version: env!("CARGO_PKG_VERSION").into(),
+            executable: PathBuf::new(),
+        };
+        let (_, renders) = render::remote();
+        let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
+        Server::new(engine, info, renders, defaults, store).serve(hear)
+    });
+    Ok(())
 }
 
 /// The Threads whose Panes were open when the last Server stopped — after

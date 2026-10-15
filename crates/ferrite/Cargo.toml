@@ -61,6 +61,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
+# A Server in the test's own process, behind a fake machine (ADR 0026).
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

@@ -147,11 +147,53 @@ on/off, remove — or save, for the `--remote` machine of this run — and a
 field to add one by its ssh target. "Start at login" is hidden while the
 window is on a machine: it is this computer's.
 
+### Projects and new Threads on a machine
+
+A window on a machine never reads a path of the machine on this
+computer: the paths look the same, and may even exist here, but they are
+another computer's. What the Server can answer, it answers; what it
+cannot, the window does without.
+
+- **Folders.** The Project card's folder dialog could only browse this
+  computer, so on a machine it is not offered. A path field stands in for
+  it, starting at `~/`: what is typed completes (a press, or Tab) against
+  the directory it names, listed by the machine's Server through a new
+  gen-1 command, `list_dir {path}`, replied `listing {path, entries[{name,
+  directory}]}` with `~` spelled out (`workspace::list_dir`). ↵ in the
+  field adds the directory to the card; Create registers the Project
+  through the existing `project` command. Additive under ADR 0025's rules:
+  an older Server answers `unsupported`, and the field then completes
+  nothing. A listing is one `read_dir` on the pump thread, never a walk.
+- **`~`.** A path goes to the Server as typed; the registry spells out
+  `~` against its own computer's home before canonicalizing
+  (`workspace::expand_home`), so `path ~/src/x` on a draft's Project chip
+  and the card's field mean the machine's home. The window's own
+  expansion is gone: it would have meant this computer's.
+- **Drafts.** The Project chip lists the machine's Projects (the
+  registry is the Server's), and a first send starts the Thread there, as
+  on this computer. The workspace chip's worktrees are the ones the
+  Server registered for the Project, each on its branch; git's own
+  listing and the repo's branches are not offered. Whether a chosen
+  worktree still stands is the Server's to say when it starts
+  (`DraftBinding::resolve(registry, here)`).
+- **No git here.** The branch labels and status (`workspace::branch_status`),
+  the worktree listing that lets a binding follow its agent
+  (`refresh_branches`), the checkout and default-branch lookups, a
+  review's uncommitted and branch scopes (the last turn still reads), and
+  the `@` menu's walk of the checkout are skipped on a machine.
+
+The window's tests reach a machine whose Server runs in the test's own
+process (`server::serve_in_thread`, behind ferrite-core's `test-support`
+feature, which only the app's dev-dependencies turn on).
+
 ## Not done here
 
-- Starting new Threads on a machine needs its Projects: the window
-  offers the machine's registered Projects, but the Project editor picks
-  local folders.
+- On a machine, a Thread's branch label and status, and its binding
+  following the agent into a worktree it made: both need git on the
+  machine, which the Server does not yet run for a window.
+- On a machine, a file opened beside a Pane and the operator's own
+  commands (ADR 0024) still read or run on this computer; a review reads
+  only the last turn.
 - A machine's parked Threads are not listed (its log is on the machine).
 - Notifications (sound, system) for Decisions on a machine off screen.
 - Phone access (plan §6, "later").

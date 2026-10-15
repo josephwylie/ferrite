@@ -9,7 +9,9 @@ use super::*;
 use crate::machines::{Connection, MachineRow};
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::machine::{self, Machine};
+use ferrite_core::workspace::Listing;
 use gpui::App;
+use std::sync::mpsc::Receiver;
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
@@ -36,11 +38,17 @@ impl CockpitView {
             .then(|| machines.rows(self.cockpit.server()))
     }
 
+    /// The window is on a machine: the paths it shows are the machine's,
+    /// so no git or folder of this computer answers for them — the Server
+    /// does, or nothing.
+    pub(super) fn on_machine(&self) -> bool {
+        self.cockpit.machine().is_some()
+    }
+
     /// The window is on a machine whose Server is not there: what it shows
     /// stays, dimmed, and takes no input until it is back.
     pub(super) fn machine_lost(&self) -> bool {
-        self.cockpit.machine().is_some()
-            && matches!(self.cockpit.server(), Some(ServerState::Detached { .. }))
+        self.on_machine() && matches!(self.cockpit.server(), Some(ServerState::Detached { .. }))
     }
 
     /// Take what the machines off screen said.
@@ -267,6 +275,235 @@ impl CockpitView {
             },
         ));
         Some(prefs::Group::new(Some("Machines")).rows(shown))
+    }
+}
+
+/// The Project card's path field on a machine (ADR 0026), where no folder
+/// dialog can browse: what is typed completes against the directory it
+/// names there, listed by the machine's Server (`list_dir`).
+pub(super) struct RemotePath {
+    pub(super) field: Entity<Composer>,
+    /// The listing the completions come from, of the directory as typed.
+    listed: Option<(String, Listing)>,
+    /// A listing asked for and not answered yet, of the directory as typed.
+    asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
+}
+
+/// Where the field starts: the machine's home, which its Server spells out.
+const REMOTE_HOME: &str = "~/";
+
+/// How many completions the card lists under the field.
+const REMOTE_COMPLETIONS: usize = 8;
+
+/// A typed path's directory, to list, and the start of the name in it, to
+/// complete: `~/src/fe` is `~/src/` and `fe`.
+fn split_typed(typed: &str) -> (&str, &str) {
+    match typed.rfind('/') {
+        Some(at) => typed.split_at(at + 1),
+        None => ("", typed),
+    }
+}
+
+impl CockpitView {
+    /// The path field a new card gets on a machine; none on this computer,
+    /// whose card browses with the system's folder dialog.
+    pub(super) fn remote_path(&mut self, cx: &mut Context<Self>) -> Option<RemotePath> {
+        if !self.on_machine() {
+            return None;
+        }
+        let field = cx.new(Composer::new);
+        field.update(cx, |field, cx| {
+            field.set_role(crate::composer::Role::Field(None), cx);
+            field.set(REMOTE_HOME.into(), cx);
+        });
+        cx.subscribe(&field, |view, _, _: &Edited, cx| {
+            view.remote_path_edited(cx)
+        })
+        .detach();
+        Some(RemotePath {
+            field,
+            listed: None,
+            asking: None,
+        })
+    }
+
+    /// The open card's path field, on a machine.
+    fn open_remote_path(&self) -> Option<&RemotePath> {
+        self.project_editor.as_ref()?.remote.as_ref()
+    }
+
+    fn open_remote_path_mut(&mut self) -> Option<&mut RemotePath> {
+        self.project_editor.as_mut()?.remote.as_mut()
+    }
+
+    /// The field moved: list the directory it now names, unless that
+    /// listing is already in hand or on its way.
+    fn remote_path_edited(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.open_remote_path() else {
+            return;
+        };
+        let typed = remote.field.read(cx).text().to_string();
+        let (directory, _) = split_typed(&typed);
+        let known = |held: Option<&String>| held.is_some_and(|held| held == directory);
+        if known(remote.listed.as_ref().map(|(at, _)| at))
+            || known(remote.asking.as_ref().map(|(at, _)| at))
+        {
+            return;
+        }
+        let asking = if directory.is_empty() {
+            None
+        } else {
+            self.cockpit
+                .list_dir(std::path::Path::new(directory))
+                .ok()
+                .map(|answer| (directory.to_string(), answer))
+        };
+        if let Some(remote) = self.open_remote_path_mut() {
+            remote.asking = asking;
+        }
+        cx.notify();
+    }
+
+    /// Take the machine's answer to the field's listing, once it lands. A
+    /// directory that cannot be read lists nothing.
+    pub(super) fn poll_remote_path(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.open_remote_path_mut() else {
+            return;
+        };
+        let Some((directory, answer)) = &remote.asking else {
+            return;
+        };
+        let listed = match answer.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Ok(Ok(listing)) => Some((directory.clone(), listing)),
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+        };
+        remote.asking = None;
+        remote.listed = listed;
+        cx.notify();
+    }
+
+    /// The directories in the listing whose names start as the field's
+    /// last name does; a dot directory only once a dot is typed.
+    pub(super) fn remote_completions(&self, cx: &App) -> Vec<String> {
+        let Some(remote) = self.open_remote_path() else {
+            return Vec::new();
+        };
+        let typed = remote.field.read(cx).text();
+        let (directory, start) = split_typed(typed);
+        let Some((_, listing)) = remote
+            .listed
+            .as_ref()
+            .filter(|(listed, _)| listed == directory)
+        else {
+            return Vec::new();
+        };
+        listing
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.directory
+                    && entry.name.starts_with(start)
+                    && (start.starts_with('.') || !entry.name.starts_with('.'))
+            })
+            .take(REMOTE_COMPLETIONS)
+            .map(|entry| entry.name.clone())
+            .collect()
+    }
+
+    /// Complete the field's last name to `name`, a directory: the field
+    /// then lists what is in it.
+    pub(super) fn complete_remote_path(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(remote) = self.open_remote_path() else {
+            return;
+        };
+        let field = remote.field.clone();
+        let typed = field.read(cx).text().to_string();
+        let (directory, _) = split_typed(&typed);
+        let completed = format!("{directory}{name}/");
+        field.update(cx, |field, cx| field.set(completed, cx));
+    }
+
+    /// Tab in the path field: complete it to the first directory that
+    /// fits. False when the field does not hold the keyboard.
+    pub(super) fn tab_remote_path(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.remote_path_focused(window, cx) {
+            return false;
+        }
+        if let Some(first) = self.remote_completions(cx).into_iter().next() {
+            self.complete_remote_path(&first, cx);
+        }
+        true
+    }
+
+    /// ↵ in the path field: the directory it names joins the card, and the
+    /// field goes back to the directory it was in, for the next. False
+    /// when the field does not hold the keyboard or holds nothing.
+    pub(super) fn submit_remote_path(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        self.remote_path_focused(window, cx) && self.add_remote_path(cx)
+    }
+
+    /// Add the directory the field names to the card. It goes to the
+    /// Server as typed: `~` is the machine's home, spelled out there.
+    pub(super) fn add_remote_path(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(remote) = self.open_remote_path() else {
+            return false;
+        };
+        let field = remote.field.clone();
+        let typed = field.read(cx).text().trim().to_string();
+        let path = match typed.trim_end_matches('/') {
+            "" if typed.starts_with('/') => "/",
+            "" => return false,
+            path => path,
+        };
+        self.adopt_editor_directory(path.into(), cx);
+        let (directory, _) = split_typed(path);
+        let directory = directory.to_string();
+        field.update(cx, |field, cx| field.set(directory, cx));
+        true
+    }
+
+    fn remote_path_focused(&self, window: &Window, cx: &App) -> bool {
+        self.open_remote_path()
+            .is_some_and(|remote| remote.field.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    /// The path field and, under it, the directories that complete it —
+    /// each a press away.
+    pub(super) fn remote_path_element(
+        &self,
+        remote: &RemotePath,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let machine = self
+            .cockpit
+            .machine()
+            .map_or_else(String::new, |bridge| bridge.name().to_string());
+        let focused = remote.field.read(cx).focus_handle(cx).is_focused(window);
+        let completions =
+            self.remote_completions(cx)
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    project_editor::path_completion(index, &name).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.complete_remote_path(&name, cx);
+                        }),
+                    )
+                });
+        div()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .child(project_editor::path_field(
+                &machine,
+                remote.field.clone(),
+                focused,
+            ))
+            .child(project_editor::directory_list(completions.collect()))
     }
 }
 

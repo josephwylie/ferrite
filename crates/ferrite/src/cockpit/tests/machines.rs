@@ -1,7 +1,8 @@
 //! Machines in the window (ADR 0026), with fake bridges: no ssh runs. A
 //! machine off screen lists its connection, the window goes to another
-//! machine by building its Cockpit afresh, and a machine that needs the
-//! operator says so and stays dimmed and read-only.
+//! machine by building its Cockpit afresh, a machine that needs the
+//! operator says so and stays dimmed and read-only, and a Project and its
+//! first Thread are made on a machine in a directory typed there.
 
 use super::*;
 use crate::cockpit::server::Gone;
@@ -34,10 +35,93 @@ fn not_installed(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     failing(machine, settings_dir, Failure::NotInstalled)
 }
 
+/// Every byte a window sent `box`'s Server through `serving`.
+static SENT_TO_BOX: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// `box`'s Server runs in this process (`server::serve_in_thread`), its
+/// Store in `box` under the settings directory; each tunnel reaches it as
+/// ssh would, keeping what the window sends in `SENT_TO_BOX`.
+fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
+    use ferrite_core::link::{self, TryClone};
+    struct Kept(link::Stream);
+    impl std::io::Write for Kept {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            SENT_TO_BOX.lock().unwrap().extend_from_slice(buf);
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.flush()
+        }
+    }
+    impl Drop for Kept {
+        fn drop(&mut self) {
+            let _ = self.0.shutdown();
+        }
+    }
+    let address = link::address(&settings_dir.join("box"));
+    Bridge::new(
+        &machine.name,
+        machine::dir(settings_dir, &machine.target).join("bridge.sock"),
+        Box::new(move || {
+            let stream = link::connect(&address)?;
+            Ok(Tunnel {
+                from: Box::new(stream.try_clone()?),
+                to: Box::new(Kept(stream)),
+                ended: Box::new(|| None),
+            })
+        }),
+    )
+}
+
+/// `box`'s Sessions: each keeps where it was started, and says nothing.
+struct OnBox(std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>);
+
+struct Quiet {
+    _alive: mpsc::Sender<SessionEvent>,
+    events: mpsc::Receiver<SessionEvent>,
+}
+
+impl ferrite_core::engine::Spawner for OnBox {
+    fn spawn(
+        &mut self,
+        request: ferrite_core::engine::SpawnRequest,
+    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+        self.0
+            .lock()
+            .unwrap()
+            .extend(request.cwd.map(std::path::Path::to_path_buf));
+        let (alive, events) = mpsc::channel();
+        Ok(Box::new(Quiet {
+            _alive: alive,
+            events,
+        }))
+    }
+}
+
+impl ferrite_core::providers::Session for Quiet {
+    fn events(&self) -> &mpsc::Receiver<SessionEvent> {
+        &self.events
+    }
+    fn send(&mut self, _: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn interrupt(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// This computer, whose Server cannot start, and `box`, which needs a
 /// sign-in; the window starts on `remote` when given.
 fn machines(name: &str, remote: Option<&str>) -> Machines {
     machines_through(name, remote, needs_sign_in)
+}
+
+/// Where `machines_through(name, …)` keeps this computer's settings.
+fn settings_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("fv-{}-{name}", std::process::id()))
 }
 
 fn machines_through(
@@ -45,7 +129,7 @@ fn machines_through(
     remote: Option<&str>,
     bridge: fn(&Machine, &std::path::Path) -> Bridge,
 ) -> Machines {
-    let dir = std::env::temp_dir().join(format!("fv-{}-{name}", std::process::id()));
+    let dir = settings_dir(name);
     let _ = std::fs::remove_dir_all(&dir);
     Machines::new(
         Reach {
@@ -316,4 +400,104 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
             Connection::Disabled
         );
     });
+}
+
+/// On a machine the Project card has no folder dialog, which could only
+/// browse this computer: a path field completes against the machine's
+/// folders through its Server (`list_dir`). The Project it makes is the
+/// machine's, a draft chooses it, and its first send starts the Thread in
+/// that directory on the machine.
+#[gpui::test]
+fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut TestAppContext) {
+    let machines = cx.new(|_| machines_through("typed", Some("me@box"), serving));
+    let folder = settings_dir("typed").join("src");
+    std::fs::create_dir_all(folder.join("ferrite")).unwrap();
+    std::fs::create_dir_all(folder.join(".fe-hidden")).unwrap();
+    std::fs::write(folder.join("fern.txt"), "").unwrap();
+    let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    ferrite_core::server::serve_in_thread(
+        settings_dir("typed").join("box"),
+        Box::new(OnBox(started.clone())),
+    )
+    .unwrap();
+    let core = machines
+        .update(cx, |machines, _| machines.cockpit())
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new(core, cx).with_machines(machines)
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            matches!(
+                view.cockpit.server(),
+                Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            )
+        })
+    });
+
+    let field = view.update(cx, |view, cx| {
+        view.open_project_creator(cx);
+        let field = view.project_editor.as_ref().unwrap().remote.as_ref();
+        field.expect("a path field on a machine").field.clone()
+    });
+    field.update(cx, |field, cx| {
+        field.set(format!("{}/fe", folder.display()), cx)
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| view.remote_completions(cx) == ["ferrite"])
+    });
+    tick(cx);
+    assert!(debug_bounds(cx, "project-path-completion:ferrite".into()).is_some());
+    assert!(
+        debug_bounds(cx, "project-add-directory".into()).is_none(),
+        "no folder dialog for a machine"
+    );
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"list_dir""#),
+        "the machine's Server listed it"
+    );
+
+    let project = view.update(cx, |view, cx| {
+        view.complete_remote_path("ferrite", cx);
+        assert_eq!(
+            field.read(cx).text(),
+            format!("{}/ferrite/", folder.display())
+        );
+        assert!(view.add_remote_path(cx));
+        assert_eq!(
+            view.project_editor.as_ref().unwrap().staged,
+            [folder.join("ferrite")]
+        );
+        view.confirm_project_editor(cx);
+        let project = view.cockpit.registry().projects().last().unwrap().clone();
+        assert_eq!(project.title, "ferrite");
+        assert_eq!(
+            project.root,
+            std::fs::canonicalize(folder.join("ferrite")).unwrap()
+        );
+        project.id
+    });
+
+    view.update(cx, |view, cx| {
+        if view.panes.is_empty() {
+            view.open_draft(DraftTarget::Main, cx);
+        }
+        let draft = view.panes[view.focused()].draft().unwrap();
+        let offered = view
+            .band_rows(draft, pane::BandChip::Project, cx)
+            .into_iter()
+            .any(|row| row.consequence == Consequence::Band(BandChoice::Project(project)));
+        assert!(offered, "the machine's Project is on the draft's chip");
+        let composer = view.panes[view.focused()].composer.clone();
+        view.pick_band(&BandChoice::Project(project), &composer, cx);
+        composer.update(cx, |composer, cx| composer.set("hello box".into(), cx));
+        view.bootstrap_draft(cx);
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.cockpit.threads().len() == 1)
+    });
+    assert_eq!(
+        *started.lock().unwrap(),
+        [std::fs::canonicalize(folder.join("ferrite")).unwrap()]
+    );
 }

@@ -273,6 +273,12 @@ pub enum Op {
         project: ProjectId,
         provider: Provider,
     },
+    /// A directory's entries on the Server's computer, `~` its home: how a
+    /// window on a machine browses the machine's folders (ADR 0026).
+    /// Replied `listing`.
+    ListDir {
+        path: PathBuf,
+    },
     Restart {
         when: When,
     },
@@ -677,8 +683,37 @@ pub enum Done {
         #[serde(default)]
         dissolved: Vec<WireDissolved>,
     },
+    /// A `list_dir`'s directory, with `~` spelled out, and its entries in
+    /// name order.
+    Listing {
+        path: PathBuf,
+        entries: Vec<WireEntry>,
+    },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireEntry {
+    pub name: String,
+    #[serde(default)]
+    pub directory: bool,
+}
+
+impl From<crate::workspace::Listing> for Done {
+    fn from(listing: crate::workspace::Listing) -> Self {
+        Done::Listing {
+            path: listing.path,
+            entries: listing
+                .entries
+                .into_iter()
+                .map(|entry| WireEntry {
+                    name: entry.name,
+                    directory: entry.directory,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

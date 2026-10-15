@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Ferrite headless core: providers, transcript, store, workspace. No UI."
 
+[features]
+# `server::serve_in_thread`: a Server in the test's own process, for the
+# window's tests of a machine (ADR 0026). Never in a build that ships.
+test-support = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

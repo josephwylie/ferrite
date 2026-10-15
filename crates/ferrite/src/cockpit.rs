@@ -887,6 +887,8 @@ struct ProjectEditor {
     error: Option<SharedString>,
     /// The body's scroll, for its overlay scrollbar.
     scroll: ScrollHandle,
+    /// On a machine, the path field that stands in for the folder dialog.
+    remote: Option<machines::RemotePath>,
 }
 
 impl ProjectEditor {
@@ -1694,8 +1696,13 @@ impl CockpitView {
     }
 
     /// Run the facts' slow reads in the background and adopt what they
-    /// find.
-    fn look_up(&mut self, lookups: crate::facts::Lookups, cx: &mut Context<Self>) {
+    /// find. On a machine the git half is left out: its checkouts are the
+    /// machine's (ADR 0026).
+    fn look_up(&mut self, mut lookups: crate::facts::Lookups, cx: &mut Context<Self>) {
+        if self.on_machine() {
+            lookups.branches.clear();
+            lookups.default_branches.clear();
+        }
         if lookups.is_empty() {
             return;
         }
@@ -2014,6 +2021,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.poll_remote_path(cx);
         let server_moved = self.server_moved();
         self.apply_thread_rules(&frame, cx);
         self.ring_bell(cx);
@@ -2251,7 +2259,11 @@ impl CockpitView {
     /// worktrees each Thread's repo has, and hands the answer to the core:
     /// that is how a binding follows the agent into a worktree it made
     /// (`workspace::follow`), and the labels re-read on the very next pass.
+    /// None of it on a machine: no git here can read its checkouts.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+        if self.on_machine() {
+            return;
+        }
         // A draft has no Thread yet, but its workspace chip names its
         // Project's checkout, which the operator may switch under it.
         let drafted: Vec<ProjectId> = self
@@ -4786,8 +4798,18 @@ impl CockpitView {
                 "Diagnostics",
                 "Version, platform, the CLIs, the newest crash report and the end of \
                  the log, for a bug report",
-                ferrite_core::diagnostics::logs(&self.prefs.dir).display().to_string().into(),
-                Some(if copied == Some("Diagnostics") { "Copied" } else { "Copy" }.into()),
+                ferrite_core::diagnostics::logs(&self.prefs.dir)
+                    .display()
+                    .to_string()
+                    .into(),
+                Some(
+                    if copied == Some("Diagnostics") {
+                        "Copied"
+                    } else {
+                        "Copy"
+                    }
+                    .into(),
+                ),
                 {
                     let view = cx.entity().downgrade();
                     move |cx| {
@@ -4911,6 +4933,7 @@ impl CockpitView {
             name.set_role(crate::composer::Role::Field(None), cx);
             name.set(title, cx)
         });
+        let remote = self.remote_path(cx);
         self.show_project_editor(
             ProjectEditor {
                 target: Some(project),
@@ -4918,6 +4941,7 @@ impl CockpitView {
                 staged: Vec::new(),
                 error: None,
                 scroll: ScrollHandle::new(),
+                remote,
             },
             cx,
         );
@@ -4930,6 +4954,7 @@ impl CockpitView {
         name.update(cx, |name, cx| {
             name.set_role(crate::composer::Role::Field(None), cx)
         });
+        let remote = self.remote_path(cx);
         self.show_project_editor(
             ProjectEditor {
                 target: None,
@@ -4937,6 +4962,7 @@ impl CockpitView {
                 staged: Vec::new(),
                 error: None,
                 scroll: ScrollHandle::new(),
+                remote,
             },
             cx,
         );
@@ -5019,7 +5045,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// One directory, for the open card. The picker is single-select
+    /// One directory of this computer, for the open card (a machine's card
+    /// has a path field instead). The picker is single-select
     /// deliberately: a Project's main directory is the first one added, and
     /// a multi-select would leave which-is-which to the file dialog.
     fn browse_for_project_directory(&mut self, cx: &mut Context<Self>) {
@@ -5187,23 +5214,31 @@ impl CockpitView {
                 actions,
             ));
         }
-        // Its own flex row, so the control hugs its label on the list's edge.
-        body = body.child(project_editor::directory_list(rows)).child(
-            div().flex().child(
-                project_editor::add_directory(
-                    if empty {
-                        "+ Add main directory"
-                    } else {
-                        "+ Add directory"
-                    },
-                    cx,
-                )
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.browse_for_project_directory(cx);
-                })),
+        body = body.child(project_editor::directory_list(rows));
+        // On a machine a path field stands in for the folder dialog, which
+        // could only browse this computer (ADR 0026).
+        body = match &editor.remote {
+            Some(remote) => body.child(self.remote_path_element(remote, window, cx)),
+            // Its own flex row, so the control hugs its label on the list's edge.
+            None => body.child(
+                div().flex().child(
+                    project_editor::add_directory(
+                        if empty {
+                            "+ Add main directory"
+                        } else {
+                            "+ Add directory"
+                        },
+                        cx,
+                    )
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.browse_for_project_directory(cx);
+                        },
+                    )),
+                ),
             ),
-        );
+        };
         let mut left = div().flex().items_center();
         if let Some(project) = editing {
             let in_use = self.project_in_use(project);
@@ -5405,8 +5440,12 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        // The card's ↵ is its confirm: the only line on it is the name.
+        // The card's ↵ is its confirm — but in a machine's path field it
+        // adds the directory typed there.
         if self.project_editor.is_some() {
+            if self.submit_remote_path(window, cx) {
+                return;
+            }
             if self.project_editor_ready() {
                 self.confirm_project_editor(cx);
             }
@@ -5644,6 +5683,9 @@ impl CockpitView {
     }
 
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tab_remote_path(window, cx) {
+            return;
+        }
         if let Some(at) = self
             .popover
             .as_ref()
@@ -6090,7 +6132,10 @@ impl CockpitView {
                 let identity = pane.identity;
                 let draft = pane.draft()?;
                 let provider = draft.binding.provider().provider;
-                let cwd = match draft.binding.resolve(self.cockpit.registry()) {
+                let cwd = match draft
+                    .binding
+                    .resolve(self.cockpit.registry(), !self.on_machine())
+                {
                     Ok(workspace) => workspace.source_root().to_path_buf(),
                     Err(_) => {
                         // Import remains available when a workspace was removed.
@@ -6279,7 +6324,7 @@ impl CockpitView {
                 .to_path_buf(),
             (None, Some(draft)) => draft
                 .binding
-                .resolve(self.cockpit.registry())
+                .resolve(self.cockpit.registry(), !self.on_machine())
                 .ok()?
                 .source_root()
                 .to_path_buf(),
@@ -6326,6 +6371,10 @@ impl CockpitView {
                     selected: 0,
                 });
             }
+        }
+        // A machine's files are its Sessions' to search (ADR 0026).
+        if self.on_machine() {
+            return None;
         }
         // The walk runs once per open menu; keystrokes only re-filter it.
         let walked = match &self.popover {
@@ -6632,6 +6681,9 @@ impl CockpitView {
                         {
                             None
                         }
+                        // A machine's files are walked by none of this
+                        // computer's threads (ADR 0026).
+                        _ if self.on_machine() => Some(Vec::new()),
                         _ => {
                             let root = pending.root.clone();
                             let query = pending.query.clone();
@@ -7263,8 +7315,13 @@ impl CockpitView {
     /// Ask git, off the UI thread, what `project`'s repo holds for the
     /// workspace popover — its worktrees and its local branches — and fill
     /// the open popover's rows in when the answer lands. One listing per
-    /// open, never per frame.
+    /// open, never per frame. On a machine, its Server's listing instead.
     fn refresh_repo_listing(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        if self.on_machine() {
+            self.repo_listing = Some((project, self.registered_listing(project)));
+            self.sync_workspace_rows(cx);
+            return;
+        }
         let Some(root) = self
             .cockpit
             .registry()
@@ -7285,6 +7342,25 @@ impl CockpitView {
             .ok();
         })
         .detach();
+    }
+
+    /// On a machine (ADR 0026) the workspace popover lists the worktrees
+    /// its Server registered for `project`, each on its branch; no git
+    /// here can list the machine's branches.
+    fn registered_listing(&self, project: ProjectId) -> RepoListing {
+        RepoListing {
+            worktrees: self
+                .cockpit
+                .registry()
+                .worktrees(project)
+                .iter()
+                .map(|worktree| ferrite_core::workspace::ListedWorktree {
+                    path: worktree.path.clone(),
+                    branch: Some(worktree.branch.clone()),
+                })
+                .collect(),
+            branches: Vec::new(),
+        }
     }
 
     /// The repo listing landed while the workspace popover is up: rebuild
@@ -7335,8 +7411,12 @@ impl CockpitView {
 
     /// Ask git, off the UI thread, what each of `projects`' checkouts is
     /// on. Callable from a frame: it only starts the lookup, once per
-    /// Project at a time, and `checkouts_read` takes the answers.
+    /// Project at a time, and `checkouts_read` takes the answers. Never on
+    /// a machine, whose checkouts no git here can read.
     fn look_up_checkouts(&self, projects: impl IntoIterator<Item = ProjectId>, cx: &Context<Self>) {
+        if self.on_machine() {
+            return;
+        }
         let mut checking = self.checking_out.borrow_mut();
         let mut roots: Vec<(ProjectId, std::path::PathBuf)> = Vec::new();
         for project in projects {
@@ -7487,7 +7567,9 @@ impl CockpitView {
                         SharedString::from(format!("add {path}")),
                         SharedString::from("register path"),
                         false,
-                        BandChoice::RegisterPath(expand_home(path)),
+                        // As typed: `~` is the home of the computer the
+                        // Server runs on, which spells it out.
+                        BandChoice::RegisterPath(path.into()),
                     ));
                 }
                 // The same verb the nav's dropdown ends on, opening the
@@ -7752,7 +7834,7 @@ impl CockpitView {
         let effort = draft.binding.effort().map(str::to_owned);
         let resolved = draft
             .binding
-            .resolve(self.cockpit.registry())
+            .resolve(self.cockpit.registry(), !self.on_machine())
             .map_err(|e| e.to_string());
         let opened = resolved.and_then(|choice| {
             self.cockpit
@@ -13576,16 +13658,6 @@ fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectId
             .last()
             .map(|project| project.id)
     })
-}
-
-fn expand_home(typed: &str) -> std::path::PathBuf {
-    if let Some(rest) = typed.strip_prefix("~/") {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".into());
-        return std::path::PathBuf::from(home).join(rest);
-    }
-    std::path::PathBuf::from(typed)
 }
 
 /// This process's resident memory, for the perf print.
@@ -23586,7 +23658,9 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.prefs.settings.default_provider, Provider::Codex);
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().default_provider,
+                ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .default_provider,
                 Provider::Codex,
                 "the restyled component must save through the real settings action"
             );
@@ -23613,7 +23687,9 @@ mod tests {
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().reading_size,
+                ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .reading_size,
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
         });
@@ -23630,7 +23706,11 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.prefs.settings.confirm_delete);
-            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().confirm_delete);
+            assert!(
+                !ferrite_core::settings::Settings::load(&view.prefs.dir)
+                    .unwrap()
+                    .confirm_delete
+            );
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes("escape");

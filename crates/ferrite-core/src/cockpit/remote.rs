@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +24,7 @@ use crate::protocol::{
 use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
+use crate::workspace::{DirEntry, Listing};
 use crate::ThreadId;
 
 /// How long an act waits for the Server's reply.
@@ -84,7 +85,10 @@ pub(crate) enum Arrival {
     Message(ServerMessage),
     /// Attached afresh: the shared state is this snapshot's. `new_boot`
     /// means a different Server than before, so every mirror starts over.
-    Attached { snapshot: Snapshot, new_boot: bool },
+    Attached {
+        snapshot: Snapshot,
+        new_boot: bool,
+    },
     /// A first send settled: its Thread, or why not.
     Started(BootstrapResult),
 }
@@ -119,6 +123,7 @@ pub(crate) struct Remote {
     /// First sends the connection took with it, for the next `poll`.
     abandoned: Vec<Arrival>,
     searches: BTreeMap<u64, Sender<io::Result<Vec<FileSuggestion>>>>,
+    listings: BTreeMap<u64, Sender<io::Result<Listing>>>,
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
     rendered: (Sender<ClientMessage>, Receiver<ClientMessage>),
@@ -145,6 +150,7 @@ impl Remote {
             starting: BTreeMap::new(),
             abandoned: Vec::new(),
             searches: BTreeMap::new(),
+            listings: BTreeMap::new(),
             watching: BTreeSet::new(),
             rendered: mpsc::channel(),
         }
@@ -347,7 +353,9 @@ impl Remote {
     }
 
     pub(crate) fn draft_starting(&self, draft: DraftId) -> bool {
-        self.starting.values().any(|(starting, _)| *starting == draft)
+        self.starting
+            .values()
+            .any(|(starting, _)| *starting == draft)
     }
 
     /// Take back a first send still starting. True when one was.
@@ -380,6 +388,17 @@ impl Remote {
             .map_err(io::Error::from)?;
         let (answer, answered) = mpsc::channel();
         self.searches.insert(id, answer);
+        Ok(answered)
+    }
+
+    pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
+        let id = self
+            .send_command(Op::ListDir {
+                path: path.to_path_buf(),
+            })
+            .map_err(io::Error::from)?;
+        let (answer, answered) = mpsc::channel();
+        self.listings.insert(id, answer);
         Ok(answered)
     }
 
@@ -491,13 +510,16 @@ impl Remote {
         self.retry_at = Instant::now();
         self.watching.clear();
         self.searches.clear();
+        self.listings.clear();
         self.abandon_starting();
     }
 
     fn heard(&mut self, message: ServerMessage) -> Vec<Arrival> {
         match message {
             ServerMessage::Reply { id, ok, error } => {
-                if let Some(error) = error.as_ref().filter(|error| error.code == ErrorCode::Lagged)
+                if let Some(error) = error
+                    .as_ref()
+                    .filter(|error| error.code == ErrorCode::Lagged)
                 {
                     self.detach(&error.message);
                     return Vec::new();
@@ -522,16 +544,34 @@ impl Remote {
                     })];
                 }
                 if let Some(answer) = self.searches.remove(&id) {
-                    let _ = answer.send(result.map(|done| match done {
-                        Some(Done::Files { files }) => files
-                            .into_iter()
-                            .map(|file| FileSuggestion {
-                                path: file.path,
-                                is_directory: file.is_directory,
-                                matched: file.matched,
-                            })
-                            .collect(),
-                        _ => Vec::new(),
+                    let _ = answer.send(result.map(|done| {
+                        match done {
+                            Some(Done::Files { files }) => files
+                                .into_iter()
+                                .map(|file| FileSuggestion {
+                                    path: file.path,
+                                    is_directory: file.is_directory,
+                                    matched: file.matched,
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        }
+                    }));
+                } else if let Some(answer) = self.listings.remove(&id) {
+                    let _ = answer.send(result.and_then(|done| {
+                        match done {
+                            Some(Done::Listing { path, entries }) => Ok(Listing {
+                                path,
+                                entries: entries
+                                    .into_iter()
+                                    .map(|entry| DirEntry {
+                                        name: entry.name,
+                                        directory: entry.directory,
+                                    })
+                                    .collect(),
+                            }),
+                            _ => Err(io::Error::other("the server listed nothing")),
+                        }
                     }));
                 }
                 Vec::new()
@@ -598,8 +638,7 @@ impl Remote {
                     Ok(Ok(rendered)) => ClientMessage::Rendered {
                         request,
                         png: Some(WirePng {
-                            base64: base64::engine::general_purpose::STANDARD
-                                .encode(rendered.png),
+                            base64: base64::engine::general_purpose::STANDARD.encode(rendered.png),
                             width: rendered.width,
                             height: rendered.height,
                         }),
