@@ -45,9 +45,16 @@ as the plan's §1 asks — the LaunchAgent's counterpart (`agent::systemd`):
   `systemctl --user daemon-reload` and `enable --now`. When
   `loginctl show-user` reports `Linger=no` it says so: without lingering
   the user manager, and the Server with it, stops at the last logout, so
-  the operator runs `loginctl enable-linger`.
-- `ferrited service uninstall` disables the unit and removes it. As on
-  macOS, the running Server is not stopped: that would end its agents.
+  the operator runs `loginctl enable-linger`. When a Server already
+  answers and the unit is not active — one `ferrited bridge` started
+  detached — the unit's Server finds the Store taken and stops; it says
+  that too: the service takes over at the first connection after that
+  Server stops.
+- `ferrited service uninstall` removes the unit and its
+  `default.target.wants` link by hand rather than `systemctl disable`,
+  which needs both the user bus and the unit file, then reloads the user
+  manager if it can. As on macOS, the running Server is not stopped:
+  that would end its agents.
 - `agent::ensure_running`, for the operator's own Store, runs
   `systemctl --user start ferrited.service` when the unit is installed
   and waits for the socket, as the macOS path kickstarts the LaunchAgent;

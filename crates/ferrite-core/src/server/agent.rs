@@ -198,43 +198,67 @@ WantedBy=default.target
     }
 
     /// Write the unit at `path` (rewritten when `ferrited` moved), then
-    /// enable and start it. Returns what the operator should hear: when
-    /// logind says `uid` does not linger, the user manager — and the
-    /// Server with it — stops at the last logout.
+    /// enable and start it. Returns what the operator should hear: when a
+    /// Server already answers (`server_answers`) and it is not the unit's,
+    /// the unit's Server finds the Store taken and stops; when logind says
+    /// `uid` does not linger, the user manager — and the Server with it —
+    /// stops at the last logout.
     pub(super) fn install(
         path: &Path,
         executable: &Path,
         uid: u32,
+        server_answers: bool,
         run: Run,
-    ) -> io::Result<Option<&'static str>> {
+    ) -> io::Result<Vec<&'static str>> {
         let wanted = unit(executable);
         if std::fs::read_to_string(path).ok().as_deref() != Some(wanted.as_str()) {
             std::fs::create_dir_all(path.parent().expect("under systemd/user"))?;
             crate::store::replace_file(path, wanted.as_bytes())?;
         }
+        let outside =
+            server_answers && run("systemctl", &["--user", "is-active", "--quiet", UNIT]).is_err();
         run("systemctl", &["--user", "daemon-reload"])?;
         run("systemctl", &["--user", "enable", "--now", UNIT])?;
+        let mut hints = Vec::new();
+        if outside {
+            hints.push(
+                "a Server started before the service still runs, outside it; \
+                 the service takes over at the first connection after that Server stops",
+            );
+        }
         let linger = run(
             "loginctl",
             &["show-user", &uid.to_string(), "--property=Linger"],
         );
-        Ok(linger
-            .is_ok_and(|said| said.trim() == "Linger=no")
-            .then_some(
+        if linger.is_ok_and(|said| said.trim() == "Linger=no") {
+            hints.push(
                 "the Server stops when your last session ends; \
-             to keep it and its agents running, run: loginctl enable-linger",
-            ))
+                 to keep it and its agents running, run: loginctl enable-linger",
+            );
+        }
+        Ok(hints)
     }
 
-    /// Disable the unit and remove it. As on macOS, the running Server is
-    /// not stopped — that would end its agents — so it runs until it stops.
+    /// Disable the unit and remove it, by hand — `systemctl disable` needs
+    /// the user bus and the unit file both, and either may be gone — then
+    /// tell the user manager, if it can be reached: one that cannot reads
+    /// the directory afresh when it starts. As on macOS, the running
+    /// Server is not stopped — that would end its agents — so it runs
+    /// until it stops.
     pub(super) fn uninstall(path: &Path, run: Run) -> io::Result<()> {
-        if !path.exists() {
-            return Ok(());
+        let wants = path
+            .parent()
+            .expect("under systemd/user")
+            .join("default.target.wants")
+            .join(UNIT);
+        for file in [wants.as_path(), path] {
+            match std::fs::remove_file(file) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
         }
-        run("systemctl", &["--user", "disable", UNIT])?;
-        std::fs::remove_file(path)?;
-        run("systemctl", &["--user", "daemon-reload"]).map(drop)
+        let _ = run("systemctl", &["--user", "daemon-reload"]);
+        Ok(())
     }
 
     /// Start the installed unit's Server; false when there is none, or
@@ -348,6 +372,7 @@ mod platform {
     use std::process::{Command, Stdio};
 
     use super::systemd;
+    use crate::link;
 
     /// Settings › Server › "Start at login" is the window's; on Linux the
     /// operator installs the service (`ferrited service install`).
@@ -381,12 +406,13 @@ mod platform {
     fn install(executable: &Path) -> io::Result<()> {
         // SAFETY: getuid has no preconditions and cannot fail.
         let uid = unsafe { libc::getuid() };
-        let hint = systemd::install(&unit_path()?, executable, uid, &mut run)?;
+        let answers = link::connect(&link::address(&crate::server::store_dir())).is_ok();
+        let hints = systemd::install(&unit_path()?, executable, uid, answers, &mut run)?;
         println!(
             "ferrited: the Server runs as the user service {}",
             systemd::UNIT
         );
-        if let Some(hint) = hint {
+        for hint in hints {
             println!("ferrited: {hint}");
         }
         Ok(())
@@ -469,10 +495,11 @@ mod tests {
         let path = scratch("install").join("systemd/user").join(systemd::UNIT);
         let executable = Path::new("/usr/local/bin/ferrited");
         let mut said = Vec::new();
-        let hint = systemd::install(
+        let hints = systemd::install(
             &path,
             executable,
             1000,
+            false,
             &mut |program: &str, args: &[&str]| {
                 said.push(spelled(program, args));
                 Ok("Linger=no\n".into())
@@ -491,19 +518,43 @@ mod tests {
                 "loginctl show-user 1000 --property=Linger",
             ]
         );
-        assert!(hint.is_some_and(|hint| hint.contains("loginctl enable-linger")));
+        assert!(matches!(&hints[..], [hint] if hint.contains("loginctl enable-linger")));
     }
 
     #[test]
     fn a_user_who_lingers_hears_no_hint() {
         let path = scratch("lingers").join(systemd::UNIT);
-        let hint = systemd::install(
+        let hints = systemd::install(
             &path,
             Path::new("/bin/ferrited"),
             1000,
+            false,
             &mut |_: &str, _: &[&str]| Ok("Linger=yes\n".into()),
         );
-        assert_eq!(hint.unwrap(), None);
+        assert!(hints.unwrap().is_empty());
+    }
+
+    /// A Server `ferrited bridge` started detached keeps the Store: the
+    /// unit's Server finds it taken and stops, and the operator hears so.
+    /// One that is the unit's own is said nothing about.
+    #[test]
+    fn a_server_running_outside_the_unit_is_told_of() {
+        let path = scratch("outside").join(systemd::UNIT);
+        let install = |active: bool| {
+            systemd::install(
+                &path,
+                Path::new("/bin/ferrited"),
+                1000,
+                true,
+                &mut |_: &str, args: &[&str]| match args {
+                    [_, "is-active", ..] if !active => Err(io::Error::other("inactive")),
+                    _ => Ok("Linger=yes\n".into()),
+                },
+            )
+            .unwrap()
+        };
+        assert!(matches!(&install(false)[..], [hint] if hint.contains("outside")));
+        assert!(install(true).is_empty());
     }
 
     #[test]
@@ -513,6 +564,7 @@ mod tests {
             &path,
             Path::new("/bin/ferrited"),
             1000,
+            false,
             &mut |_: &str, args: &[&str]| {
                 if args.contains(&"enable") {
                     Err(io::Error::other("Failed to connect to bus"))
@@ -524,25 +576,27 @@ mod tests {
         assert!(installed.is_err());
     }
 
+    /// The unit and its `default.target.wants` link go even when the user
+    /// bus cannot be reached, or the unit was already deleted by hand.
     #[test]
-    fn uninstalling_disables_and_removes_the_unit_but_never_stops_it() {
-        let path = scratch("uninstall").join(systemd::UNIT);
-        std::fs::write(&path, systemd::unit(Path::new("/bin/ferrited"))).unwrap();
+    fn uninstalling_removes_the_unit_and_its_link_but_never_stops_it() {
+        let dir = scratch("uninstall");
+        let path = dir.join(systemd::UNIT);
+        let wants = dir.join("default.target.wants").join(systemd::UNIT);
+        std::fs::create_dir_all(wants.parent().unwrap()).unwrap();
+        std::fs::write(&wants, "").unwrap();
         let mut said = Vec::new();
         let mut run = |program: &str, args: &[&str]| {
             said.push(spelled(program, args));
-            Ok(String::new())
+            Err(io::Error::other("Failed to connect to bus"))
         };
         systemd::uninstall(&path, &mut run).unwrap();
+        assert!(!wants.exists());
+
+        std::fs::write(&path, systemd::unit(Path::new("/bin/ferrited"))).unwrap();
         systemd::uninstall(&path, &mut run).unwrap();
         assert!(!path.exists());
-        assert_eq!(
-            said,
-            [
-                "systemctl --user disable ferrited.service",
-                "systemctl --user daemon-reload",
-            ]
-        );
+        assert_eq!(said, ["systemctl --user daemon-reload"; 2]);
     }
 
     /// `ensure_running`'s branch: the unit's Server when there is a unit

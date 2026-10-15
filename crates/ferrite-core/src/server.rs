@@ -848,9 +848,9 @@ impl Server {
 }
 
 /// Start the successor. On Unix the same process becomes it (`exec`: same
-/// pid, so launchd and systemd see no exit; the Store's claim is close-on-exec, so the
-/// new image takes it). On Windows, a detached Server that waits for this
-/// one to exit before it claims the Store.
+/// pid, so launchd and systemd see no exit; the Store's claim is
+/// close-on-exec, so the new image takes it). On Windows, a detached
+/// Server that waits for this one to exit before it claims the Store.
 fn relaunch(executable: &std::path::Path) -> io::Result<()> {
     #[cfg(unix)]
     {
