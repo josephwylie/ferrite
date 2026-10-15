@@ -205,6 +205,7 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
     project::write_priming(&project, &prefix)?;
 
     // A project belongs to the session it was opened in.
+    // Ferrite: the session is Ferrite's Server, in these messages and the ones below.
     let mut previous = project.coordinator();
     if let Some(record) = &previous
         && !record.socket.is_empty()
@@ -212,7 +213,7 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
     {
         if Path::new(&record.socket).exists() {
             bail!(
-                "`{slug}` belongs to the herdr session at {}; open it there, not at {socket}",
+                "`{slug}` belongs to Ferrite's Server at {}; open it there, not at {socket}",
                 record.socket
             );
         }
@@ -229,7 +230,7 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
     let herdr = Herdr::new(ctx.env.herdr_bin(), &session.socket, ctx.runner);
     let agents = herdr
         .agent_list()
-        .with_context(|| format!("the herdr session at {socket} is not reachable"))?;
+        .with_context(|| format!("Ferrite's Server at {socket} is not reachable"))?;
     let label = crate::project::home_label(&settings.name, slug);
     // Canonical, because herdr reports a pane's physical working directory and
     // the identity check compares against it.
@@ -286,7 +287,7 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
         !options.new && panes.iter().any(|p| pane_matches(record, p)) && !agents.iter().any(|a| a.pane_id == record.pane_id)
     });
     let (workspace_id, tab_id, pane_id) = if let Some(pane) = &here {
-        let pane = panes.iter().find(|p| &p.pane_id == pane).with_context(|| format!("pane {pane} is not listed by the herdr session at {socket}"))?;
+        let pane = panes.iter().find(|p| &p.pane_id == pane).with_context(|| format!("pane {pane} is not listed by Ferrite's Server at {socket}"))?;
         (pane.workspace_id.clone(), pane.tab_id.clone(), pane.pane_id.clone())
     } else if let Some(record) = reusable {
         sync_label(&herdr, &record.workspace_id, &label);
@@ -498,7 +499,7 @@ pub fn prompt(ctx: &Ctx, slug: &str, text: &str) -> Result<()> {
     if text.is_empty() {
         bail!("the text is empty");
     }
-    let view = crate::threads::session_view(ctx, &project).with_context(|| format!("the herdr session of `{slug}` is not reachable; run `open {slug}` first"))?;
+    let view = crate::threads::session_view(ctx, &project).with_context(|| format!("Ferrite's Server for `{slug}` is not reachable; run `open {slug}` first"))?;
     let record = project.coordinator().unwrap_or_default();
     let target = view
         .agents
