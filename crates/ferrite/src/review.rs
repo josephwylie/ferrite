@@ -7,17 +7,19 @@
 //! what the diff adds up to; under it, one row per diff line — numbered on
 //! both sides, signed and washed like every diff Ferrite draws — with the
 //! file's path over its first line and each hunk's section over its own.
-//! A click picks a line, a shift-click stretches the pick to a range in the
-//! same file; ↑↓ and ⇧↑↓ do the same from the keyboard. `c` (or ⏎, or the
-//! `+ comment` beside the pick) opens a one-line field under it; ⏎ (or its
-//! `add`) there adds the comment to the Pane's Composer, where it waits on
-//! the shelf for the next send (`review::attach`). ⌫ (or a comment's `×`)
-//! takes back the latest comment under the pick. The commits scope first
-//! lists the branch's commits, newest first: ↑↓ or a click picks one, ⏎ (or
-//! the click) reviews it, and the scope again goes back to the list. The
-//! cockpit loads each
-//! scope's edits (`cockpit/beside.rs`) and hands them over with `show`;
-//! they are a snapshot, read again on `r` or on picking the scope again.
+//! A press picks a line, a shift-press or a drag stretches the pick to a
+//! range in the same file; ↑↓ and ⇧↑↓ do the same from the keyboard. A
+//! right-click asks the cockpit for the slot's context menu (`MenuAsked`):
+//! comment, open the file at the line, copy the picked lines. `c` (or ⏎,
+//! or the `+ comment` beside the pick) opens a one-line field under it; ⏎
+//! (or its `add`) there adds the comment to the Pane's Composer, where it
+//! waits on the shelf for the next send (`review::attach`). ⌫ (or a
+//! comment's `×`) takes back the latest comment under the pick. The commits
+//! scope first lists the branch's commits, newest first: ↑↓ or a click
+//! picks one, ⏎ (or the click) reviews it, and the scope again goes back to
+//! the list. The cockpit loads each scope's edits (`cockpit/beside.rs`)
+//! and hands them over with `show`; they are a snapshot, read again on `r`
+//! or on picking the scope again.
 
 use ferrite_core::review::git::Commit;
 use ferrite_core::review::{self, Line, Scope, Selection};
@@ -25,7 +27,8 @@ use ferrite_core::FileEdit;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, HighlightStyle, ScrollHandle, SharedString, StyledText, Window,
+    Focusable, HighlightStyle, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollHandle, SharedString, StyledText, Window,
 };
 use std::ops::Range;
 
@@ -83,6 +86,13 @@ pub(crate) struct ScopePicked(pub Scope);
 /// loads its diff and calls `show`.
 pub(crate) struct CommitPicked(pub String);
 
+/// The operator right-clicked diff line `line` (the pick holds it); the
+/// cockpit opens the slot's context menu `at` the pointer.
+pub(crate) struct MenuAsked {
+    pub at: Point<Pixels>,
+    pub line: usize,
+}
+
 pub(crate) struct ReviewView {
     /// The Pane's own prompt: where comments gather, and are read back to
     /// mark the lines they are about.
@@ -100,6 +110,8 @@ pub(crate) struct ReviewView {
     /// Each line's syntax colours, worked out once per read.
     highlights: Vec<Vec<(Range<usize>, HighlightStyle)>>,
     selection: Option<Selection>,
+    /// A press on a line is held: dragging over lines stretches the pick.
+    dragging: bool,
     /// The comment being written under the pick.
     editor: Option<Entity<Composer>>,
     /// The commits scope's list; `None` while it is being read.
@@ -112,6 +124,7 @@ pub(crate) struct ReviewView {
 
 impl EventEmitter<ScopePicked> for ReviewView {}
 impl EventEmitter<CommitPicked> for ReviewView {}
+impl EventEmitter<MenuAsked> for ReviewView {}
 
 impl ReviewView {
     pub(crate) fn new(
@@ -131,6 +144,7 @@ impl ReviewView {
             lines: Vec::new(),
             highlights: Vec::new(),
             selection: None,
+            dragging: false,
             editor: None,
             commits: None,
             commit_pick: 0,
@@ -253,12 +267,37 @@ impl ReviewView {
         if line >= self.lines.len() {
             return;
         }
-        self.selection = Some(match self.selection {
+        let picked = match self.selection {
             Some(selection) if extend => selection.extend_to(line, &self.lines),
             _ => Selection::at(line),
-        });
-        self.scroll.scroll_to_item(line);
+        };
+        if self.selection == Some(picked) {
+            return;
+        }
+        self.selection = Some(picked);
+        self.scroll.scroll_to_item(picked.head);
         cx.notify();
+    }
+
+    /// The picked lines as the file reads them: no signs, no numbers.
+    pub(crate) fn picked_text(&self) -> Option<String> {
+        let selection = self.selection?;
+        let lines = &self.lines[selection.first()..=selection.last()];
+        Some(
+            lines
+                .iter()
+                .map(|line| line.text.get(1..).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    }
+
+    /// Where diff line `line` sits: its file's path, as git names it, and
+    /// its number there (the old one for a removed line).
+    pub(crate) fn place(&self, line: usize) -> Option<(&str, u32)> {
+        let line = self.lines.get(line)?;
+        let edit = self.edits.as_ref()?.get(line.edit)?;
+        Some((edit.path.as_str(), line.place().1))
     }
 
     fn step(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
@@ -287,7 +326,7 @@ impl ReviewView {
         self.pick(line.min(self.lines.len().saturating_sub(1)), extend, cx);
     }
 
-    fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.listing_commits() {
             self.open_commit(self.commit_pick, cx);
             return;
@@ -420,16 +459,44 @@ impl ReviewView {
                         .text_color(rgb(ACCENT))
                         .hover_control(format!("review-comment-on-{at}"))
                         .child("+ comment")
-                        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            view.open_editor(window, cx);
-                        })),
+                        // On the press, before the row's own press re-picks one line.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|view, _: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                view.open_editor(window, cx);
+                            }),
+                        ),
                 )
             })
-            .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-                window.focus(&view.focus, cx);
-                view.pick(at, event.modifiers().shift, cx);
-            }));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                    window.focus(&view.focus, cx);
+                    view.pick(at, event.modifiers.shift, cx);
+                    view.dragging = true;
+                }),
+            )
+            .on_mouse_move(cx.listener(move |view, event: &MouseMoveEvent, _, cx| {
+                if view.dragging && event.dragging() {
+                    view.pick(at, true, cx);
+                }
+            }))
+            // A right-click keeps a pick that holds the line, else picks it.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    window.focus(&view.focus, cx);
+                    if !view.selection.is_some_and(|picked| picked.contains(at)) {
+                        view.pick(at, false, cx);
+                    }
+                    cx.emit(MenuAsked {
+                        at: event.position,
+                        line: at,
+                    });
+                }),
+            );
         let indent = 2. * number_w + 2. * cell;
         let mut stack = div().flex().flex_col().w_full();
         if first_of_file {
@@ -720,6 +787,14 @@ impl Render for ReviewView {
             .flex_col()
             .flex_1()
             .min_h_0()
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseUpEvent, _, _| view.dragging = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseUpEvent, _, _| view.dragging = false),
+            )
             .on_action(cx.listener(|view, _: &Next, _, cx| view.step(true, false, cx)))
             .on_action(cx.listener(|view, _: &Previous, _, cx| view.step(false, false, cx)))
             .on_action(cx.listener(|view, _: &ExtendNext, _, cx| view.step(true, true, cx)))
@@ -763,12 +838,12 @@ mod tests {
         }]
     }
 
-    /// The keys walk and stretch the pick, `c` opens the field, ⏎ there
-    /// (or its `↵ add`) puts the comment on the Composer's shelf, the next
-    /// send carries it after the prompt's own words, and ⌫ takes comments
-    /// back one at a time.
-    #[gpui::test]
-    fn a_comment_from_the_keys_rides_the_next_prompt(cx: &mut TestAppContext) {
+    /// A Review in a window of its own, showing `edits` and holding the
+    /// keyboard, the production keys bound.
+    fn open(
+        edits: Vec<FileEdit>,
+        cx: &mut TestAppContext,
+    ) -> (Entity<ReviewView>, gpui::VisualTestContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
             let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
@@ -787,13 +862,24 @@ mod tests {
             });
             Host(review)
         });
-        let cx = &mut gpui::VisualTestContext::from_window(*window, cx);
-        let review = window.update(cx, |host, _, _| host.0.clone()).unwrap();
-        review.update_in(cx, |review, window, cx| {
-            review.show(Scope::LastTurn, edits(), cx);
+        let mut cx = gpui::VisualTestContext::from_window(*window, cx);
+        let review = window.update(&mut cx, |host, _, _| host.0.clone()).unwrap();
+        review.update_in(&mut cx, |review, window, cx| {
+            review.show(Scope::LastTurn, edits, cx);
             window.focus(&review.focus, cx);
         });
         cx.run_until_parked();
+        (review, cx)
+    }
+
+    /// The keys walk and stretch the pick, `c` opens the field, ⏎ there
+    /// (or its `↵ add`) puts the comment on the Composer's shelf, the next
+    /// send carries it after the prompt's own words, and ⌫ takes comments
+    /// back one at a time.
+    #[gpui::test]
+    fn a_comment_from_the_keys_rides_the_next_prompt(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(edits(), cx);
+        let cx = &mut cx;
         cx.simulate_keystrokes("down shift-down c");
         cx.simulate_input("why two?");
         cx.simulate_keystrokes("enter");
@@ -835,6 +921,57 @@ mod tests {
             assert_eq!(review.scope(), Scope::Uncommitted, "⇥ steps the scope");
             assert!(review.edits.is_none(), "until the cockpit reads it");
         });
+    }
+
+    /// A press dragged over the lines stretches the pick, held inside the
+    /// file it began in, and a release leaves it with its `+ comment`; a
+    /// press alone picks one line again.
+    #[gpui::test]
+    fn a_drag_stretches_the_pick_within_its_file(cx: &mut TestAppContext) {
+        let mut two_files = edits();
+        two_files.push(FileEdit {
+            path: "src/b.rs".into(),
+            ..edits().remove(0)
+        });
+        let (review, mut cx) = open(two_files, cx);
+        let cx = &mut cx;
+        let line =
+            |cx: &mut gpui::VisualTestContext, selector| cx.debug_bounds(selector).expect("drawn");
+        let none = gpui::Modifiers::none();
+        let (from, over) = (
+            line(cx, "review-line-0").center(),
+            line(cx, "review-line-1").center(),
+        );
+        let past = line(cx, "review-line-4").center();
+        cx.simulate_mouse_down(from, MouseButton::Left, none);
+        cx.simulate_mouse_move(over, MouseButton::Left, none);
+        let picked = |cx: &mut gpui::VisualTestContext| review.read_with(cx, |r, _| r.selection);
+        assert_eq!(
+            picked(cx),
+            Some(Selection { anchor: 0, head: 1 }),
+            "the drag stretches the pick"
+        );
+        cx.simulate_mouse_move(past, MouseButton::Left, none);
+        cx.simulate_mouse_up(past, MouseButton::Left, none);
+        cx.run_until_parked();
+        assert_eq!(
+            picked(cx),
+            Some(Selection { anchor: 0, head: 2 }),
+            "held at the file's last line"
+        );
+        let comment = cx.debug_bounds("review-add-comment").expect("shown");
+        assert!(
+            line(cx, "review-line-2").contains(&comment.center()),
+            "on the range's last line"
+        );
+        cx.simulate_mouse_move(from, None, none);
+        assert_eq!(
+            picked(cx).map(|picked| picked.head),
+            Some(2),
+            "no drag after the release"
+        );
+        cx.simulate_click(over, none);
+        assert_eq!(picked(cx), Some(Selection::at(1)), "a press picks one line");
     }
 
     struct Host(Entity<ReviewView>);

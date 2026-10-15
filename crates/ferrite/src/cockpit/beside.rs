@@ -23,7 +23,7 @@
 //! a member.
 
 use super::*;
-use crate::review::{CommitPicked, ReviewView, ScopePicked};
+use crate::review::{CommitPicked, MenuAsked, ReviewView, ScopePicked};
 use ferrite_core::review::git::Diff;
 use ferrite_core::review::Scope;
 use std::path::PathBuf;
@@ -157,6 +157,14 @@ impl CockpitView {
                 view.read_commit(thread, review, commit.clone(), cx)
             })
             .detach();
+            cx.subscribe(&review, move |view, _, MenuAsked { at, line }, cx| {
+                let target = MenuTarget::Review {
+                    thread,
+                    line: *line,
+                };
+                view.open_context_menu(target, *at, cx)
+            })
+            .detach();
             review
         });
         let title = self
@@ -168,6 +176,11 @@ impl CockpitView {
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| review.pick_scope(scope, cx));
         cx.notify();
+    }
+
+    /// The review open beside `thread`'s Pane, if one is.
+    pub(super) fn review_of(&self, thread: ThreadId) -> Option<Entity<ReviewView>> {
+        self.panes.get(self.pane_for(thread)?)?.preview.review()
     }
 
     /// Read `scope` for `thread` into `review`: the last turn from Main's

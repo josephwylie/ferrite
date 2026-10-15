@@ -955,6 +955,11 @@ enum MenuTarget {
     Group(GroupId),
     /// The Parked section's header at the foot of the nav.
     Parked,
+    /// A diff line in the Review beside the Thread's Pane (ADR 0021).
+    Review {
+        thread: ThreadId,
+        line: usize,
+    },
 }
 
 /// One thing a context-menu row does.
@@ -971,9 +976,13 @@ enum MenuVerb {
     /// Park the Thread in one act, on screen or not: a Group member leaves
     /// its Group and parks (`Cockpit::park_thread`), the same as cmd-w.
     Park,
-    /// The transcript menu's own verbs: what is highlighted, or all of it.
+    /// The transcript menu's own verbs: what is highlighted (in the
+    /// Review, the pick), or all of it.
     CopySelection,
     CopyTranscript,
+    /// The Review's own verbs: comment on the pick, read the line's file.
+    Comment,
+    OpenAtLine,
     LeaveGroup,
     EnterGroup,
     DissolveGroup,
@@ -3404,6 +3413,19 @@ impl CockpitView {
                     MenuVerb::DeleteAllParked,
                 )));
             }
+            // The Review's diff: the pick — comment on it, read its file,
+            // copy it. The reader reads this computer's files only.
+            MenuTarget::Review { .. } => {
+                rows.push(Some((
+                    menu::Item::new("Comment").shortcut("c"),
+                    MenuVerb::Comment,
+                )));
+                rows.push(Some((
+                    menu::Item::new("Open file at this line").disabled(self.on_machine()),
+                    MenuVerb::OpenAtLine,
+                )));
+                rows.push(Some((menu::Item::new("Copy"), MenuVerb::CopySelection)));
+            }
         }
         rows
     }
@@ -3467,7 +3489,7 @@ impl CockpitView {
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
             MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
-            MenuTarget::Group(_) | MenuTarget::Parked => None,
+            MenuTarget::Group(_) | MenuTarget::Parked | MenuTarget::Review { .. } => None,
         }
     }
 
@@ -3490,7 +3512,7 @@ impl CockpitView {
     /// A row's press: a destructive row arms on the first press and runs
     /// on the second; anything else runs at once. The menu closes after
     /// a verb runs, and stays up while a row is armed.
-    fn press_menu_row(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn press_menu_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(open) = self.context_menu.as_mut() else {
             return;
         };
@@ -3512,11 +3534,17 @@ impl CockpitView {
         }
         let target = open.target;
         self.context_menu = None;
-        self.run_menu_verb(target, verb, cx);
+        self.run_menu_verb(target, verb, window, cx);
         cx.notify();
     }
 
-    fn run_menu_verb(&mut self, target: MenuTarget, verb: MenuVerb, cx: &mut Context<Self>) {
+    fn run_menu_verb(
+        &mut self,
+        target: MenuTarget,
+        verb: MenuVerb,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match (target, verb) {
             (MenuTarget::Thread(thread), MenuVerb::Rename) => {
                 self.start_rename(RenameTarget::Thread(thread), cx)
@@ -3548,6 +3576,33 @@ impl CockpitView {
             }
             (MenuTarget::Pane(_), MenuVerb::CopySelection) => {
                 if let Some(text) = self.native_copy.clone() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            (MenuTarget::Review { thread, .. }, MenuVerb::Comment) => {
+                if let Some(review) = self.review_of(thread) {
+                    review.update(cx, |review, cx| review.open_editor(window, cx));
+                }
+            }
+            (MenuTarget::Review { thread, line }, MenuVerb::OpenAtLine) => {
+                let place = self.review_of(thread).and_then(|review| {
+                    let (path, number) = review.read(cx).place(line)?;
+                    Some((self.thread_path(thread)?.join(path), number))
+                });
+                if let (Some((path, number)), Some(index)) = (place, self.pane_for(thread)) {
+                    self.focus_pane(index);
+                    let reader = beside::Beside::Reader {
+                        path,
+                        line: Some(number),
+                    };
+                    self.open_beside(reader, window, cx);
+                }
+            }
+            (MenuTarget::Review { thread, .. }, MenuVerb::CopySelection) => {
+                if let Some(text) = self
+                    .review_of(thread)
+                    .and_then(|review| review.read(cx).picked_text())
+                {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
@@ -3605,7 +3660,7 @@ impl CockpitView {
                         .get(group)
                         .and_then(|group| group.members.first().copied())
                         .and_then(|thread| self.cockpit.project_id(thread)),
-                    MenuTarget::Parked => None,
+                    MenuTarget::Parked | MenuTarget::Review { .. } => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
                 if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
@@ -3685,9 +3740,9 @@ impl CockpitView {
                 Some((item, _)) => shell.child(
                     menu::row(index, item, open.armed == Some(index)).on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.listener(move |view, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            view.press_menu_row(index, cx);
+                            view.press_menu_row(index, window, cx);
                         }),
                     ),
                 ),
@@ -20501,12 +20556,12 @@ mod tests {
                 .position(|row| matches!(row, Some((_, MenuVerb::DeleteAllParked))))
                 .unwrap()
         });
-        view.update(cx, |view, cx| {
-            view.press_menu_row(delete, cx);
+        view.update_in(cx, |view, window, cx| {
+            view.press_menu_row(delete, window, cx);
             let menu = view.context_menu.as_ref().expect("armed, still up");
             assert_eq!(menu.armed, Some(delete), "the first press only arms");
             assert_eq!(view.facts.parked().len(), 2, "and deletes nothing");
-            view.press_menu_row(delete, cx);
+            view.press_menu_row(delete, window, cx);
             assert!(
                 view.context_menu.is_none(),
                 "the second press runs and closes"
@@ -20544,7 +20599,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
-        view.update(cx, |view, cx| {
+        view.update_in(cx, |view, window, cx| {
             view.prefs.settings.confirm_delete = false;
             view.open_context_menu(MenuTarget::Parked, gpui::point(px(100.), px(600.)), cx);
             let delete = view
@@ -20555,7 +20610,7 @@ mod tests {
                 .iter()
                 .position(|row| matches!(row, Some((_, MenuVerb::DeleteAllParked))))
                 .unwrap();
-            view.press_menu_row(delete, cx);
+            view.press_menu_row(delete, window, cx);
             let menu = view
                 .context_menu
                 .as_ref()
@@ -20566,7 +20621,7 @@ mod tests {
                 &[threads[0]],
                 "nothing was deleted yet"
             );
-            view.press_menu_row(delete, cx);
+            view.press_menu_row(delete, window, cx);
             assert!(view.context_menu.is_none());
             assert!(view.facts.parked().is_empty());
         });
@@ -23449,16 +23504,16 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(view.context_menu.is_none()));
 
-        view.update(cx, |view, cx| {
+        view.update_in(cx, |view, window, cx| {
             view.open_context_menu(
                 MenuTarget::Thread(thread),
                 gpui::point(px(600.), px(300.)),
                 cx,
             );
-            view.press_menu_row(delete, cx);
+            view.press_menu_row(delete, window, cx);
             let menu = view.context_menu.as_ref().expect("armed, still up");
             assert_eq!(menu.armed, Some(delete), "the first press only arms");
-            view.press_menu_row(delete, cx);
+            view.press_menu_row(delete, window, cx);
             assert!(
                 view.context_menu.is_none(),
                 "the second press runs and closes"
@@ -23803,7 +23858,7 @@ mod tests {
 
         // With confirmation off, a destructive row runs on its first press.
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-        view.update(cx, |view, cx| {
+        view.update_in(cx, |view, window, cx| {
             view.open_context_menu(
                 MenuTarget::Thread(thread),
                 gpui::point(px(600.), px(300.)),
@@ -23817,7 +23872,7 @@ mod tests {
                 .iter()
                 .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
                 .unwrap();
-            view.press_menu_row(delete, cx);
+            view.press_menu_row(delete, window, cx);
             assert!(view.context_menu.is_none());
             assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
         });

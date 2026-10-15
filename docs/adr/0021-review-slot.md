@@ -54,8 +54,15 @@ the branch against `main`, read-only, in the reader slot.
    the scope again, reads it afresh.
 3. **Unified rows, every line selectable.** The Review draws its own
    unified rows (the transcript's signs, washes and syntax colours) so each
-   diff line is a pick target: click or ↑↓ picks, shift-click or ⇧↑↓
-   stretches the pick within one file. The split layout the compare had on
+   diff line is a pick target: click or ↑↓ picks, shift-click, a drag
+   across rows or ⇧↑↓ stretches the pick within one file (a drag past the
+   file's last line holds there; the slot does not scroll under a drag
+   held past its edge). A right-click opens the app's context menu on the
+   pick (keeping a range that holds the line, else picking it): *Comment*,
+   *Open file at this line* (the reader, at the line's new number or a
+   removed line's old one; disabled on a machine, whose files the reader
+   cannot read) and *Copy* (the lines' text, without signs or numbers).
+   The split layout the compare had on
    wide slots goes: a comment needs one line to hang under. The rows read
    at the operator's reading size, as the compare did (and every diff in a
    transcript does); the bar and footer are chrome, at the UI size.

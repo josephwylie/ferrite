@@ -264,3 +264,83 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("review-comment").is_none());
 }
+
+/// A right-click in the diff opens the context menu on the pick — kept
+/// when the line is in it, else the line picked — and its rows act: copy
+/// takes the lines' text, comment opens the field, and open reads the
+/// line's file in the reader.
+#[gpui::test]
+fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
+    let (core, _fake) = edited("review-menu");
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    open_review(&view, Scope::LastTurn, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let none = gpui::Modifiers::none();
+    let first = cx.debug_bounds("review-line-0").expect("drawn").center();
+    let second = cx.debug_bounds("review-line-1").expect("drawn").center();
+    let last = cx.debug_bounds("review-line-2").expect("drawn").center();
+    let right_click = |at, cx: &mut gpui::VisualTestContext| {
+        cx.simulate_mouse_down(at, gpui::MouseButton::Right, none);
+        tick(cx);
+    };
+    // A range, then a right-click inside it: the range stays.
+    cx.simulate_click(first, none);
+    cx.simulate_click(second, gpui::Modifiers::shift());
+    right_click(second, cx);
+    let row = |verb: MenuVerb, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let menu = view.context_menu.as_ref().expect("the menu is up");
+            menu.rows
+                .iter()
+                .position(|row| matches!(row, Some((_, found)) if *found == verb))
+                .expect("offered")
+        })
+    };
+    view.read_with(cx, |view, _| {
+        let menu = view.context_menu.as_ref().expect("a right-click opens it");
+        assert_eq!(menu.target, MenuTarget::Review { thread, line: 1 });
+        let labels: Vec<&str> = menu
+            .rows
+            .iter()
+            .flatten()
+            .map(|(item, _)| item.label.as_ref())
+            .collect();
+        assert_eq!(labels, ["Comment", "Open file at this line", "Copy"]);
+    });
+    let copy = row(MenuVerb::CopySelection, cx);
+    view.update_in(cx, |view, window, cx| view.press_menu_row(copy, window, cx));
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("fn row() {\n    let wide = 1;".into()),
+        "the range's lines, no signs or numbers"
+    );
+    // Outside the range, the right-click picks its line first.
+    right_click(last, cx);
+    let comment = row(MenuVerb::Comment, cx);
+    view.update_in(cx, |view, window, cx| {
+        view.press_menu_row(comment, window, cx)
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("review-comment-field").is_some());
+    cx.simulate_input("why 2?");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let comments = view.panes[0].composer.read(cx).review_comments().to_vec();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].location(), "src/nav.rs:8");
+    });
+    right_click(second, cx);
+    let open = row(MenuVerb::OpenAtLine, cx);
+    view.update_in(cx, |view, window, cx| view.press_menu_row(open, window, cx));
+    tick(cx);
+    let document = view
+        .read_with(cx, |view, _| view.panes[0].preview.document())
+        .expect("the reader replaces the review");
+    assert!(document.path.ends_with("src/nav.rs"), "{:?}", document.path);
+    assert_eq!(document.line, Some(8), "the removed line's old number");
+    assert!(document.review.is_none());
+}
