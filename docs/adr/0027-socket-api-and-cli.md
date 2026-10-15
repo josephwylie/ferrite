@@ -185,7 +185,9 @@ non-delivery; never resend blindly; don't prompt your own Thread.
   that broke with no answer is refused in the words of its `Failure` (no
   `ferrited`, or a sign-in the operator must do from a window); a CLI
   cannot sign in. Thread ids are per Store, so `--current` is refused with
-  `--machine`, and `FERRITE_SOCKET` is not consulted. Paths are the
+  `--machine`, and `FERRITE_SOCKET` is not consulted. A set
+  `FERRITE_THREAD_ID` is not refused: only `--current` reads it, and
+  refusing it would keep every agent inside a Thread from `--machine`. Paths are the
   machine's too: a `cwd` is never filled in from this computer's
   directory, so `thread start` and `coordinator start` need `--cwd` with
   an absolute path on the machine.
