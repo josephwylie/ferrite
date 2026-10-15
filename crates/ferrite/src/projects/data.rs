@@ -72,11 +72,15 @@ pub(crate) struct Jump {
 }
 
 impl Jump {
-    /// `popup.jump`'s `(socket, machine, pane)`.
-    pub(crate) fn of(machine: &str, pane: &str) -> Option<Jump> {
-        Some(Jump {
+    /// `popup.jump`'s `(socket, machine, pane)`; a pane id that names no
+    /// Thread is said, not jumped to.
+    pub(crate) fn of(machine: &str, pane: &str) -> Result<Jump, String> {
+        let thread = pane.parse().map_err(|_| {
+            format!("pane `{pane}` is not a Ferrite Thread; there is nothing to jump to")
+        })?;
+        Ok(Jump {
             machine: machine.to_string(),
-            thread: ThreadId::new(pane.parse().ok()?),
+            thread: ThreadId::new(thread),
         })
     }
 }
@@ -307,11 +311,12 @@ pub(crate) const CONFIGURE_FAILED_TITLE: &str = "Projects: configure failed";
 /// process (the CLI's `configure` with no flags), as its toast: title,
 /// words, whether it failed.
 pub(crate) fn configure(place: &Place) -> (String, String, bool) {
-    configured(
-        place
-            .with_ctx(|ctx| setup::configure_ferrite(ctx).map_err(|error| format!("{error:#}")))
-            .and_then(|done| done),
-    )
+    configured(place.with_ctx(configure_in).and_then(|done| done))
+}
+
+/// `configure` in `ctx`.
+pub(super) fn configure_in(ctx: &Ctx) -> Result<Vec<String>, String> {
+    setup::configure_ferrite(ctx).map_err(|error| format!("{error:#}"))
 }
 
 pub(super) fn configured(done: Result<Vec<String>, String>) -> (String, String, bool) {

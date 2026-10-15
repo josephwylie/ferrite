@@ -1305,3 +1305,35 @@ fn a_projects_jump_lands_on_its_thread_on_its_machine(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// "Continue this Thread as a project" on a window on another machine is
+/// refused before any check or dialog: as upstream, only a running local
+/// agent pane can be adopted, and this computer's Server is the one asked.
+#[gpui::test]
+fn adopting_on_another_machine_is_refused_up_front(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("machines-adopt", 1);
+    let machines = cx.new(|_| machines("adopt", Some("box")));
+    let (root, cx) = machine_window(cx, core, machines);
+    let on_box = shown(&root, cx);
+    let toasts = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            gpui::component::Root::read(window, cx)
+                .notification
+                .read(cx)
+                .notifications()
+                .len()
+        })
+    };
+    let before = toasts(cx);
+    on_box.update_in(cx, |view, window, cx| {
+        assert_eq!(view.away_machine(cx).as_deref(), Some("box"));
+        view.projects.place = Some(crate::projects::Place {
+            root: std::env::temp_dir().join("ferrite-projects-adopt-away"),
+            config_dir: std::env::temp_dir().join("ferrite-projects-adopt-away"),
+        });
+        view.run_projects_command(crate::projects::Command::Adopt, window, cx);
+        assert!(view.projects.sheet.is_none(), "no dialog");
+    });
+    tick(cx);
+    assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
+}

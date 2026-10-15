@@ -367,3 +367,53 @@ fn configure_says_what_it_set_or_why_not() {
         )
     );
 }
+
+/// The configure action itself, in a scratch home where Claude is
+/// installed: it succeeds, writes the progress hooks and the skill, and
+/// says so — where `configure --hooks-only` failed on an unknown flag.
+#[test]
+fn the_configure_action_sets_the_hooks_and_the_skill() {
+    let scratch = Scratch::new("configure");
+    let place = scratch.place(&[]);
+    let home = scratch.0.join("home");
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    let env = Env::for_test(&home, &[]);
+    let ctx = Ctx {
+        env: &env,
+        root: place.root.clone(),
+        config_dir: place.config_dir.clone(),
+        runner: &OneThread,
+        detached_ticker: false,
+    };
+    let (title, body, failed) = data::configured(data::configure_in(&ctx));
+    assert_eq!(
+        (title.as_str(), body.as_str(), failed),
+        (
+            "Projects configured",
+            "Progress hooks and the autoproject skill are set.",
+            false
+        )
+    );
+    let settings = std::fs::read_to_string(home.join(".claude/settings.json")).unwrap();
+    assert!(settings.contains("hook --agent claude"), "{settings}");
+    assert!(ferrite_projects::setup::skill_source(&place.config_dir)
+        .join("SKILL.md")
+        .is_file());
+}
+
+/// A popup row whose pane id names no Thread says so rather than closing
+/// on nothing.
+#[test]
+fn a_jump_to_a_pane_that_is_no_thread_is_refused_in_words() {
+    assert_eq!(
+        Jump::of("box", "7"),
+        Ok(Jump {
+            machine: "box".into(),
+            thread: ThreadId::new(7)
+        })
+    );
+    assert_eq!(
+        Jump::of("", "w1:p2"),
+        Err("pane `w1:p2` is not a Ferrite Thread; there is nothing to jump to".into())
+    );
+}

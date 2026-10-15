@@ -125,6 +125,9 @@ impl CockpitView {
         match event.clone() {
             SheetEvent::Close => self.close_projects(cx),
             SheetEvent::Jump(jump) => self.jump_to(jump, window, cx),
+            SheetEvent::Refused(why) => {
+                self.projects_toast("Projects".into(), why, true, window, cx)
+            }
             SheetEvent::Open(path) => {
                 if ferrite_projects::settings::is_text(&path) {
                     self.close_projects(cx);
@@ -271,6 +274,15 @@ impl CockpitView {
                 }
             },
             Command::Adopt => {
+                // Upstream adopts only a running local agent pane: a Thread
+                // on another machine is not this computer's Server's.
+                if let Some(machine) = self.away_machine(cx) {
+                    let body = format!(
+                        "this window is on `{machine}`; only a running local agent pane can be adopted"
+                    );
+                    self.projects_toast("Projects".into(), body, true, window, cx);
+                    return;
+                }
                 let Some(thread) = self.focused_thread() else {
                     self.projects_toast(
                         "Projects".into(),
@@ -324,13 +336,36 @@ impl CockpitView {
             let adoptable = cx
                 .background_spawn(async move { projects::adoptable(&checking, thread) })
                 .await;
-            view.update_in(cx, |view, window, cx| match adoptable {
-                Ok(()) => view.ask_adopt(place, thread, window, cx),
-                Err(refusal) => view.projects_toast("Projects".into(), refusal, true, window, cx),
+            view.update_in(cx, |view, window, cx| {
+                view.adopt_or_refuse(place, thread, adoptable, window, cx)
             })
             .ok();
         })
         .detach();
+    }
+
+    /// The adopt dialog once the check passed; else its refusal, and no
+    /// dialog.
+    pub(super) fn adopt_or_refuse(
+        &mut self,
+        place: Place,
+        thread: ThreadId,
+        adoptable: Result<(), String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match adoptable {
+            Ok(()) => self.ask_adopt(place, thread, window, cx),
+            Err(refusal) => self.projects_toast("Projects".into(), refusal, true, window, cx),
+        }
+    }
+
+    /// The machine the window is on, by name, when that is not this
+    /// computer.
+    pub(super) fn away_machine(&self, cx: &gpui::App) -> Option<String> {
+        let machines = self.machines.as_ref()?.read(cx);
+        let index = machines.index(&machines.selected_key())?;
+        machines.machine(index).map(|machine| machine.name.clone())
     }
 
     /// The adopt dialog for `thread`, its name and directory offered.
