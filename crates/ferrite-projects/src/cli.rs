@@ -9,7 +9,7 @@ use crate::paths::{self, Ctx, Env, SessionFlags};
 use crate::project::{self, Project, Status};
 use crate::runner::RealRunner;
 use crate::threads::{self, ResolveArgs, StartArgs};
-use crate::{actions, adopt, doctor, inbox, lifecycle, overview, routine, ticker};
+use crate::{adopt, doctor, inbox, lifecycle, overview, routine, ticker};
 
 #[derive(Parser)]
 #[command(name = "herdr-projects", version = crate::VERSION, about = "Projects for herdr")]
@@ -107,12 +107,7 @@ enum Command {
         check: Option<String>,
     },
     /// Print threads grouped by what needs you
-    Overview {
-        slug: Option<String>,
-        /// Wait for Enter before exiting (only when on a terminal; used by the popup)
-        #[arg(long)]
-        wait: bool,
-    },
+    Overview { slug: Option<String> },
     /// Show only one project's panes in the sidebar, sorted by attention
     Focus { slug: Option<String> },
     /// Clear the sidebar view (herdr holds one, so this clears any tool's view)
@@ -182,12 +177,6 @@ enum Command {
         #[command(flatten)]
         session: SessionArgs,
     },
-    /// Run by herdr's action menu
-    #[command(hide = true)]
-    Action { id: String },
-    /// Run inside a plugin popup pane
-    #[command(hide = true)]
-    Pane { id: String },
     /// Agent profiles: named launch setups (harness, model, effort, flags) and which ones threads and coordinators may use
     Profile {
         #[command(subcommand)]
@@ -229,11 +218,6 @@ enum Command {
     },
     /// Open a URL (a pull request) in the browser
     OpenUrl { url: String },
-    /// The projects popup, in this terminal
-    Popup {
-        /// Scope it to one project (default: the current workspace's, else all)
-        slug: Option<String>,
-    },
     /// Install the plugin's progress hooks (Claude Code, Codex, Droid, Gemini CLI, Copilot CLI) and its `autoproject` skill (Claude Code, Codex)
     Configure {
         /// Harnesses to configure, comma-separated: claude, codex, droid, gemini, copilot (default: those installed)
@@ -693,7 +677,7 @@ pub fn run() -> Result<()> {
         },
         Command::Context { slug, peek } => coordinator::context(&ctx, &slug, peek),
         Command::Assignable { slug, refresh, check } => crate::assign::run(&ctx, &slug, refresh, check.as_deref()),
-        Command::Overview { slug, wait } => overview::run(&ctx, slug.as_deref(), wait),
+        Command::Overview { slug } => overview::run(&ctx, slug.as_deref()),
         Command::Focus { slug } => overview::focus(&ctx, slug.as_deref()),
         Command::Unfocus { session } => overview::unfocus(&ctx, &session.into()),
         Command::Inbox { command } => match command {
@@ -762,17 +746,6 @@ pub fn run() -> Result<()> {
             }
             crate::settings::system_open(&ctx, &url)
         }
-        Command::Popup { slug } => {
-            let scope = match slug {
-                Some(slug) => Some(slug),
-                None => match overview::resolve_slug_quiet(&ctx) {
-                    Some(slug) => Some(slug),
-                    None => None,
-                },
-            };
-            let workspace = ctx.env.var("HERDR_WORKSPACE_ID").unwrap_or("").to_string();
-            crate::popup::run(&ctx, scope, workspace)
-        }
         Command::Routine { command } => match command {
             RoutineCommand::Toggle { slug, name, on, off } => crate::settings::routine_toggle(&ctx, &slug, &name, if on { Some(true) } else if off { Some(false) } else { None }),
             RoutineCommand::Approve { slug, name } => {
@@ -802,8 +775,6 @@ pub fn run() -> Result<()> {
         Command::AdoptWorkspace { name, goal, pane, workspace_cwd, session } => {
             adopt::adopt_workspace(&ctx, &adopt::AdoptWorkspace { name, goal, pane, workspace_cwd, session: session.into() })
         }
-        Command::Action { id } => actions::run_action(&ctx, &id),
-        Command::Pane { id } => actions::run_pane(&ctx, &id),
         Command::Profile { command } => {
             if let ProfileCommand::Resolve { name } = &command {
                 println!("{}", crate::profiles::resolve_json(&ctx, name.as_deref())?);
