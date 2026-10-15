@@ -103,9 +103,9 @@ machine's log stays on the machine.
 
 `cockpit::ServerStatus` is a link that never sends `watch`: it hears the
 snapshot, every Thread's `thread` state, the Roster, the Decisions and
-the Notices — never a history or an input. The app's `Machines` keeps one per enabled
-machine the window is not on, and none for the one it is on, whose
-Cockpit watches its open Threads.
+the Notices — never a history or an input. The app's `Machines` keeps
+one per enabled machine the window is not on, and none for the one it
+is on, whose Cockpit watches its open Threads.
 
 Going to another machine builds the window's `CockpitView` afresh on a
 Cockpit attached there (`CockpitWindow::go_to`, on the view's
@@ -144,8 +144,10 @@ status link and rings for it as it does here (ADR 0017, "Machines off
 screen") — a toast and a chime, and a system notification while the
 window is in the background, each naming the machine. Opening one goes
 to the machine (`GoToMachine` carries the alert) and the Cockpit built
-there opens it once attached (`CockpitView::land`), its bell carrying
-what was heard so nothing rings twice. `mark all read` reaches every
+there opens it once attached (`CockpitView::land`). The bell goes with
+the window (`Bell::moved`): nothing rings twice, what was waiting still
+rings, toasts stand on, and a system notification posted before the
+move still opens on its own machine. `mark all read` reaches every
 machine off screen through its status link — the one act a status link
 sends.
 

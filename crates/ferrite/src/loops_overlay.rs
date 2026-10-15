@@ -148,7 +148,7 @@ impl CockpitWindow {
         let bell = self
             .cockpit
             .update(cx, |view, _| std::mem::take(&mut view.bell))
-            .moved(left, &arrived);
+            .moved(&left, &arrived);
         let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
             CockpitView::new_with_settings(core, provider, prefs, cx)

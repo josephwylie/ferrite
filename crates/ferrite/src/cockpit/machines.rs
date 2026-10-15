@@ -378,14 +378,18 @@ fn connection_hint(target: &str, connection: Connection) -> String {
 }
 
 /// Whether an alert's record still wants the operator, on its machine:
-/// `here`, or the machine off screen it is on while that is heard from.
-pub(super) fn wanted(alert: &Alert, here: &Notifications, machines: Option<&Machines>) -> bool {
-    match &alert.away {
-        None => alert.target.wants(here),
-        Some(key) => machines
-            .and_then(|machines| machines.away(key))
-            .is_some_and(|away| alert.target.wants(away.notifications)),
-    }
+/// `here` (once attached), or the machine off screen it is on. `None`
+/// while that machine has not been heard from (`Bell::ring`).
+pub(super) fn wanted(
+    alert: &Alert,
+    here: Option<&Notifications>,
+    machines: Option<&Machines>,
+) -> Option<bool> {
+    let notifications = match &alert.away {
+        None => here?,
+        Some(key) => machines?.away(key)?.notifications,
+    };
+    Some(alert.target.wants(notifications))
 }
 
 /// A row about a machine off screen, worded from what its status link

@@ -534,7 +534,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
             "a toast's open too"
         );
     });
-    let tag = system_tag(Some(&key), thread);
+    let tag = system_tag(&key, thread);
     assert_eq!(
         cx.delivered_system_notifications()
             .iter()
@@ -572,7 +572,92 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
             _ => unreachable!(),
         });
         view.bell.hear(None, [], held, now);
-        assert!(!view.bell.busy(), "nothing rings twice");
+        let ring = view.bell.ring(
+            now + crate::notifications::ALERT_DELAY,
+            &|_| Some(true),
+            &|_| false,
+        );
+        assert!(ring.rang.is_empty(), "nothing rings twice");
+        assert_eq!(
+            view.bell
+                .toasts()
+                .iter()
+                .map(|toast| &toast.alert.away)
+                .collect::<Vec<_>>(),
+            [&None],
+            "its toast came along, on screen now"
+        );
+    });
+}
+
+/// The bell moves with the window: a system notification posted about
+/// this computer while the window was on it still opens, from box, on
+/// this computer's Thread.
+#[gpui::test]
+fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
+    use crate::machines::MachineKey;
+    use crate::notifications::Alert;
+    let (core, fake) = cockpit("machines-posted", 1);
+    let machines = cx.new(|_| machines("posted", None));
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+    let (root, cx) = machine_window(cx, core, machines.clone());
+    let first = shown(&root, cx);
+    let here = first.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let thread = ThreadId::new(1);
+    hear_box(&machines, box_snapshot(&[(thread, "Release")], vec![]), cx);
+    ring(cx);
+
+    cx.deactivate_window();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    hear_box(&machines, box_decision(thread, 1, "make deploy"), cx);
+    hear_box(
+        &machines,
+        ferrite_core::protocol::ServerMessage::Notices {
+            revision: 2,
+            notices: vec![box_request(thread, 1)],
+        },
+        cx,
+    );
+    tick(cx);
+    ring(cx);
+    ring(cx);
+    let home_tag = system_tag(&MachineKey(None), here);
+    let box_tag = system_tag(&MachineKey(Some("me@box".into())), thread);
+    let mut tags: Vec<String> = cx
+        .delivered_system_notifications()
+        .iter()
+        .map(|notification| notification.tag.to_string())
+        .collect();
+    tags.sort();
+    assert_eq!(tags, [home_tag.clone(), box_tag.clone()]);
+
+    let click = |tag: String, cx: &mut gpui::VisualTestContext| {
+        cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+            tag: tag.into(),
+            action_id: None,
+        });
+        tick(cx);
+    };
+    click(box_tag, cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), first.entity_id(), "the window went");
+    click(home_tag, cx);
+    let home = shown(&root, cx);
+    assert_ne!(home.entity_id(), on_box.entity_id(), "and came back");
+    home.read_with(cx, |view, _| {
+        assert!(view.cockpit.machine().is_none(), "this computer");
+        assert_eq!(
+            view.landing
+                .as_ref()
+                .map(|(Alert { away, thread, .. }, _)| (away.clone(), *thread)),
+            Some((None, here)),
+            "on its Thread once it answers"
+        );
     });
 }
 

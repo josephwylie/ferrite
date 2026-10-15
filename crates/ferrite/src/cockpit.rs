@@ -268,15 +268,13 @@ const MAIN_BRANCH: &str = "main";
 const PUMP_MS: u64 = 8;
 
 /// A Thread's system notification tag: a newer one for the same Thread
-/// replaces it in the notification centre. A Thread on a machine off
-/// screen (`away`) is named by its machine too: ids are per Store.
-fn system_tag(away: Option<&crate::machines::MachineKey>, thread: ThreadId) -> String {
-    match away {
+/// replaces it in the notification centre. A Thread on another machine is
+/// named by it too, since ids are per Store, whichever machine the window
+/// is on: the tag outlives a move.
+fn system_tag(machine: &crate::machines::MachineKey, thread: ThreadId) -> String {
+    match &machine.0 {
         None => format!("ferrite-thread-{thread}"),
-        Some(machine) => format!(
-            "ferrite-thread-{thread}@{}",
-            machine.0.as_deref().unwrap_or_default()
-        ),
+        Some(target) => format!("ferrite-thread-{thread}@{target}"),
     }
 }
 
@@ -575,9 +573,6 @@ pub struct CockpitView {
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) bell: Bell,
-    /// The system notifications standing, by their tag (one per Thread),
-    /// and what each opens when clicked.
-    system_alerts: std::collections::BTreeMap<String, crate::notifications::Alert>,
     /// What to open once the Cockpit is attached: the alert the window
     /// came to this machine for (ADR 0026), and until when it waits.
     landing: Option<(crate::notifications::Alert, std::time::Instant)>,
@@ -1589,7 +1584,6 @@ impl CockpitView {
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),
-            system_alerts: Default::default(),
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
@@ -12668,23 +12662,25 @@ impl CockpitView {
         let machines = entity.as_ref().map(|machines| machines.read(cx));
         let notifications = self.cockpit.notifications();
         // Until its Server answers, a Cockpit's Notices are none, not news:
-        // hearing them would forget the requests heard of it.
-        if self.attached() {
-            let (fresh, requests) = news(notifications, self.bell.presented(None));
+        // hearing them would forget the requests heard of it, and judging
+        // its alerts by them would drop the ones the window brought along.
+        let here = self.attached().then_some(notifications);
+        if let Some(here) = here {
+            let (fresh, requests) = news(here, self.bell.presented(None));
             self.bell.hear(None, fresh, requests, now);
         }
         for away in machines.iter().flat_map(|machines| machines.off_screen()) {
             let (fresh, requests) = news(away.notifications, self.bell.presented(Some(&away.key)));
             self.bell.hear(Some(away.key), fresh, requests, now);
         }
-        let live =
-            |alert: &crate::notifications::Alert| machines::wanted(alert, notifications, machines);
+        let live = |alert: &crate::notifications::Alert| machines::wanted(alert, here, machines);
         // A system notification the operator has since read, or whose
         // request resolved, is taken back out of the notification centre.
         let stale: Vec<String> = self
-            .system_alerts
+            .bell
+            .posted
             .iter()
-            .filter(|(_, alert)| !live(alert))
+            .filter(|(_, alert)| live(alert) == Some(false))
             .map(|(tag, _)| tag.clone())
             .collect();
         let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
@@ -12727,7 +12723,7 @@ impl CockpitView {
             }
         }
         for tag in stale {
-            self.system_alerts.remove(&tag);
+            self.bell.posted.remove(&tag);
             cx.dismiss_system_notification(&tag);
         }
         if let Some(sound) = sound {
@@ -12764,14 +12760,21 @@ impl CockpitView {
         alert: crate::notifications::Alert,
         cx: &mut Context<Self>,
     ) {
-        let tag = system_tag(alert.away.as_ref(), alert.thread);
+        let machine = alert.away.clone().unwrap_or_else(|| {
+            self.machines
+                .as_ref()
+                .map_or(crate::machines::MachineKey(None), |machines| {
+                    machines.read(cx).selected_key()
+                })
+        });
+        let tag = system_tag(&machine, alert.thread);
         cx.show_system_notification(gpui::SystemNotification {
             tag: tag.clone().into(),
             title: format!("{} \u{b7} {}", row.word(), row.title).into(),
             body: row.detail.text().into(),
             actions: Vec::new(),
         });
-        self.system_alerts.insert(tag, alert);
+        self.bell.posted.insert(tag, alert);
     }
 
     /// Play a chime: the operator's own file for it, else the built-in.
@@ -12791,7 +12794,7 @@ impl CockpitView {
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
-        if let Some(alert) = self.system_alerts.get(tag).cloned() {
+        if let Some(alert) = self.bell.posted.get(tag).cloned() {
             self.notice_verb(alert.open_verb(), cx);
         }
     }
@@ -25198,6 +25201,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        let home = crate::machines::MachineKey(None);
         cx.deactivate_window();
         for at in [0, 1] {
             fake.streams.borrow()[at]
@@ -25217,7 +25221,7 @@ mod tests {
         };
         assert_eq!(
             tags(cx),
-            [system_tag(None, threads[0]), system_tag(None, threads[1])],
+            [system_tag(&home, threads[0]), system_tag(&home, threads[1])],
             "both Panes are on the board, but nobody is looking"
         );
         view.read_with(cx, |view, _| {
@@ -25230,7 +25234,7 @@ mod tests {
         });
 
         cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-            tag: system_tag(None, threads[1]).into(),
+            tag: system_tag(&home, threads[1]).into(),
             action_id: None,
         });
         tick(cx);
@@ -25256,6 +25260,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        let home = crate::machines::MachineKey(None);
         cx.deactivate_window();
         fake.streams.borrow()[1].send(decision("away")).unwrap();
         tick(cx);
@@ -25266,11 +25271,11 @@ mod tests {
                 .map(|notification| notification.tag.to_string())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(tags(cx), [system_tag(None, threads[1])]);
+        assert_eq!(tags(cx), [system_tag(&home, threads[1])]);
         view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
 
         cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-            tag: system_tag(None, threads[1]).into(),
+            tag: system_tag(&home, threads[1]).into(),
             action_id: None,
         });
         tick(cx);
