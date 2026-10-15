@@ -279,6 +279,12 @@ pub enum Op {
     ListDir {
         path: PathBuf,
     },
+    /// What a Project's repo holds for a Draft's workspace chip, read by
+    /// git on the Server's computer: how a window on a machine offers the
+    /// machine's worktrees and branches (ADR 0026). Replied `repo_listing`.
+    ListRepo {
+        project: ProjectId,
+    },
     Restart {
         when: When,
     },
@@ -689,6 +695,14 @@ pub enum Done {
         path: PathBuf,
         entries: Vec<WireEntry>,
     },
+    /// A `list_repo`'s main checkout's branch, its other worktrees, and
+    /// its local branches, each in git's order.
+    RepoListing {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checked_out: Option<String>,
+        worktrees: Vec<WireWorktree>,
+        branches: Vec<String>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -698,6 +712,31 @@ pub struct WireEntry {
     pub name: String,
     #[serde(default)]
     pub directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireWorktree {
+    pub path: PathBuf,
+    /// None when its HEAD is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+impl From<crate::workspace::RepoListing> for Done {
+    fn from(listing: crate::workspace::RepoListing) -> Self {
+        Done::RepoListing {
+            checked_out: listing.checked_out,
+            worktrees: listing
+                .worktrees
+                .into_iter()
+                .map(|worktree| WireWorktree {
+                    path: worktree.path,
+                    branch: worktree.branch,
+                })
+                .collect(),
+            branches: listing.branches,
+        }
+    }
 }
 
 impl From<crate::workspace::Listing> for Done {

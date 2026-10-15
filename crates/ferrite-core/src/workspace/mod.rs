@@ -829,6 +829,38 @@ pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
         .collect())
 }
 
+/// What a repo holds for the workspace chip: the branch its main checkout
+/// is on, its other worktrees, and its local branches — each in git's own
+/// order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoListing {
+    /// None when the checkout's HEAD is detached.
+    pub checked_out: Option<String>,
+    pub worktrees: Vec<ListedWorktree>,
+    pub branches: Vec<String>,
+}
+
+/// Read `root`'s repo for the workspace chip — two git calls, never on a
+/// UI or pump thread; on a machine its Server reads it (`list_repo`, ADR
+/// 0026). The main checkout is left out of the worktrees (it is the
+/// `checked out` row already), as is any worktree whose directory is
+/// gone: git still lists a prunable one, but it is no place to work. A
+/// root git cannot answer for lists nothing, and the chip offers the
+/// fresh starts alone.
+pub fn repo_listing(root: &Path) -> RepoListing {
+    let checkout = follow::canonical(root);
+    let (main, worktrees): (Vec<_>, Vec<_>) = worktrees(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|worktree| worktree.path.is_dir())
+        .partition(|worktree| follow::canonical(&worktree.path) == checkout);
+    RepoListing {
+        checked_out: main.into_iter().find_map(|main| main.branch),
+        worktrees,
+        branches: branches(root).unwrap_or_default(),
+    }
+}
+
 /// Whether the tree at `cwd` is clean exactly as `git status` defines it:
 /// nothing modified, nothing untracked — an empty porcelain listing.
 pub fn is_clean(cwd: &Path) -> Result<bool, GitError> {

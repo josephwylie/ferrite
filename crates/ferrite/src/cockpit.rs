@@ -172,7 +172,7 @@ use ferrite_core::store::Provider;
 use ferrite_core::transcript::plain_text;
 use ferrite_core::workspace::registry::ProjectId;
 #[cfg(test)]
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::workspace::{RepoListing, WorkspaceChoice};
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
@@ -348,6 +348,8 @@ pub struct CockpitView {
     /// popover opens and kept by project: the rows show the last answer
     /// at once and take the fresh one when it lands. Never read per frame.
     repo_listing: Option<(ProjectId, RepoListing)>,
+    /// On a machine, the listing its Server is reading for the popover.
+    asking_repo: Option<(ProjectId, std::sync::mpsc::Receiver<std::io::Result<RepoListing>>)>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     native_copy: Option<String>,
@@ -1507,6 +1509,7 @@ impl CockpitView {
             checked_out: Default::default(),
             checking_out: Default::default(),
             repo_listing: None,
+            asking_repo: None,
             rename: None,
             context_menu: None,
             context_usage: None,
@@ -2022,6 +2025,7 @@ impl CockpitView {
         }
         let frame = self.cockpit.pump();
         self.poll_remote_path(cx);
+        self.poll_machine_repo(cx);
         let server_moved = self.server_moved();
         self.apply_thread_rules(&frame, cx);
         self.ring_bell(cx);
@@ -3242,10 +3246,13 @@ impl CockpitView {
                     menu::Item::new("New thread in this project").shortcut("cmd-T"),
                     MenuVerb::NewThread,
                 )));
-                rows.push(Some((
-                    menu::Item::new("Reveal in Finder"),
-                    MenuVerb::Reveal,
-                )));
+                // A machine's path is not in this computer's Finder.
+                if !self.on_machine() {
+                    rows.push(Some((
+                        menu::Item::new("Reveal in Finder"),
+                        MenuVerb::Reveal,
+                    )));
+                }
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
                 rows.push(None);
                 if live {
@@ -3285,10 +3292,12 @@ impl CockpitView {
                     MenuVerb::Fullscreen,
                 )));
                 rows.push(None);
-                rows.push(Some((
-                    menu::Item::new("Reveal in Finder"),
-                    MenuVerb::Reveal,
-                )));
+                if !self.on_machine() {
+                    rows.push(Some((
+                        menu::Item::new("Reveal in Finder"),
+                        MenuVerb::Reveal,
+                    )));
+                }
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
                 rows.push(None);
                 // cmd-w parks in one act, Group member or not
@@ -4798,18 +4807,8 @@ impl CockpitView {
                 "Diagnostics",
                 "Version, platform, the CLIs, the newest crash report and the end of \
                  the log, for a bug report",
-                ferrite_core::diagnostics::logs(&self.prefs.dir)
-                    .display()
-                    .to_string()
-                    .into(),
-                Some(
-                    if copied == Some("Diagnostics") {
-                        "Copied"
-                    } else {
-                        "Copy"
-                    }
-                    .into(),
-                ),
+                ferrite_core::diagnostics::logs(&self.prefs.dir).display().to_string().into(),
+                Some(if copied == Some("Diagnostics") { "Copied" } else { "Copy" }.into()),
                 {
                     let view = cx.entity().downgrade();
                     move |cx| {
@@ -7315,11 +7314,10 @@ impl CockpitView {
     /// Ask git, off the UI thread, what `project`'s repo holds for the
     /// workspace popover — its worktrees and its local branches — and fill
     /// the open popover's rows in when the answer lands. One listing per
-    /// open, never per frame. On a machine, its Server's listing instead.
+    /// open, never per frame. On a machine, its Server asks git there.
     fn refresh_repo_listing(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         if self.on_machine() {
-            self.repo_listing = Some((project, self.registered_listing(project)));
-            self.sync_workspace_rows(cx);
+            self.ask_machine_repo(project);
             return;
         }
         let Some(root) = self
@@ -7333,7 +7331,7 @@ impl CockpitView {
         cx.spawn(async move |this, cx| {
             let listing = cx
                 .background_executor()
-                .spawn(async move { read_repo_listing(&root) })
+                .spawn(async move { ferrite_core::workspace::repo_listing(&root) })
                 .await;
             this.update(cx, |view, cx| {
                 view.repo_listing = Some((project, listing));
@@ -7342,25 +7340,6 @@ impl CockpitView {
             .ok();
         })
         .detach();
-    }
-
-    /// On a machine (ADR 0026) the workspace popover lists the worktrees
-    /// its Server registered for `project`, each on its branch; no git
-    /// here can list the machine's branches.
-    fn registered_listing(&self, project: ProjectId) -> RepoListing {
-        RepoListing {
-            worktrees: self
-                .cockpit
-                .registry()
-                .worktrees(project)
-                .iter()
-                .map(|worktree| ferrite_core::workspace::ListedWorktree {
-                    path: worktree.path.clone(),
-                    branch: Some(worktree.branch.clone()),
-                })
-                .collect(),
-            branches: Vec::new(),
-        }
     }
 
     /// The repo listing landed while the workspace popover is up: rebuild
@@ -9190,38 +9169,6 @@ fn local_row(
         prose_detail: true,
         inert,
     })
-}
-
-/// What git lists for one repo, for the workspace chip: its worktrees
-/// other than the main checkout, and its local branches — each in git's
-/// own order.
-#[derive(Clone, Default)]
-struct RepoListing {
-    worktrees: Vec<ferrite_core::workspace::ListedWorktree>,
-    branches: Vec<String>,
-}
-
-/// Read `root`'s repo for the workspace chip — two git calls, on the
-/// background executor. The main checkout is left out (it is the `checked
-/// out` row already), as is any worktree whose directory is gone: git
-/// still lists a prunable one, but it is no place to work. A root git
-/// cannot answer for lists nothing, and the chip offers the fresh starts
-/// alone.
-fn read_repo_listing(root: &std::path::Path) -> RepoListing {
-    let checkout = ferrite_core::workspace::follow::canonical(root);
-    let worktrees = ferrite_core::workspace::worktrees(root)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|worktree| {
-            worktree.path.is_dir()
-                && ferrite_core::workspace::follow::canonical(&worktree.path) != checkout
-        })
-        .collect();
-    let branches = ferrite_core::workspace::branches(root).unwrap_or_default();
-    RepoListing {
-        worktrees,
-        branches,
-    }
 }
 
 /// One band row: a label and its detail beside the choice it makes.
@@ -23658,9 +23605,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.prefs.settings.default_provider, Provider::Codex);
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir)
-                    .unwrap()
-                    .default_provider,
+                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().default_provider,
                 Provider::Codex,
                 "the restyled component must save through the real settings action"
             );
@@ -23687,9 +23632,7 @@ mod tests {
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
             assert_eq!(
-                ferrite_core::settings::Settings::load(&view.prefs.dir)
-                    .unwrap()
-                    .reading_size,
+                ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().reading_size,
                 ferrite_core::settings::ReadingSize::nearest(15)
             );
         });
@@ -23706,11 +23649,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.prefs.settings.confirm_delete);
-            assert!(
-                !ferrite_core::settings::Settings::load(&view.prefs.dir)
-                    .unwrap()
-                    .confirm_delete
-            );
+            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).unwrap().confirm_delete);
         });
         cx.simulate_click(search.center(), gpui::Modifiers::none());
         cx.simulate_keystrokes("escape");

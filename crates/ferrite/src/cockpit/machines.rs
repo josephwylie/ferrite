@@ -9,9 +9,9 @@ use super::*;
 use crate::machines::{Connection, MachineRow};
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::machine::{self, Machine};
-use ferrite_core::workspace::Listing;
+use ferrite_core::workspace::{DirEntry, Listing};
 use gpui::App;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
@@ -278,13 +278,51 @@ impl CockpitView {
     }
 }
 
+impl CockpitView {
+    /// Ask the machine's Server what `project`'s repo holds for the
+    /// workspace popover (`list_repo`): git there, never here (ADR 0026).
+    /// An older Server cannot say, and the popover offers the fresh starts
+    /// alone.
+    pub(super) fn ask_machine_repo(&mut self, project: ProjectId) {
+        self.asking_repo = self
+            .cockpit
+            .list_repo(project)
+            .ok()
+            .map(|answer| (project, answer));
+    }
+
+    /// Take the machine's answer to `ask_machine_repo`, once it lands: the
+    /// popover's rows, and the branch its checkout is on, which no git
+    /// here could name.
+    pub(super) fn poll_machine_repo(&mut self, cx: &mut Context<Self>) {
+        let Some((project, answer)) = &self.asking_repo else {
+            return;
+        };
+        let project = *project;
+        let listing = match answer.try_recv() {
+            Err(TryRecvError::Empty) => return,
+            Ok(listing) => listing.unwrap_or_default(),
+            Err(TryRecvError::Disconnected) => RepoListing::default(),
+        };
+        if let Some(branch) = &listing.checked_out {
+            self.checked_out
+                .borrow_mut()
+                .insert(project, branch.clone().into());
+        }
+        self.repo_listing = Some((project, listing));
+        self.asking_repo = None;
+        self.sync_workspace_rows(cx);
+    }
+}
+
 /// The Project card's path field on a machine (ADR 0026), where no folder
 /// dialog can browse: what is typed completes against the directory it
 /// names there, listed by the machine's Server (`list_dir`).
 pub(super) struct RemotePath {
     pub(super) field: Entity<Composer>,
-    /// The listing the completions come from, of the directory as typed.
-    listed: Option<(String, Listing)>,
+    /// The entries the completions come from, of the directory as typed:
+    /// none when it could not be read, which is not asked again.
+    listed: Option<(String, Vec<DirEntry>)>,
     /// A listing asked for and not answered yet, of the directory as typed.
     asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
 }
@@ -365,7 +403,8 @@ impl CockpitView {
     }
 
     /// Take the machine's answer to the field's listing, once it lands. A
-    /// directory that cannot be read lists nothing.
+    /// directory that cannot be read lists nothing; one whose answer the
+    /// lost connection took is asked again at the next keystroke.
     pub(super) fn poll_remote_path(&mut self, cx: &mut Context<Self>) {
         let Some(remote) = self.open_remote_path_mut() else {
             return;
@@ -373,13 +412,16 @@ impl CockpitView {
         let Some((directory, answer)) = &remote.asking else {
             return;
         };
-        let listed = match answer.try_recv() {
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Ok(Ok(listing)) => Some((directory.clone(), listing)),
-            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+        let entries = match answer.try_recv() {
+            Err(TryRecvError::Empty) => return,
+            Ok(Ok(listing)) => Some(listing.entries),
+            Ok(Err(_)) => Some(Vec::new()),
+            Err(TryRecvError::Disconnected) => None,
         };
+        if let Some(entries) = entries {
+            remote.listed = Some((directory.clone(), entries));
+        }
         remote.asking = None;
-        remote.listed = listed;
         cx.notify();
     }
 
@@ -391,15 +433,14 @@ impl CockpitView {
         };
         let typed = remote.field.read(cx).text();
         let (directory, start) = split_typed(typed);
-        let Some((_, listing)) = remote
+        let Some((_, entries)) = remote
             .listed
             .as_ref()
             .filter(|(listed, _)| listed == directory)
         else {
             return Vec::new();
         };
-        listing
-            .entries
+        entries
             .iter()
             .filter(|entry| {
                 entry.directory

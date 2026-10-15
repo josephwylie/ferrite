@@ -404,16 +404,18 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
 
 /// On a machine the Project card has no folder dialog, which could only
 /// browse this computer: a path field completes against the machine's
-/// folders through its Server (`list_dir`). The Project it makes is the
-/// machine's, a draft chooses it, and its first send starts the Thread in
-/// that directory on the machine.
+/// folders through its Server (`list_dir`), Tab taking the first and ↵
+/// adding it. The Project it makes is the machine's; a draft chooses it,
+/// its workspace chip offers what git on the machine lists (`list_repo`),
+/// and its first send starts the Thread in that directory on the machine.
 #[gpui::test]
 fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx));
     let machines = cx.new(|_| machines_through("typed", Some("me@box"), serving));
     let folder = settings_dir("typed").join("src");
-    std::fs::create_dir_all(folder.join("ferrite")).unwrap();
-    std::fs::create_dir_all(folder.join(".fe-hidden")).unwrap();
-    std::fs::write(folder.join("fern.txt"), "").unwrap();
+    let repo = repo_with_worktree_and_branches(&folder);
+    std::fs::create_dir_all(folder.join(".re-hidden")).unwrap();
+    std::fs::write(folder.join("readme.txt"), "").unwrap();
     let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     ferrite_core::server::serve_in_thread(
         settings_dir("typed").join("box"),
@@ -440,14 +442,15 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         let field = view.project_editor.as_ref().unwrap().remote.as_ref();
         field.expect("a path field on a machine").field.clone()
     });
+    cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
     field.update(cx, |field, cx| {
-        field.set(format!("{}/fe", folder.display()), cx)
+        field.set(format!("{}/re", folder.display()), cx)
     });
     until(cx, |cx| {
-        view.read_with(cx, |view, cx| view.remote_completions(cx) == ["ferrite"])
+        view.read_with(cx, |view, cx| view.remote_completions(cx) == ["repo"])
     });
     tick(cx);
-    assert!(debug_bounds(cx, "project-path-completion:ferrite".into()).is_some());
+    assert!(debug_bounds(cx, "project-path-completion:repo".into()).is_some());
     assert!(
         debug_bounds(cx, "project-add-directory".into()).is_none(),
         "no folder dialog for a machine"
@@ -457,28 +460,27 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         "the machine's Server listed it"
     );
 
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        format!("{}/repo/", folder.display())
+    );
+    cx.simulate_keystrokes("enter");
     let project = view.update(cx, |view, cx| {
-        view.complete_remote_path("ferrite", cx);
+        assert_eq!(view.project_editor.as_ref().unwrap().staged, [repo.clone()]);
         assert_eq!(
             field.read(cx).text(),
-            format!("{}/ferrite/", folder.display())
-        );
-        assert!(view.add_remote_path(cx));
-        assert_eq!(
-            view.project_editor.as_ref().unwrap().staged,
-            [folder.join("ferrite")]
+            format!("{}/", folder.display()),
+            "the field goes back to the directory, for the next"
         );
         view.confirm_project_editor(cx);
         let project = view.cockpit.registry().projects().last().unwrap().clone();
-        assert_eq!(project.title, "ferrite");
-        assert_eq!(
-            project.root,
-            std::fs::canonicalize(folder.join("ferrite")).unwrap()
-        );
+        assert_eq!(project.title, "repo");
+        assert_eq!(project.root, std::fs::canonicalize(&repo).unwrap());
         project.id
     });
 
-    view.update(cx, |view, cx| {
+    let composer = view.update(cx, |view, cx| {
         if view.panes.is_empty() {
             view.open_draft(DraftTarget::Main, cx);
         }
@@ -490,6 +492,41 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         assert!(offered, "the machine's Project is on the draft's chip");
         let composer = view.panes[view.focused()].composer.clone();
         view.pick_band(&BandChoice::Project(project), &composer, cx);
+        view.open_band_popover(pane::BandChip::Workspace, cx);
+        composer
+    });
+    let rows = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.popover.as_ref().map_or_else(Vec::new, |popover| {
+                popover
+                    .rows
+                    .iter()
+                    .map(|row| (row.name.to_string(), row.detail.to_string()))
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+    until(cx, |cx| rows(cx).len() > 3);
+    let named = |name: &str, detail: &str| (name.to_string(), detail.to_string());
+    assert_eq!(
+        rows(cx),
+        [
+            named("trunk", "checked out"),
+            named("feature/wt", "worktree · wt-feature"),
+            named("main", "existing branch"),
+            named("topic/spare", "existing branch"),
+            named("New branch", "in the project checkout"),
+            named("New branch + worktree", "in an isolated checkout"),
+        ],
+        "git on the machine lists the repo, its own worktrees and branches"
+    );
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"list_repo""#),
+        "the machine's Server read the repo"
+    );
+
+    view.update(cx, |view, cx| {
+        view.popover = None;
         composer.update(cx, |composer, cx| composer.set("hello box".into(), cx));
         view.bootstrap_draft(cx);
     });
@@ -498,6 +535,6 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     });
     assert_eq!(
         *started.lock().unwrap(),
-        [std::fs::canonicalize(folder.join("ferrite")).unwrap()]
+        [std::fs::canonicalize(&repo).unwrap()]
     );
 }

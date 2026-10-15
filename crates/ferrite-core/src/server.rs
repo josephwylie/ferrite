@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use crate::api::Api;
 use crate::engine::Engine;
 use crate::link::{self, ClientId, Connection, Heard, Ring};
+use crate::roster::DraftId;
 use crate::protocol::{
     self, Capability, ClientMessage, ClosedBy, Command, Done, ErrorCode, Op, ServerInfo,
     ServerMessage, When, WireError, WireFile, WireHandle,
 };
-use crate::roster::DraftId;
 use crate::settings::Settings;
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use crate::store::{Provider, Store};
@@ -268,6 +268,10 @@ type Search = (
     Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>,
 );
 
+/// A repo git is reading off the pump for a `list_repo`: who asked, in
+/// which command.
+type RepoRead = (ClientId, u64, Receiver<Done>);
+
 struct Server {
     engine: Engine,
     boot_id: String,
@@ -281,6 +285,7 @@ struct Server {
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
     searches: Vec<Search>,
+    repo_reads: Vec<RepoRead>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
     starting: HashMap<DraftId, (ClientId, u64)>,
@@ -321,6 +326,7 @@ impl Server {
             answered: BTreeMap::new(),
             renders,
             searches: Vec::new(),
+            repo_reads: Vec::new(),
             starting: HashMap::new(),
             next_start: 0,
             swept: Instant::now(),
@@ -360,6 +366,7 @@ impl Server {
             }
             self.answer_bootstraps();
             self.answer_searches();
+            self.answer_repo_reads();
             self.forward_renders();
             self.coordinate();
             self.broadcast();
@@ -506,6 +513,18 @@ impl Server {
                 }
                 Err(error) => Err(failed(error)),
             },
+            Op::ListRepo { project } => match self.engine.registry().project(*project) {
+                Some(project) => {
+                    let root = project.root.clone();
+                    let (answer, answered) = mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = answer.send(crate::workspace::repo_listing(&root).into());
+                    });
+                    self.repo_reads.push((id, request, answered));
+                    return;
+                }
+                None => Err(failed("no such Project")),
+            },
             Op::Bootstrap { .. } => {
                 self.next_start += 1;
                 let tag = DraftId::new(self.next_start);
@@ -647,6 +666,26 @@ impl Server {
                     })
                 })
                 .map_err(failed);
+            self.reply(client, request, executed);
+        }
+    }
+
+    /// Reply to each `list_repo` whose git read finished.
+    fn answer_repo_reads(&mut self) {
+        let mut answered = Vec::new();
+        self.repo_reads
+            .retain(|(client, request, answer)| match answer.try_recv() {
+                Ok(listing) => {
+                    answered.push((*client, *request, Ok(Some(listing))));
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    answered.push((*client, *request, Err(failed("git's read ended"))));
+                    false
+                }
+            });
+        for (client, request, executed) in answered {
             self.reply(client, request, executed);
         }
     }

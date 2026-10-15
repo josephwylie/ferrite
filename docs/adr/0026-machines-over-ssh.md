@@ -163,7 +163,10 @@ cannot, the window does without.
   field adds the directory to the card; Create registers the Project
   through the existing `project` command. Additive under ADR 0025's rules:
   an older Server answers `unsupported`, and the field then completes
-  nothing. A listing is one `read_dir` on the pump thread, never a walk.
+  nothing. A listing is one `read_dir` on the pump thread, never a walk;
+  a directory that cannot be read is not asked about again until the
+  field leaves it. Only a Server answers `list_dir`: a window that runs
+  its agents itself never shows the field.
 - **`~`.** A path goes to the Server as typed; the registry spells out
   `~` against its own computer's home before canonicalizing
   (`workspace::expand_home`), so `path ~/src/x` on a draft's Project chip
@@ -171,16 +174,23 @@ cannot, the window does without.
   expansion is gone: it would have meant this computer's.
 - **Drafts.** The Project chip lists the machine's Projects (the
   registry is the Server's), and a first send starts the Thread there, as
-  on this computer. The workspace chip's worktrees are the ones the
-  Server registered for the Project, each on its branch; git's own
-  listing and the repo's branches are not offered. Whether a chosen
-  worktree still stands is the Server's to say when it starts
-  (`DraftBinding::resolve(registry, here)`).
+  on this computer. The workspace chip asks the machine's Server what the
+  repo holds through a second gen-1 command, `list_repo {project}`,
+  replied `repo_listing {checked_out?, worktrees[{path, branch?}],
+  branches[]}`: the same `workspace::repo_listing` the window runs here
+  for a local repo, git's own listing, so worktrees made outside Ferrite
+  and the repo's branches are offered too. Its two git calls run on a
+  thread of their own, never the pump. The chip names the checkout's
+  branch from that answer; until the chip is first opened it reads
+  `main`. Whether a chosen worktree still stands is the Server's to say
+  when it starts (`DraftBinding::resolve(registry, here)`).
 - **No git here.** The branch labels and status (`workspace::branch_status`),
   the worktree listing that lets a binding follow its agent
   (`refresh_branches`), the checkout and default-branch lookups, a
   review's uncommitted and branch scopes (the last turn still reads), and
   the `@` menu's walk of the checkout are skipped on a machine.
+- **No Finder.** "Reveal in Finder" is not offered for a machine's
+  Thread: its path is not on this computer. "Copy path" stays.
 
 The window's tests reach a machine whose Server runs in the test's own
 process (`server::serve_in_thread`, behind ferrite-core's `test-support`
@@ -190,7 +200,8 @@ feature, which only the app's dev-dependencies turn on).
 
 - On a machine, a Thread's branch label and status, and its binding
   following the agent into a worktree it made: both need git on the
-  machine, which the Server does not yet run for a window.
+  machine read as the Thread works, not once per chip open as
+  `list_repo` is.
 - On a machine, a file opened beside a Pane and the operator's own
   commands (ADR 0024) still read or run on this computer; a review reads
   only the last turn.

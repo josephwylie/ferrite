@@ -369,10 +369,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 },
             ),
         ),
-        (
-            "command_take_recovered",
-            command(30, Op::TakeRecovered { thread }),
-        ),
+        ("command_take_recovered", command(30, Op::TakeRecovered { thread })),
         (
             "command_recall",
             command(
@@ -384,10 +381,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 },
             ),
         ),
-        (
-            "command_revive_group",
-            command(32, Op::ReviveGroup { group }),
-        ),
+        ("command_revive_group", command(32, Op::ReviveGroup { group })),
         (
             "command_cli_replaced",
             command(
@@ -620,6 +614,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 },
             ),
         ),
+        ("command_list_repo", command(39, Op::ListRepo { project })),
         (
             "welcome",
             Sample::Server(ServerMessage::Welcome {
@@ -776,6 +771,27 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             directory: false,
                         },
                     ],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_repo_listing",
+            Sample::Server(ServerMessage::Reply {
+                id: 39,
+                ok: Some(Done::RepoListing {
+                    checked_out: Some("main".into()),
+                    worktrees: vec![
+                        WireWorktree {
+                            path: "/home/me/src/ferrite/.worktrees/fix".into(),
+                            branch: Some("fix".into()),
+                        },
+                        WireWorktree {
+                            path: "/home/me/src/ferrite/.worktrees/bisect".into(),
+                            branch: None,
+                        },
+                    ],
+                    branches: vec!["main".into(), "fix".into()],
                 }),
                 error: None,
             }),

@@ -210,6 +210,7 @@ impl Engine {
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
+            | Op::ListRepo { .. }
             | Op::Coordinate { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
@@ -220,11 +221,7 @@ impl Engine {
     /// A window's first send, with the scope its Draft gave it, tagged
     /// `tag` so its settling (`take_bootstrap_results`) names it. The
     /// Thread, or `None` while it starts.
-    pub fn bootstrap_command(
-        &mut self,
-        tag: DraftId,
-        op: &Op,
-    ) -> Result<Option<ThreadId>, WireError> {
+    pub fn bootstrap_command(&mut self, tag: DraftId, op: &Op) -> Result<Option<ThreadId>, WireError> {
         let Op::Bootstrap {
             provider,
             model,

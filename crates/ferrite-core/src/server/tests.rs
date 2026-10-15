@@ -485,6 +485,40 @@ fn list_dir_answers_a_directory_on_the_servers_computer() {
     assert!(refused_with(&reply, ErrorCode::Failed), "{reply:?}");
 }
 
+/// A window on a machine offers the machine's worktrees and branches
+/// (ADR 0026): `list_repo` reads the Project's repo with git where the
+/// Server runs, off its pump, naming the main checkout's branch apart.
+#[test]
+fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
+    let harness = start("list-repo");
+    let repo = repository(&harness.dir);
+    let tree = harness.dir.join("fix");
+    let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
+    git(&["worktree", "add", "-q", "-b", "fix", tree.to_str().unwrap()]);
+    git(&["branch", "spare"]);
+    let mut window = cockpit(&harness);
+    let project = window.register_project(&repo).unwrap();
+
+    let answer = window.list_repo(project).unwrap();
+    let listed = std::cell::RefCell::new(None);
+    pump_until(&mut window, |_| {
+        if let Ok(answered) = answer.try_recv() {
+            *listed.borrow_mut() = Some(answered);
+        }
+        listed.borrow().is_some()
+    });
+    let listing = listed.into_inner().unwrap().unwrap();
+    assert_eq!(listing.checked_out.as_deref(), Some("main"));
+    assert_eq!(
+        listing.worktrees,
+        [crate::workspace::ListedWorktree {
+            path: std::fs::canonicalize(&tree).unwrap(),
+            branch: Some("fix".into()),
+        }]
+    );
+    assert_eq!(listing.branches, ["fix", "main", "spare"]);
+}
+
 /// A request id is unique only within one provider process: an answer to
 /// a replaced Session's Decision is refused even when its successor asks
 /// with the same id, and the successor's own Decision stays pending.
@@ -1773,10 +1807,7 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let again = caller.answer("2", "coordinator.start", serde_json::json!({ "cwd": repo }));
-    assert_eq!(
-        again["result"]["coordinator"]["thread"], coordinator,
-        "{again}"
-    );
+    assert_eq!(again["result"]["coordinator"]["thread"], coordinator, "{again}");
     let briefed = caller.answer(
         "3",
         "agent.read",
@@ -1799,15 +1830,9 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         serde_json::json!({ "thread": coordinator, "task": "Add invoices", "title": "invoices" }),
     );
     let info = &worker["result"]["thread"];
-    let thread = info["thread"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("{worker}"));
+    let thread = info["thread"].as_u64().unwrap_or_else(|| panic!("{worker}"));
     assert_eq!(info["title"], "invoices");
-    assert_ne!(
-        info["cwd"],
-        serde_json::json!(repo),
-        "a worktree of its own"
-    );
+    assert_ne!(info["cwd"], serde_json::json!(repo), "a worktree of its own");
     let provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
@@ -1818,12 +1843,7 @@ fn a_coordinator_starts_briefed_workers_whose_lessons_are_remembered() {
         serde_json::json!({ "thread": thread, "lines": 400 }),
     );
     let briefed = briefed["result"]["text"].as_str().unwrap();
-    for part in [
-        "## Your task",
-        "Add invoices",
-        "Ship billing",
-        "## Remember",
-    ] {
+    for part in ["## Your task", "Add invoices", "Ship billing", "## Remember"] {
         assert!(briefed.contains(part), "{part:?} in {briefed}");
     }
     let groups = std::fs::read_to_string(harness.dir.join("threads").join("groups.json")).unwrap();

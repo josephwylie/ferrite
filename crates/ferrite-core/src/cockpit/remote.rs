@@ -24,8 +24,12 @@ use crate::protocol::{
 use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
-use crate::workspace::{DirEntry, Listing};
+use crate::workspace::registry::ProjectId;
+use crate::workspace::{DirEntry, ListedWorktree, Listing, RepoListing};
 use crate::ThreadId;
+
+/// Where a later-answered command's reply goes (`Remote::ask`).
+type Answer = Box<dyn FnOnce(io::Result<Option<Done>>) + Send>;
 
 /// How long an act waits for the Server's reply.
 const REPLY_WAIT: Duration = Duration::from_secs(10);
@@ -85,10 +89,7 @@ pub(crate) enum Arrival {
     Message(ServerMessage),
     /// Attached afresh: the shared state is this snapshot's. `new_boot`
     /// means a different Server than before, so every mirror starts over.
-    Attached {
-        snapshot: Snapshot,
-        new_boot: bool,
-    },
+    Attached { snapshot: Snapshot, new_boot: bool },
     /// A first send settled: its Thread, or why not.
     Started(BootstrapResult),
 }
@@ -123,7 +124,9 @@ pub(crate) struct Remote {
     /// First sends the connection took with it, for the next `poll`.
     abandoned: Vec<Arrival>,
     searches: BTreeMap<u64, Sender<io::Result<Vec<FileSuggestion>>>>,
-    listings: BTreeMap<u64, Sender<io::Result<Listing>>>,
+    /// Commands whose reply the window takes later, each with where its
+    /// answer goes (`ask`).
+    answers: BTreeMap<u64, Answer>,
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
     rendered: (Sender<ClientMessage>, Receiver<ClientMessage>),
@@ -150,7 +153,7 @@ impl Remote {
             starting: BTreeMap::new(),
             abandoned: Vec::new(),
             searches: BTreeMap::new(),
-            listings: BTreeMap::new(),
+            answers: BTreeMap::new(),
             watching: BTreeSet::new(),
             rendered: mpsc::channel(),
         }
@@ -353,9 +356,7 @@ impl Remote {
     }
 
     pub(crate) fn draft_starting(&self, draft: DraftId) -> bool {
-        self.starting
-            .values()
-            .any(|(starting, _)| *starting == draft)
+        self.starting.values().any(|(starting, _)| *starting == draft)
     }
 
     /// Take back a first send still starting. True when one was.
@@ -392,13 +393,66 @@ impl Remote {
     }
 
     pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
-        let id = self
-            .send_command(Op::ListDir {
-                path: path.to_path_buf(),
-            })
-            .map_err(io::Error::from)?;
+        let op = Op::ListDir {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::Listing { path, entries } => Some(Listing {
+                path,
+                entries: entries
+                    .into_iter()
+                    .map(|entry| DirEntry {
+                        name: entry.name,
+                        directory: entry.directory,
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn list_repo(
+        &mut self,
+        project: ProjectId,
+    ) -> io::Result<Receiver<io::Result<RepoListing>>> {
+        self.ask(Op::ListRepo { project }, |done| match done {
+            Done::RepoListing {
+                checked_out,
+                worktrees,
+                branches,
+            } => Some(RepoListing {
+                checked_out,
+                worktrees: worktrees
+                    .into_iter()
+                    .map(|worktree| ListedWorktree {
+                        path: worktree.path,
+                        branch: worktree.branch,
+                    })
+                    .collect(),
+                branches,
+            }),
+            _ => None,
+        })
+    }
+
+    /// Send `op` and answer its reply later, as `read` makes of it.
+    fn ask<T: Send + 'static>(
+        &mut self,
+        op: Op,
+        read: fn(Done) -> Option<T>,
+    ) -> io::Result<Receiver<io::Result<T>>> {
+        let id = self.send_command(op).map_err(io::Error::from)?;
         let (answer, answered) = mpsc::channel();
-        self.listings.insert(id, answer);
+        self.answers.insert(
+            id,
+            Box::new(move |result| {
+                let read = result.and_then(|done| {
+                    done.and_then(read)
+                        .ok_or_else(|| io::Error::other("the server answered something else"))
+                });
+                let _ = answer.send(read);
+            }),
+        );
         Ok(answered)
     }
 
@@ -510,16 +564,14 @@ impl Remote {
         self.retry_at = Instant::now();
         self.watching.clear();
         self.searches.clear();
-        self.listings.clear();
+        self.answers.clear();
         self.abandon_starting();
     }
 
     fn heard(&mut self, message: ServerMessage) -> Vec<Arrival> {
         match message {
             ServerMessage::Reply { id, ok, error } => {
-                if let Some(error) = error
-                    .as_ref()
-                    .filter(|error| error.code == ErrorCode::Lagged)
+                if let Some(error) = error.as_ref().filter(|error| error.code == ErrorCode::Lagged)
                 {
                     self.detach(&error.message);
                     return Vec::new();
@@ -544,35 +596,19 @@ impl Remote {
                     })];
                 }
                 if let Some(answer) = self.searches.remove(&id) {
-                    let _ = answer.send(result.map(|done| {
-                        match done {
-                            Some(Done::Files { files }) => files
-                                .into_iter()
-                                .map(|file| FileSuggestion {
-                                    path: file.path,
-                                    is_directory: file.is_directory,
-                                    matched: file.matched,
-                                })
-                                .collect(),
-                            _ => Vec::new(),
-                        }
+                    let _ = answer.send(result.map(|done| match done {
+                        Some(Done::Files { files }) => files
+                            .into_iter()
+                            .map(|file| FileSuggestion {
+                                path: file.path,
+                                is_directory: file.is_directory,
+                                matched: file.matched,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
                     }));
-                } else if let Some(answer) = self.listings.remove(&id) {
-                    let _ = answer.send(result.and_then(|done| {
-                        match done {
-                            Some(Done::Listing { path, entries }) => Ok(Listing {
-                                path,
-                                entries: entries
-                                    .into_iter()
-                                    .map(|entry| DirEntry {
-                                        name: entry.name,
-                                        directory: entry.directory,
-                                    })
-                                    .collect(),
-                            }),
-                            _ => Err(io::Error::other("the server listed nothing")),
-                        }
-                    }));
+                } else if let Some(answer) = self.answers.remove(&id) {
+                    answer(result);
                 }
                 Vec::new()
             }
@@ -638,7 +674,8 @@ impl Remote {
                     Ok(Ok(rendered)) => ClientMessage::Rendered {
                         request,
                         png: Some(WirePng {
-                            base64: base64::engine::general_purpose::STANDARD.encode(rendered.png),
+                            base64: base64::engine::general_purpose::STANDARD
+                                .encode(rendered.png),
                             width: rendered.width,
                             height: rendered.height,
                         }),
