@@ -1,20 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn resolve_herdr_bin() -> Result<String, String> {
-    if let Ok(configured) = env::var("HERDR_BIN_PATH") {
-        if is_executable_file(Path::new(&configured)) || executable_in_path(&configured).is_some() {
-            return Ok(configured);
-        }
-
-        return Err(format!(
-            "configured Herdr binary is not executable: {configured}"
-        ));
-    }
-
-    Ok(find_executable("herdr", herdr_candidate_paths()).unwrap_or_else(|| "herdr".to_string()))
-}
-
 pub(crate) fn find_executable(name: &str, candidate_paths: Vec<PathBuf>) -> Option<String> {
     executable_in_path(name)
         .or_else(|| {
@@ -51,14 +37,4 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
 #[cfg(not(unix))]
 pub(crate) fn is_executable_file(path: &Path) -> bool {
     path.is_file()
-}
-
-fn herdr_candidate_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(home_dir) = home_dir() {
-        paths.push(home_dir.join(".local/bin/herdr"));
-    }
-    paths.push(PathBuf::from("/opt/homebrew/bin/herdr"));
-    paths.push(PathBuf::from("/usr/local/bin/herdr"));
-    paths
 }

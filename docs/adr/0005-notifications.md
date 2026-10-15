@@ -1,5 +1,5 @@
 ---
-status: accepted, amended by 0017
+status: accepted, amended by 0017 and the 2026-10-15 update below
 date: 2026-09-06
 ---
 
@@ -51,3 +51,49 @@ Both adapters are proven by replaying the committed captures through the
 real Sessions into the Cockpit: the Claude overlap capture finishes exactly
 twice and never while its agents run, the nested and both Codex captures
 finish once. The rule's own cases run headless with an injected clock.
+
+## Update 2026-10-15: system notifications are herdr-focus-notify's
+
+The system notification is no longer Ferrite's own code. Following the
+user's decision to copy community plugins 1:1, Ferrite vendors
+[herdr-focus-notify](https://github.com/yankewei/herdr-focus-notify)
+(MIT, yankewei) as `crates/ferrite-focus-notify`, with its source verbatim
+apart from a Ferrite adapter in place of its Herdr adapter (the crate's
+README lists every change and the upstream commit).
+
+The split: this ADR and ADR 0017 still decide **what** a Notice is, when it
+is read, and when the bell rings (the second's wait, one voice per Thread,
+nothing for what is in view). For each alert that rings, focus-notify
+decides **whether** it becomes a system notification, **how** it is
+delivered, and **how its click lands**:
+
+- **Whether.** Upstream skips a notification only when the pane is the
+  focused one *and* its terminal is frontmost; otherwise it sends. Ferrite is
+  its own terminal, so the Thread's Pane being the focused one and the
+  window having the system's focus stand for those
+  (`ferrite_focus_notify::notification_decision`). Where this overlapped
+  ADR 0017's rule (a system notification only while the window is in the
+  background), focus-notify's wins: a Thread off the board that rings while
+  the window is frontmost now posts a system notification beside its toast.
+  Upstream's other overlap, notifying only `blocked` and `done`, already
+  holds: a live request is blocked, a finished turn done; a failed turn is a
+  Notice and goes as done, its words saying it failed.
+- **How.** On macOS, a clickable `alerter` notification, laid out as
+  upstream lays out its rows: `Blocked · {Thread}` or `Done · {Thread}` as
+  the title (the Thread named by its machine when off screen), the provider
+  and the git state of the Thread's directory (`main* · +120/-45`, upstream's
+  2-second budget) as the subtitle, the row's detail as the message (with
+  upstream's copy when it has none), and the provider's bundled icon. Its tag
+  is the Thread's, so a newer one replaces it. Upstream's visibility monitor
+  is not used: a notification whose Notice or request is read, answered or
+  gone is taken back by the bell as before, through upstream's withdraw
+  (`alerter --remove` and the cleared marker, so one still queued never
+  shows). Without `alerter` installed, on Windows and Linux (upstream is
+  macOS only), and in tests and captures, GPUI's notification centre carries
+  the same posting, under the same tag, with the same click.
+- **Click.** Upstream exec'd itself to focus the Herdr pane over Herdr's
+  socket and raise the terminal window running it. Ferrite waits on the
+  notification itself, and a click comes back in-process: the window comes
+  forward and lands on the Thread as ADR 0017 describes, on its machine
+  when that is off screen. Upstream's terminal learning (which app shows a
+  workspace) has nothing to learn here and is not used.

@@ -11,9 +11,9 @@ const TEMP_FILE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const FOCUS_ORIGIN_RETENTION: Duration = Duration::from_secs(15);
 
 pub(crate) fn plugin_state_dir() -> PathBuf {
-    env::var_os("HERDR_PLUGIN_STATE_DIR")
+    env::var_os("FERRITE_FOCUS_NOTIFY_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| env::temp_dir().join("herdr-focus-notify"))
+        .unwrap_or_else(|| env::temp_dir().join("ferrite-focus-notify"))
 }
 
 /// The most recently used terminal (learned from `pane.focused` events) is
@@ -104,33 +104,6 @@ fn clear_focus_origin_markers() -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Removes bindings for workspaces that no longer exist in Herdr.
-///
-/// Uses `herdr pane list` to learn the live workspace set; when that cannot
-/// be trusted (command failure or no panes at all) nothing is pruned, so the
-/// memory file never loses bindings against an empty world. Best-effort: a
-/// stale binding is harmless, it just gets re-learned on the next focus.
-/// The rewrite reuses the same atomic write path as learning.
-pub(crate) fn prune_stale_workspace_bindings(herdr_bin: &str) -> io::Result<()> {
-    let state_dir = plugin_state_dir();
-    let path = terminal_memory_path();
-    let Some(mut bindings) = read_terminal_bindings_from(&path) else {
-        return Ok(());
-    };
-    let Some(live) = crate::focus::live_workspace_ids(herdr_bin) else {
-        return Ok(());
-    };
-
-    let before = bindings.len();
-    bindings.retain(|workspace, _| live.iter().any(|id| id == workspace));
-    if bindings.len() == before {
-        return Ok(());
-    }
-
-    fs::create_dir_all(&state_dir)?;
-    remember_bindings_into(&state_dir, &bindings)
 }
 
 fn remember_bindings_into(

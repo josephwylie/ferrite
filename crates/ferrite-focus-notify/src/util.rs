@@ -128,7 +128,7 @@ pub(crate) fn sanitize_group_id(value: &str) -> String {
 }
 
 pub(crate) fn notification_group_id(pane_id: &str) -> String {
-    format!("herdr-{}", sanitize_group_id(pane_id))
+    format!("ferrite-{}", sanitize_group_id(pane_id))
 }
 
 /// The workspace part of a pane id, e.g. `w1:p3` -> `w1`.

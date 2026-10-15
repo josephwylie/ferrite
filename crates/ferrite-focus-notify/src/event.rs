@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(notification.title, "Blocked");
         assert_eq!(notification.body, "Implement plugin");
         assert_eq!(notification.subtitle.as_deref(), Some("Codex"));
-        assert_eq!(notification.group, "herdr-w1-p3");
+        assert_eq!(notification.group, "ferrite-w1-p3");
         assert!(notification
             .app_icon
             .as_deref()

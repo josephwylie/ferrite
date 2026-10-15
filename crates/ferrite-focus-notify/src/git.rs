@@ -1,6 +1,6 @@
 //! How much the pane's directory has changed versus `HEAD`.
 //!
-//! The branch next to these counts comes from Herdr, not from here: see
+//! The branch next to these counts comes from the adapter, not from here: see
 //! `focus::worktree_branch`.
 
 use std::time::Instant;

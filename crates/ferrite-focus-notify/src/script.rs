@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::notification::FocusNotification;
 use crate::state::{
     cleanup_stale_state_files, cleared_notification_marker_path, plugin_state_dir,
-    prune_stale_workspace_bindings, remembered_terminal,
+    remembered_terminal,
 };
 use crate::util::shell_quote;
 
@@ -16,9 +16,13 @@ use crate::util::shell_quote;
 /// auto-dismisses it; 0 would keep it forever.
 const ALERTER_TIMEOUT_SECS: u64 = 3600;
 
+/// What the script prints when the operator clicks the notification. Ferrite
+/// runs the script itself and focuses the Thread in-process, where upstream
+/// exec'd its own binary to focus the Herdr pane over Herdr's socket.
+pub(crate) const CLICKED: &str = "focus";
+
 pub(crate) fn write_focus_script(
     notification: &FocusNotification,
-    herdr_bin: &str,
     notifier_bin: &str,
     monitor_visibility: bool,
     test_mode: bool,
@@ -29,7 +33,6 @@ pub(crate) fn write_focus_script(
     // notification from being delivered.
     let _ = cleanup_stale_state_files();
     let _ = rewrite_generated_scripts_without_activation();
-    let _ = prune_stale_workspace_bindings(herdr_bin);
 
     let timeout_secs = if test_mode {
         test_timeout_secs(ALERTER_TIMEOUT_SECS)
@@ -44,11 +47,9 @@ pub(crate) fn write_focus_script(
     let executable_path = env::current_exe()?;
     let script = focus_script_content_with_timeout(
         notification,
-        herdr_bin,
         notifier_bin,
         timeout_secs,
         monitor_visibility.then_some(executable_path.as_path()),
-        &executable_path,
     );
 
     fs::write(&script_path, script)?;
@@ -59,11 +60,9 @@ pub(crate) fn write_focus_script(
 
 fn focus_script_content_with_timeout(
     notification: &FocusNotification,
-    herdr_bin: &str,
     notifier_bin: &str,
     timeout_secs: u64,
     executable_path: Option<&Path>,
-    focus_binary: &Path,
 ) -> String {
     let workspace = crate::util::workspace_of(&notification.pane_id);
     // The visibility monitor needs a terminal it can match the frontmost app
@@ -76,11 +75,9 @@ fn focus_script_content_with_timeout(
 
     alerter_focus_script(
         notification,
-        herdr_bin,
         notifier_bin,
         timeout_secs,
         visibility_check_binary,
-        focus_binary,
     )
 }
 
@@ -102,18 +99,14 @@ fn alerter_text_arg(option: &str, text: &str) -> String {
 
 fn alerter_focus_script(
     notification: &FocusNotification,
-    herdr_bin: &str,
     notifier_bin: &str,
     timeout_secs: u64,
     visibility_check_binary: Option<&Path>,
-    focus_binary: &Path,
 ) -> String {
     let title_arg = alerter_text_arg("title", &notification.title);
     let message_arg = alerter_text_arg("message", &notification.body);
     let group_q = shell_quote(&notification.group);
     let pane_q = shell_quote(&notification.pane_id);
-    let herdr_q = shell_quote(herdr_bin);
-    let focus_binary_q = shell_quote(&focus_binary.to_string_lossy());
     let notifier_q = shell_quote(notifier_bin);
     let cleared_marker = cleared_notification_marker_path(&notification.pane_id);
     let cleared_marker_q = shell_quote(cleared_marker.to_string_lossy().as_ref());
@@ -182,10 +175,8 @@ fn alerter_focus_script(
     script.push_str("fi\n");
     script.push_str("case \"$result\" in\n");
     script.push_str(&format!(
-        "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n    HERDR_BIN_PATH={herdr} exec {focus_binary} --focus-pane {pane}\n    ;;\n",
-        herdr = herdr_q,
-        focus_binary = focus_binary_q,
-        pane = pane_q,
+        "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n    printf '%s\\n' {clicked}\n    ;;\n",
+        clicked = shell_quote(CLICKED),
     ));
     script.push_str("esac\n");
 
@@ -264,7 +255,7 @@ mod tests {
             title: "Blocked · sample-repo · status".to_string(),
             body: "Open the pane to review and respond.".to_string(),
             subtitle: Some("Codex".to_string()),
-            group: "herdr-w1-p3".to_string(),
+            group: "ferrite-w1-p3".to_string(),
             app_icon: Some("/tmp/codex icon.png".to_string()),
         }
     }
@@ -273,11 +264,9 @@ mod tests {
     fn alerter_script_invokes_alerter_and_runs_focus_on_click() {
         let script = focus_script_content_with_timeout(
             &sample_notification(),
-            "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             ALERTER_TIMEOUT_SECS,
             None,
-            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.starts_with("#!/bin/sh\n"));
@@ -286,7 +275,7 @@ mod tests {
         );
         assert!(script.contains("--message='Open the pane to review and respond.'"));
         assert!(script.contains("--subtitle='Codex'"));
-        assert!(script.contains("--group 'herdr-w1-p3'"));
+        assert!(script.contains("--group 'ferrite-w1-p3'"));
         assert!(script.contains("--app-icon '/tmp/codex icon.png'"));
         assert!(script.contains("--actions 'Focus'"));
         assert!(script.contains("--close-label 'Dismiss'"));
@@ -298,18 +287,16 @@ mod tests {
         assert!(script.contains("notifier_status=$(cat \"$status_path\""));
         assert!(script.contains("exit \"$notifier_status\""));
         assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));
-        assert!(script.contains("HERDR_BIN_PATH='/usr/local/bin/herdr' exec '/tmp/herdr-focus-notify' --focus-pane 'w1:p3'"));
+        assert!(script.contains("printf '%s\\n' 'focus'"));
     }
 
     #[test]
     fn alerter_script_includes_timeout_when_configured() {
         let script = alerter_focus_script(
             &sample_notification(),
-            "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             120,
             None,
-            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.contains("--timeout 120"));
@@ -320,14 +307,7 @@ mod tests {
         let mut notification = sample_notification();
         notification.body = "--resume the migration".to_string();
 
-        let script = alerter_focus_script(
-            &notification,
-            "/usr/local/bin/herdr",
-            "/opt/homebrew/bin/alerter",
-            3600,
-            None,
-            Path::new("/tmp/herdr-focus-notify"),
-        );
+        let script = alerter_focus_script(&notification, "/opt/homebrew/bin/alerter", 3600, None);
 
         assert!(script.contains("--message='--resume the migration'"));
     }
@@ -337,28 +317,15 @@ mod tests {
         let mut notification = sample_notification();
         notification.subtitle = None;
 
-        let script = alerter_focus_script(
-            &notification,
-            "/usr/local/bin/herdr",
-            "/opt/homebrew/bin/alerter",
-            3600,
-            None,
-            Path::new("/tmp/herdr-focus-notify"),
-        );
+        let script = alerter_focus_script(&notification, "/opt/homebrew/bin/alerter", 3600, None);
 
         assert!(!script.contains("--subtitle"));
     }
 
     #[test]
     fn alerter_script_omits_timeout_when_zero() {
-        let script = alerter_focus_script(
-            &sample_notification(),
-            "/usr/local/bin/herdr",
-            "/opt/homebrew/bin/alerter",
-            0,
-            None,
-            Path::new("/tmp/herdr-focus-notify"),
-        );
+        let script =
+            alerter_focus_script(&sample_notification(), "/opt/homebrew/bin/alerter", 0, None);
 
         assert!(!script.contains("--timeout"));
     }
@@ -374,33 +341,29 @@ mod tests {
     fn alerter_script_defers_activation_to_focus_helper() {
         let script = alerter_focus_script(
             &sample_notification(),
-            "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             3600,
             None,
-            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(!script.contains("open -b "));
-        assert!(script.contains("HERDR_BIN_PATH='/usr/local/bin/herdr' exec '/tmp/herdr-focus-notify' --focus-pane 'w1:p3'"));
+        assert!(script.contains("printf '%s\\n' 'focus'"));
     }
 
     #[test]
     fn alerter_script_monitors_visibility_after_starting_the_notifier() {
         let script = alerter_focus_script(
             &sample_notification(),
-            "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             3600,
             Some(Path::new("/tmp/herdr-focus-notify")),
-            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.contains("notifier_pid=$!"));
         assert!(script.contains("while kill -0 \"$notifier_pid\" 2>/dev/null"));
         assert!(script.contains("kill -0 \"$notifier_pid\" 2>/dev/null || exit 0"));
         assert!(script.contains("'/tmp/herdr-focus-notify' --check-pane-visibility 'w1:p3'"));
-        assert!(script.contains("'/opt/homebrew/bin/alerter' --remove 'herdr-w1-p3'"));
+        assert!(script.contains("'/opt/homebrew/bin/alerter' --remove 'ferrite-w1-p3'"));
         assert!(
             script.find("notifier_pid=$!").unwrap()
                 < script.find("while kill -0 \"$notifier_pid\"").unwrap()
