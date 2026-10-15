@@ -43,11 +43,10 @@ impl Server {
             .ok_or_else(|| ApiError::new(Code::ProjectNotFound, "no Project has that id"))
     }
 
-    /// The directory of `project` a Thread started in `cwd` works in: the
-    /// one holding `cwd`, or `cwd` itself when it is a linked worktree of
-    /// one of them. Anywhere else is not the Project's.
+    /// The directory of `project` holding the canonical `cwd`, or `cwd`
+    /// itself when it is a linked worktree of one of them. Anywhere else is
+    /// not the Project's.
     pub(super) fn directory_in(&self, project: ProjectId, cwd: &Path) -> Result<PathBuf, ApiError> {
-        let cwd = std::fs::canonicalize(cwd).map_err(failed)?;
         let entry = self
             .engine
             .registry()
@@ -67,7 +66,7 @@ impl Server {
                     .any(|directory| directory == checkout.repo)
         });
         if worktree_of_project {
-            return Ok(cwd);
+            return Ok(cwd.to_path_buf());
         }
         Err(ApiError::new(
             Code::InvalidRequest,

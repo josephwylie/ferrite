@@ -392,7 +392,11 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             request(Method::ThreadStart(ThreadStartParams {
                 title: Some("t-0001".into()),
                 focus: true,
-                args: vec!["--dangerously-skip-permissions".into()],
+                args: vec![
+                    "--dangerously-bypass-approvals-and-sandbox".into(),
+                    "--model".into(),
+                    "gpt-5.5".into(),
+                ],
                 branch: Some("hp/demo/t-0001".into()),
                 base: Some("main".into()),
                 project: Some("3".into()),

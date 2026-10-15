@@ -201,10 +201,15 @@ is a Decision, and its Thread is `blocked` until it is answered.
 
 `project open` answers the Project holding a directory, registering one
 when there is none. `project close` parks every open Thread of it.
-Start a Thread in a Project with `thread start --project 3`, on a new
+Start a Thread in a Project with `thread start --project 3` (it works in
+`--cwd` itself, any directory inside the Project), on a new
 branch with `--worktree --branch my-task --base main`, in a worktree that
 stands (one `worktree create` made) with `--cwd` its path, or carrying on
-an agent's own conversation with `--resume <provider_session>`. Add
+an agent's own conversation with `--resume <provider_session>`. `--args`
+are written as for the agent's terminal UI; Codex's `--model`, `-m`,
+`-c model_reasoning_effort=…`, `-a`, `-s` and
+`--dangerously-bypass-approvals-and-sandbox` become its app-server's
+settings. Add
 `--ready` to be answered only once its agent is ready for a prompt
 (`agent_not_ready` names the Thread otherwise). To be told as soon as a
 prompt was taken, rather than when the turn ends:

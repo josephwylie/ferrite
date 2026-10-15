@@ -356,12 +356,11 @@ impl Spawn {
             .lock()
             .map(|defaults| defaults.clone())
             .unwrap_or_default();
-        // The Thread's own effort, else the operator's default for the
-        // provider, else nothing — the provider's own.
-        let effort = request
-            .effort
-            .map(|effort| effort.to_string())
-            .or_else(|| defaults.effort_for(request.provider));
+        // The Thread's own effort, else its launch arguments', else the
+        // operator's default for the provider, else nothing — the
+        // provider's own.
+        let own_effort = request.effort.map(|effort| effort.to_string());
+        let default_effort = || defaults.effort_for(request.provider);
         // The newest installed copy of the CLI, wherever it is — not
         // whichever a bare name happens to hit on this launch's PATH.
         let program = crate::providers::discover::program(request.provider);
@@ -370,7 +369,7 @@ impl Spawn {
                 program: program.clone(),
                 cwd,
                 model,
-                effort,
+                effort: own_effort.or_else(default_effort),
                 name,
                 permission_mode: defaults.claude_permission_mode,
                 prompt_suggestions: defaults.placeholder_suggestions,
@@ -381,22 +380,28 @@ impl Spawn {
                 args,
                 ..Default::default()
             }),
-            Provider::Codex => SessionConfig::Codex(CodexConfig {
-                program: program.clone(),
-                cwd,
-                model,
-                effort,
-                approval_policy: defaults
-                    .codex_approval_policy
-                    .or_else(|| Some("on-request".into())),
-                sandbox: defaults.codex_sandbox,
-                resume,
-                additional_directories,
-                visuals: self.visuals(defaults.visuals),
-                env,
-                args,
-                ..Default::default()
-            }),
+            Provider::Codex => {
+                // Written for Codex's terminal UI (ADR 0030); what they set
+                // gives way only to the Thread's own choice.
+                let launch = crate::providers::codex_launch::from_tui_args(&args);
+                SessionConfig::Codex(CodexConfig {
+                    program: program.clone(),
+                    cwd,
+                    model: model.or(launch.model),
+                    effort: own_effort.or(launch.effort).or_else(default_effort),
+                    approval_policy: launch
+                        .approval_policy
+                        .or(defaults.codex_approval_policy.clone())
+                        .or_else(|| Some("on-request".into())),
+                    sandbox: launch.sandbox.or(defaults.codex_sandbox.clone()),
+                    resume,
+                    additional_directories,
+                    visuals: self.visuals(defaults.visuals),
+                    env,
+                    args: launch.args,
+                    ..Default::default()
+                })
+            }
         }
     }
 }

@@ -1,1 +1,1 @@
-{"id":"1","method":"thread.start","params":{"cwd":"/work/app","provider":"codex","worktree":true,"title":"t-0001","focus":true,"args":["--dangerously-skip-permissions"],"branch":"hp/demo/t-0001","base":"main","project":"3","ready":true,"timeout_ms":20000}}
+{"id":"1","method":"thread.start","params":{"cwd":"/work/app","provider":"codex","worktree":true,"title":"t-0001","focus":true,"args":["--dangerously-bypass-approvals-and-sandbox","--model","gpt-5.5"],"branch":"hp/demo/t-0001","base":"main","project":"3","ready":true,"timeout_ms":20000}}

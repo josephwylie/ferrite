@@ -16,6 +16,7 @@ pub(super) mod catalog;
 mod controls;
 pub(super) mod discovery;
 mod file_search;
+pub(crate) mod launch;
 mod live_catalogs;
 mod questions;
 mod queue;
@@ -129,8 +130,9 @@ pub struct CodexConfig {
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited.
     pub env: Vec<(&'static str, std::ffi::OsString)>,
-    /// Extra arguments to `codex app-server` (`thread.start --args`):
-    /// a `-c key=value` override, say.
+    /// Extra arguments to `codex app-server`: what `launch::from_tui_args`
+    /// leaves of a Thread's launch arguments, a `-c key=value` override,
+    /// say.
     pub args: Vec<String>,
 }
 

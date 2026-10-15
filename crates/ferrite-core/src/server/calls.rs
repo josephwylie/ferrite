@@ -188,17 +188,24 @@ impl Server {
     /// Open a Thread as a window's `open` does, its CLI given `args`, then
     /// title it and land the windows on it as asked.
     fn start_thread(&mut self, params: ThreadStartParams) -> Result<ThreadId, ApiError> {
-        let checkout = match &params.project {
+        let (checkout, project) = match &params.project {
             Some(project) => {
                 let project = self.project(project)?;
-                self.directory_in(project, &params.cwd)?
+                let cwd = std::fs::canonicalize(&params.cwd)
+                    .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+                let directory = self.directory_in(project, &cwd)?;
+                // As Herdr's tab starts in its cwd, the Thread works in
+                // `cwd` itself; a fresh worktree is of its directory.
+                let checkout = if params.worktree { directory } else { cwd };
+                (checkout, Some(project))
             }
-            None => params.cwd,
+            None => (params.cwd, None),
         };
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
             args: params.args,
             resume: params.resume,
+            project,
         };
         let thread = self
             .engine

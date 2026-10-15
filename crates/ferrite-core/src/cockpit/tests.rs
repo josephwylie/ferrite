@@ -4981,8 +4981,13 @@ fn a_closed_thread_takes_no_draft() {
     let thread = core.open(Provider::Claude, main_choice()).unwrap();
     core.park(thread).unwrap();
     core.pump();
-    core.engine_mut()
-        .window_says(7, &crate::protocol::Op::Composing { thread, unsent: true });
+    core.engine_mut().window_says(
+        7,
+        &crate::protocol::Op::Composing {
+            thread,
+            unsent: true,
+        },
+    );
     assert!(!core.engine().composing(thread));
 }
 
@@ -4994,7 +4999,7 @@ fn a_thread_started_with_args_is_revived_with_them() {
     let args = vec!["--permission-mode".to_string(), "plan".to_string()];
     let launch = crate::engine::Launch {
         args: args.clone(),
-        resume: None,
+        ..Default::default()
     };
     let thread = core
         .engine_mut()
@@ -5011,8 +5016,8 @@ fn a_thread_started_with_args_is_revived_with_them() {
 fn a_thread_started_on_a_provider_conversation_resumes_it() {
     let (mut core, fake) = cockpit("launch-resume");
     let launch = crate::engine::Launch {
-        args: Vec::new(),
         resume: Some("sess-9".into()),
+        ..Default::default()
     };
     let thread = core
         .engine_mut()

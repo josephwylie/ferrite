@@ -153,8 +153,13 @@ pub struct ThreadStartParams {
     /// Land every window on it once started.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub focus: bool,
-    /// Extra arguments for the provider's CLI, after Ferrite's own, for
-    /// every Session of that provider the Thread has, revived ones too.
+    /// Extra arguments for the provider's CLI, written as for its terminal
+    /// UI, after Ferrite's own, for every Session of that provider the
+    /// Thread has, revived ones too. Codex's become its app-server's
+    /// settings: `-m`/`--model`, `-c model_reasoning_effort=…`,
+    /// `-a`/`--ask-for-approval`, `-s`/`--sandbox` and
+    /// `--dangerously-bypass-approvals-and-sandbox` (never ask, full
+    /// access); the rest (`-c`, `--enable`, `--disable`) pass through.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
     /// With `worktree`: the new worktree's branch, which must not exist;
@@ -166,8 +171,9 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
     /// Open it in this Project (`project.list`'s `id`): `cwd` must lie in
-    /// one of the Project's directories, and the Thread works in that
-    /// directory.
+    /// one of the Project's directories (or be a linked worktree of one),
+    /// and the Thread works in `cwd` itself; with `worktree`, the fresh
+    /// worktree is of the directory holding `cwd`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Answer only once the agent is up and ready for a prompt (idle or

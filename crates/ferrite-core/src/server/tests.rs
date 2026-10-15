@@ -2088,6 +2088,28 @@ fn projects_are_opened_renamed_focused_and_closed() {
         id.as_str(),
         "{started}"
     );
+    // As Herdr's tab starts in its cwd, a Thread started in a directory
+    // inside the Project works there, in that Project.
+    let inside = home.join("crates").join("api");
+    std::fs::create_dir_all(&inside).unwrap();
+    let nested = caller.answer(
+        "4b",
+        "thread.start",
+        serde_json::json!({ "cwd": inside, "project": id }),
+    );
+    assert_eq!(
+        nested["result"]["thread"]["project"],
+        id.as_str(),
+        "{nested}"
+    );
+    assert_eq!(
+        nested["result"]["thread"]["cwd"],
+        std::fs::canonicalize(&inside)
+            .unwrap()
+            .display()
+            .to_string(),
+        "{nested}"
+    );
     let elsewhere = caller.answer(
         "5",
         "thread.start",
@@ -2095,7 +2117,7 @@ fn projects_are_opened_renamed_focused_and_closed() {
     );
     assert_eq!(elsewhere["error"]["code"], "invalid_request", "{elsewhere}");
     let got = caller.answer("6", "project.get", serde_json::json!({ "project": id }));
-    assert_eq!(got["result"]["project"]["thread_count"], 1, "{got}");
+    assert_eq!(got["result"]["project"]["thread_count"], 2, "{got}");
 
     // The nav's focus is by a Projects project's slug, passed on unread.
     caller.answer(

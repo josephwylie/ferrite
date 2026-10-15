@@ -54,6 +54,10 @@ pub struct Launch {
     pub args: Vec<String>,
     /// The provider's own id of a conversation to carry on.
     pub resume: Option<String>,
+    /// The Project the Thread joins when its checkout is a directory inside
+    /// one rather than one of its roots (`thread.start --project --cwd`, as
+    /// Herdr starts a tab in its cwd); `None` is the checkout's own Project.
+    pub project: Option<ProjectId>,
 }
 
 /// Everything one spawn needs, in one struct: every path that starts a
@@ -100,7 +104,7 @@ fn project_additional_directories(
         .and_then(|project| registry.project(project))
         .into_iter()
         .flat_map(|project| project.directories())
-        .filter(|directory| Some(*directory) != cwd.as_deref())
+        .filter(|directory| !cwd.as_deref().is_some_and(|cwd| cwd.starts_with(directory)))
         .map(Path::to_path_buf)
         .collect()
 }
@@ -1264,7 +1268,11 @@ impl Engine {
         launch: Launch,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
-        let Launch { args, resume } = launch;
+        let Launch {
+            args,
+            resume,
+            project,
+        } = launch;
         let root =
             match &workspace {
                 WorkspaceChoice::Main { checkout } => checkout,
@@ -1274,7 +1282,10 @@ impl Engine {
                 | WorkspaceChoice::NamedWorktree { repo, .. } => repo,
                 WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
             };
-        let project = self.registry.register(root)?;
+        let project = match project {
+            Some(project) => project,
+            None => self.registry.register(root)?,
+        };
         match &workspace {
             WorkspaceChoice::Branch { checkout, branch } => {
                 workspace::checkout_existing_branch(checkout, branch).map_err(io::Error::other)?;
@@ -1342,10 +1353,7 @@ impl Engine {
                 return Err(io::Error::other(e.to_string()));
             }
         }
-        let agent_args = (!args.is_empty()).then(|| launch_args::LaunchArgs {
-            provider,
-            args,
-        });
+        let agent_args = (!args.is_empty()).then(|| launch_args::LaunchArgs { provider, args });
         if let Some(saved) = &agent_args {
             if let Err(e) = launch_args::save(&launch_args::path(self.store.dir(), id), saved) {
                 let _ = self.store.delete(id);
