@@ -544,6 +544,7 @@ fn box_snapshot(
         registry: None,
         notices: Some(notices),
         providers: None,
+        parked: None,
     })
 }
 
