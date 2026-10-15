@@ -75,7 +75,9 @@ pub fn binary() -> Result<PathBuf> {
         Some(path) => PathBuf::from(path),
         None => {
             let exe = std::env::current_exe().context("could not find this binary's own path")?;
-            std::fs::canonicalize(&exe).unwrap_or(exe).with_file_name("ferrite-projects")
+            let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+            // No sibling is built beside the unit-test harness: it stands in, as upstream.
+            if cfg!(test) { exe } else { exe.with_file_name("ferrite-projects") }
         }
     };
     Ok(std::fs::canonicalize(&path).unwrap_or(path))
