@@ -80,14 +80,18 @@ impl CockpitWindow {
         cockpit.update(cx, |view, _| view.set_parts(overlay));
         let handle = window.window_handle();
         let clicked = cx.entity().downgrade();
-        cx.on_system_notification_response(move |response, cx| {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
-            let _ = clicked.update(cx, |this, cx| {
-                this.cockpit.update(cx, |view, cx| {
-                    view.open_system_notification(&response.tag, cx)
-                })
-            });
-        });
+        crate::system_notifications::on_click(
+            move |tag, cx| {
+                // alerter leaves bringing the app forward to its caller.
+                cx.activate(true);
+                let _ = handle.update(cx, |_, window, _| window.activate_window());
+                let _ = clicked.update(cx, |this, cx| {
+                    this.cockpit
+                        .update(cx, |view, cx| view.open_system_notification(tag, cx))
+                });
+            },
+            cx,
+        );
         let going = Self::follow(&cockpit, window, cx);
         let overlay = overlay.then(|| {
             let overlay = cx.new(|_| LoopsOverlay);

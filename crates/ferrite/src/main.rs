@@ -42,6 +42,7 @@ mod scrollbar;
 mod select;
 mod shortcuts;
 mod status;
+mod system_notifications;
 mod theme;
 mod titlebar;
 mod transcript;

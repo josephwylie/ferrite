@@ -2018,6 +2018,7 @@ version = "0.4.0"
 dependencies = [
  "cef",
  "ferrite-core",
+ "ferrite-focus-notify",
  "futures",
  "gpui-base",
  "gpui-kit",
@@ -2044,6 +2045,14 @@ dependencies = [
  "sha2 0.10.9",
  "ureq",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrite-focus-notify"
+version = "0.8.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

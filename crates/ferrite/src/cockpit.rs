@@ -12849,12 +12849,13 @@ impl CockpitView {
     /// Keep the bell up with the Notices and requests (FL-18, ADR 0017),
     /// on every pump: hear what arrived here and on the machines off
     /// screen (ADR 0026), and ring what waited out its delay and still
-    /// stands — a toast, a sound, and while the window is in the
-    /// background a system notification.
+    /// stands — a toast, a sound, and a system notification unless its
+    /// Thread's Pane is focused in the frontmost window (focus-notify's
+    /// rule, ADR 0005's update).
     ///
-    /// The operator is looking at an event, and nothing rings for it, while
-    /// the window has focus and its Thread is on the board. Nobody looks
-    /// at a machine off screen.
+    /// The operator is looking at an event, and nothing rings for it — no
+    /// system notification either — while the window has focus and its
+    /// Thread is on the board. Nobody looks at a machine off screen.
     fn ring_bell(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let entity = self.machines.clone();
@@ -12912,24 +12913,30 @@ impl CockpitView {
                     }
                 })
                 .max_by_key(|sound| *sound == Sound::NeedsYou);
-            if !present && settings.system_notifications {
+            if settings.system_notifications {
                 let now = ferrite_core::clock::system_time();
+                let focused = self.focused_thread();
                 posts = ring
                     .rang
                     .into_iter()
-                    .filter_map(|alert| Some((self.alert_row(&alert, machines, now)?, alert)))
+                    .filter(|alert| {
+                        let focused = alert.away.is_none() && focused == Some(alert.thread);
+                        crate::system_notifications::wanted(focused, present)
+                    })
+                    .filter_map(|alert| Some((self.system_posting(&alert, machines, now)?, alert)))
                     .collect();
             }
         }
         for tag in stale {
             self.bell.posted.remove(&tag);
-            cx.dismiss_system_notification(&tag);
+            crate::system_notifications::withdraw(&tag, cx);
         }
         if let Some(sound) = sound {
             self.chime(sound);
         }
-        for (row, alert) in posts {
-            self.post_system_notification(row, alert, cx);
+        for (posting, alert) in posts {
+            self.bell.posted.insert(posting.tag.clone(), alert);
+            crate::system_notifications::post(posting, cx);
         }
         if redraw {
             cx.notify();
@@ -12951,29 +12958,41 @@ impl CockpitView {
         }
     }
 
-    /// One alert's system notification, worded as `row`, tagged with its
-    /// Thread so a newer one replaces it.
-    fn post_system_notification(
-        &mut self,
-        row: NoticeRow,
-        alert: crate::notifications::Alert,
-        cx: &mut Context<Self>,
-    ) {
+    /// One alert's system notification, worded as its row and tagged with
+    /// its Thread so a newer one replaces it, while its record is there to
+    /// word it.
+    fn system_posting(
+        &self,
+        alert: &crate::notifications::Alert,
+        machines: Option<&crate::machines::Machines>,
+        now: std::time::SystemTime,
+    ) -> Option<crate::system_notifications::Posting> {
+        let row = self.alert_row(alert, machines, now)?;
         let machine = alert.away.clone().unwrap_or_else(|| {
-            self.machines
-                .as_ref()
-                .map_or(crate::machines::MachineKey(None), |machines| {
-                    machines.read(cx).selected_key()
-                })
+            machines.map_or(crate::machines::MachineKey(None), |machines| {
+                machines.selected_key()
+            })
         });
-        let tag = system_tag(&machine, alert.thread);
-        cx.show_system_notification(gpui::SystemNotification {
-            tag: tag.clone().into(),
-            title: format!("{} \u{b7} {}", row.word(), row.title).into(),
-            body: row.detail.text().into(),
-            actions: Vec::new(),
-        });
-        self.bell.posted.insert(tag, alert);
+        // The directory is this computer's only for a Thread on screen.
+        let cwd = match alert.away {
+            None => self
+                .cockpit
+                .thread(alert.thread)
+                .and_then(|open| open.workspace())
+                .map(|binding| binding.cwd().to_path_buf()),
+            Some(_) => None,
+        };
+        Some(crate::system_notifications::Posting {
+            tag: system_tag(&machine, alert.thread),
+            needs_you: alert.needs_you(),
+            word: row.word(),
+            title: row.title.to_string(),
+            detail: row.detail.text(),
+            agent: self
+                .alert_provider(alert, machines)
+                .map(|provider| provider.to_string()),
+            cwd,
+        })
     }
 
     /// Play a chime: the operator's own file for it, else the built-in.
@@ -12988,7 +13007,7 @@ impl CockpitView {
     }
 
     /// The operator clicked a system notification: the app comes forward
-    /// (the window's doing) and lands on what it was about — on its
+    /// (the click handler's doing) and lands on what it was about — on its
     /// machine, when that is off screen.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
         // Its entry stays: read now, the next pump takes it out of the
@@ -25377,6 +25396,37 @@ mod tests {
                 "the request still waits in the bell"
             );
         });
+    }
+
+    /// ADR 0005's update (focus-notify's rule): with the window frontmost, a
+    /// request from a Thread whose Pane is not the focused one posts a
+    /// system notification beside its toast.
+    #[gpui::test]
+    fn a_request_off_the_board_posts_while_the_window_is_frontmost(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("system-notification-frontmost", 2);
+        cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        let off = view.read_with(cx, |view, _| {
+            threads
+                .iter()
+                .position(|thread| Some(*thread) != view.focused_thread())
+                .unwrap()
+        });
+        fake.streams.borrow()[off].send(decision("waits")).unwrap();
+        tick(cx);
+        ring(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.cockpit.window_active());
+            assert_eq!(view.bell.toasts().len(), 1);
+        });
+        assert_eq!(
+            cx.delivered_system_notifications()
+                .iter()
+                .map(|notification| notification.tag.to_string())
+                .collect::<Vec<_>>(),
+            [system_tag(&crate::machines::MachineKey(None), threads[off])]
+        );
     }
 
     /// ADR 0017: with the window in the background, a finish on a Pane
