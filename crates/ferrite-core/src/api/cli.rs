@@ -4,7 +4,8 @@
 //! the declared positional parameters in order, every other one as a
 //! `--flag` typed by its JSON Schema, and after `--` every word is an
 //! argument. `--current` names the calling Thread (`FERRITE_THREAD_ID`); a
-//! `cwd` not given is the CLI's own.
+//! `cwd` not given is the CLI's own. `--machine <name>` asks a saved
+//! machine's Server instead, over the window's ssh (ADR 0026).
 //!
 //! Exit status, as Herdr's: 0 answered, 1 refused by the Server (the error
 //! on stderr, as JSON) or no Server reached, 2 a wrong command line.
@@ -17,6 +18,8 @@ use serde_json::{json, Map, Value};
 use super::schema::Operation;
 use super::{address, ApiError, Code, Method, Request};
 use crate::link::{self, TryClone};
+use crate::machine::{self, Dial, Failure, Machine, Tunnel};
+use crate::settings::Settings;
 
 /// The agent skill: how an agent in one Thread drives the others. Bundled,
 /// so the printed skill always matches this binary.
@@ -26,16 +29,24 @@ pub const SKILL: &str = include_str!(concat!(
 ));
 
 /// Run the CLI when `args` (the process's, program first) are its; `None`
-/// leaves them to the app. The exit status otherwise.
-pub fn run(args: &[String], store: &Path) -> Option<i32> {
+/// leaves them to the app. The exit status otherwise. `settings_dir` is
+/// where `--machine` finds the saved machines.
+pub fn run(args: &[String], store: &Path, settings_dir: &Path) -> Option<i32> {
     let words: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
-    Some(match words.as_slice() {
-        ["--skill"] => {
+    let (machine, words) = match machine_flag(&words) {
+        Ok(split) => split,
+        Err(error) => {
+            eprint!("ferrite: {error}\n\n{}", usage(None));
+            return Some(2);
+        }
+    };
+    Some(match (machine, words.as_slice()) {
+        (None, ["--skill"]) => {
             print!("{SKILL}");
             0
         }
-        ["--skill", "install"] => install_skill(),
-        ["--schema"] => {
+        (None, ["--skill", "install"]) => install_skill(),
+        (None, ["--schema"]) => {
             let schema = schemars::schema_for!(Request).to_value();
             println!(
                 "{}",
@@ -43,20 +54,102 @@ pub fn run(args: &[String], store: &Path) -> Option<i32> {
             );
             0
         }
-        ["help" | "--help"] => {
+        (None, ["help" | "--help"]) => {
             print!("{}", usage(None));
             0
         }
-        [group, rest @ ..] if groups().any(|known| known == *group) => command(group, rest, store),
-        _ => return None,
+        (_, [group, rest @ ..]) if groups().any(|known| known == *group) => {
+            let to = match machine {
+                Some(name) => match saved(name, settings_dir) {
+                    Ok(machine) => To::Machine(machine, settings_dir),
+                    Err((status, error)) => {
+                        eprintln!("ferrite: {error}");
+                        return Some(status);
+                    }
+                },
+                None => To::Local(store),
+            };
+            command(group, rest, &to)
+        }
+        (None, _) => return None,
+        (Some(_), _) => {
+            eprint!("ferrite: --machine goes with a command\n\n{}", usage(None));
+            2
+        }
     })
+}
+
+/// The global `--machine <name>` (or `--machine=<name>`), taken out of the
+/// words before `--`, and the words left. A machine's Thread ids are its
+/// own Store's, so `--current` cannot name one there.
+pub fn machine_flag<'a>(words: &[&'a str]) -> Result<(Option<&'a str>, Vec<&'a str>), String> {
+    let mut machine = None;
+    let mut rest = Vec::new();
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        let name = match *word {
+            "--" => {
+                rest.push(*word);
+                rest.extend(words.by_ref());
+                break;
+            }
+            "--machine" => *words.next().ok_or("--machine needs a machine's name")?,
+            word => match word.strip_prefix("--machine=") {
+                Some(name) => name,
+                None => {
+                    rest.push(word);
+                    continue;
+                }
+            },
+        };
+        if machine.replace(name).is_some() {
+            return Err("--machine is given once".into());
+        }
+    }
+    let mut flags = rest.iter().take_while(|word| **word != "--");
+    if machine.is_some() && flags.any(|word| *word == "--current") {
+        return Err(
+            "--current names a Thread on this computer; on a machine, name its Thread by id".into(),
+        );
+    }
+    Ok((machine, rest))
+}
+
+/// The saved machine `name` names, by its name or else its ssh target:
+/// with the exit status to refuse it with when there is none to ask.
+fn saved(name: &str, settings_dir: &Path) -> Result<Machine, (i32, String)> {
+    let settings =
+        Settings::load(settings_dir).map_err(|error| (1, format!("settings.json: {error}")))?;
+    let found = settings
+        .machines
+        .iter()
+        .find(|machine| machine.name == name)
+        .or_else(|| {
+            settings
+                .machines
+                .iter()
+                .find(|machine| machine.target == name)
+        })
+        .ok_or_else(|| (2, format!("no saved machine `{name}`")))?;
+    if !found.enabled {
+        return Err((1, format!("`{}` is turned off", found.name)));
+    }
+    Ok(found.clone())
+}
+
+/// Whose Server a command asks.
+enum To<'a> {
+    /// This computer's, at `FERRITE_SOCKET` or beside the Store.
+    Local(&'a Path),
+    /// A saved machine's, over ssh.
+    Machine(Machine, &'a Path),
 }
 
 fn groups() -> impl Iterator<Item = &'static str> {
     Method::OPERATIONS.iter().map(|op| op.words().0)
 }
 
-fn command(group: &str, rest: &[&str], store: &Path) -> i32 {
+fn command(group: &str, rest: &[&str], to: &To) -> i32 {
     let Some((verb, args)) = rest
         .split_first()
         .filter(|(verb, _)| !verb.starts_with('-'))
@@ -78,17 +171,28 @@ fn command(group: &str, rest: &[&str], store: &Path) -> i32 {
         thread: std::env::var("FERRITE_THREAD_ID").ok(),
         cwd: std::env::current_dir().unwrap_or_default(),
     };
-    match parse(op, args, &context) {
-        Ok(request) => {
+    let request = match parse(op, args, &context) {
+        Ok(request) => request,
+        Err(error) => {
+            eprint!("ferrite: {error}\n\n{}", usage(Some(group)));
+            return 2;
+        }
+    };
+    let (out, err) = (&mut io::stdout(), &mut io::stderr());
+    match to {
+        To::Local(store) => {
             let socket = std::env::var_os("FERRITE_SOCKET")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| address(store));
-            call(&request, &socket, &mut io::stdout(), &mut io::stderr())
+            call(&request, &socket, out, err)
         }
-        Err(error) => {
-            eprint!("ferrite: {error}\n\n{}", usage(Some(group)));
-            2
-        }
+        To::Machine(machine, settings_dir) => call_machine(
+            &request,
+            &machine.name,
+            &machine::api_dial(machine, settings_dir),
+            out,
+            err,
+        ),
     }
 }
 
@@ -268,8 +372,9 @@ pub fn usage(group: Option<&str>) -> String {
     }
     out.push_str(
         "\n--current names the calling Thread; after --, every word is an argument\n\
-         (`agent prompt 12 -- \"--flags in the prompt\"`). Answers are JSON lines; a\n\
-         refusal is JSON on stderr with exit status 1, a wrong command line exits 2.\n",
+         (`agent prompt 12 -- \"--flags in the prompt\"`). --machine <name> asks a\n\
+         saved machine's Server over ssh, its Threads by id. Answers are JSON lines;\n\
+         a refusal is JSON on stderr with exit status 1, a wrong command line exits 2.\n",
     );
     out
 }
@@ -314,10 +419,53 @@ fn synopsis(op: &Operation) -> String {
     out
 }
 
+/// Ask the Server at `socket`, and print what comes back ([`exchange`]).
+pub fn call(request: &Request, socket: &Path, out: &mut impl Write, err: &mut impl Write) -> i32 {
+    let tunnel = link::connect(socket)
+        .and_then(|stream| {
+            Ok(Tunnel {
+                from: Box::new(stream.try_clone()?),
+                to: Box::new(stream),
+                ended: Box::new(|| None),
+            })
+        })
+        .map_err(|error| {
+            ApiError::new(
+                Code::ServerUnavailable,
+                format!("no Ferrite server at {}: {error}", socket.display()),
+            )
+        });
+    exchange(request, tunnel, out, err)
+}
+
+/// Ask the machine `name`'s Server through a Tunnel `dial` opens (`ssh …
+/// ferrited bridge --api`), and print what comes back ([`exchange`]).
+pub fn call_machine(
+    request: &Request,
+    name: &str,
+    dial: &Dial,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> i32 {
+    let tunnel = dial().map_err(|error| {
+        ApiError::new(
+            Code::ServerUnavailable,
+            format!("{name}: ssh could not start: {error}"),
+        )
+    });
+    exchange(request, tunnel, out, err)
+}
+
 /// Ask, and print what comes back, a whole line at a time: the answer to
 /// `out`, or a refusal to `err`, and after a subscription's answer every
-/// event until the Server closes the connection.
-pub fn call<E: Write>(request: &Request, socket: &Path, out: &mut impl Write, err: &mut E) -> i32 {
+/// event until the Server closes the connection. A Tunnel that ends with
+/// no answer says why, as `server_unavailable`.
+fn exchange<E: Write>(
+    request: &Request,
+    tunnel: Result<Tunnel, ApiError>,
+    out: &mut impl Write,
+    err: &mut E,
+) -> i32 {
     let refused = |err: &mut E, error: ApiError| {
         print(
             err,
@@ -325,24 +473,22 @@ pub fn call<E: Write>(request: &Request, socket: &Path, out: &mut impl Write, er
         );
         1
     };
-    let mut stream = match link::connect(socket) {
-        Ok(stream) => stream,
-        Err(error) => {
-            return refused(
-                err,
-                ApiError::new(
-                    Code::ServerUnavailable,
-                    format!("no Ferrite server at {}: {error}", socket.display()),
-                ),
-            )
-        }
+    let Tunnel {
+        from,
+        mut to,
+        ended,
+    } = match tunnel {
+        Ok(tunnel) => tunnel,
+        Err(error) => return refused(err, error),
     };
-    let asked = link::send(&mut stream, request).and_then(|()| stream.try_clone());
-    let mut lines = match asked {
-        Ok(reader) => link::Lines::new(reader),
-        Err(error) => return refused(err, lost(error)),
-    };
+    // `to` stays open until the answer: a bridge takes its closing as the
+    // caller gone.
+    if let Err(error) = link::send(&mut to, request) {
+        return refused(err, lost(error));
+    }
+    let mut lines = link::Lines::new(from);
     let streams = matches!(request.method, Method::EventsSubscribe(_));
+    let mut answered = false;
     loop {
         match lines.next_line() {
             Ok(Some(line)) => {
@@ -356,12 +502,30 @@ pub fn call<E: Write>(request: &Request, socket: &Path, out: &mut impl Write, er
                 if !streams {
                     return 0;
                 }
+                answered = true;
             }
-            Ok(None) if streams => return 0,
-            Ok(None) => return refused(err, lost(io::ErrorKind::UnexpectedEof.into())),
+            Ok(None) if answered => return 0,
+            Ok(None) => {
+                let error = match ended() {
+                    Some(failure) => unreachable(&failure),
+                    None => lost(io::ErrorKind::UnexpectedEof.into()),
+                };
+                return refused(err, error);
+            }
             Err(error) => return refused(err, lost(error)),
         }
     }
+}
+
+/// Why a machine's Server did not answer, and what the operator can do.
+fn unreachable(failure: &Failure) -> ApiError {
+    let message = match failure {
+        Failure::SignIn => {
+            format!("{failure}: sign in from a Ferrite window, then ask again")
+        }
+        failure => failure.to_string(),
+    };
+    ApiError::new(Code::ServerUnavailable, message)
 }
 
 /// One line, in one write: a reader never sees half of it.

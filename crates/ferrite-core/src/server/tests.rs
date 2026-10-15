@@ -1626,6 +1626,20 @@ fn cli(
     (status, lines(said), lines(refused))
 }
 
+/// One CLI call to a machine through `dial`, as [`cli`].
+fn cli_machine(
+    dial: &crate::machine::Dial,
+    method: &str,
+    params: serde_json::Value,
+) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let ((mut out, said), (mut err, refused)) = (printed(), printed());
+    let status =
+        crate::api::cli::call_machine(&request(method, params), "box", dial, &mut out, &mut err);
+    drop((out, err));
+    let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
+    (status, lines(said), lines(refused))
+}
+
 /// The CLI over a real socket: an answer on stdout with status 0, a
 /// refusal on stderr with status 1, no Server as `server_unavailable`, and
 /// a subscription's events as they come.
@@ -1677,6 +1691,55 @@ fn the_cli_prints_answers_refusals_and_events() {
         serde_json::json!({ "thread": thread, "text": "go" }),
     );
     assert_eq!(next()["event"]["attention"], "working");
+}
+
+/// `--machine`: the same call through a machine's Tunnel (here a socket
+/// to this Server's API, where `ssh … ferrited bridge --api` would be),
+/// and an ssh that ends without an answer refused as `server_unavailable`
+/// in the words of its Failure.
+#[test]
+fn the_cli_asks_a_machine_through_its_tunnel() {
+    let harness = start("api-cli-machine");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let call = |dial: &crate::machine::Dial| {
+        cli_machine(dial, "thread.get", serde_json::json!({ "thread": thread }))
+    };
+
+    let api = harness.api.clone();
+    let tunnel: crate::machine::Dial = Box::new(move || {
+        let stream = link::connect(&api)?;
+        Ok(crate::machine::Tunnel {
+            from: Box::new(link::TryClone::try_clone(&stream)?),
+            to: Box::new(stream),
+            ended: Box::new(|| None),
+        })
+    });
+    let (status, said, refused) = call(&tunnel);
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    assert_eq!(
+        said[0]["result"]["thread"]["thread"],
+        serde_json::json!(thread)
+    );
+
+    for (failure, says) in [
+        (crate::machine::Failure::SignIn, "sign in"),
+        (crate::machine::Failure::NotInstalled, "`ferrited`"),
+    ] {
+        let ended: crate::machine::Dial = Box::new(move || {
+            let failure = failure.clone();
+            Ok(crate::machine::Tunnel {
+                from: Box::new(io::empty()),
+                to: Box::new(io::sink()),
+                ended: Box::new(move || Some(failure)),
+            })
+        });
+        let (status, said, refused) = call(&ended);
+        assert_eq!((status, said.len()), (1, 0), "{said:?}");
+        assert_eq!(refused[0]["error"]["code"], "server_unavailable");
+        let message = refused[0]["error"]["message"].as_str().unwrap();
+        assert!(message.contains(says), "{message}");
+    }
 }
 
 /// A repository with one commit, under `dir`: a Project workers can make

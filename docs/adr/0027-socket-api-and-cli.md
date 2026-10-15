@@ -170,5 +170,15 @@ non-delivery; never resend blindly; don't prompt your own Thread.
   raw stream; thinking is left out.
 - On Windows a release build is a GUI-subsystem executable with no console,
   so the CLI's output is not seen from a terminal there yet.
-- Remote (`--machine`, plan §6) is not here: the CLI talks to the local
-  Server only.
+- `--machine <name>` (plan §2) asks a saved machine's Server (ADR 0026),
+  found by name, else by ssh target; one turned off is refused. The CLI
+  runs `ssh -T … <target> ferrited bridge --api` with the window's options
+  (`machine::bridge_args`, one builder for both): `BatchMode=yes`, so it
+  never prompts, and the window's master under `~/.ferrite/machines/`, so
+  a window's sign-in carries it. `ferrited bridge --api` carries stdio to
+  the machine's `api.sock` as `bridge` does to `server.sock`, but starts
+  no Server: with none, its words come back as `server_unavailable`. So
+  does an ssh that ended with no answer, in the words of its `Failure`
+  (no `ferrited`, or a sign-in the operator must do from a window); a CLI
+  cannot sign in. Thread ids are per Store, so `--current` is refused with
+  `--machine`, and `FERRITE_SOCKET` is not consulted.

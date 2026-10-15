@@ -124,9 +124,11 @@ fn main() {
     }
     // `ferrite thread list`, `ferrite agent prompt …`, `ferrite --skill`:
     // the automation API's CLI (ADR 0027), which never starts a window.
-    if let Some(code) =
-        ferrite_core::api::cli::run(&std::env::args().collect::<Vec<_>>(), &store_dir())
-    {
+    if let Some(code) = ferrite_core::api::cli::run(
+        &std::env::args().collect::<Vec<_>>(),
+        &store_dir(),
+        &settings_dir(),
+    ) {
         std::process::exit(code);
     }
     // A Chromium helper process is this same binary, started
