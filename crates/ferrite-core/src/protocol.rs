@@ -271,11 +271,6 @@ pub enum Op {
         thread: ThreadId,
         query: String,
     },
-    /// Start a Project's coordinator, or answer the one it has (ADR 0028).
-    Coordinate {
-        project: ProjectId,
-        provider: Provider,
-    },
     /// A directory's entries on the Server's computer, `~` its home: how a
     /// window on a machine browses the machine's folders (ADR 0026).
     /// Replied `listing`.

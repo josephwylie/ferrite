@@ -26,12 +26,6 @@ use super::GitError;
 #[serde(transparent)]
 pub struct ProjectId(u64);
 
-impl ProjectId {
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
 /// One registered project: a root the operator (or a Thread binding) named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
@@ -326,17 +320,6 @@ impl Registry {
 
     pub fn project(&self, id: ProjectId) -> Option<&Project> {
         self.projects.iter().find(|project| project.id == id)
-    }
-
-    /// The Project with a directory holding `path` (canonical), the nearest
-    /// one where directories nest.
-    pub fn containing(&self, path: &Path) -> Option<ProjectId> {
-        self.projects
-            .iter()
-            .flat_map(|project| project.directories().map(move |root| (project.id, root)))
-            .filter(|(_, root)| path.starts_with(root))
-            .max_by_key(|(_, root)| root.components().count())
-            .map(|(id, _)| id)
     }
 
     /// Add roots to one Project atomically. Paths are canonicalized and no

@@ -59,6 +59,9 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         coordinator_profile: Option<String>,
     },
+    /// Ferrite: turn Ferrite's own coordinators into projects, once (ADR 0030)
+    #[command(hide = true)]
+    MigrateFerriteCoordinators { file: PathBuf },
     /// List projects
     List {
         /// Include archived projects
@@ -630,6 +633,7 @@ pub fn run() -> Result<()> {
             println!("next: {prefix} open {}", project.slug);
             Ok(())
         }
+        Command::MigrateFerriteCoordinators { file } => crate::ferrite_migrate::run(&ctx, &file),
         Command::List { all } => {
             for slug in project::list_slugs(&ctx.root) {
                 let project = Project::load(&ctx.root, &slug)?;

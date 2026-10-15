@@ -30,7 +30,6 @@ use crate::ThreadId;
 pub mod agent;
 mod bridge;
 mod calls;
-mod coordinate;
 mod projects;
 mod render;
 mod signals;
@@ -342,8 +341,6 @@ struct Server {
     default_provider: Provider,
     /// How this Server starts its successor (`relaunch`; a test's own).
     relaunch: Box<Relaunch>,
-    /// The Projects' coordinators and their workers (ADR 0028).
-    coordinating: coordinate::Coordinating,
 }
 
 impl Server {
@@ -355,7 +352,6 @@ impl Server {
         settings_dir: PathBuf,
     ) -> Self {
         Self {
-            coordinating: coordinate::Coordinating::load(engine.store_dir()),
             engine,
             boot_id: boot_id(),
             info,
@@ -407,7 +403,6 @@ impl Server {
             self.answer_searches();
             self.answer_reads();
             self.forward_renders();
-            self.coordinate();
             self.broadcast();
             self.api.pump(&self.engine);
             if let Some(why) = signals::stop_requested() {
@@ -644,10 +639,6 @@ impl Server {
                     None => Ok(Some(Done::Changed { changed: false })),
                 }
             }
-            Op::Coordinate { project, provider } => self
-                .start_coordinator(*project, *provider, Default::default())
-                .map(|thread| Some(Done::Thread { thread }))
-                .map_err(|error| failed(error.message)),
             Op::Stop { when } => {
                 self.stopping = Some(*when);
                 Ok(None)

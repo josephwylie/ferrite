@@ -180,10 +180,6 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "decision.answer",
             "events.subscribe",
             "notification.show",
-            "coordinator.start",
-            "coordinator.get",
-            "coordinator.update",
-            "worker.start",
         ]
     );
 }
@@ -324,26 +320,6 @@ fn samples() -> Vec<Request> {
         request(Method::NotificationShow(NotificationShowParams {
             title: "Review ready".into(),
             body: Some("3 findings".into()),
-        })),
-        request(Method::CoordinatorStart(CoordinatorStartParams {
-            cwd: PathBuf::from("/work/app"),
-            provider: Some(Provider::Claude),
-            goal: Some("Ship billing".into()),
-            instructions: Some("Never push to main.".into()),
-            follow_prs: true,
-        })),
-        request(Method::CoordinatorGet(ThreadParams { thread: thread() })),
-        request(Method::CoordinatorUpdate(CoordinatorUpdateParams {
-            thread: thread(),
-            goal: Some("Ship billing".into()),
-            instructions: None,
-            follow_prs: Some(false),
-        })),
-        request(Method::WorkerStart(WorkerStartParams {
-            thread: thread(),
-            task: "Add invoices".into(),
-            title: Some("invoices".into()),
-            provider: Some(Provider::Codex),
         })),
     ]
 }
@@ -715,7 +691,6 @@ fn on_a_machine_a_cwd_is_given_whole() {
     for (name, args) in [
         ("thread.start", &[][..]),
         ("thread.start", &["--cwd", "app"][..]),
-        ("coordinator.start", &["--goal", "Ship billing"][..]),
     ] {
         let refused = start(name, args).unwrap_err();
         assert!(
@@ -724,44 +699,6 @@ fn on_a_machine_a_cwd_is_given_whole() {
         );
     }
     assert!(start("thread.list", &[]).is_ok(), "no cwd, none asked");
-}
-
-/// A coordinator names itself with `--current`: its task comes next, and
-/// PR follow-up is switched either way by an inline value.
-#[test]
-fn a_coordinator_starts_workers_and_switches_follow_up_as_itself() {
-    assert_eq!(
-        parse(
-            "worker.start",
-            &["--current", "Add invoices", "--title", "invoices"]
-        ),
-        Ok(Method::WorkerStart(WorkerStartParams {
-            thread: ThreadId::new(7),
-            task: "Add invoices".into(),
-            title: Some("invoices".into()),
-            provider: None,
-        }))
-    );
-    assert_eq!(
-        parse("coordinator.update", &["--current", "--follow-prs=false"]),
-        Ok(Method::CoordinatorUpdate(CoordinatorUpdateParams {
-            thread: ThreadId::new(7),
-            goal: None,
-            instructions: None,
-            follow_prs: Some(false),
-        }))
-    );
-    match parse(
-        "coordinator.start",
-        &["--goal", "Ship billing", "--follow-prs"],
-    ) {
-        Ok(Method::CoordinatorStart(params)) => {
-            assert_eq!(params.cwd, PathBuf::from("/work/app"));
-            assert_eq!(params.goal.as_deref(), Some("Ship billing"));
-            assert!(params.follow_prs);
-        }
-        other => panic!("{other:?}"),
-    }
 }
 
 #[test]
