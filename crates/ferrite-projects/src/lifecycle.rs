@@ -161,6 +161,8 @@ mod tests {
         let project = world.project("demo", "a.sock");
         world.thread(&project, world.home.path(), |t| t.branch = "hp/demo/t-0001-x".into());
         *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
+        // Ferrite: a live pane is a Thread the Server lists.
+        *world.agents.borrow_mut() = format!("[{}]", world.coordinator_agent(&project));
         let ctx = world.ctx();
 
         let error = delete(&ctx, "demo", false).unwrap_err().to_string();
@@ -193,13 +195,13 @@ mod tests {
         let world = World::new();
         let project = world.project("demo", "a.sock");
         *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
+        // Ferrite: a live pane is a Thread the Server lists.
+        *world.agents.borrow_mut() = format!("[{}]", world.coordinator_agent(&project));
         let ctx = world.ctx();
         set_status(&ctx, "demo", Status::Archived).unwrap();
         assert_eq!(project.status(), Status::Archived);
-        let calls = world.runner.calls.borrow();
-        let clear = calls.iter().find(|c| c.display().contains("--clear-token")).expect("tokens cleared");
-        assert!(clear.display().contains("w1:p1"));
-        drop(calls);
+        // Ferrite: the nav draws its rows natively; no token was pushed, so none is cleared.
+        assert_eq!(world.runner.count("report-metadata"), 0);
         assert!(set_status(&ctx, "demo", Status::Paused).is_err());
         set_status(&ctx, "demo", Status::Active).unwrap();
         assert_eq!(project.status(), Status::Active);
