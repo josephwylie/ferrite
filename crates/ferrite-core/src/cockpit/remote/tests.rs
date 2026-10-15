@@ -223,7 +223,7 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
         matches!(
             remote.state(),
             ServerState::Detached {
-                attention: true,
+                attention: Some(Failure::SignIn),
                 ..
             }
         )

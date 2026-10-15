@@ -494,7 +494,15 @@ pub mod words {
     pub const UNAVAILABLE: &str = "unavailable";
     /// An answer is on its way to the provider.
     pub const SENDING: &str = "sending";
+    /// A machine's Server is being reached, or reached again (ADR 0026).
+    pub const CONNECTING: &str = "connecting";
+    /// A machine the operator turned off in Settings.
+    pub const OFF: &str = "off";
 }
+
+/// A machine whose Server went (ADR 0026): what it last showed stays, at
+/// this opacity, and takes no input until it is back.
+pub const MACHINE_LOST_OPACITY: f32 = 0.5;
 
 /// The ink a lexicon word wears when it leads a line: `needs you` is
 /// `ATTENTION`, `failed`/`failing` are `BLOCKED`, every other word is
@@ -1989,6 +1997,8 @@ pub const SETTINGS_STEPPER_VALUE_W: f32 = 6.0 * CH;
 pub const SETTINGS_MENU_MAX_W: f32 = 28.0 * CH;
 /// An About key's column, so every value starts on one edge.
 pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
+/// A typed field on a Settings row (Machines' ssh target).
+pub const SETTINGS_FIELD_W: f32 = 24.0 * CH;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents

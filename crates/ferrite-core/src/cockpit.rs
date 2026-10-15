@@ -130,6 +130,14 @@ impl Cockpit {
         }
     }
 
+    /// The machine this window is on (ADR 0026); `None` for this computer.
+    pub fn machine(&self) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
+        match &self.link {
+            Link::InProcess(_) => None,
+            Link::Server(server) => server.bridge(),
+        }
+    }
+
     /// Attach again now, rather than at the next retry.
     pub fn retry_server(&mut self) {
         if let Link::Server(server) = &mut self.link {

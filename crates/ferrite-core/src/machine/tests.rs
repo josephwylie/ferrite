@@ -14,6 +14,13 @@ fn a_target_is_one_word_and_never_an_option() {
 }
 
 #[test]
+fn a_saved_machine_is_enabled_unless_it_says_not() {
+    let machine: Machine = serde_json::from_str(r#"{"name":"box","target":"me@box"}"#).unwrap();
+    assert!(machine.enabled);
+    assert_eq!(Machine::new("me@box").name, "me@box");
+}
+
+#[test]
 fn the_bridge_never_asks_and_keeps_its_connection_alive() {
     let args = bridge_args("me@box", Path::new("/tmp/m/c"));
     let has = |pair: &str| args.windows(2).any(|w| w[0] == "-o" && w[1] == pair);

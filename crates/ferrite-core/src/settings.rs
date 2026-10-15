@@ -125,6 +125,9 @@ pub struct Settings {
     /// warns: one toast as a window rises past each. Empty turns the
     /// warnings off. Default: 80 and 95.
     pub allowance_warnings: Vec<u8>,
+    /// Other computers whose Servers the window can be on, over ssh (ADR
+    /// 0026), in the nav's order. Default: none.
+    pub machines: Vec<crate::machine::Machine>,
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -223,6 +226,7 @@ impl Default for Settings {
             codex_sounds: true,
             system_notifications: true,
             allowance_warnings: vec![80, 95],
+            machines: Vec::new(),
         }
     }
 }
@@ -407,6 +411,11 @@ mod tests {
             codex_sounds: false,
             system_notifications: false,
             allowance_warnings: vec![90],
+            machines: vec![crate::machine::Machine {
+                name: "build box".into(),
+                target: "me@build.example.com".into(),
+                enabled: false,
+            }],
         }
     }
 

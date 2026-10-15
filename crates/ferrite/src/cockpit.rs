@@ -7,6 +7,7 @@ pub(crate) mod beside;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;
 mod leaving;
+mod machines;
 mod palette;
 mod parts;
 mod server;
@@ -186,8 +187,9 @@ use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Div, Entity, FocusHandle, Focusable, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    Context, Div, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString,
+    Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -595,7 +597,19 @@ pub struct CockpitView {
     /// The Pane whose reader took the last press: ⌘F finds there. A press
     /// hands the keyboard back to the Pane, so focus cannot say it.
     reader_pressed: Option<PaneIdentity>,
+    /// The Provider an empty board's first draft starts on.
+    launch_provider: Provider,
+    /// The machines this window can be on (ADR 0026); `None` in a window
+    /// on an Engine of its own.
+    machines: Option<Entity<crate::machines::Machines>>,
+    /// Settings › Machines' field for a new machine's ssh target.
+    machine_field: Option<Entity<gpui::component::input::InputState>>,
 }
+
+/// The Cockpit asks its window to put it on machine `.0` (ADR 0026).
+pub struct GoToMachine(pub usize);
+
+impl EventEmitter<GoToMachine> for CockpitView {}
 
 /// What a card hangs from (`card_corner`): its trigger in the window's
 /// bar (a status-line segment, ADR 0014), or its Pane's Composer (opening
@@ -1573,6 +1587,9 @@ impl CockpitView {
             solo_beside: None,
             reader_pressed: None,
             plan_card: None,
+            launch_provider,
+            machines: None,
+            machine_field: None,
         };
         // A Cockpit notification is the earliest common point after core
         // state changes and before GPUI draws cached transcript children.
@@ -1586,8 +1603,9 @@ impl CockpitView {
         view.sync_panes(cx);
         view.parked_changed(cx);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
-        // nothing spawns before the operator's choice.
-        if view.panes.is_empty() {
+        // nothing spawns before the operator's choice. A machine's Threads
+        // arrive once it is connected, and its Projects are its own.
+        if view.panes.is_empty() && view.cockpit.machine().is_none() {
             if view.launch_project.is_some() {
                 view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
             } else {
@@ -1595,6 +1613,36 @@ impl CockpitView {
             }
         }
         view
+    }
+
+    /// The window's machines (ADR 0026), listed in the nav and Settings.
+    pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>) -> Self {
+        self.machines = Some(machines);
+        self
+    }
+
+    pub(crate) fn machines(&self) -> Option<Entity<crate::machines::Machines>> {
+        self.machines.clone()
+    }
+
+    pub(crate) fn launch_provider(&self) -> Provider {
+        self.launch_provider
+    }
+
+    /// The Preferences a Cockpit built in this one's place starts with:
+    /// the settings as they are now; what a launch says once is said.
+    pub(crate) fn successor_preferences(&self) -> Preferences {
+        Preferences {
+            settings: self.prefs.settings.clone(),
+            dir: self.prefs.dir.clone(),
+            defaults: self.prefs.defaults.clone(),
+            titler: self.prefs.titler,
+            cli_updates: self.prefs.cli_updates,
+            ferrite_updates: self.prefs.ferrite_updates,
+            whats_new: None,
+            unreadable: self.prefs.unreadable.clone(),
+            keys_refused: Vec::new(),
+        }
     }
 
     /// Mirror the roster (#28): a view for every Pane the Cockpit shows, in
@@ -1967,6 +2015,7 @@ impl CockpitView {
         // moves: a frame that changes none of it redraws only those.
         let shared = self.parts.borrow().on.then(|| self.shared_chrome());
         self.poll_navigation(cx);
+        self.poll_machines(cx);
         let commands_changed = self
             .draft_commands
             .as_mut()
@@ -4297,6 +4346,7 @@ impl CockpitView {
         }
         // Saved first: a Server rereads the file.
         self.cockpit.settings_changed(&self.prefs.settings);
+        self.machines_changed(cx);
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = ferrite_core::spawner::SessionDefaults::from_settings(&self.prefs.settings);
         }
@@ -4439,6 +4489,7 @@ impl CockpitView {
                 })
             })
             .clone();
+        let machines = self.machine_settings(window, cx);
         let settings = &self.prefs.settings;
         let defaults = vec![prefs::choices(
             "settings-provider",
@@ -4734,6 +4785,7 @@ impl CockpitView {
         if !server.is_empty() {
             about.push(prefs::Group::new(Some("Server")).rows(server));
         }
+        about.extend(machines);
         about.push(prefs::Group::new(Some("Provider CLIs")).rows(clis));
         let pages = vec![
             prefs::page(prefs::PageKey::NewThreads, new_thread_groups),
@@ -9719,6 +9771,23 @@ impl CockpitView {
             grid
         };
 
+        // A machine whose Server went keeps what it showed, dimmed, and
+        // takes no press until it is back (ADR 0026).
+        let grid = if self.machine_lost() {
+            grid.relative()
+                .opacity(crate::theme::MACHINE_LOST_OPACITY)
+                .child(
+                    div()
+                        .id("machine-lost")
+                        .debug_selector(|| "machine-lost".into())
+                        .absolute()
+                        .inset_0()
+                        .occlude(),
+                )
+        } else {
+            grid
+        };
+
         // A terminal multiplexer's window (theme WP-C): the sidebar and the
         // board side by side over the bottom bar, the 1px seam between
         // them, and the titlebar band laid over their tops. One face on
@@ -12951,11 +13020,23 @@ impl CockpitView {
         if let Some(error) = &self.group_error {
             tree = tree.child(nav::notice(error.clone()));
         }
-        if let Some(smart) = &state.smart {
+        // With machines (ADR 0026): the one the window is on heads its own
+        // tree, which folds under it, dimmed while its Server is away; the
+        // others follow the tree.
+        let machines = self.machine_rows(cx);
+        let on = machines
+            .as_ref()
+            .and_then(|rows| rows.iter().find(|row| row.selected));
+        if let Some(on) = on {
+            tree = tree.child(self.machine_heading(on, cx));
+        }
+        let folded = on.is_some_and(|on| on.folded);
+        let lost = on.is_some() && self.machine_lost();
+        if let Some(smart) = state.smart.as_ref().filter(|_| !folded) {
             tree = tree.child(self.smart_sections_element(smart, cx));
         }
         let mut zones = 0usize;
-        for (index, section) in state.sections.iter().enumerate() {
+        for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
             let mut block =
                 nav::section(index == 0).child(self.project_heading(index, section, cx));
             if !section.folded {
@@ -12974,11 +13055,13 @@ impl CockpitView {
                     block = block.child(self.group_element(&state.groups[*group], origin, cx));
                 }
             }
-            tree = tree.child(block);
+            tree = tree.child(block.when(lost, |block| {
+                block.opacity(crate::theme::MACHINE_LOST_OPACITY)
+            }));
         }
         // An empty tree says so at its top, before the ground. It names the
         // Project the filter chose.
-        if state.sections.is_empty() {
+        if state.sections.is_empty() && !folded {
             let filtered = self
                 .nav_filter
                 .and_then(|project| self.cockpit.registry().project(project))
@@ -12987,6 +13070,9 @@ impl CockpitView {
                 filtered.as_deref(),
                 !state.parked.is_empty(),
             ));
+        }
+        if let Some(rows) = &machines {
+            tree = tree.children(self.machines_off_screen(rows, cx));
         }
         // The ground under the last row is a drop target too — with every
         // Thread in a Group it is the only place left to drop one to get it
@@ -13523,6 +13609,7 @@ mod tests {
     mod layout_polish;
     mod leaving;
     mod loops_overlay;
+    mod machines;
     mod nav_parity;
     mod provider_controls;
     mod provider_forms;

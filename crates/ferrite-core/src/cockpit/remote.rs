@@ -71,9 +71,12 @@ pub enum ServerState {
         since: Instant,
     },
     /// No Server answers: why, and the window keeps trying. `attention`:
-    /// trying again will not help until the operator acts (signs in,
-    /// installs `ferrited`).
-    Detached { reason: String, attention: bool },
+    /// what the operator must do first (sign in, install `ferrited`) for
+    /// trying again to help.
+    Detached {
+        reason: String,
+        attention: Option<Failure>,
+    },
 }
 
 /// What arrived from the Server for the window.
@@ -162,7 +165,7 @@ impl Remote {
             },
             None => ServerState::Detached {
                 reason: self.detached.clone(),
-                attention: self.attention.is_some(),
+                attention: self.attention.clone(),
             },
         }
     }

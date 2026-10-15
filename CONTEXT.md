@@ -185,6 +185,14 @@ the Threads' history and the pending Decisions, so agents keep running
 when no window is open. Windows are its clients; several may attach.
 _Avoid_: daemon, backend (that is a Provider), host.
 
+**Machine**
+Another computer whose Server a window reaches over ssh (`ferrite --remote
+<target>`, or saved in Settings). The window is on one machine at a time —
+this computer, `local`, or another — and watches only that one's Threads;
+the others stream status to the nav. A machine runs `ferrited`, the Server
+without a window.
+_Avoid_: host, remote (as a noun), node.
+
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,
