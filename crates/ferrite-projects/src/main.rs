@@ -1,13 +1,13 @@
-// Ferrite: the modules, `VERSION` and `USER_PATH` live in the library.
-use ferrite_projects::{USER_PATH, cli};
+// Ferrite: the modules and `VERSION` live in the library.
+use ferrite_projects::cli;
 
 /// A herdr server that was not started from a login shell hands its plugins a
 /// minimal `PATH`, so `gh`, `rsync` or the agent CLI may be missing for the
 /// ticker although they work in the user's terminal. The usual install folders
 /// are appended (never prepended: what the user's `PATH` resolves still wins).
+/// Ferrite: likewise a Server launchd started, which runs `ticker start`.
 fn extend_path() {
     let current = std::env::var_os("PATH").unwrap_or_default();
-    let _ = USER_PATH.set(current.to_string_lossy().into_owned());
     let mut dirs: Vec<std::path::PathBuf> = std::env::split_paths(&current).collect();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let mut extra: Vec<std::path::PathBuf> = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].iter().map(Into::into).collect();

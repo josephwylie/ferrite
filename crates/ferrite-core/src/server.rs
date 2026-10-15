@@ -31,6 +31,7 @@ pub mod agent;
 mod bridge;
 mod calls;
 mod coordinate;
+mod projects;
 mod render;
 mod signals;
 
@@ -197,6 +198,7 @@ pub fn run(options: Options) -> i32 {
         server.info.version,
         server.boot_id
     );
+    projects::start(&options.store);
     server.serve(hear)
 }
 

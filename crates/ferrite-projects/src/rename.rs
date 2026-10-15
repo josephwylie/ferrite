@@ -544,10 +544,11 @@ pub fn cli(ctx: &Ctx, args: &Args, session: &crate::paths::SessionFlags) -> Resu
         return Ok(());
     }
     println!("\nOpen it again with `open {to}`.\n");
-    match crate::doctor::run(ctx, session, false) {
-        Ok(true) => {}
-        Ok(false) => println!("doctor found problems above; the rename itself is done"),
-        Err(error) => println!("doctor could not run ({error:#}); the rename itself is done"),
+    // Ferrite: `doctor::run` returns its report.
+    let (text, healthy) = crate::doctor::run(ctx, session, false);
+    print!("{text}");
+    if !healthy {
+        println!("doctor found problems above; the rename itself is done");
     }
     Ok(())
 }

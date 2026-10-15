@@ -6,7 +6,6 @@ pub mod agents;
 pub mod assign;
 pub mod brief;
 pub mod cli;
-pub mod command_link;
 pub mod coordinator;
 pub mod doctor;
 pub mod grouping;
@@ -42,12 +41,7 @@ pub mod thread;
 pub mod threads;
 pub mod ticker;
 pub mod trust_screen;
-pub mod update;
 
 /// Crate version plus a build identifier (short git hash and build time), so a
 /// rebuilt binary always differs from the one a running ticker was started from.
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("HP_BUILD_ID"));
-
-/// `PATH` as this process received it, before `extend_path` (main.rs): what the
-/// user's shell resolves, for `doctor`'s command check.
-pub static USER_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
