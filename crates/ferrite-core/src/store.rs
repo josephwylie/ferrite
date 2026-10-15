@@ -103,6 +103,10 @@ const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 const OPEN_MARKER: &str = ".open";
 const OPEN_STATE_MARKER: &str = ".open-state-v1";
 
+/// The store's high-water mark: the id the next Thread takes. It only
+/// rises, so a deleted Thread's id is never handed out again (ADR 0009).
+const NEXT_ID: &str = "next-id";
+
 /// The store's single-writer claim (ADR 0009): the process holding an
 /// exclusive lock on this file is the only one that changes any log.
 const CLAIM: &str = ".lock";
@@ -1566,6 +1570,9 @@ struct Shared {
     read_only: Option<String>,
     /// The derived summary cache (`Store::summary`), loaded on first use.
     summaries: std::sync::Mutex<Option<BTreeMap<u64, CachedSummary>>>,
+    /// Held while a Thread's id is minted, so two creators never read the
+    /// same high-water mark.
+    minting: std::sync::Mutex<()>,
     /// The store's worker, started with its first writer.
     worker: std::sync::OnceLock<std::sync::Arc<Worker>>,
     /// What the worker synced and marked, in order, for tests.
@@ -1701,6 +1708,7 @@ impl Shared {
         Self {
             read_only,
             summaries: std::sync::Mutex::new(None),
+            minting: std::sync::Mutex::new(()),
             worker: std::sync::OnceLock::new(),
             #[cfg(test)]
             journal: Default::default(),
@@ -2337,15 +2345,7 @@ impl Store {
             return Err(io::Error::other("stub refused Thread creation"));
         }
         self.writable()?;
-        let mut next = self.thread_ids()?.last().map_or(1, |id| id.get() + 1);
-        loop {
-            match fs::create_dir(self.dir.join(next.to_string())) {
-                Ok(()) => break,
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => next += 1,
-                Err(e) => return Err(e),
-            }
-        }
-        let id = ThreadId::new(next);
+        let id = self.mint()?;
 
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -2377,6 +2377,33 @@ impl Store {
             base: None,
         };
         Ok((id, self.writer_on(id, file, tail)))
+    }
+
+    /// Take the next Thread id and its directory. Ids are never reused: the
+    /// high-water mark is raised durably before the directory exists, so a
+    /// crash can skip an id but never hand one out twice, and a store from
+    /// before the mark is seeded from the Threads it holds.
+    fn mint(&self) -> io::Result<ThreadId> {
+        let _minting = self
+            .shared
+            .minting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = self.dir.join(NEXT_ID);
+        let marked = match fs::read_to_string(&path) {
+            Ok(text) => text.trim().parse::<u64>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {error}", path.display()),
+                )
+            })?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => 1,
+            Err(error) => return Err(error),
+        };
+        let next = marked.max(self.thread_ids()?.last().map_or(1, |id| id.get() + 1));
+        replace_file(&path, (next + 1).to_string().as_bytes())?;
+        fs::create_dir(self.dir.join(next.to_string()))?;
+        Ok(ThreadId::new(next))
     }
 
     /// Where the store keeps its files — what the registry binds to, so the
@@ -4576,6 +4603,29 @@ mod tests {
         assert_eq!(store.thread_ids().unwrap(), vec![second]);
         assert!(store.load(first).is_err(), "a deleted Thread must not load");
         assert!(store.load(second).is_ok());
+    }
+
+    /// A deleted Thread's id is never handed out again, not even by a store
+    /// opened afresh on the same directory; one from before the high-water
+    /// mark is seeded from the Threads it holds.
+    #[test]
+    fn a_deleted_threads_id_is_never_reused() {
+        let dir = scratch("never-reuse");
+        let store = Store::open(&dir).unwrap();
+        let (first, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        assert_eq!(first, ThreadId::new(1));
+        store.delete(first).unwrap();
+        let (second, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        assert_eq!(second, ThreadId::new(2));
+
+        store.delete(second).unwrap();
+        let store = Store::open(&dir).unwrap();
+        let (third, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        assert_eq!(third, ThreadId::new(3));
+
+        fs::remove_file(dir.join(NEXT_ID)).unwrap();
+        let (fourth, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        assert_eq!(fourth, ThreadId::new(4), "seeded from the Threads held");
     }
 
     /// #21: the nav's parked rows come from `peek`, which must answer from

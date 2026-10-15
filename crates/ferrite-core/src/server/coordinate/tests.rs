@@ -164,6 +164,7 @@ fn a_start_records_its_brief_and_a_successor_keeps_the_book() {
         .start_coordinator(project, Provider::Claude, BriefChange::default())
         .unwrap();
     let _successor = provider(&providers);
+    assert_ne!(successor, first);
     let entry = server.coordinating.book.of_project(project).unwrap();
     assert_eq!(entry.coordinator, successor);
     assert_eq!(entry.goal, "Ship billing");
@@ -171,11 +172,8 @@ fn a_start_records_its_brief_and_a_successor_keeps_the_book() {
     assert!(entry.follow_prs);
     assert_eq!(entry.workers, [worker]);
     server.engine.pump();
-    // The Store may hand a deleted Thread's id to the next one, so the
-    // successor is told apart by its transcript, not its id.
     let briefed = said(&server, successor);
     assert!(briefed.contains("Ship billing"), "{briefed}");
-    assert!(!briefed.contains("What first?"), "a new Thread: {briefed}");
 }
 
 /// A followed PR's remark is sent to its worker once across readings;

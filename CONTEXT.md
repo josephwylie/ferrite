@@ -10,7 +10,8 @@ glossary only, no implementation.
 **Thread**
 One durable agent conversation: its history, its provider choice, and its
 workspace binding (a dedicated worktree or the main checkout). Threads outlive
-any running process.
+any running process. A Thread's id is never given to another, even after the
+Thread is deleted.
 _Avoid_: chat, conversation, task.
 
 **Session**
