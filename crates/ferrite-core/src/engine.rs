@@ -3555,15 +3555,17 @@ impl Engine {
 
     /// An open Thread's Attention, as the Server knows it (ADR 0015): a
     /// Decision waiting, any work running or in the provider's queue, an
-    /// unseen Notice, else idle. A prompt not yet taken counts as work, the
-    /// provider's queued one or one held for a starting Session: until it
-    /// runs, the agent is not at rest.
+    /// unseen Notice, else idle. A prompt not yet answered counts as work —
+    /// sent before the provider streams a byte, the provider's queued one,
+    /// or one held for a starting Session: until it runs, the agent is not
+    /// at rest.
     pub fn attention(&self, thread: ThreadId) -> Option<crate::Attention> {
         use crate::Attention;
         let view = self.thread(thread)?;
         Some(if view.pending().is_some() {
             Attention::Blocked
         } else if view.working()
+            || view.activity().main_operator_turn()
             || view.queue_pending()
             || view.background_work()
             || (view.starting() && self.holds_prompt(thread))
