@@ -1309,20 +1309,37 @@ impl Cockpit {
         }
     }
 
-    /// The pull request of the branch checked out at `path`, read by its
-    /// forge's CLI where `review_diff` reads.
-    pub fn pull_request(
+    /// The pull request of the branch checked out at `path`, whole, read by
+    /// its forge's CLI for a review, where `review_diff` reads.
+    pub fn review_pull_request(
         &mut self,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<crate::protocol::PullRequest>>> {
+    ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
         match &mut self.link {
-            Link::Server(server) => server.pull_request(path),
+            Link::Server(server) => server.review_pull_request(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
                 Ok(read_here(move || {
                     let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path);
-                    Ok(crate::protocol::PullRequest::of(view, noun))
+                    Ok(crate::protocol::ReviewPullRequest::of(view, noun))
                 }))
+            }
+        }
+    }
+
+    /// The PR of the branch checked out at `path`, read by `gh` where
+    /// `review_diff` reads git: on the Server that owns the checkout, or
+    /// here when this window runs its agents itself. `None` whenever `gh`
+    /// has nothing to say.
+    pub fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Option<crate::workspace::PullRequest>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.pull_request(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || Ok(crate::workspace::pull_request(&path))))
             }
         }
     }

@@ -243,31 +243,31 @@ pub struct ThreadRow {
     pub tail: NavTail,
 }
 
-/// A row's checkout facts, from the slow branch-status cadence: commits
-/// ahead of and behind its upstream, a dirty working tree, and the PR's CI.
+/// A row's checkout facts: commits ahead of and behind its upstream and a
+/// dirty working tree, from the slow branch-status cadence, and its PR's
+/// label (`pr::PrWatch::label`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowDetails {
     pub ahead: u32,
     pub behind: u32,
     pub dirty: bool,
-    pub ci: Option<ferrite_core::workspace::CheckState>,
+    pub pr: Option<String>,
 }
 
 impl RowDetails {
-    pub fn of(status: &ferrite_core::workspace::BranchStatus) -> Self {
+    pub fn of(status: Option<&ferrite_core::workspace::BranchStatus>, pr: Option<String>) -> Self {
         RowDetails {
-            ahead: status.ahead,
-            behind: status.behind,
-            dirty: status.dirty > 0,
-            ci: status.pr.as_ref().and_then(|pr| pr.checks),
+            ahead: status.map_or(0, |status| status.ahead),
+            behind: status.map_or(0, |status| status.behind),
+            dirty: status.is_some_and(|status| status.dirty > 0),
+            pr,
         }
     }
 
     /// The facts as the row types them, terse and in a fixed order:
-    /// `↑2↓1` drift, `*` a dirty tree, then the CI's `✓` / `✗` / `◌`. A
-    /// skipped rollup claims nothing. `None` when there is nothing to say.
+    /// `↑2↓1` drift, `*` a dirty tree, then the PR's `#123 ✓`. `None` when
+    /// there is nothing to say.
     pub fn text(&self) -> Option<SharedString> {
-        use ferrite_core::workspace::CheckState;
         let mut text = String::new();
         if self.ahead > 0 {
             text.push_str(&format!("\u{2191}{}", self.ahead));
@@ -278,17 +278,11 @@ impl RowDetails {
         if self.dirty {
             text.push('*');
         }
-        let ci = match self.ci {
-            Some(CheckState::Passing) => Some('\u{2713}'),
-            Some(CheckState::Failing) => Some('\u{2717}'),
-            Some(CheckState::Pending) => Some('\u{25cc}'),
-            Some(CheckState::Skipped) | None => None,
-        };
-        if let Some(ci) = ci {
+        if let Some(pr) = &self.pr {
             if !text.is_empty() {
                 text.push(' ');
             }
-            text.push(ci);
+            text.push_str(pr);
         }
         (!text.is_empty()).then(|| text.into())
     }
@@ -1588,7 +1582,7 @@ mod tests {
                     ahead: 12,
                     behind: 3,
                     dirty: true,
-                    ci: Some(ferrite_core::workspace::CheckState::Failing),
+                    pr: Some("#123 \u{2717}".into()),
                 },
                 ..bare.clone()
             })),
@@ -1735,35 +1729,26 @@ mod tests {
     }
 
     /// A row's checkout facts are terse and fixed in order — drift, dirt,
-    /// CI — and come before its word; a clean, even, unchecked checkout
-    /// says nothing.
+    /// the PR's label — and come before its word; a clean, even checkout
+    /// with no PR says nothing.
     #[test]
     fn the_checkout_facts_come_before_the_word() {
-        use ferrite_core::workspace::CheckState;
-        let details = |ahead, behind, dirty, ci| RowDetails {
+        let details = |ahead, behind, dirty, pr: Option<&str>| RowDetails {
             ahead,
             behind,
             dirty,
-            ci,
+            pr: pr.map(str::to_string),
         };
         assert_eq!(details(0, 0, false, None).text(), None);
         assert_eq!(
-            details(0, 0, false, Some(CheckState::Skipped)).text(),
-            None,
-            "a skipped rollup claims nothing"
+            details(2, 1, true, Some("#48 \u{2717}")).text(),
+            Some("\u{2191}2\u{2193}1* #48 \u{2717}".into())
         );
         assert_eq!(
-            details(2, 1, true, Some(CheckState::Failing)).text(),
-            Some("\u{2191}2\u{2193}1* \u{2717}".into())
+            details(0, 3, false, Some("#48 \u{2713}")).text(),
+            Some("\u{2193}3 #48 \u{2713}".into())
         );
-        assert_eq!(
-            details(0, 3, false, Some(CheckState::Passing)).text(),
-            Some("\u{2193}3 \u{2713}".into())
-        );
-        assert_eq!(
-            details(0, 0, false, Some(CheckState::Pending)).text(),
-            Some("\u{25cc}".into())
-        );
+        assert_eq!(details(0, 0, false, Some("#48")).text(), Some("#48".into()));
         let row = ThreadRow {
             details: details(1, 0, true, None),
             ..thread()

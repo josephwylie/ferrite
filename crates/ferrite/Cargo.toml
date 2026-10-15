@@ -21,6 +21,8 @@ cef = ["dep:cef"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# System notifications: herdr-focus-notify, vendored (its README).
+ferrite-focus-notify = { path = "../ferrite-focus-notify" }
 # herdr-reviewr's review core, vendored: the Review slot's rows, comments and
 # their prompt text (ADR 0021).
 ferrite-reviewr = { path = "../ferrite-reviewr" }

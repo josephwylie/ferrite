@@ -43,8 +43,11 @@ means:
   under sounds: a muted provider's Threads still toast and still post
   system notifications, since a request still waits on the operator. Alerts that ring together chime once,
   needs-you over done, so Threads finishing at once never pile up chimes;
-- while the window is in the background, a **system notification**
-  through GPUI's `show_system_notification` (`UNUserNotificationCenter` on
+- a **system notification** (superseded in part by ADR 0005's
+  2026-10-15 update: herdr-focus-notify now decides whether one is posted,
+  also while the window is frontmost for a Thread off the board, and
+  delivers it on macOS) through
+  GPUI's `show_system_notification` (`UNUserNotificationCenter` on
   macOS, which needs the app bundle, so a dev build posts none; toast
   notifications on Windows). Its tag is the Thread's, so a newer one
   replaces it in the notification centre; clicking it brings the window

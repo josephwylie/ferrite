@@ -17,7 +17,7 @@ use base64::Engine as _;
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
 use crate::machine::{self, Bridge, Failure};
-use crate::protocol::PullRequest;
+use crate::protocol::ReviewPullRequest;
 use crate::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
@@ -26,7 +26,9 @@ use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
-use crate::workspace::{DirEntry, ListedWorktree, Listing, RepoListing};
+use crate::workspace::{
+    parse_pr_json, DirEntry, ListedWorktree, Listing, PullRequest, RepoListing,
+};
 use crate::ThreadId;
 use ferrite_reviewr::ferrite::{FileSides, Read};
 use ferrite_reviewr::git::CommitRow;
@@ -507,18 +509,31 @@ impl Remote {
         })
     }
 
+    pub(crate) fn review_pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>> {
+        let op = Op::ReviewPullRequest {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::ReviewPullRequest { noun, pr, note } => Some(ReviewPullRequest {
+                noun,
+                pr: pr.ok_or_else(|| note.unwrap_or_default()),
+            }),
+            _ => None,
+        })
+    }
+
     pub(crate) fn pull_request(
         &mut self,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<PullRequest>>> {
+    ) -> io::Result<Receiver<io::Result<Option<PullRequest>>>> {
         let op = Op::PullRequest {
             path: path.to_path_buf(),
         };
         self.ask(op, |done| match done {
-            Done::PullRequest { noun, pr, note } => Some(PullRequest {
-                noun,
-                pr: pr.ok_or_else(|| note.unwrap_or_default()),
-            }),
+            Done::PullRequest { json } => Some(json.as_deref().and_then(parse_pr_json)),
             _ => None,
         })
     }

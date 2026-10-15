@@ -119,12 +119,13 @@ take reviewr itself instead, so its fixes and features keep arriving.
    transcript's bar, `crate::find`). `m` renders each Markdown file's new
    side with Ferrite's Markdown, in place of its rows. `p`, or the bar's
    `PR`, shows the branch's pull request as reviewr reads it with the
-   forge's own CLI (`gh`, `glab`, `az`; read-only): `pull_request {path}`
-   answers `pull_request {noun, pr?, note?}` — its number, title, state,
-   branches, mergeability, how the checkout stands against it, its checks
-   and its conversation — or reviewr's note in its place (no remote, no
-   CLI, not signed in, no PR yet). `r` reads again what shows; esc goes
-   back to the diff.
+   forge's own CLI (`gh`, `glab`, `az`; read-only):
+   `review_pull_request {path}` answers `review_pull_request {noun, pr?,
+   note?}` — its number, title, state, branches, mergeability, how the
+   checkout stands against it, its checks and its conversation — or
+   reviewr's note in its place (no remote, no CLI, not signed in, no PR
+   yet). A Thread row's PR label reads `gh` on its own (`pull_request`,
+   ADR 0026). `r` reads again what shows; esc goes back to the diff.
 8. **Keys in their own context.** The Review's keys are bound in `Review
    && !Composer` (never while a field of it takes text), the comment
    field's ⏎/esc in `ReviewComment`, the search field's ↑↓/⏎/esc in

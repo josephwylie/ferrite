@@ -225,7 +225,7 @@ impl From<super::WireCommit> for CommitRow {
     }
 }
 
-/// A `pull_request`'s pull request: what its forge's CLI read.
+/// A `review_pull_request`'s pull request: what its forge's CLI read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WirePr {
     pub number: u64,
@@ -414,15 +414,15 @@ impl From<forge::PrSnapshot> for WirePr {
     }
 }
 
-/// A `pull_request`'s answer as the window draws it: the forge's noun for
+/// A `review_pull_request`'s answer as the window draws it: the forge's noun for
 /// one (`PR`, `MR`), and the pull request or what stands in its place.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PullRequest {
+pub struct ReviewPullRequest {
     pub noun: String,
     pub pr: Result<WirePr, String>,
 }
 
-impl PullRequest {
+impl ReviewPullRequest {
     /// What the forge read gave: the snapshot, else its note (`r` retries).
     pub fn of(view: PrView, noun: &str) -> Self {
         let pr = match view {
@@ -440,13 +440,13 @@ impl PullRequest {
     }
 }
 
-impl From<PullRequest> for Done {
-    fn from(PullRequest { noun, pr }: PullRequest) -> Self {
+impl From<ReviewPullRequest> for Done {
+    fn from(ReviewPullRequest { noun, pr }: ReviewPullRequest) -> Self {
         let (pr, note) = match pr {
             Ok(pr) => (Some(pr), None),
             Err(note) => (None, Some(note)),
         };
-        Done::PullRequest { noun, pr, note }
+        Done::ReviewPullRequest { noun, pr, note }
     }
 }
 
@@ -490,16 +490,16 @@ mod tests {
     /// says why, in the forge's noun.
     #[test]
     fn a_pull_request_carries_its_snapshot_or_its_note() {
-        let note = PullRequest::of(PrView::NoPr, "MR");
+        let note = ReviewPullRequest::of(PrView::NoPr, "MR");
         assert_eq!(note.pr, Err("No MR yet. Ready to ship?".into()));
-        let Done::PullRequest { noun, pr, note } = note.into() else {
-            panic!("a pull_request reply");
+        let Done::ReviewPullRequest { noun, pr, note } = note.into() else {
+            panic!("a review_pull_request reply");
         };
         assert_eq!(
             (noun.as_str(), pr, note.as_deref()),
             ("MR", None, Some("No MR yet. Ready to ship?"))
         );
-        let retry = PullRequest::of(PrView::NoCli(ferrite_reviewr::git::Forge::GitHub), "PR");
+        let retry = ReviewPullRequest::of(PrView::NoCli(ferrite_reviewr::git::Forge::GitHub), "PR");
         assert!(
             retry.pr.is_err_and(|note| note.contains("press r")),
             "the remedy names r"

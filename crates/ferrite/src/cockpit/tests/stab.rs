@@ -825,8 +825,8 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
-    let status = branch_status_with_checks();
-    let tally = status.pr.as_ref().unwrap().tally();
+    let pr = pr_with_checks();
+    let tally = pr.tally();
     let text = [
         (tally.failing, "failed"),
         (tally.pending, "running"),
@@ -839,7 +839,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     .collect::<Vec<_>>()
     .join(" · ");
     view.update(cx, |view, cx| {
-        view.facts.set_branches(vec![(thread, Some(status))]);
+        view.facts.pr_answered(thread, Some(pr));
         cx.notify();
     });
     tick(cx);

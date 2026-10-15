@@ -713,9 +713,18 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
-            "command_pull_request",
+            "command_review_pull_request",
             command(
                 46,
+                Op::ReviewPullRequest {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_pull_request",
+            command(
+                43,
                 Op::PullRequest {
                     path: "/home/me/src/ferrite".into(),
                 },
@@ -1015,10 +1024,10 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
-            "reply_pull_request",
+            "reply_review_pull_request",
             Sample::Server(ServerMessage::Reply {
                 id: 46,
-                ok: Some(Done::PullRequest {
+                ok: Some(Done::ReviewPullRequest {
                     noun: "PR".into(),
                     pr: Some(WirePr {
                         number: 118,
@@ -1058,14 +1067,32 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
-            "reply_pull_request_note",
+            "reply_pull_request",
+            Sample::Server(ServerMessage::Reply {
+                id: 43,
+                ok: Some(Done::PullRequest {
+                    json: Some(r#"{"number":48,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/48","statusCheckRollup":[]}"#.into()),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_review_pull_request_note",
             Sample::Server(ServerMessage::Reply {
                 id: 46,
-                ok: Some(Done::PullRequest {
+                ok: Some(Done::ReviewPullRequest {
                     noun: "MR".into(),
                     pr: None,
                     note: Some("No MR yet. Ready to ship?".into()),
                 }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_no_pull_request",
+            Sample::Server(ServerMessage::Reply {
+                id: 43,
+                ok: Some(Done::PullRequest { json: None }),
                 error: None,
             }),
         ),

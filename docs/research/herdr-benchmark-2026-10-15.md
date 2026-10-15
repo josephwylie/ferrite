@@ -45,7 +45,8 @@ end of 2026-10-15. "Partial" names what is missing.
 | #6 Remote over SSH | Partial | ADR 0026: `ferrited bridge`, `--remote`, saved machines in the nav, status-only links, parked and new Threads, off-screen alerts. Not done on a machine: live branch label and status, opened files and user commands (run locally), an open Thread's Project; phone access deferred by plan |
 | Four-state status | Done | ADR 0015: blocked > done > working > idle from protocol events |
 | Attention sort, roll-up headings, collapsed rail | Done | ADR 0015; rail digits are jump keys |
-| Row details (#7 ahead/behind, CI, waiting reason, background work) | Done | `nav::RowGit`; reason words `approval` / `plan` / `question`; green ring for background work |
+| Row details (#7 ahead/behind, CI, waiting reason, background work) | Done | `nav::RowDetails`; reason words `approval` / `plan` / `question`; green ring for background work |
+| PR status on Thread rows (herdr-plugin-gh-pr) | Done | ADR 0026: `#123 ✓` / `✗` / `●` / `◆` / `⊘`, `⟳` while reading; on focus, Pane open and worktree follow, at most every 30 s per Thread; `refresh PR status` / `open PR in browser` in the palette, the row's menu and as bindable keys (ADR 0024); `gh` runs where the checkout is (the owning Server, on a machine too); replaces the row's CI glyph. Behaviour matched from the plugin's README; its code is not copied (the repository has no license) |
 | #5 Palette filters, workspace jump, cwd footer | Done | `b` `w` `i` `d` `a` |
 | #4 Sounds + OS notifications + toasts | Done | ADR 0017: two chimes, custom files, per-provider mute (not per-agent), click focuses, 1 s delay, 8 s / 5 s expiry |
 | Review slot | Done | ADR 0021: uncommitted / branch / commits / last turn, line comments; git runs where the checkout is (the owning Server, on a machine too) |

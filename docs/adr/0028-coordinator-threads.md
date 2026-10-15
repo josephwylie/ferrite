@@ -1,9 +1,12 @@
 ---
-status: accepted
+status: superseded by 0030
 date: 2026-10-15
 ---
 
 # Coordinator Threads
+
+> Superseded by ADR 0030: herdr-projects is vendored as Ferrite's
+> coordinator, and what this ADR built is removed.
 
 Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
 "Features taken from plugins" → Coordinator Threads), on the API of ADR

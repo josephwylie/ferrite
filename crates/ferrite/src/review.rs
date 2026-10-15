@@ -31,7 +31,7 @@
 use std::ops::Range;
 
 use ferrite_core::protocol::{
-    PullRequest, WireCheckStatus, WireMerge, WirePr, WirePrCommentKind, WirePrState, WireSync,
+    ReviewPullRequest, WireCheckStatus, WireMerge, WirePr, WirePrCommentKind, WirePrState, WireSync,
 };
 use ferrite_reviewr::diff::{FileDiff, Row};
 use ferrite_reviewr::ferrite::{self as reviewr, FileSides};
@@ -277,7 +277,7 @@ pub(crate) struct ReviewView {
     /// The pull request is shown in the diff's place.
     pr_open: bool,
     /// The pull request; `None` while it is being read.
-    pr: Option<PullRequest>,
+    pr: Option<ReviewPullRequest>,
     /// Markdown files read rendered rather than as rows.
     markdown: bool,
     /// The shown files' rows, in drawing order.
@@ -497,7 +497,7 @@ impl ReviewView {
     }
 
     /// The pull request has been read.
-    pub(crate) fn show_pr(&mut self, pr: PullRequest, cx: &mut Context<Self>) {
+    pub(crate) fn show_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
         self.pr = Some(pr);
         self.error = None;
         cx.notify();
@@ -2100,7 +2100,7 @@ mod tests {
         assert!(review.read_with(cx, |r, _| r.pr_open()));
         review.update(cx, |review, cx| {
             review.show_pr(
-                PullRequest {
+                ReviewPullRequest {
                     noun: "PR".into(),
                     pr: Err("No PR yet. Ready to ship?".into()),
                 },

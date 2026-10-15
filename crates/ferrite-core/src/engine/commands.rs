@@ -213,6 +213,7 @@ impl Engine {
             | Op::ListCommits { .. }
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }
+            | Op::ReviewPullRequest { .. }
             | Op::PullRequest { .. }
             | Op::Coordinate { .. }
             | Op::Restart { .. }

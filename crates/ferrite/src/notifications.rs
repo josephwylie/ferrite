@@ -386,9 +386,8 @@ pub struct Toast {
     until: Instant,
 }
 
-/// What one `Bell::ring` did: the events that rang (each owes its sound and,
-/// away from the window, its system notification), and whether the toasts
-/// changed.
+/// What one `Bell::ring` did: the events that rang (each owes its sound and
+/// its system notification), and whether the toasts changed.
 #[derive(Debug, Default)]
 pub struct Ring {
     pub rang: Vec<Alert>,

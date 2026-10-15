@@ -319,8 +319,15 @@ pub enum Op {
         path: PathBuf,
         file: String,
     },
-    /// The pull request of the branch checked out at `path`, as its
-    /// forge's CLI reads it (ADR 0021). Replied `pull_request`.
+    /// The pull request of the branch checked out at `path`, whole, as its
+    /// forge's CLI reads it for a review (ADR 0021). Replied
+    /// `review_pull_request`.
+    ReviewPullRequest {
+        path: PathBuf,
+    },
+    /// The PR of the branch checked out at `path`, read by `gh` on the
+    /// Server's computer, where the checkout is: what a Thread row's PR
+    /// label says. Replied `pull_request`.
     PullRequest {
         path: PathBuf,
     },
@@ -852,14 +859,21 @@ pub enum Done {
         #[serde(default)]
         code_more: bool,
     },
-    /// A `pull_request`'s pull request, or the note in its place, `noun`
-    /// the forge's word for one.
-    PullRequest {
+    /// A `review_pull_request`'s pull request, or the note in its place,
+    /// `noun` the forge's word for one.
+    ReviewPullRequest {
         noun: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pr: Option<WirePr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+    },
+    /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
+    /// (`workspace::pr_view`), or none when `gh` had nothing to say — no
+    /// `gh`, not logged in, no PR for the branch.
+    PullRequest {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        json: Option<String>,
     },
     #[serde(other)]
     Unknown,

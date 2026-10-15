@@ -281,6 +281,34 @@ cannot, the window does without.
   (`refresh_branches`), the checkout and default-branch lookups, and
   the `@` menu's walk of the checkout are skipped on a machine. A review
   reads every scope: git runs on the machine (ADR 0021, `review_diff`).
+- **A Thread's PR label** (`#123 ✓`, below) is read by `gh` where the
+  checkout is: the window asks the Server that owns the Thread with a
+  gen-1 command, `pull_request {path}`, replied `pull_request {json?}` —
+  `gh pr view`'s JSON as printed, none when `gh` has nothing to say — on
+  a thread of its own as `list_repo`'s git is. On a machine that is the
+  machine's `gh`, logged in there; only an in-process Engine runs `gh`
+  in the window. An older Server answers `unsupported`, which reads as
+  no PR.
+
+### The PR label on Thread rows
+
+Matched from the herdr-plugin-gh-pr README, not its code (the repository
+carries no license). Each Thread row shows its checkout's branch PR after
+its drift: the number and one symbol — `✓` passing CI, `✗` failing, `●`
+pending, `◆` merged, `⊘` closed, none for an open PR with no checks — and
+no label without a PR. While a reading is out the symbol is `⟳`. A
+reading is asked for when a Thread is focused, when its Pane opens, and
+when its binding follows its agent into a worktree, at most once per
+Thread every 30 seconds (`pr::AUTO_EVERY`); `refresh PR status` asks at
+once and `open PR in browser` opens the PR's URL from the last reading,
+in this computer's browser. Both are palette commands and rows of the
+Thread's right-click menu, and actions with no default key the operator
+may bind (`cockpit::RefreshPrStatus`, `cockpit::OpenPrInBrowser`, ADR
+0024). No `gh`, no login and no PR all read as no label; a row never shows
+an error. This replaces the CI glyph the row drew from the branch status,
+whose PR was read by the window on the 60-second `PR_TTL` tick: the label's
+reading (`ThreadFacts::pr`) is the one the checks card reads too, and the
+branch status is git alone.
 - **No Finder.** "Reveal in Finder" is not offered for a machine's
   Thread: its path is not on this computer. "Copy path" stays.
 
@@ -290,7 +318,8 @@ feature, which only the app's dev-dependencies turn on).
 
 ## Not done here
 
-- On a machine, a Thread's branch label and status, and its binding
+- On a machine, a Thread's branch label and drift (its PR label is
+  read there), and its binding
   following the agent into a worktree it made: both need git on the
   machine read as the Thread works, not once per chip open as
   `list_repo` is.
