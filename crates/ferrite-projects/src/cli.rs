@@ -263,6 +263,9 @@ enum Command {
         #[command(subcommand)]
         command: TickerCommand,
     },
+    /// Ferrite: turn Ferrite's own coordinators into projects, once (ADR 0030)
+    #[command(hide = true)]
+    MigrateFerriteCoordinators { file: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -844,5 +847,6 @@ pub fn run() -> Result<()> {
             TickerCommand::Stop => ticker::stop(&ctx.root),
             TickerCommand::Status => ticker::status(&ctx.root),
         },
+        Command::MigrateFerriteCoordinators { file } => crate::ferrite_migrate::run(&ctx, &file),
     }
 }

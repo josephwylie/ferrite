@@ -1,6 +1,6 @@
 ---
 name: ferrite
-description: "Drive other Ferrite Threads: start an agent, prompt it, wait for it, read its transcript, coordinate a project's workers. Use only when the user asks to delegate work to, coordinate with, or check on another Ferrite Thread or agent, or when you are a project's coordinator. Requires FERRITE_THREAD_ID and FERRITE_SOCKET, which Ferrite sets for every agent it runs."
+description: "Drive other Ferrite Threads: start an agent, prompt it, wait for it, read its transcript. Use only when the user asks to delegate work to, coordinate with, or check on another Ferrite Thread or agent. Requires FERRITE_THREAD_ID and FERRITE_SOCKET, which Ferrite sets for every agent it runs."
 ---
 
 # Ferrite
@@ -149,45 +149,7 @@ it. Prefer `agent wait` when you only need to know when a Thread settles.
 
 ## Coordinate a project
 
-A **coordinator** is a Thread that leads one project: it never does the
-work itself, it proposes tasks and starts one **worker** Thread per task
-the user agreed to. Ferrite briefs it when it starts; the user starts one
-from Ferrite's palette (`coordinate <project>`), or:
-
-```bash
-"$F" coordinator start --goal "Ship billing" --follow-prs
-```
-
-A project has one coordinator: `coordinator start` from any directory or
-worktree of a project that has one answers that one, records the
-`--goal`, `--instructions` or `--follow-prs` given on it, and sends the
-running coordinator its changed brief.
-
-As the coordinator, name yourself with `--current`:
-
-```bash
-"$F" coordinator update --current --goal "…" --instructions "…"
-"$F" worker start --current "Add the invoice table to app/billing, with tests." --title invoices
-"$F" coordinator get --current
-```
-
-- `worker start` opens a Thread in a new worktree and branch of the
-  project, seats it in your Group, and sends it a brief: the project's
-  goal, standing instructions and memory, then its task. Write the task so
-  it stands on its own: the worker knows nothing else. Start a worker only
-  on the user's go-ahead for that task; each costs them money.
-- `coordinator get` answers the goal, the instructions, the memory, and
-  your workers: what needs the user first (`needs_you`), then what is
-  `ready_for_review`, then what is `working`.
-- A worker ends its report with a `## Remember` section; Ferrite adds
-  those lessons to the project's memory for the next worker.
-- With `--follow-prs` (or `coordinator update --current --follow-prs`),
-  workers are briefed to push their branch and open a pull request, and
-  failing checks and review remarks on it are sent back to that worker;
-  `--follow-prs=false` stops it. Once a worker's PR merges and it has
-  finished, Ferrite parks it, removes its worktree (and its branch when
-  nothing on it would be lost), and tells you: plan the next task. It is
-  listed under `closed` with its `merged` PR.
+A project's coordinator and its threads are Projects' (ADR 0030), not this skill's: run `ferrite-projects skill` and follow what it prints.
 
 ## Tell the user
 

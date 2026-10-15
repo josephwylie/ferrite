@@ -91,7 +91,7 @@ their fixtures, the coordinator palette and nav code, and the skill's
 coordinator section go. The API's names are append-only once released;
 these four never were (the API is not on `main`), so they are removed
 rather than kept as aliases. CONTEXT.md's Coordinator, Worker and Memory
-entries are rewritten to herdr-projects' terms when that lands.
+entries are rewritten to herdr-projects' terms.
 
 A one-time migration runs on first start when `coordinators.json` is
 beside the Store: each entry becomes a project under the Projects root
@@ -99,6 +99,10 @@ beside the Store: each entry becomes a project under the Projects root
 its memory file, the `pr-followup` routine when it followed PRs, a thread
 record per open worker naming its Thread), and the file is renamed
 `coordinators.json.migrated`. With no file there is nothing to do.
+The Server runs it at start as `ferrite-projects
+migrate-ferrite-coordinators <store_dir>/coordinators.json`, which exits 0
+when there is nothing to do and skips, with a note, a project whose slug
+already exists.
 
 ### Upstream updates
 

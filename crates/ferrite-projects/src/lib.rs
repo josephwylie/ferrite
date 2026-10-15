@@ -8,6 +8,8 @@ pub mod brief;
 pub mod cli;
 pub mod coordinator;
 pub mod doctor;
+// Ferrite: the one-time migration of Ferrite's own coordinators (ADR 0030).
+mod ferrite_migrate;
 pub mod grouping;
 pub mod herdr;
 pub mod inbox;

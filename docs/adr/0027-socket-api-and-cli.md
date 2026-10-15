@@ -189,5 +189,5 @@ non-delivery; never resend blindly; don't prompt your own Thread.
   `FERRITE_THREAD_ID` is not refused: only `--current` reads it, and
   refusing it would keep every agent inside a Thread from `--machine`. Paths are the
   machine's too: a `cwd` is never filled in from this computer's
-  directory, so `thread start` and `coordinator start` need `--cwd` with
-  an absolute path on the machine.
+  directory, so `thread start` needs `--cwd` with an absolute path on
+  the machine.

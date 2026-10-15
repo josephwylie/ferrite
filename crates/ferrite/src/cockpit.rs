@@ -30,7 +30,6 @@ pub(crate) mod visual_reference;
 use std::time::Duration;
 
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice, ThreadView};
-use ferrite_core::coordinator::Need;
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
@@ -40,9 +39,9 @@ use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::sound::Sound;
 
-/// The loose rows the nav last drew, in order, and the state each row was
-/// ranked by — under `sort: attention`, and in a coordinator's Group (C8,
-/// "never re-sort under the pointer"): while the pointer is inside the column or a drag is live,
+/// The loose rows the nav last drew, in order, and under `sort: attention`
+/// the state each row was ranked by (C8, "never re-sort under the
+/// pointer"): while the pointer is inside the column or a drag is live,
 /// the tree keeps this order, and Groups and sections keep the ranks they
 /// were sorted by. It re-ranks on pointer-leave, a focus change, or a
 /// Thread arriving or leaving — any of which changes `focused` or the row
@@ -7377,24 +7376,6 @@ impl CockpitView {
         );
     }
 
-    /// The Project's coordinator (ADR 0028), started or found, on screen —
-    /// in its Group once it has workers. A refusal lands in the nav's
-    /// banner.
-    fn coordinate(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        let provider = self.prefs.settings.default_provider;
-        match self.cockpit.coordinate(project, provider) {
-            Ok(thread) => {
-                self.group_error = None;
-                self.sync_panes(cx);
-                self.land_on_thread(thread, cx);
-            }
-            Err(error) => {
-                self.group_error = Some(format!("no coordinator: {error}").into());
-                cx.notify();
-            }
-        }
-    }
-
     /// `chosen` is a Project the caller is naming outright, which outranks
     /// every guess below — the filter, the current Group, the fallback.
     fn open_draft_with_choice(
@@ -8494,15 +8475,16 @@ impl CockpitView {
         };
         let held = held_ranks.is_some();
         let ranks = held_ranks.unwrap_or_default();
-        // A row's Attention: the held one while the tree holds still.
-        let held_attention = |row: &nav::ThreadRow| {
-            ranks
-                .get(&row.thread)
-                .copied()
-                .unwrap_or_else(|| row.status.attention())
+        // A row's rank under `sort: attention`, most urgent least: the held
+        // one while the tree holds still.
+        let rank = |row: &nav::ThreadRow| {
+            std::cmp::Reverse(
+                ranks
+                    .get(&row.thread)
+                    .copied()
+                    .unwrap_or_else(|| row.status.attention()),
+            )
         };
-        // A row's rank under `sort: attention`, most urgent least.
-        let rank = |row: &nav::ThreadRow| std::cmp::Reverse(held_attention(row));
         let attention = order == ThreadListOrder::Attention;
 
         // The Groups, in the durable order (creation order unless the
@@ -8533,14 +8515,7 @@ impl CockpitView {
                 if shown.is_empty() {
                     return None;
                 }
-                // A coordinator heads its Group, and its workers read in
-                // the order of what needs the operator (ADR 0028), whatever
-                // the sort.
-                if let Some(coordinator) = group.coordinator {
-                    shown.sort_by_key(|row| {
-                        (row.thread != coordinator, Need::of(held_attention(row)))
-                    });
-                } else if attention {
+                if attention {
                     shown.sort_by_key(rank);
                 }
                 // `None` is the Groups section; `Some(project)` a Project's.
@@ -8698,11 +8673,15 @@ impl CockpitView {
             });
         }
         if !held {
-            let ranks = solos
-                .iter()
-                .chain(groups.iter().flat_map(|group| group.members.iter()))
-                .map(|row| (row.thread, row.status.attention()))
-                .collect();
+            let ranks = if attention {
+                solos
+                    .iter()
+                    .chain(groups.iter().flat_map(|group| group.members.iter()))
+                    .map(|row| (row.thread, row.status.attention()))
+                    .collect()
+            } else {
+                Default::default()
+            };
             *self.nav_snapshot.borrow_mut() = Some(NavSnapshot {
                 rows: loose.iter().map(|row| row.thread).collect(),
                 focused,

@@ -953,21 +953,6 @@ impl Engine {
         self.groups.apply(change)
     }
 
-    /// Seat a coordinator's worker in the Group it leads (ADR 0028).
-    pub fn enlist(
-        &mut self,
-        coordinator: ThreadId,
-        worker: ThreadId,
-        title: &str,
-    ) -> Result<GroupId, ApplyError> {
-        self.groups.enlist(coordinator, worker, title)
-    }
-
-    /// Where the Store lives: what else the Server keeps beside it.
-    pub fn store_dir(&self) -> &Path {
-        self.store.dir()
-    }
-
     pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
         self.groups.preview_drop(drag, target)
     }
@@ -2317,36 +2302,6 @@ impl Engine {
             .into_iter()
             .filter(|id| !self.threads.contains_key(id))
             .collect())
-    }
-
-    /// A parked Thread's binding, read from its log's header; `None` for an
-    /// open Thread (its view has it) or one the Store cannot read.
-    pub fn parked_workspace(&self, thread: ThreadId) -> Option<WorkspaceBinding> {
-        if self.threads.contains_key(&thread) {
-            return None;
-        }
-        self.store.peek(thread).ok()?.workspace
-    }
-
-    /// A parked Thread whose worktree was removed for good (a Coordinator's
-    /// merged Worker, ADR 0028) is bound to its repo's main checkout, so a
-    /// revive does not rebuild the tree on demand, and the worktree menu
-    /// forgets the tree. Refused for an open Thread: its Session works
-    /// there.
-    pub fn retire_worktree(&mut self, thread: ThreadId) -> io::Result<()> {
-        if self.threads.contains_key(&thread) {
-            return Err(io::Error::other("the Thread is open"));
-        }
-        let meta = self.store.peek(thread).map_err(io::Error::other)?;
-        let Some(WorkspaceBinding::Worktree { repo, path }) = meta.workspace else {
-            return Ok(());
-        };
-        self.parked_listing.stale = true;
-        let main = WorkspaceBinding::Main { checkout: repo };
-        self.store
-            .set_workspace(thread, &main, None)
-            .map_err(io::Error::other)?;
-        self.registry.remove_worktree(&path)
     }
 
     /// Whether some Thread's Main just finished making a worktree and is
