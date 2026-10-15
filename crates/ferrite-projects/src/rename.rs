@@ -221,7 +221,8 @@ pub fn run(ctx: &Ctx, args: &Args) -> Result<Outcome> {
     if view.is_none()
         && let Some(socket) = recorded
     {
-        bail!("the herdr session at {socket} does not answer, so live agents cannot be ruled out; try again once it runs");
+        // Ferrite: the session is Ferrite's Server.
+        bail!("Ferrite's Server at {socket} does not answer, so live agents cannot be ruled out; try again once it runs");
     }
     let live = match &view {
         Some(view) => live_agents(&project, view, &[&canonical_old, &old_dir, &project.dir()]),
