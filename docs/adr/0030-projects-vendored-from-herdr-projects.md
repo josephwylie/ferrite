@@ -97,16 +97,19 @@ A one-time migration runs on first start when `coordinators.json` is
 beside the Store: each entry becomes a project under the Projects root
 (`PROJECT.md` from its goal, standing instructions and the configured
 default profiles, `MEMORY.md` from its memory file, the `pr-followup`
-routine enabled when it followed PRs, and each open worker adopted as a
-thread in its Thread's working directory, re-briefed once it is ready),
-and the file is renamed `coordinators.json.migrated`. With no file there
-is nothing to do. The old coordinator Thread works in its repository, not
-the project folder, so it is not carried over as a coordinator; `open`
-starts one. The Server runs it at start as `ferrite-projects
-migrate-ferrite-coordinators <store_dir>/coordinators.json`, which exits 0
-when there is nothing to do, numbers a name an earlier entry already
-slugged (`app`, `app-2`), and skips, with a note, a project whose slug
-already exists under the root.
+routine enabled when it followed PRs, and each open worker adopted as
+`thread adopt` would, from the Server's own `thread.list`, re-briefed once
+it is ready). The Server must answer first; the file is then renamed
+`coordinators.json.migrated` before anything is created, so the migration
+never runs twice, and an entry or worker that fails becomes a note: a
+parked worker Thread is not listed, so it is left for `thread adopt` once
+it runs. With no file there is nothing to do. A name a project under the
+root or an earlier entry already slugs is numbered (`app`, `app-2`). The
+old coordinator Thread works in its repository, not the project folder,
+so it is not carried over as a coordinator, nor prompted; `open` starts
+one. The Server runs it at start as `ferrite-projects
+migrate-ferrite-coordinators <store_dir>/coordinators.json`, logs its
+notes and shows them as one toast once a window is there to show it.
 
 ### Upstream updates
 

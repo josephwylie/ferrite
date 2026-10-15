@@ -36,7 +36,8 @@ What differs from upstream, beyond the adapter.
   `ferrite-projects migrate-ferrite-coordinators <store>/coordinators.json`
   when that file is there, then `ferrite-projects ticker start` (which does
   nothing without projects), with `FERRITE_BIN` and `FERRITE_SOCKET` set.
-  Failures are logged; the Server never waits for them. `startup`'s default
+  Failures are logged; the Server never waits for them. The migration's
+  notes are logged and shown as one toast once a window is there. `startup`'s default
   agent view goes with it: the Projects view orders Threads natively.
 - **`update` and the command link are removed** (`src/update.rs`,
   `src/command_link.rs`, `scripts/link-command.sh`, the `update` subcommand,
