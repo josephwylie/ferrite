@@ -36,14 +36,15 @@ pub use remote::{Attach, Endpoint, ServerState};
 pub use status::{ServerStatus, StatusRow};
 
 pub(crate) mod mirror;
+mod parked;
 mod remote;
 mod shared;
 mod status;
 
 pub struct Cockpit {
     link: Link,
-    /// The Store, read-only from here: what a parked Thread says.
-    store: Store,
+    /// What a parked Thread says.
+    parked: parked::Parked,
     /// What is on screen (#28): the roster of Panes, focus, view, fullscreen
     /// and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
@@ -81,9 +82,10 @@ enum Link {
 impl Cockpit {
     /// A window driving an Engine of its own, in this process.
     pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
-        let reader = store.clone();
+        let reader = parked::Parked::Store(store.clone());
+        let dir = store.dir().to_path_buf();
         let engine = Engine::try_new(store, spawner)?;
-        let mut cockpit = Self::with(Link::InProcess(Box::new(engine)), reader);
+        let mut cockpit = Self::with(Link::InProcess(Box::new(engine)), reader, &dir);
         cockpit.receive();
         Ok(cockpit)
     }
@@ -97,22 +99,28 @@ impl Cockpit {
     /// A window attached to its Server: this computer's, starting one when
     /// none answers, or a machine's, connected to in the background. Without
     /// one it starts detached (`server`) and keeps trying; it never runs
-    /// the agents itself.
+    /// the agents itself. A machine's parked Threads are what its Server
+    /// publishes: their logs stay there.
     pub fn attach(attach: Attach) -> io::Result<Self> {
-        let store = Store::reader(&attach.store)?;
         let local = matches!(attach.server, Endpoint::Local { .. });
+        let parked = if local {
+            parked::Parked::Store(Store::reader(&attach.store)?)
+        } else {
+            parked::Parked::published()
+        };
+        let dir = attach.store.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut cockpit = Self::with(Link::Server(Box::new(remote)), store);
+        let mut cockpit = Self::with(Link::Server(Box::new(remote)), parked, &dir);
         cockpit.arrive(arrived.into_iter().collect());
         Ok(cockpit)
     }
 
-    fn with(link: Link, store: Store) -> Self {
+    fn with(link: Link, parked: parked::Parked, dir: &Path) -> Self {
         Self {
             link,
-            shared: shared::Shared::new(store.dir()),
-            store,
+            shared: shared::Shared::new(dir),
+            parked,
             roster: Roster::default(),
             synced: Vec::new(),
             mirrors: mirror::Mirrors::default(),
@@ -282,7 +290,9 @@ impl Cockpit {
                     if new_boot {
                         self.mirrors = mirror::Mirrors::default();
                     }
-                    self.shared = shared::Shared::from_snapshot(&snapshot, self.store.dir());
+                    let dir = self.shared.dir().to_path_buf();
+                    self.shared = shared::Shared::from_snapshot(&snapshot, &dir);
+                    self.parked.attached(&snapshot);
                     self.mirrors.retain(&self.shared.open);
                     for state in snapshot.threads {
                         self.mirrors.receive(
@@ -341,6 +351,7 @@ impl Cockpit {
             _ => {}
         }
         self.shared.receive(&message);
+        self.parked.receive(&message);
         self.mirrors.receive(message, boot);
     }
 
@@ -1042,7 +1053,7 @@ impl Cockpit {
     }
 
     pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
-        self.store.peek(thread).map(|meta| meta.project_id)
+        self.parked.peek(thread).map(|meta| meta.project_id)
     }
 
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
@@ -1208,7 +1219,7 @@ impl Cockpit {
     /// The Threads not open, in creation order.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
         Ok(self
-            .store
+            .parked
             .thread_ids()?
             .into_iter()
             .filter(|thread| self.thread(*thread).is_none())
@@ -1241,7 +1252,7 @@ impl Cockpit {
     }
 
     pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
-        self.store.peek(thread)
+        self.parked.peek(thread)
     }
 
     /// The subagents a Thread knows, live or parked. A parked Thread's are
@@ -1256,14 +1267,14 @@ impl Cockpit {
     /// A read-only handle on the Thread logs, for the parked-Thread reads
     /// too slow for the UI thread: it can be moved to a background task.
     pub fn log_reader(&self) -> LogReader {
-        LogReader::new(self.store.clone())
+        self.parked.log_reader()
     }
 
     /// When a Thread was last used, live or parked — the nav's default
     /// order and its "3 days" line. One `stat`, so callers still cache it
     /// rather than ask per frame.
     pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
-        self.store.last_used(thread)
+        self.parked.last_used(thread)
     }
 
     /// The open Threads.
@@ -1283,11 +1294,11 @@ impl Cockpit {
     /// callers keep the answer rather than ask it per frame.
     pub fn last_worked_project(&self) -> Option<ProjectId> {
         let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
-            .store
+            .parked
             .thread_ids()
             .unwrap_or_default()
             .into_iter()
-            .map(|thread| (self.store.last_used(thread), thread))
+            .map(|thread| (self.parked.last_used(thread), thread))
             .collect();
         // Newest first, and a Thread whose log cannot be stat'd sorts last
         // rather than counting as the epoch's most recent.
@@ -1313,7 +1324,7 @@ impl Cockpit {
         if let Some(open) = self.thread(thread) {
             return Ok(open.title().map(str::to_string));
         }
-        self.store.peek(thread).map(|meta| meta.title)
+        self.parked.peek(thread).map(|meta| meta.title)
     }
 
     /// What a Thread is called on screen: the title the operator gave it;
@@ -1340,7 +1351,7 @@ impl Cockpit {
                 })
                 .unwrap_or_else(numbered);
         }
-        let Ok(meta) = self.store.peek(thread) else {
+        let Ok(meta) = self.parked.peek(thread) else {
             return numbered();
         };
         if let Some(title) = meta.title {
@@ -1349,11 +1360,8 @@ impl Cockpit {
         if !auto {
             return numbered();
         }
-        self.store
-            .peek_first_prompt(thread)
-            .ok()
-            .flatten()
-            .map(|text| title_from_prompt(&text))
+        self.parked
+            .prompt_title(thread)
             .unwrap_or_else(numbered)
     }
 
@@ -1511,6 +1519,12 @@ impl Cockpit {
 
     pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
         self.shared.account_limits(provider)
+    }
+
+    /// Whether a machine's parked Threads moved since the last ask: its
+    /// Server said so. This computer's are read at the window's moments.
+    pub fn take_parked_changed(&mut self) -> bool {
+        self.parked.take_changed()
     }
 
     pub fn take_models_changed(&mut self) -> bool {

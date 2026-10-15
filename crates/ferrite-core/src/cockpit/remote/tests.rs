@@ -61,6 +61,7 @@ fn server_answering_nothing(store: &std::path::Path, drop_at: usize) -> Receiver
                             registry: None,
                             notices: None,
                             providers: None,
+                            parked: None,
                         }))
                         .unwrap();
                 }

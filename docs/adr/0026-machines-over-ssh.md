@@ -95,9 +95,35 @@ when the operator clicks. Other failures back off from 250 ms to 30 s
 behaviour, attached at once) or `Endpoint::Machine(Arc<Bridge>)`,
 attached in the background from the first `poll`, since ssh can take
 seconds. `ServerState::Detached` carries `attention`, the `Failure` only
-the operator can fix. A machine's window reads parked Threads from an
-empty Store of its own (`~/.ferrite/machines/<hash>/threads`): a
-machine's log stays on the machine.
+the operator can fix.
+
+### Parked Threads
+
+A machine's logs stay on the machine, so its window has no Store to
+read parked Threads from. Its Server publishes them instead: `parked
+{revision, threads[]}`, latest-wins, and the snapshot's `parked`, a
+gen-1 addition (ADR 0025). Each row is what the window would have read
+off the log — provider, title, the first prompt's title, binding,
+Project, last use (ms since the epoch), turns and Subagents — or only
+its age when the log cannot be read. The Engine reads the rows afresh
+only after something may have moved one (the open Threads changed, a
+rename, delete, import or provider change) and publishes them when they
+differ, so an idle Server reads nothing.
+
+`Cockpit` reads parked Threads through one seam (`cockpit::Parked`):
+this computer's Store (`Store::reader`, unchanged) or, on a machine,
+the published rows; the off-thread counts (`LogReader`) follow it. A
+row that moved tells the window to rebuild its parked rows
+(`take_parked_changed`), since on a machine there are none until the
+Server says so. Reopening is the `revive` command, as for any Thread.
+
+Every Server publishes the rows, and this computer's windows ignore
+them: telling the windows apart would need a capability for a cost
+paid only when a Thread parks or revives.
+
+The empty per-machine Store is gone: nothing reads parked Threads from
+`Attach::store` for a machine, which now only names the directory the
+window's copies of its Groups and Projects belong to.
 
 ### One machine on screen
 
@@ -152,6 +178,9 @@ window is on a machine: it is this computer's.
 - Starting new Threads on a machine needs its Projects: the window
   offers the machine's registered Projects, but the Project editor picks
   local folders.
-- A machine's parked Threads are not listed (its log is on the machine).
+- An open Thread's Project on a machine: the `thread` state does not
+  carry it, so a machine's open Threads group under no Project. And the
+  window's copy of a machine's Groups checks a drop against a local
+  Store at `Attach::store`, which holds no Thread, so it refuses.
 - Notifications (sound, system) for Decisions on a machine off screen.
 - Phone access (plan §6, "later").

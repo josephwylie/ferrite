@@ -607,6 +607,7 @@ struct PublishedShared {
     registry: Option<serde_json::Value>,
     notices: Option<Vec<protocol::WireNotice>>,
     providers: Option<Vec<protocol::ProviderState>>,
+    parked: Option<Vec<protocol::ParkedThread>>,
 }
 
 /// `now`, when it is not what was last published: it is from here on.
@@ -832,6 +833,9 @@ pub struct Engine {
     published: BTreeMap<ThreadId, Published>,
     published_open: Vec<ThreadId>,
     published_shared: PublishedShared,
+    /// Something may have changed a parked Thread's row: the `parked`
+    /// message is read afresh off the Store at the next publish.
+    parked_stale: bool,
     revision: u64,
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
@@ -891,6 +895,7 @@ impl Engine {
             published: BTreeMap::new(),
             published_open: Vec::new(),
             published_shared: PublishedShared::default(),
+            parked_stale: true,
             revision: 0,
             spawner,
             model_discovery,
@@ -1494,6 +1499,7 @@ impl Engine {
         thread: ThreadId,
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
+        self.parked_stale = true;
         let Some(state) = self.threads.get(&thread) else {
             // Parked: the lock is whether a prompt was ever sent, which the
             // log's tail says without a full load.
@@ -1742,6 +1748,7 @@ impl Engine {
     /// legacy unregistered worktree binding is removed, and then only when
     /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
+        self.parked_stale = true;
         if self.bootstraps.contains_key(&thread) {
             return self.park(thread).map_err(DeleteError::Io);
         }
@@ -2013,6 +2020,7 @@ impl Engine {
     /// session id. A refusal is the import module's, unchanged: readable,
     /// and no Thread was created.
     pub fn import(&mut self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
+        self.parked_stale = true;
         crate::import::import_registered(&self.store, &mut self.registry, path)
     }
 
@@ -2364,6 +2372,7 @@ impl Engine {
                 "Thread title cannot be blank",
             ));
         }
+        self.parked_stale = true;
         let mut state = self.threads.get_mut(&thread);
         if let Some(state) = state.as_mut() {
             state.history.clear();
@@ -3613,6 +3622,7 @@ impl Engine {
             registry: self.published_shared.registry.clone(),
             notices: self.published_shared.notices.clone(),
             providers: self.published_shared.providers.clone(),
+            parked: self.published_shared.parked.clone(),
         }
     }
 
@@ -3801,6 +3811,7 @@ impl Engine {
                 }
             }
             self.published_open = self.open.clone();
+            self.parked_stale = true;
             self.revision += 1;
             self.outbox.push(ServerMessage::Roster {
                 revision: self.revision,
@@ -3848,6 +3859,71 @@ impl Engine {
                 providers,
             });
         }
+        if std::mem::take(&mut self.parked_stale) {
+            let rows = self.parked_rows();
+            if let Some(threads) = changed(&mut self.published_shared.parked, rows) {
+                self.revision += 1;
+                self.outbox.push(ServerMessage::Parked {
+                    revision: self.revision,
+                    threads,
+                });
+            }
+        }
+    }
+
+    /// Each parked Thread's row, as a window on a machine lists it: a
+    /// header line, the log's tail and a `stat` each — read only when a
+    /// park, revive, rename, delete, import or provider change may have
+    /// moved one. A log from before schema 13 is replayed for its counts
+    /// once, ever (`Store::summary`).
+    fn parked_rows(&self) -> Vec<protocol::ParkedThread> {
+        self.parked()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|thread| {
+                let last_used_ms = self
+                    .store
+                    .last_used(thread)
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|since| since.as_millis() as u64);
+                let Ok(meta) = self.store.peek(thread) else {
+                    return protocol::ParkedThread {
+                        thread,
+                        provider: None,
+                        title: None,
+                        prompt_title: None,
+                        workspace: None,
+                        session_project_root: None,
+                        project: None,
+                        last_used_ms,
+                        turns: None,
+                        subagents: None,
+                    };
+                };
+                let prompt_title = match meta.title {
+                    Some(_) => None,
+                    None => self
+                        .store
+                        .peek_first_prompt(thread)
+                        .ok()
+                        .flatten()
+                        .map(|text| title_from_prompt(&text)),
+                };
+                let summary = self.store.summary(thread, replayed_subagents).ok();
+                protocol::ParkedThread {
+                    thread,
+                    provider: Some(meta.provider),
+                    title: meta.title,
+                    prompt_title,
+                    workspace: meta.workspace.as_ref().map(Into::into),
+                    session_project_root: meta.session_project_root,
+                    project: meta.project_id,
+                    last_used_ms,
+                    turns: summary.as_ref().map(|summary| summary.turns),
+                    subagents: summary.and_then(|summary| summary.subagents),
+                }
+            })
+            .collect()
     }
 
     fn note_open(&mut self, thread: ThreadId) {
@@ -4656,15 +4732,30 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
 }
 
 /// Reads a Thread's log without the Cockpit: `Cockpit::log_reader`. It
-/// never writes, so a copy may replay parked logs off the UI thread.
+/// never writes, so a copy may replay parked logs off the UI thread. On a
+/// machine it reads what the machine's Server counted (ADR 0026).
 #[derive(Clone)]
 pub struct LogReader {
-    store: Store,
+    logs: Logs,
+}
+
+#[derive(Clone)]
+enum Logs {
+    Store(Store),
+    Published(Vec<protocol::ParkedThread>),
 }
 
 impl LogReader {
     pub(crate) fn new(store: Store) -> Self {
-        Self { store }
+        Self {
+            logs: Logs::Store(store),
+        }
+    }
+
+    pub(crate) fn published(threads: Vec<protocol::ParkedThread>) -> Self {
+        Self {
+            logs: Logs::Published(threads),
+        }
     }
 
     /// The subagents a parked Thread's durable activity knows — a replay of
@@ -4672,19 +4763,42 @@ impl LogReader {
     /// Read off the log's tail for a schema-13 log; a log from before is
     /// replayed once and remembered (`Store::summary`).
     pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        Ok(self
-            .store
-            .summary(thread, replayed_subagents)?
-            .subagents
-            .unwrap_or_default())
+        match &self.logs {
+            Logs::Store(store) => Ok(store
+                .summary(thread, replayed_subagents)?
+                .subagents
+                .unwrap_or_default()),
+            Logs::Published(threads) => published(threads, thread, |row| row.subagents),
+        }
     }
 
     /// How many turns a parked Thread's log holds — its prompts since the
     /// last conversation reset: the wall's parked tile reads `11 turns`.
     /// Off the log's tail, or remembered like `subagent_count`.
     pub fn turn_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        Ok(self.store.summary(thread, replayed_subagents)?.turns)
+        match &self.logs {
+            Logs::Store(store) => Ok(store.summary(thread, replayed_subagents)?.turns),
+            Logs::Published(threads) => published(threads, thread, |row| row.turns),
+        }
     }
+}
+
+/// A count the machine's Server published for `thread`, when it could.
+fn published(
+    threads: &[protocol::ParkedThread],
+    thread: ThreadId,
+    count: impl Fn(&protocol::ParkedThread) -> Option<usize>,
+) -> Result<usize, LoadError> {
+    threads
+        .iter()
+        .find(|row| row.thread == thread)
+        .and_then(count)
+        .ok_or_else(|| {
+            LoadError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("thread {thread}: the machine did not say"),
+            ))
+        })
 }
 
 /// The subagents a full replay of a snapshot knows: what a pre-13 log's

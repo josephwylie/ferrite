@@ -40,6 +40,11 @@ impl Shared {
         }
     }
 
+    /// The Store these are of.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub(crate) fn from_snapshot(snapshot: &Snapshot, dir: &Path) -> Self {
         let mut shared = Self {
             open: snapshot.roster.open.clone(),

@@ -317,3 +317,114 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// A Session that never speaks: what the machine's Server revives onto.
+struct Quiet {
+    events: std::sync::mpsc::Receiver<SessionEvent>,
+    _provider: std::sync::mpsc::Sender<SessionEvent>,
+}
+
+impl Session for Quiet {
+    fn events(&self) -> &std::sync::mpsc::Receiver<SessionEvent> {
+        &self.events
+    }
+    fn send(&mut self, _: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn interrupt(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct Quietly;
+
+impl Spawner for Quietly {
+    fn spawn(
+        &mut self,
+        _: ferrite_core::cockpit::SpawnRequest,
+    ) -> std::io::Result<Box<dyn Session>> {
+        let (provider, events) = std::sync::mpsc::channel();
+        Ok(Box::new(Quiet {
+            events,
+            _provider: provider,
+        }))
+    }
+}
+
+/// A machine's parked Threads are its Server's to list: its logs stay on
+/// it. They show in the nav's Parked section, called what the machine's
+/// log calls them, and a click revives one there.
+#[gpui::test]
+fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    let dir = scratch("machine-parked");
+    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(Quietly)).unwrap();
+    let mut core = Cockpit::attach(Attach {
+        store: dir.join("window").join("threads"),
+        server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
+            "box",
+            dir.join("bridge").join("bridge.sock"),
+            dial,
+        ))),
+        client: ferrite_core::protocol::Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    })
+    .unwrap();
+    for _ in 0..500 {
+        core.pump();
+        if matches!(core.server(), Some(ServerState::Attached { .. })) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let named = core
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    let other = core
+        .open(Provider::Codex, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    core.rename_thread(named, "Release notes").unwrap();
+    core.park(named).unwrap();
+    core.park(other).unwrap();
+
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.facts.parked().len() == 2)
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.facts.parked(), &[named, other], "in creation order");
+        assert_eq!(view.facts.name(named).as_ref(), "Release notes");
+        assert!(view.panes.is_empty(), "nothing open on the machine");
+    });
+    assert!(
+        !dir.join("window").join("threads").exists(),
+        "the window keeps no Store for the machine"
+    );
+
+    let fold = cx
+        .debug_bounds("nav-parked")
+        .expect("the machine's parked Threads put the Parked section in the nav");
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
+    let row = cx
+        .debug_bounds(row_id)
+        .expect("unfolded, the machine's parked Thread has a row");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.panes.len() == 1 && view.facts.parked() == [other]
+        })
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].thread(), Some(named), "revived on the machine");
+    });
+}

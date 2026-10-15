@@ -202,7 +202,7 @@ Server → Client:
 | Message | Lane | Meaning |
 |---|---|---|
 | `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. |
-| `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
+| `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?, parked?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
 | `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`, in pieces of about 1 MiB (`after` counts the inputs before each; `0` starts the Thread over); then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
 | `decision {thread, subject?, handle, decision}` / `decision_closed {thread, handle, by}` | reliable | To every client, watching or not. `by`: `answered {client}`, `cancelled` (the provider withdrew it), `session_ended`, `server_restart` (the Server restarts or stops). A watcher also reads each Decision from its Thread's inputs. |
@@ -210,6 +210,7 @@ Server → Client:
 | `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus, permission modes, supported controls, store error, generation. |
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
+| `parked {revision, threads[]}` | latest-wins | The Threads not open, as the Store says them: header facts, first-prompt title, last use, turn and Subagent counts. Added for machines (ADR 0026), whose windows have no Store to read. |
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
 | `allowance_warning {provider, window, threshold, used_fraction}` | reliable | A provider's allowance rose past one of the operator's thresholds. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |
@@ -245,7 +246,7 @@ loses text. Coalescing gives the same effect losslessly: adjacent text,
 thinking and tool-output deltas of one Thread are concatenated while they
 wait (the merged `input` carries the last `seq`). The latest-wins kinds
 (`thread`, `tool_draft` per tool, `roster`, `groups`, `registry`,
-`notices`, `providers`) take a keyed slot: a newer one drops the one of
+`notices`, `providers`, `parked`) take a keyed slot: a newer one drops the one of
 its kind still waiting and joins the back of the queue, so it is never
 delivered ahead of anything queued before it. They share the one ordered queue
 rather than a second one, as first written here, because order carries

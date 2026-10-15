@@ -260,6 +260,7 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
                 registry: None,
                 notices: None,
                 providers: None,
+                parked: None,
             }))
             .unwrap();
         connection

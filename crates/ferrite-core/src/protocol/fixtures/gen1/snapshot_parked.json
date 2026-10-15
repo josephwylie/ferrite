@@ -1,0 +1,1 @@
+{"type":"snapshot","boot_id":"b-1","revision":7,"threads":[],"roster":{"open":[],"parked":[2]},"decisions":[],"parked":[{"thread":2,"provider":"codex","prompt_title":"Tidy the release notes","workspace":{"kind":"main","checkout":"/src/ferrite"},"project":2,"last_used_ms":1759990000000,"turns":11,"subagents":2}]}

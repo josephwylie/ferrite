@@ -538,6 +538,12 @@ pub enum ServerMessage {
         revision: u64,
         providers: Vec<ProviderState>,
     },
+    /// The Threads not open, as the Store says them (ADR 0026): what a
+    /// window on a machine lists, whose logs stay there.
+    Parked {
+        revision: u64,
+        threads: Vec<ParkedThread>,
+    },
     /// A provider's allowance rose past one of the operator's thresholds.
     AllowanceWarning {
         provider: Provider,
@@ -598,6 +604,38 @@ pub struct Snapshot {
     pub notices: Option<Vec<WireNotice>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<Vec<ProviderState>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked: Option<Vec<ParkedThread>>,
+}
+
+/// A Thread not open, in creation order: what its log's header and tail
+/// say, read where the log is. `provider` is absent when the log could not
+/// be read; the row then claims nothing but its age.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParkedThread {
+    pub thread: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Its first prompt, shortened as `title_from_prompt` does: what a
+    /// Thread with no title is called.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WireBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_project_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectId>,
+    /// When its log was last written, in milliseconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_ms: Option<u64>,
+    /// Prompts since its last conversation reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<usize>,
 }
 
 /// One pending Decision, as the snapshot lists them.

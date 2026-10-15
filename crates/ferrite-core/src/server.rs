@@ -187,6 +187,53 @@ pub fn run(options: Options) -> i32 {
     server.serve(hear)
 }
 
+/// A machine for the window's tests (ADR 0026): a Server on a thread of
+/// this process, for the Store at `store`, whose Sessions `spawner` makes,
+/// and the Dial that reaches it as ssh reaches a machine's. It serves until
+/// the process ends.
+pub fn fixture_machine(
+    store: PathBuf,
+    spawner: Box<dyn crate::engine::Spawner + Send>,
+) -> io::Result<crate::machine::Dial> {
+    /// The window's end: dropped, it hangs up, as ssh does.
+    struct Upload(link::Stream);
+    impl io::Write for Upload {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
+    }
+    impl Drop for Upload {
+        fn drop(&mut self) {
+            let _ = link::TryClone::shutdown(&self.0);
+        }
+    }
+    let address = link::address(&store);
+    let (heard, hear) = mpsc::channel();
+    link::accept_all(link::listen(&address)?, heard)?;
+    std::thread::spawn(move || {
+        let engine = Engine::try_new(Store::open(&store).expect("the Store opens"), spawner)
+            .expect("the registry opens");
+        let info = ServerInfo {
+            version: env!("CARGO_PKG_VERSION").into(),
+            executable: PathBuf::new(),
+        };
+        let (_, renders) = render::remote();
+        let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
+        Server::new(engine, info, renders, Arc::default(), settings_dir).serve(hear)
+    });
+    Ok(Box::new(move || {
+        let stream = link::connect(&address)?;
+        Ok(crate::machine::Tunnel {
+            from: Box::new(link::TryClone::try_clone(&stream)?),
+            to: Box::new(Upload(stream)),
+            ended: Box::new(|| None),
+        })
+    }))
+}
+
 /// The Threads whose Panes were open when the last Server stopped — after
 /// a crash, a reboot or a restart — which resume without a window. A store
 /// from before open-state persistence falls back once to its most recently
