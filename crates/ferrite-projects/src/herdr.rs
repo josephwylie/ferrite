@@ -177,7 +177,7 @@ fn not_wired<T>(call: &str, why: &str) -> Result<T, HerdrError> {
 /// Ferrite: Ferrite's error code under the Herdr name callers match on.
 fn herdr_code(code: &str) -> &str {
     match code {
-        "thread_not_found" => "pane_not_found",
+        "unknown_thread" => "pane_not_found",
         "project_not_found" => "workspace_not_found",
         "server_unavailable" => "unreachable",
         other => other,
@@ -423,11 +423,6 @@ impl Staged {
         Some(Staged { space: space.into(), focus: focus == "1", cwd: cwd.into() })
     }
 
-    /// A linked worktree's Space is its path; a Project's is its id.
-    fn in_worktree(&self) -> bool {
-        Path::new(&self.space).is_absolute()
-    }
-
     fn created(&self) -> Created {
         let id = self.id();
         Created { workspace_id: self.space.clone(), tab_id: id.clone(), pane_id: id }
@@ -450,24 +445,32 @@ fn provider(kind: &str) -> Result<&'static str, HerdrError> {
     }
 }
 
-/// Ferrite: where a new worktree goes, below the directory of the Server's
-/// socket (the Store) as Ferrite's own do, Herdr's layout within:
-/// `worktrees/<repo>/<branch with hyphens>`.
-fn worktree_dir(store: &Path, repo: &str, branch: &str) -> PathBuf {
-    let name = Path::new(repo).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
-    store.join("worktrees").join(name).join(branch.replace('/', "-"))
-}
-
-/// Ferrite: a git command's output, or its failure as herdr reports one.
-fn git_ran(out: Result<crate::runner::Output>, what: &str) -> Result<crate::runner::Output, HerdrError> {
-    let out = out.map_err(|e| HerdrError { code: "unreachable".into(), message: format!("{e:#}") })?;
-    if out.timed_out {
-        return refused("timeout", format!("`git {what}` timed out"));
+/// Ferrite: the arguments without the resume upstream adds to them
+/// (`agents::resume_args`), and the session that resume names: Ferrite
+/// resumes a Thread's conversation itself (`thread.start --resume`).
+fn split_resume(kind: &str, args: &[String]) -> (Vec<String>, Option<String>) {
+    let mut rest = Vec::new();
+    let mut resume = None;
+    let mut i = 0;
+    while i < args.len() {
+        let pair = args.get(i + 1).filter(|id| crate::agents::resume_args(kind, id).as_deref() == Some(&args[i..i + 2]));
+        let inline = args[i].split_once('=').map(|(_, id)| id).filter(|id| crate::agents::resume_args(kind, id).as_deref() == Some(&args[i..=i]));
+        match (pair, inline) {
+            (Some(id), _) => {
+                resume = Some(id.clone());
+                i += 2;
+            }
+            (None, Some(id)) => {
+                resume = Some(id.to_string());
+                i += 1;
+            }
+            (None, None) => {
+                rest.push(args[i].clone());
+                i += 1;
+            }
+        }
     }
-    if !out.success() {
-        return refused("failed", format!("`git {what}`: {}", out.error_text()));
-    }
-    Ok(out)
+    (rest, resume)
 }
 
 /// Ferrite: what a pane's screen shows, as Ferrite knows it exactly: whether
@@ -521,36 +524,109 @@ fn decision_text(decision: &Value) -> String {
     parts.join("\n")
 }
 
+/// Ferrite: the menu a pending Decision shows, as the answers its items
+/// give, in order: an approval's allow, then each suggestion (allow always,
+/// or a choice where plain allow is not offered), then deny; a question's
+/// options; a form's single choice field's options.
+fn menu(decision: &Value) -> Vec<Value> {
+    let kind = &decision["kind"];
+    match kind["kind"].as_str() {
+        Some("approval") => {
+            let offered = |rule: &str| decision["policy"][rule].as_bool().unwrap_or(true);
+            let input = &decision["input"];
+            let mut items = Vec::new();
+            if offered("allow") {
+                items.push(json!({ "kind": "allow", "input": input }));
+            }
+            for suggestion in decision["suggestions"].as_array().into_iter().flatten() {
+                items.push(match offered("allow") {
+                    true => json!({ "kind": "allow_always", "input": input, "suggestion": suggestion["value"] }),
+                    false => json!({ "kind": "choose", "value": suggestion["value"] }),
+                });
+            }
+            if offered("deny") {
+                items.push(json!({ "kind": "deny", "message": "" }));
+            }
+            items
+        }
+        Some("questions") => match kind["questions"].as_array().map(Vec::as_slice) {
+            Some([question]) => (0..question["options"].as_array().map_or(0, Vec::len)).map(|pick| json!({ "kind": "questions", "answers": [{ "picks": [pick] }] })).collect(),
+            _ => Vec::new(),
+        },
+        Some("form") => match kind["fields"].as_array().map(Vec::as_slice) {
+            Some([field]) if field["kind"]["kind"] == "enum" => field["kind"]["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|option| {
+                    let value = match field["kind"]["multi_select"].as_bool() {
+                        Some(true) => json!([option["value"]]),
+                        _ => option["value"].clone(),
+                    };
+                    json!({ "kind": "form", "values": { field["id"].as_str().unwrap_or_default(): value } })
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
 /// Ferrite: the answer a key press gives a pending Decision, as the menu
-/// Herdr's terminal showed would have taken it: `1`, `y` or Enter allows (or
-/// picks the first choice), `2` allows always, `3` or `n` denies, a digit
-/// picks that choice. `None` when the keys mean nothing to it.
+/// Herdr's terminal showed would have taken it: Enter takes the first item
+/// (a form's defaults, when every required field has one), a digit that
+/// item, `y` allows and `n` denies (a form's single yes/no field: true or
+/// false). `None` when the keys mean nothing to it.
 fn key_answer(decision: &Value, keys: &[String]) -> Option<Value> {
     let key = match keys {
         [key] => key.as_str(),
         [key, enter] if enter == "enter" => key.as_str(),
         _ => return None,
     };
-    match decision["kind"]["kind"].as_str()? {
-        "approval" => match key {
-            "1" | "y" | "enter" => Some(json!({ "kind": "allow", "input": decision["input"] })),
-            "2" => match decision["suggestions"].as_array().and_then(|all| all.first()) {
-                Some(suggestion) => Some(json!({ "kind": "allow_always", "input": decision["input"], "suggestion": suggestion["value"] })),
-                None => Some(json!({ "kind": "allow", "input": decision["input"] })),
-            },
-            "3" | "n" => Some(json!({ "kind": "deny", "message": "" })),
+    let items = menu(decision);
+    let pick = |n: usize| items.get(n).cloned();
+    let fields = decision["kind"]["fields"].as_array().map(Vec::as_slice).filter(|_| decision["kind"]["kind"] == "form");
+    match (key, fields) {
+        ("enter", Some(fields)) if items.is_empty() => form_defaults(fields),
+        ("enter", _) => pick(0),
+        ("y" | "n", Some([field])) if field["kind"]["kind"] == "boolean" => {
+            Some(json!({ "kind": "form", "values": { field["id"].as_str().unwrap_or_default(): key == "y" } }))
+        }
+        ("y", _) => items.iter().find(|item| item["kind"] == "allow").cloned(),
+        ("n", _) => items.iter().find(|item| item["kind"] == "deny").cloned(),
+        (digit, _) => pick(digit.parse::<usize>().ok()?.checked_sub(1)?),
+    }
+}
+
+/// Ferrite: a form answered with its defaults, unless a required field has
+/// none.
+fn form_defaults(fields: &[Value]) -> Option<Value> {
+    let mut values = serde_json::Map::new();
+    for field in fields {
+        match &field["kind"]["default"] {
+            Value::Null if field["required"] == true => return None,
+            Value::Null => {}
+            default => {
+                values.insert(field["id"].as_str().unwrap_or_default().to_string(), default.clone());
+            }
+        }
+    }
+    Some(json!({ "kind": "form", "values": values }))
+}
+
+/// Ferrite: the answer text typed at a pending Decision gives it: a single
+/// question's own answer, where it takes one, or a form's single text field.
+fn text_answer(decision: &Value, text: &str) -> Option<Value> {
+    let kind = &decision["kind"];
+    match kind["kind"].as_str()? {
+        "questions" => match kind["questions"].as_array()?.as_slice() {
+            [question] if question["allow_other"] == true => Some(json!({ "kind": "questions", "answers": [{ "picks": [], "other": text }] })),
             _ => None,
         },
-        "questions" => {
-            let [question] = decision["kind"]["questions"].as_array()?.as_slice() else {
-                return None;
-            };
-            let pick = match key {
-                "enter" => 0,
-                digit => digit.parse::<usize>().ok()?.checked_sub(1)?,
-            };
-            (pick < question["options"].as_array()?.len()).then(|| json!({ "kind": "questions", "answers": [{ "picks": [pick] }] }))
-        }
+        "form" => match kind["fields"].as_array()?.as_slice() {
+            [field] if field["kind"]["kind"] == "string" => Some(json!({ "kind": "form", "values": { field["id"].as_str()?: text } })),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -717,40 +793,18 @@ impl<'a> Herdr<'a> {
     /// Creates a worktree-backed workspace. Returns the ids and the checkout
     /// path as herdr reports it (on the machine the call ran on).
     ///
-    /// Ferrite: the worktree is made now, before its agent, so the brief can
-    /// be written into it (`git worktree add`, over ssh on a machine); its
-    /// Thread is staged there and opens it as it is at `agent_start`.
+    /// Ferrite: the Server makes the worktree now (`worktree.create`, in its
+    /// registry's layout), before its agent, so the brief can be written into
+    /// it; its Thread is staged there and opens it as it is at `agent_start`.
     pub fn worktree_create(&self, repo: &str, branch: &str, base: &str, _label: &str) -> Result<(Created, String, String), HerdrError> {
-        let timeout = Duration::from_secs(20);
-        let path = match &self.machine {
-            None => {
-                let store = self.socket.parent().unwrap_or(Path::new("/"));
-                let path = worktree_dir(store, repo, branch).to_string_lossy().into_owned();
-                let cmd = Cmd::new("git", timeout).args(["-C", repo, "worktree", "add", "-b", branch, &path, base]);
-                git_ran(self.runner.run(&cmd), "worktree add")?;
-                path
-            }
-            Some(machine) => {
-                let target = crate::remote::saved_machines(self.runner, &self.bin)
-                    .into_iter()
-                    .find(|(label, _)| label == machine)
-                    .map(|(_, target)| target)
-                    .unwrap_or_else(|| machine.clone());
-                let relative = worktree_dir(Path::new(".ferrite/threads"), repo, branch).to_string_lossy().into_owned();
-                let q = crate::remote::quote;
-                let script = format!(
-                    "cd {repo} && p=\"$HOME\"/{relative} && git worktree add -b {branch} \"$p\" {base} >&2 && printf '%s' \"$p\"",
-                    repo = q(repo),
-                    relative = q(&relative),
-                    branch = q(branch),
-                    base = q(base),
-                );
-                let out = git_ran(crate::remote::ssh(self.runner, &target, &script, None, timeout), "worktree add")?;
-                out.stdout.trim().to_string()
-            }
-        };
+        let mut args = vec!["worktree", "create", "--cwd", repo, "--branch", branch];
+        if !base.is_empty() {
+            args.extend(["--base", base]);
+        }
+        let result = self.ferrite(&args, Duration::from_secs(20))?;
+        let path = result["worktree"]["path"].as_str().unwrap_or_default().to_string();
         if path.is_empty() {
-            return refused("failed", "`git worktree add` named no path");
+            return refused("failed", "`ferrite worktree create` named no path");
         }
         let created = Staged { space: path.clone(), focus: false, cwd: path.clone() }.created();
         Ok((created, path.clone(), path))
@@ -769,15 +823,14 @@ impl<'a> Herdr<'a> {
     /// Never passes `--force`: herdr refuses a dirty worktree and that refusal
     /// is reported unchanged.
     ///
-    /// Ferrite: a worktree's Space is its path; the Server removes the
-    /// worktree of the Thread working in it (`worktree.remove`, never
-    /// forced: `dirty_worktree_requires_force`).
+    /// Ferrite: a worktree's Space is its path, which the Server removes
+    /// (`worktree.remove`, parking the Threads in it; never forced:
+    /// `dirty_worktree_requires_force`). A Project's Space is no worktree.
     pub fn worktree_remove(&self, workspace: &str) -> Result<(), HerdrError> {
-        let threads = self.threads()?;
-        let Some(thread) = threads.iter().find(|t| t.worktree.as_deref() == Some(workspace)) else {
-            return refused("worktree_not_found", format!("no open Thread works in the worktree {workspace}"));
-        };
-        self.ferrite(&["worktree", "remove", "--thread", &thread.id()], Duration::from_secs(20)).map(|_| ())
+        if !Path::new(workspace).is_absolute() {
+            return refused("worktree_not_found", format!("Space {workspace} is a Ferrite project, not a worktree"));
+        }
+        self.ferrite(&["worktree", "remove", "--path", workspace], Duration::from_secs(20)).map(|_| ())
     }
 
     /// Ferrite: a Project's Space closes with the Project (its Threads
@@ -824,10 +877,11 @@ impl<'a> Herdr<'a> {
     /// detected the agent and it is ready for input.
     ///
     /// Ferrite: starts the Thread staged in `pane`, titled with the agent's
-    /// name, its CLI given `agent_args` (a resume among them), and answers
-    /// once it is ready (`agent_not_ready` otherwise; the Thread stays). A
-    /// start whose answer was lost left its Thread running: that one is the
-    /// answer, never a second.
+    /// name, its CLI given `agent_args`, and answers once it is ready
+    /// (`agent_not_ready` otherwise; the Thread stays). A resume among the
+    /// arguments is the start's own (`--resume`); a Thread staged in a
+    /// worktree opens it as it is. A start whose answer was lost left its
+    /// Thread running: that one is the answer, never a second.
     pub fn agent_start(&self, name: &str, kind: &str, pane: &str, agent_args: &[String]) -> Result<Agent, HerdrError> {
         let Some(staged) = Staged::parse(pane) else {
             return refused("agent_pane_occupied", format!("Thread {pane} already runs its agent: a Thread is born with it"));
@@ -837,17 +891,18 @@ impl<'a> Herdr<'a> {
             return Ok(running.agent());
         }
         let timeout_ms = AGENT_START_TIMEOUT.as_millis().to_string();
-        let mut args = vec!["thread", "start", "--cwd", &staged.cwd, "--provider", provider, "--title", name, "--ready", "--timeout-ms", &timeout_ms];
         // The Server finds the Thread's Project by its directory: `--project`
         // would move a Thread staged in a Project's subdirectory (a tab
         // thread's folder) to the Project's own directory.
-        if staged.in_worktree() {
-            args.push("--worktree");
-        }
+        let mut args = vec!["thread", "start", "--cwd", &staged.cwd, "--provider", provider, "--title", name, "--ready", "--timeout-ms", &timeout_ms];
         if staged.focus {
             args.push("--focus");
         }
-        for arg in agent_args {
+        let (agent_args, resume) = split_resume(kind, agent_args);
+        if let Some(session) = &resume {
+            args.extend(["--resume", session.as_str()]);
+        }
+        for arg in &agent_args {
             args.extend(["--args", arg.as_str()]);
         }
         // The Server enforces the timeout itself; the outer deadline only guards a hang.
@@ -912,31 +967,53 @@ impl<'a> Herdr<'a> {
     /// any, and refuses a pane that no longer hosts the agent.
     ///
     /// Ferrite: there is no terminal to press keys in, so each press becomes
-    /// what it meant: Escape or Ctrl+C interrupts the agent, and a menu key
-    /// answers the Decision pending on the Thread. Anything else is refused
-    /// (`no_decision`, `invalid_answer`) before anything is sent.
+    /// what it meant: Escape or Ctrl+C interrupts the agent, a menu key
+    /// answers the Decision pending on the Thread ([`key_answer`]), and Enter
+    /// with nothing pending sends nothing, as in an empty input box: a prompt
+    /// is never left in one. Anything else is refused (`no_decision`,
+    /// `invalid_answer`) before anything is sent.
     pub fn agent_send_keys(&self, target: &str, keys: &[String]) -> Result<(), HerdrError> {
         if matches!(keys, [key] if key == "esc" || key == "ctrl+c") {
             return self.ferrite(&["agent", "interrupt", "--thread", target], CALL_TIMEOUT).map(|_| ());
         }
-        let pending: Vec<Value> = self.ferrite_as(&["decision", "list", "--thread", target], "decisions", CALL_TIMEOUT)?;
-        let Some(decision) = pending.first().map(|p| &p["decision"]) else {
+        let Some(decision) = self.pending_decision(target)? else {
+            if matches!(keys, [key] if key == "enter") {
+                return Ok(());
+            }
             return refused("no_decision", format!("nothing on Thread {target} waits for keys ({}): Ferrite sends a prompt whole, and only a Decision is answered with a menu key", keys.join(" ")));
         };
-        let Some(answer) = key_answer(decision, keys) else {
-            return refused("invalid_answer", format!("`{}` answers nothing in Thread {target}'s Decision: {}", keys.join(" "), decision_text(decision)));
+        let Some(answer) = key_answer(&decision, keys) else {
+            return refused("invalid_answer", format!("`{}` answers nothing in Thread {target}'s Decision: {}", keys.join(" "), decision_text(&decision)));
         };
-        let id = decision["id"].as_str().unwrap_or_default();
-        self.ferrite(&["decision", "answer", "--thread", target, "--decision", id, "--answer", &answer.to_string()], CALL_TIMEOUT).map(|_| ())
+        self.answer(target, &decision, &answer)
     }
 
     /// Literal text typed into a pane, with no Enter (herdr has no agent-level
     /// form of this in 0.9.1).
     ///
-    /// Ferrite: there is no input box to type into: a prompt is sent whole
-    /// (`thread prompt`), a Decision answered with keys.
-    pub fn pane_send_text(&self, pane: &str, _text: &str) -> Result<(), HerdrError> {
-        not_wired(&format!("pane send-text {pane}"), "a Thread has no input box to type into; send a prompt, or answer its Decision with keys")
+    /// Ferrite: there is no input box to type into (a prompt is sent whole),
+    /// so text answers the Decision pending on the Thread where it takes
+    /// typed text ([`text_answer`]); anything else is refused before anything
+    /// is sent.
+    pub fn pane_send_text(&self, pane: &str, text: &str) -> Result<(), HerdrError> {
+        let Some(decision) = self.pending_decision(pane)? else {
+            return refused("no_decision", format!("nothing on Thread {pane} takes typed text: Ferrite has no input box to type into; send a prompt (`thread prompt`)"));
+        };
+        let Some(answer) = text_answer(&decision, text) else {
+            return refused("invalid_answer", format!("Thread {pane}'s Decision takes no typed text, only its menu keys: {}", decision_text(&decision)));
+        };
+        self.answer(pane, &decision, &answer)
+    }
+
+    /// Ferrite: the first Decision pending on `thread`, if any.
+    fn pending_decision(&self, thread: &str) -> Result<Option<Value>, HerdrError> {
+        let pending: Vec<Value> = self.ferrite_as(&["decision", "list", "--thread", thread], "decisions", CALL_TIMEOUT)?;
+        Ok(pending.into_iter().next().map(|mut p| p["decision"].take()))
+    }
+
+    fn answer(&self, thread: &str, decision: &Value, answer: &Value) -> Result<(), HerdrError> {
+        let id = decision["id"].as_str().unwrap_or_default();
+        self.ferrite(&["decision", "answer", "--thread", thread, "--decision", id, "--answer", &answer.to_string()], CALL_TIMEOUT).map(|_| ())
     }
 
     pub fn agent_focus(&self, target: &str) -> Result<(), HerdrError> {
@@ -952,18 +1029,6 @@ impl<'a> Herdr<'a> {
     pub fn notification_show(&self, title: &str, body: &str) -> Result<(), HerdrError> {
         self.ferrite(&["notification", "show", "--title", title, "--body", body], CALL_TIMEOUT).map(|_| ())
     }
-
-    /// Ferrite: the Ferrite Project a herdr-projects project lives in: the
-    /// one its coordinator works in, by the coordinator's name.
-    fn project_of(&self, slug: &str) -> Result<String, HerdrError> {
-        let names: Vec<String> = (1..=9).map(|n| crate::names::coordinator(slug, n)).collect();
-        self.threads()?
-            .iter()
-            .find(|t| t.title.as_ref().is_some_and(|title| names.contains(title)))
-            .map(|t| id_text(&t.project))
-            .filter(|project| !project.is_empty())
-            .map_or_else(|| refused("workspace_not_found", format!("`{slug}` has no coordinator open in Ferrite; `open {slug}` starts one")), Ok)
-    }
 }
 
 pub const SOURCE: &str = "herdr-projects";
@@ -973,16 +1038,12 @@ impl<'a> Herdr<'a> {
     /// globally, so this replaces any other tool's view.
     ///
     /// Ferrite: the view `focus` and `unfocus` install is the nav's focus
-    /// (`nav.focus`): one project's Threads, or every Thread. Ferrite's nav
-    /// sorts by need itself.
+    /// (`nav.focus`): only the block of the project the filter names, by its
+    /// slug, or every block. Ferrite's nav sorts by need itself.
     pub fn agent_view_set(&self, params: Value) -> Result<(), HerdrError> {
-        let project = match params["filter"]["value"].as_str() {
-            Some(slug) => Some(self.project_of(slug)?),
-            None => None,
-        };
         let mut args = vec!["nav", "focus"];
-        if let Some(project) = &project {
-            args.extend(["--project", project.as_str()]);
+        if let Some(slug) = params["filter"]["value"].as_str() {
+            args.extend(["--project", slug]);
         }
         self.ferrite(&args, CALL_TIMEOUT).map(|_| ())
     }
@@ -1051,7 +1112,7 @@ mod tests {
     #[test]
     fn ferrite_refusals_carry_herdr_codes() {
         let runner = FakeRunner::new();
-        runner.on("thread get", fail(1, r#"{"id":"1","error":{"code":"thread_not_found","message":"no open Thread has that id"}}"#));
+        runner.on("thread get", fail(1, r#"{"id":"1","error":{"code":"unknown_thread","message":"no open Thread has that id"}}"#));
         runner.on("thread list", fail(1, r#"{"id":"1","error":{"code":"server_unavailable","message":"no Ferrite server"}}"#));
         runner.on("project get", fail(1, r#"{"id":"1","error":{"code":"project_not_found","message":"no Project has that id"}}"#));
         assert_eq!(herdr(&runner).pane_cwd("9").unwrap_err().code, "pane_not_found");
@@ -1113,48 +1174,61 @@ mod tests {
         assert_eq!(herdr(&runner).agent_start("hp-demo-t-0002", "codex", &pane, &[]).unwrap_err().code, "agent_not_ready");
         assert_eq!(
             last(&runner, "thread start"),
-            ["thread", "start", "--cwd", "/wt", "--provider", "codex", "--title", "hp-demo-t-0002", "--ready", "--timeout-ms", "20000", "--worktree"]
+            ["thread", "start", "--cwd", "/wt", "--provider", "codex", "--title", "hp-demo-t-0002", "--ready", "--timeout-ms", "20000"]
         );
     }
 
     #[test]
-    fn a_worktree_is_made_before_its_thread_and_removed_through_it() {
+    fn a_resume_is_the_starts_own_and_the_rest_go_to_the_agent() {
         let runner = FakeRunner::new();
-        runner.on("worktree add", ok(""));
-        let (created, path, cwd) = herdr(&runner).worktree_create("/r/app", "hp/demo/t-0001", "origin/main", "Task").unwrap();
-        assert_eq!(path, "/store/worktrees/app/hp-demo-t-0001");
-        assert_eq!(cwd, path);
-        assert_eq!(created.workspace_id, path);
-        assert_eq!(Staged::parse(&created.pane_id).unwrap().cwd, path);
-        let add = runner.calls.borrow()[0].clone();
-        assert_eq!(add.program, "git");
-        assert_eq!(add.args, ["-C", "/r/app", "worktree", "add", "-b", "hp/demo/t-0001", "/store/worktrees/app/hp-demo-t-0001", "origin/main"]);
-
-        let broken = FakeRunner::new();
-        broken.on("worktree add", fail(128, "fatal: a branch named 'hp/demo/t-0001' already exists"));
-        let error = herdr(&broken).worktree_create("/r/app", "hp/demo/t-0001", "origin/main", "Task").unwrap_err();
-        assert!(error.message.contains("already exists"), "{error}");
-
-        runner.on("thread list", ok(THREADS));
-        runner.on("worktree remove", fail(1, r#"{"error":{"code":"dirty_worktree_requires_force","message":"/wt has modified or untracked files; nothing was removed"}}"#));
-        let error = herdr(&runner).worktree_remove("/wt").unwrap_err();
-        assert_eq!(error.code, "dirty_worktree_requires_force");
-        assert_eq!(last(&runner, "worktree remove"), ["worktree", "remove", "--thread", "12"]);
-        assert!(!runner.calls.borrow().iter().any(|c| c.args.contains(&"--force".to_string())));
-        assert_eq!(herdr(&runner).worktree_remove("/elsewhere").unwrap_err().code, "worktree_not_found");
+        runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
+        runner.on("thread start", ok(r#"{"result":{"thread":{"thread":21,"provider":"claude","attention":"idle","cwd":"/home/demo","project":"1"}}}"#));
+        let pane = Staged { space: "1".into(), focus: false, cwd: "/home/demo".into() }.id();
+        let strings = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        herdr(&runner).agent_start("hpc-demo", "claude", &pane, &strings(&["--model", "opus", "--resume", "s-1"])).unwrap();
+        assert_eq!(last(&runner, "thread start")[11..], ["--resume", "s-1", "--args", "--model", "--args", "opus"]);
+        herdr(&runner).agent_start("hpc-demo", "codex", &pane, &strings(&["-m", "gpt-5.5", "resume", "019a"])).unwrap();
+        assert_eq!(last(&runner, "thread start")[11..], ["--resume", "019a", "--args", "-m", "--args", "gpt-5.5"]);
+        // A word that only looks like a resume stays the agent's.
+        assert_eq!(split_resume("claude", &strings(&["--resume", "--dangerous"])), (strings(&["--resume", "--dangerous"]), None));
+        assert_eq!(split_resume("codex", &strings(&["--resume", "x"])), (strings(&["--resume", "x"]), None));
     }
 
     #[test]
-    fn a_worktree_on_a_machine_is_made_there() {
+    fn a_worktree_is_made_before_its_thread_and_removed_by_its_path() {
         let runner = FakeRunner::new();
-        runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"box","label":"box","target":"me@box"}]}}"#));
-        runner.on("ssh", ok("/home/me/.ferrite/threads/worktrees/app/hp-demo-t-0001"));
-        let (created, path, _) = herdr(&runner).on_machine("box").worktree_create("/home/me/app", "hp/demo/t-0001", "main", "Task").unwrap();
-        assert_eq!(path, "/home/me/.ferrite/threads/worktrees/app/hp-demo-t-0001");
+        runner.on("worktree create", ok(r#"{"result":{"worktree":{"path":"/store/worktrees/0a1b2c3d4e5f/hp-demo-t-0001","branch":"hp/demo/t-0001"},"project":"3"}}"#));
+        let (created, path, cwd) = herdr(&runner).worktree_create("/r/app", "hp/demo/t-0001", "origin/main", "Task").unwrap();
+        assert_eq!(path, "/store/worktrees/0a1b2c3d4e5f/hp-demo-t-0001");
+        assert_eq!(cwd, path);
         assert_eq!(created.workspace_id, path);
-        let ssh = last(&runner, "ssh");
-        assert!(ssh.contains(&"me@box".to_string()), "{ssh:?}");
-        assert!(ssh.last().unwrap().contains("git worktree add -b hp/demo/t-0001"), "{ssh:?}");
+        assert_eq!(Staged::parse(&created.pane_id).unwrap().cwd, path);
+        assert_eq!(last(&runner, "worktree create"), ["worktree", "create", "--cwd", "/r/app", "--branch", "hp/demo/t-0001", "--base", "origin/main"]);
+
+        let broken = FakeRunner::new();
+        broken.on("worktree create", fail(1, r#"{"error":{"code":"failed","message":"a branch named 'hp/demo/t-0001' already exists"}}"#));
+        let error = herdr(&broken).worktree_create("/r/app", "hp/demo/t-0001", "origin/main", "Task").unwrap_err();
+        assert!(error.message.contains("already exists"), "{error}");
+
+        runner.on("worktree remove", fail(1, r#"{"error":{"code":"dirty_worktree_requires_force","message":"/wt has modified or untracked files; nothing was removed"}}"#));
+        let error = herdr(&runner).worktree_remove("/wt").unwrap_err();
+        assert_eq!(error.code, "dirty_worktree_requires_force");
+        assert_eq!(last(&runner, "worktree remove"), ["worktree", "remove", "--path", "/wt"]);
+        assert!(!runner.calls.borrow().iter().any(|c| c.args.contains(&"--force".to_string())));
+        // A Project's Space is no worktree: nothing is asked.
+        let asked = runner.count("worktree remove");
+        assert_eq!(herdr(&runner).worktree_remove("4").unwrap_err().code, "worktree_not_found");
+        assert_eq!(runner.count("worktree remove"), asked);
+    }
+
+    #[test]
+    fn a_worktree_on_a_machine_is_made_by_its_server() {
+        let runner = FakeRunner::new();
+        runner.on("worktree create", ok(r#"{"result":{"worktree":{"path":"/home/me/.ferrite/threads/worktrees/0a1b2c3d4e5f/hp-demo-t-0001","branch":"hp/demo/t-0001"},"project":"1"}}"#));
+        let (created, path, _) = herdr(&runner).on_machine("box").worktree_create("/home/me/app", "hp/demo/t-0001", "main", "Task").unwrap();
+        assert_eq!(path, "/home/me/.ferrite/threads/worktrees/0a1b2c3d4e5f/hp-demo-t-0001");
+        assert_eq!(created.workspace_id, path);
+        assert_eq!(last(&runner, "worktree create"), ["--machine", "box", "worktree", "create", "--cwd", "/home/me/app", "--branch", "hp/demo/t-0001", "--base", "main"]);
     }
 
     #[test]
@@ -1276,12 +1350,54 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&last(&question, "decision answer")[7]).unwrap(), json!({ "kind": "questions", "answers": [{ "picks": [1] }] }));
         assert_eq!(herdr(&question).agent_send_keys("12", &keys(&["3"])).unwrap_err().code, "invalid_answer");
 
+        // Enter with nothing pending sends nothing, as in an empty input box.
         let none = state_runner(IDLE, "[]");
-        assert_eq!(herdr(&none).agent_send_keys("12", &keys(&["enter"])).unwrap_err().code, "no_decision");
+        herdr(&none).agent_send_keys("12", &keys(&["enter"])).unwrap();
+        assert_eq!(herdr(&none).agent_send_keys("12", &keys(&["down"])).unwrap_err().code, "no_decision");
+        assert_eq!(herdr(&none).pane_send_text("12", "hello").unwrap_err().code, "no_decision");
         assert_eq!(none.count("decision answer"), 0);
-        let before = none.calls.borrow().len();
-        assert_eq!(herdr(&none).pane_send_text("12", "hello").unwrap_err().code, NOT_WIRED);
-        assert_eq!(none.calls.borrow().len(), before);
+    }
+
+    fn answered(runner: &FakeRunner) -> Value {
+        serde_json::from_str(&last(runner, "decision answer")[7]).unwrap()
+    }
+
+    #[test]
+    fn every_menu_a_decision_shows_takes_its_keys() {
+        // An approval offering only its choices: a digit picks one.
+        let choices = state_runner(IDLE, r#"[{"thread":12,"decision":{"id":"c1","kind":{"kind":"approval"},"policy":{"allow":false,"deny":true,"prefer_deny":false,"interaction_required":true},"description":"Network access","tool_name":"","input":{},"suggestions":[{"label":"this once","value":"accept","standing":false},{"label":"always","value":"acceptForSession","standing":true}]}}]"#);
+        herdr(&choices).agent_send_keys("12", &keys(&["2"])).unwrap();
+        assert_eq!(answered(&choices), json!({ "kind": "choose", "value": "acceptForSession" }));
+        herdr(&choices).agent_send_keys("12", &keys(&["enter"])).unwrap();
+        assert_eq!(answered(&choices), json!({ "kind": "choose", "value": "accept" }));
+        herdr(&choices).agent_send_keys("12", &keys(&["3"])).unwrap();
+        assert_eq!(answered(&choices)["kind"], "deny");
+        assert_eq!(herdr(&choices).agent_send_keys("12", &keys(&["y"])).unwrap_err().code, "invalid_answer", "plain allow is not offered");
+
+        // A form: Enter takes its defaults, a single choice field's digit its option.
+        let defaults = state_runner(IDLE, r#"[{"thread":12,"decision":{"id":"f1","kind":{"kind":"form","fields":[{"id":"name","label":"Name","description":"","required":true,"kind":{"kind":"string","default":"demo"}},{"id":"note","label":"Note","description":"","required":false,"kind":{"kind":"string"}}]},"input":{}}}]"#);
+        herdr(&defaults).agent_send_keys("12", &keys(&["enter"])).unwrap();
+        assert_eq!(answered(&defaults), json!({ "kind": "form", "values": { "name": "demo" } }));
+        let pick = state_runner(IDLE, r#"[{"thread":12,"decision":{"id":"f2","kind":{"kind":"form","fields":[{"id":"env","label":"Env","description":"","required":true,"kind":{"kind":"enum","options":[{"value":"dev","label":"Dev"},{"value":"prod","label":"Prod"}],"multi_select":false}}]},"input":{}}}]"#);
+        herdr(&pick).agent_send_keys("12", &keys(&["2"])).unwrap();
+        assert_eq!(answered(&pick), json!({ "kind": "form", "values": { "env": "prod" } }));
+        let yes_no = state_runner(IDLE, r#"[{"thread":12,"decision":{"id":"f3","kind":{"kind":"form","fields":[{"id":"ok","label":"Proceed?","description":"","required":true,"kind":{"kind":"boolean"}}]},"input":{}}}]"#);
+        herdr(&yes_no).agent_send_keys("12", &keys(&["n"])).unwrap();
+        assert_eq!(answered(&yes_no), json!({ "kind": "form", "values": { "ok": false } }));
+        assert_eq!(herdr(&yes_no).agent_send_keys("12", &keys(&["enter"])).unwrap_err().code, "invalid_answer", "a required field without a default");
+    }
+
+    #[test]
+    fn text_answers_a_decision_that_takes_typed_text() {
+        let other = state_runner(IDLE, r#"[{"thread":12,"decision":{"id":"q1","kind":{"kind":"questions","questions":[{"question":"Which?","header":"","options":[{"label":"a","description":""}],"multi_select":false,"secret":false,"allow_other":true}]},"input":{}}}]"#);
+        herdr(&other).pane_send_text("12", "-- neither").unwrap();
+        assert_eq!(answered(&other), json!({ "kind": "questions", "answers": [{ "picks": [], "other": "-- neither" }] }));
+        let field = state_runner(IDLE, r#"[{"thread":12,"decision":{"id":"f1","kind":{"kind":"form","fields":[{"id":"name","label":"Name","description":"","required":true,"kind":{"kind":"string"}}]},"input":{}}}]"#);
+        herdr(&field).pane_send_text("12", "demo").unwrap();
+        assert_eq!(answered(&field), json!({ "kind": "form", "values": { "name": "demo" } }));
+        let approval = state_runner(IDLE, PERMISSION);
+        assert_eq!(herdr(&approval).pane_send_text("12", "yes").unwrap_err().code, "invalid_answer");
+        assert_eq!(approval.count("decision answer"), 0);
     }
 
     #[test]
@@ -1304,12 +1420,12 @@ mod tests {
         assert_eq!(last(&runner, "notification"), ["notification", "show", "--title", "Demo · t-0001", "--body", "needs you", "--sound", "request", "--important"]);
         herdr(&runner).call(&["notification", "show", "Demo", "--body", "done", "--sound", "done"], CALL_TIMEOUT).unwrap();
         assert!(!last(&runner, "notification").contains(&"--important".to_string()));
-        // `focus demo` shows the Project its coordinator works in.
+        // `focus demo` shows that project's block, by its slug, open or not.
         herdr(&runner).agent_view_set(crate::sidebar::project_view("demo")).unwrap();
-        assert_eq!(last(&runner, "nav focus"), ["nav", "focus", "--project", "4"]);
+        assert_eq!(last(&runner, "nav focus"), ["nav", "focus", "--project", "demo"]);
         herdr(&runner).agent_view_set(crate::sidebar::default_view()).unwrap();
         assert_eq!(last(&runner, "nav focus"), ["nav", "focus"]);
-        assert_eq!(herdr(&runner).agent_view_set(crate::sidebar::project_view("other")).unwrap_err().code, "workspace_not_found");
+        assert_eq!(runner.count("thread list"), 0);
         let current = herdr(&runner).call(&["pane", "current", "--current"], CALL_TIMEOUT).unwrap();
         assert_eq!((current["pane"]["pane_id"].as_str(), current["pane"]["terminal_id"].as_str()), (Some("12"), Some("12")));
         assert_eq!((current["pane"]["agent"].as_str(), current["pane"]["agent_session"]["value"].as_str()), (Some("claude"), Some("s-9")));

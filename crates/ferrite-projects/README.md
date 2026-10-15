@@ -92,15 +92,21 @@ What differs from upstream, beyond the adapter.
   list`/`get`/`open`/`rename`/`close`), except a Thread in a linked worktree,
   whose Space is the worktree, named by its path.
 - **Placement is staged.** A Thread is born with its agent, so `tab create`,
-  `workspace create` (which opens the Project), `worktree create` (which
-  runs `git worktree add` below the Store, over ssh on a machine, so the
-  brief is written first) and `worktree open` return a staged pane,
-  `new:<focus>:<space>:<cwd>`; `agent start` starts the Thread there
-  (`thread start --ready`, the agent's arguments, a resume among them, as
-  `--args`). The ticker and `open` record the started Thread as the pane
-  (`ticker.rs`, `coordinator.rs`); a staged pane counts as a shell at its
-  prompt (`thread.rs`, `pane_idle_shell`). A start whose answer was lost is
-  found by title and directory, never started twice.
+  `workspace create` (which opens the Project) and `worktree open` return a
+  staged pane, `new:<focus>:<space>:<cwd>`, and `worktree create` has the
+  Server make the worktree first (`ferrite worktree create`, in its
+  registry's layout, forwarded with `--machine` to a machine's Server), so
+  the brief is written into it, then stages its Thread there. `agent start`
+  starts the Thread (`thread start --ready`; a resume among the agent's
+  arguments, `agents::resume_args`, becomes its `--resume`, the rest go as
+  `--args`). Ferrite's Codex Provider reads `codex`'s own flags from them
+  (model, approval policy and sandbox, yolo's
+  `--dangerously-bypass-approvals-and-sandbox` among them) and refuses one
+  it cannot honour (`invalid_request`, ADR 0027). The ticker and `open`
+  record the started Thread as the pane (`ticker.rs`, `coordinator.rs`); a
+  staged pane counts as a shell at its prompt (`thread.rs`,
+  `pane_idle_shell`). A start whose answer was lost is found by title and
+  directory, never started twice.
 - **Prompts** go whole (`agent prompt`); a confirmed one waits `--until
   working --until blocked` (`agent_prompt_stalled`, `timeout` and no reply
   are unconfirmed; `agent_blocked`, `agent_starting`, `pane_not_found` and
@@ -110,29 +116,43 @@ What differs from upstream, beyond the adapter.
   (`PaneState`: a draft, a held or queued prompt, the pending Decisions):
   `prompt_box::Screen`, which a Terminal's screen still implements.
 - **Keys mean what they meant**: `esc` and `ctrl+c` interrupt (`agent
-  interrupt`); a menu key (`1`/`y`/Enter, `2`, `3`/`n`, a choice's digit)
-  answers the pending Decision (`decision answer`); anything else is
-  refused, `no_decision` or `invalid_answer`, before anything is sent.
+  interrupt`); a menu key answers the pending Decision (`decision answer`)
+  as its menu would: Enter the first item, a digit that item (an approval's
+  allow, its suggestions, deny; a question's options; a single choice
+  field's options), `y` allow and `n` deny (a yes/no field's answer), and
+  Enter on a form its defaults. Enter with nothing pending sends nothing, as
+  in an empty input box. Anything else is refused, `no_decision` or
+  `invalid_answer`, before anything is sent. `pane send-text` answers the
+  pending Decision that takes typed text (a question's own answer, a form's
+  single text field); there is no input box to type into otherwise
+  (`no_decision`).
 - **Closing**: `tab`/`pane close` is `thread close`; `workspace close` is
   `project close`, or closes the Threads of a worktree's Space; `worktree
-  remove` is the worktree's Thread's `worktree remove` (never forced:
-  `dirty_worktree_requires_force`).
+  remove` is `ferrite worktree remove` of the Space's path (never forced:
+  `dirty_worktree_requires_force`; a Project's Space is no worktree,
+  `worktree_not_found`).
 - `notification show` keeps its sound (`request` is important), `focus`/
-  `unfocus` are `nav focus` (the Project the project's coordinator works
-  in), `machine list` is `ferrite machine list` (`result.machines`).
+  `unfocus` are `nav focus` (the project's slug, passed on unread), `machine
+  list` is `ferrite machine list` (`result.machines`).
 - **Silent successes**: `report-metadata` and `workspace.move` (the nav
   draws and orders its rows from the crate's data).
-- **Refused** (`not_wired`, nothing runs): `pane send-text` (there is no
-  input box: send a prompt or answer the Decision), `pane process-info` (a
-  Thread is never a shell; `pane_idle_shell` answers from the staged id),
-  and any call upstream may add before it is mapped.
+- **Refused** (`not_wired`, nothing runs): `pane process-info` (a Thread is
+  never a shell; `pane_idle_shell` answers from the staged id, true only
+  before its agent starts), and any call upstream may add before it is
+  mapped.
 
-Ferrite error codes reach callers under Herdr's names: `thread_not_found`
+Ferrite error codes reach callers under Herdr's names: `unknown_thread`
 is `pane_not_found`, `project_not_found` `workspace_not_found`,
 `server_unavailable` `unreachable`. A kind Ferrite has no Provider for
 (only `claude` and `codex` run) fails `no_provider`, as a missing binary
 does. `open --here` never runs a coordinator on the caller's terminal: a
 Thread is never a shell.
+
+A **checkout thread** works in the user's own repository, so its Thread
+belongs to that repository's Ferrite project, not to the coordinator's
+(upstream it is a tab in the coordinator's Space): archiving the project
+(`lifecycle::close_workspaces`, `project close` on the coordinator's
+project) leaves it open, and it is closed on its own (`thread close`).
 
 ### Machines
 

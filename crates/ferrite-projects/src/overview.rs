@@ -331,16 +331,14 @@ mod tests {
     fn focus_filters_on_the_project_token_and_sorts_by_rank_in_the_projects_socket() {
         let world = World::new();
         let project = world.project("demo", "a.sock");
-        // Ferrite: the view is the nav's focus on the Project the project's
-        // coordinator works in; the nav sorts by need itself.
-        let dir = project.canonical_dir().to_string_lossy().into_owned();
-        *world.agents.borrow_mut() = format!("[{}]", crate::scenarios::agent_json("w1", "w1:p1", "w1:p1", &dir, "hpc-demo", "idle"));
-        world.runner.on("nav focus", ok(r#"{"result":{"project":"w1","windows":1}}"#));
+        // Ferrite: the view is the nav's focus on the project's block, by
+        // its slug; the nav sorts by need itself.
+        world.runner.on("nav focus", ok(r#"{"result":{"project":"demo","windows":1}}"#));
         focus(&world.ctx(), Some("demo")).unwrap();
         let calls = world.runner.calls.borrow();
         let focused: Vec<_> = calls.iter().filter(|c| c.display().contains("nav focus")).collect();
         assert_eq!(focused.len(), 1);
-        assert_eq!(focused[0].args, ["nav", "focus", "--project", "w1"]);
+        assert_eq!(focused[0].args, ["nav", "focus", "--project", "demo"]);
         assert_eq!(focused[0].env, [("FERRITE_SOCKET".to_string(), project.coordinator().unwrap().socket)]);
         assert!(world.runner.socket_requests.borrow().is_empty());
     }

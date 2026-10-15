@@ -71,7 +71,9 @@ An operation herdr-projects needs and Ferrite lacks is added to the API
 catalog and schema follow, with a v1 fixture. Expected additions:
 Projects (list, get, open, rename, close: Herdr's Spaces), thread close,
 worktree branch/base on `thread.start` and worktree removal (never
-forced), extra agent arguments and focus on `thread.start`, delivery
+forced), extra agent arguments (Codex's read by its Provider into
+the model, approval policy and sandbox they set) and focus on
+`thread.start`, delivery
 confirmation on `agent.prompt` (answer once seen working or blocked, not
 settled), an interrupt, the provider session id and an Attention change
 counter on a Thread, saved-machine listing, and `ferrite --version`.
