@@ -38,5 +38,6 @@ consumer, present or future, can trust an id to name one Thread only.
   stranger.
 - One more small file is written, with one more sync, on each Thread
   creation. Creation is rare, so the cost does not matter.
-- Deleting `next-id` by hand can only bring back ids whose Threads are
-  already gone. Its loss would allow reuse again, as before this ADR.
+- A `next-id` deleted by hand is seeded again from the Threads held, so
+  the ids of deleted Threads above the highest held one could be reused,
+  as before this ADR.
