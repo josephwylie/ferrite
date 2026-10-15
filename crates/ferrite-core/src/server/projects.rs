@@ -103,6 +103,8 @@ fn toast(socket: &Path, body: &str) -> bool {
         method: Method::NotificationShow(NotificationShowParams {
             title: "Ferrite's coordinators are now projects".into(),
             body: Some(body.into()),
+            sound: crate::protocol::WireSound::None,
+            important: false,
         }),
     };
     let mut answer = Vec::new();

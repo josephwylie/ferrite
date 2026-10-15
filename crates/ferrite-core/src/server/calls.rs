@@ -2,6 +2,7 @@
 //! that changes a Thread is the window's own command (`Engine::execute`),
 //! so an agent and the operator act through the same door.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -14,8 +15,12 @@ use crate::api::{
     self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
     ThreadInfo, Until, Wait,
 };
-use crate::protocol::{Done, Op, ServerMessage, WireChoice};
+use crate::engine::Launch;
+use crate::protocol::{Done, Op, ProjectAction, ServerMessage};
+use crate::workspace::{self, WorkspaceChoice};
 use crate::ThreadId;
+
+mod projects;
 
 /// How much of a transcript `agent.read` gives when not told.
 const READ_LINES: usize = 80;
@@ -36,7 +41,20 @@ impl Server {
         let now = Instant::now();
         let timeout = |ms: Option<u64>| ms.map(Duration::from_millis);
         let result = match method {
-            Method::ThreadStart(params) => self.start_thread(params),
+            Method::ThreadStart(params) => {
+                let ready = params.ready.then(|| {
+                    let within = timeout(params.timeout_ms).unwrap_or(api::READY);
+                    Wait::until(Until::Ready, Some(within), now)
+                });
+                match (self.start_thread(params), ready) {
+                    (Ok(thread), Some(wait)) => {
+                        self.api.wait(&self.engine, caller, id, thread, wait);
+                        return;
+                    }
+                    (Ok(thread), None) => thread_result(&self.engine, thread),
+                    (Err(error), _) => Err(error),
+                }
+            }
             Method::ThreadList(_) => {
                 let threads: Vec<ThreadInfo> = self
                     .engine
@@ -62,9 +80,17 @@ impl Server {
                     title: params.title,
                 })
                 .and_then(|_| thread_result(&self.engine, params.thread)),
+            Method::ThreadClose(params) => self.open_thread(params.thread).and_then(|thread| {
+                self.execute(Op::Park { thread })?;
+                Ok(json!({ "thread": thread }))
+            }),
             Method::AgentPrompt(params) => match self.prompt(&params) {
-                Ok(()) if params.wait => {
-                    let wait = Wait::after_prompt(timeout(params.timeout_ms), now);
+                Ok(()) if params.wait || !params.until.is_empty() => {
+                    let until = match params.until.is_empty() {
+                        true => Until::Settled,
+                        false => Until::AnyOf(params.until),
+                    };
+                    let wait = Wait::after_prompt_until(until, timeout(params.timeout_ms), now);
                     self.api.wait(&self.engine, caller, id, params.thread, wait);
                     return;
                 }
@@ -85,6 +111,10 @@ impl Server {
                 None => Err(unknown_thread()),
             },
             Method::AgentRead(params) => self.read(params),
+            Method::AgentInterrupt(params) => self.open_thread(params.thread).and_then(|thread| {
+                self.execute(Op::Interrupt { thread })?;
+                thread_result(&self.engine, thread)
+            }),
             Method::DecisionList(params) => {
                 let decisions: Vec<_> = self
                     .engine
@@ -95,21 +125,39 @@ impl Server {
                 Ok(json!({ "decisions": decisions }))
             }
             Method::DecisionAnswer(params) => self.answer(caller, params),
+            Method::ProjectList(_) => Ok(json!({ "projects": api::project_infos(&self.engine) })),
+            Method::ProjectGet(params) => self
+                .project(&params.project)
+                .and_then(|project| self.project_result(project)),
+            Method::ProjectOpen(params) => self.open_project(params),
+            Method::ProjectRename(params) => self.project(&params.project).and_then(|project| {
+                self.execute(Op::Project {
+                    action: ProjectAction::Rename {
+                        project,
+                        title: params.label,
+                    },
+                })?;
+                self.project_result(project)
+            }),
+            Method::ProjectClose(params) => self
+                .project(&params.project)
+                .and_then(|project| self.close_project(project)),
+            Method::WorktreeCreate(params) => self.create_worktree(params),
+            Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
+            Method::MachineList(_) => self.machines(),
+            Method::NavFocus(params) => self.focus_nav(params),
             Method::EventsSubscribe(params) => {
                 self.api.subscribe(&self.engine, caller, id, params.threads);
                 return;
             }
             Method::NotificationShow(params) => {
-                let windows = self
-                    .clients
-                    .values()
-                    .filter(|client| client.welcomed)
-                    .count();
                 self.say(ServerMessage::Notification {
                     title: params.title,
                     body: params.body,
+                    sound: params.sound,
+                    important: params.important,
                 });
-                Ok(json!({ "windows": windows }))
+                Ok(json!({ "windows": self.windows() }))
             }
         };
         // What the request changed reaches the windows before its answer.
@@ -121,26 +169,59 @@ impl Server {
         self.engine.execute(&op).map_err(ApiError::from)
     }
 
-    /// Open a Thread as a window's `open` does, then title it.
-    fn start_thread(&mut self, params: ThreadStartParams) -> Result<Value, ApiError> {
-        let workspace = if params.worktree {
-            WireChoice::NewWorktree { repo: params.cwd }
-        } else {
-            WireChoice::Main {
-                checkout: params.cwd,
+    /// How many windows hear what the Server says to them all.
+    fn windows(&self) -> usize {
+        self.clients
+            .values()
+            .filter(|client| client.welcomed)
+            .count()
+    }
+
+    /// An open Thread, or `unknown_thread`.
+    fn open_thread(&self, thread: ThreadId) -> Result<ThreadId, ApiError> {
+        self.engine
+            .thread(thread)
+            .map(|_| thread)
+            .ok_or_else(unknown_thread)
+    }
+
+    /// Open a Thread as a window's `open` does, its CLI given `args`, then
+    /// title it and land the windows on it as asked.
+    fn start_thread(&mut self, params: ThreadStartParams) -> Result<ThreadId, ApiError> {
+        let (checkout, project) = match &params.project {
+            Some(project) => {
+                let project = self.project(project)?;
+                let cwd = std::fs::canonicalize(&params.cwd)
+                    .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+                let directory = self.directory_in(project, &cwd)?;
+                // As Herdr's tab starts in its cwd, the Thread works in
+                // `cwd` itself; a fresh worktree is of its directory.
+                let checkout = if params.worktree { directory } else { cwd };
+                (checkout, Some(project))
             }
+            None => (params.cwd, None),
         };
-        let Some(Done::Thread { thread }) = self.execute(Op::Open {
-            provider: params.provider.unwrap_or(self.default_provider),
-            workspace,
-        })?
-        else {
-            return Err(ApiError::new(Code::Failed, "no Thread was opened"));
+        let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
+        let launch = Launch {
+            args: params.args,
+            resume: params.resume,
+            project,
         };
+        let thread = self
+            .engine
+            .open_with(
+                params.provider.unwrap_or(self.default_provider),
+                workspace,
+                launch,
+            )
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
         if let Some(title) = params.title {
             self.execute(Op::Rename { thread, title })?;
         }
-        thread_result(&self.engine, thread)
+        if params.focus {
+            self.say(ServerMessage::Focus { thread });
+        }
+        Ok(thread)
     }
 
     /// Herdr's rule: nothing is sent to an agent a Decision blocks, since
@@ -217,4 +298,39 @@ impl Server {
         self.answered.insert((thread, handle), caller);
         thread_result(&self.engine, thread)
     }
+}
+
+/// Where a started Thread works: a linked worktree `cwd` is, opened
+/// rather than made (Herdr's `worktree open`, or a tab in a worktree
+/// `worktree.create` made); else `cwd` itself, or with `worktree` a new
+/// worktree of its repository, on `branch` from `base` when named.
+fn workspace_choice(
+    cwd: PathBuf,
+    worktree: bool,
+    branch: Option<String>,
+    base: Option<String>,
+) -> Result<WorkspaceChoice, ApiError> {
+    let invalid = |message: &str| Err(ApiError::new(Code::InvalidRequest, message));
+    if base.is_some() && branch.is_none() {
+        return invalid("base goes with branch");
+    }
+    if let Some(checkout) = workspace::checkout_of(&cwd).filter(|checkout| checkout.linked) {
+        if branch.is_some() {
+            return invalid("cwd is a worktree already: it is opened, so it takes no branch");
+        }
+        return Ok(WorkspaceChoice::ExistingWorktree {
+            repo: checkout.repo,
+            path: cwd,
+        });
+    }
+    Ok(match (worktree, branch) {
+        (false, Some(_)) => return invalid("branch goes with worktree"),
+        (false, None) => WorkspaceChoice::Main { checkout: cwd },
+        (true, Some(branch)) => WorkspaceChoice::NamedWorktree {
+            repo: cwd,
+            branch,
+            base,
+        },
+        (true, None) => WorkspaceChoice::NewWorktree { repo: cwd },
+    })
 }

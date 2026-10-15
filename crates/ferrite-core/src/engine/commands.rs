@@ -207,6 +207,8 @@ impl Engine {
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
+            | Op::Focused { .. }
+            | Op::Composing { .. }
             | Op::ListDir { .. }
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }

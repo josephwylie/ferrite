@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use super::cli::{self, Context};
 use super::schema::*;
 use super::*;
-use crate::protocol::WireAnswer;
+use crate::protocol::{WireAnswer, WireSound};
 
 // ------------------------------------------------------------ waiting
 
@@ -173,11 +173,21 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "thread.get",
             "thread.focus",
             "thread.rename",
+            "thread.close",
             "agent.prompt",
             "agent.wait",
             "agent.read",
+            "agent.interrupt",
             "decision.list",
             "decision.answer",
+            "project.list",
+            "project.get",
+            "project.open",
+            "project.rename",
+            "project.close",
+            "worktree.remove",
+            "machine.list",
+            "nav.focus",
             "events.subscribe",
             "notification.show",
         ]
@@ -279,10 +289,8 @@ fn thread() -> ThreadId {
 fn samples() -> Vec<Request> {
     vec![
         request(Method::ThreadStart(ThreadStartParams {
-            cwd: PathBuf::from("/work/app"),
-            provider: Some(Provider::Codex),
-            worktree: true,
             title: Some("reviewer".into()),
+            ..thread_start()
         })),
         request(Method::ThreadList(Empty {})),
         request(Method::ThreadGet(ThreadParams { thread: thread() })),
@@ -291,11 +299,13 @@ fn samples() -> Vec<Request> {
             thread: thread(),
             title: "reviewer".into(),
         })),
+        request(Method::ThreadClose(ThreadParams { thread: thread() })),
         request(Method::AgentPrompt(AgentPromptParams {
             thread: thread(),
             text: "Review the diff".into(),
             wait: true,
             timeout_ms: Some(120_000),
+            until: Vec::new(),
         })),
         request(Method::AgentWait(AgentWaitParams {
             thread: thread(),
@@ -306,6 +316,7 @@ fn samples() -> Vec<Request> {
             thread: thread(),
             lines: Some(200),
         })),
+        request(Method::AgentInterrupt(ThreadParams { thread: thread() })),
         request(Method::DecisionList(DecisionListParams {
             thread: Some(thread()),
         })),
@@ -314,14 +325,138 @@ fn samples() -> Vec<Request> {
             decision: "perm_01".into(),
             answer: WireAnswer::Allow { input: json!({}) },
         })),
+        request(Method::ProjectList(Empty {})),
+        request(Method::ProjectGet(ProjectParams {
+            project: "3".into(),
+        })),
+        request(Method::ProjectOpen(ProjectOpenParams {
+            cwd: PathBuf::from("/work/app"),
+            label: Some("billing".into()),
+            focus: true,
+        })),
+        request(Method::ProjectRename(ProjectRenameParams {
+            project: "3".into(),
+            label: "billing".into(),
+        })),
+        request(Method::ProjectClose(ProjectParams {
+            project: "3".into(),
+        })),
+        request(Method::WorktreeCreate(WorktreeCreateParams {
+            cwd: PathBuf::from("/work/app"),
+            branch: "hp/billing/t-0001".into(),
+            base: Some("origin/main".into()),
+        })),
+        request(Method::WorktreeRemove(WorktreeRemoveParams {
+            path: PathBuf::from("/work/.worktrees/app/hp-billing-t-0001"),
+        })),
+        request(Method::MachineList(Empty {})),
+        request(Method::NavFocus(NavFocusParams {
+            project: Some("billing".into()),
+        })),
         request(Method::EventsSubscribe(EventsSubscribeParams {
             threads: vec![thread(), ThreadId::new(14)],
         })),
         request(Method::NotificationShow(NotificationShowParams {
             title: "Review ready".into(),
             body: Some("3 findings".into()),
+            sound: WireSound::None,
+            important: false,
         })),
     ]
+}
+
+/// `thread.start` as the frozen fixture has it, every later parameter
+/// absent.
+fn thread_start() -> ThreadStartParams {
+    ThreadStartParams {
+        cwd: PathBuf::from("/work/app"),
+        provider: Some(Provider::Codex),
+        worktree: true,
+        title: None,
+        focus: false,
+        args: Vec::new(),
+        branch: None,
+        base: None,
+        project: None,
+        ready: false,
+        timeout_ms: None,
+        resume: None,
+    }
+}
+
+/// Requests a later parameter changed, frozen beside the operations' own.
+fn later_samples() -> Vec<(&'static str, Request)> {
+    vec![
+        (
+            "thread_start_herdr",
+            request(Method::ThreadStart(ThreadStartParams {
+                title: Some("t-0001".into()),
+                focus: true,
+                args: vec![
+                    "--dangerously-bypass-approvals-and-sandbox".into(),
+                    "--model".into(),
+                    "gpt-5.5".into(),
+                ],
+                branch: Some("hp/demo/t-0001".into()),
+                base: Some("main".into()),
+                project: Some("3".into()),
+                ready: true,
+                timeout_ms: Some(20_000),
+                ..thread_start()
+            })),
+        ),
+        (
+            "thread_start_resume",
+            request(Method::ThreadStart(ThreadStartParams {
+                worktree: false,
+                resume: Some("4f2a".into()),
+                ..thread_start()
+            })),
+        ),
+        (
+            "agent_prompt_until",
+            request(Method::AgentPrompt(AgentPromptParams {
+                thread: thread(),
+                text: "Review the diff".into(),
+                wait: false,
+                timeout_ms: Some(8_000),
+                until: vec![Attention::Working, Attention::Blocked],
+            })),
+        ),
+        (
+            "notification_show_chime",
+            request(Method::NotificationShow(NotificationShowParams {
+                title: "Review ready".into(),
+                body: None,
+                sound: WireSound::Request,
+                important: true,
+            })),
+        ),
+        (
+            "nav_focus_clear",
+            request(Method::NavFocus(NavFocusParams { project: None })),
+        ),
+    ]
+}
+
+/// A later parameter freezes as its own fixture: what a script sends with
+/// it today is read the same by every later Server.
+#[test]
+fn every_later_parameter_has_a_frozen_request_that_round_trips() {
+    for (name, sample) in later_samples() {
+        let path = fixtures().join(format!("{name}.json"));
+        let encoded = protocol::encode(&sample);
+        let frozen = std::fs::read(&path).unwrap_or_else(|_| panic!("no fixture {name}"));
+        assert_eq!(
+            String::from_utf8_lossy(&encoded),
+            String::from_utf8_lossy(&frozen),
+            "{name}"
+        );
+        assert_eq!(
+            decode(frozen.strip_suffix(b"\n").unwrap()).as_ref(),
+            Ok(&sample)
+        );
+    }
 }
 
 fn fixtures() -> PathBuf {
@@ -395,6 +530,15 @@ fn answers_refusals_and_events_keep_their_shape() {
         provider: Provider::Codex,
         attention: Attention::Done,
         cwd: Some(PathBuf::from("/work/app")),
+        focused: true,
+        project: Some("3".into()),
+        provider_session: Some("4f2a".into()),
+        attention_seq: 7,
+        held_prompt: false,
+        queued_prompts: 1,
+        draft: true,
+        worktree: Some(PathBuf::from("/work/.worktrees/app/invoices")),
+        branch: Some("hp/billing/invoices".into()),
     };
     let answer = Response::Result {
         id: "1".into(),
@@ -408,7 +552,49 @@ fn answers_refusals_and_events_keep_their_shape() {
             "provider": "codex",
             "attention": "done",
             "cwd": "/work/app",
+            "focused": true,
+            "project": "3",
+            "provider_session": "4f2a",
+            "attention_seq": 7,
+            "held_prompt": false,
+            "queued_prompts": 1,
+            "draft": true,
+            "worktree": "/work/.worktrees/app/invoices",
+            "branch": "hp/billing/invoices",
         }}})
+    );
+    let not_ready = Response::Error {
+        id: "1".into(),
+        error: ApiError::new(Code::AgentNotReady, "blocked").on(thread()),
+    };
+    assert_eq!(
+        serde_json::to_value(&not_ready).unwrap(),
+        json!({"id": "1", "error": {"code": "agent_not_ready", "message": "blocked", "thread": 12}})
+    );
+    let project = ProjectInfo {
+        id: "3".into(),
+        label: "billing".into(),
+        focused: false,
+        thread_count: 2,
+        worktree: Some(ProjectCheckout {
+            repo_key: PathBuf::from("/work/app"),
+            checkout_path: PathBuf::from("/work/app"),
+            is_linked_worktree: false,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&project).unwrap(),
+        json!({
+            "id": "3",
+            "label": "billing",
+            "focused": false,
+            "thread_count": 2,
+            "worktree": {
+                "repo_key": "/work/app",
+                "checkout_path": "/work/app",
+                "is_linked_worktree": false,
+            },
+        })
     );
     let refusal = Response::Error {
         id: "1".into(),
@@ -516,6 +702,7 @@ fn positionals_come_in_their_declared_order_and_flags_by_their_type() {
             text: "Review the diff".into(),
             wait: true,
             timeout_ms: Some(5000),
+            until: Vec::new(),
         }))
     );
     assert_eq!(
@@ -561,6 +748,7 @@ fn current_names_the_calling_thread_and_frees_its_position() {
             text: "status?".into(),
             wait: false,
             timeout_ms: None,
+            until: Vec::new(),
         }))
     );
     let outside = Context {
@@ -648,6 +836,7 @@ fn after_a_double_dash_every_word_is_an_argument() {
             text: "--dry-run first".into(),
             wait: true,
             timeout_ms: None,
+            until: Vec::new(),
         }))
     );
     let refused = parse("agent.prompt", &["12", "--dry-run first"]).unwrap_err();
@@ -673,6 +862,35 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
     assert_eq!(reviewer.provider, Some(Provider::Codex));
     assert!(reviewer.worktree);
     assert_eq!(reviewer.title.as_deref(), Some("reviewer"));
+}
+
+/// A worktree is named by its directory, read from where the CLI runs, as
+/// Herdr's `worktree remove` names its Space.
+#[test]
+fn a_worktree_is_removed_by_its_directory() {
+    let removed = |args: &[&str]| match parse("worktree.remove", args) {
+        Ok(Method::WorktreeRemove(params)) => params.path,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        removed(&["../t-0001"]),
+        PathBuf::from("/work/app/../t-0001")
+    );
+    assert_eq!(
+        removed(&["--path", "/wt/t-0001"]),
+        PathBuf::from("/wt/t-0001")
+    );
+    match parse(
+        "worktree.create",
+        &["--branch", "hp/demo/t-0001", "--base", "main"],
+    ) {
+        Ok(Method::WorktreeCreate(params)) => {
+            assert_eq!(params.cwd, PathBuf::from("/work/app"));
+            assert_eq!(params.branch, "hp/demo/t-0001");
+            assert_eq!(params.base.as_deref(), Some("main"));
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 /// On a machine this computer's directory means nothing: a `cwd` is the
@@ -777,4 +995,159 @@ fn the_bundled_skill_names_the_safety_rules() {
             op.name
         );
     }
+}
+
+/// `ferrite --version` reads as Herdr's does: the name, then the version.
+#[test]
+fn the_version_is_the_name_then_semver() {
+    let version = cli::version();
+    let semver = version.strip_prefix("ferrite ").unwrap();
+    let parts: Vec<&str> = semver
+        .split(['-', '+'])
+        .next()
+        .unwrap()
+        .split('.')
+        .collect();
+    assert_eq!(parts.len(), 3, "{version}");
+    assert!(
+        parts.iter().all(|part| part.parse::<u64>().is_ok()),
+        "{version}"
+    );
+}
+
+/// What herdr-projects asks with: a Thread's start, its prompt confirmed
+/// working or blocked, a Project by id and label, a cleared nav focus.
+#[test]
+fn herdr_projects_calls_read_as_their_parameters() {
+    match parse(
+        "thread.start",
+        &[
+            "--worktree",
+            "--branch",
+            "hp/demo/t-0001",
+            "--base",
+            "main",
+            "--project",
+            "3",
+            "--ready",
+            "--timeout-ms",
+            "20000",
+            "--focus",
+            "--args",
+            "--model",
+            "--args",
+            "opus",
+        ],
+    ) {
+        Ok(Method::ThreadStart(params)) => {
+            assert_eq!(params.branch.as_deref(), Some("hp/demo/t-0001"));
+            assert_eq!(params.base.as_deref(), Some("main"));
+            assert_eq!(params.project.as_deref(), Some("3"));
+            assert!(params.ready && params.focus && params.worktree);
+            assert_eq!(params.timeout_ms, Some(20_000));
+            assert_eq!(params.args, ["--model", "opus"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        parse(
+            "agent.prompt",
+            &["12", "go", "--until", "working", "--until", "blocked"]
+        ),
+        Ok(Method::AgentPrompt(AgentPromptParams {
+            thread: thread(),
+            text: "go".into(),
+            wait: false,
+            timeout_ms: None,
+            until: vec![Attention::Working, Attention::Blocked],
+        }))
+    );
+    assert_eq!(
+        parse("project.rename", &["3", "billing"]),
+        Ok(Method::ProjectRename(ProjectRenameParams {
+            project: "3".into(),
+            label: "billing".into(),
+        }))
+    );
+    assert_eq!(
+        parse("nav.focus", &[]),
+        Ok(Method::NavFocus(NavFocusParams { project: None }))
+    );
+    assert_eq!(
+        parse(
+            "notification.show",
+            &["Review ready", "--sound", "done", "--important"]
+        ),
+        Ok(Method::NotificationShow(NotificationShowParams {
+            title: "Review ready".into(),
+            body: None,
+            sound: WireSound::Done,
+            important: true,
+        }))
+    );
+    match parse("project.open", &["--label", "demo"]) {
+        Ok(Method::ProjectOpen(params)) => {
+            assert_eq!(params.cwd, PathBuf::from("/work/app"));
+            assert_eq!(params.label.as_deref(), Some("demo"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Herdr's delivery confirmation: a prompt's wait `until` working or
+/// blocked answers as soon as the agent is seen so, never on the idle it
+/// was sent from, and stalls as any prompt's wait does.
+#[test]
+fn a_prompts_wait_until_working_answers_once_the_prompt_is_taken() {
+    let start = Instant::now();
+    let until = || Until::AnyOf(vec![Attention::Working, Attention::Blocked]);
+    let mut wait = Wait::after_prompt_until(until(), None, start);
+    assert_eq!(wait.observe(seen(Attention::Idle), start), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Working), at(start, 100)),
+        Some(Settled::Reached)
+    );
+
+    let mut wait = Wait::after_prompt_until(until(), None, start);
+    assert_eq!(
+        wait.observe(seen(Attention::Blocked), at(start, 100)),
+        Some(Settled::Reached)
+    );
+
+    let mut wait = Wait::after_prompt_until(until(), None, start);
+    assert_eq!(wait.observe(seen(Attention::Idle), start), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Idle), at(start, 5_000)),
+        Some(Settled::Stalled)
+    );
+}
+
+/// `thread.start --ready`, as Herdr's `agent start`: answered once the
+/// Session is up and idle or done; a blocked agent (a trust dialog) or one
+/// not up in time is not ready.
+#[test]
+fn a_ready_wait_answers_once_the_agent_is_up_and_at_rest() {
+    let start = Instant::now();
+    let ready = || Wait::until(Until::Ready, Some(Duration::from_secs(20)), start);
+
+    let mut wait = ready();
+    assert_eq!(wait.observe(starting(), start), None);
+    assert_eq!(wait.observe(seen(Attention::Working), at(start, 100)), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Idle), at(start, 200)),
+        Some(Settled::Reached)
+    );
+
+    let mut wait = ready();
+    assert_eq!(
+        wait.observe(seen(Attention::Blocked), at(start, 100)),
+        Some(Settled::NotReady)
+    );
+
+    let mut wait = ready();
+    assert_eq!(wait.observe(starting(), at(start, 19_999)), None);
+    assert_eq!(
+        wait.observe(starting(), at(start, 20_000)),
+        Some(Settled::NotReady)
+    );
 }

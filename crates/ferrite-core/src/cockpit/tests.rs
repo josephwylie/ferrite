@@ -127,6 +127,8 @@ struct Fake {
     answer_later: Rc<RefCell<bool>>,
     answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
     resumed: Rc<RefCell<Vec<Option<String>>>>,
+    /// The extra CLI arguments each spawn was handed.
+    args: Rc<RefCell<Vec<Vec<String>>>>,
     cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
     additional_directories: Rc<RefCell<Vec<Vec<std::path::PathBuf>>>>,
     /// The title each spawn was handed.
@@ -186,6 +188,7 @@ impl Spawner for Fake {
         self.resumed
             .borrow_mut()
             .push(request.resume.map(|target| target.to_string()));
+        self.args.borrow_mut().push(request.args.to_vec());
         self.cwds
             .borrow_mut()
             .push(request.cwd.map(|path| path.to_path_buf()));
@@ -4925,4 +4928,105 @@ fn local_thread_revival_probe() {
             subject.transcript().blocks().len(),
         );
     }
+}
+
+/// What only the window knows reaches the Engine for the API (ADR 0030):
+/// the Thread its focused Pane shows while it has the operator's focus,
+/// and which Composers hold unsent text.
+#[test]
+fn a_window_tells_which_thread_it_shows_and_which_composer_holds_text() {
+    let (mut core, _fake) = cockpit("window-says");
+    let first = core.open(Provider::Claude, main_choice()).unwrap();
+    let second = core.open(Provider::Claude, main_choice()).unwrap();
+    assert!(core.focus_thread(second));
+    core.pump();
+    assert_eq!(core.engine().focused_thread(), Some(second));
+
+    core.set_window_active(false);
+    core.pump();
+    assert_eq!(core.engine().focused_thread(), None);
+
+    core.set_composing(first, true);
+    core.pump();
+    assert!(core.engine().composing(first));
+    assert!(!core.engine().composing(second));
+    core.set_composing(first, false);
+    core.pump();
+    assert!(!core.engine().composing(first));
+}
+
+/// A Thread parked with unsent text took its Composer with it: revived, it
+/// reports no `draft`, so Projects may prompt it (ADR 0030).
+#[test]
+fn a_parked_thread_holds_no_draft_when_revived() {
+    let (mut core, _fake) = cockpit("draft-parked");
+    let thread = core.open(Provider::Claude, main_choice()).unwrap();
+    core.set_composing(thread, true);
+    core.pump();
+    assert!(core.engine().composing(thread));
+
+    core.park(thread).unwrap();
+    core.pump();
+    assert!(!core.engine().composing(thread));
+    core.revive(thread).unwrap();
+    core.pump();
+    assert!(!core.engine().composing(thread));
+}
+
+/// A window that says a closed Thread's Composer holds text is too late:
+/// nothing is held for it.
+#[test]
+fn a_closed_thread_takes_no_draft() {
+    let (mut core, _fake) = cockpit("draft-closed");
+    let thread = core.open(Provider::Claude, main_choice()).unwrap();
+    core.park(thread).unwrap();
+    core.pump();
+    core.engine_mut().window_says(
+        7,
+        &crate::protocol::Op::Composing {
+            thread,
+            unsent: true,
+        },
+    );
+    assert!(!core.engine().composing(thread));
+}
+
+/// `thread.start --args` (ADR 0030): the Thread's launch arguments are
+/// saved, so a revive (and a Server's restart) starts its agent with them.
+#[test]
+fn a_thread_started_with_args_is_revived_with_them() {
+    let (mut core, fake) = cockpit("launch-args");
+    let args = vec!["--permission-mode".to_string(), "plan".to_string()];
+    let launch = crate::engine::Launch {
+        args: args.clone(),
+        ..Default::default()
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch)
+        .unwrap();
+    core.park(thread).unwrap();
+    core.revive(thread).unwrap();
+    assert_eq!(*fake.args.borrow(), [args.clone(), args]);
+}
+
+/// `thread.start --resume` (ADR 0030): the first Session carries on the
+/// provider's own conversation, and the Thread reports it as its own.
+#[test]
+fn a_thread_started_on_a_provider_conversation_resumes_it() {
+    let (mut core, fake) = cockpit("launch-resume");
+    let launch = crate::engine::Launch {
+        resume: Some("sess-9".into()),
+        ..Default::default()
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch)
+        .unwrap();
+    assert_eq!(
+        fake.resumed.borrow().last().unwrap().as_deref(),
+        Some("sess-9")
+    );
+    let view = core.engine().thread(thread).unwrap();
+    assert_eq!(view.provider_session(), Some("sess-9"));
 }

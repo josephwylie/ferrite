@@ -339,6 +339,9 @@ struct Server {
     api: Api,
     /// The operator's Provider, for a `thread.start` that names none.
     default_provider: Provider,
+    /// The Projects project the nav shows alone (`nav.focus`), told to
+    /// every window that arrives later too, as Herdr's view holds.
+    nav_focus: Option<String>,
     /// How this Server starts its successor (`relaunch`; a test's own).
     relaunch: Box<Relaunch>,
 }
@@ -371,6 +374,7 @@ impl Server {
             restarting: None,
             api: Api::default(),
             default_provider: Provider::Claude,
+            nav_focus: None,
             relaunch: Box::new(relaunch),
         }
     }
@@ -443,6 +447,7 @@ impl Server {
             }
             Heard::Gone(id) => {
                 self.clients.remove(&id);
+                self.engine.window_gone(id);
                 self.renders.client_gone(id);
                 self.list_parked();
             }
@@ -480,6 +485,14 @@ impl Server {
                     self.list_parked();
                     let snapshot = self.engine.snapshot(&self.boot_id);
                     self.send(id, ServerMessage::Snapshot(snapshot));
+                    if let Some(project) = self.nav_focus.clone() {
+                        self.send(
+                            id,
+                            ServerMessage::NavFocus {
+                                project: Some(project),
+                            },
+                        );
+                    }
                 }
             }
             return;
@@ -607,6 +620,10 @@ impl Server {
                     }))
                 });
                 return;
+            }
+            Op::Focused { .. } | Op::Composing { .. } => {
+                self.engine.window_says(id, &op);
+                Ok(None)
             }
             Op::Bootstrap { .. } => {
                 self.next_start += 1;
