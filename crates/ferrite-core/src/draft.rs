@@ -99,11 +99,13 @@ impl DraftBinding {
     }
 
     /// Interpret the choice once for both first send and file completion.
-    /// This only reads the registry and asks whether a chosen worktree's
-    /// directory still stands: bootstrap still owns worktree creation and
-    /// the git adoption check. Stale choices fail without selecting a
-    /// different checkout or mutating the draft.
-    pub fn resolve(&self, registry: &Registry) -> io::Result<WorkspaceChoice> {
+    /// This only reads the registry and, when its paths are this
+    /// computer's (`here`), asks whether a chosen worktree's directory
+    /// still stands: bootstrap still owns worktree creation and the git
+    /// adoption check, and on a machine (ADR 0026) its Server asks. Stale
+    /// choices fail without selecting a different checkout or mutating the
+    /// draft.
+    pub fn resolve(&self, registry: &Registry, here: bool) -> io::Result<WorkspaceChoice> {
         let project = registry.project(self.project).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -120,7 +122,7 @@ impl DraftBinding {
             DraftTarget::NewBranch => WorkspaceChoice::NewBranch { checkout: repo },
             DraftTarget::New => WorkspaceChoice::NewWorktree { repo },
             DraftTarget::Existing { branch, path } => {
-                if !path.is_dir() {
+                if here && !path.is_dir() {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
                         format!(
@@ -240,7 +242,7 @@ mod tests {
             assert_eq!(draft.project(), fixture.two);
             assert_eq!(draft.target(), &DraftTarget::Main);
             assert_eq!(
-                draft.resolve(&fixture.registry).unwrap().source_root(),
+                draft.resolve(&fixture.registry, true).unwrap().source_root(),
                 fixture.registry.project(fixture.two).unwrap().root,
             );
         }
@@ -259,7 +261,7 @@ mod tests {
         fs::write(tree.path.join("tree-only.txt"), "tree").unwrap();
 
         let mut draft = fixture.draft(DraftTarget::Main);
-        let main = draft.resolve(&fixture.registry).unwrap();
+        let main = draft.resolve(&fixture.registry, true).unwrap();
         assert_eq!(
             main,
             WorkspaceChoice::Main {
@@ -269,7 +271,7 @@ mod tests {
         assert!(mention_files(main.source_root(), 100).contains(&"main-only.txt".into()));
 
         draft.choose_target(DraftTarget::New);
-        let new = draft.resolve(&fixture.registry).unwrap();
+        let new = draft.resolve(&fixture.registry, true).unwrap();
         assert_eq!(new, WorkspaceChoice::NewWorktree { repo: repo.clone() });
         assert_eq!(new.source_root(), main.source_root());
         assert_eq!(
@@ -282,7 +284,7 @@ mod tests {
             branch: tree.branch.clone(),
             path: tree.path.clone(),
         });
-        let existing = draft.resolve(&fixture.registry).unwrap();
+        let existing = draft.resolve(&fixture.registry, true).unwrap();
         assert_eq!(
             existing,
             WorkspaceChoice::ExistingWorktree {
@@ -299,7 +301,7 @@ mod tests {
             path: other_tree.path.clone(),
         });
         assert_eq!(
-            draft.resolve(&fixture.registry).unwrap().source_root(),
+            draft.resolve(&fixture.registry, true).unwrap().source_root(),
             other_tree.path
         );
     }
@@ -317,7 +319,7 @@ mod tests {
         // The worktree is gone from disk — git removed it — so the choice
         // names a directory that no longer stands.
         crate::workspace::remove_worktree(&repo, &tree.path).unwrap();
-        let error = draft.resolve(&fixture.registry).unwrap_err();
+        let error = draft.resolve(&fixture.registry, true).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(error.to_string().contains(&tree.branch));
         assert_eq!(draft.target(), &target);
@@ -326,7 +328,7 @@ mod tests {
         assert_ne!(replacement, fixture.one);
         for target in [DraftTarget::Main, DraftTarget::New, target] {
             draft.choose_target(target.clone());
-            let error = draft.resolve(&fixture.registry).unwrap_err();
+            let error = draft.resolve(&fixture.registry, true).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::NotFound);
             assert!(error
                 .to_string()

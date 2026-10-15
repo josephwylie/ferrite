@@ -10,7 +10,7 @@ use super::*;
 use crate::cockpit::mirror::Mirrors;
 use crate::engine::{SpawnRequest, Spawner};
 use crate::link::{Attached, Client};
-use crate::protocol::{Peer, Resume, WireAnswer, WireChoice};
+use crate::protocol::{Peer, Resume, WireAnswer, WireChoice, WireEntry};
 use crate::providers::Session;
 use crate::store::Provider;
 use crate::transcript::Body;
@@ -435,6 +435,88 @@ fn an_invalid_answer_leaves_the_decision_pending() {
     assert_eq!(harness.answers.lock().unwrap().len(), 1);
     window.until(|window| !window.closed().is_empty());
     assert_eq!(window.closed(), vec![ClosedBy::Answered { client: 1 }]);
+}
+
+/// A window on a machine browses the machine's folders through its Server
+/// (ADR 0026): `list_dir` answers the directory's entries in name order,
+/// each saying whether it is a directory.
+#[test]
+fn list_dir_answers_a_directory_on_the_servers_computer() {
+    let harness = start("list-dir");
+    let folder = harness.dir.join("src");
+    std::fs::create_dir_all(folder.join("ferrite")).unwrap();
+    std::fs::write(folder.join("notes.md"), "").unwrap();
+    let mut window = attach(&harness.address);
+
+    let reply = window.command(
+        1,
+        Op::ListDir {
+            path: folder.clone(),
+        },
+    );
+    let ServerMessage::Reply {
+        ok: Some(Done::Listing { path, entries }),
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}");
+    };
+    assert_eq!(path, folder);
+    assert_eq!(
+        entries,
+        [
+            WireEntry {
+                name: "ferrite".into(),
+                directory: true,
+            },
+            WireEntry {
+                name: "notes.md".into(),
+                directory: false,
+            },
+        ]
+    );
+
+    let reply = window.command(
+        2,
+        Op::ListDir {
+            path: folder.join("nowhere"),
+        },
+    );
+    assert!(refused_with(&reply, ErrorCode::Failed), "{reply:?}");
+}
+
+/// A window on a machine offers the machine's worktrees and branches
+/// (ADR 0026): `list_repo` reads the Project's repo with git where the
+/// Server runs, off its pump, naming the main checkout's branch apart.
+#[test]
+fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
+    let harness = start("list-repo");
+    let repo = repository(&harness.dir);
+    let tree = harness.dir.join("fix");
+    let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
+    git(&["worktree", "add", "-q", "-b", "fix", tree.to_str().unwrap()]);
+    git(&["branch", "spare"]);
+    let mut window = cockpit(&harness);
+    let project = window.register_project(&repo).unwrap();
+
+    let answer = window.list_repo(project).unwrap();
+    let listed = std::cell::RefCell::new(None);
+    pump_until(&mut window, |_| {
+        if let Ok(answered) = answer.try_recv() {
+            *listed.borrow_mut() = Some(answered);
+        }
+        listed.borrow().is_some()
+    });
+    let listing = listed.into_inner().unwrap().unwrap();
+    assert_eq!(listing.checked_out.as_deref(), Some("main"));
+    assert_eq!(
+        listing.worktrees,
+        [crate::workspace::ListedWorktree {
+            path: std::fs::canonicalize(&tree).unwrap(),
+            branch: Some("fix".into()),
+        }]
+    );
+    assert_eq!(listing.branches, ["fix", "main", "spare"]);
 }
 
 /// A request id is unique only within one provider process: an answer to

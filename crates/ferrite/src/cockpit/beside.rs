@@ -162,7 +162,8 @@ impl CockpitView {
 
     /// Read `scope`'s edits for `thread` into `review`. The git scopes read
     /// off the UI thread; a read that lands after the operator moved on to
-    /// another scope is dropped.
+    /// another scope is dropped. On a machine only the last turn reads: the
+    /// checkout is the machine's, and no git here can read it (ADR 0026).
     fn read_review(
         &mut self,
         thread: ThreadId,
@@ -188,6 +189,16 @@ impl CockpitView {
                     })
                     .unwrap_or_default();
                 review.update(cx, |review, cx| review.show(scope, edits, cx));
+                return;
+            }
+            Scope::Uncommitted | Scope::Branch if self.on_machine() => {
+                let machine = self.cockpit.machine().map_or("", |bridge| bridge.name());
+                review.update(cx, |review, cx| {
+                    review.fail(
+                        format!("this checkout is on {machine}: only the last turn reads here"),
+                        cx,
+                    )
+                });
                 return;
             }
             Scope::Uncommitted => cx

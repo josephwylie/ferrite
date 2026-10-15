@@ -157,6 +157,54 @@ fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// `~` and `~/…` spelled out against this computer's home directory, so a
+/// path typed for a machine is read where it is meant; any other path as
+/// it is.
+pub fn expand_home(path: &Path) -> PathBuf {
+    let Ok(rest) = path.strip_prefix("~") else {
+        return path.to_path_buf();
+    };
+    // Windows spells the home directory USERPROFILE, not HOME.
+    match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        Some(home) => PathBuf::from(home).join(rest),
+        None => path.to_path_buf(),
+    }
+}
+
+/// One entry `list_dir` read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    /// A directory, or a link to one.
+    pub directory: bool,
+}
+
+/// A directory's entries, in name order, and the path they were read at
+/// with `~` spelled out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub path: PathBuf,
+    pub entries: Vec<DirEntry>,
+}
+
+/// Read a directory on this computer: how a window on a machine browses
+/// the machine's folders through its Server (ADR 0026). A name that is not
+/// UTF-8 is left out: it could not be typed back.
+pub fn list_dir(path: &Path) -> io::Result<Listing> {
+    let path = expand_home(path);
+    let mut entries: Vec<DirEntry> = fs::read_dir(&path)?
+        .flatten()
+        .filter_map(|entry| {
+            Some(DirEntry {
+                directory: entry.path().is_dir(),
+                name: entry.file_name().into_string().ok()?,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Listing { path, entries })
+}
+
 /// The files and directories under `root` the Composer's `@` menu
 /// completes over (#23): relative paths with `/` separators, a directory
 /// with a trailing `/`, breadth-first — everything at the top before
@@ -838,6 +886,38 @@ pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
         .collect())
 }
 
+/// What a repo holds for the workspace chip: the branch its main checkout
+/// is on, its other worktrees, and its local branches — each in git's own
+/// order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoListing {
+    /// None when the checkout's HEAD is detached.
+    pub checked_out: Option<String>,
+    pub worktrees: Vec<ListedWorktree>,
+    pub branches: Vec<String>,
+}
+
+/// Read `root`'s repo for the workspace chip — two git calls, never on a
+/// UI or pump thread; on a machine its Server reads it (`list_repo`, ADR
+/// 0026). The main checkout is left out of the worktrees (it is the
+/// `checked out` row already), as is any worktree whose directory is
+/// gone: git still lists a prunable one, but it is no place to work. A
+/// root git cannot answer for lists nothing, and the chip offers the
+/// fresh starts alone.
+pub fn repo_listing(root: &Path) -> RepoListing {
+    let checkout = follow::canonical(root);
+    let (main, worktrees): (Vec<_>, Vec<_>) = worktrees(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|worktree| worktree.path.is_dir())
+        .partition(|worktree| follow::canonical(&worktree.path) == checkout);
+    RepoListing {
+        checked_out: main.into_iter().find_map(|main| main.branch),
+        worktrees,
+        branches: branches(root).unwrap_or_default(),
+    }
+}
+
 /// Whether the tree at `cwd` is clean exactly as `git status` defines it:
 /// nothing modified, nothing untracked — an empty porcelain listing.
 pub fn is_clean(cwd: &Path) -> Result<bool, GitError> {
@@ -1440,6 +1520,23 @@ mod tests {
             nested_repositories(&root),
             vec![root.join(".worktrees/T3-code"), root.join("checkout")]
         );
+    }
+
+    /// A path typed for a machine leads with `~` only as a whole component;
+    /// it is spelled out against the home of the computer that reads it.
+    #[test]
+    fn expand_home_spells_out_a_leading_tilde_only() {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .expect("a home");
+        assert_eq!(expand_home(Path::new("~")), home);
+        assert_eq!(expand_home(Path::new("~/src")), home.join("src"));
+        assert_eq!(
+            expand_home(Path::new("~other/src")),
+            Path::new("~other/src")
+        );
+        assert_eq!(expand_home(Path::new("/src/~")), Path::new("/src/~"));
     }
 
     /// The Composer's `@` menu source (#23): files relative with `/`, the

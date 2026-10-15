@@ -635,6 +635,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_list_dir",
+            command(
+                38,
+                Op::ListDir {
+                    path: "~/src".into(),
+                },
+            ),
+        ),
+        ("command_list_repo", command(39, Op::ListRepo { project })),
+        (
             "welcome",
             Sample::Server(ServerMessage::Welcome {
                 generation: 1,
@@ -789,6 +799,47 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         is_directory: false,
                         matched: vec![4, 5, 6, 7],
                     }],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_listing",
+            Sample::Server(ServerMessage::Reply {
+                id: 38,
+                ok: Some(Done::Listing {
+                    path: "/home/me/src".into(),
+                    entries: vec![
+                        WireEntry {
+                            name: "ferrite".into(),
+                            directory: true,
+                        },
+                        WireEntry {
+                            name: "notes.md".into(),
+                            directory: false,
+                        },
+                    ],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_repo_listing",
+            Sample::Server(ServerMessage::Reply {
+                id: 39,
+                ok: Some(Done::RepoListing {
+                    checked_out: Some("main".into()),
+                    worktrees: vec![
+                        WireWorktree {
+                            path: "/home/me/src/ferrite/.worktrees/fix".into(),
+                            branch: Some("fix".into()),
+                        },
+                        WireWorktree {
+                            path: "/home/me/src/ferrite/.worktrees/bisect".into(),
+                            branch: None,
+                        },
+                    ],
+                    branches: vec!["main".into(), "fix".into()],
                 }),
                 error: None,
             }),

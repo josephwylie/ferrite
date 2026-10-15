@@ -230,11 +230,73 @@ on/off, remove — or save, for the `--remote` machine of this run — and a
 field to add one by its ssh target. "Start at login" is hidden while the
 window is on a machine: it is this computer's.
 
+### Projects and new Threads on a machine
+
+A window on a machine never reads a path of the machine on this
+computer: the paths look the same, and may even exist here, but they are
+another computer's. What the Server can answer, it answers; what it
+cannot, the window does without.
+
+- **Folders.** The Project card's folder dialog could only browse this
+  computer, so on a machine it is not offered. A path field stands in for
+  it, starting at `~/`, whose listing is asked for as the card opens:
+  what is typed completes (a press, or Tab) against the directory it
+  names, listed by the machine's Server through a new gen-1 command,
+  `list_dir {path}`, replied `listing {path, entries[{name, directory}]}`
+  with `~` spelled out (`workspace::list_dir`). ↵ in the field adds the
+  directory to the card and empties the field, so a second ↵ confirms
+  the card rather than adding anything more; Create registers the
+  Project through the existing `project` command. The card stages the
+  path as the listing in hand spelled it out (of it, or of its parent),
+  so `~` is named for the home's leaf and one directory typed two ways
+  stages once; with no listing in hand it goes as typed, and the
+  registry spells `~` out. Additive under ADR 0025's rules: an older
+  Server answers `unsupported`, and the field then completes nothing. A
+  listing is one `read_dir`, never a walk, on a thread of its own as
+  `list_repo`'s git is, never the pump: a huge folder or a hung mount on
+  the machine holds up only the field. A directory that cannot be read
+  is not asked about again until the field leaves it. Only a Server
+  answers `list_dir`, as `list_repo`: the Server, not the Engine, owns
+  both, so a window that runs its agents itself never shows the field.
+- **`~`.** A path goes to the Server as typed; the registry spells out
+  `~` against its own computer's home before canonicalizing
+  (`workspace::expand_home`), so `path ~/src/x` on a draft's Project chip
+  and the card's field mean the machine's home. The window's own
+  expansion is gone: it would have meant this computer's.
+- **Drafts.** The Project chip lists the machine's Projects (the
+  registry is the Server's), and a first send starts the Thread there, as
+  on this computer. The workspace chip asks the machine's Server what the
+  repo holds through a second gen-1 command, `list_repo {project}`,
+  replied `repo_listing {checked_out?, worktrees[{path, branch?}],
+  branches[]}`: the same `workspace::repo_listing` the window runs here
+  for a local repo, git's own listing, so worktrees made outside Ferrite
+  and the repo's branches are offered too. Its two git calls run on a
+  thread of their own, never the pump. The chip names the checkout's
+  branch from that answer, asked once for each draft's Project as soon
+  as a draft shows it (one at a time), and `main` when the machine
+  cannot say. Whether a chosen worktree still stands is the Server's to say
+  when it starts (`DraftBinding::resolve(registry, here)`).
+- **No git here.** The branch labels and status (`workspace::branch_status`),
+  the worktree listing that lets a binding follow its agent
+  (`refresh_branches`), the checkout and default-branch lookups, a
+  review's uncommitted and branch scopes (the last turn still reads), and
+  the `@` menu's walk of the checkout are skipped on a machine.
+- **No Finder.** "Reveal in Finder" is not offered for a machine's
+  Thread: its path is not on this computer. "Copy path" stays.
+
+The window's tests reach a machine whose Server runs in the test's own
+process (`server::fixture_machine`, behind ferrite-core's `test-support`
+feature, which only the app's dev-dependencies turn on).
+
 ## Not done here
 
-- Starting new Threads on a machine needs its Projects: the window
-  offers the machine's registered Projects, but the Project editor picks
-  local folders.
+- On a machine, a Thread's branch label and status, and its binding
+  following the agent into a worktree it made: both need git on the
+  machine read as the Thread works, not once per chip open as
+  `list_repo` is.
+- On a machine, a file opened beside a Pane and the operator's own
+  commands (ADR 0024) still read or run on this computer; a review reads
+  only the last turn.
 - An open Thread's Project on a machine: the `thread` state does not
   carry it, so a machine's open Threads group under no Project. A drop
   the Server refuses (a Thread with no Project) shows as allowed while

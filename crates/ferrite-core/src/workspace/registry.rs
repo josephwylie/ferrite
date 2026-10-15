@@ -241,7 +241,7 @@ impl Registry {
     pub fn register_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
         let mut resolved = Vec::new();
         for root in roots {
-            let root = fs::canonicalize(root)?;
+            let root = canonical_root(root)?;
             if !resolved.contains(&root) {
                 resolved.push(root);
             }
@@ -345,7 +345,7 @@ impl Registry {
     pub fn add_directories(&mut self, id: ProjectId, roots: &[PathBuf]) -> io::Result<()> {
         let roots = roots
             .iter()
-            .map(fs::canonicalize)
+            .map(|root| canonical_root(root))
             .collect::<io::Result<Vec<_>>>()?;
         let mut next = self.clone();
         for root in roots {
@@ -379,7 +379,7 @@ impl Registry {
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        let root = fs::canonicalize(root)?;
+        let root = canonical_root(root)?;
         let current = self
             .project(id)
             .and_then(|project| project.directories().nth(index))
@@ -701,6 +701,13 @@ pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
             repo.display()
         ),
     })
+}
+
+/// A directory the operator named, as the registry keeps it: `~` spelled
+/// out for this computer — a window on a machine sends the path as typed
+/// (ADR 0026) — then canonicalized.
+fn canonical_root(root: &Path) -> io::Result<PathBuf> {
+    fs::canonicalize(super::expand_home(root))
 }
 
 /// A root's leaf name, for selector rows.

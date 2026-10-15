@@ -1,7 +1,8 @@
 //! Machines in the window (ADR 0026), with fake bridges: no ssh runs. A
 //! machine off screen lists its connection, the window goes to another
-//! machine by building its Cockpit afresh, and a machine that needs the
-//! operator says so and stays dimmed and read-only.
+//! machine by building its Cockpit afresh, a machine that needs the
+//! operator says so and stays dimmed and read-only, and a Project and its
+//! first Thread are made on a machine in a directory typed there.
 
 use super::*;
 use crate::cockpit::server::Gone;
@@ -34,10 +35,93 @@ fn not_installed(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     failing(machine, settings_dir, Failure::NotInstalled)
 }
 
+/// Every byte a window sent `box`'s Server through `serving`.
+static SENT_TO_BOX: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// `box`'s Server runs in this process (`server::fixture_machine`), its
+/// Store in `box` under the settings directory; each tunnel reaches it as
+/// ssh would, keeping what the window sends in `SENT_TO_BOX`.
+fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
+    use ferrite_core::link::{self, TryClone};
+    struct Kept(link::Stream);
+    impl std::io::Write for Kept {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            SENT_TO_BOX.lock().unwrap().extend_from_slice(buf);
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.flush()
+        }
+    }
+    impl Drop for Kept {
+        fn drop(&mut self) {
+            let _ = self.0.shutdown();
+        }
+    }
+    let address = link::address(&settings_dir.join("box"));
+    Bridge::new(
+        &machine.name,
+        machine::dir(settings_dir, &machine.target).join("bridge.sock"),
+        Box::new(move || {
+            let stream = link::connect(&address)?;
+            Ok(Tunnel {
+                from: Box::new(stream.try_clone()?),
+                to: Box::new(Kept(stream)),
+                ended: Box::new(|| None),
+            })
+        }),
+    )
+}
+
+/// `box`'s Sessions: each keeps where it was started, and says nothing.
+struct OnBox(std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>);
+
+struct Quiet {
+    _alive: mpsc::Sender<SessionEvent>,
+    events: mpsc::Receiver<SessionEvent>,
+}
+
+impl ferrite_core::engine::Spawner for OnBox {
+    fn spawn(
+        &mut self,
+        request: ferrite_core::engine::SpawnRequest,
+    ) -> std::io::Result<Box<dyn ferrite_core::providers::Session>> {
+        self.0
+            .lock()
+            .unwrap()
+            .extend(request.cwd.map(std::path::Path::to_path_buf));
+        let (alive, events) = mpsc::channel();
+        Ok(Box::new(Quiet {
+            _alive: alive,
+            events,
+        }))
+    }
+}
+
+impl ferrite_core::providers::Session for Quiet {
+    fn events(&self) -> &mpsc::Receiver<SessionEvent> {
+        &self.events
+    }
+    fn send(&mut self, _: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn interrupt(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// This computer, whose Server cannot start, and `box`, which needs a
 /// sign-in; the window starts on `remote` when given.
 fn machines(name: &str, remote: Option<&str>) -> Machines {
     machines_through(name, remote, needs_sign_in)
+}
+
+/// Where `machines_through(name, …)` keeps this computer's settings.
+fn settings_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("fv-{}-{name}", std::process::id()))
 }
 
 fn machines_through(
@@ -45,7 +129,7 @@ fn machines_through(
     remote: Option<&str>,
     bridge: fn(&Machine, &std::path::Path) -> Bridge,
 ) -> Machines {
-    let dir = std::env::temp_dir().join(format!("fv-{}-{name}", std::process::id()));
+    let dir = settings_dir(name);
     let _ = std::fs::remove_dir_all(&dir);
     Machines::new(
         Reach {
@@ -328,42 +412,6 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
     });
 }
 
-/// A Session that never speaks: what the machine's Server revives onto.
-struct Quiet {
-    events: std::sync::mpsc::Receiver<SessionEvent>,
-    _provider: std::sync::mpsc::Sender<SessionEvent>,
-}
-
-impl Session for Quiet {
-    fn events(&self) -> &std::sync::mpsc::Receiver<SessionEvent> {
-        &self.events
-    }
-    fn send(&mut self, _: &str) -> std::io::Result<()> {
-        Ok(())
-    }
-    fn interrupt(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-    fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-struct Quietly;
-
-impl Spawner for Quietly {
-    fn spawn(
-        &mut self,
-        _: ferrite_core::cockpit::SpawnRequest,
-    ) -> std::io::Result<Box<dyn Session>> {
-        let (provider, events) = std::sync::mpsc::channel();
-        Ok(Box::new(Quiet {
-            events,
-            _provider: provider,
-        }))
-    }
-}
-
 /// A machine's parked Threads are its Server's to list: its logs stay on
 /// it. They show in the nav's Parked section, called what the machine's
 /// log calls them, and a click revives one there.
@@ -371,7 +419,7 @@ impl Spawner for Quietly {
 fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAppContext) {
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     let dir = scratch("machine-parked");
-    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(Quietly)).unwrap();
+    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
@@ -934,4 +982,166 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
         assert_eq!(view.focused_thread(), Some(threads[1]), "stays put");
         assert!(view.landing.is_none(), "dropped");
     });
+}
+
+/// On a machine the Project card has no folder dialog, which could only
+/// browse this computer: a path field, listing the machine's home from
+/// the start, completes against the machine's folders through its Server
+/// (`list_dir`), Tab taking the first, ↵ adding it and the next ↵
+/// confirming. The Project it makes is the machine's; a draft chooses it,
+/// its workspace chip names and offers what git on the machine lists
+/// (`list_repo`) — no git here is asked — and its first send starts the
+/// Thread in that directory on the machine.
+#[gpui::test]
+fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx));
+    let machines = cx.new(|_| machines_through("typed", Some("me@box"), serving));
+    let folder = settings_dir("typed").join("src");
+    let repo = repo_with_worktree_and_branches(&folder);
+    std::fs::create_dir_all(folder.join(".re-hidden")).unwrap();
+    std::fs::write(folder.join("readme.txt"), "").unwrap();
+    let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    // `serving` dials it itself, to keep what the window sends.
+    let _ = ferrite_core::server::fixture_machine(
+        settings_dir("typed").join("box"),
+        Box::new(OnBox(started.clone())),
+    )
+    .unwrap();
+    let core = machines
+        .update(cx, |machines, _| machines.cockpit())
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new(core, cx).with_machines(machines)
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            matches!(
+                view.cockpit.server(),
+                Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            )
+        })
+    });
+
+    let field = view.update(cx, |view, cx| {
+        view.open_project_creator(cx);
+        let field = view.project_editor.as_ref().unwrap().remote.as_ref();
+        field.expect("a path field on a machine").field.clone()
+    });
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
+            .contains(r#""op":"list_dir","path":"~/""#),
+        "the card lists the machine's home as it opens"
+    );
+    cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
+    field.update(cx, |field, cx| {
+        field.set(format!("{}/re", folder.display()), cx)
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, cx| view.remote_completions(cx) == ["repo"])
+    });
+    tick(cx);
+    assert!(debug_bounds(cx, "project-path-completion:repo".into()).is_some());
+    assert!(
+        debug_bounds(cx, "project-add-directory".into()).is_none(),
+        "no folder dialog for a machine"
+    );
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"list_dir""#),
+        "the machine's Server listed it"
+    );
+
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        format!("{}/repo/", folder.display())
+    );
+    cx.simulate_keystrokes("enter");
+    view.update(cx, |view, cx| {
+        assert_eq!(view.project_editor.as_ref().unwrap().staged, [repo.clone()]);
+        assert_eq!(field.read(cx).text(), "", "the field empties");
+    });
+    cx.simulate_keystrokes("enter");
+    let project = view.update(cx, |view, _| {
+        assert!(
+            view.project_editor.is_none(),
+            "the next ↵ confirms the card, adding nothing more"
+        );
+        let project = view.cockpit.registry().projects().last().unwrap().clone();
+        assert_eq!(project.title, "repo");
+        assert_eq!(project.root, std::fs::canonicalize(&repo).unwrap());
+        project.id
+    });
+
+    let composer = view.update(cx, |view, cx| {
+        if view.panes.is_empty() {
+            view.open_draft(DraftTarget::Main, cx);
+        }
+        let draft = view.panes[view.focused()].draft().unwrap();
+        let offered = view
+            .band_rows(draft, pane::BandChip::Project, cx)
+            .into_iter()
+            .any(|row| row.consequence == Consequence::Band(BandChoice::Project(project)));
+        assert!(offered, "the machine's Project is on the draft's chip");
+        let composer = view.panes[view.focused()].composer.clone();
+        view.pick_band(&BandChoice::Project(project), &composer, cx);
+        composer
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.checked_out
+                .borrow()
+                .get(&project)
+                .map(|branch| branch.as_ref())
+                == Some("trunk")
+        })
+    });
+    view.update(cx, |view, cx| {
+        assert!(
+            view.checking_out.borrow().is_empty(),
+            "no git here was asked what the machine's checkout is on"
+        );
+        view.open_band_popover(pane::BandChip::Workspace, cx);
+    });
+    let rows = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.popover.as_ref().map_or_else(Vec::new, |popover| {
+                popover
+                    .rows
+                    .iter()
+                    .map(|row| (row.name.to_string(), row.detail.to_string()))
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+    until(cx, |cx| rows(cx).len() > 3);
+    let named = |name: &str, detail: &str| (name.to_string(), detail.to_string());
+    assert_eq!(
+        rows(cx),
+        [
+            named("trunk", "checked out"),
+            named("feature/wt", "worktree · wt-feature"),
+            named("main", "existing branch"),
+            named("topic/spare", "existing branch"),
+            named("New branch", "in the project checkout"),
+            named("New branch + worktree", "in an isolated checkout"),
+        ],
+        "git on the machine lists the repo, its own worktrees and branches"
+    );
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"list_repo""#),
+        "the machine's Server read the repo"
+    );
+
+    view.update(cx, |view, cx| {
+        view.popover = None;
+        composer.update(cx, |composer, cx| composer.set("hello box".into(), cx));
+        view.bootstrap_draft(cx);
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.cockpit.threads().len() == 1)
+    });
+    assert_eq!(
+        *started.lock().unwrap(),
+        [std::fs::canonicalize(&repo).unwrap()]
+    );
 }

@@ -305,6 +305,10 @@ type Search = (
     Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>,
 );
 
+/// A read off the pump — git's for a `list_repo`, a folder's for a
+/// `list_dir`: who asked, in which command, and the reply it makes.
+type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
+
 struct Server {
     engine: Engine,
     boot_id: String,
@@ -318,6 +322,7 @@ struct Server {
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
     searches: Vec<Search>,
+    reads: Vec<Read>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
     starting: HashMap<DraftId, (ClientId, u64)>,
@@ -358,6 +363,7 @@ impl Server {
             answered: BTreeMap::new(),
             renders,
             searches: Vec::new(),
+            reads: Vec::new(),
             starting: HashMap::new(),
             next_start: 0,
             swept: Instant::now(),
@@ -397,6 +403,7 @@ impl Server {
             }
             self.answer_bootstraps();
             self.answer_searches();
+            self.answer_reads();
             self.forward_renders();
             self.coordinate();
             self.broadcast();
@@ -547,6 +554,25 @@ impl Server {
                 }
                 Err(error) => Err(failed(error)),
             },
+            Op::ListRepo { project } => match self.engine.registry().project(*project) {
+                Some(project) => {
+                    let root = project.root.clone();
+                    self.read_off_pump(id, request, move || {
+                        Ok(Some(crate::workspace::repo_listing(&root).into()))
+                    });
+                    return;
+                }
+                None => Err(failed("no such Project")),
+            },
+            Op::ListDir { path } => {
+                let path = path.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::workspace::list_dir(&path)
+                        .map(|listing| Some(listing.into()))
+                        .map_err(failed)
+                });
+                return;
+            }
             Op::Bootstrap { .. } => {
                 self.next_start += 1;
                 let tag = DraftId::new(self.next_start);
@@ -688,6 +714,41 @@ impl Server {
                     })
                 })
                 .map_err(failed);
+            self.reply(client, request, executed);
+        }
+    }
+
+    /// Read on a thread of its own, so a slow disk or a hung mount holds
+    /// up only the window that asked, not every Thread on the pump.
+    fn read_off_pump(
+        &mut self,
+        client: ClientId,
+        request: u64,
+        read: impl FnOnce() -> Result<Option<Done>, WireError> + Send + 'static,
+    ) {
+        let (answer, answered) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = answer.send(read());
+        });
+        self.reads.push((client, request, answered));
+    }
+
+    /// Reply to each read off the pump that finished.
+    fn answer_reads(&mut self) {
+        let mut answered = Vec::new();
+        self.reads
+            .retain(|(client, request, answer)| match answer.try_recv() {
+                Ok(executed) => {
+                    answered.push((*client, *request, executed));
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    answered.push((*client, *request, Err(failed("the read ended"))));
+                    false
+                }
+            });
+        for (client, request, executed) in answered {
             self.reply(client, request, executed);
         }
     }

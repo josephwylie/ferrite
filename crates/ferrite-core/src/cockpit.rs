@@ -1201,6 +1201,26 @@ impl Cockpit {
         )
     }
 
+    /// A directory's entries on the computer the Server runs on — on a
+    /// machine, the machine's (ADR 0026). Answered later: a machine is a
+    /// round trip away. Only a Server answers: a window that runs its
+    /// agents itself has this computer's folders at hand.
+    pub fn list_dir(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<crate::workspace::Listing>>> {
+        self.remote()?.list_dir(path)
+    }
+
+    /// What `project`'s repo holds for the workspace chip, read by git
+    /// where the Server runs (ADR 0026). Answered later, as `list_dir`.
+    pub fn list_repo(
+        &mut self,
+        project: ProjectId,
+    ) -> io::Result<Receiver<io::Result<crate::workspace::RepoListing>>> {
+        self.remote()?.list_repo(project)
+    }
+
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
         self.act(
             |engine| engine.control(thread, action.clone()),

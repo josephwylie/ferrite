@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,7 +24,12 @@ use crate::protocol::{
 use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
+use crate::workspace::registry::ProjectId;
+use crate::workspace::{DirEntry, ListedWorktree, Listing, RepoListing};
 use crate::ThreadId;
+
+/// Where a later-answered command's reply goes (`Remote::ask`).
+type Answer = Box<dyn FnOnce(io::Result<Option<Done>>) + Send>;
 
 /// How long an act waits for the Server's reply.
 const REPLY_WAIT: Duration = Duration::from_secs(10);
@@ -121,6 +126,9 @@ pub(crate) struct Remote {
     /// First sends the connection took with it, for the next `poll`.
     abandoned: Vec<Arrival>,
     searches: BTreeMap<u64, Sender<io::Result<Vec<FileSuggestion>>>>,
+    /// Commands whose reply the window takes later, each with where its
+    /// answer goes (`ask`).
+    answers: BTreeMap<u64, Answer>,
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
     rendered: (Sender<ClientMessage>, Receiver<ClientMessage>),
@@ -147,6 +155,7 @@ impl Remote {
             starting: BTreeMap::new(),
             abandoned: Vec::new(),
             searches: BTreeMap::new(),
+            answers: BTreeMap::new(),
             watching: BTreeSet::new(),
             rendered: mpsc::channel(),
         }
@@ -385,6 +394,70 @@ impl Remote {
         Ok(answered)
     }
 
+    pub(crate) fn list_dir(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Listing>>> {
+        let op = Op::ListDir {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::Listing { path, entries } => Some(Listing {
+                path,
+                entries: entries
+                    .into_iter()
+                    .map(|entry| DirEntry {
+                        name: entry.name,
+                        directory: entry.directory,
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn list_repo(
+        &mut self,
+        project: ProjectId,
+    ) -> io::Result<Receiver<io::Result<RepoListing>>> {
+        self.ask(Op::ListRepo { project }, |done| match done {
+            Done::RepoListing {
+                checked_out,
+                worktrees,
+                branches,
+            } => Some(RepoListing {
+                checked_out,
+                worktrees: worktrees
+                    .into_iter()
+                    .map(|worktree| ListedWorktree {
+                        path: worktree.path,
+                        branch: worktree.branch,
+                    })
+                    .collect(),
+                branches,
+            }),
+            _ => None,
+        })
+    }
+
+    /// Send `op` and answer its reply later, as `read` makes of it.
+    fn ask<T: Send + 'static>(
+        &mut self,
+        op: Op,
+        read: fn(Done) -> Option<T>,
+    ) -> io::Result<Receiver<io::Result<T>>> {
+        let id = self.send_command(op).map_err(io::Error::from)?;
+        let (answer, answered) = mpsc::channel();
+        self.answers.insert(
+            id,
+            Box::new(move |result| {
+                let read = result.and_then(|done| {
+                    done.and_then(read)
+                        .ok_or_else(|| io::Error::other("the server answered something else"))
+                });
+                let _ = answer.send(read);
+            }),
+        );
+        Ok(answered)
+    }
+
     /// Stream every open Thread to this window: from where its mirror left
     /// off when the boot is the same, else from its history.
     pub(crate) fn watch(&mut self, open: &[ThreadId], seq: impl Fn(ThreadId) -> Option<u64>) {
@@ -493,6 +566,7 @@ impl Remote {
         self.retry_at = Instant::now();
         self.watching.clear();
         self.searches.clear();
+        self.answers.clear();
         self.abandon_starting();
     }
 
@@ -535,6 +609,8 @@ impl Remote {
                             .collect(),
                         _ => Vec::new(),
                     }));
+                } else if let Some(answer) = self.answers.remove(&id) {
+                    answer(result);
                 }
                 Vec::new()
             }

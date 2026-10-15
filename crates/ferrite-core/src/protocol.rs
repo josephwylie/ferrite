@@ -276,6 +276,18 @@ pub enum Op {
         project: ProjectId,
         provider: Provider,
     },
+    /// A directory's entries on the Server's computer, `~` its home: how a
+    /// window on a machine browses the machine's folders (ADR 0026).
+    /// Replied `listing`.
+    ListDir {
+        path: PathBuf,
+    },
+    /// What a Project's repo holds for a Draft's workspace chip, read by
+    /// git on the Server's computer: how a window on a machine offers the
+    /// machine's worktrees and branches (ADR 0026). Replied `repo_listing`.
+    ListRepo {
+        project: ProjectId,
+    },
     Restart {
         when: When,
     },
@@ -718,8 +730,70 @@ pub enum Done {
         #[serde(default)]
         dissolved: Vec<WireDissolved>,
     },
+    /// A `list_dir`'s directory, with `~` spelled out, and its entries in
+    /// name order.
+    Listing {
+        path: PathBuf,
+        entries: Vec<WireEntry>,
+    },
+    /// A `list_repo`'s main checkout's branch, its other worktrees, and
+    /// its local branches, each in git's order.
+    RepoListing {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checked_out: Option<String>,
+        worktrees: Vec<WireWorktree>,
+        branches: Vec<String>,
+    },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireEntry {
+    pub name: String,
+    #[serde(default)]
+    pub directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireWorktree {
+    pub path: PathBuf,
+    /// None when its HEAD is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+impl From<crate::workspace::RepoListing> for Done {
+    fn from(listing: crate::workspace::RepoListing) -> Self {
+        Done::RepoListing {
+            checked_out: listing.checked_out,
+            worktrees: listing
+                .worktrees
+                .into_iter()
+                .map(|worktree| WireWorktree {
+                    path: worktree.path,
+                    branch: worktree.branch,
+                })
+                .collect(),
+            branches: listing.branches,
+        }
+    }
+}
+
+impl From<crate::workspace::Listing> for Done {
+    fn from(listing: crate::workspace::Listing) -> Self {
+        Done::Listing {
+            path: listing.path,
+            entries: listing
+                .entries
+                .into_iter()
+                .map(|entry| WireEntry {
+                    name: entry.name,
+                    directory: entry.directory,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
