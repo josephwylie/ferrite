@@ -17,6 +17,7 @@ use crate::git;
 use crate::highlight::Highlighter;
 use crate::model::{ChangeKind, ChangedFile, Comment, CommentStore, CommitPick, Side};
 use crate::search::{SearchCompletion, SearchJob, SearchOutcome, SearchResults};
+use crate::turn::{Status, TurnHost};
 
 /// The most file text one review carries; the files past it read as too large.
 pub const MAX_REVIEW: usize = 8 << 20;
@@ -28,7 +29,8 @@ pub enum Read {
     Uncommitted,
     /// The worktree against the merge base of the resolved base branch.
     Branch,
-    /// The worktree against its snapshot when the latest turn began ([`turn_started`]).
+    /// The worktree against its snapshot when the last turn that changed it began
+    /// ([`agents_changed`]).
     LastTurn,
     /// A picked run of commits, `oldest^` against `newest`.
     Commits(CommitPick),
@@ -99,13 +101,13 @@ fn at_ends(repo: &Path, ends: DiffEnds) -> Result<Changeset> {
     Ok(Changeset { files: files.into_values().collect(), ends: Some(ends) })
 }
 
-/// The checkouts this process has read a review of: only their turns are snapshotted.
+/// The checkouts this process has read in, a review or a turn.
 fn reviewed() -> &'static Mutex<HashSet<PathBuf>> {
     static REVIEWED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
     REVIEWED.get_or_init(Mutex::default)
 }
 
-/// Note a review of `repo`; the first sweeps the index copies a dead process left in its git dir.
+/// Note a read in `repo`; the first sweeps the index copies a dead process left in its git dir.
 fn session_started(repo: &Path) {
     if reviewed().lock().unwrap_or_else(PoisonError::into_inner).insert(repo.to_path_buf()) {
         git::sweep_dead_copies(repo);
@@ -135,7 +137,7 @@ pub fn review(repo: &Path, read: &Read) -> Result<Vec<FileSides>, String> {
     let changeset = changed(repo, read, None).map_err(|error| format!("{error:#}"))?;
     let Some(ends) = changeset.ends else {
         return Err(match read {
-            Read::LastTurn => "no turn yet: the last turn starts with the next prompt",
+            Read::LastTurn => "waiting for the first turn",
             Read::Branch => "no base branch to compare against",
             Read::Uncommitted | Read::Commits(_) => "nothing to compare",
         }
@@ -237,21 +239,81 @@ fn highlighter() -> &'static Highlighter {
     PLAIN.get_or_init(Highlighter::plain)
 }
 
-/// Mark the start of a turn in `repo`: its worktree as it stands becomes what `last turn`
-/// reads against, under upstream's private per-worktree ref. Off the caller's thread, and only
-/// for a checkout this process has reviewed: a snapshot hashes every file changed since `HEAD`.
-pub fn turn_started(repo: &Path) {
-    if !reviewed().lock().unwrap_or_else(PoisonError::into_inner).contains(repo) {
-        return;
+/// One of the Engine's agents: its Thread, where it works, and its status in upstream's terms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Agent {
+    pub thread: String,
+    pub cwd: PathBuf,
+    pub status: Status,
+}
+
+/// The Engine's agents changed, `at` when it saw them: turn tracking follows them, as upstream's
+/// follows herdr's `agent_status` (`herdr_socket.rs`). Every checkout an agent works in gets a
+/// [`TurnHost`] on a thread of its own, which snapshots its turn's start and promotes it to
+/// `last turn` once the turn ends having changed the checkout. Ferrite runs no watcher, so a
+/// turn is judged at its end, as upstream judges one its watcher was down for.
+pub fn agents_changed(agents: Vec<Agent>, at: Instant) {
+    static TURNS: OnceLock<Mutex<mpsc::Sender<(Vec<Agent>, Instant)>>> = OnceLock::new();
+    let turns = TURNS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        let _ = std::thread::Builder::new().name("turns".into()).spawn(move || track_turns(&rx));
+        Mutex::new(tx)
+    });
+    let _ = turns.lock().unwrap_or_else(PoisonError::into_inner).send((agents, at));
+}
+
+/// Find each agent's checkout and tell every checkout's turn host what the agents are now.
+fn track_turns(news: &mpsc::Receiver<(Vec<Agent>, Instant)>) {
+    // A resolved root never moves, so it is kept; outside and unknown are asked again.
+    let mut roots: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut hosts: HashMap<PathBuf, mpsc::Sender<(Arc<Vec<Agent>>, Instant)>> = HashMap::new();
+    for (agents, at) in news {
+        for agent in &agents {
+            if roots.contains_key(&agent.cwd) || !agent.cwd.is_absolute() {
+                continue;
+            }
+            if let git::Worktree::Root(root) = git::worktree_of(&agent.cwd) {
+                roots.insert(agent.cwd.clone(), root);
+            }
+        }
+        for agent in &agents {
+            let Some(root) = roots.get(&agent.cwd) else { continue };
+            hosts.entry(root.clone()).or_insert_with(|| turn_host(root.clone()));
+        }
+        let agents = Arc::new(agents);
+        hosts.retain(|_, host| host.send((Arc::clone(&agents), at)).is_ok());
     }
-    let repo = repo.to_path_buf();
-    let _ = std::thread::Builder::new().name("turn-baseline".into()).spawn(move || {
-        let written =
-            git::snapshot_worktree(&repo).and_then(|tree| git::write_baseline_ref(&repo, &tree));
-        if let Err(error) = written {
-            logln!("turn baseline in {} failed: {error:#}", repo.display());
+}
+
+/// The turn host of the checkout at `root`, on its own thread so one slow snapshot holds up no
+/// other checkout's turn.
+fn turn_host(root: PathBuf) -> mpsc::Sender<(Arc<Vec<Agent>>, Instant)> {
+    let (tx, rx) = mpsc::channel::<(Arc<Vec<Agent>>, Instant)>();
+    let _ = std::thread::Builder::new().name("turn-host".into()).spawn(move || {
+        session_started(&root);
+        let mut host = TurnHost::open(root);
+        host.watcher_down(true);
+        // The Engine owns its agents from their start: before any was seen here, none worked,
+        // so the first status it reports can start a turn.
+        host.observe_statuses(Some(&[]), Instant::now());
+        for (agents, at) in rx {
+            let cwds: Vec<String> = agents.iter().map(|a| a.cwd.to_string_lossy().into()).collect();
+            let named: Vec<(&str, Option<&str>)> = agents
+                .iter()
+                .zip(&cwds)
+                .map(|(a, cwd)| (a.thread.as_str(), Some(cwd.as_str())))
+                .collect();
+            let statuses = host.members(&named).map(|members| {
+                agents
+                    .iter()
+                    .filter(|a| members.contains(&a.thread.as_str()))
+                    .map(|a| a.status)
+                    .collect::<Vec<_>>()
+            });
+            host.observe_statuses(statuses.as_deref(), at);
         }
     });
+    tx
 }
 
 /// The branch's commits since its base, newest first along first parents (50 when no base
@@ -535,7 +597,7 @@ mod tests {
         let [only] = review(repo, &pick).unwrap().try_into().unwrap();
         assert_eq!(only.sides, Ok(("one\n".to_string(), "two\n".to_string())));
 
-        assert!(review(repo, &Read::LastTurn).unwrap_err().starts_with("no turn yet"));
+        assert_eq!(review(repo, &Read::LastTurn).unwrap_err(), "waiting for the first turn");
         let tree = git::snapshot_worktree(repo).unwrap();
         git::write_baseline_ref(repo, &tree).unwrap();
         std::fs::write(repo.join("a.txt"), "three\n").unwrap();
@@ -562,22 +624,59 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_start_in_a_reviewed_checkout_records_what_last_turn_reads_against() {
+    fn a_turn_that_changed_nothing_leaves_the_last_turn_as_it_was() {
         let (dir, git) = test_repo();
-        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        let repo = dir.path();
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", "root"]);
-        turn_started(dir.path());
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(git::read_baseline_ref(dir.path()).is_none(), "never reviewed, never snapshotted");
-        assert!(review(dir.path(), &Read::LastTurn).is_err(), "no turn yet");
-        turn_started(dir.path());
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while git::read_baseline_ref(dir.path()).is_none() {
-            assert!(Instant::now() < deadline, "the baseline lands");
-            std::thread::sleep(Duration::from_millis(20));
+        let git::Worktree::Root(root) = git::worktree_of(repo) else { panic!("a repo") };
+        let mut host = TurnHost::open(root);
+        host.watcher_down(true);
+        let at = Instant::now();
+        host.observe_statuses(Some(&[]), at);
+        host.observe_statuses(Some(&[Status::Working]), at);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        host.observe_statuses(Some(&[Status::Idle]), at);
+        let baseline = git::read_baseline_ref(repo).expect("a turn that wrote promotes its start");
+        let paths = || -> Vec<String> {
+            review(repo, &Read::LastTurn).unwrap().into_iter().map(|f| f.file.path).collect()
+        };
+        assert_eq!(paths(), ["a.txt"]);
+        // A question: the agent works, writes nothing, rests.
+        host.observe_statuses(Some(&[Status::Working]), at);
+        host.observe_statuses(Some(&[Status::Idle]), at);
+        assert_eq!(git::read_baseline_ref(repo), Some(baseline), "the turn before still shows");
+        assert_eq!(paths(), ["a.txt"]);
+    }
+
+    #[test]
+    fn the_engines_agents_drive_the_last_turn() {
+        let (dir, git) = test_repo();
+        let repo = dir.path();
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "root"]);
+        let agent = |status| Agent { thread: "t1".into(), cwd: repo.to_path_buf(), status };
+        agents_changed(vec![agent(Status::Idle)], Instant::now());
+        // A write that lands before the start's snapshot is part of it, so each try writes anew
+        // after giving the snapshot time.
+        for attempt in 0..20 {
+            agents_changed(vec![agent(Status::Working)], Instant::now());
+            std::thread::sleep(Duration::from_millis(200));
+            std::fs::write(repo.join("a.txt"), format!("edit {attempt}\n")).unwrap();
+            agents_changed(vec![agent(Status::Idle)], Instant::now());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if git::read_baseline_ref(repo).is_some() {
+                    let [only] = review(repo, &Read::LastTurn).unwrap().try_into().unwrap();
+                    assert_eq!(only.file.path, "a.txt");
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
-        assert!(review(dir.path(), &Read::LastTurn).unwrap().is_empty());
+        panic!("no turn was promoted");
     }
 
     #[test]

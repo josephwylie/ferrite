@@ -26,4 +26,6 @@ pub mod snippet;
 mod test_support;
 mod text;
 pub mod theme;
+pub mod turn;
 pub mod wake;
+mod watch;

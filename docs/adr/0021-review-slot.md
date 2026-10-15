@@ -43,7 +43,7 @@ take reviewr itself instead, so its fixes and features keep arriving.
    (reviewr's chain: its per-worktree base pick, else the default branch —
    `origin/HEAD`, `init.defaultBranch`, `main`, `master`); *last turn* is
    the worktree against reviewr's snapshot of it when the latest turn
-   began; *commits* lists the branch's first-parent commits since that
+   that changed it began; *commits* lists the branch's first-parent commits since that
    base, newest first: ↑↓ or a click picks one, ⇧↑↓ or a shift-click
    stretches the pick to a run of them (reviewr's commit picker run), ⏎ or
    the click reviews the pick (the oldest's first parent against the
@@ -64,17 +64,31 @@ take reviewr itself instead, so its fixes and features keep arriving.
    says so. An older Server's `diff` answer reads as no answer. A read
    that lands after the operator moved on is dropped; each read is a
    snapshot, read afresh on `r` or on picking the scope again.
-4. **The last turn is reviewr's snapshot, taken as a turn begins.** When
-   the Engine sends Main a prompt (`deliver`) in a checkout this process
-   has reviewed, it snapshots the worktree off its thread
-   (`ferrite::turn_started`: `git add -A` into a private index copy,
-   `write-tree`) and records the tree under reviewr's worktree-private ref
-   `refs/worktree/reviewr/turn-base`. The last turn diffs a fresh snapshot
-   against it, so it holds every change since the prompt — Main's,
-   its Subagents' and their shell's — and a turn that left the checkout as
-   it was shows nothing. Before a reviewed checkout's first turn the scope
-   says so. These, and reviewr's index copies under the git dir, are the
-   only writes; the real index and the worktree are never touched.
+4. **The last turn is reviewr's turn tracking, fed Ferrite's agents.**
+   Upstream's `turn.rs` is vendored whole; where herdr fed it each agent's
+   status, the Engine feeds it every live Session's checkout and status
+   (`ferrite::agents_changed`, on each pump that changed them: streaming
+   is `working`, blocked `blocked`, idle `idle`, closed `done`). Each
+   checkout an agent works in gets reviewr's `TurnHost` on a thread of its
+   own, reviewed or not. A turn is reviewr's: the checkout going from
+   every agent at rest to one working. Its start snapshots the worktree
+   (`git add -A` into a private index copy, `write-tree`); when the
+   checkout rests again, the turn is promoted to *last turn* only if the
+   checkout changed meanwhile, under reviewr's worktree-private ref
+   `refs/worktree/reviewr/turn-base`. So a turn that wrote nothing (a
+   question) leaves the turn before it on show, and the last turn holds
+   every change since that start — Main's, its Subagents', their shell's,
+   and another Thread's in the same checkout. Ferrite runs no watcher, so
+   each turn is judged at its end, as reviewr judges a turn its watcher
+   was down for: while a turn runs, *last turn* still reads from the start
+   of the one before. The ref persists, as reviewr's does, so after a
+   restart the last turn is still the one Ferrite (or reviewr, sharing the
+   ref) last saw; every turn of every Session is seen, from the moment the
+   Engine starts it, so the first turn that writes replaces it. Before any
+   turn, the scope says it waits for the first. These, and reviewr's index
+   copies under the git dir (gone when the Engine halts,
+   `git::end_sessions`), are the only writes; the real index and the
+   worktree are never touched.
 5. **Rows as reviewr builds them, drawn as Ferrite draws diffs.** Each
    file is a head (its path, a rename's `old → new`, its `+N −N`) over its
    rows: numbered on both sides, signed and washed like every diff in a
@@ -150,11 +164,11 @@ take reviewr itself instead, so its fixes and features keep arriving.
 - Every file of a scope is read with its sides at once, and the slot draws
   every row (folds aside): virtualising would need uniform rows, which the
   inline comments break. Each row's colours are worked out once per read.
-- Snapshotting at each prompt costs a `git add -A` into a copy of the
-  index, which hashes only what changed since `HEAD`, and only in a
-  checkout reviewed since the process started. A turn that begins before
-  the snapshot lands (a fast first edit) folds that edit into the
-  baseline.
+- Each turn costs a `git add -A` into a copy of the index at its start
+  and its end, which hashes only what changed since `HEAD`, in every
+  checkout a Session works in, off the pump. A write that lands before the
+  start's snapshot (a fast first edit) folds into the baseline: with no
+  watcher, reviewr cannot tell it raced.
 - The search engine holds one index per searched checkout for as long as
   the Server runs.
 - A self-hosted forge (reviewr's `*_host` settings) is not configurable

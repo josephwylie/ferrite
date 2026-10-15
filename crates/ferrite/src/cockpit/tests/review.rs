@@ -351,39 +351,64 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     assert!(document.review.is_none());
 }
 
-/// A prompt to a reviewed checkout snapshots it as the turn begins (the
-/// vendored turn baseline), and the last turn reads only what changed
-/// since: not the edit that was already there.
+/// A turn snapshots its checkout as it begins, reviewed or not (the
+/// vendored turn tracking), and once it ends having changed something the
+/// last turn reads only that: not the edit already there, nor what a
+/// baseline an earlier session left would show.
 #[gpui::test]
 fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
-    let (core, _fake, repo) = edited("review-last-turn");
+    let (core, fake, repo) = edited("review-last-turn");
+    const BASE: &str = "refs/worktree/reviewr/turn-base";
+    git(&repo, &["update-ref", BASE, "HEAD^{tree}"]);
+    let baseline = || {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "--quiet", BASE])
+            .current_dir(&repo)
+            .output()
+            .expect("git");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let stale = baseline();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    open_review(&view, Scope::Uncommitted, cx);
-    view.update(cx, |view, _| {
-        let thread = view.panes[0].thread().unwrap();
-        view.cockpit.send(thread, "Add notes".into());
-    });
-    let baseline = || {
-        std::process::Command::new("git")
-            .args([
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "refs/worktree/reviewr/turn-base",
-            ])
-            .current_dir(&repo)
-            .output()
-            .is_ok_and(|out| out.status.success())
-    };
-    until(cx, |_| baseline());
-    std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
+    // A write that lands before the start's snapshot is part of it, so
+    // each try is a fresh turn with a fresh write.
+    for attempt in 0..5 {
+        view.update(cx, |view, _| {
+            let thread = view.panes[0].thread().unwrap();
+            view.cockpit.send(thread, "Add notes".into());
+        });
+        tick(cx);
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(repo.join("notes.md"), format!("fresh {attempt}\n")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        for _ in 0..200 {
+            tick(cx);
+            if baseline() != stale {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if baseline() != stale {
+            break;
+        }
+    }
+    assert_ne!(
+        baseline(),
+        stale,
+        "the turn's start replaced the old baseline"
+    );
+    open_review(&view, Scope::LastTurn, cx);
     let review = view
         .read_with(cx, |view, _| view.panes[0].preview.review())
         .expect("a review is open");
-    open_review(&view, Scope::LastTurn, cx);
     until(cx, |cx| {
         review.read_with(cx, |review, _| {
             review.place(0).map(|(path, _)| path.to_string())

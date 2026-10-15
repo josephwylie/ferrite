@@ -14,7 +14,7 @@ vendored for Ferrite's Review slot (ADR 0021). MIT, © 2026 Dmitry Persiyanov
 
 Verbatim from upstream (`src/`): `azure_devops.rs`, `diff.rs`, `forge.rs`,
 `git.rs`, `gitlab.rs`, `keymap.rs`, `log.rs`, `model.rs`, `proc.rs`,
-`search.rs`, `snippet.rs`, `test_support.rs`, `text.rs`; and
+`search.rs`, `snippet.rs`, `test_support.rs`, `text.rs`, `turn.rs`; and
 `assets/*.tmTheme`, the syntax themes the highlighter's tests load (each under
 its own licence: Catppuccin Mocha, Rosé Pine, ayu and Everforest MIT, Tokyo
 Night Apache-2.0).
@@ -34,21 +34,25 @@ Ferrite's own:
 - `ferrite.rs`: the adapter, in place of upstream's herdr adapter
   (`herdr.rs`, `herdr_socket.rs`): each scope's changeset and sides (after
   upstream's `world::scope_build` and `App::content_sides`), the file view,
-  the turn baseline, the commit list, the comment anchor (upstream's
+  turn tracking's feed (after upstream's `herdr_socket.rs`: the Engine's
+  agents in place of herdr's, a `TurnHost` per checkout), the commit list, the comment anchor (upstream's
   `app::anchor`), the prompt text, the per-checkout search workers and the
   pull request read with its notes (upstream's `ui::pr_empty_msg`).
-- `config.rs`, `theme.rs`, `wake.rs`: stand-ins for upstream modules of the
-  same names that were dropped, holding only what the kept modules call
-  (the forge host set and host grammar; the syntax theme choice; the search
-  worker's sender).
+- `config.rs`, `theme.rs`, `wake.rs`, `watch.rs`: stand-ins for upstream
+  modules of the same names that were dropped, holding only what the kept
+  modules call (the forge host set and host grammar; the syntax theme
+  choice; the search worker's sender; the watcher's gathering span, which
+  sizes turn tracking's race window). Ferrite runs no watcher, so every
+  turn is judged at its end by the worktree itself, as upstream judges a
+  turn its watcher was down for.
 
 Dropped: the terminal UI and its loop (`app.rs`, `ui.rs`, `input*`,
 `wake.rs`, `theme.rs`, `roles.rs`, `markdown.rs`, `marks.rs`, `rendered.rs`,
 `selection.rs`, `file_list.rs`, `browser.rs`, `editor.rs`, `schedule.rs`,
-`world.rs`, `watch.rs`, `turn.rs`, `actions.rs`, `config.rs`, `main.rs`), the
+`world.rs`, `watch.rs`, `actions.rs`, `config.rs`, `main.rs`), the
 herdr adapter (`herdr.rs`, `herdr_socket.rs`), the plugin manifest and
 scripts. Ferrite draws the review with GPUI (`crates/ferrite/src/review.rs`)
-and starts a turn's baseline itself (`ferrite::turn_started`).
+and feeds turn tracking its own agents (`ferrite::agents_changed`).
 
 Tests: every unit test of the kept modules, `tests/git_repo.rs` (its scope
 reads go through the adapter's `changed` instead of upstream's world build)
@@ -65,6 +69,6 @@ herdr, or check upstream's own source style (`comment_shape.rs`).
    apply upstream's change around the edits listed above.
 3. When a kept module starts calling into a dropped one, extend the matching
    stand-in (or keep the module it now needs, verbatim).
-4. When upstream's `world::scope_build`, `App::content_sides`, `app::anchor`
-   or `ui::pr_empty_msg` changed, carry the change into `ferrite.rs`.
+4. When upstream's `world::scope_build`, `App::content_sides`, `app::anchor`,
+   `ui::pr_empty_msg` or `herdr_socket.rs`'s turn feed changed, carry the change into `ferrite.rs`.
 5. Record the new commit above, then `cargo test -p ferrite-reviewr`.
