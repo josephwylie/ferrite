@@ -7,7 +7,9 @@ use std::rc::Rc;
 
 use ferrite_core::ThreadId;
 use ferrite_projects::keys::{KeyCode, KeyEvent, KeyModifiers};
+use ferrite_projects::paths::{self, Ctx, Env, SessionFlags};
 use ferrite_projects::project;
+use ferrite_projects::runner::{Cmd, Output, Runner};
 use ferrite_projects::thread::{self, Group};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
@@ -148,11 +150,9 @@ fn the_picker_filters_on_name_and_slug_and_scopes_the_popup(cx: &mut TestAppCont
     // Nothing matches: it says so.
     press(&sheet, cx, KeyCode::Char('/'));
     typed(&sheet, cx, "zz");
-    assert!(
-        screen(&sheet, cx)
-            .iter()
-            .any(|line| line.starts_with("  no projects match"))
-    );
+    assert!(screen(&sheet, cx)
+        .iter()
+        .any(|line| line.starts_with("  no projects match")));
 }
 
 #[gpui::test]
@@ -264,8 +264,106 @@ fn the_snapshot_lists_open_threads_by_need_with_their_sub_lines() {
         model.project_of(ThreadId::new(13)).is_none(),
         "a resolved thread is no one's"
     );
+}
+
+/// The CLI as the adapter runs it: `thread list` answers one Thread, 7,
+/// working in `/work`; nothing else answers.
+struct OneThread;
+
+impl Runner for OneThread {
+    fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
+        let listed = cmd.args.windows(2).any(|pair| pair == ["thread", "list"]);
+        Ok(if listed {
+            Output {
+                code: Some(0),
+                stdout: r#"{"result":{"threads":[{"thread":7,"provider":"claude","attention":"idle","cwd":"/work"}]}}"#.into(),
+                ..Output::default()
+            }
+        } else {
+            Output {
+                code: Some(1),
+                ..Output::default()
+            }
+        })
+    }
+
+    fn socket_request(
+        &self,
+        _: &std::path::Path,
+        _: &str,
+        _: std::time::Duration,
+    ) -> anyhow::Result<String> {
+        anyhow::bail!("no socket here")
+    }
+
+    fn run_foreground(&self, _: &Cmd, _: &mut dyn FnMut() -> bool) -> anyhow::Result<Option<i32>> {
+        anyhow::bail!("no terminal here")
+    }
+}
+
+/// "Continue this Thread as a project" refuses before its dialog opens, as
+/// upstream's action did: a Thread with no agent, and one a project
+/// already has, each with `adopt::adoptable_agent`'s words.
+#[test]
+fn adopting_refuses_a_thread_without_an_agent_or_already_a_projects() {
+    let scratch = Scratch::new("adoptable");
+    let place = scratch.place(&["Alpha"]);
+    let env = Env::from_process().unwrap();
+    let ctx = Ctx {
+        env: &env,
+        root: place.root.clone(),
+        config_dir: place.config_dir.clone(),
+        runner: &OneThread,
+        detached_ticker: false,
+    };
+    assert_eq!(data::adoptable_in(&ctx, ThreadId::new(7)), Ok(()));
+    let refused = data::adoptable_in(&ctx, ThreadId::new(8)).unwrap_err();
+    assert!(
+        refused.starts_with("no agent is detected in pane 8"),
+        "{refused}"
+    );
+
+    let session = paths::resolve_session(&SessionFlags::default(), &env, &OneThread).unwrap();
+    let alpha = project::Project::load(&place.root, "alpha").unwrap();
+    alpha
+        .update_coordinator(|record| {
+            record.socket = session.socket.to_string_lossy().into_owned();
+            record.cwd = alpha.dir().to_string_lossy().into_owned();
+        })
+        .unwrap();
+    thread::allocate(&alpha, |t| {
+        t.title = "Adopted".into();
+        t.status = thread::Status::Open;
+        t.kind = thread::Kind::Adopted;
+        t.pane_id = "7".into();
+        t.cwd = "/work".into();
+    })
+    .unwrap();
     assert_eq!(
-        adopt_refusal(&model, ThreadId::new(11)).as_deref(),
-        Some("pane 11 is already thread t-0001 of `alpha`")
+        data::adoptable_in(&ctx, ThreadId::new(7)),
+        Err("pane 7 is already thread t-0001 of `alpha`".into())
+    );
+}
+
+/// The configure action is `setup::configure_ferrite`, run in process —
+/// no CLI flags to fall out of step with the parser — and says so in
+/// herdr-projects' words.
+#[test]
+fn configure_says_what_it_set_or_why_not() {
+    assert_eq!(
+        data::configured(Ok(vec!["claude: hooks added".into()])),
+        (
+            "Projects configured".into(),
+            "Progress hooks and the autoproject skill are set.".into(),
+            false
+        )
+    );
+    assert_eq!(
+        data::configured(Err("no harness is installed".into())),
+        (
+            "Projects: configure failed".into(),
+            "no harness is installed".into(),
+            true
+        )
     );
 }

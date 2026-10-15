@@ -132,7 +132,7 @@ impl CockpitWindow {
     fn go_to(
         &mut self,
         index: usize,
-        open: Option<crate::notifications::Alert>,
+        open: Option<crate::cockpit::Landing>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

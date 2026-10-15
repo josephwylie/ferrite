@@ -11,7 +11,7 @@ use crate::float::{self, FloatPlace};
 use crate::palette::{
     Act, Command as PaletteCommand, Row as PaletteRow, Section as PaletteSection,
 };
-use crate::projects::{self, Ask, Command, Model, Outcome, Place, ProjectsSheet, SheetEvent};
+use crate::projects::{self, Ask, Command, Jump, Model, Outcome, Place, ProjectsSheet, SheetEvent};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
 use gpui::Subscription;
@@ -124,7 +124,7 @@ impl CockpitView {
     ) {
         match event.clone() {
             SheetEvent::Close => self.close_projects(cx),
-            SheetEvent::Jump(thread) => self.land_on_thread(thread, cx),
+            SheetEvent::Jump(jump) => self.jump_to(jump, window, cx),
             SheetEvent::Open(path) => {
                 if ferrite_projects::settings::is_text(&path) {
                     self.close_projects(cx);
@@ -140,6 +140,32 @@ impl CockpitView {
             SheetEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
             SheetEvent::Notify { title, body } => {
                 self.projects_toast(title, body, false, window, cx)
+            }
+        }
+    }
+
+    /// Land on the Thread a popup row jumps to: here, when it runs on the
+    /// machine the window is on; else the window goes to its machine and
+    /// lands on it there once attached.
+    pub(super) fn jump_to(&mut self, jump: Jump, window: &mut Window, cx: &mut Context<Self>) {
+        let machines = self.machines.as_ref().map(|machines| machines.read(cx));
+        let index = match machines {
+            Some(machines) => machines.named(&jump.machine),
+            None => jump.machine.is_empty().then_some(0),
+        };
+        let here = machines.map_or(Some(0), |machines| machines.index(&machines.selected_key()));
+        match index {
+            Some(index) if Some(index) == here => self.land_on_thread(jump.thread, cx),
+            Some(index) => cx.emit(GoToMachine {
+                index,
+                open: Some(Landing::Thread(jump.thread)),
+            }),
+            None => {
+                let body = format!(
+                    "{} runs on `{}`, which is not one of this window's machines",
+                    jump.thread, jump.machine
+                );
+                self.projects_toast("Projects".into(), body, true, window, cx)
             }
         }
     }
@@ -255,20 +281,7 @@ impl CockpitView {
                     );
                     return;
                 };
-                if let Some(refusal) = projects::adopt_refusal(&self.projects.model, thread) {
-                    self.projects_toast("Projects".into(), refusal, true, window, cx);
-                    return;
-                }
-                let label = self.facts.name(thread).to_string();
-                let cwd = self
-                    .thread_path(thread)
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_default();
-                self.show_projects_sheet(
-                    |cx| ProjectsSheet::ask(place, Ask::adopt(thread, label, cwd), cx),
-                    window,
-                    cx,
-                )
+                self.adopt_if_adoptable(place, thread, window, cx)
             }
             Command::Focus => match scope {
                 Some(slug) => self.focus_nav_on_project(Some(slug), cx),
@@ -281,17 +294,7 @@ impl CockpitView {
                 ),
             },
             Command::Unfocus => self.focus_nav_on_project(None, cx),
-            Command::Configure => self.projects_work(
-                move || match place.run(&projects::CONFIGURE) {
-                    (true, _) => (
-                        projects::CONFIGURED_TITLE.into(),
-                        projects::CONFIGURED_BODY.into(),
-                        false,
-                    ),
-                    (false, error) => (projects::CONFIGURE_FAILED_TITLE.into(), error, true),
-                },
-                cx,
-            ),
+            Command::Configure => self.projects_work(move || projects::configure(&place), cx),
             Command::Doctor => self.projects_work(
                 move || {
                     let (healthy, _) = place.run(&["doctor"]);
@@ -305,6 +308,49 @@ impl CockpitView {
             ),
         }
         cx.notify();
+    }
+
+    /// "Continue this Thread as a project": the adoptable-agent check off
+    /// the UI thread, then the dialog — or its refusal, before any input.
+    fn adopt_if_adoptable(
+        &mut self,
+        place: Place,
+        thread: ThreadId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |view, cx| {
+            let checking = place.clone();
+            let adoptable = cx
+                .background_spawn(async move { projects::adoptable(&checking, thread) })
+                .await;
+            view.update_in(cx, |view, window, cx| match adoptable {
+                Ok(()) => view.ask_adopt(place, thread, window, cx),
+                Err(refusal) => view.projects_toast("Projects".into(), refusal, true, window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The adopt dialog for `thread`, its name and directory offered.
+    fn ask_adopt(
+        &mut self,
+        place: Place,
+        thread: ThreadId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = self.facts.name(thread).to_string();
+        let cwd = self
+            .thread_path(thread)
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        self.show_projects_sheet(
+            |cx| ProjectsSheet::ask(place, Ask::adopt(thread, label, cwd), cx),
+            window,
+            cx,
+        )
     }
 
     /// `focus`/`unfocus`: the nav shows only `slug`'s block, coordinator

@@ -585,9 +585,9 @@ pub struct CockpitView {
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) bell: Bell,
-    /// What to open once the Cockpit is attached: the alert the window
-    /// came to this machine for (ADR 0026), and until when it waits.
-    landing: Option<(crate::notifications::Alert, std::time::Instant)>,
+    /// What to open once the Cockpit is attached: what the window came
+    /// to this machine for (ADR 0026), and until when it waits.
+    landing: Option<(Landing, std::time::Instant)>,
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
@@ -640,10 +640,18 @@ pub struct CockpitView {
 }
 
 /// The Cockpit asks its window to put it on machine `index` (ADR 0026),
-/// and there to open `open`: an alert about one of its Threads.
+/// and there to open `open`.
 pub struct GoToMachine {
     pub index: usize,
-    pub open: Option<crate::notifications::Alert>,
+    pub open: Option<Landing>,
+}
+
+/// What a window goes to a machine for: an alert about one of its
+/// Threads, or one of its Threads (a Projects row on that machine).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Landing {
+    Alert(crate::notifications::Alert),
+    Thread(ThreadId),
 }
 
 impl EventEmitter<GoToMachine> for CockpitView {}
@@ -1685,13 +1693,9 @@ impl CockpitView {
         self
     }
 
-    /// Open `alert` once the Cockpit is attached, if it is by `until`.
-    pub fn with_landing(
-        mut self,
-        alert: Option<crate::notifications::Alert>,
-        until: std::time::Instant,
-    ) -> Self {
-        self.landing = alert.map(|alert| (alert, until));
+    /// Open `open` once the Cockpit is attached, if it is by `until`.
+    pub fn with_landing(mut self, open: Option<Landing>, until: std::time::Instant) -> Self {
+        self.landing = open.map(|open| (open, until));
         self
     }
 

@@ -117,13 +117,7 @@ impl Machines {
         };
         machines.settings_changed(saved);
         if let Some(remote) = remote {
-            let known = machines.entries.iter().position(|entry| {
-                entry
-                    .machine
-                    .as_ref()
-                    .is_some_and(|machine| machine.target == remote || machine.name == remote)
-            });
-            let index = known.unwrap_or_else(|| {
+            let index = machines.named(remote).unwrap_or_else(|| {
                 machines
                     .entries
                     .push(Entry::new(Some(Machine::new(remote)), true));
@@ -153,6 +147,20 @@ impl Machines {
     /// The machine the window is on, as alerts name it.
     pub fn selected_key(&self) -> MachineKey {
         self.entries[self.selected].key()
+    }
+
+    /// Where the machine `name` (its name or its target) is listed now;
+    /// the empty name is this computer's.
+    pub fn named(&self, name: &str) -> Option<usize> {
+        if name.is_empty() {
+            return Some(0);
+        }
+        self.entries.iter().position(|entry| {
+            entry
+                .machine
+                .as_ref()
+                .is_some_and(|machine| machine.target == name || machine.name == name)
+        })
     }
 
     /// Where the machine `key` names is listed now.
