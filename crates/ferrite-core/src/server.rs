@@ -589,7 +589,8 @@ impl Server {
                 path,
                 scope,
                 commit,
-            } => match scope.read(commit.clone()) {
+                since,
+            } => match scope.read(commit.clone(), since.clone()) {
                 Some(read) => {
                     let path = path.clone();
                     self.read_off_pump(id, request, move || {

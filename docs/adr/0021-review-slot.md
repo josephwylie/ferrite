@@ -44,13 +44,15 @@ take reviewr itself instead, so its fixes and features keep arriving.
    `origin/HEAD`, `init.defaultBranch`, `main`, `master`); *last turn* is
    the worktree against reviewr's snapshot of it when the latest turn
    began; *commits* lists the branch's first-parent commits since that
-   base, newest first: ↑↓ or a click picks one, ⏎ or the click reviews it
-   (its first parent against it), and the scope again (or `r`) goes back to
-   the list. Each file comes with both its sides (one full-context `git
+   base, newest first: ↑↓ or a click picks one, ⇧↑↓ or a shift-click
+   stretches the pick to a run of them (reviewr's commit picker run), ⏎ or
+   the click reviews the pick (the oldest's first parent against the
+   newest), and the scope again (or `r`) goes back to the list. Each file comes with both its sides (one full-context `git
    diff`), and the window builds its rows with reviewr's model. These reads
    run on the computer that has the code: the Server that owns the Thread
-   answers `review_diff {path, scope, commit?}` (scopes `uncommitted`,
-   `branch`, `commit`, and now `last_turn`) with `review {files[{path,
+   answers `review_diff {path, scope, commit?, since?}` (scopes
+   `uncommitted`, `branch`, `commit`, and now `last_turn`; `since`, new, the
+   oldest commit of a run, absent for one commit) with `review {files[{path,
    change, previous_path?, additions, deletions, old?, new?, notice?}]}` and
    `list_commits {path}` with `commits {commits[{id, subject, author?,
    time?}]}`, gen-1 additions (ADR 0025), off its pump as `list_repo` is.
@@ -143,7 +145,7 @@ take reviewr itself instead, so its fixes and features keep arriving.
   `two-face`, `similar` and `process-wrap`.
 - Comments survive closing the Review and switching scope, and go with the
   next send; a recalled prompt shows them as the text that was sent. A
-  comment made on one commit shows only on that commit; one made on the
+  comment made on one commit (or run) shows only on that commit (or run); one made on the
   worktree shows wherever the worktree's diff of that file has its row.
 - Every file of a scope is read with its sides at once, and the slot draws
   every row (folds aside): virtualising would need uniform rows, which the

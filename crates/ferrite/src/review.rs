@@ -23,8 +23,10 @@
 //! lines take comments too; esc goes back to the diff. ⌘F finds in the
 //! rows shown. `m` renders each Markdown file's new side. `p` shows the
 //! pull request, as its forge's CLI reads it. The commits scope first lists
-//! the branch's commits, newest first: ↑↓ or a click picks one, ⏎ (or the
-//! click) reviews it, and the scope again goes back to the list. The
+//! the branch's commits, newest first: ↑↓ or a click picks one, ⇧↑↓ or a
+//! shift-click stretches the pick to a run of them, ⏎ (or the click)
+//! reviews the pick — a run's changes together — and the scope again goes
+//! back to the list. The
 //! cockpit reads each of these where the checkout is (`cockpit/beside.rs`)
 //! and hands it over; each is a snapshot, read again on `r`.
 
@@ -92,8 +94,9 @@ const FOOTER: [(&str, &str); 9] = [
 ];
 
 /// The slot's keys while it lists the branch's commits.
-const COMMITS_FOOTER: [(&str, &str); 5] = [
+const COMMITS_FOOTER: [(&str, &str); 6] = [
     ("\u{2191}\u{2193}", "commit"),
+    ("\u{21e7}\u{2191}\u{2193}", "run"),
     ("\u{23ce}", "review"),
     ("\u{21e5}", "scope"),
     ("r", "reread"),
@@ -114,9 +117,9 @@ const BACK_FOOTER: [(&str, &str); 3] = [("r", "reread"), ("/", "search"), ("esc"
 /// `show` (`show_commits` for the commits scope).
 pub(crate) struct ScopePicked(pub Scope);
 
-/// The operator picked one of the listed commits, by its id; the cockpit
-/// loads its diff and calls `show`.
-pub(crate) struct CommitPicked(pub String);
+/// The operator picked one of the listed commits, or a run of them; the
+/// cockpit loads the pick's diff and calls `show`.
+pub(crate) struct CommitPicked(pub CommitPick);
 
 /// The search field reads `0`; the cockpit searches the checkout and calls
 /// `show_found`.
@@ -297,8 +300,11 @@ pub(crate) struct ReviewView {
     commits: Option<Vec<CommitRow>>,
     /// The listed commit the arrows are on.
     commit_pick: usize,
-    /// The commit under review; `None` while the list shows.
-    commit: Option<CommitRow>,
+    /// Where a run of listed commits started (⇧↑↓, shift-click): the run
+    /// is every commit from it to `commit_pick`.
+    commit_anchor: Option<usize>,
+    /// The commits under review; `None` while the list shows.
+    commit: Option<CommitPick>,
     search: Option<SearchPanel>,
     /// Find in the rows shown (⌘F).
     find: Option<crate::find::Find>,
@@ -341,6 +347,7 @@ impl ReviewView {
             editor: None,
             commits: None,
             commit_pick: 0,
+            commit_anchor: None,
             commit: None,
             search: None,
             find: None,
@@ -352,9 +359,9 @@ impl ReviewView {
         self.scope
     }
 
-    /// The id of the commit under review, if one is.
-    pub(crate) fn commit(&self) -> Option<&str> {
-        self.commit.as_ref().map(|commit| commit.sha.as_str())
+    /// The commits under review, if any are.
+    pub(crate) fn commit(&self) -> Option<&CommitPick> {
+        self.commit.as_ref()
     }
 
     /// The file open whole, if one is.
@@ -376,6 +383,7 @@ impl ReviewView {
     pub(crate) fn show_commits(&mut self, commits: Vec<CommitRow>, cx: &mut Context<Self>) {
         self.commits = Some(commits);
         self.commit_pick = 0;
+        self.commit_anchor = None;
         self.error = None;
         self.scroll.scroll_to_item(0);
         cx.notify();
@@ -391,24 +399,64 @@ impl ReviewView {
         !self.pr_open && self.file.is_none()
     }
 
-    /// Review the listed commit at `index`: its diff when it is read.
-    fn open_commit(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(commit) = self
-            .commits
-            .as_ref()
-            .and_then(|commits| commits.get(index))
-            .cloned()
-        else {
-            return;
+    /// The listed commits the pick spans, newest first: the run from the
+    /// anchor, else the one the arrows are on.
+    fn commit_run(&self) -> Range<usize> {
+        let anchor = self.commit_anchor.unwrap_or(self.commit_pick);
+        anchor.min(self.commit_pick)..anchor.max(self.commit_pick) + 1
+    }
+
+    /// Move the commit pick to `index`; `extend` stretches it to a run
+    /// from where it was.
+    fn move_commit_pick(&mut self, index: usize, extend: bool) {
+        self.commit_anchor = match extend {
+            true => self.commit_anchor.or(Some(self.commit_pick)),
+            false => None,
         };
         self.commit_pick = index;
-        let sha = commit.sha.clone();
-        self.commit = Some(commit);
+    }
+
+    /// Review the picked commits: their diff when it is read.
+    fn open_commits(&mut self, cx: &mut Context<Self>) {
+        let run = self.commit_run();
+        let Some(listed) = self.commits.as_ref().and_then(|commits| commits.get(run)) else {
+            return;
+        };
+        let (Some(newest), Some(oldest)) = (listed.first(), listed.last()) else {
+            return;
+        };
+        let pick = CommitPick {
+            oldest: oldest.sha.clone(),
+            newest: newest.sha.clone(),
+        };
+        self.commit = Some(pick.clone());
         self.diff = None;
         self.error = None;
         self.rebuild();
-        cx.emit(CommitPicked(sha));
+        cx.emit(CommitPicked(pick));
         cx.notify();
+    }
+
+    /// The bar's words for the commits under review: the commit's id and
+    /// subject, or a run's ends and length.
+    fn commit_label(&self, pick: &CommitPick) -> String {
+        let listed = self.commits.as_deref().unwrap_or_default();
+        let index = |sha: &str| listed.iter().position(|commit| commit.sha == sha);
+        if pick.is_single() {
+            let subject = index(&pick.newest).map_or("", |i| listed[i].subject.as_str());
+            return format!("{} {subject}", abbreviate_oid(&pick.newest));
+        }
+        let range = format!(
+            "{}..{}",
+            abbreviate_oid(&pick.oldest),
+            abbreviate_oid(&pick.newest)
+        );
+        match (index(&pick.newest), index(&pick.oldest)) {
+            (Some(newest), Some(oldest)) => {
+                format!("{range} \u{b7} {} commits", oldest - newest + 1)
+            }
+            _ => range,
+        }
     }
 
     /// The operator changed the reading size: the rows follow it.
@@ -742,7 +790,7 @@ impl ReviewView {
     /// worktree's.
     fn rev(&self) -> Rev {
         match (&self.commit, self.scope, &self.file) {
-            (Some(commit), Scope::Commits, None) => Rev::Commit(CommitPick::single(&commit.sha)),
+            (Some(pick), Scope::Commits, None) => Rev::Commit(pick.clone()),
             _ => Rev::Worktree,
         }
     }
@@ -771,10 +819,11 @@ impl ReviewView {
                 .commits
                 .as_ref()
                 .map_or(0, |commits| commits.len().saturating_sub(1));
-            self.commit_pick = match down {
+            let index = match down {
                 true => (self.commit_pick + 1).min(last),
                 false => self.commit_pick.saturating_sub(1),
             };
+            self.move_commit_pick(index, extend);
             self.scroll.scroll_to_item(self.commit_pick);
             cx.notify();
             return;
@@ -813,7 +862,7 @@ impl ReviewView {
     /// comment field under the pick.
     pub(crate) fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.listing_commits() {
-            self.open_commit(self.commit_pick, cx);
+            self.open_commits(cx);
             return;
         }
         let Some(selection) = self.selection else {
@@ -1327,7 +1376,8 @@ impl ReviewView {
             .into_any_element()
     }
 
-    /// A listed commit: its short id, subject and author; a click reviews it.
+    /// A listed commit: its short id, subject and author; a click reviews
+    /// it, a shift-click the run from the pick to it.
     fn commit_row(&self, index: usize, commit: &CommitRow, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         div()
@@ -1339,7 +1389,9 @@ impl ReviewView {
             .px(px(cell))
             .whitespace_nowrap()
             .cursor_pointer()
-            .when(index == self.commit_pick, |row| row.bg(paint::SELECTION))
+            .when(self.commit_run().contains(&index), |row| {
+                row.bg(paint::SELECTION)
+            })
             .child(
                 div()
                     .flex_shrink_0()
@@ -1362,9 +1414,10 @@ impl ReviewView {
                         .child(SharedString::from(commit.author.clone())),
                 )
             })
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |view, click: &ClickEvent, window, cx| {
                 window.focus(&view.focus, cx);
-                view.open_commit(index, cx);
+                view.move_commit_pick(index, click.modifiers().shift);
+                view.open_commits(cx);
             }))
             .into_any_element()
     }
@@ -1689,10 +1742,9 @@ impl ReviewView {
         );
         let shown = match (&self.file, &self.commit) {
             (Some(file), _) => Some(("review-file-shown", file.path.clone())),
-            (None, Some(commit)) if self.showing_diff() && self.scope == Scope::Commits => Some((
-                "review-commit-reviewed",
-                format!("{} {}", abbreviate_oid(&commit.sha), commit.subject),
-            )),
+            (None, Some(pick)) if self.showing_diff() && self.scope == Scope::Commits => {
+                Some(("review-commit-reviewed", self.commit_label(pick)))
+            }
             _ => None,
         };
         bar = bar
@@ -2132,6 +2184,54 @@ mod tests {
         assert_eq!(count(cx), Some("2/2".into()));
         cx.simulate_keystrokes("escape");
         assert!(review.read_with(cx, |r, _| r.find.is_none()));
+    }
+
+    /// In the commits scope ⇧↓ stretches the pick to a run of commits and
+    /// ⏎ reviews the run's changes together, oldest to newest; a plain
+    /// click after it picks one commit again.
+    #[gpui::test]
+    fn a_run_of_commits_is_reviewed_together(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        let row = |sha: &str, subject: &str| CommitRow {
+            sha: sha.repeat(40),
+            subject: subject.into(),
+            time: 0,
+            author: String::new(),
+            refs: Vec::new(),
+            merge: false,
+        };
+        review.update(cx, |review, cx| {
+            review.pick_scope(Scope::Commits, cx);
+            review.show_commits(
+                vec![row("c", "third"), row("b", "second"), row("a", "first")],
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down shift-down enter");
+        cx.run_until_parked();
+        review.read_with(cx, |review, _| {
+            let pick = review.commit().expect("a run is under review");
+            assert_eq!(
+                pick,
+                &CommitPick {
+                    oldest: "a".repeat(40),
+                    newest: "b".repeat(40),
+                }
+            );
+            assert_eq!(
+                review.commit_label(pick),
+                "aaaaaaa..bbbbbbb \u{b7} 2 commits"
+            );
+        });
+        review.update(cx, |review, cx| {
+            review.move_commit_pick(0, false);
+            review.open_commits(cx);
+            let pick = review.commit().expect("one commit is under review");
+            assert_eq!(pick, &CommitPick::single(&"c".repeat(40)));
+            assert_eq!(review.commit_label(pick), "ccccccc third");
+        });
     }
 
     struct Host(Entity<ReviewView>);

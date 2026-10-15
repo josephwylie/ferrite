@@ -309,6 +309,10 @@ pub enum Op {
         scope: WireScope,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
+        /// With `commit`, the oldest commit of a run of them: the scope is
+        /// the run's changes together. Absent for one commit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<String>,
     },
     /// The branch's commits since its base at `path`, for a review's
     /// commits scope (ADR 0021). Replied `commits`.
@@ -374,33 +378,42 @@ pub enum WireScope {
 
 impl Op {
     pub fn review_diff(path: &Path, read: &Read) -> Op {
-        let (scope, commit) = match read {
-            Read::Uncommitted => (WireScope::Uncommitted, None),
-            Read::Branch => (WireScope::Branch, None),
-            Read::LastTurn => (WireScope::LastTurn, None),
-            Read::Commits(pick) => (WireScope::Commit, Some(pick.newest.clone())),
+        let (scope, commit, since) = match read {
+            Read::Uncommitted => (WireScope::Uncommitted, None, None),
+            Read::Branch => (WireScope::Branch, None, None),
+            Read::LastTurn => (WireScope::LastTurn, None, None),
+            Read::Commits(pick) => (
+                WireScope::Commit,
+                Some(pick.newest.clone()),
+                (!pick.is_single()).then(|| pick.oldest.clone()),
+            ),
         };
         Op::ReviewDiff {
             path: path.to_path_buf(),
             scope,
             commit,
+            since,
         }
     }
 }
 
 impl WireScope {
     /// The read it names, unless this Server does not know it (or a
-    /// commit scope names no commit id: never an option or a range).
-    pub fn read(self, commit: Option<String>) -> Option<Read> {
+    /// commit scope names no commit id: never an option or a revision
+    /// range). `since`, the oldest of a run of commits, must be an id too.
+    pub fn read(self, commit: Option<String>, since: Option<String>) -> Option<Read> {
+        let is_id = |id: &str| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit());
         match (self, commit) {
             (WireScope::Uncommitted, _) => Some(Read::Uncommitted),
             (WireScope::Branch, _) => Some(Read::Branch),
             (WireScope::LastTurn, _) => Some(Read::LastTurn),
-            (WireScope::Commit, Some(id))
-                if !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit()) =>
-            {
-                Some(Read::Commits(CommitPick::single(&id)))
-            }
+            (WireScope::Commit, Some(newest)) if is_id(&newest) => match since {
+                None => Some(Read::Commits(CommitPick::single(&newest))),
+                Some(oldest) if is_id(&oldest) => {
+                    Some(Read::Commits(CommitPick { oldest, newest }))
+                }
+                Some(_) => None,
+            },
             _ => None,
         }
     }

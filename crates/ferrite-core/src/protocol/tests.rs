@@ -648,6 +648,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::Uncommitted,
                     commit: None,
+                    since: None,
                 },
             ),
         ),
@@ -659,6 +660,19 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::Commit,
                     commit: Some("9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into()),
+                    since: None,
+                },
+            ),
+        ),
+        (
+            "command_review_diff_commits",
+            command(
+                47,
+                Op::ReviewDiff {
+                    path: "/home/me/src/ferrite".into(),
+                    scope: WireScope::Commit,
+                    commit: Some("9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into()),
+                    since: Some("1f2e3d4c5b6a79880716253443526170f8e9dacb".into()),
                 },
             ),
         ),
@@ -679,6 +693,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     path: "/home/me/src/ferrite".into(),
                     scope: WireScope::LastTurn,
                     commit: None,
+                    since: None,
                 },
             ),
         ),
@@ -1929,23 +1944,62 @@ fn an_unknown_decision_kind_reads_as_one_this_window_cannot_draw() {
     assert!(matches!(core.kind, crate::DecisionKind::Unsupported { .. }));
 }
 
-/// A review's commit scope reads a commit id and nothing else: an option
-/// or a range is refused before git sees it.
+/// A review's commit scope reads commit ids and nothing else: an option
+/// or a revision range is refused before git sees it.
 #[test]
-fn a_review_reads_only_a_commit_id() {
+fn a_review_reads_only_commit_ids() {
     let id = "9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7";
+    let oldest = "1f2e3d4c5b6a79880716253443526170f8e9dacb";
     assert_eq!(
-        WireScope::Commit.read(Some(id.into())),
+        WireScope::Commit.read(Some(id.into()), None),
         Some(Read::Commits(CommitPick::single(id)))
+    );
+    assert_eq!(
+        WireScope::Commit.read(Some(id.into()), Some(oldest.into())),
+        Some(Read::Commits(CommitPick {
+            oldest: oldest.into(),
+            newest: id.into(),
+        }))
     );
     for refused in ["--output=/tmp/x", "main..HEAD", ""] {
         assert_eq!(
-            WireScope::Commit.read(Some(refused.into())),
+            WireScope::Commit.read(Some(refused.into()), None),
             None,
             "{refused}"
         );
+        assert_eq!(
+            WireScope::Commit.read(Some(id.into()), Some(refused.into())),
+            None,
+            "since {refused}"
+        );
     }
-    assert_eq!(WireScope::Commit.read(None), None);
-    assert_eq!(WireScope::LastTurn.read(None), Some(Read::LastTurn));
-    assert_eq!(WireScope::Unknown.read(None), None);
+    assert_eq!(WireScope::Commit.read(None, None), None);
+    assert_eq!(WireScope::LastTurn.read(None, None), Some(Read::LastTurn));
+    assert_eq!(WireScope::Unknown.read(None, None), None);
+}
+
+/// A run of commits goes over the wire as its two ends and comes back the
+/// same pick; one commit sends no `since`.
+#[test]
+fn a_commit_run_round_trips_through_review_diff() {
+    let path = Path::new("/home/me/src/ferrite");
+    for pick in [
+        CommitPick::single("9a31c76e"),
+        CommitPick {
+            oldest: "1f2e3d4c".into(),
+            newest: "9a31c76e".into(),
+        },
+    ] {
+        let read = Read::Commits(pick);
+        let Op::ReviewDiff {
+            scope,
+            commit,
+            since,
+            ..
+        } = Op::review_diff(path, &read)
+        else {
+            unreachable!("review_diff builds a ReviewDiff");
+        };
+        assert_eq!(scope.read(commit, since), Some(read));
+    }
 }

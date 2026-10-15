@@ -240,24 +240,25 @@ impl CockpitView {
         );
     }
 
-    /// Read the diff of `commit`, one listed in the commits scope.
+    /// Read the diff of `pick`, commits listed in the commits scope.
     fn read_commit(
         &mut self,
         thread: ThreadId,
         review: Entity<ReviewView>,
-        commit: String,
+        pick: CommitPick,
         cx: &mut Context<Self>,
     ) {
         let Some(workspace) = self.thread_path(thread) else {
             return;
         };
-        let read = Read::Commits(CommitPick::single(&commit));
-        let files = self.cockpit.review_diff(&workspace, read);
+        let files = self
+            .cockpit
+            .review_diff(&workspace, Read::Commits(pick.clone()));
         land(
             review,
             files,
             cx,
-            move |review| review.commit() == Some(commit.as_str()),
+            move |review| review.commit() == Some(&pick),
             |review, files, cx| review.show(Scope::Commits, files, cx),
             ReviewView::fail,
         );
