@@ -648,7 +648,7 @@ fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
 /// (`original_line` once the diff moved past it; no line on a comment on
 /// the whole file). A comment with no words is no remark: its location
 /// alone would read as one.
-fn parse_line_comments_json(body: &str) -> Vec<Remark> {
+pub(crate) fn parse_line_comments_json(body: &str) -> Vec<Remark> {
     serde_json::Deserializer::from_str(body)
         .into_iter::<Vec<serde_json::Value>>()
         .map_while(Result::ok)
