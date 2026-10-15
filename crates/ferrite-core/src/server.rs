@@ -513,7 +513,7 @@ impl Server {
                 }
             }
             Op::Coordinate { project, provider } => self
-                .start_coordinator(*project, *provider, String::new(), String::new(), false)
+                .start_coordinator(*project, *provider, Default::default())
                 .map(|thread| Some(Done::Thread { thread }))
                 .map_err(|error| failed(error.message)),
             Op::Stop { when } => {

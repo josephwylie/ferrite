@@ -42,6 +42,28 @@ pub struct Coordination {
     pub workers: Vec<Worker>,
 }
 
+/// A change to a Project's brief: each field given replaces its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BriefChange {
+    pub goal: Option<String>,
+    pub instructions: Option<String>,
+    pub follow_prs: Option<bool>,
+}
+
+impl BriefChange {
+    pub fn apply(self, coordination: &mut Coordination) {
+        if let Some(goal) = self.goal {
+            coordination.goal = goal;
+        }
+        if let Some(instructions) = self.instructions {
+            coordination.instructions = instructions;
+        }
+        if let Some(follow_prs) = self.follow_prs {
+            coordination.follow_prs = follow_prs;
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Worker {
     pub thread: ThreadId,
@@ -362,7 +384,10 @@ pub struct Feedback {
 }
 
 /// What an open PR asks of its worker: each failing check, then each
-/// review or comment with words in it. A merged or closed PR asks nothing.
+/// review or comment with words in it, short of an approval and of what
+/// the PR's own author wrote — the worker's replies, through the
+/// operator's `gh`, which would otherwise start it again on its own words.
+/// A merged or closed PR asks nothing.
 pub fn feedback(pr: &PrFeedback) -> Vec<Feedback> {
     if pr.pr.state != crate::workspace::PrState::Open {
         return Vec::new();
@@ -386,7 +411,9 @@ pub fn feedback(pr: &PrFeedback) -> Vec<Feedback> {
     let remarks = pr
         .remarks
         .iter()
-        .filter(|remark| !remark.body.trim().is_empty())
+        .filter(|remark| {
+            !remark.approves && remark.author != pr.author && !remark.body.trim().is_empty()
+        })
         .map(|remark| Feedback {
             key: format!("remark:{}", remark.id),
             text: format!("@{} wrote: {}", remark.author, remark.body.trim()),

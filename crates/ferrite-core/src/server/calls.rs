@@ -14,6 +14,7 @@ use crate::api::{
     self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
     ThreadInfo, Until, Wait,
 };
+use crate::coordinator::BriefChange;
 use crate::protocol::{Done, Op, ServerMessage, WireChoice};
 use crate::ThreadId;
 
@@ -119,9 +120,11 @@ impl Server {
                     self.start_coordinator(
                         project,
                         params.provider.unwrap_or(self.default_provider),
-                        params.goal.unwrap_or_default(),
-                        params.instructions.unwrap_or_default(),
-                        params.follow_prs,
+                        BriefChange {
+                            goal: params.goal,
+                            instructions: params.instructions,
+                            follow_prs: params.follow_prs.then_some(true),
+                        },
                     )
                 })
                 .and_then(|thread| self.coordinator_result(thread)),

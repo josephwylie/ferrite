@@ -13,10 +13,12 @@ use serde_json::{json, Value};
 use super::Server;
 use crate::api::schema::{AgentPromptParams, CoordinatorUpdateParams, WorkerStartParams};
 use crate::api::{thread_info, thread_result, ApiError, Code};
-use crate::coordinator::{self, Brief, Coordination, Coordinators, Feedback, Need, Worker};
+use crate::coordinator::{
+    self, Brief, BriefChange, Coordination, Coordinators, Feedback, Need, Worker,
+};
 use crate::protocol::{Done, Op, WireChoice};
 use crate::store::Provider;
-use crate::transcript::{Block, Body};
+use crate::transcript::{BlockId, Body};
 use crate::workspace::registry::ProjectId;
 use crate::workspace::PrFeedback;
 use crate::{Attention, ThreadId};
@@ -28,9 +30,9 @@ const FOLLOW_EVERY: Duration = Duration::from_secs(60);
 /// The Server's side of coordination: the book, and what it watches.
 pub(super) struct Coordinating {
     book: Coordinators,
-    /// Each open worker's Attention on the last pass: a turn that ends is
-    /// read for its lessons.
-    seen: BTreeMap<ThreadId, Attention>,
+    /// Each open worker's last Block read for lessons (`None`: none yet).
+    /// What follows it is read once the worker is at rest.
+    read: BTreeMap<ThreadId, Option<BlockId>>,
     /// The followed PRs being read, off the pump thread.
     reading: Option<Receiver<Vec<(ThreadId, PrFeedback)>>>,
     read_at: Option<Instant>,
@@ -46,7 +48,7 @@ impl Coordinating {
         });
         Self {
             book,
-            seen: BTreeMap::new(),
+            read: BTreeMap::new(),
             reading: None,
             read_at: None,
         }
@@ -61,33 +63,28 @@ fn not_a_coordinator() -> ApiError {
     ApiError::new(Code::NotACoordinator, "that Thread is no Project's coordinator")
 }
 
-/// The last turn's answer as plain text: everything after its prompt.
-fn last_answer(blocks: &[Block]) -> String {
-    let from = blocks
-        .iter()
-        .rposition(|block| matches!(block.body, Body::Prompt(_)))
-        .map_or(0, |at| at + 1);
-    crate::transcript::plain_text(&blocks[from..])
-}
-
 impl Server {
     /// The Project's coordinator, started in its main checkout and briefed;
-    /// or the one it has, reopened when parked.
+    /// or the one it has, reopened when parked. Either way `change` is made
+    /// to the Project's brief. A coordinator that was deleted is replaced:
+    /// its successor keeps the brief and the workers.
     pub(super) fn start_coordinator(
         &mut self,
         project: ProjectId,
         provider: Provider,
-        goal: String,
-        instructions: String,
-        follow_prs: bool,
+        change: BriefChange,
     ) -> Result<ThreadId, ApiError> {
-        if let Some(existing) = self.coordinating.book.of_project(project) {
-            let thread = existing.coordinator;
-            if self.engine.thread(thread).is_some() {
-                return Ok(thread);
-            }
-            if self.engine.parked().map_err(failed)?.contains(&thread) {
-                self.execute(Op::Revive { thread })?;
+        let kept = self.coordinating.book.of_project(project).cloned();
+        if let Some(thread) = kept.as_ref().map(|kept| kept.coordinator) {
+            let open = self.engine.thread(thread).is_some();
+            if open || self.engine.parked().map_err(failed)?.contains(&thread) {
+                if !open {
+                    self.execute(Op::Revive { thread })?;
+                }
+                self.coordinating
+                    .book
+                    .update(thread, |coordination| change.apply(coordination))
+                    .map_err(failed)?;
                 return Ok(thread);
             }
         }
@@ -104,14 +101,16 @@ impl Server {
         else {
             return Err(failed("no Thread was opened"));
         };
-        let coordination = Coordination {
+        let mut coordination = kept.unwrap_or_else(|| Coordination {
             project,
             coordinator: thread,
-            goal,
-            instructions,
-            follow_prs,
+            goal: String::new(),
+            instructions: String::new(),
+            follow_prs: false,
             workers: Vec::new(),
-        };
+        });
+        coordination.coordinator = thread;
+        change.apply(&mut coordination);
         let prompt = coordinator::coordinator_prompt(&Brief {
             project: &title,
             goal: &coordination.goal,
@@ -181,20 +180,15 @@ impl Server {
             instructions,
             follow_prs,
         } = params;
+        let change = BriefChange {
+            goal,
+            instructions,
+            follow_prs,
+        };
         let found = self
             .coordinating
             .book
-            .update(thread, |coordination| {
-                if let Some(goal) = goal {
-                    coordination.goal = goal;
-                }
-                if let Some(instructions) = instructions {
-                    coordination.instructions = instructions;
-                }
-                if let Some(follow_prs) = follow_prs {
-                    coordination.follow_prs = follow_prs;
-                }
-            })
+            .update(thread, |coordination| change.apply(coordination))
             .map_err(failed)?;
         if !found {
             return Err(not_a_coordinator());
@@ -271,8 +265,11 @@ impl Server {
         self.follow_prs();
     }
 
-    /// A turn ends where the worker was seen working and now is not, short
-    /// of a Decision: its answer's `## Remember` joins the memory.
+    /// What a worker wrote since it was last at rest, once it is at rest
+    /// again — every turn in between, queued or blocked on the way — is
+    /// read for its `## Remember` lessons, which join the memory. A worker
+    /// first seen at rest has nothing new; one first seen mid-turn is read
+    /// from that turn's prompt.
     fn remember_lessons(&mut self) {
         let workers: Vec<(ProjectId, ThreadId)> = self
             .coordinating
@@ -285,22 +282,35 @@ impl Server {
                     .map(|worker| (coordination.project, worker.thread))
             })
             .collect();
-        let mut seen = BTreeMap::new();
+        let mut read = BTreeMap::new();
         for (project, thread) in workers {
-            let Some(attention) = self.engine.attention(thread) else {
+            let (Some(view), Some(attention)) =
+                (self.engine.thread(thread), self.engine.attention(thread))
+            else {
                 continue;
             };
-            seen.insert(thread, attention);
-            let ended = self.coordinating.seen.get(&thread) == Some(&Attention::Working)
-                && matches!(attention, Attention::Done | Attention::Idle);
-            if !ended {
+            let blocks = view.transcript().blocks();
+            let at_rest = matches!(attention, Attention::Done | Attention::Idle);
+            let last = blocks.last().map(|block| block.id);
+            let Some(&from) = self.coordinating.read.get(&thread) else {
+                let from = if at_rest {
+                    last
+                } else {
+                    blocks
+                        .iter()
+                        .rfind(|block| matches!(block.body, Body::Prompt(_)))
+                        .map(|block| block.id)
+                };
+                read.insert(thread, from);
+                continue;
+            };
+            if !at_rest || last == from {
+                read.insert(thread, from);
                 continue;
             }
-            let lessons = self
-                .engine
-                .thread(thread)
-                .map(|view| coordinator::remembered(&last_answer(view.transcript().blocks())))
-                .unwrap_or_default();
+            read.insert(thread, last);
+            let unread = &blocks[blocks.partition_point(|block| Some(block.id) <= from)..];
+            let lessons = coordinator::remembered(&crate::transcript::plain_text(unread));
             if lessons.is_empty() {
                 continue;
             }
@@ -308,7 +318,7 @@ impl Server {
                 crate::log!("worker {thread}: its lessons were not remembered: {error}");
             }
         }
-        self.coordinating.seen = seen;
+        self.coordinating.read = read;
     }
 
     /// Read the followed workers' PRs every `FOLLOW_EVERY`, one reading at
@@ -362,15 +372,17 @@ impl Server {
         }
     }
 
-    /// Each worker is sent what its PR asks that it was not sent before,
-    /// as one prompt; feedback that could not be sent (a Decision waits,
-    /// the agent cannot queue yet) is tried again on the next reading.
+    /// Each worker whose PRs are still followed is sent what its PR asks
+    /// that it was not sent before, as one prompt; feedback that could not
+    /// be sent (a Decision waits, the agent cannot queue yet) is tried
+    /// again on the next reading.
     fn send_feedback(&mut self, read: Vec<(ThreadId, PrFeedback)>) {
         for (thread, pr) in read {
             let Some(worker) = self
                 .coordinating
                 .book
                 .iter()
+                .filter(|coordination| coordination.follow_prs)
                 .flat_map(|coordination| &coordination.workers)
                 .find(|worker| worker.thread == thread)
             else {
@@ -405,3 +417,6 @@ impl Server {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

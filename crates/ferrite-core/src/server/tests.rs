@@ -16,7 +16,7 @@ use crate::store::Provider;
 use crate::transcript::Body;
 use crate::{Decision, DecisionAnswer, SessionEvent};
 
-fn scratch(name: &str) -> PathBuf {
+pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -296,7 +296,7 @@ fn open(window: &mut Window, harness: &Harness) -> (ThreadId, Sender<SessionEven
     (thread, provider)
 }
 
-fn decision() -> SessionEvent {
+pub(super) fn decision() -> SessionEvent {
     SessionEvent::DecisionRequested {
         decision: Decision {
             delivery: Default::default(),
@@ -321,7 +321,7 @@ fn exit(provider: Sender<SessionEvent>) {
         .unwrap();
 }
 
-fn text(text: &str) -> SessionEvent {
+pub(super) fn text(text: &str) -> SessionEvent {
     SessionEvent::TextDelta { text: text.into() }
 }
 
@@ -388,7 +388,7 @@ fn pending_handle(window: &Window, thread: ThreadId) -> protocol::WireHandle {
     (&window.mirrors.view(thread).unwrap().activity().decisions()[0].handle).into()
 }
 
-fn allow(thread: ThreadId, handle: &protocol::WireHandle) -> Op {
+pub(super) fn allow(thread: ThreadId, handle: &protocol::WireHandle) -> Op {
     Op::Answer {
         thread,
         handle: handle.clone(),
@@ -891,13 +891,13 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
 }
 
 /// An Engine on its own Store, its Sessions scripted.
-fn engine(dir: &Path, spawner: Box<dyn Spawner>) -> Engine {
+pub(super) fn engine(dir: &Path, spawner: Box<dyn Spawner>) -> Engine {
     Engine::try_new(Store::open(dir).unwrap(), spawner).unwrap()
 }
 
 /// Scripted Sessions, and where their providers arrive: held, so each
 /// Session lives as long as the test.
-fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
+pub(super) fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
     let (sessions, providers) = mpsc::channel();
     let spawner = Spawn {
         sessions,
@@ -908,7 +908,7 @@ fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
     (Box::new(spawner), providers)
 }
 
-fn open_in(engine: &mut Engine, dir: &Path) -> ThreadId {
+pub(super) fn open_in(engine: &mut Engine, dir: &Path) -> ThreadId {
     engine
         .open(
             Provider::Claude,
@@ -1211,7 +1211,7 @@ impl Caller {
     }
 }
 
-fn turn_ends(provider: &Sender<SessionEvent>) {
+pub(super) fn turn_ends(provider: &Sender<SessionEvent>) {
     provider
         .send(SessionEvent::TurnEnded {
             outcome: crate::TurnOutcome::Completed,
@@ -1681,7 +1681,7 @@ fn the_cli_prints_answers_refusals_and_events() {
 
 /// A repository with one commit, under `dir`: a Project workers can make
 /// worktrees of.
-fn repository(dir: &Path) -> PathBuf {
+pub(super) fn repository(dir: &Path) -> PathBuf {
     let repo = dir.join("app");
     std::fs::create_dir_all(&repo).unwrap();
     let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);

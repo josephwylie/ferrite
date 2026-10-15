@@ -211,24 +211,40 @@ fn pr(state: PrState) -> PrFeedback {
                 check("lint", CheckState::Failing, None),
             ],
         },
+        author: "op".into(),
         remarks: vec![
             Remark {
                 id: "PRR_1".into(),
                 author: "ana".into(),
                 body: " Rename `total`. ".into(),
+                approves: false,
             },
             Remark {
                 id: "PRR_2".into(),
                 author: "ana".into(),
                 body: String::new(),
+                approves: false,
+            },
+            Remark {
+                id: "PRR_3".into(),
+                author: "ana".into(),
+                body: "LGTM".into(),
+                approves: true,
+            },
+            Remark {
+                id: "IC_4".into(),
+                author: "op".into(),
+                body: "Renamed it.".into(),
+                approves: false,
             },
         ],
     }
 }
 
 /// An open PR asks for each failing check and each remark with words in
-/// it, each under a key a later reading recognises; a rerun's new run is
-/// a new key. A merged or closed PR asks nothing.
+/// it — never an approval, nor what its own author wrote — each under a
+/// key a later reading recognises; a rerun's new run is a new key. A
+/// merged or closed PR asks nothing.
 #[test]
 fn an_open_prs_feedback_is_its_failing_checks_and_remarks() {
     let items = feedback(&pr(PrState::Open));

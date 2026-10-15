@@ -557,6 +557,9 @@ fn pull_request(cwd: &Path) -> Option<PullRequest> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrFeedback {
     pub pr: PullRequest,
+    /// Who opened it: a worker's `gh` is the operator's, so what it says
+    /// on its own PR is under this name too.
+    pub author: String,
     /// Reviews, then conversation comments, in the forge's order.
     pub remarks: Vec<Remark>,
 }
@@ -568,6 +571,8 @@ pub struct Remark {
     pub id: String,
     pub author: String,
     pub body: String,
+    /// An approving review: it asks for nothing.
+    pub approves: bool,
 }
 
 /// The branch's PR and its remarks through `gh`, uncached: a coordinator
@@ -579,7 +584,7 @@ pub fn pr_feedback(cwd: &Path) -> Option<PrFeedback> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,statusCheckRollup,reviews,comments",
+            "number,state,isDraft,author,statusCheckRollup,reviews,comments",
         ])
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -595,6 +600,12 @@ pub fn pr_feedback(cwd: &Path) -> Option<PrFeedback> {
 fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
     let pr = parse_pr_json(body)?;
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let login = |node: &serde_json::Value| {
+        node.pointer("/author/login")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("someone")
+            .to_string()
+    };
     let remarks = ["reviews", "comments"]
         .into_iter()
         .filter_map(|key| value.get(key).and_then(serde_json::Value::as_array))
@@ -603,16 +614,17 @@ fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
             let text = |key: &str| node.get(key).and_then(serde_json::Value::as_str);
             Some(Remark {
                 id: text("id")?.to_string(),
-                author: node
-                    .pointer("/author/login")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("someone")
-                    .to_string(),
+                author: login(node),
                 body: text("body").unwrap_or_default().to_string(),
+                approves: text("state") == Some("APPROVED"),
             })
         })
         .collect();
-    Some(PrFeedback { pr, remarks })
+    Some(PrFeedback {
+        pr,
+        author: login(&value),
+        remarks,
+    })
 }
 
 /// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
@@ -850,13 +862,15 @@ mod tests {
     }
 
     /// A coordinator's reading of a worker's PR: the checks as the header
-    /// reads them, and every review and comment with its author.
+    /// reads them, who opened it, and every review and comment with its
+    /// author.
     #[test]
     fn pr_feedback_reads_reviews_and_comments_beside_the_checks() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","author":{"login":"op"},"statusCheckRollup":[
             {"name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci/1"}
         ],"reviews":[
-            {"id":"PRR_1","author":{"login":"ana"},"body":"Rename this.","state":"CHANGES_REQUESTED"}
+            {"id":"PRR_1","author":{"login":"ana"},"body":"Rename this.","state":"CHANGES_REQUESTED"},
+            {"id":"PRR_4","author":{"login":"ana"},"body":"LGTM","state":"APPROVED"}
         ],"comments":[
             {"id":"IC_2","author":{"login":"bo"},"body":"Also the docs."},
             {"id":"IC_3","body":"anonymous"}
@@ -864,17 +878,26 @@ mod tests {
         let feedback = parse_feedback_json(body).expect("a PR");
         assert_eq!(feedback.pr.number, 9);
         assert_eq!(feedback.pr.checks, Some(CheckState::Failing));
-        let remarks: Vec<(&str, &str, &str)> = feedback
+        assert_eq!(feedback.author, "op");
+        let remarks: Vec<(&str, &str, &str, bool)> = feedback
             .remarks
             .iter()
-            .map(|remark| (remark.id.as_str(), remark.author.as_str(), remark.body.as_str()))
+            .map(|remark| {
+                (
+                    remark.id.as_str(),
+                    remark.author.as_str(),
+                    remark.body.as_str(),
+                    remark.approves,
+                )
+            })
             .collect();
         assert_eq!(
             remarks,
             [
-                ("PRR_1", "ana", "Rename this."),
-                ("IC_2", "bo", "Also the docs."),
-                ("IC_3", "someone", "anonymous"),
+                ("PRR_1", "ana", "Rename this.", false),
+                ("PRR_4", "ana", "LGTM", true),
+                ("IC_2", "bo", "Also the docs.", false),
+                ("IC_3", "someone", "anonymous", false),
             ]
         );
     }

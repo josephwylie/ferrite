@@ -822,9 +822,11 @@ impl CockpitView {
                 Command::NewThreadIn(*project),
             );
         }
+        // Only a Server coordinates (ADR 0028).
+        let served = self.cockpit.server().is_some();
         for (project, title) in &projects {
             add(
-                true,
+                served,
                 format!("coordinate {}", title.to_lowercase()),
                 "one agent that delegates",
                 None,

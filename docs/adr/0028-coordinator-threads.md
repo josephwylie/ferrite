@@ -36,6 +36,11 @@ operator can read and edit it; never inside a repo.
 Starting a coordinator for a Project that has one answers that one
 (reopened when parked): a Project has one goal and one memory, and two
 coordinators would brief workers from the same memory at cross purposes.
+A goal, instructions or `follow_prs` given with the start are recorded
+either way, as `coordinator.update` records them, never dropped. When the
+Project's coordinator Thread was deleted, a start opens its successor,
+which takes over the entry: the brief, the workers and what each was
+sent stay, so the old workers' lessons and PR feedback keep flowing.
 
 ### Driven through the API, so the coordinator agent drives it
 
@@ -43,7 +48,7 @@ Four operations join the API's table, append-only:
 
 | Operation | Does |
 |---|---|
-| `coordinator.start` | the Project of `cwd`'s coordinator, started and briefed, or the one it has |
+| `coordinator.start` | the Project of `cwd`'s coordinator, started and briefed, or the one it has; the brief given is recorded |
 | `coordinator.get` | its brief, memory and workers, open ones in need order |
 | `coordinator.update` | goal, standing instructions, PR follow-up |
 | `worker.start` | a Thread in a new worktree of the Project, seated in the coordinator's Group, briefed with the Project's brief and its task |
@@ -78,15 +83,29 @@ the file: the Group's Panes keep their places on the board.
 A window starts a coordinator from the palette, `coordinate <project>`,
 through a new gen-1 command `coordinate {project, provider}` answered
 with the Thread, and lands on it. A window running its Engine in-process
-(`--demo`, tests) is refused: only a Server coordinates.
+(`--demo`, tests) does not offer it, and is refused if asked: only a
+Server coordinates.
+
+A worker's need is not labelled in words in the nav: `Need` is a fold of
+Attention, and each row already wears its status mark (needs you,
+working, done unseen), so the order plus the mark is the label; a worker
+already read and idle sits among the ready-for-review rows unmarked. A worker that could
+not be seated in the Group (logged) is still an open Thread, listed
+loose, and `coordinator get` lists it among the workers.
 
 ### Lessons flow back through `## Remember`
 
 A worker's brief asks it to end its report with a `## Remember` section,
-one lesson per bullet. The Server watches each worker's Attention; when a
-turn ends (working, then done or idle) it reads that turn's answer as the
-API's `agent.read` does and appends the lessons the memory does not hold
-yet. Later briefs carry the memory as it is then.
+one lesson per bullet. The Server keeps, per worker, the last transcript
+Block it read. Whenever the worker is at rest (done or idle) and has
+written past that Block, everything since is read as the API's
+`agent.read` reads it, and the lessons the memory does not hold yet are
+appended. Reading by Block rather than by watching Attention change
+catches every turn: one shorter than a pump pass, one blocked on a
+Decision on the way, and one that ran straight into a queued prompt. A
+worker first seen at rest (a Server restart) has nothing new; one first
+seen mid-turn is read from that turn's prompt. Later briefs carry the
+memory as it is then.
 
 ### PR feedback, opt-in
 
@@ -97,8 +116,15 @@ check (named by its run, so a rerun's failure is new) and each review or
 comment with words in it is sent to the worker once, together, through
 `agent.prompt`'s own rules: queued behind a working turn, never sent to a
 blocked one. What could not be sent is tried at the next reading. A merged
-or closed PR asks nothing. Line comments on the diff are not in `gh pr
-view` and are not followed.
+or closed PR asks nothing; neither does an approving review, nor anything
+the PR's own author wrote. A worker's `gh` is the operator's, so its
+replies on the PR carry the PR author's name, and following them would
+start the worker again on its own words, a paid turn each, possibly in
+a loop. The cost is that the operator's own comments on a worker's PR are
+not followed either; the operator tells a worker directly in its Thread.
+Turning `follow_prs` off stops a reading already under way from being
+sent. Line comments on the diff are not in `gh pr view` and are not
+followed.
 
 ## Consequences
 
@@ -106,7 +132,5 @@ view` and are not followed.
   a coordinator does, and the operator's palette does what a script can.
 - Worktrees and branches the workers made are left in place: the plan
   rules worktree removal out.
-- A turn shorter than one pump pass is not seen working, and its lessons
-  are not read; turns take seconds, passes milliseconds.
 - An unreadable `coordinators.json` is logged and started afresh, as
   unreadable settings are.

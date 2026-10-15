@@ -158,6 +158,10 @@ from Ferrite's palette (`coordinate <project>`), or:
 "$F" coordinator start --goal "Ship billing" --follow-prs
 ```
 
+A project has one coordinator: `coordinator start` for a project that has
+one answers that one, and records the `--goal`, `--instructions` or
+`--follow-prs` given on it.
+
 As the coordinator, name yourself with `--current`:
 
 ```bash
