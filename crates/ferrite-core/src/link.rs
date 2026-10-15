@@ -104,6 +104,20 @@ pub fn send<W: Write, T: Serialize>(writer: &mut W, message: &T) -> io::Result<(
     writer.flush()
 }
 
+/// Copy a byte stream as it arrives, until it ends: the protocol is lines,
+/// and a line must not wait for a buffer to fill. What bridges carry.
+pub fn relay(from: &mut dyn Read, to: &mut dyn Write) -> io::Result<()> {
+    let mut buffer = vec![0u8; 64 << 10];
+    loop {
+        let read = from.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(());
+        }
+        to.write_all(&buffer[..read])?;
+        to.flush()?;
+    }
+}
+
 // -------------------------------------------------------------- outbox
 
 /// What a connection has yet to be sent.

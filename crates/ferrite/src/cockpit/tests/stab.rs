@@ -1417,7 +1417,9 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
         store: dir.clone(),
-        executable: dir.join("no-such-ferrite"),
+        server: ferrite_core::cockpit::Endpoint::Local {
+            executable: dir.join("no-such-ferrite"),
+        },
         client: ferrite_core::protocol::Peer {
             name: "test".into(),
             version: "0".into(),

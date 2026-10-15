@@ -81,17 +81,20 @@ fn server_answering_nothing(store: &std::path::Path, drop_at: usize) -> Receiver
 }
 
 fn remote(store: &std::path::Path) -> Remote {
-    Remote::new(Attach {
+    let mut remote = Remote::new(Attach {
         store: store.to_path_buf(),
-        executable: "/bin/false".into(),
+        server: Endpoint::Local {
+            executable: "/bin/false".into(),
+        },
         client: Peer {
             name: "test".into(),
             version: "0".into(),
         },
         renderer: None,
         discovery: Box::new(NoDiscovery),
-    })
-    .0
+    });
+    remote.attach_now();
+    remote
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -184,4 +187,67 @@ fn an_answer_in_flight_across_a_disconnect_is_not_resent() {
         "the answer was sent again"
     );
     let _ = std::fs::remove_dir_all(&store);
+}
+
+/// A machine that needs a sign-in is not asked again on its own — each ask
+/// is a refused login on it — and is asked as soon as the operator has
+/// signed in.
+#[test]
+fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
+    let store = scratch("sign-in");
+    let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&dials);
+    let bridge = Arc::new(Bridge::new(
+        "box",
+        store.join("bridge.sock"),
+        Box::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(machine::Tunnel {
+                from: Box::new(io::empty()),
+                to: Box::new(io::sink()),
+                ended: Box::new(|| Some(Failure::SignIn)),
+            })
+        }),
+    ));
+    let mut remote = Remote::new(Attach {
+        store: store.clone(),
+        server: Endpoint::Machine(Arc::clone(&bridge)),
+        client: Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(NoDiscovery),
+    });
+    let attention = |remote: &Remote| {
+        matches!(
+            remote.state(),
+            ServerState::Detached {
+                attention: true,
+                ..
+            }
+        )
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !attention(&remote) {
+        assert!(Instant::now() < deadline, "timed out");
+        remote.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(dials.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    std::thread::sleep(RETRY_FIRST * 4);
+    remote.poll();
+    assert_eq!(
+        dials.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "not asked again on its own"
+    );
+
+    bridge.signed_in();
+    while dials.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < deadline, "timed out");
+        remote.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }

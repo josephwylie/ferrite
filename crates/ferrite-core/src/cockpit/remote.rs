@@ -16,6 +16,7 @@ use base64::Engine as _;
 
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
+use crate::machine::{self, Bridge, Failure};
 use crate::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
@@ -27,9 +28,11 @@ use crate::ThreadId;
 
 /// How long an act waits for the Server's reply.
 const REPLY_WAIT: Duration = Duration::from_secs(10);
-/// How long the window waits before attaching again, at first and at most.
+/// How long the window waits before attaching again, at first and at most;
+/// a machine's attempts each start an ssh, so they back off further.
 const RETRY_FIRST: Duration = Duration::from_millis(250);
 const RETRY_MOST: Duration = Duration::from_secs(5);
+const MACHINE_RETRY_MOST: Duration = Duration::from_secs(30);
 /// How long a restarting Server is given to come back before the window
 /// starts one of its own.
 const RESTART_GRACE: Duration = Duration::from_secs(2);
@@ -37,10 +40,10 @@ const RESTART_GRACE: Duration = Duration::from_secs(2);
 /// What attaching needs: where the Server is, how to start one, and who
 /// this window is.
 pub struct Attach {
-    /// The Store the Server serves; its socket is beside it.
+    /// The Store the window reads parked Threads from: for this computer's
+    /// Server, the one it serves, its socket beside it.
     pub store: PathBuf,
-    /// Started as `<executable> server` when no Server answers.
-    pub executable: PathBuf,
+    pub server: Endpoint,
     pub client: Peer,
     /// Draws the Visuals the Server's agents ask for; none, and this window
     /// does not offer to.
@@ -48,6 +51,15 @@ pub struct Attach {
     /// What the window finds on its own: CLI session files to adopt, a
     /// workspace's commands. It spawns no Session.
     pub discovery: Box<dyn crate::engine::Spawner>,
+}
+
+/// Where the Server is.
+#[derive(Clone)]
+pub enum Endpoint {
+    /// This computer's, started as `<executable> server` when none answers.
+    Local { executable: PathBuf },
+    /// A machine's, through its bridge (ADR 0026). Never started from here.
+    Machine(Arc<Bridge>),
 }
 
 /// What a window knows of its Server.
@@ -58,8 +70,10 @@ pub enum ServerState {
         /// When the Server started, on this side's clock.
         since: Instant,
     },
-    /// No Server answers: why, and the window keeps trying.
-    Detached { reason: String },
+    /// No Server answers: why, and the window keeps trying. `attention`:
+    /// trying again will not help until the operator acts (signs in,
+    /// installs `ferrited`).
+    Detached { reason: String, attention: bool },
 }
 
 /// What arrived from the Server for the window.
@@ -86,6 +100,8 @@ pub(crate) struct Remote {
     attachment: Option<Attachment>,
     /// Why there is no attachment, while there is none.
     detached: String,
+    /// The last attach failed in a way only the operator can fix.
+    attention: Option<Failure>,
     /// An attach running in the background.
     attaching: Option<Receiver<io::Result<link::Attached>>>,
     retry_at: Instant,
@@ -106,13 +122,17 @@ pub(crate) struct Remote {
 }
 
 impl Remote {
-    /// Attach now when a Server answers or can be started; otherwise the
-    /// window starts detached and keeps trying.
-    pub(crate) fn new(attach: Attach) -> (Self, Vec<Arrival>) {
-        let mut remote = Self {
+    /// Detached, attaching from the first `poll`.
+    pub(crate) fn new(attach: Attach) -> Self {
+        let detached = match &attach.server {
+            Endpoint::Local { .. } => "attaching to the Ferrite server".into(),
+            Endpoint::Machine(bridge) => format!("connecting to {}", bridge.name()),
+        };
+        Self {
             attach,
             attachment: None,
-            detached: "attaching to the Ferrite server".into(),
+            detached,
+            attention: None,
             attaching: None,
             retry_at: Instant::now(),
             backoff: RETRY_FIRST,
@@ -124,14 +144,14 @@ impl Remote {
             searches: BTreeMap::new(),
             watching: BTreeSet::new(),
             rendered: mpsc::channel(),
-        };
-        let attached = attach_to(
-            &remote.attach.store,
-            &remote.attach.executable,
-            hello(&remote.attach),
-        );
-        let arrivals = remote.attached(attached).into_iter().collect();
-        (remote, arrivals)
+        }
+    }
+
+    /// Attach now, waiting for it: when a Server answers or can be
+    /// started. Otherwise the window stays detached and keeps trying.
+    pub(crate) fn attach_now(&mut self) -> Option<Arrival> {
+        let attached = attach_to(&self.attach.store, &self.attach.server, hello(&self.attach));
+        self.attached(attached)
     }
 
     pub(crate) fn state(&self) -> ServerState {
@@ -142,6 +162,7 @@ impl Remote {
             },
             None => ServerState::Detached {
                 reason: self.detached.clone(),
+                attention: self.attention.is_some(),
             },
         }
     }
@@ -157,6 +178,29 @@ impl Remote {
     pub(crate) fn retry(&mut self) {
         self.retry_at = Instant::now();
         self.backoff = RETRY_FIRST;
+        self.attention = None;
+    }
+
+    /// The machine this window is on, when it is not this computer.
+    pub(crate) fn bridge(&self) -> Option<&Arc<Bridge>> {
+        match &self.attach.server {
+            Endpoint::Local { .. } => None,
+            Endpoint::Machine(bridge) => Some(bridge),
+        }
+    }
+
+    /// Whether attaching waits for the operator: a machine that needs a
+    /// sign-in is not asked again (each ask is a refused login on it) until
+    /// they have signed in, or ask.
+    fn waits_for_operator(&mut self) -> bool {
+        if self.attention != Some(Failure::SignIn) {
+            return false;
+        }
+        if self.bridge().is_some_and(|bridge| bridge.take_signed_in()) {
+            self.retry();
+            return false;
+        }
+        true
     }
 
     /// Everything that arrived since the last call, attaching again first
@@ -173,16 +217,19 @@ impl Remote {
                 Err(TryRecvError::Disconnected) => self.attaching = None,
             }
         }
-        if self.attachment.is_none() && self.attaching.is_none() && Instant::now() >= self.retry_at
+        if self.attachment.is_none()
+            && self.attaching.is_none()
+            && Instant::now() >= self.retry_at
+            && !self.waits_for_operator()
         {
             let (done, attaching) = mpsc::channel();
             let store = self.attach.store.clone();
-            let executable = self.attach.executable.clone();
+            let server = self.attach.server.clone();
             let hello = hello(&self.attach);
             let started = std::thread::Builder::new()
                 .name("ferrite-attach".into())
                 .spawn(move || {
-                    let _ = done.send(attach_to(&store, &executable, hello));
+                    let _ = done.send(attach_to(&store, &server, hello));
                 });
             if started.is_ok() {
                 self.attaching = Some(attaching);
@@ -387,9 +434,21 @@ impl Remote {
         } = match attached {
             Ok(attached) => attached,
             Err(error) => {
-                self.detached = format!("no Ferrite server: {error}");
+                let most = match &self.attach.server {
+                    Endpoint::Local { .. } => {
+                        self.detached = format!("no Ferrite server: {error}");
+                        RETRY_MOST
+                    }
+                    Endpoint::Machine(bridge) => {
+                        self.detached = format!("{}: {error}", bridge.name());
+                        MACHINE_RETRY_MOST
+                    }
+                };
+                self.attention = machine::failure(&error)
+                    .filter(|failure| failure.needs_operator())
+                    .cloned();
                 self.retry_at = Instant::now() + self.backoff;
-                self.backoff = (self.backoff * 2).min(RETRY_MOST);
+                self.backoff = (self.backoff * 2).min(most);
                 return None;
             }
         };
@@ -412,6 +471,7 @@ impl Remote {
             boot,
         });
         self.backoff = RETRY_FIRST;
+        self.attention = None;
         self.watching.clear();
         crate::log!("attached to the Ferrite server, boot {}", snapshot.boot_id);
         Some(Arrival::Attached { snapshot, new_boot })
@@ -561,14 +621,20 @@ impl Remote {
     }
 }
 
-/// Make sure a Server runs for `store`, then attach to it.
+/// Attach to the Server: this computer's, started first when none runs
+/// for `store`, or a machine's through its bridge.
 fn attach_to(
     store: &std::path::Path,
-    executable: &std::path::Path,
+    server: &Endpoint,
     hello: ClientMessage,
 ) -> io::Result<link::Attached> {
-    crate::server::agent::ensure_running(store, executable)?;
-    link::Client::attach(&link::address(store), hello)
+    match server {
+        Endpoint::Local { executable } => {
+            crate::server::agent::ensure_running(store, executable)?;
+            link::Client::attach(&link::address(store), hello)
+        }
+        Endpoint::Machine(bridge) => bridge.attach(hello),
+    }
 }
 
 /// Who this window is, and that it draws Visuals when it can.

@@ -49,6 +49,7 @@ use ::gpui;
 use ::gpui as kit;
 use ::gpui::*;
 use ferrite_core::cockpit::Cockpit;
+use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
@@ -296,7 +297,9 @@ fn main() {
                     std::sync::Arc::new(visual::renderer::start(cx));
                 Cockpit::attach(ferrite_core::cockpit::Attach {
                     store: store_dir(),
-                    executable: std::env::current_exe().unwrap_or_default(),
+                    server: ferrite_core::cockpit::Endpoint::Local {
+                        executable: std::env::current_exe().unwrap_or_default(),
+                    },
                     client: ferrite_core::protocol::Peer {
                         name: "ferrite".into(),
                         version: env!("CARGO_PKG_VERSION").into(),
@@ -659,30 +662,6 @@ fn app_menus() -> Vec<Menu> {
             items: vec![],
         },
     ]
-}
-
-/// Where settings live: the store's parent (`~/.ferrite`), or beside an
-/// overridden store.
-fn settings_dir() -> std::path::PathBuf {
-    let store = store_dir();
-    store
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or(store)
-}
-
-/// Where Threads live between runs.
-fn store_dir() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("FERRITE_STORE") {
-        return dir.into();
-    }
-    // Windows spells the home directory USERPROFILE, not HOME.
-    let base = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(base)
-        .join(".ferrite")
-        .join("threads")
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ use crate::store::Store;
 use crate::ThreadId;
 
 pub mod agent;
+mod bridge;
 mod render;
 mod signals;
 
@@ -51,6 +52,51 @@ pub struct Options {
     /// `--after <pid>`: the Server this one replaces, on Windows, where a
     /// restart cannot `exec`. It must be gone before the Store is claimed.
     pub after: Option<u32>,
+}
+
+/// Where the Threads live: `FERRITE_STORE`, else `~/.ferrite/threads`.
+pub fn store_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("FERRITE_STORE") {
+        return dir.into();
+    }
+    // Windows spells the home directory USERPROFILE, not HOME.
+    let base = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .unwrap_or_else(|| ".".into());
+    PathBuf::from(base).join(".ferrite").join("threads")
+}
+
+/// `~/.ferrite`: the Store's parent, where the settings and logs live.
+pub fn settings_dir() -> PathBuf {
+    let store = store_dir();
+    store
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(store)
+}
+
+/// `ferrited` (ADR 0026): the Server alone, for a machine a window reaches
+/// over ssh — no window, so none of its libraries. `ferrited server` runs
+/// it; `ferrited bridge` is what the window's ssh runs.
+pub fn ferrited(args: &[String]) -> i32 {
+    let executable = std::env::current_exe().unwrap_or_else(|_| "ferrited".into());
+    match args.get(1).map(String::as_str) {
+        Some("server") => run(Options {
+            store: store_dir(),
+            settings_dir: settings_dir(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            after: args
+                .iter()
+                .position(|arg| arg == "--after")
+                .and_then(|at| args.get(at + 1))
+                .and_then(|pid| pid.parse().ok()),
+        }),
+        Some("bridge") => bridge::run(&store_dir(), &executable),
+        _ => {
+            eprintln!("usage: ferrited server | ferrited bridge");
+            2
+        }
+    }
 }
 
 /// Run the Server until it is stopped. The process's exit code: 0 for a
@@ -317,12 +363,8 @@ impl Server {
             } = message
             {
                 let uptime = protocol::ms_since(crate::clock::instant(), self.engine.boot());
-                let welcome = protocol::welcome(
-                    generation,
-                    self.info.clone(),
-                    self.boot_id.clone(),
-                    uptime,
-                );
+                let welcome =
+                    protocol::welcome(generation, self.info.clone(), self.boot_id.clone(), uptime);
                 let accepted = !matches!(welcome, ServerMessage::Welcome { error: Some(_), .. });
                 let _ = client.connection.send(welcome);
                 if accepted {

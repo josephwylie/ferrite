@@ -35,7 +35,7 @@ impl CockpitView {
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.cockpit.server() {
             None => {}
-            Some(ServerState::Detached { reason }) => {
+            Some(ServerState::Detached { reason, .. }) => {
                 if std::mem::take(&mut self.server_bands.updating) {
                     window.remove_notification::<Updating>(cx);
                 }
@@ -194,7 +194,7 @@ impl CockpitView {
                 }
                 status.into()
             }
-            ServerState::Detached { reason } => format!("not running: {reason}").into(),
+            ServerState::Detached { reason, .. } => format!("not running: {reason}").into(),
         };
         let handle = window.window_handle();
         let act = |view: gpui::WeakEntity<Self>,
