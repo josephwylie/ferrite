@@ -5,6 +5,7 @@
 
 use super::*;
 use ferrite_core::cockpit::ServerState;
+use ferrite_core::machine::Failure;
 use ferrite_core::protocol::When;
 use ferrite_core::server::agent;
 use gpui::component::notification::{Notification, NotificationType};
@@ -17,16 +18,39 @@ const RELEASE_WAIT: Duration = Duration::from_secs(5);
 
 /// The no-Server band, so attaching again takes it down.
 struct Detached;
+
+/// What the no-Server band says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Gone {
+    /// This computer's Server does not answer.
+    NoServer,
+    /// The machine the window is on went.
+    Lost,
+    SignIn,
+    NotInstalled,
+}
 /// The band saying the Server will update.
 struct Updating;
 
 /// What the window has said about its Server this run.
 #[derive(Default)]
 pub(crate) struct ServerBands {
-    detached: bool,
+    /// The no-Server band up, and what it says.
+    detached: Option<Gone>,
+    /// The Server answered once: a machine's that goes is lost, not still
+    /// being reached.
+    attached: bool,
     updating: bool,
     /// The restart onto this build is asked for once per run.
     restart_asked: bool,
+}
+
+#[cfg(test)]
+impl ServerBands {
+    /// What the no-Server band says, while it is up.
+    pub(crate) fn detached(&self) -> Option<Gone> {
+        self.detached
+    }
 }
 
 impl CockpitView {
@@ -35,29 +59,71 @@ impl CockpitView {
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.cockpit.server() {
             None => {}
-            Some(ServerState::Detached { reason }) => {
+            Some(ServerState::Detached { reason, attention }) => {
                 if std::mem::take(&mut self.server_bands.updating) {
                     window.remove_notification::<Updating>(cx);
                 }
-                if self.server_bands.detached {
+                let machine = self.cockpit.machine().map(|bridge| bridge.name().to_string());
+                let gone = match (&machine, attention) {
+                    (None, _) => Gone::NoServer,
+                    (Some(_), Some(Failure::SignIn)) => Gone::SignIn,
+                    (Some(_), Some(_)) => Gone::NotInstalled,
+                    (Some(_), None) if self.server_bands.attached => Gone::Lost,
+                    // Being reached for the first time: the nav's glyph says so.
+                    (Some(_), None) => return,
+                };
+                if self.server_bands.detached == Some(gone) {
                     return;
                 }
-                self.server_bands.detached = true;
+                if self.server_bands.detached.replace(gone).is_some() {
+                    window.remove_notification::<Detached>(cx);
+                }
+                let name = machine.unwrap_or_default();
+                let (title, message) = match gone {
+                    Gone::NoServer => (
+                        "No Ferrite server".to_string(),
+                        format!(
+                            "{reason}. Your agents run in it; Ferrite keeps trying. \
+                             Click to try now."
+                        ),
+                    ),
+                    Gone::Lost => (
+                        format!("{name} is not connected"),
+                        format!(
+                            "{reason}. Its agents keep running there; Ferrite reconnects. \
+                             Click to try now."
+                        ),
+                    ),
+                    Gone::SignIn => (
+                        format!("Sign in to {name}"),
+                        "ssh needs you to sign in. Click to sign in in a terminal; \
+                         Ferrite connects once you have."
+                            .to_string(),
+                    ),
+                    Gone::NotInstalled => (
+                        format!("{name} has no ferrited"),
+                        format!(
+                            "{reason}. Install it there (cargo install --path \
+                             crates/ferrite-core --bin ferrited); Ferrite keeps trying."
+                        ),
+                    ),
+                };
                 let view = cx.entity().downgrade();
                 window.push_notification(
                     Notification::new()
                         .id::<Detached>()
-                        .title("No Ferrite server")
-                        .message(format!(
-                            "{reason}. Your agents run in it; Ferrite keeps trying. \
-                             Click to try now."
-                        ))
+                        .title(title)
+                        .message(message)
                         .with_type(NotificationType::Warning)
                         .autohide(false)
                         .on_click(move |_, _, cx| {
                             view.update(cx, |view, cx| {
-                                view.cockpit.retry_server();
-                                view.server_bands.detached = false;
+                                if gone == Gone::SignIn {
+                                    view.sign_in(cx);
+                                } else {
+                                    view.cockpit.retry_server();
+                                }
+                                view.server_bands.detached = None;
                                 cx.notify();
                             })
                             .ok();
@@ -66,7 +132,8 @@ impl CockpitView {
                 );
             }
             Some(ServerState::Attached { server, .. }) => {
-                if std::mem::take(&mut self.server_bands.detached) {
+                self.server_bands.attached = true;
+                if self.server_bands.detached.take().is_some() {
                     window.remove_notification::<Detached>(cx);
                 }
                 if self.server_bands.restart_asked || !self.server_is_older(&server) {
@@ -93,6 +160,17 @@ impl CockpitView {
                     cx,
                 );
             }
+        }
+    }
+
+    /// Take down the bands this view put up: a window going to another
+    /// machine leaves them behind with it.
+    pub(crate) fn take_server_bands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.server_bands.detached.take().is_some() {
+            window.remove_notification::<Detached>(cx);
+        }
+        if std::mem::take(&mut self.server_bands.updating) {
+            window.remove_notification::<Updating>(cx);
         }
     }
 
@@ -194,7 +272,7 @@ impl CockpitView {
                 }
                 status.into()
             }
-            ServerState::Detached { reason } => format!("not running: {reason}").into(),
+            ServerState::Detached { reason, .. } => format!("not running: {reason}").into(),
         };
         let handle = window.window_handle();
         let act = |view: gpui::WeakEntity<Self>,
@@ -209,8 +287,9 @@ impl CockpitView {
         let view = cx.entity().downgrade();
         let mut rows = vec![prefs::fact("Server", status)];
         // A development build never installs the LaunchAgent (main), and
-        // must not point the operator's at itself.
-        if !crate::titlebar::DEV {
+        // must not point the operator's at itself. A machine's Server is
+        // not this computer's to start.
+        if !crate::titlebar::DEV && self.cockpit.machine().is_none() {
             rows.push(prefs::toggle(
                 "settings-start-at-login",
                 "Start at login",

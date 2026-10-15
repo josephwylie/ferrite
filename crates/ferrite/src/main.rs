@@ -23,6 +23,7 @@ mod icons;
 mod keymap;
 mod line;
 mod loops_overlay;
+mod machines;
 mod menu;
 mod motion;
 mod nav;
@@ -49,6 +50,7 @@ use ::gpui;
 use ::gpui as kit;
 use ::gpui::*;
 use ferrite_core::cockpit::Cockpit;
+use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
@@ -237,6 +239,15 @@ fn main() {
             }
         }
     }
+    // `--remote <ssh target>`: start on that machine (ADR 0026).
+    let remote = flag(&args, "--remote").map(str::to_string);
+    if let Some(Err(e)) = remote
+        .as_deref()
+        .map(ferrite_core::machine::check_target)
+    {
+        eprintln!("ferrite: --remote: {e}");
+        std::process::exit(2);
+    }
     // How many Panes to open. The perf run uses 24.
     let panes: usize = flag(&args, "--panes")
         .and_then(|n| n.parse().ok())
@@ -267,17 +278,19 @@ fn main() {
             // process. Every other launch is a window on the Server, which
             // spawns the real provider CLIs and keeps them when it goes
             // (ADR 0025).
-            let mut core = if parity {
-                demo::parity_world()
+            let (mut core, machines) = if parity {
+                (demo::parity_world(), None)
             } else if demo {
                 let store = Store::open(store_dir()).unwrap_or_else(|e| {
                     ferrite_core::log!("cannot open the Thread store: {e}");
                     std::process::exit(1);
                 });
-                Cockpit::try_new(store, Box::new(demo::Spawn::new(load))).unwrap_or_else(|e| {
-                    ferrite_core::log!("cannot open the workspace registry: {e}");
-                    std::process::exit(1);
-                })
+                let core = Cockpit::try_new(store, Box::new(demo::Spawn::new(load)))
+                    .unwrap_or_else(|e| {
+                        ferrite_core::log!("cannot open the workspace registry: {e}");
+                        std::process::exit(1);
+                    });
+                (core, None)
             } else {
                 // A released app's Server is launchd's (the Run key's) from
                 // its first launch, so the agents' Threads resume at login;
@@ -294,20 +307,33 @@ fn main() {
                 // app's off-screen browser (ADR 0013).
                 let renderer: std::sync::Arc<dyn ferrite_core::visual::Renderer> =
                     std::sync::Arc::new(visual::renderer::start(cx));
-                Cockpit::attach(ferrite_core::cockpit::Attach {
-                    store: store_dir(),
-                    executable: std::env::current_exe().unwrap_or_default(),
-                    client: ferrite_core::protocol::Peer {
-                        name: "ferrite".into(),
-                        version: env!("CARGO_PKG_VERSION").into(),
-                    },
-                    renderer: Some(renderer),
-                    discovery: Box::new(spawner::Spawn::new(defaults.clone(), None)),
-                })
-                .unwrap_or_else(|e| {
-                    ferrite_core::log!("cannot read the Thread store: {e}");
-                    std::process::exit(1);
-                })
+                // This computer's Server, or `--remote`'s machine's (ADR
+                // 0026); the nav lists the others.
+                let machines = cx.new(|_| {
+                    machines::Machines::new(
+                        machines::Reach {
+                            settings_dir: settings_dir.clone(),
+                            store: store_dir(),
+                            executable: std::env::current_exe().unwrap_or_default(),
+                            client: ferrite_core::protocol::Peer {
+                                name: "ferrite".into(),
+                                version: env!("CARGO_PKG_VERSION").into(),
+                            },
+                            renderer: Some(renderer),
+                            defaults: defaults.clone(),
+                            bridge: ferrite_core::machine::Bridge::ssh,
+                        },
+                        &settings.machines,
+                        remote.as_deref(),
+                    )
+                });
+                let core = machines
+                    .update(cx, |machines, _| machines.cockpit())
+                    .unwrap_or_else(|e| {
+                        ferrite_core::log!("cannot read the Thread store: {e}");
+                        std::process::exit(1);
+                    });
+                (core, Some(machines))
             };
             let (adopted, refused) = adopt(&mut core, &imports);
             for refusal in refused {
@@ -350,7 +376,7 @@ fn main() {
             // identifier, and on Windows the AppUserModelID.
             cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite");
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
-            let mut cockpit_view = None;
+            let mut cockpit_window = None;
             let window = cx
                 .open_window(
                     WindowOptions {
@@ -409,21 +435,29 @@ fn main() {
                             if let Some(group) = seeded_group {
                                 view.enter_group(group, cx);
                             }
-                            view
+                            match machines {
+                                Some(machines) => view.with_machines(machines),
+                                None => view,
+                            }
                         });
-                        let closing = view.downgrade();
-                        window.on_window_should_close(cx, move |window, cx| {
-                            closing
-                                .update(cx, |view, cx| view.close_requested(window, cx))
-                                .unwrap_or(true)
-                        });
-                        cockpit_view = Some(view.downgrade());
                         // The kit Root paints its theme's opaque `background`
                         // under everything; on glass the window's root paints
                         // nothing (`paint::WINDOW`), so the blur reaches the
                         // regions' own fills.
                         let content =
                             cx.new(|cx| loops_overlay::CockpitWindow::new(view, window, cx));
+                        // The Cockpit the window shows when it is asked:
+                        // it is built afresh on another machine.
+                        let closing = content.downgrade();
+                        window.on_window_should_close(cx, move |window, cx| {
+                            closing
+                                .update(cx, |content, _| content.cockpit().clone())
+                                .map(|view| {
+                                    view.update(cx, |view, cx| view.close_requested(window, cx))
+                                })
+                                .unwrap_or(true)
+                        });
+                        cockpit_window = Some(content.downgrade());
                         cx.new(|cx| {
                             kit::component::Root::new(content, window, cx)
                                 .bordered(false)
@@ -434,11 +468,13 @@ fn main() {
                 .unwrap();
             // ⌘Q asks first while an agent works or a Decision waits — in
             // this process; a Server's agents keep running.
-            let cockpit_view: WeakEntity<CockpitView> =
-                cockpit_view.expect("the window built its Cockpit");
+            let cockpit_window: WeakEntity<loops_overlay::CockpitWindow> =
+                cockpit_window.expect("the window built its Cockpit");
             cx.on_action(move |_: &Quit, cx| {
                 let asked = window.update(cx, |_, window, cx| {
-                    cockpit_view.update(cx, |view, cx| view.request_quit(window, cx))
+                    cockpit_window
+                        .update(cx, |content, _| content.cockpit().clone())
+                        .map(|view| view.update(cx, |view, cx| view.request_quit(window, cx)))
                 });
                 if !matches!(asked, Ok(Ok(()))) {
                     cx.quit();
@@ -659,30 +695,6 @@ fn app_menus() -> Vec<Menu> {
             items: vec![],
         },
     ]
-}
-
-/// Where settings live: the store's parent (`~/.ferrite`), or beside an
-/// overridden store.
-fn settings_dir() -> std::path::PathBuf {
-    let store = store_dir();
-    store
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or(store)
-}
-
-/// Where Threads live between runs.
-fn store_dir() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("FERRITE_STORE") {
-        return dir.into();
-    }
-    // Windows spells the home directory USERPROFILE, not HOME.
-    let base = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(base)
-        .join(".ferrite")
-        .join("threads")
 }
 
 #[cfg(test)]

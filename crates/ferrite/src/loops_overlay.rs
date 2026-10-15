@@ -30,7 +30,7 @@ use gpui::{
     StyleRefinement, TextStyle, TextStyleRefinement, Window, WindowId,
 };
 
-use crate::cockpit::CockpitView;
+use crate::cockpit::{CockpitView, GoToMachine};
 
 /// Whether the overlay runs: on unless `FERRITE_LOOPS_OVERLAY=0`.
 fn enabled() -> bool {
@@ -48,10 +48,13 @@ fn enabled() -> bool {
 
 /// The kit Root's view: the Cockpit, cached, and the loops over it. It
 /// also brings the window forward for a clicked system notification (ADR
-/// 0017).
+/// 0017), and puts the window on another machine (ADR 0026) by building
+/// the Cockpit afresh on it.
 pub struct CockpitWindow {
     cockpit: Entity<CockpitView>,
     overlay: Option<Entity<LoopsOverlay>>,
+    /// The Cockpit asking to be on another machine.
+    _going: gpui::Subscription,
 }
 
 impl CockpitWindow {
@@ -71,13 +74,16 @@ impl CockpitWindow {
         // Over a cached Cockpit, its nav and Panes are cached parts too.
         cockpit.update(cx, |view, _| view.set_parts(overlay));
         let handle = window.window_handle();
-        let clicked = cockpit.downgrade();
+        let clicked = cx.entity().downgrade();
         cx.on_system_notification_response(move |response, cx| {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
-            let _ = clicked.update(cx, |view, cx| {
-                view.open_system_notification(&response.tag, cx)
+            let _ = clicked.update(cx, |this, cx| {
+                this.cockpit.update(cx, |view, cx| {
+                    view.open_system_notification(&response.tag, cx)
+                })
             });
         });
+        let going = Self::follow(&cockpit, window, cx);
         let overlay = overlay.then(|| {
             let overlay = cx.new(|_| LoopsOverlay);
             let id = window.window_handle().window_id();
@@ -89,11 +95,53 @@ impl CockpitWindow {
             .detach();
             overlay
         });
-        Self { cockpit, overlay }
+        Self {
+            cockpit,
+            overlay,
+            _going: going,
+        }
     }
 
-    /// The Cockpit this window shows (what a test window's root holds).
-    #[cfg_attr(not(test), allow(dead_code))]
+    fn follow(
+        cockpit: &Entity<CockpitView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Subscription {
+        cx.subscribe_in(cockpit, window, |this, _, going: &GoToMachine, window, cx| {
+            this.go_to(going.0, window, cx)
+        })
+    }
+
+    /// Put the window on machine `index`: a Cockpit attached there, with
+    /// the settings the window has now. The one it leaves lets its
+    /// machine's Threads go; that machine streams status from here on.
+    fn go_to(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (machines, prefs, provider) = {
+            let view = self.cockpit.read(cx);
+            let Some(machines) = view.machines() else {
+                return;
+            };
+            (machines, view.successor_preferences(), view.launch_provider())
+        };
+        let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
+            Some(Ok(core)) => core,
+            Some(Err(error)) => {
+                ferrite_core::log!("the window could not go to that machine: {error}");
+                return;
+            }
+            None => return,
+        };
+        let view = cx.new(|cx| {
+            CockpitView::new_with_settings(core, provider, prefs, cx).with_machines(machines)
+        });
+        view.update(cx, |view, _| view.set_parts(self.overlay.is_some()));
+        self.cockpit.update(cx, |left, cx| left.take_server_bands(window, cx));
+        self._going = Self::follow(&view, window, cx);
+        self.cockpit = view;
+        cx.notify();
+    }
+
+    /// The Cockpit this window shows now.
     pub fn cockpit(&self) -> &Entity<CockpitView> {
         &self.cockpit
     }

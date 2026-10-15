@@ -58,6 +58,8 @@ use gpui::{
 };
 
 use crate::cockpit::{thread_status, Attention, ThreadStatus};
+use crate::machines::{Connection, MachineRow};
+use ferrite_core::cockpit::StatusRow;
 use crate::components;
 use crate::icons::{self, icon};
 use crate::motion::{self, MotionSpec};
@@ -1128,6 +1130,75 @@ pub fn notice(text: SharedString) -> Div {
         .child(blank_cell())
         .child(cell(components::status_dot(BLOCKED)))
         .child(div().flex_1().min_w_0().child(text))
+}
+
+// ------------------------------------------------------------- machines
+
+/// A machine's heading (ADR 0026), in the heading style: its triangle
+/// (`fold`, from `machine_fold`, with its own press), its connection glyph
+/// where a row's mark sits, its name — the strong ink on the machine the
+/// window is on — and a word for a connection that is not up. The cockpit
+/// wires the press: onto the machine.
+pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div> {
+    let index = row.index;
+    let word: Option<SharedString> = match row.connection {
+        Connection::Online => None,
+        Connection::Connecting => Some(words::CONNECTING.into()),
+        Connection::Attention => Some(words::NEEDS_YOU.into()),
+        Connection::Disabled => Some(words::OFF.into()),
+    };
+    let glyph = match row.connection {
+        Connection::Online => components::status_dot(RUNNING),
+        Connection::Connecting => components::status_ring(CHROME_MUTED),
+        Connection::Attention => components::status_dot(ATTENTION),
+        Connection::Disabled => components::status_ring(CHROME_FAINT),
+    };
+    let key = SharedString::from(format!("nav-machine-{index}"));
+    row_frame(("nav-machine", index), key, false)
+        .debug_selector(move || format!("nav-machine-{index}"))
+        .child(fold)
+        .child(cell(glyph))
+        .child(fitted(
+            title_w(2.0, word.as_deref()),
+            if row.selected { TEXT_STRONG } else { CHROME_MUTED },
+            W_BODY,
+            SharedString::from(row.name.clone()),
+        ))
+        .child(word_cell(word))
+}
+
+/// A machine heading's triangle (`▾` open, `▸` folded): its press folds
+/// the machine to its heading.
+pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
+    div()
+        .id(("nav-machine-fold", index))
+        .debug_selector(move || format!("nav-machine-fold-{index}"))
+        .flex_shrink_0()
+        .child(disclosure(!folded))
+}
+
+/// One open Thread on a machine the window is not on: its mark, its title
+/// and its word, from the status the machine streams. A press goes to the
+/// machine. A machine that went keeps its rows, dimmed.
+pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Stateful<Div> {
+    let (status, word) = if row.waiting {
+        (RowStatus::NeedsYou, Some(words::NEEDS_YOU))
+    } else if row.working {
+        (RowStatus::Working, Some(words::WORKING))
+    } else {
+        (RowStatus::Idle, None)
+    };
+    let thread = row.thread.get();
+    let key = SharedString::from(format!("nav-machine-{machine}-{thread}"));
+    let title: SharedString = row.title.clone().unwrap_or_default().into();
+    // Thread ids are per Server: the machine is part of the id.
+    wash(line().id(key.clone()), key.clone(), false)
+        .debug_selector(move || key.to_string())
+        .when(lost, |row| row.opacity(MACHINE_LOST_OPACITY))
+        .child(blank_cell())
+        .child(cell(status_mark(status)))
+        .child(fitted(title_w(2.0, word), TEXT, W_BODY, title))
+        .child(word_cell(word.map(SharedString::from)))
 }
 
 // ------------------------------------------------------------- Parked

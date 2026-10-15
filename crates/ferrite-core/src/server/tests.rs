@@ -739,7 +739,9 @@ impl Spawner for NoDiscovery {
 fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
     crate::cockpit::Cockpit::attach(crate::cockpit::Attach {
         store: harness.dir.join("threads"),
-        executable: "/bin/false".into(),
+        server: crate::cockpit::Endpoint::Local {
+            executable: "/bin/false".into(),
+        },
         client: Peer {
             name: "test".into(),
             version: "0".into(),
@@ -948,4 +950,158 @@ fn a_boot_staggers_the_sessions_it_resumes() {
     for (nth, wait) in waits.iter().enumerate() {
         assert!(*wait >= LAUNCH_STAGGER * nth as u32, "{waits:?}");
     }
+}
+
+/// The far end of `ssh box ferrited bridge`, played by the harness's own
+/// socket: every byte the window sends is kept, and the window closing its
+/// end closes the Server's, as ssh does.
+fn fake_ssh(address: PathBuf, sent: Arc<Mutex<Vec<u8>>>) -> crate::machine::Dial {
+    struct Upload(link::Stream, Arc<Mutex<Vec<u8>>>);
+    impl io::Write for Upload {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.1.lock().unwrap().extend_from_slice(buf);
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
+    }
+    impl Drop for Upload {
+        fn drop(&mut self) {
+            let _ = link::TryClone::shutdown(&self.0);
+        }
+    }
+    Box::new(move || {
+        let stream = link::connect(&address)?;
+        Ok(crate::machine::Tunnel {
+            from: Box::new(link::TryClone::try_clone(&stream)?),
+            to: Box::new(Upload(stream, sent.clone())),
+            ended: Box::new(|| None),
+        })
+    })
+}
+
+fn bridge(harness: &Harness, sent: &Arc<Mutex<Vec<u8>>>) -> Arc<crate::machine::Bridge> {
+    Arc::new(crate::machine::Bridge::new(
+        "box",
+        harness.dir.join("box").join("bridge.sock"),
+        fake_ssh(harness.address.clone(), sent.clone()),
+    ))
+}
+
+fn peer() -> Peer {
+    Peer {
+        name: "test".into(),
+        version: "0".into(),
+    }
+}
+
+/// What a client sent, as message types.
+fn said(sent: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
+    sent.lock()
+        .unwrap()
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let message: serde_json::Value = serde_json::from_slice(line).unwrap();
+            message["type"].as_str().unwrap_or_default().to_string()
+        })
+        .collect()
+}
+
+/// ADR 0026: a window on a machine is a window on its Server, through the
+/// bridge — attached in the background, then driving its Threads exactly
+/// as a window on this computer's does.
+#[test]
+fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
+    let harness = start("machine-window");
+    let sent = Arc::default();
+    let mut window = crate::cockpit::Cockpit::attach(crate::cockpit::Attach {
+        store: harness.dir.join("box").join("threads"),
+        server: crate::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        client: peer(),
+        renderer: None,
+        discovery: Box::new(NoDiscovery),
+    })
+    .unwrap();
+    assert!(
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Detached { .. })
+        ),
+        "a machine is connected to in the background"
+    );
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Attached { .. })
+        )
+    });
+    let thread = window
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: harness.dir.clone(),
+            },
+        )
+        .unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    window.send(thread, "go".into());
+    provider.send(text("on it")).unwrap();
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    assert!(said(&sent).contains(&"watch".to_string()));
+}
+
+/// Only the machine on screen streams transcripts: the others' links say
+/// hello and nothing else, and still hear each open Thread's state and
+/// every Decision.
+#[test]
+fn a_machine_off_screen_streams_status_and_never_a_transcript() {
+    let harness = start("machine-status");
+    let sent = Arc::default();
+    let mut status = crate::cockpit::ServerStatus::new(
+        harness.dir.join("box").join("threads"),
+        crate::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
+        peer(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let until = |status: &mut crate::cockpit::ServerStatus,
+                 done: &dyn Fn(&[crate::cockpit::StatusRow]) -> bool| {
+        while !done(&status.rows()) {
+            assert!(Instant::now() < deadline, "timed out");
+            status.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    let mut window = cockpit(&harness);
+    let thread = window
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: harness.dir.clone(),
+            },
+        )
+        .unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    until(&mut status, &|rows| {
+        rows.iter().any(|row| row.thread == thread)
+    });
+    window.send(thread, "go".into());
+    provider.send(text("on it")).unwrap();
+    until(&mut status, &|rows| rows.iter().any(|row| row.working));
+    provider.send(decision()).unwrap();
+    until(&mut status, &|rows| rows.iter().any(|row| row.waiting));
+
+    assert!(matches!(
+        status.server(),
+        crate::cockpit::ServerState::Attached { .. }
+    ));
+    assert_eq!(said(&sent), vec!["hello".to_string()]);
 }

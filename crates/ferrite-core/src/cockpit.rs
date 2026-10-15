@@ -32,11 +32,13 @@ use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
 use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
 pub use mirror::ThreadView;
-pub use remote::{Attach, ServerState};
+pub use remote::{Attach, Endpoint, ServerState};
+pub use status::{ServerStatus, StatusRow};
 
 pub(crate) mod mirror;
 mod remote;
 mod shared;
+mod status;
 
 pub struct Cockpit {
     link: Link,
@@ -90,14 +92,17 @@ impl Cockpit {
         Self::try_new(store, spawner).expect("the workspace registry opens")
     }
 
-    /// A window attached to the Server for `attach.store`, starting one
-    /// when none answers. Without one it starts detached (`server`) and
-    /// keeps trying; it never runs the agents itself.
+    /// A window attached to its Server: this computer's, starting one when
+    /// none answers, or a machine's, connected to in the background. Without
+    /// one it starts detached (`server`) and keeps trying; it never runs
+    /// the agents itself.
     pub fn attach(attach: Attach) -> io::Result<Self> {
         let store = Store::reader(&attach.store)?;
-        let (remote, arrived) = remote::Remote::new(attach);
+        let local = matches!(attach.server, Endpoint::Local { .. });
+        let mut remote = remote::Remote::new(attach);
+        let arrived = if local { remote.attach_now() } else { None };
         let mut cockpit = Self::with(Link::Server(Box::new(remote)), store);
-        cockpit.arrive(arrived);
+        cockpit.arrive(arrived.into_iter().collect());
         Ok(cockpit)
     }
 
@@ -122,6 +127,14 @@ impl Cockpit {
         match &self.link {
             Link::InProcess(_) => None,
             Link::Server(server) => Some(server.state()),
+        }
+    }
+
+    /// The machine this window is on (ADR 0026); `None` for this computer.
+    pub fn machine(&self) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
+        match &self.link {
+            Link::InProcess(_) => None,
+            Link::Server(server) => server.bridge(),
         }
     }
 

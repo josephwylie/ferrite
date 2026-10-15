@@ -932,6 +932,65 @@ pub fn file_choice(
     })
 }
 
+/// A row whose title and hint are the operator's own words (a machine's
+/// name and ssh target), offering a token per act. Searchable by both.
+pub fn named(
+    id: &'static str,
+    nth: usize,
+    title: SharedString,
+    detail: SharedString,
+    acts: Vec<(SharedString, Act)>,
+) -> Row {
+    let words = vec![title.clone(), detail.clone()];
+    Row::new(title, detail, words, move |_, cx| {
+        div()
+            .flex()
+            .items_center()
+            .flex_shrink_0()
+            .children(acts.iter().enumerate().map(|(at, (label, act))| {
+                let act = act.clone();
+                chip((id, nth * acts.len() + at), label.clone(), false, cx).on_click(
+                    move |_, _, cx| {
+                        cx.stop_propagation();
+                        act(cx);
+                    },
+                )
+            }))
+            .into_any_element()
+    })
+}
+
+/// A field, and the token that takes what is typed in it.
+pub fn entry(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    field: Entity<InputState>,
+    label: &'static str,
+    act: impl Fn(&mut Window, &mut App) + 'static,
+) -> Row {
+    let act = Rc::new(act);
+    Row::new(title, detail, Vec::new(), move |_, cx| {
+        let act = act.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(CH))
+            .child(
+                div()
+                    .w(px(SETTINGS_FIELD_W))
+                    .child(Input::new(&field).small()),
+            )
+            .child(
+                chip((id, 0), label.into(), false, cx).on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    act(window, cx);
+                }),
+            )
+            .into_any_element()
+    })
+}
+
 /// A read-only fact (About): its key at the left, its value at the right
 /// in `TEXT_MUTED` (versions are machine text), wrapping anywhere rather
 /// than cut. Searchable by both.
