@@ -73,7 +73,21 @@ its rows (only the machine's own windows change its Notices). Opening
 one — a toast, a row, a system notification's click — puts the window
 on that machine (`CockpitWindow::go_to`), and the Cockpit built there
 opens it once attached: the request or Notice if it still stands, else
-its Thread. The badge counts the unread requests off screen too.
+its Thread, revived if it was parked since. A machine that does not
+answer within 10 s opens nothing: the operator has moved on, and focus
+is not taken from them minutes later. The badge counts the unread
+requests off screen too, so `mark all read` asks every machine off
+screen to read its Notices as well — otherwise the badge could only be
+cleared by visiting each. Finished turns list newest first across
+machines.
+
+The bell moves with the window. Going to another machine, what it heard
+of each machine is re-keyed (`Bell::moved`): the one left is now off
+screen and what it held is heard already; the one arrived at is now on
+screen and what rang of it off screen does not ring again. Its Cockpit's
+Notices are heard only once its Server answers — until then they are
+none, not news. So an alert rings once, wherever the window is when it
+does; toasts and waiting events stay with the Cockpit left.
 
 The timing lives in the window's `Bell` (fed `now` from the pump, so tests
 drive it with the executor's clock); the core keeps deciding what is

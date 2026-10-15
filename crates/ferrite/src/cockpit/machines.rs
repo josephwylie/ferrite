@@ -130,28 +130,41 @@ impl CockpitView {
         }
     }
 
+    /// Whether the Cockpit's Server answers (or it runs an Engine of its
+    /// own): what it mirrors is the Server's.
+    pub(super) fn attached(&self) -> bool {
+        self.cockpit
+            .server()
+            .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
+    }
+
     /// Open what the window came to this machine for, once its Server is
-    /// there: the alert while it still stands, else its Thread while it is
-    /// open.
+    /// there: the alert while it still stands, else its Thread (revived
+    /// when parked). A machine that does not answer by the landing's
+    /// deadline opens nothing: the operator has moved on.
     pub(super) fn land(&mut self, cx: &mut Context<Self>) {
-        let cockpit = &self.cockpit;
-        let Some(alert) = self.landing.take_if(|_| {
-            cockpit
-                .server()
-                .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
-        }) else {
+        let now = cx.background_executor().now();
+        let expired = self.landing.as_ref().is_some_and(|(_, until)| now > *until);
+        if !expired && !self.attached() {
+            return;
+        }
+        let Some((alert, _)) = self.landing.take().filter(|_| !expired) else {
             return;
         };
         if alert.target.wants(self.cockpit.notifications()) {
             self.notice_verb(alert.open_verb(), cx);
-        } else if self.cockpit.thread(alert.thread).is_some() {
+        } else {
             self.land_on_thread(alert.thread, cx);
         }
     }
 
     /// The bell's rows for the machines off screen: their live requests,
-    /// then their finished turns, each named by its machine.
-    pub(super) fn away_rows(&self, cx: &App) -> (Vec<NoticeRow>, Vec<NoticeRow>) {
+    /// then their finished turns with when each finished, each named by
+    /// its machine.
+    pub(super) fn away_rows(
+        &self,
+        cx: &App,
+    ) -> (Vec<NoticeRow>, Vec<(std::time::SystemTime, NoticeRow)>) {
         let now = ferrite_core::clock::system_time();
         let (mut requests, mut finished) = (Vec::new(), Vec::new());
         let Some(machines) = &self.machines else {
@@ -166,12 +179,12 @@ impl CockpitView {
                         away_row(&away, &RowTarget::Decision(notice.id.clone()), now)
                     }),
             );
-            finished.extend(
-                away.notifications
-                    .notices()
-                    .take(50)
-                    .filter_map(|notice| away_row(&away, &RowTarget::Notice(notice.id), now)),
-            );
+            finished.extend(away.notifications.notices().take(50).filter_map(|notice| {
+                Some((
+                    notice.at,
+                    away_row(&away, &RowTarget::Notice(notice.id), now)?,
+                ))
+            }));
         }
         (requests, finished)
     }

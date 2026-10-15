@@ -144,7 +144,10 @@ status link and rings for it as it does here (ADR 0017, "Machines off
 screen") — a toast and a chime, and a system notification while the
 window is in the background, each naming the machine. Opening one goes
 to the machine (`GoToMachine` carries the alert) and the Cockpit built
-there opens it once attached (`CockpitView::land`).
+there opens it once attached (`CockpitView::land`), its bell carrying
+what was heard so nothing rings twice. `mark all read` reaches every
+machine off screen through its status link — the one act a status link
+sends.
 
 ### Settings
 

@@ -46,6 +46,11 @@ fn enabled() -> bool {
 
 // ---------------------------------------------------------------- the window
 
+/// How long an alert the window went to another machine for waits for that
+/// machine to answer: more than ssh takes to reach one that is up. Later,
+/// the operator has moved on, and focus is not taken from them.
+const LANDING_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The kit Root's view: the Cockpit, cached, and the loops over it. It
 /// also brings the window forward for a clicked system notification (ADR
 /// 0017), and puts the window on another machine (ADR 0026) by building
@@ -130,6 +135,7 @@ impl CockpitWindow {
             };
             (machines, view.successor_preferences(), view.launch_provider())
         };
+        let left = machines.read(cx).selected_key();
         let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
             Some(Ok(core)) => core,
             Some(Err(error)) => {
@@ -138,10 +144,17 @@ impl CockpitWindow {
             }
             None => return,
         };
+        let arrived = machines.read(cx).selected_key();
+        let bell = self
+            .cockpit
+            .update(cx, |view, _| std::mem::take(&mut view.bell))
+            .moved(left, &arrived);
+        let until = cx.background_executor().now() + LANDING_WAIT;
         let view = cx.new(|cx| {
             CockpitView::new_with_settings(core, provider, prefs, cx)
                 .with_machines(machines)
-                .with_landing(open)
+                .with_bell(bell)
+                .with_landing(open, until)
         });
         view.update(cx, |view, _| view.set_parts(self.overlay.is_some()));
         self.cockpit.update(cx, |left, cx| left.take_server_bands(window, cx));

@@ -419,7 +419,8 @@ struct Heard {
 /// `MachineKey`. What one held when the window first heard it is not news
 /// (the window just left it, or met it already waiting); what it says
 /// after rings like the rest. Nobody looks at a machine off screen, so its
-/// alerts are never in view.
+/// alerts are never in view. When the window goes to another machine, what
+/// was heard moves with it (`moved`): an alert rings once, off screen or on.
 pub struct Bell {
     pub open: bool,
     /// The list's cursor row (`SELECTION`), first on open.
@@ -442,6 +443,21 @@ impl Bell {
             pending: Vec::new(),
             toasts: Vec::new(),
             door: Rc::new(std::cell::Cell::new(None)),
+        }
+    }
+
+    /// The bell of a window that went from machine `left` to `arrived`:
+    /// what it heard of each, re-keyed (the one left is off screen now,
+    /// the one arrived at on screen), so neither rings again for what it
+    /// rang already. Toasts and waiting events stay with the Cockpit left.
+    pub fn moved(mut self, left: MachineKey, arrived: &MachineKey) -> Self {
+        let here = self.heard.remove(&None);
+        let there = self.heard.remove(&Some(arrived.clone()));
+        self.heard.extend(here.map(|heard| (Some(left), heard)));
+        self.heard.extend(there.map(|heard| (None, heard)));
+        Self {
+            heard: self.heard,
+            ..Self::new()
         }
     }
 
@@ -1320,5 +1336,54 @@ mod tests {
         bell.drop_toast(&RowTarget::Decision(request(3, 1)));
         assert_eq!(bell.toasts().len(), 1, "only the one on screen went");
         assert_eq!(bell.toasts()[0].alert.away, away);
+    }
+
+    /// What was heard moves with the window: arriving at box, what rang
+    /// off screen does not ring again; leaving this computer, what it held
+    /// is heard already. What either says after still rings.
+    #[test]
+    fn what_rang_off_screen_does_not_ring_again_on_arrival() {
+        let mut bell = Bell::new();
+        let start = Instant::now();
+        let home = MachineKey(None);
+        let on_box = MachineKey(Some("me@box".into()));
+        let finished = NoticeId::from_u64(7);
+        bell.hear(None, [(finished, ThreadId::new(1), false)], [], start);
+        bell.hear(Some(on_box.clone()), [], [], start);
+        let (one, two) = (request(1, 1), request(2, 1));
+        bell.hear(
+            Some(on_box.clone()),
+            [],
+            [(one, false), (two.clone(), false)],
+            start,
+        );
+        let ring = bell.ring(start + ALERT_DELAY, &|_| true, &|_| false);
+        assert_eq!(ring.rang.len(), 3, "box's two and the finish here");
+
+        let mut bell = bell.moved(home.clone(), &on_box);
+        assert!(!bell.busy(), "toasts stay with the Cockpit left");
+        let later = start + 2 * ALERT_DELAY;
+        assert_eq!(bell.presented(Some(&home)), Some(finished));
+        assert_eq!(bell.presented(None), None, "box had no Notice");
+        bell.hear(None, [], [(two, false)], later);
+        bell.hear(Some(home.clone()), [], [], later);
+        assert!(!bell.busy(), "nothing heard rings twice");
+
+        let newer = NoticeId::from_u64(8);
+        bell.hear(
+            Some(home.clone()),
+            [(newer, ThreadId::new(1), false)],
+            [],
+            later,
+        );
+        let ring = bell.ring(later + ALERT_DELAY, &|_| true, &|_| false);
+        assert_eq!(
+            ring.rang,
+            [Alert {
+                away: Some(home),
+                target: RowTarget::Notice(newer),
+                thread: ThreadId::new(1),
+            }]
+        );
     }
 }

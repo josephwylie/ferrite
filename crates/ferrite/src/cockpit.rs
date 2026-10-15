@@ -579,8 +579,8 @@ pub struct CockpitView {
     /// and what each opens when clicked.
     system_alerts: std::collections::BTreeMap<String, crate::notifications::Alert>,
     /// What to open once the Cockpit is attached: the alert the window
-    /// came to this machine for (ADR 0026).
-    landing: Option<crate::notifications::Alert>,
+    /// came to this machine for (ADR 0026), and until when it waits.
+    landing: Option<(crate::notifications::Alert, std::time::Instant)>,
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
@@ -1646,9 +1646,19 @@ impl CockpitView {
         self
     }
 
-    /// Open `alert` once the Cockpit is attached.
-    pub fn with_landing(mut self, alert: Option<crate::notifications::Alert>) -> Self {
-        self.landing = alert;
+    /// Open `alert` once the Cockpit is attached, if it is by `until`.
+    pub fn with_landing(
+        mut self,
+        alert: Option<crate::notifications::Alert>,
+        until: std::time::Instant,
+    ) -> Self {
+        self.landing = alert.map(|alert| (alert, until));
+        self
+    }
+
+    /// The bell of the Cockpit the window left (`Bell::moved`).
+    pub fn with_bell(mut self, bell: Bell) -> Self {
+        self.bell = bell;
         self
     }
 
@@ -12491,7 +12501,12 @@ impl CockpitView {
             }
             // Every row read, none removed: titles drop to plain, the badge
             // clears.
-            Verb::MarkAllRead => self.cockpit.mark_notices_read(),
+            Verb::MarkAllRead => {
+                self.cockpit.mark_notices_read();
+                if let Some(machines) = &self.machines {
+                    machines.update(cx, |machines, _| machines.mark_notices_read());
+                }
+            }
             Verb::Answer(..) => {}
             Verb::GoTo(alert) => {
                 self.bell.open = false;
@@ -12652,8 +12667,12 @@ impl CockpitView {
         let entity = self.machines.clone();
         let machines = entity.as_ref().map(|machines| machines.read(cx));
         let notifications = self.cockpit.notifications();
-        let (fresh, requests) = news(notifications, self.bell.presented(None));
-        self.bell.hear(None, fresh, requests, now);
+        // Until its Server answers, a Cockpit's Notices are none, not news:
+        // hearing them would forget the requests heard of it.
+        if self.attached() {
+            let (fresh, requests) = news(notifications, self.bell.presented(None));
+            self.bell.hear(None, fresh, requests, now);
+        }
         for away in machines.iter().flat_map(|machines| machines.off_screen()) {
             let (fresh, requests) = news(away.notifications, self.bell.presented(Some(&away.key)));
             self.bell.hear(Some(away.key), fresh, requests, now);
@@ -12858,8 +12877,8 @@ impl CockpitView {
 
     /// The list's rows (FL-16): the live requests first, in the order the
     /// answer keys take them (the Needs-you queue), then the machines off
-    /// screen's, then finished turns newest first — here, then off screen
-    /// — each Thread folded to its newest.
+    /// screen's, then finished turns newest first on every machine, each
+    /// Thread folded to its newest.
     pub(super) fn bell_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
@@ -12877,13 +12896,15 @@ impl CockpitView {
         });
         let (away_requests, away_finished) = self.away_rows(cx);
         rows.extend(away_requests);
+        let mut finished: Vec<_> = notifications
+            .notices()
+            .take(50)
+            .map(|notice| (notice.at, self.notice_row(notice, now)))
+            .chain(away_finished)
+            .collect();
+        finished.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         rows.extend(crate::notifications::fold(
-            notifications
-                .notices()
-                .take(50)
-                .map(|notice| self.notice_row(notice, now))
-                .chain(away_finished)
-                .collect(),
+            finished.into_iter().map(|(_, row)| row).collect(),
         ));
         rows
     }

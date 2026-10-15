@@ -12,7 +12,9 @@ use super::remote::{Arrival, Attach, Endpoint, Remote, ServerState};
 use crate::activity::DecisionHandle;
 use crate::engine::{SpawnRequest, Spawner};
 use crate::notifications::Notifications;
-use crate::protocol::{Peer, ServerMessage, Snapshot, ThreadState, WireDecision, WireHandle};
+use crate::protocol::{
+    NoticeAction, Op, Peer, ServerMessage, Snapshot, ThreadState, WireDecision, WireHandle,
+};
 use crate::store::Provider;
 use crate::ThreadId;
 
@@ -23,7 +25,7 @@ pub struct ServerStatus {
     states: HashMap<ThreadId, ThreadState>,
     /// The pending Decisions.
     waiting: BTreeMap<(ThreadId, WireHandle), WireDecision>,
-    /// The Server's Notices, read-only; `None` until the first snapshot.
+    /// The Server's Notices as last heard; `None` until the first snapshot.
     notifications: Option<Notifications>,
     /// The snapshot's: a state message older than it is dropped.
     revision: u64,
@@ -118,6 +120,22 @@ impl ServerStatus {
     /// ones it last had.
     pub fn notifications(&self) -> Option<&Notifications> {
         self.notifications.as_ref()
+    }
+
+    /// Every Notice and request read on the Server, as the bell's `mark
+    /// all read` does on screen. Asked only while one is unread.
+    pub fn mark_notices_read(&mut self) {
+        if self
+            .notifications
+            .as_ref()
+            .is_none_or(|notifications| notifications.unread() == 0)
+        {
+            return;
+        }
+        let action = NoticeAction::Read;
+        if let Err(error) = self.remote.execute(Op::Notice { action }) {
+            crate::log!("a notice act did not reach the server: {}", error.message);
+        }
     }
 
     /// An open Thread's title, as far as it has one.

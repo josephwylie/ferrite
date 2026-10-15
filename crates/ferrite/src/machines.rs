@@ -150,6 +150,11 @@ impl Machines {
         self.entries.get(index)?.machine.as_ref()
     }
 
+    /// The machine the window is on, as alerts name it.
+    pub fn selected_key(&self) -> MachineKey {
+        self.entries[self.selected].key()
+    }
+
     /// Where the machine `key` names is listed now.
     pub fn index(&self, key: &MachineKey) -> Option<usize> {
         self.entries.iter().position(|entry| entry.key() == *key)
@@ -172,6 +177,17 @@ impl Machines {
                 status,
             })
         })
+    }
+
+    /// The bell's `mark all read` on every machine off screen.
+    pub fn mark_notices_read(&mut self) {
+        for status in self
+            .entries
+            .iter_mut()
+            .filter_map(|entry| entry.status.as_mut())
+        {
+            status.mark_notices_read();
+        }
     }
 
     /// Machine `index`'s status link, while it is off screen.
