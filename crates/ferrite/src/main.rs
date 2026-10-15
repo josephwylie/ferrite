@@ -122,6 +122,13 @@ fn main() {
                 .and_then(|pid| pid.parse().ok()),
         }));
     }
+    // `ferrite thread list`, `ferrite agent prompt …`, `ferrite --skill`:
+    // the automation API's CLI (ADR 0027), which never starts a window.
+    if let Some(code) =
+        ferrite_core::api::cli::run(&std::env::args().collect::<Vec<_>>(), &store_dir())
+    {
+        std::process::exit(code);
+    }
     // A Chromium helper process is this same binary, started
     // by Chromium with `--type=…`; it runs the helper and exits here, before
     // any shell, store or window. In the app this only readies Chromium

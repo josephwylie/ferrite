@@ -548,6 +548,17 @@ pub enum ServerMessage {
         title: String,
         html: String,
     },
+    /// An API caller asked the windows to land on this Thread
+    /// (`thread.focus`, ADR 0027).
+    Focus {
+        thread: ThreadId,
+    },
+    /// An API caller's toast (`notification.show`, ADR 0027).
+    Notification {
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+    },
     /// The Server is about to restart: reconnect.
     Restarting {
         when: When,
@@ -1140,7 +1151,8 @@ pub struct WireFormChoice {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Also the API's `decision.answer` (ADR 0027), hence its JSON Schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireAnswer {
     Allow {
@@ -1164,10 +1176,11 @@ pub enum WireAnswer {
     },
     Cancel,
     #[serde(other)]
+    #[schemars(skip)]
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WireQuestionAnswer {
     pub picks: Vec<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -166,6 +166,7 @@ fn an_imported_codex_session_continues_on_the_next_prompt() {
         sandbox: Some("read-only".into()),
         resume: None,
         visuals: None,
+        env: Vec::new(),
     };
 
     let mut session = CodexSession::spawn(config.clone()).unwrap();

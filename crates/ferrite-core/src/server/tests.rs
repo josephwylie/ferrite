@@ -24,10 +24,13 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 type Answers = Arc<Mutex<Vec<(String, DecisionAnswer)>>>;
+/// The client ids of the prompts handed to the providers' queues.
+type Queued = Arc<Mutex<Vec<String>>>;
 
 struct Scripted {
     events: Receiver<SessionEvent>,
     answers: Answers,
+    queued: Queued,
 }
 
 impl Session for Scripted {
@@ -44,22 +47,48 @@ impl Session for Scripted {
         self.answers.lock().unwrap().push((id.into(), answer));
         Ok(())
     }
+    /// Takes every prompt, as a provider that confirmed native queuing.
+    fn enqueue(&mut self, client_id: &str, _: &str) -> io::Result<()> {
+        self.queued.lock().unwrap().push(client_id.into());
+        Ok(())
+    }
 }
 
 /// Each Session it starts hands the test the Sender that plays its provider.
 struct Spawn {
     sessions: Sender<Sender<SessionEvent>>,
     answers: Answers,
+    queued: Queued,
+    /// Sessions start only as the test lets each through; at once without.
+    gate: Option<Arc<Mutex<Receiver<()>>>>,
+}
+
+impl Spawn {
+    fn scripted(&self) -> Scripted {
+        let (provider, events) = mpsc::channel();
+        self.sessions.send(provider).unwrap();
+        Scripted {
+            events,
+            answers: self.answers.clone(),
+            queued: self.queued.clone(),
+        }
+    }
 }
 
 impl Spawner for Spawn {
     fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
-        let (provider, events) = mpsc::channel();
-        self.sessions.send(provider).unwrap();
-        Ok(Box::new(Scripted {
-            events,
-            answers: self.answers.clone(),
-        }))
+        Ok(Box::new(self.scripted()))
+    }
+    fn start(&mut self, request: SpawnRequest) -> io::Result<crate::session::SessionLifecycle> {
+        use crate::session::SessionLifecycle;
+        let Some(gate) = self.gate.clone() else {
+            return self.spawn(request).map(SessionLifecycle::ready);
+        };
+        let session = self.scripted();
+        SessionLifecycle::background(move || {
+            let _ = gate.lock().unwrap().recv();
+            Ok(Box::new(session) as Box<dyn crate::providers::Session + Send>)
+        })
     }
 }
 
@@ -69,20 +98,39 @@ struct Harness {
     relaunched: Receiver<PathBuf>,
     dir: PathBuf,
     address: PathBuf,
+    /// The API's socket.
+    api: PathBuf,
     sessions: Receiver<Sender<SessionEvent>>,
     answers: Answers,
+    queued: Queued,
 }
 
 fn start(name: &str) -> Harness {
+    serve(name, None)
+}
+
+/// A Server whose Sessions start only as the returned Sender lets each
+/// through, one `()` each.
+fn start_gated(name: &str) -> (Harness, Sender<()>) {
+    let (gate, opens) = mpsc::channel();
+    (serve(name, Some(Arc::new(Mutex::new(opens)))), gate)
+}
+
+fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
     let dir = scratch(name);
     let store = dir.join("threads");
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
+    let api = crate::api::address(&store);
+    let api_listener = link::listen(&api).unwrap();
     let (sessions, started) = mpsc::channel();
     let answers = Answers::default();
+    let queued = Queued::default();
     let spawn = Spawn {
         sessions,
         answers: answers.clone(),
+        queued: queued.clone(),
+        gate,
     };
     let settings_dir = dir.clone();
     let (relaunches, relaunched) = mpsc::channel();
@@ -100,6 +148,7 @@ fn start(name: &str) -> Harness {
             Ok(())
         });
         let (heard, hear) = mpsc::channel();
+        crate::api::accept_all(api_listener, heard.clone()).unwrap();
         link::accept_all(listener, heard).unwrap();
         server.serve(hear)
     });
@@ -108,8 +157,10 @@ fn start(name: &str) -> Harness {
         relaunched,
         dir,
         address,
+        api,
         sessions: started,
         answers,
+        queued,
     }
 }
 
@@ -851,6 +902,8 @@ fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
     let spawner = Spawn {
         sessions,
         answers: Answers::default(),
+        queued: Queued::default(),
+        gate: None,
     };
     (Box::new(spawner), providers)
 }
@@ -910,7 +963,10 @@ fn a_boot_staggers_the_sessions_it_resumes() {
         waits: Arc<Mutex<Vec<Duration>>>,
     }
     impl Spawner for Timing {
-        fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
+        fn spawn(
+            &mut self,
+            request: SpawnRequest,
+        ) -> io::Result<Box<dyn crate::providers::Session>> {
             self.inner.spawn(request)
         }
         fn start_after(
@@ -1104,4 +1160,521 @@ fn a_machine_off_screen_streams_status_and_never_a_transcript() {
         crate::cockpit::ServerState::Attached { .. }
     ));
     assert_eq!(said(&sent), vec!["hello".to_string()]);
+}
+
+// ------------------------------------------------------------- the API
+
+/// An API caller's end (ADR 0027): one connection, every line it is sent.
+struct Caller {
+    stream: link::Stream,
+    heard: Receiver<serde_json::Value>,
+}
+
+fn call(harness: &Harness) -> Caller {
+    let stream = link::connect(&harness.api).unwrap();
+    let mut lines = link::Lines::new(link::TryClone::try_clone(&stream).unwrap());
+    let (tell, heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(Some(line)) = lines.next_line() {
+            if tell.send(serde_json::from_slice(&line).unwrap()).is_err() {
+                return;
+            }
+        }
+    });
+    Caller { stream, heard }
+}
+
+impl Caller {
+    fn ask(&mut self, id: &str, method: &str, params: serde_json::Value) {
+        let request = serde_json::json!({ "id": id, "method": method, "params": params });
+        link::send(&mut self.stream, &request).unwrap();
+    }
+
+    /// The next line, within five seconds.
+    fn next(&self) -> serde_json::Value {
+        self.heard
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an answer within five seconds")
+    }
+
+    /// Nothing arrives for a while.
+    fn quiet(&self) {
+        let line = self.heard.recv_timeout(Duration::from_millis(300));
+        assert!(line.is_err(), "unexpected {line:?}");
+    }
+
+    fn answer(&mut self, id: &str, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.ask(id, method, params);
+        let answer = self.next();
+        assert_eq!(answer["id"], id, "{answer}");
+        answer
+    }
+}
+
+fn turn_ends(provider: &Sender<SessionEvent>) {
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+}
+
+/// `thread.start` opens a titled Thread a window sees; `agent.prompt` with
+/// `wait` holds its answer while the agent works and gives it once the
+/// turn has ended.
+#[test]
+fn a_prompt_with_wait_answers_once_the_agent_worked_and_settled() {
+    let harness = start("api-wait");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "title": "reviewer" }),
+    );
+    let info = &started["result"]["thread"];
+    assert_eq!(info["title"], "reviewer", "{started}");
+    assert_eq!(info["provider"], "claude");
+    let thread = info["thread"].as_u64().unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    caller.ask(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "review", "wait": true }),
+    );
+    caller.quiet();
+    turn_ends(&provider);
+    let settled = caller.next();
+    assert_eq!(settled["id"], "2", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+
+    let read = caller.answer("3", "agent.read", serde_json::json!({ "thread": thread }));
+    assert!(
+        read["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("> review"),
+        "{read}"
+    );
+}
+
+/// Herdr's rule: a prompt never goes to an agent a Decision blocks. The
+/// Decision is listed under its provider's id, an `agent.wait` for
+/// `blocked` hears it, and the API's answer wins like a window's would.
+#[test]
+fn a_blocked_agent_refuses_prompts_and_its_decision_is_answered_once() {
+    let harness = start("api-blocked");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    let mut caller = call(&harness);
+
+    caller.ask(
+        "1",
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "until": "blocked" }),
+    );
+    caller.quiet();
+    provider.send(decision()).unwrap();
+    let blocked = caller.next();
+    assert_eq!(
+        blocked["result"]["thread"]["attention"], "blocked",
+        "{blocked}"
+    );
+
+    let refused = caller.answer(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "carry on" }),
+    );
+    assert_eq!(refused["error"]["code"], "agent_blocked", "{refused}");
+
+    let listed = caller.answer("3", "decision.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["decisions"][0]["decision"]["id"], "perm_01",
+        "{listed}"
+    );
+
+    let answered = caller.answer(
+        "4",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread,
+            "decision": "perm_01",
+            "answer": { "kind": "allow", "input": {} },
+        }),
+    );
+    assert!(answered.get("result").is_some(), "{answered}");
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+    let again = caller.answer(
+        "5",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread,
+            "decision": "perm_01",
+            "answer": { "kind": "allow", "input": {} },
+        }),
+    );
+    assert_eq!(again["error"]["code"], "unknown_decision", "{again}");
+    window.until(|window| !window.closed().is_empty());
+    assert!(matches!(
+        window.closed()[..],
+        [ClosedBy::Answered { client }] if client >= 1 << 32
+    ));
+}
+
+/// Subscribed before the snapshot is read: the first answer is the state
+/// now, and every change after it follows as an event under the same id.
+#[test]
+fn a_subscriber_hears_the_threads_now_then_every_change() {
+    let harness = start("api-events");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let mut subscriber = call(&harness);
+    let now = subscriber.answer(
+        "events",
+        "events.subscribe",
+        serde_json::json!({ "threads": [thread] }),
+    );
+    assert_eq!(now["result"]["threads"][0]["attention"], "idle", "{now}");
+    assert_eq!(now["result"]["decisions"], serde_json::json!([]));
+
+    let mut caller = call(&harness);
+    caller.answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+    let working = subscriber.next();
+    assert_eq!(working["id"], "events");
+    assert_eq!(
+        working["event"],
+        serde_json::json!({ "event": "attention", "thread": thread, "attention": "working" })
+    );
+    provider.send(decision()).unwrap();
+    let asked = subscriber.next();
+    assert_eq!(asked["event"]["event"], "decision_requested", "{asked}");
+    let blocked = subscriber.next();
+    assert_eq!(blocked["event"]["attention"], "blocked", "{blocked}");
+}
+
+/// `thread.focus` and `notification.show` reach every window.
+#[test]
+fn focus_and_toasts_reach_the_windows() {
+    let harness = start("api-windows");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut caller = call(&harness);
+
+    caller.answer("1", "thread.focus", serde_json::json!({ "thread": thread }));
+    let shown = caller.answer(
+        "2",
+        "notification.show",
+        serde_json::json!({ "title": "Review ready" }),
+    );
+    assert_eq!(shown["result"]["windows"], 1, "{shown}");
+    let mut told = Vec::new();
+    while told.len() < 2 {
+        match window
+            .client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            message @ (ServerMessage::Focus { .. } | ServerMessage::Notification { .. }) => {
+                told.push(message)
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        told,
+        [
+            ServerMessage::Focus { thread },
+            ServerMessage::Notification {
+                title: "Review ready".into(),
+                body: None,
+            },
+        ]
+    );
+    let unknown = caller.answer("3", "thread.focus", serde_json::json!({ "thread": 999 }));
+    assert_eq!(unknown["error"]["code"], "unknown_thread", "{unknown}");
+}
+
+/// A line that is not a request is answered with why, and the connection
+/// stays open for the next.
+#[test]
+fn an_unknown_method_is_answered_and_the_connection_goes_on() {
+    let harness = start("api-unknown");
+    let mut caller = call(&harness);
+    let unknown = caller.answer("9", "agent.dance", serde_json::json!({}));
+    assert_eq!(unknown["error"]["code"], "unknown_method", "{unknown}");
+    let listed = caller.answer("10", "thread.list", serde_json::json!({}));
+    assert_eq!(listed["result"]["threads"], serde_json::json!([]));
+}
+
+/// A prompt to a working agent waits in the provider's queue, and its wait
+/// is not answered by the turn before it: between that turn's end and the
+/// queued prompt's start the agent is still at work.
+#[test]
+fn a_prompt_queued_behind_a_turn_waits_for_its_own() {
+    let harness = start("api-queued");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let mut caller = call(&harness);
+    caller.answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "first" }),
+    );
+
+    caller.ask(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "second", "wait": true }),
+    );
+    caller.quiet();
+    turn_ends(&provider);
+    caller.quiet();
+    let client_id = harness.queued.lock().unwrap()[0].clone();
+    provider
+        .send(SessionEvent::Queue(crate::QueueEvent::Started {
+            historical: false,
+            client_id,
+            text: None,
+        }))
+        .unwrap();
+    caller.quiet();
+    turn_ends(&provider);
+    let settled = caller.next();
+    assert_eq!(settled["id"], "2", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+}
+
+/// A prompt to a Session still starting is held until it is up, and its
+/// wait does not stall meanwhile; a second is refused rather than replace
+/// it.
+#[test]
+fn a_starting_session_holds_one_prompt_and_refuses_another() {
+    let (harness, gate) = start_gated("api-starting");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir }),
+    );
+    let thread = started["result"]["thread"]["thread"].as_u64().unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    caller.ask(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "review", "wait": true }),
+    );
+    caller.quiet();
+    let again = caller.answer(
+        "3",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "and again" }),
+    );
+    assert_eq!(again["error"]["code"], "agent_starting", "{again}");
+
+    gate.send(()).unwrap();
+    let working = caller.answer(
+        "4",
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "until": "working" }),
+    );
+    assert!(working.get("result").is_some(), "{working}");
+    turn_ends(&provider);
+    let settled = caller.next();
+    assert_eq!(settled["id"], "2", "{settled}");
+    let read = caller.answer("5", "agent.read", serde_json::json!({ "thread": thread }));
+    let text = read["result"]["text"].as_str().unwrap();
+    assert!(text.contains("> review"), "{read}");
+    assert!(!text.contains("and again"), "{read}");
+}
+
+/// A prompt held for a starting Session is work: a plain `agent.wait` after
+/// it is not answered by the idle before the agent even has it.
+#[test]
+fn a_held_prompt_keeps_a_plain_wait_waiting() {
+    let (harness, gate) = start_gated("api-held");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir }),
+    );
+    let thread = started["result"]["thread"]["thread"].as_u64().unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let sent = caller.answer(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "review" }),
+    );
+    assert!(sent.get("result").is_some(), "{sent}");
+
+    caller.ask("3", "agent.wait", serde_json::json!({ "thread": thread }));
+    caller.quiet();
+    gate.send(()).unwrap();
+    caller.quiet();
+    turn_ends(&provider);
+    let settled = caller.next();
+    assert_eq!(settled["id"], "3", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+}
+
+/// A caller that half-closes once it has asked (`echo … | nc -U`) still
+/// hears its wait's answer.
+#[cfg(unix)]
+#[test]
+fn a_half_closed_caller_still_hears_its_wait() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let harness = start("api-half-closed");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let mut caller = call(&harness);
+    caller.answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+
+    let mut script = UnixStream::connect(&harness.api).unwrap();
+    let request = serde_json::json!({
+        "id": "w",
+        "method": "agent.wait",
+        "params": { "thread": thread },
+    });
+    writeln!(script, "{request}").unwrap();
+    script.shutdown(std::net::Shutdown::Write).unwrap();
+    caller.quiet();
+    turn_ends(&provider);
+    script
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(script).read_line(&mut line).unwrap();
+    let settled: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(settled["id"], "w", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+}
+
+/// What the CLI prints, one write per line.
+struct Printed(Sender<String>);
+
+impl io::Write for Printed {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let _ = self.0.send(String::from_utf8_lossy(bytes).into_owned());
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn printed() -> (Printed, Receiver<String>) {
+    let (tell, told) = mpsc::channel();
+    (Printed(tell), told)
+}
+
+fn line(text: &str) -> serde_json::Value {
+    assert!(text.ends_with('\n'), "{text:?}");
+    serde_json::from_str(text).unwrap()
+}
+
+fn request(method: &str, params: serde_json::Value) -> crate::api::Request {
+    serde_json::from_value(serde_json::json!({ "id": "1", "method": method, "params": params }))
+        .unwrap()
+}
+
+/// One CLI call: its exit status, and what it printed to stdout and stderr.
+fn cli(
+    socket: &Path,
+    method: &str,
+    params: serde_json::Value,
+) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let ((mut out, said), (mut err, refused)) = (printed(), printed());
+    let status = crate::api::cli::call(&request(method, params), socket, &mut out, &mut err);
+    drop((out, err));
+    let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
+    (status, lines(said), lines(refused))
+}
+
+/// The CLI over a real socket: an answer on stdout with status 0, a
+/// refusal on stderr with status 1, no Server as `server_unavailable`, and
+/// a subscription's events as they come.
+#[test]
+fn the_cli_prints_answers_refusals_and_events() {
+    let harness = start("api-cli");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+
+    let (status, said, refused) = cli(
+        &harness.api,
+        "thread.get",
+        serde_json::json!({ "thread": thread }),
+    );
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    assert_eq!(
+        said[0]["result"]["thread"]["thread"],
+        serde_json::json!(thread)
+    );
+
+    let (status, said, refused) = cli(
+        &harness.api,
+        "thread.get",
+        serde_json::json!({ "thread": 999 }),
+    );
+    assert_eq!((status, said.len()), (1, 0), "{said:?}");
+    assert_eq!(refused[0]["error"]["code"], "unknown_thread");
+
+    let (status, _, refused) = cli(
+        &harness.dir.join("nobody.sock"),
+        "thread.list",
+        serde_json::json!({}),
+    );
+    assert_eq!(status, 1);
+    assert_eq!(refused[0]["error"]["code"], "server_unavailable");
+
+    let (mut out, said) = printed();
+    let subscribe = request(
+        "events.subscribe",
+        serde_json::json!({ "threads": [thread] }),
+    );
+    let api = harness.api.clone();
+    std::thread::spawn(move || crate::api::cli::call(&subscribe, &api, &mut out, &mut io::sink()));
+    let next = || line(&said.recv_timeout(Duration::from_secs(5)).unwrap());
+    assert_eq!(next()["result"]["threads"][0]["attention"], "idle");
+    call(&harness).answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+    assert_eq!(next()["event"]["attention"], "working");
 }

@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -69,6 +70,9 @@ pub struct Spawn {
     /// What answers an agent's `show_visual` with a screenshot (the app's
     /// off-screen browser, `visual::renderer`). `None`: the tool isn't offered.
     pub renderer: Option<Arc<dyn crate::visual::Renderer>>,
+    /// The Server's API socket, told to each agent (`FERRITE_SOCKET`) so it
+    /// can drive other Threads (ADR 0027). `None` where there is no API.
+    pub api: Option<PathBuf>,
 }
 
 impl Spawn {
@@ -76,7 +80,11 @@ impl Spawn {
         defaults: Arc<Mutex<SessionDefaults>>,
         renderer: Option<Arc<dyn crate::visual::Renderer>>,
     ) -> Self {
-        Self { defaults, renderer }
+        Self {
+            defaults,
+            renderer,
+            api: None,
+        }
     }
 
     /// The tool as this spawn offers it: the operator's level and the
@@ -345,6 +353,7 @@ impl Spawn {
         let resume = request.resume.map(|target| target.to_string());
         let name = request.name.map(|name| name.to_string());
         let additional_directories = request.additional_directories;
+        let env = crate::api::caller_environment(request.thread, self.api.as_deref());
         let defaults = self
             .defaults
             .lock()
@@ -371,6 +380,7 @@ impl Spawn {
                 resume,
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),
+                env,
                 ..Default::default()
             }),
             Provider::Codex => SessionConfig::Codex(CodexConfig {
@@ -385,6 +395,7 @@ impl Spawn {
                 resume,
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),
+                env,
                 ..Default::default()
             }),
         }
@@ -483,6 +494,42 @@ pub fn rss_bytes(pid: u32) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::providers::applied;
+
+    /// Every agent knows its own Thread; one the Server runs also knows
+    /// how to reach the API, and with which binary (ADR 0027).
+    #[test]
+    fn every_agent_is_told_its_thread_and_where_the_api_listens() {
+        let request = |provider| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+        };
+        let served = Spawn {
+            api: Some(PathBuf::from("/store/api.sock")),
+            ..Spawn::new(Arc::default(), None)
+        };
+        let SessionConfig::Codex(codex) = served.config(request(Provider::Codex)) else {
+            panic!("a Codex request makes a Codex config");
+        };
+        let names: Vec<&str> = codex.env.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            ["FERRITE_THREAD_ID", "FERRITE_SOCKET", "FERRITE_BIN"]
+        );
+        assert_eq!(codex.env[0].1, "12");
+        assert_eq!(codex.env[1].1, "/store/api.sock");
+
+        let alone = Spawn::new(Arc::default(), None);
+        let SessionConfig::Claude(claude) = alone.config(request(Provider::Claude)) else {
+            panic!("a Claude request makes a Claude config");
+        };
+        assert_eq!(claude.env, [("FERRITE_THREAD_ID", "12".into())]);
+    }
 
     #[derive(Default)]
     struct NativeCalls {

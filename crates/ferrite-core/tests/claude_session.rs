@@ -722,6 +722,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         permission_mode: Some("default".into()),
         resume: None,
         visuals: None,
+        env: Vec::new(),
     })
     .unwrap();
     session.send("hi").unwrap();

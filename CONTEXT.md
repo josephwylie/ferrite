@@ -193,6 +193,13 @@ the others stream status to the nav. A machine runs `ferrited`, the Server
 without a window.
 _Avoid_: host, remote (as a noun), node.
 
+**API**
+The Server's automation surface: requests and answers as JSON lines on a
+socket of its own, spoken by the `ferrite` CLI, so a script or an agent in
+one Thread can start, prompt, wait on and read other Threads. Only the
+operator answers a Decision; an agent passes the operator's answer on.
+_Avoid_: MCP, RPC, plugin API.
+
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,

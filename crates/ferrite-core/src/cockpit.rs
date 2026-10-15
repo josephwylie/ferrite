@@ -57,6 +57,8 @@ pub struct Cockpit {
     shared: shared::Shared,
     bootstrap_results: Vec<BootstrapResult>,
     allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
+    /// What API callers asked of the windows, oldest first.
+    asked: Vec<Asked>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
     visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
@@ -116,6 +118,7 @@ impl Cockpit {
             mirrors: mirror::Mirrors::default(),
             bootstrap_results: Vec::new(),
             allowance_warnings: Vec::new(),
+            asked: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
         }
@@ -328,6 +331,14 @@ impl Cockpit {
                         used_fraction: *used_fraction,
                     });
             }
+        }
+        match &message {
+            ServerMessage::Focus { thread } => self.asked.push(Asked::Focus(*thread)),
+            ServerMessage::Notification { title, body } => self.asked.push(Asked::Notification {
+                title: title.clone(),
+                body: body.clone(),
+            }),
+            _ => {}
         }
         self.shared.receive(&message);
         self.mirrors.receive(message, boot);
@@ -1502,6 +1513,11 @@ impl Cockpit {
         std::mem::take(&mut self.allowance_warnings)
     }
 
+    /// What API callers asked of the windows since the last take.
+    pub fn take_asked(&mut self) -> Vec<Asked> {
+        std::mem::take(&mut self.asked)
+    }
+
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,
@@ -1692,6 +1708,15 @@ fn provisioned(executed: Result<Option<Done>, WireError>) -> Result<(), Provisio
     executed
         .map(drop)
         .map_err(|error| ProvisionError::Tune(error.into()))
+}
+
+/// What an API caller asked the windows to do (ADR 0027).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// Land on this Thread (`thread.focus`).
+    Focus(ThreadId),
+    /// Show a toast (`notification.show`).
+    Notification { title: String, body: Option<String> },
 }
 
 /// What `Cockpit::close` can refuse: the park that ends a Solo Thread's

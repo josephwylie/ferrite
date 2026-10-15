@@ -45,6 +45,9 @@ mod queue;
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
 /// choice through it, so a new fact travels to all of them at once (#25).
 pub struct SpawnRequest<'a> {
+    /// The Thread it serves: told to the agent (`FERRITE_THREAD_ID`), so it
+    /// can name its own Thread to the API (ADR 0027).
+    pub thread: ThreadId,
     pub provider: Provider,
     /// The Thread's chosen model, verbatim as the provider announced it.
     /// `None` is the provider's own default.
@@ -1079,6 +1082,7 @@ impl Engine {
         let spawned = self.spawner.start_after(
             placement(&self.registry, self.store.dir(), thread.workspace.as_ref(), id),
             SpawnRequest {
+                thread: id,
                 provider: thread.provider,
                 model: thread.model.as_deref(),
                 effort: thread.effort.as_deref(),
@@ -1247,6 +1251,7 @@ impl Engine {
             }
         }
         let session = match self.spawner.start(SpawnRequest {
+            thread: id,
             provider,
             model: model.as_deref(),
             effort: effort.as_deref(),
@@ -1561,6 +1566,7 @@ impl Engine {
             .start_after(
                 placement(&self.registry, self.store.dir(), state.workspace.as_ref(), thread),
                 SpawnRequest {
+                    thread,
                     provider,
                     model: model.as_deref(),
                     effort: effort.as_deref(),
@@ -1894,6 +1900,7 @@ impl Engine {
             .start_after(
                 prepare,
                 SpawnRequest {
+                    thread,
                     provider,
                     model: model.as_deref(),
                     effort: effort.as_deref(),
@@ -2035,6 +2042,7 @@ impl Engine {
             match self.spawner.start_after(
                 place,
                 SpawnRequest {
+                    thread,
                     provider: state.provider,
                     model: state.model.as_deref(),
                     effort: state.effort.as_deref(),
@@ -3545,6 +3553,29 @@ impl Engine {
                 .all(|state| state.settled() && state.queued.is_none())
     }
 
+    /// An open Thread's Attention, as the Server knows it (ADR 0015): a
+    /// Decision waiting, any work running or in the provider's queue, an
+    /// unseen Notice, else idle. A prompt not yet taken counts as work, the
+    /// provider's queued one or one held for a starting Session: until it
+    /// runs, the agent is not at rest.
+    pub fn attention(&self, thread: ThreadId) -> Option<crate::Attention> {
+        use crate::Attention;
+        let view = self.thread(thread)?;
+        Some(if view.pending().is_some() {
+            Attention::Blocked
+        } else if view.working()
+            || view.queue_pending()
+            || view.background_work()
+            || (view.starting() && self.holds_prompt(thread))
+        {
+            Attention::Working
+        } else if self.notifications.attention(thread) {
+            Attention::Done
+        } else {
+            Attention::Idle
+        })
+    }
+
     /// Everything a window draws before any transcript (ADR 0025).
     pub fn snapshot(&mut self, boot_id: &str) -> protocol::Snapshot {
         self.publish();
@@ -3878,6 +3909,17 @@ impl Engine {
         Ok(true)
     }
 
+    /// Whether a prompt already waits on `thread`'s Session to start: a
+    /// held send, or a new Thread's first prompt. Another send would
+    /// replace or drop it.
+    pub fn holds_prompt(&self, thread: ThreadId) -> bool {
+        self.bootstraps.contains_key(&thread)
+            || self
+                .threads
+                .get(&thread)
+                .is_some_and(|state| state.queued.is_some())
+    }
+
     /// Whether `thread` is a Draft's first send still starting: its Pane is
     /// the Draft's until it settles.
     pub fn starting_for_draft(&self, thread: ThreadId) -> bool {
@@ -4102,9 +4144,12 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn needs_queue(&self) -> bool {
-        self.busy()
-            || self.state.activity.view().main_operator_turn()
-            || self.state.native_queue.pending()
+        self.busy() || self.state.activity.view().main_operator_turn() || self.queue_pending()
+    }
+
+    /// Whether the provider holds a queued prompt, or is still taking one.
+    pub fn queue_pending(&self) -> bool {
+        self.state.native_queue.pending()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.

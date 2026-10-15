@@ -87,7 +87,7 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
             .activity()
             .subject(&view.panes[0].selected)
             .unwrap();
-        assert!(transcript_text(subject.transcript().blocks()).contains("Atlas transcript"));
+        assert!(plain_text(subject.transcript().blocks()).contains("Atlas transcript"));
     });
     assert!(cx.debug_bounds("return-main-1").is_some());
     emit(

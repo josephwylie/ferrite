@@ -1,0 +1,688 @@
+//! The API without a Server: the wait rules, the operations' one
+//! declaration and the wire it makes — frozen like the client contract,
+//! one request fixture per operation under `fixtures/v1`, append-only —
+//! and the CLI read from it. The Server answering over its socket is in
+//! `server::tests`.
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use super::cli::{self, Context};
+use super::schema::*;
+use super::*;
+use crate::protocol::WireAnswer;
+
+// ------------------------------------------------------------ waiting
+
+fn seen(attention: Attention) -> Seen {
+    Seen {
+        attention,
+        starting: false,
+    }
+}
+
+fn starting() -> Seen {
+    Seen {
+        attention: Attention::Idle,
+        starting: true,
+    }
+}
+
+fn at(start: Instant, ms: u64) -> Instant {
+    start + Duration::from_millis(ms)
+}
+
+/// Herdr's rule: the idle a prompt was sent from never answers its wait;
+/// the agent must be seen at work first, and then settle.
+#[test]
+fn a_prompts_wait_settles_only_after_its_agent_was_seen_working() {
+    let start = Instant::now();
+    let mut wait = Wait::after_prompt(None, start);
+
+    assert_eq!(wait.observe(seen(Attention::Idle), start), None);
+    assert_eq!(wait.observe(seen(Attention::Done), at(start, 100)), None);
+    assert_eq!(wait.observe(seen(Attention::Working), at(start, 200)), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Working), at(start, 60_000)),
+        None
+    );
+    assert_eq!(
+        wait.observe(seen(Attention::Done), at(start, 61_000)),
+        Some(Settled::Reached)
+    );
+}
+
+/// An agent that stops at a Decision was at work: the wait settles
+/// `blocked`, at once.
+#[test]
+fn a_prompts_wait_settles_blocked_when_its_agent_asks_a_decision() {
+    let start = Instant::now();
+    let mut wait = Wait::after_prompt(None, start);
+
+    assert_eq!(
+        wait.observe(seen(Attention::Blocked), at(start, 300)),
+        Some(Settled::Reached)
+    );
+}
+
+#[test]
+fn a_prompt_whose_agent_shows_no_work_stalls_after_five_seconds() {
+    let start = Instant::now();
+    let mut wait = Wait::after_prompt(None, start);
+
+    assert_eq!(wait.observe(seen(Attention::Idle), start), None);
+    assert_eq!(wait.observe(seen(Attention::Idle), at(start, 4_999)), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Idle), at(start, 5_000)),
+        Some(Settled::Stalled)
+    );
+}
+
+/// A Session still starting holds the prompt: the five seconds count
+/// from when it is up, not from the request.
+#[test]
+fn the_stall_clock_waits_for_the_session_to_be_up() {
+    let start = Instant::now();
+    let mut wait = Wait::after_prompt(None, start);
+
+    assert_eq!(wait.observe(starting(), start), None);
+    assert_eq!(wait.observe(starting(), at(start, 20_000)), None);
+    assert_eq!(wait.observe(seen(Attention::Idle), at(start, 21_000)), None);
+    assert_eq!(wait.observe(seen(Attention::Idle), at(start, 25_999)), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Idle), at(start, 26_000)),
+        Some(Settled::Stalled)
+    );
+}
+
+#[test]
+fn a_timeout_shorter_than_the_stall_comes_first() {
+    let start = Instant::now();
+    let mut wait = Wait::after_prompt(Some(Duration::from_secs(2)), start);
+
+    assert_eq!(wait.observe(seen(Attention::Idle), at(start, 1_999)), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Idle), at(start, 2_000)),
+        Some(Settled::TimedOut)
+    );
+}
+
+/// The timeout counts from the request, through the work.
+#[test]
+fn a_prompts_wait_times_out_while_its_agent_still_works() {
+    let start = Instant::now();
+    let mut wait = Wait::after_prompt(Some(Duration::from_secs(30)), start);
+
+    assert_eq!(wait.observe(seen(Attention::Working), start), None);
+    assert_eq!(
+        wait.observe(seen(Attention::Working), at(start, 30_000)),
+        Some(Settled::TimedOut)
+    );
+}
+
+/// `agent.wait` has no prompt to see land: an agent already at rest
+/// answers at once.
+#[test]
+fn a_plain_wait_answers_at_once_when_the_agent_is_settled() {
+    let start = Instant::now();
+    for attention in [Attention::Idle, Attention::Done, Attention::Blocked] {
+        let mut wait = Wait::until(Until::Settled, None, start);
+        assert_eq!(wait.observe(seen(attention), start), Some(Settled::Reached));
+    }
+    let mut wait = Wait::until(Until::Settled, None, start);
+    assert_eq!(wait.observe(seen(Attention::Working), start), None);
+    assert_eq!(
+        wait.observe(starting(), at(start, 60_000)),
+        Some(Settled::Reached)
+    );
+}
+
+#[test]
+fn a_wait_until_one_attention_passes_every_other() {
+    let start = Instant::now();
+    let mut wait = Wait::until(Until::Attention(Attention::Blocked), None, start);
+
+    for (ms, attention) in [
+        (0, Attention::Idle),
+        (100, Attention::Working),
+        (200, Attention::Done),
+        (60_000, Attention::Idle),
+    ] {
+        assert_eq!(wait.observe(seen(attention), at(start, ms)), None);
+    }
+    assert_eq!(
+        wait.observe(seen(Attention::Blocked), at(start, 60_100)),
+        Some(Settled::Reached)
+    );
+}
+
+// ------------------------------------------------------ the declaration
+
+/// The operations, in the order declared. Names are append-only: a
+/// script written against one Ferrite keeps working against the next.
+#[test]
+fn the_operations_are_the_ones_declared_and_never_renamed() {
+    let names: Vec<&str> = Method::OPERATIONS.iter().map(|op| op.name).collect();
+    assert_eq!(
+        names,
+        [
+            "thread.start",
+            "thread.list",
+            "thread.get",
+            "thread.focus",
+            "thread.rename",
+            "agent.prompt",
+            "agent.wait",
+            "agent.read",
+            "decision.list",
+            "decision.answer",
+            "events.subscribe",
+            "notification.show",
+        ]
+    );
+}
+
+#[test]
+fn every_operation_is_a_group_and_a_verb_whose_positionals_are_its_parameters() {
+    for op in Method::OPERATIONS {
+        let (group, verb) = op.words();
+        assert!(
+            !group.is_empty() && !verb.is_empty() && !verb.contains('.'),
+            "{}",
+            op.name
+        );
+        let schema = (op.params)().to_value();
+        for name in op.positional {
+            assert!(
+                schema["properties"].get(*name).is_some(),
+                "{}: positional `{name}` is not a parameter",
+                op.name
+            );
+        }
+        assert!(!op.summary.is_empty(), "{}", op.name);
+    }
+}
+
+/// The smallest value a schema admits, for the sample requests below.
+/// After Herdr's `operation_catalog_matches_every_wire_method` sampler
+/// (Apache-2.0).
+fn sample_value(schema: &Value, defs: &Value) -> Value {
+    if let Some(reference) = schema["$ref"].as_str() {
+        return sample_value(&defs[reference.rsplit('/').next().unwrap()], defs);
+    }
+    if let Some(value) = schema.get("const") {
+        return value.clone();
+    }
+    if let Some(values) = schema["enum"].as_array() {
+        return values[0].clone();
+    }
+    for key in ["oneOf", "anyOf"] {
+        if let Some(branches) = schema[key].as_array() {
+            return sample_value(&branches[0], defs);
+        }
+    }
+    let kind = match &schema["type"] {
+        Value::Array(kinds) => kinds[0].as_str(),
+        kind => kind.as_str(),
+    };
+    match kind {
+        Some("object") => {
+            let mut object = serde_json::Map::new();
+            for name in schema["required"].as_array().into_iter().flatten() {
+                let name = name.as_str().unwrap();
+                object.insert(name.into(), sample_value(&schema["properties"][name], defs));
+            }
+            Value::Object(object)
+        }
+        Some("array") => json!([]),
+        Some("string") => json!("sample"),
+        Some("integer" | "number") => json!(1),
+        Some("boolean") => json!(false),
+        _ => Value::Null,
+    }
+}
+
+/// Each operation's schema describes what its method decodes: the least
+/// request it admits is one this Server reads, under that name. The
+/// whole API's schema names every method.
+#[test]
+fn every_operations_schema_admits_a_request_this_server_reads() {
+    let whole = serde_json::to_string(&schemars::schema_for!(Request)).unwrap();
+    for op in Method::OPERATIONS {
+        let schema = (op.params)().to_value();
+        let params = sample_value(&schema, &schema["$defs"]);
+        let request: Request = serde_json::from_value(json!({
+            "id": "sample",
+            "method": op.name,
+            "params": params,
+        }))
+        .unwrap_or_else(|error| panic!("{}: {error}", op.name));
+        assert_eq!(request.method.name(), op.name);
+        assert!(whole.contains(&format!("\"{}\"", op.name)), "{}", op.name);
+    }
+}
+
+fn request(method: Method) -> Request {
+    Request {
+        id: "1".into(),
+        method,
+    }
+}
+
+fn thread() -> ThreadId {
+    ThreadId::new(12)
+}
+
+/// One request per operation, as the fixture of its name freezes it.
+fn samples() -> Vec<Request> {
+    vec![
+        request(Method::ThreadStart(ThreadStartParams {
+            cwd: PathBuf::from("/work/app"),
+            provider: Some(Provider::Codex),
+            worktree: true,
+            title: Some("reviewer".into()),
+        })),
+        request(Method::ThreadList(Empty {})),
+        request(Method::ThreadGet(ThreadParams { thread: thread() })),
+        request(Method::ThreadFocus(ThreadParams { thread: thread() })),
+        request(Method::ThreadRename(ThreadRenameParams {
+            thread: thread(),
+            title: "reviewer".into(),
+        })),
+        request(Method::AgentPrompt(AgentPromptParams {
+            thread: thread(),
+            text: "Review the diff".into(),
+            wait: true,
+            timeout_ms: Some(120_000),
+        })),
+        request(Method::AgentWait(AgentWaitParams {
+            thread: thread(),
+            until: Some(Attention::Blocked),
+            timeout_ms: Some(60_000),
+        })),
+        request(Method::AgentRead(AgentReadParams {
+            thread: thread(),
+            lines: Some(200),
+        })),
+        request(Method::DecisionList(DecisionListParams {
+            thread: Some(thread()),
+        })),
+        request(Method::DecisionAnswer(DecisionAnswerParams {
+            thread: thread(),
+            decision: "perm_01".into(),
+            answer: WireAnswer::Allow { input: json!({}) },
+        })),
+        request(Method::EventsSubscribe(EventsSubscribeParams {
+            threads: vec![thread(), ThreadId::new(14)],
+        })),
+        request(Method::NotificationShow(NotificationShowParams {
+            title: "Review ready".into(),
+            body: Some("3 findings".into()),
+        })),
+    ]
+}
+
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api/fixtures/v1")
+}
+
+fn fixture_name(request: &Request) -> String {
+    request.method.name().replace('.', "_")
+}
+
+/// A request a script sends today is read by every later Server: each
+/// operation's fixture decodes to its sample and re-encodes byte for byte.
+/// A missing one is written by running with `FERRITE_BLESS_FIXTURES=1`,
+/// which never overwrites one.
+#[test]
+fn every_operation_has_a_frozen_request_that_round_trips() {
+    let bless = std::env::var_os("FERRITE_BLESS_FIXTURES").is_some();
+    let samples = samples();
+    let mut missing = Vec::new();
+    for op in Method::OPERATIONS {
+        let sample = samples
+            .iter()
+            .find(|sample| sample.method.name() == op.name)
+            .unwrap_or_else(|| panic!("no sample for {}", op.name));
+        let path = fixtures().join(format!("{}.json", fixture_name(sample)));
+        let encoded = protocol::encode(sample);
+        let Ok(frozen) = std::fs::read(&path) else {
+            if bless {
+                std::fs::write(&path, &encoded).unwrap();
+            } else {
+                missing.push(op.name);
+            }
+            continue;
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&encoded),
+            String::from_utf8_lossy(&frozen),
+            "{}: this build no longer encodes the frozen request",
+            op.name
+        );
+        assert_eq!(
+            decode(frozen.strip_suffix(b"\n").unwrap()).as_ref(),
+            Ok(sample),
+            "{}",
+            op.name
+        );
+    }
+    assert!(
+        missing.is_empty(),
+        "no fixture for {missing:?}: run with FERRITE_BLESS_FIXTURES=1"
+    );
+}
+
+/// A fixture outlives its sample: every one on disk still decodes.
+#[test]
+fn every_frozen_request_still_decodes() {
+    for entry in std::fs::read_dir(fixtures()).unwrap() {
+        let path = entry.unwrap().path();
+        let frozen = std::fs::read(&path).unwrap();
+        let request = decode(frozen.strip_suffix(b"\n").unwrap());
+        assert!(request.is_ok(), "{path:?}: {request:?}");
+    }
+}
+
+/// What comes back is frozen too: an answer, a refusal and an event.
+#[test]
+fn answers_refusals_and_events_keep_their_shape() {
+    let info = ThreadInfo {
+        thread: thread(),
+        title: Some("reviewer".into()),
+        provider: Provider::Codex,
+        attention: Attention::Done,
+        cwd: Some(PathBuf::from("/work/app")),
+    };
+    let answer = Response::Result {
+        id: "1".into(),
+        result: json!({ "thread": info }),
+    };
+    assert_eq!(
+        serde_json::to_value(&answer).unwrap(),
+        json!({"id": "1", "result": {"thread": {
+            "thread": 12,
+            "title": "reviewer",
+            "provider": "codex",
+            "attention": "done",
+            "cwd": "/work/app",
+        }}})
+    );
+    let refusal = Response::Error {
+        id: "1".into(),
+        error: ApiError::new(Code::AgentPromptStalled, "no work"),
+    };
+    assert_eq!(
+        serde_json::to_value(&refusal).unwrap(),
+        json!({"id": "1", "error": {"code": "agent_prompt_stalled", "message": "no work"}})
+    );
+    let events = [
+        (
+            Event::Attention {
+                thread: thread(),
+                attention: Attention::Working,
+            },
+            json!({"event": "attention", "thread": 12, "attention": "working"}),
+        ),
+        (
+            Event::ThreadClosed { thread: thread() },
+            json!({"event": "thread_closed", "thread": 12}),
+        ),
+        (
+            Event::DecisionClosed {
+                thread: thread(),
+                handle: WireHandle {
+                    generation: 2,
+                    serial: 5,
+                    request_id: "perm_01".into(),
+                },
+                by: ClosedBy::Answered { client: 1 << 32 },
+            },
+            json!({
+                "event": "decision_closed",
+                "thread": 12,
+                "handle": {"generation": 2, "serial": 5, "request_id": "perm_01"},
+                "by": {"kind": "answered", "client": 4_294_967_296_u64},
+            }),
+        ),
+    ];
+    for (event, shape) in events {
+        let told = Response::Event {
+            id: "7".into(),
+            event,
+        };
+        assert_eq!(
+            serde_json::to_value(&told).unwrap(),
+            json!({"id": "7", "event": shape})
+        );
+    }
+}
+
+#[test]
+fn a_line_that_is_not_a_request_is_answered_with_why() {
+    let unknown = decode(br#"{"id":"9","method":"agent.dance","params":{}}"#);
+    assert!(matches!(
+        unknown,
+        Err(Response::Error { ref id, ref error }) if id == "9" && error.code == Code::UnknownMethod
+    ));
+    let wrong = decode(br#"{"id":"4","method":"agent.prompt","params":{"thread":"x"}}"#);
+    assert!(matches!(
+        wrong,
+        Err(Response::Error { ref id, ref error }) if id == "4" && error.code == Code::InvalidRequest
+    ));
+    let numbered = decode(br#"{"id":7,"method":"thread.list","params":{}}"#);
+    assert!(matches!(
+        numbered,
+        Err(Response::Error { ref id, ref error }) if id == "7" && error.code == Code::InvalidRequest
+    ));
+    let garbage = decode(b"not json");
+    assert!(matches!(
+        garbage,
+        Err(Response::Error { ref id, ref error }) if id.is_empty() && error.code == Code::InvalidRequest
+    ));
+}
+
+// ---------------------------------------------------------------- the CLI
+
+fn op(name: &str) -> &'static Operation {
+    Method::OPERATIONS
+        .iter()
+        .find(|op| op.name == name)
+        .unwrap()
+}
+
+fn context() -> Context {
+    Context {
+        thread: Some("7".into()),
+        cwd: PathBuf::from("/work/app"),
+    }
+}
+
+fn parse(name: &str, args: &[&str]) -> Result<Method, String> {
+    cli::parse(op(name), args, &context()).map(|request| request.method)
+}
+
+#[test]
+fn positionals_come_in_their_declared_order_and_flags_by_their_type() {
+    assert_eq!(
+        parse(
+            "agent.prompt",
+            &["12", "Review the diff", "--wait", "--timeout-ms", "5000"]
+        ),
+        Ok(Method::AgentPrompt(AgentPromptParams {
+            thread: thread(),
+            text: "Review the diff".into(),
+            wait: true,
+            timeout_ms: Some(5000),
+        }))
+    );
+    assert_eq!(
+        parse("agent.wait", &["12", "--until=blocked"]),
+        Ok(Method::AgentWait(AgentWaitParams {
+            thread: thread(),
+            until: Some(Attention::Blocked),
+            timeout_ms: None,
+        }))
+    );
+    assert_eq!(
+        parse("events.subscribe", &["--threads", "12", "--threads", "14"]),
+        Ok(Method::EventsSubscribe(EventsSubscribeParams {
+            threads: vec![thread(), ThreadId::new(14)],
+        }))
+    );
+    assert_eq!(
+        parse(
+            "decision.answer",
+            &[
+                "12",
+                "perm_01",
+                "--answer",
+                r#"{"kind":"deny","message":"not now"}"#
+            ]
+        ),
+        Ok(Method::DecisionAnswer(DecisionAnswerParams {
+            thread: thread(),
+            decision: "perm_01".into(),
+            answer: WireAnswer::Deny {
+                message: "not now".into(),
+            },
+        }))
+    );
+}
+
+#[test]
+fn current_names_the_calling_thread_and_frees_its_position() {
+    assert_eq!(
+        parse("agent.prompt", &["--current", "status?"]),
+        Ok(Method::AgentPrompt(AgentPromptParams {
+            thread: ThreadId::new(7),
+            text: "status?".into(),
+            wait: false,
+            timeout_ms: None,
+        }))
+    );
+    let outside = Context {
+        thread: None,
+        ..context()
+    };
+    let refused = cli::parse(op("thread.get"), &["--current"], &outside).unwrap_err();
+    assert!(refused.contains("FERRITE_THREAD_ID"), "{refused}");
+    let refused = cli::parse(op("thread.list"), &["--current"], &context()).unwrap_err();
+    assert!(refused.contains("takes no Thread"), "{refused}");
+}
+
+/// After `--` nothing is a flag: a prompt may start with dashes.
+#[test]
+fn after_a_double_dash_every_word_is_an_argument() {
+    assert_eq!(
+        parse("agent.prompt", &["--wait", "12", "--", "--dry-run first"]),
+        Ok(Method::AgentPrompt(AgentPromptParams {
+            thread: thread(),
+            text: "--dry-run first".into(),
+            wait: true,
+            timeout_ms: None,
+        }))
+    );
+    let refused = parse("agent.prompt", &["12", "--dry-run first"]).unwrap_err();
+    assert!(refused.contains("takes no --dry-run first"), "{refused}");
+}
+
+#[test]
+fn a_thread_starts_where_the_cli_runs_unless_told() {
+    let started = |args: &[&str]| match parse("thread.start", args) {
+        Ok(Method::ThreadStart(params)) => params,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(started(&[]).cwd, PathBuf::from("/work/app"));
+    assert_eq!(
+        started(&["--cwd", "web"]).cwd,
+        PathBuf::from("/work/app/web")
+    );
+    assert_eq!(
+        started(&["--cwd", "/elsewhere"]).cwd,
+        PathBuf::from("/elsewhere")
+    );
+    let reviewer = started(&["--provider", "codex", "--worktree", "--title", "reviewer"]);
+    assert_eq!(reviewer.provider, Some(Provider::Codex));
+    assert!(reviewer.worktree);
+    assert_eq!(reviewer.title.as_deref(), Some("reviewer"));
+}
+
+#[test]
+fn a_wrong_command_line_says_what_is_wrong() {
+    for (name, args, says) in [
+        ("thread.get", &["12", "--wait"][..], "takes no --wait"),
+        ("thread.get", &["12", "13"][..], "takes no more arguments"),
+        ("thread.get", &["twelve"][..], "not a whole number"),
+        ("thread.get", &[][..], "thread"),
+        ("agent.wait", &["12", "--until", "soon"][..], "soon"),
+        ("agent.read", &["12", "--lines"][..], "needs a value"),
+    ] {
+        let refused = parse(name, args).unwrap_err();
+        assert!(refused.contains(says), "{name} {args:?}: {refused}");
+    }
+}
+
+#[test]
+fn help_lists_every_command_with_its_arguments() {
+    let help = cli::usage(None);
+    for op in Method::OPERATIONS {
+        let (group, verb) = op.words();
+        assert!(
+            help.contains(&format!("ferrite {group} {verb}")),
+            "{}",
+            op.name
+        );
+        assert!(help.contains(op.summary), "{}", op.name);
+    }
+    assert!(help.contains("<thread> <text>"));
+    assert!(help.contains("[--wait]"));
+    assert!(help.contains("[--timeout-ms <n>]"));
+    assert!(help.contains("[--until <idle|working|done|blocked>]"));
+    assert!(help.contains("--answer <json>"));
+    let agent = cli::usage(Some("agent"));
+    assert!(agent.contains("ferrite agent wait") && !agent.contains("ferrite thread"));
+}
+
+#[test]
+fn the_cli_leaves_the_apps_own_arguments_alone() {
+    let args = |words: &[&str]| -> Vec<String> {
+        std::iter::once("ferrite")
+            .chain(words.iter().copied())
+            .map(String::from)
+            .collect()
+    };
+    let store = Path::new("/nonexistent");
+    for app in [
+        &[][..],
+        &["--demo"][..],
+        &["--import", "a.jsonl"][..],
+        &["server"][..],
+    ] {
+        assert_eq!(cli::run(&args(app), store), None, "{app:?}");
+    }
+    assert_eq!(cli::run(&args(&["thread"]), store), Some(0));
+    assert_eq!(cli::run(&args(&["thread", "dance"]), store), Some(2));
+}
+
+#[test]
+fn the_bundled_skill_names_the_safety_rules() {
+    assert!(cli::SKILL.starts_with("---\nname: ferrite\n"));
+    for rule in [
+        "Never answer another agent's Decision without the user",
+        "does not prove the prompt was not delivered",
+        "Never resend a prompt blindly",
+    ] {
+        assert!(cli::SKILL.contains(rule), "{rule}");
+    }
+    for op in Method::OPERATIONS {
+        let (group, verb) = op.words();
+        assert!(
+            cli::SKILL.contains(&format!("\"$F\" {group} {verb}")),
+            "the skill never shows `{}`",
+            op.name
+        );
+    }
+}

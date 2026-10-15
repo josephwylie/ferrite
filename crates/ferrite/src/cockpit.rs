@@ -130,19 +130,7 @@ impl ThreadStatus {
     }
 }
 
-/// The four states every list sorts, filters and rolls up by, least
-/// urgent first (Herdr's model, read from the protocol rather than the
-/// screen): **Blocked** waits on the operator, **Done** finished and has
-/// not been seen, **Working** runs (Main, or only its background work),
-/// **Idle** is everything else. Ferrite's own states (failing, failed,
-/// parked, background) are faces within these; failed is a red idle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Attention {
-    Idle,
-    Working,
-    Done,
-    Blocked,
-}
+pub(crate) use ferrite_core::Attention;
 
 /// **The one status truth.** The nav row, the Pane head, the L2 cell, the
 /// wall cell, the palette and the bottom bar all read a Thread's face from
@@ -180,6 +168,7 @@ pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatu
     }
 }
 use ferrite_core::store::Provider;
+use ferrite_core::transcript::plain_text;
 use ferrite_core::workspace::registry::ProjectId;
 #[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
@@ -3483,7 +3472,7 @@ impl CockpitView {
             }
             (MenuTarget::Pane(thread), MenuVerb::CopyTranscript) => {
                 if let Some(open) = self.cockpit.thread(thread) {
-                    let text = transcript_text(open.transcript().blocks());
+                    let text = plain_text(open.transcript().blocks());
                     if !text.is_empty() {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
@@ -4300,6 +4289,30 @@ impl CockpitView {
                 .autohide(false),
             cx,
         );
+    }
+
+    /// What an agent or a script asked of the windows through the API
+    /// (ADR 0027): to land on a Thread, as its nav row would, or a toast,
+    /// which fades as a finished turn's does.
+    fn present_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use ferrite_core::cockpit::Asked;
+        use gpui::component::notification::{Notification, NotificationType};
+        use gpui::component::WindowExt as _;
+        for asked in self.cockpit.take_asked() {
+            match asked {
+                Asked::Focus(thread) => self.land_on_thread(thread, cx),
+                Asked::Notification { title, body } => {
+                    let mut toast = Notification::new()
+                        .title(title)
+                        .with_type(NotificationType::Info)
+                        .autohide(true);
+                    if let Some(body) = body {
+                        toast = toast.message(body);
+                    }
+                    window.push_notification(toast, cx);
+                }
+            }
+        }
     }
 
     /// A provider's 5-hour or weekly window rising past one of the
@@ -9390,6 +9403,7 @@ impl CockpitView {
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);
+        self.present_asked(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -13558,54 +13572,6 @@ fn rss_mb() -> f64 {
     ferrite_core::spawner::rss_bytes(std::process::id())
         .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0)
-}
-
-/// A transcript as plain text, the way the operator would paste it
-/// somewhere else: prompts quoted, prose flat, code fenced, tool rows as
-/// their one line plus the result line indented under it. Thinking stays out — it is not the
-/// conversation.
-fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
-    use ferrite_core::transcript::Body;
-    let flat = |spans: &[ferrite_core::transcript::Span]| -> String {
-        spans.iter().map(|span| span.text.as_str()).collect()
-    };
-    let mut out = String::new();
-    for block in blocks {
-        let piece = match &block.body {
-            Body::Prompt(text) => format!("> {text}"),
-            Body::Paragraph { spans } => flat(spans),
-            Body::Heading { spans, .. } => format!("## {}", flat(spans)),
-            Body::Bullet { spans } => format!("• {}", flat(spans)),
-            Body::Code {
-                language, source, ..
-            } => format!(
-                "```{}\n{source}\n```",
-                language.as_deref().unwrap_or_default()
-            ),
-            Body::Tool(tool) => {
-                let mut line = format!("● {}", tool.name);
-                if !tool.summary.is_empty() {
-                    line.push_str(&format!(" ({})", tool.summary));
-                }
-                // The elbow is painted, never text: the result hangs at
-                // its column, as a sweep across the row copies it.
-                if let Some(result) = &tool.result_line {
-                    line.push_str(&format!("\n    {result}"));
-                }
-                line
-            }
-            Body::Thinking(_) => continue,
-            Body::Notice(text) | Body::Meta(text) => text.clone(),
-            Body::TurnEnd(end) => end.text(),
-            // The page is a picture; its words are its title and caption.
-            Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
-        };
-        if !out.is_empty() {
-            out.push_str("\n\n");
-        }
-        out.push_str(&piece);
-    }
-    out
 }
 
 #[cfg(test)]

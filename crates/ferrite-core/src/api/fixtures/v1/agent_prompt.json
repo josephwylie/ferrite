@@ -1,0 +1,1 @@
+{"id":"1","method":"agent.prompt","params":{"thread":12,"text":"Review the diff","wait":true,"timeout_ms":120000}}

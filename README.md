@@ -231,6 +231,17 @@ Threads live in `~/.ferrite/threads` (`%USERPROFILE%\.ferrite\threads` on
 Windows, or set `FERRITE_STORE`). Settings live next to them in
 `~/.ferrite/settings.json`.
 
+### Scripting and agents
+
+The same binary is a CLI for Ferrite's server: `ferrite thread list`,
+`ferrite thread start`, `ferrite agent prompt <thread> "…" --wait`,
+`ferrite agent read`, `ferrite events subscribe`, and more (`ferrite help`).
+Every answer is a line of JSON. Each agent Ferrite runs gets
+`FERRITE_THREAD_ID`, `FERRITE_SOCKET` and `FERRITE_BIN`, so it can start,
+prompt and wait on other Threads. `ferrite --skill` prints the skill that
+teaches agents how; `ferrite --skill install` installs it for Claude and
+Codex.
+
 ## Accessibility
 
 Ferrite draws its own UI with GPUI, so there's no screen reader support right
