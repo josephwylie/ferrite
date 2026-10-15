@@ -150,6 +150,9 @@ pub struct Tunnel {
 /// Opens a Tunnel: `ssh <target> ferrited bridge`, or a test's fake.
 pub type Dial = Box<dyn Fn() -> io::Result<Tunnel> + Send + Sync>;
 
+/// How long ssh's last words are waited for once it has exited.
+const STDERR_WAIT: Duration = Duration::from_secs(1);
+
 /// How long a sign-in is waited for before Ferrite stops looking.
 const SIGN_IN_WAIT: Duration = Duration::from_secs(600);
 
@@ -392,19 +395,23 @@ fn ssh_dial(target: String, control: PathBuf) -> Dial {
         else {
             return Err(io::Error::other("ssh's stdio was not piped"));
         };
-        let said = std::thread::Builder::new()
+        let (say, said) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
             .name("ferrite-ssh-stderr".into())
             .spawn(move || {
-                let mut said = String::new();
-                let _ = stderr.read_to_string(&mut said);
-                said
+                let mut words = String::new();
+                let _ = stderr.read_to_string(&mut words);
+                let _ = say.send(words);
             })?;
         Ok(Tunnel {
             from: Box::new(from),
             to: Box::new(to),
             ended: Box::new(move || {
                 let status = child.wait().ok().and_then(|status| status.code());
-                Failure::of(status, &said.join().unwrap_or_default())
+                // A master ssh left running may hold stderr open: what was
+                // said by the time ssh exited is all there is to read.
+                let said = said.recv_timeout(STDERR_WAIT).unwrap_or_default();
+                Failure::of(status, &said)
             }),
         })
     })
