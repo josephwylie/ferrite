@@ -4,6 +4,10 @@
 //! placeholder, or a harness-drawn cursor over a placeholder does not count as
 //! typed. Anything the check cannot place is `Unknown`, and the ticker treats
 //! that like a draft: it never types into a box it cannot see is empty.
+//!
+//! Ferrite: a Thread has no screen; what its box holds is known exactly
+//! (`herdr::PaneState`). Both are a [`Screen`]: the parsing of a Terminal's
+//! screen below is upstream's, kept with its fixture tests.
 
 /// What the input box holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,9 +219,59 @@ fn input_box(kind: &str, lines: &[Line]) -> Option<Vec<Line>> {
     }
 }
 
+/// Ferrite: what an agent's input box and conversation are read from.
+pub trait Screen {
+    /// The text typed in the input box, its lines joined by spaces (empty
+    /// for an empty box), or `None` when the box is not on the screen.
+    fn box_text(&self, kind: &str) -> Option<String>;
+    /// The screen's plain text, styling dropped.
+    fn plain(&self) -> String;
+    /// The text a trust screen would be drawn in (`trust_screen`), or `None`
+    /// where none can be.
+    fn trust_text(&self, kind: &str) -> Option<String>;
+}
+
+/// A Terminal's screen, as `agent read --source visible --format ansi`
+/// prints it.
+impl Screen for str {
+    fn box_text(&self, kind: &str) -> Option<String> {
+        let lines = parse(self);
+        let rows = input_box(kind, &lines)?;
+        let typed: Vec<String> = rows.iter().map(|row| typed(row).trim().to_string()).filter(|t| !t.is_empty()).collect();
+        match typed.as_slice() {
+            [only] if placeholders(kind).iter().any(|p| only.starts_with(p)) => Some(String::new()),
+            _ => Some(typed.join(" ")),
+        }
+    }
+
+    fn plain(&self) -> String {
+        parse(self).iter().map(|line| text(line)).collect::<Vec<_>>().join("\n")
+    }
+
+    /// A screen whose input box is visible and empty is the agent's prompt,
+    /// and a phrase on it is only transcript text.
+    fn trust_text(&self, kind: &str) -> Option<String> {
+        (check(kind, self) != Draft::Empty).then(|| crate::trust_screen::plain_text(self))
+    }
+}
+
+impl Screen for String {
+    fn box_text(&self, kind: &str) -> Option<String> {
+        self.as_str().box_text(kind)
+    }
+
+    fn plain(&self) -> String {
+        self.as_str().plain()
+    }
+
+    fn trust_text(&self, kind: &str) -> Option<String> {
+        self.as_str().trust_text(kind)
+    }
+}
+
 /// Reads the input box of an agent of `kind` from its screen, as `agent read
 /// --source visible --format ansi` prints it.
-pub fn check(kind: &str, screen: &str) -> Draft {
+pub fn check(kind: &str, screen: &(impl Screen + ?Sized)) -> Draft {
     match box_text(kind, screen) {
         None => Draft::Unknown,
         Some(text) if text.is_empty() => Draft::Empty,
@@ -227,14 +281,8 @@ pub fn check(kind: &str, screen: &str) -> Draft {
 
 /// The text typed in the input box, its lines joined by spaces (empty for an
 /// empty box), or `None` when the box is not on the screen.
-pub fn box_text(kind: &str, screen: &str) -> Option<String> {
-    let lines = parse(screen);
-    let rows = input_box(kind, &lines)?;
-    let typed: Vec<String> = rows.iter().map(|row| typed(row).trim().to_string()).filter(|t| !t.is_empty()).collect();
-    match typed.as_slice() {
-        [only] if placeholders(kind).iter().any(|p| only.starts_with(p)) => Some(String::new()),
-        _ => Some(typed.join(" ")),
-    }
+pub fn box_text(kind: &str, screen: &(impl Screen + ?Sized)) -> Option<String> {
+    screen.box_text(kind)
 }
 
 /// True for the kinds whose input box this module can find.
@@ -243,10 +291,12 @@ pub fn knows(kind: &str) -> bool {
 }
 
 /// The screen's plain text, styling dropped.
-pub fn plain(screen: &str) -> String {
-    parse(screen).iter().map(|line| text(line)).collect::<Vec<_>>().join("\n")
+pub fn plain(screen: &(impl Screen + ?Sized)) -> String {
+    screen.plain()
 }
 
+// Ferrite: upstream's tests of reading a Terminal's screen; Ferrite's exact
+// state is tested with the adapter (`herdr::tests`).
 #[cfg(test)]
 mod tests {
     use super::*;

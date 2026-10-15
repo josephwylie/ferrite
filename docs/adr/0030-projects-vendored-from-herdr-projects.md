@@ -46,12 +46,15 @@ Its calls go to the Server through the `ferrite` CLI: `bin` is
 `$FERRITE_BIN`, the socket is `$FERRITE_SOCKET`, `--machine` is the CLI's
 own (ADR 0027), and a pane, tab or agent id is a Thread id. Herdr's agent
 states and Ferrite's Attention are the same four words, so an agent's
-status is its Thread's Attention. `Herdr::call` takes upstream's herdr
-argv and translates it to a `ferrite` command line by one table
-(`ferrite_args`); a call with no Ferrite operation yet is refused with
-the code `not_wired` before anything runs, which callers already treat as
-any refusal. Each refusal is retired by wiring it, not by working round
-it in a caller.
+status is its Thread's Attention. `Herdr::call` takes the herdr argv
+callers build themselves and answers it from a `ferrite` command line;
+the typed methods do the same for theirs. A call with no Ferrite meaning
+is refused with the code `not_wired` before anything runs, which callers
+already treat as any refusal. Each refusal is retired by wiring it, not
+by working round it in a caller. A Thread is born with its agent, so a
+placement (`tab create`, `workspace create`, `worktree create`, `worktree
+open`) stages where it will start and `agent start` starts it; the
+crate's README lists every mapping and what is still refused.
 
 Screen reading (`agent read --format ansi`: `prompt_box`, `trust_screen`,
 the brief and steps checks) has no Ferrite counterpart and gets none:
@@ -118,7 +121,7 @@ To take an upstream release: diff upstream from the recorded commit to the
 new one, apply it to the crate (`git apply --3way` on the crate's path),
 resolve conflicts at the `Ferrite:` seams, record the new commit, and run
 the crate's tests. A new herdr call upstream starts using lands in
-`ferrite_args` (or a refusal) before it ships.
+`herdr.rs` (or a refusal) before it ships.
 
 ## Consequences
 

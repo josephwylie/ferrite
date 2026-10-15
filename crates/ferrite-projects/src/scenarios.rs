@@ -19,10 +19,16 @@ pub struct World {
     pub env: Env,
     pub root: PathBuf,
     pub runner: FakeRunner,
-    /// JSON arrays served for `agent list` and `pane list`, changeable mid-test.
+    /// JSON arrays of what Herdr called agents and panes, changeable
+    /// mid-test. Ferrite: the fake Server answers `thread list` and `thread
+    /// get` from the agents (every Thread runs one; a pane with no agent is
+    /// a shell, which a Thread never is) and their `focused` from the panes.
     pub agents: Rc<RefCell<String>>,
     pub panes: Rc<RefCell<String>>,
-    /// The styled screen `agent read --format ansi` serves for every pane.
+    /// The styled screen of every pane, as Herdr drew it. Ferrite: the fake
+    /// Server answers what upstream reads off it as exact state: a typed box
+    /// is the Thread's draft, a box it cannot place a waiting prompt and a
+    /// pending Decision (what the screen says), its text the transcript.
     pub screen: Rc<RefCell<String>>,
 }
 
@@ -34,6 +40,52 @@ pub fn claude_screen(draft: Option<&str>) -> String {
         Some(text) => format!("❯ {text}"),
     };
     format!("some output\n\n{rule}\n{line}\n{rule}\n  ⏵⏵ bypass permissions on\n")
+}
+
+/// Ferrite: one Herdr agent as the Thread the fake Server lists. A Space
+/// that is a path is a linked worktree's, in the agent's `project` if it
+/// names one.
+fn thread_info(agent: &serde_json::Value, panes: &[serde_json::Value]) -> serde_json::Value {
+    let id = agent["pane_id"].as_str().unwrap_or_default();
+    serde_json::json!({
+        "thread": id,
+        "title": agent["name"],
+        "provider": agent["agent"].as_str().unwrap_or_default(),
+        "attention": agent["agent_status"].as_str().unwrap_or_default(),
+        "cwd": agent["cwd"],
+        "project": agent.get("project").unwrap_or(&agent["workspace_id"]),
+        "worktree": agent["workspace_id"].as_str().filter(|space| space.starts_with('/')),
+        "attention_seq": agent["state_change_seq"].as_u64().unwrap_or(0),
+        "provider_session": agent["agent_session"]["value"],
+        "focused": panes.iter().any(|p| p["pane_id"] == id && p["focused"] == true),
+    })
+}
+
+fn listed(text: &str) -> Vec<serde_json::Value> {
+    serde_json::from_str(text).unwrap_or_default()
+}
+
+/// Ferrite: the fake Server's `thread list` reply for a JSON array of
+/// Herdr agents.
+pub fn threads_reply(agents: &str) -> String {
+    let threads: Vec<_> = listed(agents).iter().map(|a| thread_info(a, &[])).collect();
+    serde_json::json!({ "result": { "threads": threads } }).to_string()
+}
+
+/// Ferrite: the `--thread` a `ferrite` command names.
+pub fn thread_arg(cmd: &Cmd) -> &str {
+    let at = cmd.args.iter().position(|a| a == "--thread").unwrap();
+    &cmd.args[at + 1]
+}
+
+/// Ferrite: what the screen shows for an agent of `kind`, as the Server
+/// knows it: (draft, a prompt waiting, the Decision it shows).
+fn screen_state(kind: &str, screen: &str) -> (Option<String>, bool, Option<String>) {
+    match crate::prompt_box::box_text(kind, screen) {
+        Some(text) if text.is_empty() => (None, false, None),
+        Some(text) => (Some(text), false, None),
+        None => (None, true, Some(crate::prompt_box::plain(screen))),
+    }
 }
 
 impl World {
@@ -50,22 +102,49 @@ impl World {
             screen: Rc::new(RefCell::new(claude_screen(None))),
             home,
         };
+        let (agents, panes) = (world.agents.clone(), world.panes.clone());
+        world.runner.on_fn(
+            |cmd| cmd.display().contains("thread list"),
+            move |_| {
+                let panes = listed(&panes.borrow());
+                let threads: Vec<_> = listed(&agents.borrow()).iter().map(|a| thread_info(a, &panes)).collect();
+                Ok(ok(&serde_json::json!({ "result": { "threads": threads } }).to_string()))
+            },
+        );
+        let (agents, panes, screen) = (world.agents.clone(), world.panes.clone(), world.screen.clone());
+        world.runner.on_fn(
+            |cmd| cmd.display().contains("thread get --thread"),
+            move |cmd| {
+                let id = thread_arg(cmd);
+                let Some(agent) = listed(&agents.borrow()).into_iter().find(|a| a["pane_id"] == id) else {
+                    return Ok(fail(1, r#"{"error":{"code":"thread_not_found","message":"no open Thread has that id"}}"#));
+                };
+                let mut info = thread_info(&agent, &listed(&panes.borrow()));
+                let (draft, waiting, _) = screen_state(agent["agent"].as_str().unwrap_or_default(), &screen.borrow());
+                info["draft"] = draft.is_some().into();
+                info["held_prompt"] = waiting.into();
+                Ok(ok(&serde_json::json!({ "result": { "thread": info } }).to_string()))
+            },
+        );
+        let (agents, screen) = (world.agents.clone(), world.screen.clone());
+        world.runner.on_fn(
+            |cmd| cmd.display().contains("decision list"),
+            move |cmd| {
+                let id = thread_arg(cmd);
+                let kind = listed(&agents.borrow()).into_iter().find(|a| a["pane_id"] == id).and_then(|a| a["agent"].as_str().map(str::to_string)).unwrap_or_default();
+                let decisions: Vec<_> = screen_state(&kind, &screen.borrow())
+                    .2
+                    .map(|text| serde_json::json!({ "thread": id, "decision": { "id": "shown", "kind": { "kind": "approval" }, "description": text, "tool_name": "", "input": {} } }))
+                    .into_iter()
+                    .collect();
+                Ok(ok(&serde_json::json!({ "result": { "decisions": decisions } }).to_string()))
+            },
+        );
         let screen = world.screen.clone();
         world.runner.on_fn(
-            |cmd| cmd.display().contains("agent read") && cmd.display().contains("--format ansi"),
-            move |_| Ok(ok(&screen.borrow())),
+            |cmd| cmd.display().contains("agent read") && !cmd.args.iter().any(|a| a == "--lines"),
+            move |cmd| Ok(ok(&serde_json::json!({ "result": { "thread": thread_arg(cmd), "text": crate::prompt_box::plain(&*screen.borrow()) } }).to_string())),
         );
-        let agents = world.agents.clone();
-        world.runner.on_fn(
-            |cmd| cmd.display().contains("agent list"),
-            move |_| Ok(ok(&format!(r#"{{"result":{{"agents":{}}}}}"#, agents.borrow()))),
-        );
-        let panes = world.panes.clone();
-        world.runner.on_fn(
-            |cmd| cmd.display().contains("pane list"),
-            move |_| Ok(ok(&format!(r#"{{"result":{{"panes":{}}}}}"#, panes.borrow()))),
-        );
-        world.runner.on("report-metadata", ok(r#"{"result":{}}"#));
         world
     }
 
@@ -102,7 +181,15 @@ impl World {
         pane_json("w1", "w1:t1", "w1:p1", &project.canonical_dir().to_string_lossy())
     }
 
+    /// Ferrite: the coordinator's Thread, `w1:p1` in the project folder: a
+    /// pane is a Thread, never a bare shell.
+    pub fn coordinator_agent(&self, project: &Project) -> String {
+        agent_json("w1", "w1:t1", "w1:p1", &project.canonical_dir().to_string_lossy(), &format!("hp-{}-coordinator", project.slug), "idle")
+    }
+
     /// A thread record placed in pane `w2:p1`, working directory `cwd`.
+    /// Ferrite: a pane and its tab are one Thread, and a worktree thread's
+    /// Space is its worktree, named by its path.
     pub fn thread(&self, project: &Project, cwd: &Path, change: impl FnOnce(&mut Thread)) -> Thread {
         let dir = thread::thread_dir(&cwd.to_string_lossy(), &project.slug, "t-0001");
         let t = thread::allocate(project, |t| {
@@ -111,8 +198,8 @@ impl World {
             t.status = Status::Open;
             t.agent = "claude".into();
             t.agent_name = thread::agent_name(&project.slug, "t-0001");
-            t.workspace_id = "w2".into();
-            t.tab_id = "w2:t1".into();
+            t.workspace_id = cwd.to_string_lossy().into_owned();
+            t.tab_id = "w2:p1".into();
             t.pane_id = "w2:p1".into();
             t.cwd = cwd.to_string_lossy().into_owned();
             t.worktree_path = t.cwd.clone();
@@ -122,6 +209,30 @@ impl World {
         .unwrap();
         thread::update(project, &t.id, change).unwrap()
     }
+}
+
+/// Ferrite: a pane at a shell prompt waiting for its agent: staged in the
+/// worktree at `cwd`, as the World's thread record is.
+pub fn staged(cwd: &str) -> String {
+    crate::herdr::Staged { space: cwd.into(), focus: false, cwd: cwd.into() }.id()
+}
+
+/// Ferrite: the World thread's agent: Thread `w2:p1` in the worktree at
+/// `cwd`, its Space.
+pub fn thread_agent(cwd: &str, name: &str, state: &str) -> String {
+    agent_json(cwd, "w2:p1", "w2:p1", cwd, name, state)
+}
+
+/// Ferrite: what the fake Server answers `thread start` with: the Thread
+/// `pane` started in the worktree at `cwd`.
+pub fn thread_started(pane: &str, cwd: &str) -> Output {
+    ok(&format!(r#"{{"result":{{"thread":{{"thread":"{pane}","title":"hp-demo-t-0001","provider":"claude","attention":"idle","cwd":"{cwd}","project":"w2","worktree":"{cwd}"}}}}}}"#))
+}
+
+/// Ferrite: what the fake Server answers `thread start` with for a
+/// coordinator: Thread `pane` in Project `w3`, named `name`.
+pub fn coordinator_started(pane: &str, name: &str, kind: &str, cwd: &str, session: &str) -> Output {
+    ok(&format!(r#"{{"result":{{"thread":{{"thread":"{pane}","title":"{name}","provider":"{kind}","attention":"idle","cwd":"{cwd}","project":"w3","provider_session":"{session}"}}}}}}"#))
 }
 
 pub fn pane_json(workspace: &str, tab: &str, pane: &str, cwd: &str) -> String {
@@ -134,10 +245,10 @@ pub fn agent_json(workspace: &str, tab: &str, pane: &str, cwd: &str, name: &str,
     )
 }
 
-/// The text of an `agent prompt` call (options follow it).
+/// The text of an `agent prompt` call.
 pub fn prompt_text(cmd: &Cmd) -> &str {
-    let at = cmd.args.iter().position(|a| a == "prompt").unwrap();
-    &cmd.args[at + 2]
+    let at = cmd.args.iter().position(|a| a == "--text").unwrap();
+    &cmd.args[at + 1]
 }
 
 /// Backdates when t-0001's agent was first seen ready, as if it had stayed
@@ -147,32 +258,26 @@ pub fn settled(project: &Project) {
 }
 
 fn socket_of(cmd: &Cmd) -> String {
-    cmd.env.iter().find(|(k, _)| k == "HERDR_SOCKET_PATH").map(|(_, v)| v.clone()).unwrap_or_default()
+    cmd.env.iter().find(|(k, _)| k == "FERRITE_SOCKET").map(|(_, v)| v.clone()).unwrap_or_default()
 }
 
 #[test]
 fn thread_start_returns_without_an_agent_and_the_ticker_launches_then_prompts() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
-    let worktree = world.home.path().join("wt");
-    std::fs::create_dir(&worktree).unwrap();
+    // Ferrite: `git worktree add` makes it beside the Server's socket.
+    let worktree = world.home.path().join("worktrees/repo/hp-demo-t-0001-fix-it");
     let repo = world.home.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
     let wt = worktree.to_string_lossy().into_owned();
 
-    *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
     world.runner.on("rev-parse --show-toplevel", ok("/repo\n"));
     world.runner.on("remote get-url origin", ok("git@github.com:Owner/App.git\n"));
     world.runner.on("fetch origin", fail(1, "offline"));
     world.runner.on("symbolic-ref", ok("origin/main\n"));
     world.runner.on("rev-parse --git-path", fail(1, "not a repo"));
-    world.runner.on(
-        "worktree create",
-        ok(&format!(
-            r#"{{"result":{{"root_pane":{{"workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","cwd":"{wt}"}},"worktree":{{"path":"{wt}"}}}}}}"#
-        )),
-    );
-    world.runner.on("agent start", ok(r#"{"result":{"agent":{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2"}}}"#));
+    world.runner.on("worktree add", ok(""));
+    world.runner.on("thread start", thread_started("w2:p1", &wt));
     world.runner.on("agent prompt", ok(r#"{"result":{}}"#));
 
     let ctx = world.ctx();
@@ -194,7 +299,7 @@ fn thread_start_returns_without_an_agent_and_the_ticker_launches_then_prompts() 
     .unwrap();
 
     // A failed fetch is a warning; nothing was launched.
-    assert_eq!(world.runner.count("agent start"), 0);
+    assert_eq!(world.runner.count("thread start"), 0);
     assert_eq!(started.status, Status::Open);
     assert!(started.prompt_pending);
     assert_eq!(started.branch, "hp/demo/t-0001-fix-it");
@@ -204,22 +309,28 @@ fn thread_start_returns_without_an_agent_and_the_ticker_launches_then_prompts() 
     let brief = std::fs::read_to_string(worktree.join(".herdr-project/demo-t-0001/brief.md")).unwrap();
     assert!(brief.contains("Do the thing."));
     assert!(brief.contains("# Project instructions"));
-    // The hostile title reaches herdr as one argument, unchanged.
+    // The hostile title reaches Ferrite only inside one argument, the
+    // branch it names (Ferrite: a worktree carries no label).
     let calls = world.runner.calls.borrow();
-    let create = calls.iter().find(|c| c.display().contains("worktree create")).unwrap();
-    assert!(create.args.contains(&"Fix $(it)".to_string()));
+    let create = calls.iter().find(|c| c.display().contains("worktree add")).unwrap();
+    assert!(create.args.contains(&"hp/demo/t-0001-fix-it".to_string()));
+    assert!(!calls.iter().any(|c| c.args.iter().any(|a| a.contains("$(it)"))));
     drop(calls);
+    assert_eq!(started.pane_id, staged(&wt));
 
     // Tick 1: the pane is at a shell prompt: start, do not prompt.
-    *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(&project), pane_json("w2", "w2:t1", "w2:p1", &wt));
     assert!(ticker::tick_project(&ctx, &project).unwrap());
-    assert_eq!(world.runner.count("agent start"), 1);
+    assert_eq!(world.runner.count("thread start"), 1);
     assert_eq!(world.runner.count("agent prompt"), 0);
-    assert_eq!(thread::load(&project, "t-0001").unwrap().launch_attempts, 1);
-    // The thread's own agent arguments follow `--`.
+    let launched = thread::load(&project, "t-0001").unwrap();
+    assert_eq!(launched.launch_attempts, 1);
+    // Ferrite: the started Thread is its pane now.
+    assert_eq!((launched.pane_id.as_str(), launched.tab_id.as_str(), launched.workspace_id.as_str()), ("w2:p1", "w2:p1", wt.as_str()), "the worktree's Space");
+    // The thread's own agent arguments follow the start, each its own.
     let calls = world.runner.calls.borrow();
-    let start = calls.iter().find(|c| c.display().contains("agent start")).unwrap();
-    assert!(start.args.ends_with(&["--".to_string(), "--model".to_string(), "opus".to_string()]), "{}", start.display());
+    let start = calls.iter().find(|c| c.display().contains("thread start")).unwrap();
+    assert!(start.args.ends_with(&["--args".to_string(), "--model".to_string(), "--args".to_string(), "opus".to_string()]), "{}", start.display());
+    assert!(start.display().contains(&format!("--cwd {wt} --provider claude --title hp-demo-t-0001")), "{}", start.display());
     drop(calls);
 
     // Tick 2: the agent is ready: seen, not prompted until it stays so.
@@ -229,7 +340,7 @@ fn thread_start_returns_without_an_agent_and_the_ticker_launches_then_prompts() 
     // Tick 3: still the same: prompt once, no second start.
     settled(&project);
     assert!(ticker::tick_project(&ctx, &project).unwrap());
-    assert_eq!(world.runner.count("agent start"), 1);
+    assert_eq!(world.runner.count("thread start"), 1);
     assert_eq!(world.runner.count("agent prompt"), 1);
     let calls = world.runner.calls.borrow();
     let prompt = calls.iter().find(|c| c.display().contains("agent prompt")).unwrap();
@@ -254,7 +365,10 @@ fn one_agent_start_per_project_per_tick_and_three_failures_give_failed() {
     let project = world.project("demo", "a.sock");
     let cwd = world.home.path().to_path_buf();
     let cwd_text = cwd.to_string_lossy().into_owned();
-    world.thread(&project, &cwd, |t| t.prompt_pending = true);
+    world.thread(&project, &cwd, |t| {
+        t.prompt_pending = true;
+        t.pane_id = staged(&cwd_text);
+    });
     let second = thread::allocate(&project, |t| {
         t.status = Status::Open;
         t.kind = Kind::Tab;
@@ -262,27 +376,23 @@ fn one_agent_start_per_project_per_tick_and_three_failures_give_failed() {
         t.agent = "claude".into();
         t.agent_name = "hp-demo-t-0002".into();
         t.workspace_id = "w1".into();
-        t.tab_id = "w1:t2".into();
-        t.pane_id = "w1:p2".into();
+        let staged = crate::herdr::Staged { space: "w1".into(), focus: false, cwd: cwd_text.clone() }.id();
+        t.tab_id = staged.clone();
+        t.pane_id = staged;
         t.cwd = cwd_text.clone();
     })
     .unwrap();
-    *world.panes.borrow_mut() = format!(
-        "[{},{}]",
-        pane_json("w2", "w2:t1", "w2:p1", &cwd_text),
-        pane_json("w1", "w1:t2", "w1:p2", &cwd_text)
-    );
-    world.runner.on("agent start", fail(1, r#"{"error":{"code":"timeout","message":"timed out waiting for agent startup"}}"#));
+    world.runner.on("thread start", fail(1, r#"{"error":{"code":"timeout","message":"timed out waiting for agent startup"}}"#));
 
     let ctx = world.ctx();
     for tick in 1..=6 {
         let _ = ticker::tick_project(&ctx, &project);
-        assert_eq!(world.runner.count("agent start"), tick, "one start per tick");
+        assert_eq!(world.runner.count("thread start"), tick, "one start per tick");
     }
     // Six starts: three each. The next ticks mark them failed and start nothing.
     let _ = ticker::tick_project(&ctx, &project);
     let _ = ticker::tick_project(&ctx, &project);
-    assert_eq!(world.runner.count("agent start"), 6);
+    assert_eq!(world.runner.count("thread start"), 6);
     for id in ["t-0001", &second.id] {
         let t = thread::load(&project, id).unwrap();
         assert_eq!(t.status, Status::Failed, "{id}");
@@ -301,19 +411,24 @@ fn two_projects_in_two_sockets_sharing_a_pane_id_do_not_mix() {
     }
     // Only beta's session has the agent; both record pane w2:p1.
     let b_socket = b.coordinator().unwrap().socket;
-    let beta_agents = format!(r#"{{"result":{{"agents":[{}]}}}}"#, agent_json("w2", "w2:t1", "w2:p1", &cwd, "hp-beta-t-0001", "idle"));
+    let beta = agent_json("w2", "w2:t1", "w2:p1", &cwd, "hp-beta-t-0001", "idle");
+    let beta_threads = threads_reply(&format!("[{beta}]"));
     let world2 = World { runner: FakeRunner::new(), ..world };
     let socket = b_socket.clone();
     world2.runner.on_fn(
-        move |cmd| cmd.display().contains("agent list") && socket_of(cmd) == socket,
-        move |_| Ok(ok(&beta_agents)),
+        move |cmd| cmd.display().contains("thread list") && socket_of(cmd) == socket,
+        move |_| Ok(ok(&beta_threads)),
     );
-    world2.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    world2.runner.on("agent read", ok(&claude_screen(None)));
-    world2.runner.on("pane list", ok(r#"{"result":{"panes":[]}}"#));
+    world2.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
+    let socket = b_socket.clone();
+    let thread = serde_json::from_str::<serde_json::Value>(&threads_reply(&format!("[{beta}]"))).unwrap()["result"]["threads"][0].clone();
+    world2.runner.on_fn(
+        move |cmd| cmd.display().contains("thread get") && socket_of(cmd) == socket,
+        move |_| Ok(ok(&serde_json::json!({ "result": { "thread": thread } }).to_string())),
+    );
+    world2.runner.on("decision list", ok(r#"{"result":{"decisions":[]}}"#));
+    world2.runner.on("agent read", ok(r#"{"result":{"text":"some output"}}"#));
     world2.runner.on("agent prompt", ok(r#"{"result":{}}"#));
-    world2.runner.on("agent read", ok(&claude_screen(None)));
-    world2.runner.on("report-metadata", ok(r#"{"result":{}}"#));
 
     let ctx = world2.ctx();
     for _ in 0..2 {
@@ -372,9 +487,9 @@ fn restart_defers_to_the_ticker_and_resets_launch_attempts() {
         t.status = Status::Failed;
         t.error = "no agent".into();
         t.launch_attempts = 3;
+        t.pane_id = staged(&cwd);
     });
     std::fs::write(thread::task_path(&project, "t-0001"), "The task.").unwrap();
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd));
     world.runner.on("rev-parse --git-path", fail(1, "not a repo"));
 
     let t = threads::restart(&world.ctx(), "demo", "t-0001", Some("codex")).unwrap();
@@ -382,7 +497,7 @@ fn restart_defers_to_the_ticker_and_resets_launch_attempts() {
     assert_eq!((t.agent.as_str(), t.profile.as_str()), ("codex", "codex"));
     assert!(threads::restart(&world.ctx(), "demo", "t-0001", Some("chatgpt")).is_err());
     assert!(t.error.is_empty());
-    assert_eq!(world.runner.count("agent start"), 0);
+    assert_eq!(world.runner.count("thread start"), 0);
     assert_eq!(world.runner.count("agent prompt"), 0);
     let brief = std::fs::read_to_string(Path::new(&t.thread_dir).join("brief.md")).unwrap();
     assert!(brief.contains("previous attempt"));
@@ -402,7 +517,7 @@ fn a_partial_copy_keeps_the_worktree_unless_the_loss_is_accepted() {
     world.runner.on("rsync", ok(""));
     world.runner.on("worktree remove", ok(r#"{"result":{}}"#));
     let cwd = world.home.path().to_string_lossy().into_owned();
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd));
+    *world.agents.borrow_mut() = format!("[{}]", thread_agent(&cwd, "hp-demo-t-0001", "idle"));
     let ctx = world.ctx();
 
     // Partial copy: resolved, report home, worktree kept and the item says why.
@@ -418,9 +533,9 @@ fn a_partial_copy_keeps_the_worktree_unless_the_loss_is_accepted() {
     // --reopen starts nothing; --discard-uncopied removes it through herdr.
     threads::resolve(&ctx, "demo", "t-0001", &ResolveArgs { reopen: true, ..ResolveArgs::default() }).unwrap();
     assert_eq!(thread::load(&project, "t-0001").unwrap().status, Status::Open);
-    assert_eq!(world.runner.count("agent start"), 0);
+    assert_eq!(world.runner.count("thread start"), 0);
     threads::resolve(&ctx, "demo", "t-0001", &ResolveArgs { discard_uncopied: true, ..ResolveArgs::default() }).unwrap();
-    assert_eq!(world.runner.count("worktree remove --workspace w2"), 1);
+    assert_eq!(world.runner.count("ferrite worktree remove --thread w2:p1"), 1);
     assert!(thread::load(&project, "t-0001").unwrap().worktree_path.is_empty());
 }
 
@@ -434,7 +549,7 @@ fn resolving_a_merged_thread_removes_worktree_and_branch_and_an_unmerged_one_kee
             t.pr_state = if merged { "MERGED".into() } else { "OPEN".into() };
         });
         let cwd = world.home.path().to_string_lossy().into_owned();
-        *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd));
+        *world.agents.borrow_mut() = format!("[{}]", thread_agent(&cwd, "hp-demo-t-0001", "idle"));
         world.runner.on("worktree remove", ok(r#"{"result":{}}"#));
         world.runner.on("branch -D", ok(""));
         world.runner.on("rev-parse --verify --quiet refs/heads/hp/demo/t-0001-task", ok("abc123\n"));
@@ -442,7 +557,7 @@ fn resolving_a_merged_thread_removes_worktree_and_branch_and_an_unmerged_one_kee
         state.prs.insert("t-0001".into(), crate::pr::Summary { state: "MERGED".into(), head_oid: "abc123".into(), ..Default::default() });
         crate::steps::save_state(&project, &state).unwrap();
         threads::resolve(&world.ctx(), "demo", "t-0001", &ResolveArgs::default()).unwrap();
-        assert_eq!(world.runner.count("worktree remove --workspace w2"), 1, "merged={merged}");
+        assert_eq!(world.runner.count("ferrite worktree remove --thread w2:p1"), 1, "merged={merged}");
         assert_eq!(world.runner.count("branch -D hp/demo/t-0001-task"), usize::from(merged));
         assert!(thread::load(&project, "t-0001").unwrap().worktree_path.is_empty());
         let item = inbox::unhandled(&project).into_iter().find(|i| i.kind == "thread-state").unwrap();
@@ -465,11 +580,11 @@ fn resolving_a_thread_whose_worktree_is_already_gone_closes_its_workspace() {
         t.pr_state = "MERGED".into();
     });
     let cwd = gone.to_string_lossy().into_owned();
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd));
+    *world.agents.borrow_mut() = format!("[{}]", thread_agent(&cwd, "hp-demo-t-0001", "idle"));
     // What herdr says of a worktree git no longer knows.
     world.runner.on("worktree remove", fail(1, "fatal: not a working tree (worktree_remove_failed)"));
     world.runner.on("worktree prune", ok(""));
-    world.runner.on("workspace close", ok(r#"{"result":{}}"#));
+    world.runner.on("thread close", ok(r#"{"result":{}}"#));
     world.runner.on("rev-parse --verify --quiet refs/heads/hp/demo/t-0001-task", fail(1, ""));
     let mut state = crate::steps::load_state(&project);
     state.prs.insert("t-0001".into(), crate::pr::Summary { state: "MERGED".into(), head_oid: "abc123".into(), ..Default::default() });
@@ -478,7 +593,8 @@ fn resolving_a_thread_whose_worktree_is_already_gone_closes_its_workspace() {
     threads::resolve(&world.ctx(), "demo", "t-0001", &ResolveArgs::default()).unwrap();
     assert_eq!(world.runner.count("worktree remove"), 0);
     assert_eq!(world.runner.count("worktree prune"), 1);
-    assert_eq!(world.runner.count("workspace close w2"), 1);
+    // Ferrite: a worktree's Space closes with the Threads in it.
+    assert_eq!(world.runner.count("thread close --thread w2:p1"), 1);
     assert!(thread::load(&project, "t-0001").unwrap().worktree_path.is_empty());
     let item = inbox::unhandled(&project).into_iter().find(|i| i.kind == "thread-state").unwrap();
     assert!(item.summary.contains("was already gone; its workspace closed"), "{}", item.summary);
@@ -493,19 +609,19 @@ fn sweep_closes_a_resolved_threads_workspace_left_on_a_gone_worktree() {
     let gone = world.home.path().join("gone");
     world.thread(&project, &gone, |t| t.status = Status::Resolved);
     let cwd = gone.to_string_lossy().into_owned();
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd));
-    world.runner.on("workspace close", ok(r#"{"result":{}}"#));
+    *world.agents.borrow_mut() = format!("[{}]", thread_agent(&cwd, "hp-demo-t-0001", "idle"));
+    world.runner.on("thread close", ok(r#"{"result":{}}"#));
     let orphans = crate::sweep::find(&world.ctx(), &project);
-    assert!(orphans.contains(&crate::sweep::Orphan::Workspace { id: "t-0001".into(), workspace: "w2".into() }), "{orphans:?}");
+    assert!(orphans.contains(&crate::sweep::Orphan::Workspace { id: "t-0001".into(), workspace: cwd.clone() }), "{orphans:?}");
     crate::sweep::run(&world.ctx(), "demo", false, true).unwrap();
-    assert_eq!(world.runner.count("workspace close w2"), 1);
+    assert_eq!(world.runner.count("thread close --thread w2:p1"), 1);
     assert!(thread::load(&project, "t-0001").unwrap().worktree_path.is_empty());
 
     // A worktree that is still there is not this orphan.
     let world = World::new();
     let project = world.project("demo", "a.sock");
     world.thread(&project, world.home.path(), |t| t.status = Status::Resolved);
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &world.home.path().to_string_lossy()));
+    *world.agents.borrow_mut() = format!("[{}]", thread_agent(&world.home.path().to_string_lossy(), "hp-demo-t-0001", "idle"));
     assert!(!crate::sweep::find(&world.ctx(), &project).iter().any(|o| matches!(o, crate::sweep::Orphan::Workspace { .. })));
 }
 
@@ -522,15 +638,15 @@ fn resolving_the_last_thread_closes_its_empty_repo_space() {
         t.repo_workspace = "w9".into();
     });
     let cwd = world.home.path().to_string_lossy().into_owned();
-    *world.panes.borrow_mut() = format!("[{},{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd), pane_json("w9", "w9:t1", "w9:p1", &repo));
+    *world.agents.borrow_mut() = format!("[{}]", thread_agent(&cwd, "hp-demo-t-0001", "idle"));
     world.runner.on("worktree remove", ok(r#"{"result":{}}"#));
-    // After the removal herdr lists only the repository's primary Space.
-    world.runner.on("workspace list", ok(&format!(r#"{{"result":{{"workspaces":[{{"workspace_id":"w9","label":"repo","pane_count":1,"worktree":{{"repo_key":"{repo}/.git","checkout_path":"{repo}","is_linked_worktree":false}}}}]}}}}"#)));
-    world.runner.on("process-info", ok(r#"{"result":{"process_info":{"shell_pid":7,"foreground_process_group_id":7,"foreground_processes":[{"pid":7,"name":"zsh"}]}}}"#));
-    world.runner.on("workspace close", ok(r#"{"result":{}}"#));
+    // After the removal Ferrite lists the repository's Project, with no
+    // Thread in it (Ferrite: no shell is left behind).
+    world.runner.on("project list", ok(&format!(r#"{{"result":{{"projects":[{{"id":"w9","label":"repo","focused":false,"thread_count":0,"worktree":{{"repo_key":"{repo}","checkout_path":"{repo}","is_linked_worktree":false}}}}]}}}}"#)));
+    world.runner.on("project close", ok(r#"{"result":{}}"#));
     threads::resolve(&world.ctx(), "demo", "t-0001", &ResolveArgs::default()).unwrap();
-    assert_eq!(world.runner.count("worktree remove --workspace w2"), 1);
-    assert_eq!(world.runner.count("workspace close w9"), 1);
+    assert_eq!(world.runner.count("ferrite worktree remove --thread w2:p1"), 1);
+    assert_eq!(world.runner.count("project close --project w9"), 1);
     let item = inbox::unhandled(&project).into_iter().find(|i| i.kind == "space").unwrap();
     assert_eq!(item.summary, "closed empty Space repo (w9)");
 }
@@ -544,7 +660,7 @@ fn a_merged_branch_with_a_later_local_commit_is_kept() {
         t.pr_state = "MERGED".into();
     });
     let cwd = world.home.path().to_string_lossy().into_owned();
-    *world.panes.borrow_mut() = format!("[{},{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd), pane_json("w9", "w9:t1", "w9:p1", &cwd));
+    *world.agents.borrow_mut() = format!("[{},{}]", thread_agent(&cwd, "hp-demo-t-0001", "idle"), agent_json("w9", "w9:p1", "w9:p1", &cwd, "someone", "idle"));
     world.runner.on("worktree remove", ok(r#"{"result":{}}"#));
     world.runner.on("rev-parse --verify --quiet refs/heads/", ok("local-only-commit\n"));
     let mut state = crate::steps::load_state(&project);
@@ -552,9 +668,9 @@ fn a_merged_branch_with_a_later_local_commit_is_kept() {
     crate::steps::save_state(&project, &state).unwrap();
     threads::resolve(&world.ctx(), "demo", "t-0001", &ResolveArgs::default()).unwrap();
     assert_eq!(world.runner.count("branch -D"), 0);
-    // Only the thread's own workspace (w2), not another pane in the same folder.
-    assert_eq!(world.runner.count("worktree remove --workspace w2"), 1);
-    assert_eq!(world.runner.count("--workspace w9"), 0);
+    // Only the thread's own Space (its worktree), not another pane in the same folder.
+    assert_eq!(world.runner.count("ferrite worktree remove --thread w2:p1"), 1);
+    assert_eq!(world.runner.count("--thread w9:p1"), 0);
     let item = inbox::unhandled(&project).into_iter().find(|i| i.kind == "thread-state").unwrap();
     assert!(item.summary.contains("commits that are not in the merged pull request"), "{}", item.summary);
 }
@@ -618,37 +734,42 @@ fn thread_start_and_open_refuse_profiles_off_the_allow_list() {
     assert!(coordinator::open(&world.ctx(), "demo", &options).unwrap_err().to_string().contains("allowed: claude"));
     assert!(threads::restart(&world.ctx(), "demo", "t-0001", Some("deep")).is_err());
     assert!(thread::list(&project).is_empty());
-    assert_eq!(world.runner.count("agent start") + world.runner.count("create"), 0, "nothing was created or launched");
+    assert_eq!(world.runner.count("thread start") + world.runner.count("create") + world.runner.count("project open"), 0, "nothing was created or launched");
 }
 
 #[test]
 fn a_thread_launches_with_its_profile_and_fails_closed_once_disallowed() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
-    write_profiles(&world, &format!("{PROFILES}\n[safety.\"{}\"]\nthread_agent_args = [\"--dangerously-skip-permissions\"]\n", project.canonical_dir().display()));
+    // Ferrite: `luna` on a kind Ferrite runs (one it does not is refused as
+    // a missing binary is: `herdr::tests`).
+    let profiles = PROFILES.replace("agent = \"omp\"", "agent = \"codex\"");
+    write_profiles(&world, &format!("{profiles}\n[safety.\"{}\"]\nthread_agent_args = [\"--dangerously-skip-permissions\"]\n", project.canonical_dir().display()));
     let cwd = world.home.path().to_string_lossy().into_owned();
     world.thread(&project, world.home.path(), |t| {
         t.prompt_pending = true;
-        t.agent = "omp".into();
+        t.agent = "codex".into();
         t.profile = "luna".into();
     });
-    *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(&project), pane_json("w2", "w2:t1", "w2:p1", &cwd));
-    world.runner.on("agent start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
+    // Ferrite: its pane is staged, at a shell prompt as Herdr would say.
+    thread::update(&project, "t-0001", |t| t.pane_id = staged(&cwd)).unwrap();
+    world.runner.on("thread start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
     let ctx = world.ctx();
     let _ = ticker::tick_project(&ctx, &project);
-    let call = world.runner.calls.borrow().iter().find(|c| c.display().contains("agent start")).cloned().unwrap();
+    let call = world.runner.calls.borrow().iter().find(|c| c.display().contains("thread start")).cloned().unwrap();
     let home = world.home.path().to_string_lossy();
     // The profile's own arguments, `~` expanded; the old Claude flag stays with Claude.
-    assert!(call.args.ends_with(&strings(&["omp", "--pane", "w2:p1", "--", "--config", &format!("{home}/.omp/agent/luna.yml")])) || call.display().ends_with(&format!("-- --config {home}/.omp/agent/luna.yml")), "{}", call.display());
+    assert!(call.args.ends_with(&strings(&["--args", "--config", "--args", &format!("{home}/.omp/agent/luna.yml")])), "{}", call.display());
+    assert!(call.display().contains("--provider codex"), "{}", call.display());
     assert!(!call.display().contains("dangerously"), "{}", call.display());
 
     // The user takes `luna` off the list: the next launch is refused.
-    write_profiles(&world, &PROFILES.replace("thread_profiles = [\"claude\", \"luna\"]", "thread_profiles = [\"claude\"]"));
+    write_profiles(&world, &profiles.replace("thread_profiles = [\"claude\", \"luna\"]", "thread_profiles = [\"claude\"]"));
     let _ = ticker::tick_project(&ctx, &project);
     let t = thread::load(&project, "t-0001").unwrap();
     assert_eq!(t.status, Status::Failed);
     assert!(t.error.contains("not allowed for threads"), "{}", t.error);
-    assert_eq!(world.runner.count("agent start"), 1);
+    assert_eq!(world.runner.count("thread start"), 1);
     assert!(items_of(&project, "thread-state").iter().any(|i| i.summary.contains("not launched")));
 }
 
@@ -664,11 +785,12 @@ fn a_legacy_thread_keeps_claude_flags_to_claude() {
             t.prompt_pending = true;
             t.agent = kind.into();
         });
-        *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(&project), pane_json("w2", "w2:t1", "w2:p1", &cwd));
-        world.runner.on("agent start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
+        // Ferrite: its pane is staged, at a shell prompt as Herdr would say.
+    thread::update(&project, "t-0001", |t| t.pane_id = staged(&cwd)).unwrap();
+        world.runner.on("thread start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
         let _ = ticker::tick_project(&world.ctx(), &project);
-        let call = world.runner.calls.borrow().iter().find(|c| c.display().contains("agent start")).map(|c| c.display()).unwrap();
-        assert!(call.contains(&format!("--kind {kind}")), "{call}");
+        let call = world.runner.calls.borrow().iter().find(|c| c.display().contains("thread start")).map(|c| c.display()).unwrap();
+        assert!(call.contains(&format!("--provider {kind}")), "{call}");
         // Issue #45: the Claude flag no longer reaches a Codex thread.
         assert_eq!(call.contains("--dangerously-skip-permissions"), flagged, "{call}");
     }
@@ -683,15 +805,16 @@ fn a_stored_launch_flag_is_dropped_at_launch_with_one_item() {
         t.prompt_pending = true;
         t.agent_args = strings(&["--model", "opus", "--dangerously-skip-permissions"]);
     });
-    *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(&project), pane_json("w2", "w2:t1", "w2:p1", &cwd));
-    world.runner.on("agent start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
+    // Ferrite: its pane is staged, at a shell prompt as Herdr would say.
+    thread::update(&project, "t-0001", |t| t.pane_id = staged(&cwd)).unwrap();
+    world.runner.on("thread start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
 
     let ctx = world.ctx();
     let _ = ticker::tick_project(&ctx, &project);
     let _ = ticker::tick_project(&ctx, &project);
-    assert_eq!(world.runner.count("agent start"), 2);
-    for call in world.runner.calls.borrow().iter().filter(|c| c.display().contains("agent start")) {
-        assert!(call.args.ends_with(&strings(&["--", "--model", "opus"])), "{}", call.display());
+    assert_eq!(world.runner.count("thread start"), 2);
+    for call in world.runner.calls.borrow().iter().filter(|c| c.display().contains("thread start")) {
+        assert!(call.args.ends_with(&strings(&["--args", "--model", "--args", "opus"])), "{}", call.display());
         assert!(!call.display().contains("dangerously"), "{}", call.display());
     }
     assert_eq!(thread::load(&project, "t-0001").unwrap().agent_args, ["--model", "opus"]);
@@ -710,14 +833,15 @@ fn yolo_launches_each_thread_with_its_own_harness_flag() {
         t.agent = "codex".into();
         t.agent_args = strings(&["-m", "gpt-5.5"]);
     });
-    *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(&project), pane_json("w2", "w2:t1", "w2:p1", &cwd));
-    world.runner.on("agent start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
+    // Ferrite: its pane is staged, at a shell prompt as Herdr would say.
+    thread::update(&project, "t-0001", |t| t.pane_id = staged(&cwd)).unwrap();
+    world.runner.on("thread start", fail(1, r#"{"error":{"code":"timeout","message":"timed out"}}"#));
     let ctx = world.ctx();
     crate::safety::apply(&ctx, &crate::safety::Target::Global, "yolo", &strings(&["on"])).unwrap();
 
     let _ = ticker::tick_project(&ctx, &project);
-    let call = world.runner.calls.borrow().iter().find(|c| c.display().contains("agent start")).cloned().unwrap();
-    assert!(call.args.ends_with(&strings(&["--", "-m", "gpt-5.5", "--dangerously-bypass-approvals-and-sandbox"])), "{}", call.display());
+    let call = world.runner.calls.borrow().iter().find(|c| c.display().contains("thread start")).cloned().unwrap();
+    assert!(call.args.ends_with(&strings(&["--args", "-m", "--args", "gpt-5.5", "--args", "--dangerously-bypass-approvals-and-sandbox"])), "{}", call.display());
     assert!(!call.display().contains("--dangerously-skip-permissions"), "never Claude's flag for Codex: {}", call.display());
     assert_eq!(thread::load(&project, "t-0001").unwrap().agent_args, ["-m", "gpt-5.5"], "the flag is never stored");
 }
@@ -731,9 +855,9 @@ fn restart_keeps_an_old_model_flag_until_a_profile_replaces_it() {
         t.status = Status::Failed;
         t.agent = "codex".into();
         t.agent_args = strings(&["-m", "gpt-5.5"]);
+        t.pane_id = staged(&cwd);
     });
     std::fs::write(thread::task_path(&project, "t-0001"), "The task.").unwrap();
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w2", "w2:t1", "w2:p1", &cwd));
     world.runner.on("rev-parse --git-path", fail(1, "not a repo"));
     let ctx = world.ctx();
 
@@ -750,7 +874,7 @@ fn unreachable_session_prints_records_without_treating_panes_as_gone() {
     let project = world.project("demo", "a.sock");
     world.thread(&project, world.home.path(), |t| t.last_group = "working".into());
     let broken = World { runner: FakeRunner::new(), ..world };
-    broken.runner.on("agent list", fail(1, "connection refused"));
+    broken.runner.on("thread list", fail(1, r#"{"error":{"code":"server_unavailable","message":"no Ferrite server"}}"#));
     let rows = threads::rows(&broken.ctx(), &project);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].note, "session unreachable");
@@ -952,7 +1076,7 @@ fn a_thread_that_needs_you_gives_one_specific_notification_with_sound_unless_mut
             continue;
         }
         assert_eq!(shown.len(), 1, "{:?}", shown.iter().map(|c| c.display()).collect::<Vec<_>>());
-        assert_eq!(&shown[0].args[2..], ["Demo · t-0001", "--body", "needs you · blocked", "--sound", "request"]);
+        assert_eq!(&shown[0].args[2..], ["--title", "Demo · t-0001", "--body", "needs you · blocked", "--sound", "request", "--important"]);
         // The coordinator's item says how to answer the screen itself.
         let items = items_of(&project, "thread-state");
         assert!(items[0].summary.contains("`thread read demo t-0001` shows it, `thread keys demo t-0001` answers it"), "{}", items[0].summary);
@@ -993,7 +1117,9 @@ fn a_single_missing_pane_is_a_thread_item_not_a_session_item() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
     world.thread(&project, world.home.path(), |t| t.last_group = "working".into());
-    *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
+    // Ferrite: the coordinator's pane is its Thread.
+    let dir = project.canonical_dir().to_string_lossy().into_owned();
+    *world.agents.borrow_mut() = format!("[{}]", agent_json("w1", "w1:t1", "w1:p1", &dir, "hp-demo-coordinator", "working"));
     ticker::tick_project(&world.ctx(), &project).unwrap();
     assert!(items_of(&project, "session").is_empty());
     let items = items_of(&project, "thread-state");
@@ -1007,7 +1133,7 @@ fn an_unreachable_session_writes_nothing() {
     let project = world.project("demo", "a.sock");
     world.thread(&project, world.home.path(), |t| t.last_group = "working".into());
     let broken = World { runner: FakeRunner::new(), ..world };
-    broken.runner.on("agent list", fail(1, "connection refused"));
+    broken.runner.on("thread list", fail(1, r#"{"error":{"code":"server_unavailable","message":"no Ferrite server"}}"#));
     assert!(!ticker::tick_project(&broken.ctx(), &project).unwrap());
     assert!(inbox::unhandled(&project).is_empty());
     assert_eq!(thread::load(&project, "t-0001").unwrap().last_group, "working");
@@ -1152,10 +1278,9 @@ fn a_merged_thread_whose_agent_stays_idle_is_resolved_after_the_grace_period() {
 }
 
 /// The agent's own progress report, as `herdr-projects report` writes it. The
-/// thread's pane is listed too, or the ticker drops the record as stale.
-fn thread_progress(world: &World, project: &Project, percent: u8, activity: &str) {
-    let cwd = world.home.path().to_string_lossy().into_owned();
-    *world.panes.borrow_mut() = format!("[{},{}]", world.coordinator_pane(project), pane_json("w2", "w2:t1", "w2:p1", &cwd));
+/// thread's pane is listed too (Ferrite: its Thread, from `set_agents`), or
+/// the ticker drops the record as stale.
+fn thread_progress(project: &Project, percent: u8, activity: &str) {
     let record = crate::progress::Record {
         socket: project.coordinator().unwrap().socket,
         pane_id: "w2:p1".into(),
@@ -1174,7 +1299,7 @@ fn thread_progress(world: &World, project: &Project, percent: u8, activity: &str
 #[test]
 fn a_merged_thread_that_reports_work_in_progress_is_not_resolved() {
     let (world, project) = merged_world("done");
-    thread_progress(&world, &project, 70, "Waiting on CI");
+    thread_progress(&project, 70, "Waiting on CI");
     let ctx = world.ctx();
     ticker::tick_project(&ctx, &project).unwrap();
     merged_seen_ago(&project, 60);
@@ -1190,7 +1315,7 @@ fn a_merged_thread_that_reports_work_in_progress_is_not_resolved() {
     assert_eq!(world.runner.count("worktree remove"), 0);
 
     // It finishes the rollout and says so: resolved on the next pass.
-    thread_progress(&world, &project, 100, "Done");
+    thread_progress(&project, 100, "Done");
     ticker::tick_project(&ctx, &project).unwrap();
     let t = thread::load(&project, "t-0001").unwrap();
     assert_eq!((t.status, t.resolved_reason.as_str()), (Status::Resolved, "merged"));
@@ -1201,7 +1326,7 @@ fn a_merged_thread_that_reports_work_in_progress_is_not_resolved() {
 #[test]
 fn a_merged_thread_with_another_open_pull_request_is_not_resolved() {
     let (world, project) = merged_world("done");
-    thread_progress(&world, &project, 100, "Done");
+    thread_progress(&project, 100, "Done");
     let open = Rc::new(RefCell::new(r#"[{"number":8}]"#.to_string()));
     let answer = open.clone();
     world.runner.on_fn(|cmd| cmd.display().contains("gh pr list --repo owner/app --state open --author @me"), move |_| Ok(ok(&answer.borrow())));
@@ -1564,8 +1689,7 @@ fn remote_world() -> (World, Project) {
         t.last_state = "working".into();
         t.last_state_change = "2026-01-01T00:00:00Z".into();
     });
-    *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
-    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"}]}}"#));
     (world, project)
 }
 
@@ -1578,7 +1702,13 @@ fn local_threads_and_each_due_machine_get_one_agent_start_per_tick() {
     let (world, project) = remote_world();
     let world = World { runner: FakeRunner::new(), ..world };
     let home = world.home.path().to_string_lossy().into_owned();
-    thread::update(&project, "t-0001", |t| t.prompt_pending = true).unwrap();
+    thread::update(&project, "t-0001", |t| {
+        t.prompt_pending = true;
+        t.pane_id = staged("/home/me/wt");
+    })
+    .unwrap();
+    // Ferrite: every pending thread's pane is staged, at a shell prompt as
+    // Herdr would say.
     let pending = |machine: &str, workspace: &str| {
         thread::allocate(&project, |t| {
             t.status = Status::Open;
@@ -1588,8 +1718,9 @@ fn local_threads_and_each_due_machine_get_one_agent_start_per_tick() {
             t.agent = "claude".into();
             t.agent_name = thread::agent_name(&project.slug, &t.id);
             t.workspace_id = workspace.into();
-            t.tab_id = format!("{workspace}:t2");
-            t.pane_id = format!("{workspace}:p2");
+            let staged = crate::herdr::Staged { space: workspace.into(), focus: false, cwd: home.clone() }.id();
+            t.tab_id = staged.clone();
+            t.pane_id = staged;
             t.cwd = home.clone();
         })
         .unwrap()
@@ -1598,27 +1729,14 @@ fn local_threads_and_each_due_machine_get_one_agent_start_per_tick() {
     let locals = [pending("", "w1"), pending("", "w1")];
     pending("box", "w2");
     let cube = pending("cube", "w3");
-    let local_panes = format!(r#"{{"result":{{"panes":[{},{}]}}}}"#, world.coordinator_pane(&project), pane_json("w1", "w1:t2", "w1:p2", &home));
-    let remote_panes = format!(
-        r#"{{"result":{{"panes":[{},{},{}]}}}}"#,
-        pane_json("w2", "w2:t1", "w2:p1", "/home/me/wt"),
-        pane_json("w2", "w2:t2", "w2:p2", &home),
-        pane_json("w3", "w3:t2", "w3:p2", &home)
-    );
-    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"},{"id":"2","label":"cube","target":"me@cube"}]}"#));
-    world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("agent list"), |_| Ok(ok(r#"{"result":{"agents":[]}}"#)));
-    world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("pane list"), move |_| Ok(ok(&remote_panes)));
-    world.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    world.runner.on("pane list", ok(&local_panes));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"},{"id":"2","label":"cube","target":"me@cube"}]}}"#));
+    world.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
     world.runner.on("ssh", ok(""));
-    world.runner.on("report-metadata", ok(r#"{"result":{}}"#));
     world.runner.on_fn(
-        |c| c.display().contains("agent start"),
+        |c| c.display().contains("thread start"),
         |c| {
-            let pane = c.args.iter().skip_while(|a| *a != "--pane").nth(1).cloned().unwrap_or_default();
-            let (workspace, _) = pane.split_once(':').unwrap_or_default();
-            let tab = pane.replace(":p", ":t");
-            Ok(ok(&format!(r#"{{"result":{{"agent":{{"pane_id":"{pane}","tab_id":"{tab}","workspace_id":"{workspace}"}}}}}}"#)))
+            let cwd = c.args.iter().skip_while(|a| *a != "--cwd").nth(1).cloned().unwrap_or_default();
+            Ok(ok(&format!(r#"{{"result":{{"thread":{{"thread":7,"provider":"claude","attention":"idle","cwd":"{cwd}"}}}}}}"#)))
         },
     );
 
@@ -1634,7 +1752,7 @@ fn local_threads_and_each_due_machine_get_one_agent_start_per_tick() {
         .calls
         .borrow()
         .iter()
-        .filter(|c| c.display().contains("agent start"))
+        .filter(|c| c.display().contains("thread start"))
         .map(|c| if is_machine_call(c) { c.args[1].clone() } else { "local".into() })
         .collect();
     assert_eq!(starts, ["local", "box", "cube"]);
@@ -1648,10 +1766,7 @@ fn a_failed_machine_call_changes_nothing_and_the_machine_is_skipped_for_eight_ti
     let (world, project) = remote_world();
     let failing = World { runner: FakeRunner::new(), ..world };
     failing.runner.on_fn(is_machine_call, |_| Ok(crate::runner::fake::timeout()));
-    failing.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    let panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, failing.coordinator_pane(&project));
-    failing.runner.on("pane list", ok(&panes));
-    failing.runner.on("report-metadata", ok("{}"));
+    failing.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
     let ctx = failing.ctx();
     let mut memory = Memory::new(&ctx);
 
@@ -1678,20 +1793,16 @@ fn a_long_machine_outage_gives_one_item_and_one_recovery_item() {
     let (world, project) = remote_world();
     let down = Rc::new(RefCell::new(true));
     let flag = down.clone();
-    let agents = r#"{"result":{"agents":[{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","cwd":"/home/me/wt","name":"hp-demo-t-0001","agent_status":"working"}]}}"#;
+    let agents = threads_reply(r#"[{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","cwd":"/home/me/wt","name":"hp-demo-t-0001","agent_status":"working"}]"#);
     let scripted = World { runner: FakeRunner::new(), ..world };
     scripted.runner.on_fn(
-        |cmd| is_machine_call(cmd) && cmd.display().contains("agent list"),
-        move |_| Ok(if *flag.borrow() { fail(255, "ssh: connect to host box: Operation timed out") } else { ok(agents) }),
+        |cmd| is_machine_call(cmd) && cmd.display().contains("thread list"),
+        move |_| Ok(if *flag.borrow() { fail(255, "ssh: connect to host box: Operation timed out") } else { ok(&agents) }),
     );
-    scripted.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("pane list"), |_| Ok(ok(r#"{"result":{"panes":[]}}"#)));
     scripted.runner.on_fn(is_machine_call, |_| Ok(ok(r#"{"result":{}}"#)));
-    scripted.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
+    scripted.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"}]}}"#));
     scripted.runner.on("ssh", ok("t-0001 -\n"));
-    scripted.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    let panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, scripted.coordinator_pane(&project));
-    scripted.runner.on("pane list", ok(&panes));
-    scripted.runner.on("report-metadata", ok("{}"));
+    scripted.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
     let ctx = scripted.ctx();
     let mut memory = Memory::new(&ctx);
     memory.outage_secs = 0;
@@ -1711,29 +1822,21 @@ fn a_long_machine_outage_gives_one_item_and_one_recovery_item() {
     let outages = items_of(&project, "outage");
     assert_eq!(outages.len(), 2);
     assert!(outages[1].summary.contains("reachable again"));
-    // Remote tokens go through `--machine`, with the five minute TTL.
-    let calls = scripted.runner.calls.borrow();
-    let tokens = calls.iter().find(|c| is_machine_call(c) && c.display().contains("report-metadata")).expect("remote tokens");
-    assert!(tokens.display().contains("--ttl-ms 300000"));
-    assert!(tokens.args.contains(&"t-0001 · Task".to_string()), "{}", tokens.display());
-    assert!(tokens.display().contains("hp_project=demo"));
+    // Ferrite: the nav draws the remote thread's row from its record
+    // (`sidebar::thread_display`); no token is pushed to any Server.
+    assert_eq!(scripted.runner.count("report-metadata"), 0);
+    assert_eq!(crate::sidebar::thread_display(&thread::load(&project, "t-0001").unwrap()), "t-0001 · Task");
 }
 
 #[test]
 fn a_remote_thread_blocked_at_a_poll_is_waiting_on_you_at_once() {
     let (world, project) = remote_world();
     let scripted = World { runner: FakeRunner::new(), ..world };
-    scripted.runner.on_fn(
-        |cmd| is_machine_call(cmd) && cmd.display().contains("agent list"),
-        |_| Ok(ok(r#"{"result":{"agents":[{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","cwd":"/home/me/wt","name":"hp-demo-t-0001","agent_status":"blocked"}]}}"#)),
-    );
-    scripted.runner.on_fn(is_machine_call, |_| Ok(ok(r#"{"result":{"panes":[]}}"#)));
-    scripted.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
+    let blocked = threads_reply(r#"[{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","cwd":"/home/me/wt","name":"hp-demo-t-0001","agent_status":"blocked"}]"#);
+    scripted.runner.on_fn(is_machine_call, move |_| Ok(ok(&blocked)));
+    scripted.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"}]}}"#));
     scripted.runner.on("ssh", ok("t-0001 -\n"));
-    scripted.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    let panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, scripted.coordinator_pane(&project));
-    scripted.runner.on("pane list", ok(&panes));
-    scripted.runner.on("report-metadata", ok("{}"));
+    scripted.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
     let ctx = scripted.ctx();
     let mut memory = Memory::new(&ctx);
     memory.tick = 1;
@@ -1771,27 +1874,28 @@ fn open_alive(world: &World, project: &Project) -> anyhow::Result<()> {
 fn open_renames_a_workspace_whose_label_is_not_the_display_name() {
     let world = World::new();
     let project = world.project("herdr-projects", "a.sock");
-    world.runner.on("workspace get w1", ok(r#"{"result":{"workspace":{"workspace_id":"w1","label":"herdr-projects"}}}"#));
-    world.runner.on("workspace rename", ok(r#"{"result":{}}"#));
+    // Ferrite: the coordinator's Space is a Ferrite Project.
+    world.runner.on("project get --project w1", ok(r#"{"result":{"project":{"id":"w1","label":"herdr-projects"}}}"#));
+    world.runner.on("project rename", ok(r#"{"result":{}}"#));
     open_alive(&world, &project).unwrap();
     let calls = world.runner.calls.borrow();
-    let rename = calls.iter().find(|c| c.display().contains("workspace rename")).unwrap();
-    assert!(rename.args.ends_with(&["w1".to_string(), "Herdr Projects\u{2800}".to_string()]), "{}", rename.display());
+    let rename = calls.iter().find(|c| c.display().contains("project rename")).unwrap();
+    assert!(rename.args.ends_with(&["w1".to_string(), "--label".to_string(), "Herdr Projects\u{2800}".to_string()]), "{}", rename.display());
 }
 
 #[test]
 fn open_leaves_a_matching_label_alone_and_a_failed_rename_does_not_block_it() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
-    world.runner.on("workspace get w1", ok("{\"result\":{\"workspace\":{\"workspace_id\":\"w1\",\"label\":\"Demo\u{2800}\"}}}"));
+    world.runner.on("project get --project w1", ok("{\"result\":{\"project\":{\"id\":\"w1\",\"label\":\"Demo\u{2800}\"}}}"));
     open_alive(&world, &project).unwrap();
-    assert_eq!(world.runner.count("workspace rename"), 0);
+    assert_eq!(world.runner.count("project rename"), 0);
 
     let text = std::fs::read_to_string(project.project_md()).unwrap();
     std::fs::write(project.project_md(), text.replacen("name = \"Demo\"", "name = \"Renamed\"", 1)).unwrap();
-    world.runner.on("workspace rename", fail(1, "boom"));
+    world.runner.on("project rename", fail(1, "boom"));
     open_alive(&world, &project).unwrap();
-    assert_eq!(world.runner.count("workspace rename"), 1);
+    assert_eq!(world.runner.count("project rename"), 1);
 }
 
 #[test]
@@ -1819,11 +1923,12 @@ fn open_starts_a_coordinator_without_a_priming_prompt_then_focuses_it_and_resume
     let socket = world.home.path().join("a.sock");
     std::fs::write(&socket, b"").unwrap();
     let dir = project.canonical_dir().to_string_lossy().into_owned();
-    world.runner.on("workspace create", ok(r#"{"result":{"root_pane":{"workspace_id":"w3","tab_id":"w3:t1","pane_id":"w3:p1"}}}"#));
-    world.runner.on("tab rename", ok(r#"{"result":{}}"#));
-    world.runner.on("workspace get", ok(r#"{"result":{"workspace":{"label":"Demo"}}}"#));
-    world.runner.on("agent focus", ok(r#"{"result":{}}"#));
-    world.runner.on("agent start", ok(r#"{"result":{"agent":{"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3","name":"hpc-demo","agent":"claude","agent_status":"idle","agent_session":{"value":"sess-42"}}}}"#));
+    // Ferrite: the Project opens, the coordinator's Thread is staged in it
+    // and starts with its agent.
+    world.runner.on("project open", ok(r#"{"result":{"project":{"id":"w3","label":"Demo"}}}"#));
+    world.runner.on("project get", ok(r#"{"result":{"project":{"id":"w3","label":"Demo"}}}"#));
+    world.runner.on("thread focus", ok(r#"{"result":{}}"#));
+    world.runner.on("thread start", coordinator_started("w3:p1", "hpc-demo", "claude", &dir, "sess-42"));
     let options = |new: bool| crate::coordinator::OpenOptions {
         session: crate::paths::SessionFlags { session: None, socket: Some(socket.clone()) },
         rebind: false,
@@ -1836,41 +1941,40 @@ fn open_starts_a_coordinator_without_a_priming_prompt_then_focuses_it_and_resume
     // First open: workspace, tab named coordinator, agent started, no prompt at all.
     crate::coordinator::open(&ctx, "demo", &options(false)).unwrap();
     assert_eq!(world.runner.count("agent prompt"), 0);
-    assert_eq!(world.runner.count("agent start"), 1);
+    assert_eq!(world.runner.count("thread start"), 1);
     let record = project.coordinator().unwrap();
     assert_eq!((record.pane_id.as_str(), record.agent_name.as_str(), record.agent.as_str(), record.agent_session.as_str()), ("w3:p1", "hpc-demo", "claude", "sess-42"));
     assert!(project.dir().join("AGENTS.md").is_file());
     assert_eq!(std::fs::read_link(project.dir().join("CLAUDE.md")).unwrap().to_str(), Some("AGENTS.md"));
     let calls = world.runner.calls.borrow();
-    let start = calls.iter().find(|c| c.display().contains("agent start")).unwrap();
-    assert!(start.display().starts_with("herdr agent start hpc-demo --kind claude --pane w3:p1"), "{}", start.display());
+    let start = calls.iter().find(|c| c.display().contains("thread start")).unwrap();
+    assert!(start.display().starts_with(&format!("ferrite thread start --cwd {dir} --provider claude --title hpc-demo --ready")), "{}", start.display());
+    assert!(start.display().contains("--focus"), "{}", start.display());
     assert!(!start.display().contains("--resume"));
     drop(calls);
 
     // A coordinator is running in the folder (unnamed, started by hand): open focuses it.
     *world.agents.borrow_mut() = format!("[{}]", agent_json("w3", "w3:t1", "w3:p1", &dir, "", "idle"));
     crate::coordinator::open(&ctx, "demo", &options(false)).unwrap();
-    assert_eq!(world.runner.count("agent start"), 1);
-    assert_eq!(world.runner.count("agent focus"), 1);
+    assert_eq!(world.runner.count("thread start"), 1);
+    assert_eq!(world.runner.count("thread focus"), 1);
 
     // The pane is gone: a fresh open of the same kind resumes the recorded session.
     *world.agents.borrow_mut() = "[]".into();
     *world.panes.borrow_mut() = "[]".into();
     crate::coordinator::open(&ctx, "demo", &options(false)).unwrap();
     let calls = world.runner.calls.borrow();
-    let start = calls.iter().filter(|c| c.display().contains("agent start")).last().unwrap();
-    assert!(start.args.ends_with(&["--".to_string(), "--resume".to_string(), "sess-42".to_string()]), "{}", start.display());
+    let start = calls.iter().filter(|c| c.display().contains("thread start")).last().unwrap();
+    assert!(start.args.ends_with(&["--args".to_string(), "--resume".to_string(), "--args".to_string(), "sess-42".to_string()]), "{}", start.display());
     drop(calls);
 
     // Another kind never gets claude's session id, and --new starts beside a live one.
     *world.agents.borrow_mut() = format!("[{}]", agent_json("w3", "w3:t1", "w3:p1", &dir, "hpc-demo", "idle"));
-    world.runner.on("tab create", ok(r#"{"result":{"root_pane":{"workspace_id":"w3","tab_id":"w3:t2","pane_id":"w3:p2"}}}"#));
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w3", "w3:t1", "w3:p1", &dir));
     let another = crate::coordinator::OpenOptions { profile: Some("codex".into()), ..options(true) };
     crate::coordinator::open(&ctx, "demo", &another).unwrap();
     let calls = world.runner.calls.borrow();
-    let start = calls.iter().filter(|c| c.display().contains("agent start")).last().unwrap();
-    assert!(start.display().starts_with("herdr agent start hpc-demo-1 --kind codex --pane w3:p2"), "{}", start.display());
+    let start = calls.iter().filter(|c| c.display().contains("thread start")).last().unwrap();
+    assert!(start.display().starts_with(&format!("ferrite thread start --cwd {dir} --provider codex --title hpc-demo-1 --ready")), "{}", start.display());
     assert!(!start.display().contains("sess-42"));
     drop(calls);
     assert!(crate::coordinator::open(&ctx, "demo", &crate::coordinator::OpenOptions { profile: Some("chatgpt".into()), ..options(false) }).is_err());
@@ -1883,10 +1987,9 @@ fn open_new_starts_a_fresh_coordinator_beside_a_live_one_without_its_session() {
     let socket = world.home.path().join("a.sock");
     std::fs::write(&socket, b"").unwrap();
     let dir = project.canonical_dir().to_string_lossy().into_owned();
-    world.runner.on("workspace create", ok(r#"{"result":{"root_pane":{"workspace_id":"w3","tab_id":"w3:t1","pane_id":"w3:p1"}}}"#));
-    world.runner.on("tab rename", ok(r#"{"result":{}}"#));
-    world.runner.on("workspace get", ok(r#"{"result":{"workspace":{"label":"Demo"}}}"#));
-    world.runner.on("agent start hpc-demo --kind claude --pane w3:p1", ok(r#"{"result":{"agent":{"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3","name":"hpc-demo","agent":"claude","agent_status":"idle","agent_session":{"value":"sess-42"}}}}"#));
+    world.runner.on("project open", ok(r#"{"result":{"project":{"id":"w3","label":"Demo"}}}"#));
+    world.runner.on("project get", ok(r#"{"result":{"project":{"id":"w3","label":"Demo"}}}"#));
+    world.runner.on("--title hpc-demo --ready", coordinator_started("w3:p1", "hpc-demo", "claude", &dir, "sess-42"));
     let options = |new: bool| crate::coordinator::OpenOptions {
         session: crate::paths::SessionFlags { session: None, socket: Some(socket.clone()) },
         rebind: false,
@@ -1901,13 +2004,11 @@ fn open_new_starts_a_fresh_coordinator_beside_a_live_one_without_its_session() {
     // The first coordinator is live; --new of the same kind starts a second
     // pane that neither resumes nor records the first one's session.
     *world.agents.borrow_mut() = format!("[{}]", agent_json("w3", "w3:t1", "w3:p1", &dir, "hpc-demo", "idle"));
-    *world.panes.borrow_mut() = format!("[{}]", pane_json("w3", "w3:t1", "w3:p1", &dir));
-    world.runner.on("tab create", ok(r#"{"result":{"root_pane":{"workspace_id":"w3","tab_id":"w3:t2","pane_id":"w3:p2"}}}"#));
-    world.runner.on("--pane w3:p2", ok(r#"{"result":{"agent":{"pane_id":"w3:p2","tab_id":"w3:t2","workspace_id":"w3","name":"hpc-demo-1","agent":"claude","agent_status":"idle"}}}"#));
+    world.runner.on("--title hpc-demo-1 --ready", coordinator_started("w3:p2", "hpc-demo-1", "claude", &dir, ""));
     crate::coordinator::open(&ctx, "demo", &options(true)).unwrap();
     let calls = world.runner.calls.borrow();
-    let start = calls.iter().filter(|c| c.display().contains("agent start")).last().unwrap();
-    assert!(start.display().starts_with("herdr agent start hpc-demo-1 --kind claude --pane w3:p2"), "{}", start.display());
+    let start = calls.iter().filter(|c| c.display().contains("thread start")).last().unwrap();
+    assert!(start.display().starts_with(&format!("ferrite thread start --cwd {dir} --provider claude --title hpc-demo-1 --ready")), "{}", start.display());
     assert!(!start.display().contains("--resume") && !start.display().contains("sess-42"), "{}", start.display());
     drop(calls);
     let record = project.coordinator().unwrap();
@@ -1921,15 +2022,11 @@ fn a_tab_thread_with_a_repo_gets_its_brief_seconds_after_its_agent_is_ready() {
     let repo = world.home.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
     let cwd = project.canonical_dir().join("threads/t-0001").to_string_lossy().into_owned();
-    let created = cwd.clone();
-    world.runner.on_fn(
-        |cmd| cmd.display().contains("tab create"),
-        move |_| Ok(ok(&format!(r#"{{"result":{{"root_pane":{{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2","cwd":"{created}"}}}}}}"#))),
-    );
-    world.runner.on("pane get", ok(r#"{"result":{"pane":{"cwd":""}}}"#));
-    world.runner.on("agent start", ok(r#"{"result":{"agent":{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"}}}"#));
+    // Ferrite: the tab is staged in the coordinator's Project; its Thread
+    // starts with its agent.
+    world.runner.on("thread start", ok(&format!(r#"{{"result":{{"thread":{{"thread":"w1:p2","title":"hp-demo-t-0001","provider":"claude","attention":"idle","cwd":"{cwd}","project":"w1"}}}}}}"#)));
     world.runner.on("agent prompt", ok(r#"{"result":{}}"#));
-    *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
+    *world.agents.borrow_mut() = format!("[{}]", world.coordinator_agent(&project));
     let ctx = world.ctx();
     let args = StartArgs { title: "Clean up".into(), repo: Some(repo.to_string_lossy().into_owned()), machine: None, profile: None, kind: Some(Kind::Tab), base: None, task: "Tidy.".into() };
     let t = threads::start(&ctx, "demo", args).unwrap();
@@ -1937,11 +2034,10 @@ fn a_tab_thread_with_a_repo_gets_its_brief_seconds_after_its_agent_is_ready() {
 
     // Tick 1: the tab is at a shell prompt: the agent is started and the
     // loop is told to look for its brief before the next tick.
-    let pane = pane_json("w1", "w1:t2", "w1:p2", &cwd);
-    *world.panes.borrow_mut() = format!("[{},{pane}]", world.coordinator_pane(&project));
     let mut memory = crate::steps::Memory::new(&ctx);
     assert!(ticker::tick_for_test(&ctx, &mut memory));
-    assert_eq!((world.runner.count("agent start"), world.runner.count("agent prompt")), (1, 0));
+    assert_eq!((world.runner.count("thread start"), world.runner.count("agent prompt")), (1, 0));
+    assert_eq!(thread::load(&project, "t-0001").unwrap().pane_id, "w1:p2", "Ferrite: its Thread is its pane now");
 
     // Between ticks: still starting up, so the brief waits and the checks go on.
     *world.agents.borrow_mut() = format!("[{}]", agent_json("w1", "w1:t2", "w1:p2", &cwd, "hp-demo-t-0001", "working"));
@@ -1966,7 +2062,7 @@ fn a_tab_thread_with_a_repo_gets_its_brief_seconds_after_its_agent_is_ready() {
     assert!(!ticker::brief_pass_for_test(&ctx));
     let mut memory = crate::steps::Memory::new(&ctx);
     assert!(ticker::tick_for_test(&ctx, &mut memory));
-    assert_eq!((world.runner.count("agent start"), world.runner.count("agent prompt")), (1, 1));
+    assert_eq!((world.runner.count("thread start"), world.runner.count("agent prompt")), (1, 1));
 }
 
 #[test]
@@ -1975,13 +2071,7 @@ fn a_tab_thread_gets_a_brief_with_the_project_header_and_prompts_are_recorded() 
     let project = world.project("demo", "a.sock");
     let text = std::fs::read_to_string(project.project_md()).unwrap();
     std::fs::write(project.project_md(), text.replacen("goal = \"\"", "goal = \"Ship it\"", 1)).unwrap();
-    *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
-    let folder = project.dir().join("threads/t-0001");
-    world.runner.on_fn(
-        |cmd| cmd.display().contains("tab create"),
-        move |_| Ok(ok(&format!(r#"{{"result":{{"root_pane":{{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2","cwd":"{}"}}}}}}"#, folder.display()))),
-    );
-    world.runner.on("pane get", ok(r#"{"result":{"pane":{"cwd":""}}}"#));
+    *world.agents.borrow_mut() = format!("[{}]", world.coordinator_agent(&project));
     world.runner.on("agent prompt", ok(r#"{"result":{}}"#));
     let ctx = world.ctx();
     // Delegated from TASKS.md: the task's notes reach the brief.
@@ -1995,7 +2085,13 @@ fn a_tab_thread_gets_a_brief_with_the_project_header_and_prompts_are_recorded() 
     assert!(!brief.contains("max_parallel_threads"));
 
     // A follow-up lands in the task file once it was accepted.
-    thread::update(&project, &t.id, |t| t.prompt_pending = false).unwrap();
+    thread::update(&project, &t.id, |t| {
+        t.prompt_pending = false;
+        // Ferrite: the ticker started its Thread there.
+        t.tab_id = "w1:t2".into();
+        t.pane_id = "w1:p2".into();
+    })
+    .unwrap();
     *world.agents.borrow_mut() = format!("[{}]", agent_json("w1", "w1:t2", "w1:p2", &t.cwd, "hp-demo-t-0001", "working"));
     // Text someone typed in the thread's box is never merged with a prompt.
     *world.screen.borrow_mut() = claude_screen(Some("wait, one more thing"));
@@ -2045,56 +2141,46 @@ fn sweep_leaves_kept_worktrees_and_copies_a_resolved_threads_files_first() {
 
 // ------------------------------------------------------- open in this pane
 
-/// `open` run from shell pane `w5:p1` (working in /tmp) of the session at
-/// `a.sock`, with `vars` added to the pane's variables. Each run of the fake
-/// `claude` executable takes the next (exit code, `agent list`) from `runs`.
+/// `open` run from inside Thread 5 of the Server at `a.sock`, as an agent
+/// there runs it. Ferrite: a Thread's agent is told its Thread and the
+/// Server's socket, never a Herdr pane, and a Thread is never a shell: `open`
+/// never runs a coordinator on the caller's terminal, it starts a Thread.
 struct Here {
     world: World,
     project: Project,
     socket: PathBuf,
     dir: String,
-    runs: Rc<RefCell<Vec<(i32, String)>>>,
 }
 
 impl Here {
-    fn new(vars: &[(&str, &str)]) -> Here {
+    fn new() -> Here {
         let world = World::new();
         let project = project::create(&world.root, "demo", "Ship it", vec![]).unwrap();
         let socket = world.home.path().join("a.sock");
         std::fs::write(&socket, b"").unwrap();
         let socket_text = socket.to_string_lossy().into_owned();
-        let mut all = vec![("HERDR_PANE_ID", "w5:p1"), ("HERDR_SOCKET_PATH", socket_text.as_str())];
-        all.extend_from_slice(vars);
-        let world = World { env: Env::for_test(world.home.path(), &all), ..world };
-        *world.panes.borrow_mut() = format!("[{}]", pane_json("w5", "w5:t1", "w5:p1", "/tmp"));
-        world.runner.on("agent rename", ok(r#"{"result":{}}"#));
-        world.runner.on("agent focus", ok(r#"{"result":{}}"#));
-        world.runner.on("workspace get", ok(r#"{"result":{"workspace":{"label":"Demo"}}}"#));
-        world.runner.on("workspace create", ok(r#"{"result":{"root_pane":{"workspace_id":"w3","tab_id":"w3:t1","pane_id":"w3:p1"}}}"#));
-        world.runner.on("tab rename", ok(r#"{"result":{}}"#));
-        world.runner.on("agent start", ok(r#"{"result":{"agent":{"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3","name":"hpc-demo","agent":"claude","agent_status":"idle"}}}"#));
-        let runs: Rc<RefCell<Vec<(i32, String)>>> = Rc::default();
-        let (agents, queue) = (world.agents.clone(), runs.clone());
-        world.runner.on_fn(
-            |cmd| cmd.program == "claude",
-            move |_| {
-                let (code, listed) = queue.borrow_mut().remove(0);
-                *agents.borrow_mut() = listed;
-                Ok(Output { code: Some(code), ..Output::default() })
-            },
-        );
+        let world = World { env: Env::for_test(world.home.path(), &[("FERRITE_THREAD_ID", "5"), ("FERRITE_SOCKET", socket_text.as_str())]), ..world };
+        world.runner.on("thread rename", ok(r#"{"result":{}}"#));
+        world.runner.on("thread focus", ok(r#"{"result":{}}"#));
+        world.runner.on("project get", ok(r#"{"result":{"project":{"id":"w3","label":"Demo"}}}"#));
+        world.runner.on("project open", ok(r#"{"result":{"project":{"id":"w3","label":"Demo"}}}"#));
         let dir = project.canonical_dir().to_string_lossy().into_owned();
-        Here { world, project, socket, dir, runs }
+        Here { world, project, socket, dir }
     }
 
-    /// An agent Herdr detects in `pane` as a child of `open`: the shell stays
-    /// in /tmp, the agent's own directory is the project home.
-    fn child_agent(&self, pane: &str, name: &str, session: &str) -> String {
-        let workspace = pane.split(':').next().unwrap();
-        format!(
-            r#"{{"pane_id":"{pane}","tab_id":"{workspace}:t1","workspace_id":"{workspace}","cwd":"/tmp","foreground_cwd":"{}","name":"{name}","agent":"claude","agent_status":"idle","agent_session":{{"value":"{session}"}}}}"#,
-            self.dir
-        )
+    /// The fake Server starts `hpc-demo` as Thread `w3:p1` (conversation
+    /// `sess-7`) and any other coordinator as `w3:p2` (`sess-8`), in Project
+    /// `w3`.
+    fn starts_coordinators(&self) {
+        let dir = self.dir.clone();
+        self.world.runner.on_fn(
+            |cmd| cmd.display().contains("thread start"),
+            move |cmd| {
+                let title = cmd.args.iter().skip_while(|a| *a != "--title").nth(1).cloned().unwrap_or_default();
+                let (pane, session) = if title == "hpc-demo" { ("w3:p1", "sess-7") } else { ("w3:p2", "sess-8") };
+                Ok(coordinator_started(pane, &title, "claude", &dir, session))
+            },
+        );
     }
 
     fn open_with(&self, env: &Env, here: bool, new: bool) -> anyhow::Result<()> {
@@ -2112,57 +2198,57 @@ impl Here {
         self.open_with(&self.world.env, here, new)
     }
 
+    /// Agents run on this terminal: never, in Ferrite.
     fn foreground(&self) -> Vec<Cmd> {
         self.world.runner.calls.borrow().iter().filter(|c| c.program == "claude").cloned().collect()
+    }
+
+    fn starts(&self) -> Vec<Cmd> {
+        self.world.runner.calls.borrow().iter().filter(|c| c.display().contains("thread start")).cloned().collect()
     }
 }
 
 #[test]
 fn open_from_a_shell_pane_runs_the_coordinator_there_then_focuses_it_and_new_starts_fresh_elsewhere() {
-    let h = Here::new(&[]);
-    h.runs.borrow_mut().push((0, format!("[{}]", h.child_agent("w5:p1", "", "sess-7"))));
+    let h = Here::new();
+    h.starts_coordinators();
     h.open(true, false).unwrap();
 
-    // The agent ran in this pane, in the project home, not through a new tab.
-    assert_eq!(h.world.runner.count("agent start"), 0);
-    assert_eq!(h.world.runner.count("workspace create") + h.world.runner.count("tab create"), 0);
-    let runs = h.foreground();
-    assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].cwd.as_deref(), Some(h.project.canonical_dir().as_path()));
-    assert!(runs[0].args.is_empty(), "{}", runs[0].display());
-    assert!(runs[0].env.contains(&("PWD".to_string(), h.dir.clone())));
+    // Ferrite: the agent runs in a Thread of its own, in the project home.
+    assert!(h.foreground().is_empty());
+    assert_eq!(h.world.runner.count("project open"), 1);
+    let starts = h.starts();
+    assert_eq!(starts.len(), 1);
+    assert!(starts[0].display().contains(&format!("--cwd {} --provider claude --title hpc-demo --ready", h.dir)), "{}", starts[0].display());
     // Detected, named and recorded like any coordinator.
-    assert_eq!(h.world.runner.count("agent rename w5:p1 hpc-demo"), 1);
     let record = h.project.coordinator().unwrap();
     assert_eq!(
         (record.workspace_id.as_str(), record.tab_id.as_str(), record.pane_id.as_str(), record.agent_name.as_str(), record.cwd.as_str(), record.agent_session.as_str()),
-        ("w5", "w5:t1", "w5:p1", "hpc-demo", h.dir.as_str(), "sess-7")
+        ("w3", "w3:p1", "w3:p1", "hpc-demo", h.dir.as_str(), "sess-7")
     );
-    assert!(h.world.runner.calls.borrow().iter().any(|c| c.display().contains("report-metadata") && c.args.contains(&"w5:p1".to_string())));
+    assert_eq!(h.world.runner.count("report-metadata"), 0, "the nav draws its row natively");
 
-    // Running it again, from another shell pane, focuses it: no second agent.
-    *h.world.agents.borrow_mut() = format!("[{}]", h.child_agent("w5:p1", "hpc-demo", "sess-7"));
+    // Running it again, from another Thread, focuses it: no second agent.
+    *h.world.agents.borrow_mut() = format!("[{}]", agent_json("w3", "w3:p1", "w3:p1", &h.dir, "hpc-demo", "idle"));
     let socket = h.socket.to_string_lossy().into_owned();
-    let other = Env::for_test(h.world.home.path(), &[("HERDR_PANE_ID", "w6:p1"), ("HERDR_SOCKET_PATH", &socket)]);
+    let other = Env::for_test(h.world.home.path(), &[("FERRITE_THREAD_ID", "6"), ("FERRITE_SOCKET", &socket)]);
     h.open_with(&other, true, false).unwrap();
-    assert_eq!(h.foreground().len(), 1);
-    assert_eq!(h.world.runner.count("agent focus w5:p1"), 1);
+    assert_eq!(h.starts().len(), 1);
+    assert_eq!(h.world.runner.count("thread focus --thread w3:p1"), 1);
 
-    // --new from that pane starts a second coordinator there, never resuming.
-    *h.world.panes.borrow_mut() = format!("[{},{}]", pane_json("w5", "w5:t1", "w5:p1", "/tmp"), pane_json("w6", "w6:t1", "w6:p1", "/tmp"));
-    h.runs.borrow_mut().push((0, format!("[{},{}]", h.child_agent("w5:p1", "hpc-demo", "sess-7"), h.child_agent("w6:p1", "", "sess-8"))));
+    // --new from there starts a second coordinator, never resuming.
     h.open_with(&other, true, true).unwrap();
-    let runs = h.foreground();
-    assert_eq!(runs.len(), 2);
-    assert!(runs[1].args.is_empty(), "{}", runs[1].display());
-    assert_eq!(h.world.runner.count("agent rename w6:p1 hpc-demo-1"), 1);
+    let starts = h.starts();
+    assert_eq!(starts.len(), 2);
+    assert!(starts[1].display().contains("--title hpc-demo-1") && !starts[1].display().contains("--resume"), "{}", starts[1].display());
+    assert!(h.foreground().is_empty());
     let record = h.project.coordinator().unwrap();
-    assert_eq!((record.pane_id.as_str(), record.agent_session.as_str()), ("w6:p1", "sess-8"));
+    assert_eq!((record.pane_id.as_str(), record.agent_session.as_str()), ("w3:p2", "sess-8"));
 }
 
 #[test]
 fn open_in_a_pane_resumes_the_recorded_session_and_starts_fresh_when_that_fails() {
-    let h = Here::new(&[]);
+    let h = Here::new();
     h.project
         .update_coordinator(|c| {
             c.socket = h.socket.to_string_lossy().into_owned();
@@ -2171,21 +2257,32 @@ fn open_in_a_pane_resumes_the_recorded_session_and_starts_fresh_when_that_fails(
             c.cwd = h.dir.clone();
         })
         .unwrap();
-    h.runs.borrow_mut().push((0, format!("[{}]", h.child_agent("w5:p1", "", "sess-42"))));
+    let gone = Rc::new(RefCell::new(false));
+    let (flag, dir) = (gone.clone(), h.dir.clone());
+    h.world.runner.on_fn(
+        |cmd| cmd.display().contains("thread start"),
+        move |cmd| {
+            let resuming = cmd.args.iter().any(|a| a == "--resume");
+            Ok(match (resuming, *flag.borrow()) {
+                (true, true) => fail(1, r#"{"error":{"code":"failed","message":"No conversation found with session ID: sess-42"}}"#),
+                (true, false) => coordinator_started("w3:p1", "hpc-demo", "claude", &dir, "sess-42"),
+                (false, _) => coordinator_started("w3:p1", "hpc-demo", "claude", &dir, "sess-9"),
+            })
+        },
+    );
     h.open(true, false).unwrap();
-    assert_eq!(h.foreground()[0].args, ["--resume", "sess-42"]);
+    assert!(h.starts()[0].args.ends_with(&strings(&["--args", "--resume", "--args", "sess-42"])), "{}", h.starts()[0].display());
     assert_eq!(h.project.coordinator().unwrap().agent_session, "sess-42");
 
-    // The session is gone: claude exits at once, never detected, and a fresh
-    // one starts in its place.
-    *h.world.agents.borrow_mut() = "[]".into();
-    h.runs.borrow_mut().push((1, "[]".into()));
-    h.runs.borrow_mut().push((0, format!("[{}]", h.child_agent("w5:p1", "", "sess-9"))));
+    // The session is gone: the resume is refused, and a fresh one starts in
+    // its place.
+    *gone.borrow_mut() = true;
     h.open(true, false).unwrap();
-    let runs = h.foreground();
-    assert_eq!(runs.len(), 3);
-    assert_eq!(runs[1].args, ["--resume", "sess-42"]);
-    assert!(runs[2].args.is_empty(), "{}", runs[2].display());
+    let starts = h.starts();
+    assert_eq!(starts.len(), 3);
+    assert!(starts[1].args.ends_with(&strings(&["--args", "--resume", "--args", "sess-42"])), "{}", starts[1].display());
+    assert!(!starts[2].display().contains("--resume"), "{}", starts[2].display());
+    assert!(h.foreground().is_empty());
     assert_eq!(h.project.coordinator().unwrap().agent_session, "sess-9");
 }
 
@@ -2194,6 +2291,7 @@ fn open_makes_a_tab_outside_a_shell_pane_from_the_popup_with_tab_or_from_an_agen
     let socket = |h: &Here| h.socket.to_string_lossy().into_owned();
     // Not inside Herdr, --tab, the popup (a plugin pane), another session's
     // pane, and a pane an agent occupies: all make a tab and run nothing here.
+    // Ferrite: so does every Thread, a pane no agent occupies being Herdr's.
     let cases: Vec<(&str, Box<dyn Fn(&Here) -> (Env, bool)>)> = vec![
         ("outside herdr", Box::new(|h| (Env::for_test(h.world.home.path(), &[]), true))),
         ("--tab", Box::new(|h| (h.world.env.clone(), false))),
@@ -2205,45 +2303,43 @@ fn open_makes_a_tab_outside_a_shell_pane_from_the_popup_with_tab_or_from_an_agen
         })),
     ];
     for (case, setup) in cases {
-        let h = Here::new(&[]);
+        let h = Here::new();
+        h.starts_coordinators();
         let (env, here) = setup(&h);
         h.open_with(&env, here, false).unwrap();
         assert!(h.foreground().is_empty(), "{case}");
-        assert_eq!(h.world.runner.count("workspace create"), 1, "{case}");
-        assert_eq!(h.world.runner.count("agent start hpc-demo --kind claude --pane w3:p1"), 1, "{case}");
+        assert_eq!(h.world.runner.count("project open"), 1, "{case}");
+        assert_eq!(h.world.runner.count("--title hpc-demo --ready"), 1, "{case}");
         assert_eq!(h.project.coordinator().unwrap().pane_id, "w3:p1", "{case}");
     }
 }
 
 #[test]
 fn a_tab_thread_of_a_coordinator_running_in_another_workspace_opens_the_project_workspace() {
-    let h = Here::new(&[]);
-    h.runs.borrow_mut().push((0, format!("[{}]", h.child_agent("w5:p1", "", "sess-7"))));
+    let h = Here::new();
+    h.starts_coordinators();
     h.open(true, false).unwrap();
-    let folder = h.project.dir().join("threads/t-0001");
-    h.world.runner.on("pane get", ok(r#"{"result":{"pane":{"cwd":""}}}"#));
+    // Ferrite: a coordinator's Thread works in the project folder, so its
+    // Project is where a tab thread goes, even when the record names a Space
+    // that closed since; nothing new is opened for it.
+    h.project.update_coordinator(|c| c.workspace_id = "w5".into()).unwrap();
+    *h.world.agents.borrow_mut() = format!("[{}]", agent_json("w3", "w3:p1", "w3:p1", &h.dir, "hpc-demo", "idle"));
+    let folder = h.project.canonical_dir().join("threads/t-0001");
     let args = |title: &str| StartArgs { title: title.into(), repo: None, machine: None, profile: None, kind: Some(Kind::Tab), base: None, task: "Look.".into() };
     let t = threads::start(&h.world.ctx(), "demo", args("Research")).unwrap();
-    let calls = h.world.runner.calls.borrow();
-    let create = calls.iter().filter(|c| c.display().contains("workspace create")).last().unwrap();
-    assert!(create.display().contains("threads/t-0001") && create.args.contains(&"Demo\u{2800}".to_string()), "{}", create.display());
-    drop(calls);
-    // (`Here` scripts every new workspace as w3.)
-    assert_eq!(h.world.runner.count("tab rename w3:t1 Research"), 1);
-    assert_eq!((t.workspace_id.as_str(), t.pane_id.as_str()), ("w3", "w3:p1"));
+    assert_eq!((t.workspace_id.as_str(), t.cwd.as_str()), ("w3", &*folder.to_string_lossy()));
+    assert_eq!(crate::herdr::Staged::parse(&t.pane_id).map(|s| s.space), Some("w3".to_string()));
 
-    // The next tab thread finds that workspace by its shell in the project folder.
-    let folder = std::fs::canonicalize(&folder).unwrap();
-    *h.world.panes.borrow_mut() = format!("[{},{}]", pane_json("w5", "w5:t1", "w5:p1", "/tmp"), pane_json("w3", "w3:t1", "w3:p1", &folder.to_string_lossy()));
-    h.world.runner.on("tab create", ok(r#"{"result":{"root_pane":{"workspace_id":"w3","tab_id":"w3:t2","pane_id":"w3:p2"}}}"#));
-    threads::start(&h.world.ctx(), "demo", args("More")).unwrap();
-    assert_eq!(h.world.runner.count("tab create --workspace w3"), 1);
-    assert_eq!(h.world.runner.count("workspace create"), 1);
+    // The next tab thread finds the same Project.
+    let more = threads::start(&h.world.ctx(), "demo", args("More")).unwrap();
+    assert_eq!(more.workspace_id, "w3");
+    assert_eq!(h.world.runner.count("project open"), 1, "only the coordinator's open");
 }
 
 /// Herdr's default socket, where the ticker looks for hand-started agents.
+/// Ferrite: the Server's own (`herdr::default_socket`).
 fn default_socket(world: &World) -> String {
-    let socket = world.home.path().join(".config/herdr/herdr.sock");
+    let socket = crate::herdr::default_socket(world.home.path());
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
     std::fs::write(&socket, b"").unwrap();
     socket.to_string_lossy().into_owned()
@@ -2269,18 +2365,17 @@ fn an_agent_started_by_hand_in_a_never_opened_project_becomes_its_coordinator() 
     assert_eq!((record.socket.as_str(), record.pane_id.as_str(), record.workspace_id.as_str(), record.agent.as_str()), (socket.as_str(), "wGM:p1", "wGM", "opencode"));
     assert_eq!(record.cwd, dir);
     assert!(other.coordinator().is_none(), "no agent works in the other project's folder");
-    // Both projects were looked for in one agent list.
-    assert_eq!(world.runner.count("agent list"), 1);
-    // Its routine fired, and its pane and Space row carry tokens.
+    // Both projects were looked for in one agent list (Ferrite: one `thread
+    // list` answers the agents, one the panes).
+    assert_eq!(world.runner.count("thread list"), 2);
+    // Its routine fired.
     assert_eq!(items_of(&project, "routine").len(), 1);
     assert_eq!(crate::coordinator::live(&project).len(), 1);
-    // Its row once, named for its project and marked as the group's head,
-    // then its place in the grouping.
-    assert_eq!(world.runner.count("pane report-metadata wGM:p1"), 2);
-    assert_eq!(world.runner.count("--display-agent Auto\u{200B}"), 1);
-    assert_eq!(world.runner.count("hp_group=auto!0!wGM:p1"), 1);
-    // Spaces carry no tokens of ours.
-    assert_eq!(world.runner.count("workspace report-metadata wGM"), 0);
+    // Ferrite: no tokens are pushed: the nav draws its row, named for its
+    // project and marked as the group's head, in its place in the grouping.
+    assert_eq!(world.runner.count("report-metadata"), 0);
+    assert_eq!(crate::sidebar::coordinator_display(&project), "Auto\u{200B}");
+    assert_eq!(crate::grouping::coordinator_key("auto", "wGM:p1"), "auto!0!wGM:p1");
 }
 
 #[test]
@@ -2356,7 +2451,7 @@ fn a_coordinator_that_appears_later_gets_the_next_scheduled_run_only() {
     ticker::tick_for_test(&ctx, &mut memory);
     box_empty_for_a_while(&project);
     ticker::tick_for_test(&ctx, &mut memory);
-    assert_eq!(world.runner.count("agent prompt w1:p1"), 1);
+    assert_eq!(world.runner.count("agent prompt --thread w1:p1"), 1);
 }
 
 #[test]
@@ -2407,9 +2502,9 @@ fn a_routine_in_one_project_never_reaches_another_projects_coordinator() {
     ticker::tick_for_test(&ctx, &mut memory);
     assert_eq!(items_of(&a, "routine").len(), 1);
     assert!(inbox::unhandled(&b).is_empty());
-    assert_eq!(world.runner.count("agent prompt wA:p1"), 1);
-    assert_eq!(world.runner.count("agent prompt wB:p1"), 0);
-    assert_eq!(world.runner.count("agent prompt wT:p1"), 0);
+    assert_eq!(world.runner.count("agent prompt --thread wA:p1"), 1);
+    assert_eq!(world.runner.count("agent prompt --thread wB:p1"), 0);
+    assert_eq!(world.runner.count("agent prompt --thread wT:p1"), 0);
 }
 
 #[test]
@@ -2431,24 +2526,26 @@ fn an_agent_in_the_threads_folder_is_not_the_coordinator() {
 #[test]
 fn thread_read_and_keys_reach_the_threads_pane_on_its_session_and_refuse_a_bare_shell() {
     let (world, project, t) = finished_world("blocked");
-    world.runner.on("agent read", ok("Do you trust the files in this folder?\n> 1. Yes, proceed\n  2. No, exit\n"));
-    world.runner.on("pane send-text", ok(""));
-    world.runner.on("agent send-keys", ok(""));
+    world.runner.on("agent read", ok(r#"{"result":{"thread":"w2:p1","text":"Do you trust the files in this folder?\n> 1. Yes, proceed\n  2. No, exit"}}"#));
+    world.runner.on("agent interrupt", ok(r#"{"result":{}}"#));
     let ctx = world.ctx();
 
     threads::read(&ctx, "demo", "t-0001", None).unwrap();
     threads::read(&ctx, "demo", "t-0001", Some(40)).unwrap();
-    threads::keys(&ctx, "demo", "t-0001", &["down".into(), "enter".into()], Some("-- not a flag")).unwrap();
+    // Ferrite: there is no input box to type into, so text is refused before
+    // anything is sent; a key becomes what it meant (Escape interrupts).
+    let typed = threads::keys(&ctx, "demo", "t-0001", &["down".into(), "enter".into()], Some("-- not a flag")).unwrap_err().to_string();
+    assert!(typed.contains("not_wired") && typed.contains("no input box"), "{typed}");
+    threads::keys(&ctx, "demo", "t-0001", &["esc".into()], None).unwrap();
     {
         let calls = world.runner.calls.borrow();
         let reads: Vec<&Cmd> = calls.iter().filter(|c| c.display().contains("agent read")).collect();
-        assert_eq!(reads[0].args, ["agent", "read", "w2:p1", "--format", "text", "--source", "visible"]);
-        assert_eq!(reads[1].args[5..], ["--source", "recent", "--lines", "40"]);
+        assert_eq!(reads[0].args, ["agent", "read", "--thread", "w2:p1"]);
+        assert_eq!(reads[1].args[4..], ["--lines", "40"]);
         assert!(socket_of(reads[0]).ends_with("a.sock"));
-        // Text goes first, then the keys, both to the thread's pane.
-        let sent: Vec<&Cmd> = calls.iter().filter(|c| c.display().contains("send-")).collect();
-        assert_eq!(sent[0].args, ["pane", "send-text", "w2:p1", "-- not a flag"]);
-        assert_eq!(sent[1].args, ["agent", "send-keys", "w2:p1", "down", "enter"]);
+        let sent: Vec<&Cmd> = calls.iter().filter(|c| c.display().contains("agent interrupt") || c.display().contains("decision answer")).collect();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].args, ["agent", "interrupt", "--thread", "w2:p1"]);
     }
 
     // Nothing to send, an empty key name, no agent in the pane, a resolved thread.
@@ -2460,30 +2557,34 @@ fn thread_read_and_keys_reach_the_threads_pane_on_its_session_and_refuse_a_bare_
     assert!(threads::read(&ctx, "demo", "t-0001", None).is_err());
     thread::update(&project, &t.id, |t| t.status = Status::Resolved).unwrap();
     assert!(threads::read(&ctx, "demo", "t-0001", None).unwrap_err().to_string().contains("has no pane"));
-    assert_eq!(world.runner.count("send-"), 2);
+    assert_eq!(world.runner.count("agent interrupt") + world.runner.count("decision answer"), 1);
 }
 
 #[test]
 fn thread_keys_reach_a_remote_thread_through_its_machine() {
     let (world, _project) = remote_world();
     let world = World { runner: FakeRunner::new(), ..world };
-    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"}]}}"#));
     let cwd = "/home/me/wt";
+    let blocked = agent_json("w2", "w2:t1", "w2:p1", cwd, "hp-demo-t-0001", "blocked");
+    let listed = threads_reply(&format!("[{blocked}]"));
+    let thread = serde_json::from_str::<serde_json::Value>(&listed).unwrap()["result"]["threads"][0].clone();
+    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("thread list"), move |_| Ok(ok(&listed)));
+    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("thread get"), move |_| Ok(ok(&serde_json::json!({ "result": { "thread": thread } }).to_string())));
+    // Ferrite: what the screen shows is the Decision pending on the Thread.
     world.runner.on_fn(
-        |cmd| is_machine_call(cmd) && cmd.display().contains("agent list"),
-        move |_| Ok(ok(&format!(r#"{{"result":{{"agents":[{}]}}}}"#, agent_json("w2", "w2:t1", "w2:p1", cwd, "hp-demo-t-0001", "blocked")))),
+        |cmd| is_machine_call(cmd) && cmd.display().contains("decision list"),
+        |_| Ok(ok(r#"{"result":{"decisions":[{"thread":12,"decision":{"id":"perm_01","kind":{"kind":"approval"},"description":"Allow this command?","tool_name":"Bash","input":{"command":"ls"}}}]}}"#)),
     );
-    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("pane list"), |_| Ok(ok(r#"{"result":{"panes":[]}}"#)));
-    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("agent read"), |_| Ok(ok("Allow this command?\n")));
-    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("agent send-keys"), |_| Ok(ok("")));
-    world.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    world.runner.on("pane list", ok(r#"{"result":{"panes":[]}}"#));
+    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("agent read"), |_| Ok(ok(r#"{"result":{"text":"Allow this command?"}}"#)));
+    world.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("decision answer"), |_| Ok(ok(r#"{"result":{}}"#)));
+    world.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
     let ctx = world.ctx();
     threads::read(&ctx, "demo", "t-0001", None).unwrap();
     threads::keys(&ctx, "demo", "t-0001", &["enter".into()], None).unwrap();
     let calls = world.runner.calls.borrow();
-    let sent = calls.iter().find(|c| c.display().contains("agent send-keys")).unwrap();
-    assert_eq!(sent.args, ["--machine", "box", "agent", "send-keys", "w2:p1", "enter"]);
+    let sent = calls.iter().find(|c| c.display().contains("decision answer")).unwrap();
+    assert_eq!(sent.args[..8], ["--machine", "box", "decision", "answer", "--thread", "w2:p1", "--decision", "perm_01"]);
     assert!(calls.iter().any(|c| is_machine_call(c) && c.display().contains("agent read")));
 }
 
@@ -2506,7 +2607,7 @@ fn thread_brief_delivers_a_pending_brief_once_and_only_to_a_ready_agent() {
     {
         let calls = world.runner.calls.borrow();
         let sent = calls.iter().find(|c| c.display().contains("agent prompt")).unwrap();
-        assert_eq!(sent.args[2..5], ["w2:p1".to_string(), thread::launch_prompt("demo", "t-0001"), "--wait".to_string()]);
+        assert_eq!(sent.args[2..7], ["--thread".to_string(), "w2:p1".to_string(), "--text".to_string(), thread::launch_prompt("demo", "t-0001"), "--until".to_string()]);
     }
     // Again, or on the ticker's next pass: nothing more is sent.
     threads::brief(&ctx, "demo", "t-0001").unwrap();
@@ -2544,8 +2645,8 @@ fn a_brief_waits_while_a_trust_screen_shows_even_when_herdr_reads_idle() {
 #[test]
 fn prompts_never_reach_a_trust_screen_and_keys_follow_the_trust_setting() {
     let (world, project, t) = finished_world("idle");
-    world.runner.on("pane send-text", ok(""));
-    world.runner.on("agent send-keys", ok(""));
+    // Ferrite: a key answers the Decision the screen shows.
+    world.runner.on("decision answer", ok(r#"{"result":{}}"#));
     *world.screen.borrow_mut() = TRUST_SCREEN.into();
     let ctx = world.ctx();
 
@@ -2556,20 +2657,20 @@ fn prompts_never_reach_a_trust_screen_and_keys_follow_the_trust_setting() {
     // Unset and yolo off: the user answers, so keys are refused.
     let err = threads::keys(&ctx, "demo", &t.id, &["enter".into()], None).unwrap_err().to_string();
     assert!(err.contains("trust_screens = user"), "{err}");
-    assert_eq!(world.runner.count("send-keys"), 0);
+    assert_eq!(world.runner.count("decision answer"), 0);
 
     // Yolo on: the coordinator answers them.
     let target = crate::safety::Target::Project(project.clone());
     crate::safety::apply(&ctx, &target, "yolo", &["on".into()]).unwrap();
     threads::keys(&ctx, "demo", &t.id, &["enter".into()], None).unwrap();
-    assert_eq!(world.runner.count("send-keys"), 1);
+    assert_eq!(world.runner.count("decision answer"), 1);
     // Set by the user, the setting wins over yolo.
     crate::safety::apply(&ctx, &target, "trust_screens", &["user".into()]).unwrap();
     assert!(threads::keys(&ctx, "demo", &t.id, &["enter".into()], None).is_err());
     // An ordinary screen takes keys under either setting.
     *world.screen.borrow_mut() = "Allow this edit?\n❯ 1. Yes\n  2. No\n".into();
     threads::keys(&ctx, "demo", &t.id, &["enter".into()], None).unwrap();
-    assert_eq!(world.runner.count("send-keys"), 2);
+    assert_eq!(world.runner.count("decision answer"), 2);
 }
 
 /// A pending remote thread on "box" whose profile box resolved, and a ticker
@@ -2594,21 +2695,17 @@ fn remote_profile_world(allow: Option<&str>) -> (World, Project, String) {
         t.profile_args = vec!["--model".into(), "gpt-5.5".into(), "--config".into(), "/Users/box/x.toml".into()];
         t.agent_name = thread::agent_name(&project.slug, &t.id);
         t.workspace_id = "w2".into();
-        t.tab_id = "w2:t2".into();
-        t.pane_id = "w2:p2".into();
+        // Ferrite: staged on box, at a shell prompt as Herdr would say.
+        let staged = crate::herdr::Staged { space: "w2".into(), focus: false, cwd: home.clone() }.id();
+        t.tab_id = staged.clone();
+        t.pane_id = staged;
         t.cwd = home.clone();
     })
     .unwrap();
-    let local_panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, world.coordinator_pane(&project));
-    let remote_panes = format!(r#"{{"result":{{"panes":[{},{}]}}}}"#, pane_json("w2", "w2:t1", "w2:p1", "/home/me/wt"), pane_json("w2", "w2:t2", "w2:p2", &home));
-    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
-    world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("agent list"), |_| Ok(ok(r#"{"result":{"agents":[]}}"#)));
-    world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("pane list"), move |_| Ok(ok(&remote_panes)));
-    world.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
-    world.runner.on("pane list", ok(&local_panes));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"}]}}"#));
+    world.runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
     world.runner.on("ssh", ok(""));
-    world.runner.on("report-metadata", ok(r#"{"result":{}}"#));
-    world.runner.on("agent start", ok(r#"{"result":{"agent":{"pane_id":"w2:p2","tab_id":"w2:t2","workspace_id":"w2"}}}"#));
+    world.runner.on("thread start", ok(r#"{"result":{"thread":{"thread":"w2:p2","provider":"codex","attention":"idle","project":"w2"}}}"#));
     (world, project, t.id)
 }
 
@@ -2620,10 +2717,10 @@ fn a_remote_thread_launches_with_its_machines_own_profile() {
     let mut memory = Memory::new(&ctx);
     memory.tick = 1;
     ticker::tick_project_with(&ctx, &project, &mut memory).unwrap();
-    let start = world.runner.calls.borrow().iter().find(|c| c.display().contains("agent start")).cloned().expect("an agent start");
+    let start = world.runner.calls.borrow().iter().find(|c| c.display().contains("thread start")).cloned().expect("a thread start");
     assert!(is_machine_call(&start) && start.args[1] == "box");
     let line = start.display();
-    assert!(line.contains("--kind codex") && line.contains("-- --model gpt-5.5 --config /Users/box/x.toml"), "{line}");
+    assert!(line.contains("--provider codex") && line.contains("--args --model --args gpt-5.5 --args --config --args /Users/box/x.toml"), "{line}");
     assert_eq!(thread::load(&project, &id).unwrap().status, Status::Open);
 }
 
@@ -2634,7 +2731,7 @@ fn a_remote_profile_off_this_projects_allow_list_does_not_launch() {
     let mut memory = Memory::new(&ctx);
     memory.tick = 1;
     ticker::tick_project_with(&ctx, &project, &mut memory).unwrap();
-    assert_eq!(world.runner.count("agent start"), 0);
+    assert_eq!(world.runner.count("thread start"), 0);
     let t = thread::load(&project, &id).unwrap();
     assert_eq!(t.status, Status::Failed);
     assert!(t.error.contains("profile `fast` is not allowed"), "{}", t.error);
@@ -2644,7 +2741,7 @@ fn a_remote_profile_off_this_projects_allow_list_does_not_launch() {
 fn a_remote_threads_profile_is_resolved_on_its_machine() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
-    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"box","target":"me@box"}]}}"#));
     world.runner.on("resolve -- fast", ok(r#"{"name":"fast","agent":"codex","args":["--model","gpt-5.5"]}"#));
     world.runner.on("profile resolve", ok(r#"{"name":"deep","agent":"claude","args":["--model","opus"]}"#));
     let ctx = world.ctx();
@@ -2708,7 +2805,7 @@ fn rename_moves_the_folder_and_every_reference_to_it() {
     std::fs::write(ctx.config_dir.join("config.toml"), format!("# mine\n[safety.default]\nyolo = false\n\n[safety.\"{old_s}\"]\nyolo = true\nthread_profiles = [\"claude\"]\n")).unwrap();
     let approval = crate::routine::Approval { project: old_s.clone(), routine: "watch".into(), command_sha256: "h".into(), approved: "now".into() };
     project::write_json(&ctx.config_dir.join("approved-routines.json"), &vec![approval]).unwrap();
-    world.runner.on("workspace rename", ok(r#"{"result":{}}"#));
+    world.runner.on("project rename", ok(r#"{"result":{}}"#));
 
     let out = crate::rename::run(&ctx, &rename_args("scratch", "home", Some("Home Base"), false)).unwrap();
 
@@ -2739,7 +2836,7 @@ fn rename_moves_the_folder_and_every_reference_to_it() {
     assert_eq!(crate::routine::approvals(&ctx.config_dir)[0].project, new_s);
     // The home Space gets the new name.
     let calls = world.runner.calls.borrow();
-    let rename = calls.iter().find(|c| c.display().contains("workspace rename")).expect("space renamed");
+    let rename = calls.iter().find(|c| c.display().contains("project rename")).expect("space renamed");
     assert!(rename.display().contains("w1") && rename.display().contains("Home Base"), "{}", rename.display());
     drop(calls);
     // What it could not update is listed, the remote thread by machine.
@@ -2777,10 +2874,10 @@ fn rename_refuses_open_threads_live_agents_taken_and_bad_slugs() {
     assert!(!plan.scheduled && crate::rename::pending(&world.root, "demo").is_none());
     let by_ticker = crate::rename::Args { by_ticker: true, ..rename_args("demo", "home", None, false) };
     assert!(crate::rename::run(&ctx, &by_ticker).unwrap_err().to_string().contains("agents still run"));
-    *world.agents.borrow_mut() = "[]".into();
-    *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
+    // Ferrite: the coordinator's pane is its Thread.
+    *world.agents.borrow_mut() = format!("[{}]", world.coordinator_agent(&project));
     assert_eq!(crate::rename::run(&ctx, &rename_args("demo", "home", None, true)).unwrap().closing, ["coordinator (pane w1:p1)"]);
-    *world.panes.borrow_mut() = "[]".into();
+    *world.agents.borrow_mut() = "[]".into();
 
     // The dry run lists the plan and changes nothing.
     let plan = crate::rename::run(&ctx, &rename_args("demo", "home", None, true)).unwrap();
@@ -2835,11 +2932,10 @@ fn a_coordinator_renames_its_own_project_and_reopens_in_the_new_folder() {
     let coordinator = |state: &str| format!("[{}]", agent_json("w1", "w1:t1", "w1:p1", &old.to_string_lossy(), "hpc-scratch", state));
     *world.agents.borrow_mut() = coordinator("working");
     *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
-    world.runner.on("pane close", ok(r#"{"result":{}}"#));
-    world.runner.on("workspace create", ok(r#"{"result":{"root_pane":{"workspace_id":"w4","tab_id":"w4:t1","pane_id":"w4:p1"}}}"#));
-    world.runner.on("tab rename", ok(r#"{"result":{}}"#));
-    world.runner.on("workspace rename", ok(r#"{"result":{}}"#));
-    world.runner.on("agent start", ok(r#"{"result":{"agent":{"pane_id":"w4:p1","tab_id":"w4:t1","workspace_id":"w4","name":"hpc-home","agent":"claude","agent_status":"idle","agent_session":{"value":"sess-7"}}}}"#));
+    world.runner.on("thread close", ok(r#"{"result":{}}"#));
+    world.runner.on("project open", ok(r#"{"result":{"project":{"id":"w4","label":"Home"}}}"#));
+    world.runner.on("project rename", ok(r#"{"result":{}}"#));
+    world.runner.on("thread start", ok(r#"{"result":{"thread":{"thread":"w4:p1","title":"hpc-home","provider":"claude","attention":"idle","project":"w4","provider_session":"sess-7"}}}"#));
     let ctx = world.ctx();
 
     // The coordinator runs the command itself: it is handed to the ticker.
@@ -2854,11 +2950,11 @@ fn a_coordinator_renames_its_own_project_and_reopens_in_the_new_folder() {
 
     // While it works (finishing its reply), nothing happens.
     assert!(crate::rename::pending_pass(&ctx).is_empty());
-    assert_eq!(world.runner.count("pane close"), 0);
+    assert_eq!(world.runner.count("thread close"), 0);
     // Idle: its pane is closed; the move waits for the next pass.
     *world.agents.borrow_mut() = coordinator("idle");
     crate::rename::pending_pass(&ctx);
-    assert_eq!(world.runner.count("pane close w1:p1"), 1);
+    assert_eq!(world.runner.count("thread close --thread w1:p1"), 1);
     assert!(old.is_dir());
     *world.agents.borrow_mut() = "[]".into();
     *world.panes.borrow_mut() = "[]".into();
@@ -2871,9 +2967,9 @@ fn a_coordinator_renames_its_own_project_and_reopens_in_the_new_folder() {
     let new = home.canonical_dir();
     assert!(claude_transcript(&world, &new, "sess-7").is_file() && transcript.is_file());
     let calls = world.runner.calls.borrow();
-    let start = calls.iter().find(|c| c.display().contains("agent start")).expect("reopened");
-    assert!(start.display().contains("--resume sess-7"), "{}", start.display());
-    let create = calls.iter().find(|c| c.display().contains("workspace create")).unwrap();
+    let start = calls.iter().find(|c| c.display().contains("thread start")).expect("reopened");
+    assert!(start.display().contains("--args --resume --args sess-7"), "{}", start.display());
+    let create = calls.iter().find(|c| c.display().contains("project open")).unwrap();
     assert!(create.display().contains(&*new.to_string_lossy()), "{}", create.display());
     drop(calls);
     let record = home.coordinator().unwrap();
@@ -2887,7 +2983,7 @@ fn a_coordinator_renames_its_own_project_and_reopens_in_the_new_folder() {
     crate::rename::pending_pass(&ctx);
     crate::rename::pending_pass(&ctx);
     let calls = world.runner.calls.borrow();
-    let prompts: Vec<_> = calls.iter().filter(|c| c.display().contains("agent prompt w4:p1")).collect();
+    let prompts: Vec<_> = calls.iter().filter(|c| c.display().contains("agent prompt --thread w4:p1")).collect();
     assert_eq!(prompts.len(), 1);
     assert!(prompt_text(prompts[0]).contains("renamed from `scratch` to `home`"), "{}", prompts[0].display());
     drop(calls);
@@ -2920,7 +3016,7 @@ fn a_pending_rename_closes_a_busy_agent_after_the_wait_and_reports_a_failure() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
     let dir = project.canonical_dir();
-    world.runner.on("pane close", ok(r#"{"result":{}}"#));
+    world.runner.on("thread close", ok(r#"{"result":{}}"#));
     *world.agents.borrow_mut() = format!("[{}]", agent_json("w9", "w9:t1", "w9:p3", &dir.to_string_lossy(), "stray", "working"));
     let ctx = world.ctx();
     assert!(crate::rename::run(&ctx, &rename_args("demo", "home", None, false)).unwrap().scheduled);
@@ -2930,7 +3026,7 @@ fn a_pending_rename_closes_a_busy_agent_after_the_wait_and_reports_a_failure() {
     pending.requested = "2020-01-01T00:00:00Z".into();
     project::write_json(&path, &pending).unwrap();
     crate::rename::pending_pass(&ctx);
-    assert_eq!(world.runner.count("pane close w9:p3"), 1);
+    assert_eq!(world.runner.count("thread close --thread w9:p3"), 1);
 
     // A thread started meanwhile: the rename is dropped and the inbox says why.
     *world.agents.borrow_mut() = "[]".into();

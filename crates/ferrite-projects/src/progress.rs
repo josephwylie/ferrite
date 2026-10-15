@@ -130,11 +130,9 @@ pub fn current(env: &Env, runner: &dyn Runner) -> Option<Current> {
 
 /// The hook uses a short timeout: a slow server must not stall every tool call.
 pub fn current_within(env: &Env, runner: &dyn Runner, timeout: std::time::Duration) -> Option<Current> {
-    if env.var("HERDR_ENV") != Some("1") {
-        return None;
-    }
-    env.var("HERDR_PANE_ID")?;
-    let socket = env.var("HERDR_SOCKET_PATH")?.to_string();
+    // Ferrite: a Thread's agent is told its Thread and the Server's socket.
+    env.var("FERRITE_THREAD_ID")?;
+    let socket = env.var("FERRITE_SOCKET")?.to_string();
     let herdr = Herdr::new(env.herdr_bin(), &socket, runner);
     let result = herdr.call(&["pane", "current", "--current"], timeout).ok()?;
     let pane = &result["pane"];
@@ -178,7 +176,8 @@ pub fn report(ctx: &Ctx, percent: Option<u8>, activity: &str) -> Result<()> {
 /// `progress [--pane ID]`: the record for the calling pane, or the given one.
 pub fn print(ctx: &Ctx, pane: Option<&str>) -> Result<()> {
     let (socket, pane_id) = match pane {
-        Some(id) => (ctx.env.var("HERDR_SOCKET_PATH").unwrap_or("").to_string(), id.to_string()),
+        // Ferrite: the Server's socket, as `current` reads it.
+        Some(id) => (ctx.env.var("FERRITE_SOCKET").unwrap_or("").to_string(), id.to_string()),
         None => match current(ctx.env, ctx.runner) {
             Some(c) => (c.socket, c.pane_id),
             None => bail!("not inside a Ferrite pane; pass --pane ID"), // Ferrite: panes are Ferrite's.
@@ -302,7 +301,8 @@ pub fn output(harness: &crate::setup::Harness, native: &str, text: &str) -> serd
 /// (exit 0, no output) outside a Herdr pane, so the same hooks may sit in the
 /// user's settings for every session on the machine.
 pub fn hook(ctx: &Ctx, agent: &str) -> Result<()> {
-    if ctx.env.var("HERDR_ENV") != Some("1") || ctx.env.var("HERDR_PANE_ID").is_none() {
+    // Ferrite: inside a Thread, as `current` tells.
+    if ctx.env.var("FERRITE_THREAD_ID").is_none() {
         return Ok(());
     }
     use std::io::Read;
@@ -463,6 +463,20 @@ mod tests {
         assert!(guidance("/p/hp --root /r", None).contains("top-level agent in this pane reports"));
         assert!(guidance("/p/hp --root /r", Some("w2:p3")).contains("this pane (w2:p3)"));
         assert!(instructions("hp", "w1:p1").starts_with("# Progress (herdr-projects)\n\nReport the progress"));
+    }
+
+    #[test]
+    fn the_calling_pane_is_the_calling_thread() {
+        // Ferrite: bound by FERRITE_THREAD_ID and FERRITE_SOCKET.
+        use crate::runner::fake::{FakeRunner, ok};
+        let runner = FakeRunner::new();
+        runner.on("thread get --current", ok(r#"{"result":{"thread":{"thread":12,"provider":"claude","attention":"working"}}}"#));
+        let outside = Env::for_test(std::path::Path::new("/h"), &[("FERRITE_SOCKET", "/s.sock")]);
+        assert!(current(&outside, &runner).is_none());
+        assert!(runner.calls.borrow().is_empty());
+        let inside = Env::for_test(std::path::Path::new("/h"), &[("FERRITE_THREAD_ID", "12"), ("FERRITE_SOCKET", "/s.sock")]);
+        let pane = current(&inside, &runner).unwrap();
+        assert_eq!((pane.socket.as_str(), pane.pane_id.as_str(), pane.terminal_id.as_str(), pane.agent.as_str()), ("/s.sock", "12", "12", "claude"));
     }
 
     #[test]

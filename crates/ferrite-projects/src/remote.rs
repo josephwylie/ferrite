@@ -44,10 +44,15 @@ struct SavedMachine {
     target: String,
 }
 
-/// Ferrite: `ferrite machine list` answers `{"result": [machine, …]}`.
+/// Ferrite: `ferrite machine list` answers `{"result": {"machines": [machine, …]}}`.
 #[derive(Deserialize)]
 struct Listed {
-    result: Vec<SavedMachine>,
+    result: Machines,
+}
+
+#[derive(Deserialize)]
+struct Machines {
+    machines: Vec<SavedMachine>,
 }
 
 fn saved(runner: &dyn Runner, herdr_bin: &str) -> Vec<SavedMachine> {
@@ -56,7 +61,7 @@ fn saved(runner: &dyn Runner, herdr_bin: &str) -> Vec<SavedMachine> {
         .ok()
         .filter(Output::success)
         .and_then(|out| serde_json::from_str::<Listed>(&out.stdout).ok())
-        .map(|listed| listed.result)
+        .map(|listed| listed.result.machines)
         .unwrap_or_default()
 }
 
@@ -414,7 +419,7 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         std::fs::write(config.path().join("config.toml"), "[machines.box]\nssh = \"me@box.local\"\n").unwrap();
         let runner = FakeRunner::new();
-        runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"abc","label":"m1","target":"m1.local"}]}"#));
+        runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"abc","label":"m1","target":"m1.local"}]}}"#));
         assert_eq!(ssh_target(&runner, "herdr", config.path(), "m1").unwrap(), "m1.local");
         assert_eq!(ssh_target(&runner, "herdr", config.path(), "abc").unwrap(), "m1.local");
         assert_eq!(ssh_target(&runner, "herdr", config.path(), "box").unwrap(), "me@box.local");

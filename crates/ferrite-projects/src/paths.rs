@@ -51,8 +51,11 @@ impl Env {
     }
 
     /// `HERDR_BIN_PATH` when set, else `herdr` on `PATH`.
+    ///
+    /// Ferrite: `FERRITE_BIN` (every agent is told it: the bundle's binary is
+    /// rarely on `PATH`), else `ferrite` on `PATH`.
     pub fn herdr_bin(&self) -> String {
-        self.var("HERDR_BIN_PATH").unwrap_or("herdr").to_string()
+        self.var("FERRITE_BIN").unwrap_or("ferrite").to_string()
     }
 
     fn expand_tilde(&self, path: &str) -> PathBuf {
@@ -142,6 +145,9 @@ pub struct Session {
 /// `--session`, then `--socket`, then `HERDR_SOCKET_PATH`, then `HERDR_SESSION`,
 /// then herdr's default socket. A name is turned into a socket path by asking
 /// herdr (`session list --json`), never by guessing herdr's directory layout.
+///
+/// Ferrite: `FERRITE_SOCKET` stands for `HERDR_SOCKET_PATH`, and the default
+/// is the Server's own socket; Ferrite has one session (`default`).
 pub fn resolve_session(flags: &SessionFlags, env: &Env, runner: &dyn Runner) -> Result<Session> {
     if flags.session.is_some() && flags.socket.is_some() {
         bail!("pass --session or --socket, not both");
@@ -155,7 +161,7 @@ pub fn resolve_session(flags: &SessionFlags, env: &Env, runner: &dyn Runner) -> 
             name: None,
         });
     }
-    if let Some(socket) = env.var("HERDR_SOCKET_PATH") {
+    if let Some(socket) = env.var("FERRITE_SOCKET") {
         return Ok(Session {
             socket: PathBuf::from(socket),
             name: None,
@@ -164,13 +170,7 @@ pub fn resolve_session(flags: &SessionFlags, env: &Env, runner: &dyn Runner) -> 
     if let Some(name) = env.var("HERDR_SESSION") {
         return session_by_name(name, env, runner);
     }
-    let sessions = herdr::session_list(&env.herdr_bin(), runner).unwrap_or_default();
-    let socket = sessions
-        .into_iter()
-        .find(|s| s.default)
-        .map(|s| s.socket_path)
-        .unwrap_or_else(|| env.home.join(".config/herdr/herdr.sock"));
-    Ok(Session { socket, name: None })
+    Ok(Session { socket: herdr::default_socket(&env.home), name: None })
 }
 
 fn session_by_name(name: &str, env: &Env, runner: &dyn Runner) -> Result<Session> {
@@ -180,7 +180,8 @@ fn session_by_name(name: &str, env: &Env, runner: &dyn Runner) -> Result<Session
             socket: found.socket_path,
             name: Some(name.to_string()),
         }),
-        None => bail!("herdr has no session named `{name}`; start it with `herdr --session {name}`"),
+        // Ferrite: one Server, one session.
+        None => bail!("Ferrite has no session named `{name}`; its one session is `default`"),
     }
 }
 
@@ -189,9 +190,6 @@ mod tests {
     use super::*;
     use crate::runner::fake::{FakeRunner, ok};
 
-    const SESSIONS: &str = r#"{"sessions":[
-        {"default":true,"name":"default","running":true,"session_dir":"/h/.config/herdr","socket_path":"/h/.config/herdr/herdr.sock"},
-        {"default":false,"name":"hp-dev","running":true,"session_dir":"/h/.config/herdr/sessions/hp-dev","socket_path":"/h/.config/herdr/sessions/hp-dev/herdr.sock"}]}"#;
 
     #[test]
     fn root_order_flag_env_config_default() {
@@ -230,37 +228,29 @@ mod tests {
     #[test]
     fn empty_variable_counts_as_unset() {
         let home = tempfile::tempdir().unwrap();
-        let env = Env::for_test(home.path(), &[("HERDR_PROJECTS_ROOT", ""), ("HERDR_BIN_PATH", "")]);
+        let env = Env::for_test(home.path(), &[("HERDR_PROJECTS_ROOT", ""), ("FERRITE_BIN", "")]);
         assert_eq!(
             resolve_root(None, &env, &home.path().join("none")).unwrap(),
             home.path().join(".herdr-projects")
         );
-        assert_eq!(env.herdr_bin(), "herdr");
+        assert_eq!(env.herdr_bin(), "ferrite");
     }
 
     #[test]
     fn herdr_bin_prefers_the_variable() {
-        let env = Env::for_test(Path::new("/h"), &[("HERDR_BIN_PATH", "/opt/herdr")]);
-        assert_eq!(env.herdr_bin(), "/opt/herdr");
+        let env = Env::for_test(Path::new("/h"), &[("FERRITE_BIN", "/Applications/Ferrite.app/Contents/MacOS/ferrite"), ("HERDR_BIN_PATH", "/opt/herdr")]);
+        assert_eq!(env.herdr_bin(), "/Applications/Ferrite.app/Contents/MacOS/ferrite");
     }
 
     #[test]
     fn session_order_flag_socket_env_default() {
+        // Ferrite: one session, `default`, at the Server's socket.
         let runner = FakeRunner::new();
-        runner.on("session list --json", ok(SESSIONS));
         let both = [
-            ("HERDR_SOCKET_PATH", "/env.sock"),
+            ("FERRITE_SOCKET", "/env.sock"),
             ("HERDR_SESSION", "hp-dev"),
         ];
         let env = Env::for_test(Path::new("/h"), &both);
-
-        let by_name = SessionFlags {
-            session: Some("hp-dev".into()),
-            socket: None,
-        };
-        let got = resolve_session(&by_name, &env, &runner).unwrap();
-        assert_eq!(got.socket, PathBuf::from("/h/.config/herdr/sessions/hp-dev/herdr.sock"));
-        assert_eq!(got.name.as_deref(), Some("hp-dev"));
 
         let by_socket = SessionFlags {
             session: None,
@@ -273,25 +263,27 @@ mod tests {
         let got = resolve_session(&none, &env, &runner).unwrap();
         assert_eq!(got, Session { socket: "/env.sock".into(), name: None });
 
-        let env = Env::for_test(Path::new("/h"), &[("HERDR_SESSION", "hp-dev")]);
-        let got = resolve_session(&none, &env, &runner).unwrap();
-        assert_eq!(got.name.as_deref(), Some("hp-dev"));
-
         let env = Env::for_test(Path::new("/h"), &[]);
         let got = resolve_session(&none, &env, &runner).unwrap();
-        assert_eq!(got, Session { socket: "/h/.config/herdr/herdr.sock".into(), name: None });
+        assert_eq!(got, Session { socket: "/h/.ferrite/threads/api.sock".into(), name: None });
+        assert!(runner.calls.borrow().is_empty());
     }
 
     #[test]
     fn unknown_session_name_is_refused() {
         let runner = FakeRunner::new();
-        runner.on("session list --json", ok(SESSIONS));
+        runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
         let env = Env::for_test(Path::new("/h"), &[]);
         let flags = SessionFlags {
             session: Some("nope".into()),
             socket: None,
         };
         assert!(resolve_session(&flags, &env, &runner).is_err());
+        let flags = SessionFlags {
+            session: Some("default".into()),
+            socket: None,
+        };
+        assert_eq!(resolve_session(&flags, &env, &runner).unwrap().name.as_deref(), Some("default"));
     }
 
     #[test]
