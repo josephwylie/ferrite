@@ -73,6 +73,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::NewGroup" => Row(Threads, "new group"),
         "palette::OpenGroups" => Row(Threads, "open a group"),
         "palette::Toggle" => Row(Threads, "commands"),
+        "projects::Toggle" => Row(Threads, "projects"),
         "cockpit::CloseThread" => Row(Threads, "park thread"),
         "cockpit::ReopenThread" => Row(Threads, "reopen last"),
         "palette::ShowParked" => Row(Threads, "show parked"),

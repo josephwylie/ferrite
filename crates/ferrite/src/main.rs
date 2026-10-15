@@ -34,6 +34,7 @@ mod platform_text;
 mod pointer;
 mod prefs;
 mod project_editor;
+mod projects;
 mod prompt_drop;
 mod review;
 mod rich;
@@ -435,6 +436,7 @@ fn main() {
                                     whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
+                                    projects: projects::Place::resolve(),
                                 },
                                 cx,
                             );

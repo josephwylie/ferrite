@@ -209,7 +209,7 @@ enum Command {
     },
     /// Change one setting in PROJECT.md (name, goal, coordinator_profile, thread_profile, max_parallel_threads, auto_resolve_days, nudge, mute, repos.add, repos.remove)
     Set { slug: String, key: String, value: String },
-    /// Open a file: text in a new Herdr tab running $EDITOR, anything else with the system opener
+    /// Open a file: text in $VISUAL when set, anything else with the system opener
     OpenFile {
         path: PathBuf,
         /// The workspace to add the tab to (default: the current one)

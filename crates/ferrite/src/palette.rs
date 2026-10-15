@@ -158,6 +158,8 @@ pub(crate) enum Command {
     ResetKeys,
     /// The operator's own command, by its place in Settings `commands`.
     User(usize),
+    /// One of Projects' commands (ADR 0030).
+    Projects(crate::projects::Command),
 }
 
 /// What a row does when it runs.

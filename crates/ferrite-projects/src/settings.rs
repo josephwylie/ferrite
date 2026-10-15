@@ -194,29 +194,23 @@ pub fn is_text(path: &Path) -> bool {
 
 /// `open-file <path> [--workspace W]`: a text file opens in a new Herdr tab
 /// running `$EDITOR`; anything else with the system opener. No viewer.
-pub fn open_file(ctx: &Ctx, path: &Path, workspace: Option<&str>) -> Result<()> {
+///
+/// Ferrite: there is no terminal tab to run `$EDITOR` in. A text file opens
+/// in `$VISUAL` (a windowed editor) when it is set, else, like anything
+/// else, with the system opener; `--workspace` names nothing here. Ferrite's
+/// window opens one in its own reader.
+pub fn open_file(ctx: &Ctx, path: &Path, _workspace: Option<&str>) -> Result<()> {
     let path = std::fs::canonicalize(path).with_context(|| format!("{} does not exist", path.display()))?;
-    if path.is_dir() || !is_text(&path) {
+    let visual = ctx.env.var("VISUAL").filter(|_| !path.is_dir() && is_text(&path));
+    let Some(editor) = visual else {
         return system_open(ctx, &path.to_string_lossy());
-    }
-    let socket = ctx.env.var("HERDR_SOCKET_PATH").context("not inside Herdr: HERDR_SOCKET_PATH is not set")?;
-    let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), socket, ctx.runner);
-    let dir = path.parent().unwrap_or(Path::new("/"));
-    let label = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let workspace = workspace.map(str::to_string).or_else(|| ctx.env.var("HERDR_WORKSPACE_ID").map(str::to_string)).unwrap_or_default();
-    let dir_text = dir.to_string_lossy();
-    let mut args = vec!["tab", "create", "--cwd", &dir_text, "--label", &label, "--focus"];
-    if !workspace.is_empty() {
-        args.extend(["--workspace", workspace.as_str()]);
-    }
-    let created = herdr.call(&args, crate::herdr::CALL_TIMEOUT).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let pane = created["root_pane"]["pane_id"].as_str().context("herdr's tab reply has no pane")?.to_string();
-    let editor = ctx.env.var("VISUAL").or(ctx.env.var("EDITOR")).unwrap_or("vi");
+    };
     let command = format!("{editor} {}", crate::remote::quote(&path.to_string_lossy()));
-    // A fresh pane's shell needs a moment before it takes input.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    herdr.call(&["pane", "run", &pane, &command], crate::herdr::CALL_TIMEOUT).map_err(|e| anyhow::anyhow!("{e}"))?;
-    println!("opened {} in a new tab", path.display());
+    let out = ctx.runner.run(&crate::runner::Cmd::new("/bin/sh", std::time::Duration::from_secs(10)).args(["-c", &command]))?;
+    if !out.success() {
+        bail!("{command}: {}", out.error_text());
+    }
+    println!("opened {} in {editor}", path.display());
     Ok(())
 }
 

@@ -102,7 +102,8 @@ pub fn require_slug(ctx: &Ctx, slug: Option<&str>) -> Result<String> {
     }
 }
 
-fn visible_slugs(ctx: &Ctx) -> Vec<String> {
+// Ferrite: public, for the window's project picker.
+pub fn visible_slugs(ctx: &Ctx) -> Vec<String> {
     project::list_slugs(&ctx.root)
         .into_iter()
         .filter(|slug| Project::load(&ctx.root, slug).is_ok_and(|p| p.status() != Status::Archived))
