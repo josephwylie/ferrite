@@ -1,7 +1,7 @@
 //! Who a TASKS.md task may be assigned to: `me`, the thread profiles this
 //! project allows here, and other machines with their profiles. Machines come
-//! from `herdr machine list`, whose profiles are fetched by running
-//! `herdr-projects profile list --names` there over ssh, and from
+//! from `ferrite machine list`, whose profiles are fetched by running
+//! `ferrite-projects profile list --names` there over ssh, and from
 //! `[machines.<label>] profiles = [...]` in config.toml, which names the
 //! profiles of a machine this one cannot reach (a sandboxed VM). The ssh
 //! lookups are cached in `<root>/.machines.json` for an hour, so `context`
@@ -101,7 +101,7 @@ fn fetch(ctx: &Ctx) -> Vec<Machine> {
             targets.insert(name, target);
         }
     }
-    let script = format!("{}\nherdr-projects profile list --names 2>/dev/null || herdr-projects profile list", crate::remote::HP_PATH);
+    let script = format!("{}\nferrite-projects profile list --names 2>/dev/null || ferrite-projects profile list", crate::remote::HP_PATH);
     targets
         .into_iter()
         .map(|(name, target)| {
@@ -175,7 +175,7 @@ impl Assignable {
 
     /// Refuses an owner that is not `me`, one of the project's profiles here,
     /// a known machine, or a profile that machine lists. A machine is known
-    /// only from `herdr machine list` or config.toml, and its profiles only
+    /// only from `ferrite machine list` or config.toml, and its profiles only
     /// from the lookup there or config.toml: `profile@m1` is refused when
     /// neither gave m1's profiles.
     pub fn check(&self, owner: &Owner) -> Result<()> {
@@ -190,7 +190,7 @@ impl Assignable {
             }
             Owner::Agent { profile, machine: Some(name) } => {
                 let Some(machine) = self.machine(name) else {
-                    bail!("there is no machine `{name}`: it is not in `herdr machine list` or [machines] in config.toml; assignable: {}", self.line());
+                    bail!("there is no machine `{name}`: it is not in `ferrite machine list` or [machines] in config.toml; assignable: {}", self.line());
                 };
                 let Some(profile) = profile else { return Ok(()) };
                 if machine.profiles.contains(profile) {
@@ -241,7 +241,7 @@ pub fn run(ctx: &Ctx, slug: &str, refresh: bool, check: Option<&str>) -> Result<
     let _ = writeln!(out, "me: the user");
     let _ = writeln!(out, "Profiles here: {}", if assignable.local.is_empty() { "(none allowed)".to_string() } else { assignable.local.join(", ") });
     if assignable.machines.is_empty() {
-        let _ = writeln!(out, "Machines: none (herdr machine list is empty and config.toml has no [machines])");
+        let _ = writeln!(out, "Machines: none (ferrite machine list is empty and config.toml has no [machines])");
     }
     for m in &assignable.machines {
         let profiles = if m.profiles.is_empty() { "profiles unknown".to_string() } else { m.profiles.join(", ") };
@@ -302,7 +302,7 @@ mod tests {
         let ctx = world.ctx();
         std::fs::create_dir_all(&ctx.config_dir).unwrap();
         std::fs::write(ctx.config_dir.join("config.toml"), "[machines.vm]\nprofiles = [\"claude\", \"cheap\"]\n\n[machines.m1]\nprofiles = [\"extra\"]\n").unwrap();
-        world.runner.on("machine list --json", ok(r#"[{"id":"1","label":"m1","target":"me@m1"},{"id":"2","label":"down","target":"me@down"}]"#));
+        world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"m1","target":"me@m1"},{"id":"2","label":"down","target":"me@down"}]}"#));
         world.runner.on_fn(|c| c.program == "ssh" && c.args.iter().any(|a| a == "me@m1"), |_| Ok(ok("claude\npi\n")));
         world.runner.on("me@down", fail(255, "ssh: connect to host down port 22: Connection timed out"));
         let first = load(&ctx, &project, false).unwrap();

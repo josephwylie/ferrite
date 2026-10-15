@@ -234,7 +234,7 @@ enum Command {
         /// Scope it to one project (default: the current workspace's, else all)
         slug: Option<String>,
     },
-    /// Install the plugin's progress hooks (Claude Code, Codex, Droid, Gemini CLI, Copilot CLI) and its `autoproject` skill (Claude Code, Codex)
+    /// Install the progress hooks (Claude Code, Codex, Droid, Gemini CLI, Copilot CLI) and the `autoproject` skill (Claude Code, Codex)
     Configure {
         /// Harnesses to configure, comma-separated: claude, codex, droid, gemini, copilot (default: those installed)
         #[arg(long, value_delimiter = ',', value_parser = crate::setup::AGENTS)]
@@ -246,21 +246,12 @@ enum Command {
         /// Print what would change and change nothing
         #[arg(long)]
         dry_run: bool,
-        /// The key that opens the projects popup (default: prefix+a)
-        #[arg(long, value_name = "KEY")]
-        key: Option<String>,
-        /// Only the hooks: leave Herdr's config.toml alone
-        #[arg(long)]
-        hooks_only: bool,
     },
     /// Print `projects: N need you` for the tab bar (nothing when none, or when the ticker is not running)
     NeedsYou {
         #[arg(long)]
         line: bool,
     },
-    /// Run by Herdr at startup: the ticker and the default sidebar order
-    #[command(hide = true)]
-    Startup,
     /// Remove exactly what `configure` added
     Unconfigure,
     /// Report your progress (run by an agent in its own Herdr pane)
@@ -282,12 +273,6 @@ enum Command {
     Progress {
         #[arg(long, value_name = "ID")]
         pane: Option<String>,
-    },
-    /// Update the plugin to the newest release: fetch, rebuild, `doctor --fix`, restart the ticker
-    Update {
-        /// Print the installed and the newest version and change nothing
-        #[arg(long)]
-        check: bool,
     },
     /// The background ticker
     Ticker {
@@ -842,13 +827,15 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         Command::Doctor { fix, session } => {
-            if !doctor::run(&ctx, &session.into(), fix)? {
+            let (text, healthy) = doctor::run(&ctx, &session.into(), fix);
+            print!("{text}");
+            if !healthy {
                 bail!("some checks failed");
             }
             Ok(())
         }
-        Command::Configure { clients, claude_home, codex_home, dry_run, key, hooks_only } => {
-            let options = crate::setup::ConfigureOptions { clients, claude_home, codex_home, dry_run, hooks: true, sidebar: !hooks_only, key, herdr_config: None, skill: crate::setup::skill_source() };
+        Command::Configure { clients, claude_home, codex_home, dry_run } => {
+            let options = crate::setup::ConfigureOptions { clients, claude_home, codex_home, dry_run, hooks: true, skill: crate::setup::skill_source(&ctx.config_dir) };
             for note in crate::setup::configure(&ctx, &options)? {
                 println!("{note}");
             }
@@ -857,9 +844,6 @@ pub fn run() -> Result<()> {
                 return Ok(());
             }
             println!("configured. `unconfigure` removes exactly these entries.");
-            if !hooks_only {
-                crate::setup::apply_live(&ctx);
-            }
             Ok(())
         }
         Command::NeedsYou { line: _ } => {
@@ -868,22 +852,10 @@ pub fn run() -> Result<()> {
             }
             Ok(())
         }
-        Command::Startup => {
-            // Herdr may reinstall into another folder: keep the command's link current.
-            if let Ok(binary) = crate::paths::binary()
-                && crate::command_link::installable(&binary)
-            {
-                let _ = crate::command_link::ensure(ctx.env, &binary);
-            }
-            ticker::start(&ctx)?;
-            crate::setup::apply_view(&ctx);
-            Ok(())
-        }
         Command::Unconfigure => {
             for note in crate::setup::unconfigure(&ctx)? {
                 println!("{note}");
             }
-            crate::setup::reload_config(&ctx);
             Ok(())
         }
         Command::Report { percent, unknown: _, activity } => crate::progress::report(&ctx, percent, &activity),
@@ -893,7 +865,6 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         Command::Progress { pane } => crate::progress::print(&ctx, pane.as_deref()),
-        Command::Update { check } => crate::update::run(&ctx, check),
         Command::Ticker { command } => match command {
             TickerCommand::Start => ticker::start(&ctx),
             TickerCommand::Run => ticker::run(&ctx),

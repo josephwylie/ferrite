@@ -109,15 +109,14 @@ pub fn run_action(ctx: &Ctx, id: &str) -> Result<()> {
             open_pane(ctx, "adopt", &Handoff { pane_id: pane, workspace_label: context.workspace_label, workspace_cwd: context.workspace_cwd, ..base })
         }
         "configure" => {
-            let options = crate::setup::ConfigureOptions { clients: vec![], claude_home: None, codex_home: None, dry_run: false, hooks: true, sidebar: true, key: None, herdr_config: None, skill: crate::setup::skill_source() };
             let herdr = Herdr::new(ctx.env.herdr_bin(), socket(ctx)?, ctx.runner);
-            match crate::setup::configure(ctx, &options) {
+            // Ferrite: hooks and the skill only (`setup::configure_ferrite`).
+            match crate::setup::configure_ferrite(ctx) {
                 Ok(notes) => {
                     for note in &notes {
                         println!("{note}");
                     }
-                    crate::setup::apply_live(ctx);
-                    let _ = herdr.notification_show("Projects configured", "Sidebar rows, popup key, progress hooks and the autoproject skill are set. Run `reload config` if the rows are not visible yet.");
+                    let _ = herdr.notification_show("Projects configured", "Progress hooks and the autoproject skill are set.");
                 }
                 Err(error) => {
                     let _ = herdr.notification_show("Projects: configure failed", &format!("{error:#}"));
@@ -127,7 +126,8 @@ pub fn run_action(ctx: &Ctx, id: &str) -> Result<()> {
             Ok(())
         }
         "doctor" => {
-            let healthy = doctor::run(ctx, &SessionFlags::default(), false)?;
+            let (text, healthy) = doctor::run(ctx, &SessionFlags::default(), false);
+            print!("{text}");
             let herdr = Herdr::new(ctx.env.herdr_bin(), socket(ctx)?, ctx.runner);
             let body = if healthy { "All required checks passed. Details: herdr plugin log --plugin herdr-projects" } else { "Some checks FAILED. Details: herdr plugin log --plugin herdr-projects" };
             let _ = herdr.notification_show("herdr-projects doctor", body);

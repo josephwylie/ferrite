@@ -22,6 +22,10 @@
 # ~320 MB unpacked) is fetched once into $CEF_PATH (default
 # ~/.local/share/cef). FERRITE_NO_CEF=1 builds without visuals.
 #
+# Projects (ADR 0030): `ferrite-projects` ships beside the app's binary, in
+# `Contents/MacOS`, where the Server and `ferrite-projects` itself find it
+# (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
+#
 #   --bundle-only    build the .app in the target dir, don't install it
 #   --dmg <path>     ...and package it as a disk image
 
@@ -76,6 +80,7 @@ if [ -z "${FERRITE_NO_CEF:-}" ]; then
 fi
 
 cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite "${FEATURES[@]+"${FEATURES[@]}"}"
+cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite-projects
 
 metadata="$(cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml")"
 TARGET="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
@@ -84,15 +89,19 @@ VERSION="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
   'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ferrite"))')"
 
 BIN="$TARGET/release/ferrite"
-if [ ! -x "$BIN" ]; then
-  echo "no release binary at $BIN" >&2
-  exit 1
-fi
+PROJECTS_BIN="$TARGET/release/ferrite-projects"
+for built in "$BIN" "$PROJECTS_BIN"; do
+  if [ ! -x "$built" ]; then
+    echo "no release binary at $built" >&2
+    exit 1
+  fi
+done
 
 BUILT="$TARGET/release/bundle/macos/$NAME.app"
 rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
+cp "$PROJECTS_BIN" "$BUILT/Contents/MacOS/ferrite-projects"
 
 # iconutil expects this exact set of filenames. Generate the platform resource
 # from the checked-in 1254px source so the Dock gets sharp 1x and 2x variants.
@@ -211,6 +220,7 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
   # app rewrites only its own copy. A disk image leaves this machine, where
   # every nested bundle must carry its own seal: each helper is signed (and
   # becomes a copy).
+  codesign --force --sign - "$BUILT/Contents/MacOS/ferrite-projects"
   if [ -n "${FEATURES[*]:-}" ]; then
     codesign --force --sign - "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
     if [ -n "$DMG" ]; then
@@ -248,6 +258,8 @@ PLIST
     done
     rm -f "$ENTITLEMENTS"
   fi
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+    "$BUILT/Contents/MacOS/ferrite-projects"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BUILT"
   codesign --verify --deep --strict --verbose=2 "$BUILT"
 fi

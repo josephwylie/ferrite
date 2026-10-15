@@ -1565,7 +1565,7 @@ fn remote_world() -> (World, Project) {
         t.last_state_change = "2026-01-01T00:00:00Z".into();
     });
     *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
-    world.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"}]"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
     (world, project)
 }
 
@@ -1605,7 +1605,7 @@ fn local_threads_and_each_due_machine_get_one_agent_start_per_tick() {
         pane_json("w2", "w2:t2", "w2:p2", &home),
         pane_json("w3", "w3:t2", "w3:p2", &home)
     );
-    world.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"},{"id":"2","label":"cube","target":"me@cube"}]"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"},{"id":"2","label":"cube","target":"me@cube"}]}"#));
     world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("agent list"), |_| Ok(ok(r#"{"result":{"agents":[]}}"#)));
     world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("pane list"), move |_| Ok(ok(&remote_panes)));
     world.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
@@ -1686,7 +1686,7 @@ fn a_long_machine_outage_gives_one_item_and_one_recovery_item() {
     );
     scripted.runner.on_fn(|cmd| is_machine_call(cmd) && cmd.display().contains("pane list"), |_| Ok(ok(r#"{"result":{"panes":[]}}"#)));
     scripted.runner.on_fn(is_machine_call, |_| Ok(ok(r#"{"result":{}}"#)));
-    scripted.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"}]"#));
+    scripted.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
     scripted.runner.on("ssh", ok("t-0001 -\n"));
     scripted.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
     let panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, scripted.coordinator_pane(&project));
@@ -1728,7 +1728,7 @@ fn a_remote_thread_blocked_at_a_poll_is_waiting_on_you_at_once() {
         |_| Ok(ok(r#"{"result":{"agents":[{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","cwd":"/home/me/wt","name":"hp-demo-t-0001","agent_status":"blocked"}]}}"#)),
     );
     scripted.runner.on_fn(is_machine_call, |_| Ok(ok(r#"{"result":{"panes":[]}}"#)));
-    scripted.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"}]"#));
+    scripted.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
     scripted.runner.on("ssh", ok("t-0001 -\n"));
     scripted.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
     let panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, scripted.coordinator_pane(&project));
@@ -2467,7 +2467,7 @@ fn thread_read_and_keys_reach_the_threads_pane_on_its_session_and_refuse_a_bare_
 fn thread_keys_reach_a_remote_thread_through_its_machine() {
     let (world, _project) = remote_world();
     let world = World { runner: FakeRunner::new(), ..world };
-    world.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"}]"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
     let cwd = "/home/me/wt";
     world.runner.on_fn(
         |cmd| is_machine_call(cmd) && cmd.display().contains("agent list"),
@@ -2601,7 +2601,7 @@ fn remote_profile_world(allow: Option<&str>) -> (World, Project, String) {
     .unwrap();
     let local_panes = format!(r#"{{"result":{{"panes":[{}]}}}}"#, world.coordinator_pane(&project));
     let remote_panes = format!(r#"{{"result":{{"panes":[{},{}]}}}}"#, pane_json("w2", "w2:t1", "w2:p1", "/home/me/wt"), pane_json("w2", "w2:t2", "w2:p2", &home));
-    world.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"}]"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
     world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("agent list"), |_| Ok(ok(r#"{"result":{"agents":[]}}"#)));
     world.runner.on_fn(|c| is_machine_call(c) && c.display().contains("pane list"), move |_| Ok(ok(&remote_panes)));
     world.runner.on("agent list", ok(r#"{"result":{"agents":[]}}"#));
@@ -2644,7 +2644,7 @@ fn a_remote_profile_off_this_projects_allow_list_does_not_launch() {
 fn a_remote_threads_profile_is_resolved_on_its_machine() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
-    world.runner.on("machine list --json", ok(r#"[{"id":"1","label":"box","target":"me@box"}]"#));
+    world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"box","target":"me@box"}]}"#));
     world.runner.on("resolve -- fast", ok(r#"{"name":"fast","agent":"codex","args":["--model","gpt-5.5"]}"#));
     world.runner.on("profile resolve", ok(r#"{"name":"deep","agent":"claude","args":["--model","opus"]}"#));
     let ctx = world.ctx();

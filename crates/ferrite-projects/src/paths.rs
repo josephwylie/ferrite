@@ -66,9 +66,16 @@ impl Env {
 
 /// This binary's own path with symbolic links resolved, so a path written into
 /// hooks, AGENTS.md or the tab bar survives `~/.local/bin` links changing.
+/// Ferrite: the shipped `ferrite-projects`, also when this code runs inside
+/// `ferrite`: `$FERRITE_PROJECTS_BIN`, else the running executable's sibling
+/// of that name (itself, when it is `ferrite-projects`). The Server finds it
+/// the same way.
 pub fn binary() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("could not find this binary's own path")?;
-    Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
+    let path = match std::env::var_os("FERRITE_PROJECTS_BIN").filter(|v| !v.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => std::env::current_exe().context("could not find this binary's own path")?.with_file_name("ferrite-projects"),
+    };
+    Ok(std::fs::canonicalize(&path).unwrap_or(path))
 }
 
 /// What every subcommand works from: the environment, the resolved root and

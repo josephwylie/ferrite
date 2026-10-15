@@ -4,7 +4,6 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
 
 use crate::herdr::{self, Herdr};
 use crate::paths::{self, Ctx, Env, SessionFlags};
@@ -34,23 +33,16 @@ fn github_hosts(root: &Path, runner: &dyn Runner) -> std::collections::BTreeMap<
     hosts
 }
 
-/// Prints the report and returns whether every required check passed. With
-/// `fix`, repairs what the binary owns: the `herdr-projects` link on `PATH`, priming files, `uploads/`, the
-/// absolute binary path they carry, and the skill link for a configured harness. Never edits another plugin's entries.
-/// Herdr's config runs this binary in the tab bar and has today's sub-line
-/// row and no row or card of an earlier layout (the 0.2.17/0.2.18 headings,
-/// the 0.2.19 rails and `$hp_home`); otherwise `--fix` runs `configure`,
-/// which swaps them.
-fn sidebar_current(text: &str, tab_command: &str) -> bool {
-    let legacy = crate::grouping::legacy().iter().any(|t| text.contains(&format!("\"${t}\"")));
-    text.contains(tab_command) && text.contains("\"$hp_sub\"") && !legacy
-}
-
-pub fn run(ctx: &Ctx, session: &SessionFlags, fix: bool) -> Result<bool> {
-    let skill = crate::setup::skill_source();
-    let (text, healthy) = report(ctx.env, &ctx.root, &ctx.config_dir, session, ctx.runner, fix, skill.as_deref());
-    print!("{text}");
-    Ok(healthy)
+/// The report, and whether every required check passed. With `fix`, repairs
+/// what the binary owns: priming files, `uploads/`, the absolute binary path
+/// they carry, and the skill link for a configured harness. Never edits
+/// another plugin's entries.
+/// Ferrite: returns the text instead of printing it, for the Projects view;
+/// the command link, Herdr update and sidebar checks are gone (the binary
+/// ships with Ferrite, Ferrite updates itself, and Projects are drawn natively).
+pub fn run(ctx: &Ctx, session: &SessionFlags, fix: bool) -> (String, bool) {
+    let skill = crate::setup::skill_source(&ctx.config_dir);
+    report(ctx.env, &ctx.root, &ctx.config_dir, session, ctx.runner, fix, skill.as_deref())
 }
 
 fn report(
@@ -85,47 +77,32 @@ fn report(
     let _ = writeln!(out, "config dir: {}", config_dir.display());
     let _ = writeln!(out);
 
-    if let Some(latest) = crate::update::newer_release(runner, crate::update::own_root().as_deref()) {
-        check(&mut out, None, "update", format!("a newer version is available ({latest}): run `herdr-projects update`"));
-    }
-
     let bin = env.herdr_bin();
     match herdr::version(&bin, runner) {
         Ok(version) if version >= herdr::MIN_VERSION => {
-            check(&mut out, Some(true), "herdr", format!("{version} ({bin})"))
+            check(&mut out, Some(true), "ferrite", format!("{version} ({bin})"))
         }
         Ok(version) => check(
             &mut out,
             Some(false),
-            "herdr",
+            "ferrite",
             format!("{version} ({bin}); {} or later is required", herdr::MIN_VERSION),
         ),
-        Err(error) => check(&mut out, Some(false), "herdr", format!("{error:#}")),
+        Err(error) => check(&mut out, Some(false), "ferrite", format!("{error:#}")),
     }
 
-    {
-        let binary = paths::binary().unwrap_or_default();
-        let path_var = crate::USER_PATH.get().map(String::as_str).or(env.var("PATH")).unwrap_or("");
-        let (ok, detail) = crate::command_link::check(env, &binary, path_var, fix);
-        check(&mut out, ok, "command", detail);
-    }
-
+    // Ferrite: the Server at `$FERRITE_SOCKET`, where Herdr had sessions.
     match paths::resolve_session(session, env, runner) {
         Ok(found) => {
             let reachable = Herdr::new(&bin, &found.socket, runner).reachable();
-            let name = found.name.as_deref().unwrap_or("-");
             check(
                 &mut out,
                 if reachable { Some(true) } else { None },
-                "session",
-                format!(
-                    "{} (name: {name}){}",
-                    found.socket.display(),
-                    if reachable { "" } else { "; not reachable" }
-                ),
+                "server",
+                format!("{}{}", found.socket.display(), if reachable { "" } else { "; not reachable" }),
             );
         }
-        Err(error) => check(&mut out, Some(false), "session", format!("{error:#}")),
+        Err(error) => check(&mut out, Some(false), "server", format!("{error:#}")),
     }
 
     for (tool, args, required) in [
@@ -372,7 +349,7 @@ fn report(
             None => check(&mut out, None, &label, "not configured; `configure` installs the progress hooks".into()),
             Some(_) if text.contains(&expected) => check(&mut out, Some(true), &label, format!("{} runs this binary", file.display())),
             Some(_) if fix => {
-                let options = crate::setup::ConfigureOptions { clients: vec![agent.to_string()], claude_home: None, codex_home: None, dry_run: false, hooks: true, sidebar: false, key: None, herdr_config: None, skill: crate::setup::skill_source() };
+                let options = crate::setup::ConfigureOptions { clients: vec![agent.to_string()], claude_home: None, codex_home: None, dry_run: false, hooks: true, skill: skill.map(Path::to_path_buf) };
                 let ctx = Ctx { env, root: root.to_path_buf(), config_dir: config_dir.to_path_buf(), runner, detached_ticker: false };
                 match crate::setup::configure(&ctx, &options) {
                     Ok(_) => check(&mut out, Some(true), &label, format!("fixed: {} now runs this binary", file.display())),
@@ -385,7 +362,7 @@ fn report(
 
     // The bundled skill, linked where each installed harness looks for skills.
     // `--fix` links it only for a harness the user already ran `configure`
-    // for (its hooks or the link are journaled), so `update` alone brings a
+    // for (its hooks or the link are journaled), so an update alone brings a
     // newly bundled skill to existing users without a new opt-in.
     if let Some(source) = skill.map(Path::to_path_buf).filter(|s| s.join("SKILL.md").is_file()) {
         for agent in ["claude", "codex"] {
@@ -399,7 +376,7 @@ fn report(
             let state = crate::setup::skill_state(&link, &source);
             let repairable = matches!(state, crate::setup::SkillState::Missing) || matches!(state, crate::setup::SkillState::Elsewhere(_) if journaled);
             if fix && opted_in && repairable {
-                let options = crate::setup::ConfigureOptions { clients: vec![agent.to_string()], claude_home: None, codex_home: None, dry_run: false, hooks: false, sidebar: false, key: None, herdr_config: None, skill: Some(source.clone()) };
+                let options = crate::setup::ConfigureOptions { clients: vec![agent.to_string()], claude_home: None, codex_home: None, dry_run: false, hooks: false, skill: Some(source.clone()) };
                 let ctx = Ctx { env, root: root.to_path_buf(), config_dir: config_dir.to_path_buf(), runner, detached_ticker: false };
                 match crate::setup::configure(&ctx, &options) {
                     Ok(_) => check(&mut out, Some(true), &label, format!("fixed: {} now links the bundled `{}` skill", link.display(), crate::setup::SKILL)),
@@ -414,29 +391,6 @@ fn report(
                 crate::setup::SkillState::Elsewhere(old) if journaled => check(&mut out, None, &label, format!("{} links {}, another checkout; {repair} relinks it", link.display(), old.display())),
                 _ => check(&mut out, None, &label, format!("{} is not this plugin's link, so the bundled skill is not installed; move it away and run {repair}", link.display())),
             }
-        }
-    }
-
-    // Herdr's config.toml: rows, popup key and a tab-bar entry that runs this binary.
-    {
-        let file = crate::setup::herdr_config_path(env);
-        let binary = crate::paths::binary().unwrap_or_default();
-        let expected = crate::setup::tab_command(&binary, root);
-        let text = crate::setup::read(&file).ok().flatten().unwrap_or_default();
-        let key = file.to_string_lossy().into_owned();
-        match journal.get(&key) {
-            None => check(&mut out, None, "sidebar", "not configured; `configure` adds the sidebar rows, the popup key and the tab-bar count".into()),
-            Some(_) if sidebar_current(&text, &expected) => check(&mut out, Some(true), "sidebar", format!("{} has the rows, the popup key and the tab-bar entry", file.display())),
-            Some(_) if fix => {
-                let options = crate::setup::ConfigureOptions { clients: vec![], claude_home: None, codex_home: None, dry_run: false, hooks: true, sidebar: true, key: None, herdr_config: None, skill: crate::setup::skill_source() };
-                let ctx = Ctx { env, root: root.to_path_buf(), config_dir: config_dir.to_path_buf(), runner, detached_ticker: false };
-                let options = crate::setup::ConfigureOptions { clients: vec!["none".into()], ..options };
-                match crate::setup::configure(&ctx, &options) {
-                    Ok(_) => check(&mut out, Some(true), "sidebar", format!("fixed: {} has the project grouping rows and runs this binary in the tab bar", file.display())),
-                    Err(error) => check(&mut out, Some(false), "sidebar", format!("could not fix: {error:#}")),
-                }
-            }
-            Some(_) => check(&mut out, None, "sidebar", format!("{} lacks the project grouping rows (or still has the 0.2.18 headings or 0.2.19 rails), or its tab-bar entry runs another binary or root; `doctor --fix` rewrites it", file.display())),
         }
     }
 
@@ -464,24 +418,14 @@ fn report(
 #[cfg(test)]
 mod tests {
 
-    #[test]
-    fn a_sidebar_without_the_sub_line_or_with_an_earlier_layout_is_not_current() {
-        let command = "'/b/herdr-projects' --root /r needs-you --line";
-        let old = format!("[ui]\ntab_bar_right = [{{ type = \"command\", command = \"{command}\" }}]\n");
-        assert!(!super::sidebar_current(&old, command));
-        let added = crate::sidebar::config_edit(&old, &crate::sidebar::Spec { key: "prefix+a".into(), tab_command: command.into() }, false).unwrap();
-        assert!(super::sidebar_current(&added, command));
-        let with_heading = added.replacen("rows = [", "rows = [[{ token = \"$hp_top\" }], ", 1);
-        assert!(!super::sidebar_current(&with_heading, command));
-        let with_rail = added.replacen("rows = [", "rows = [[{ token = \"$hp_top_w\" }], ", 1);
-        assert!(!super::sidebar_current(&with_rail, command));
-    }
     use super::*;
     use crate::runner::fake::{FakeRunner, fail, ok};
 
-    fn runner_with_herdr(version: &str) -> FakeRunner {
+    /// Ferrite: `ferrite --version` (`version` as Ferrite prints it) at the
+    /// default binary, and the tools.
+    fn runner_with_ferrite(version: herdr::Version) -> FakeRunner {
         let runner = FakeRunner::new();
-        runner.on("herdr --version", ok(version));
+        runner.on(&format!("{} --version", Env::for_test(Path::new("/"), &[]).herdr_bin()), ok(&format!("ferrite {version}\n")));
         runner.on("session list --json", ok(r#"{"sessions":[]}"#));
         runner.on("git --version", ok("git version 2.50.0\n"));
         runner.on("ssh -V", ok(""));
@@ -492,10 +436,10 @@ mod tests {
     }
 
     #[test]
-    fn old_herdr_fails_and_names_the_minimum() {
+    fn old_ferrite_fails_and_names_the_minimum() {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[]);
-        let runner = runner_with_herdr("herdr 0.9.0\n");
+        let runner = runner_with_ferrite(herdr::Version(0, 0, 0));
         let (text, healthy) = report(
             &env,
             &home.path().join("root"),
@@ -506,15 +450,15 @@ mod tests {
             None,
         );
         assert!(!healthy);
-        assert!(text.contains("[FAIL] herdr: 0.9.0"), "{text}");
-        assert!(text.contains("0.9.1 or later"));
+        assert!(text.contains("[FAIL] ferrite: 0.0.0"), "{text}");
+        assert!(text.contains(&format!("{} or later", herdr::MIN_VERSION)));
     }
 
     #[test]
-    fn new_herdr_passes_and_warnings_do_not_fail() {
+    fn new_ferrite_passes_and_warnings_do_not_fail() {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[]);
-        let runner = runner_with_herdr("herdr 0.9.1\n");
+        let runner = runner_with_ferrite(herdr::MIN_VERSION);
         let root = home.path().join("root");
         let (text, healthy) = report(
             &env,
@@ -527,6 +471,10 @@ mod tests {
         );
         assert!(healthy, "{text}");
         assert!(text.contains("[warn] gh auth"));
+        assert!(text.contains("[warn] server: ") && text.contains("; not reachable"), "{text}");
+        for gone in ["] update:", "] command:", "] sidebar:", "] session:"] {
+            assert!(!text.contains(gone), "{gone} is not checked in Ferrite: {text}");
+        }
         assert!(text.contains("[warn] root"));
         assert!(text.contains(&format!("root:       {}", root.display())));
         assert!(!root.exists(), "doctor must not create the root");
@@ -536,7 +484,7 @@ mod tests {
     fn missing_priming_files_are_reported_and_fixed() {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[]);
-        let runner = runner_with_herdr("herdr 0.9.1\n");
+        let runner = runner_with_ferrite(herdr::MIN_VERSION);
         let root = home.path().join("root");
         // A project made before AGENTS.md existed: no priming files, no uploads/.
         let project = project::create(&root, "demo", "", vec![]).unwrap();
@@ -572,7 +520,9 @@ mod tests {
                 runner.on_fn(on_host, |_| Ok(ok("eliasstravik\n")));
             }
             runner.on("gh api user", fail(1, "HTTP 401: Requires authentication"));
-            for (needle, output) in [("herdr --version", "herdr 0.9.1\n"), ("git --version", "git 2\n"), ("gh --version", "gh 2\n")] {
+            let ferrite = format!("{} --version", env.herdr_bin());
+            let version = format!("ferrite {}\n", herdr::MIN_VERSION);
+            for (needle, output) in [(ferrite.as_str(), version.as_str()), ("git --version", "git 2\n"), ("gh --version", "gh 2\n")] {
                 runner.on(needle, ok(output));
             }
             let (text, _) = report(&env, &root, &home.path().join("cfg"), &SessionFlags::default(), &runner, false, None);
@@ -590,7 +540,7 @@ mod tests {
     fn routines_skipped_for_want_of_a_coordinator_are_named() {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[]);
-        let runner = runner_with_herdr("herdr 0.9.1\n");
+        let runner = runner_with_ferrite(herdr::MIN_VERSION);
         let root = home.path().join("root");
         let project = project::create(&root, "demo", "", vec![]).unwrap();
         std::fs::write(project.dir().join("routines/standup.md"), "+++\nschedule = \"every 5m\"\n+++\nGo.\n").unwrap();
@@ -609,7 +559,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join("claude-config");
         let env = Env::for_test(home.path(), &[("CLAUDE_CONFIG_DIR", claude.to_str().unwrap())]);
-        let runner = runner_with_herdr("herdr 0.9.1\n");
+        let runner = runner_with_ferrite(herdr::MIN_VERSION);
         let root = home.path().join("root");
         let cfg = home.path().join("cfg");
         let flags = SessionFlags::default();
@@ -653,7 +603,7 @@ mod tests {
     fn colliding_agent_names_fail_the_report() {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[]);
-        let runner = runner_with_herdr("herdr 0.9.1\n");
+        let runner = runner_with_ferrite(herdr::MIN_VERSION);
         let root = home.path().join("root");
         let long = "x".repeat(30);
         for suffix in ["a", "b"] {

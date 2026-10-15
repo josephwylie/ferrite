@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 use crate::paths::{Ctx, Env};
 use crate::remote::quote;
 
+// Ferrite: Herdr's config.toml edits (sidebar rows, popup key and its
+// conflict check, `herdr config check`, `server reload-config`, the default
+// agent view) are gone; Ferrite draws Projects natively. What stays is the
+// progress hooks and the bundled skill.
+
 /// A harness with a native, user-level hook system that can put text in the
 /// model's context. Every other agent learns to report from its thread brief
 /// or the coordinator skill alone; adding a harness here is one entry.
@@ -47,7 +52,8 @@ pub const HARNESSES: [Harness; 5] = [
     // PascalCase event names select its Claude-style payload (snake_case,
     // `hook_event_name`); prompt-submit output is dropped, but the event
     // still clears an answered question.
-    Harness { agent: "copilot", home_env: Some("COPILOT_HOME"), home: ".copilot", file: "hooks/herdr-projects.json", events: ["SessionStart", "UserPromptSubmit", "PostToolUse"], flat: true, timeout: 10, top_level_output: true },
+    // Ferrite: our own file is named for this binary.
+    Harness { agent: "copilot", home_env: Some("COPILOT_HOME"), home: ".copilot", file: "hooks/ferrite-projects.json", events: ["SessionStart", "UserPromptSubmit", "PostToolUse"], flat: true, timeout: 10, top_level_output: true },
 ];
 
 pub const AGENTS: [&str; 5] = ["claude", "codex", "droid", "gemini", "copilot"];
@@ -136,24 +142,8 @@ pub fn removal_baseline(previous: &Owned, current: &Owned) -> Result<Option<Stri
 fn remove_ours(kind: &str, text: &str, command: Option<&str>) -> Result<String> {
     match kind {
         "hooks" => hooks(text, command.context("missing hook command")?, true),
-        "config" => crate::sidebar::config_edit(text, &crate::sidebar::Spec { key: String::new(), tab_command: command.unwrap_or("").to_string() }, true),
         other => bail!("unknown ownership kind {other}"),
     }
-}
-
-/// Herdr's config file: `HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr`,
-/// else `~/.config/herdr/config.toml`.
-pub fn herdr_config_path(env: &Env) -> PathBuf {
-    if let Some(path) = env.var("HERDR_CONFIG_PATH") {
-        return PathBuf::from(path);
-    }
-    env.var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| env.home.join(".config")).join("herdr/config.toml")
-}
-
-/// The tab-bar command: absolute paths, since it runs under `/bin/sh -lc` on
-/// the server with no plugin environment.
-pub fn tab_command(binary: &Path, root: &Path) -> String {
-    format!("{} --root {} needs-you --line", quote(&binary.to_string_lossy()), quote(&root.to_string_lossy()))
 }
 
 fn hook_entry(harness: &Harness, command: &str) -> serde_json::Value {
@@ -175,9 +165,10 @@ fn cst_value(value: &serde_json::Value) -> CstInputValue {
     }
 }
 
-/// Whether a hook entry is one of ours: it runs `herdr-projects … hook`.
+/// Whether a hook entry is one of ours: it runs `ferrite-projects … hook`.
 fn is_our_entry(value: &serde_json::Value) -> bool {
-    let ours = |h: &serde_json::Value| h["command"].as_str().is_some_and(|c| c.contains("herdr-projects") && c.contains(" hook --agent "));
+    // Ferrite: this binary is `ferrite-projects`.
+    let ours = |h: &serde_json::Value| h["command"].as_str().is_some_and(|c| c.contains("ferrite-projects") && c.contains(" hook --agent "));
     ours(value) || value["hooks"].as_array().is_some_and(|hooks| hooks.iter().any(ours))
 }
 
@@ -259,10 +250,26 @@ pub fn harness_installed(env: &Env, agent: &str, claude_home: Option<&Path>, cod
 /// The skill bundled with the plugin, linked into each harness by `configure`.
 pub const SKILL: &str = "autoproject";
 
-/// The bundled skill in the plugin checkout this binary was built in, so the
-/// link follows the installed plugin, not the directory `configure` ran in.
-pub fn skill_source() -> Option<PathBuf> {
-    crate::update::own_root().map(|root| root.join("skill").join(SKILL))
+/// Ferrite: the skill's files, built into this binary; Ferrite ships no
+/// plugin checkout to link to.
+const SKILL_FILES: [(&str, &str); 2] = [
+    ("SKILL.md", include_str!("../skill/autoproject/SKILL.md")),
+    ("references/protocol.md", include_str!("../skill/autoproject/references/protocol.md")),
+];
+
+/// Ferrite: the bundled skill, written out under the config directory
+/// (`<config_dir>/skill/autoproject`) whenever it differs from this binary's,
+/// so the link follows the installed Ferrite. `None` when it cannot be written.
+pub fn skill_source(config_dir: &Path) -> Option<PathBuf> {
+    let dir = config_dir.join("skill").join(SKILL);
+    for (name, text) in SKILL_FILES {
+        let path = dir.join(name);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
+            std::fs::create_dir_all(path.parent()?).ok()?;
+            std::fs::write(&path, text).ok()?;
+        }
+    }
+    Some(dir)
 }
 
 /// Where a harness looks for user skills: Claude Code's `<config dir>/skills`,
@@ -317,11 +324,6 @@ pub struct ConfigureOptions {
     pub dry_run: bool,
     /// Install the progress hooks; `false` links only the skill (`doctor --fix`).
     pub hooks: bool,
-    /// Also edit Herdr's config.toml: sidebar rows, popup key, tab-bar entry.
-    pub sidebar: bool,
-    /// The popup key (default: the one already configured, else `prefix+a`).
-    pub key: Option<String>,
-    pub herdr_config: Option<PathBuf>,
     /// The skill directory to link (`skill_source()`); `None` links nothing.
     pub skill: Option<PathBuf>,
 }
@@ -397,35 +399,6 @@ pub fn configure(ctx: &Ctx, options: &ConfigureOptions) -> Result<Vec<String>> {
                     notes.push(format!("{}: left alone, it is not this plugin's link; move it away and run `configure` again to install the bundled `{SKILL}` skill", link.display()));
                 }
             }
-        }
-    }
-    if options.sidebar {
-        let file = options.herdr_config.clone().unwrap_or_else(|| herdr_config_path(ctx.env));
-        let before = read(&file)?;
-        let text = before.clone().unwrap_or_default();
-        let current_key = text
-            .parse::<toml_edit::DocumentMut>()
-            .ok()
-            .and_then(|doc| {
-                doc.get("keys")?.get("command")?.as_array_of_tables()?.iter().find(|t| t.get("command").and_then(|c| c.as_str()) == Some(crate::sidebar::POPUP_ACTION))?.get("key")?.as_str().map(str::to_string)
-            });
-        let key = options.key.clone().or(current_key).unwrap_or_else(|| crate::sidebar::DEFAULT_KEY.to_string());
-        let defaults = ctx.runner.run(&crate::runner::Cmd::new(ctx.env.herdr_bin(), crate::herdr::CALL_TIMEOUT).arg("--default-config")).ok().filter(|o| o.success()).map(|o| o.stdout).unwrap_or_default();
-        let builtin = crate::sidebar::builtin_keys(&defaults);
-        if builtin.is_empty() {
-            notes.push("could not read Herdr's built-in key map (`herdr --default-config`); the popup key was checked against your config only".into());
-        }
-        if let Some(conflict) = crate::sidebar::key_conflict(&text, &key, &builtin) {
-            bail!("{conflict}; pick another popup key with `configure --key <key>`");
-        }
-        let command = tab_command(&binary, &ctx.root);
-        let after = crate::sidebar::config_edit(&text, &crate::sidebar::Spec { key: key.clone(), tab_command: command.clone() }, false)?;
-        if before.as_deref() == Some(after.as_str()) {
-            notes.push(format!("{}: sidebar rows, popup key `{key}` and tab-bar entry already in place", file.display()));
-        } else {
-            crate::sidebar::check_config(&ctx.env.herdr_bin(), ctx.runner, &after, &ctx.config_dir)?;
-            notes.push(format!("{}: adding the project grouping rows, the popup key `{key}` and the tab-bar entry", file.display()));
-            edits.push((file, Owned { before, after, kind: "config".into(), command: Some(command) }));
         }
     }
     if options.dry_run {
@@ -513,53 +486,21 @@ pub fn unconfigure(ctx: &Ctx) -> Result<Vec<String>> {
     Ok(notes)
 }
 
-/// The session the user's shell or the plugin action talks to, if reachable.
-fn session_herdr<'a>(ctx: &'a Ctx) -> Option<crate::herdr::Herdr<'a>> {
-    let session = crate::paths::resolve_session(&crate::paths::SessionFlags::default(), ctx.env, ctx.runner).ok()?;
-    let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), &session.socket, ctx.runner);
-    herdr.reachable().then_some(herdr)
-}
-
-/// `herdr server reload-config`, so server-side settings (the tab-bar entry,
-/// keys) apply without a restart.
-pub fn reload_config(ctx: &Ctx) {
-    if let Some(herdr) = session_herdr(ctx) {
-        match herdr.call(&["server", "reload-config"], crate::herdr::CALL_TIMEOUT) {
-            Ok(_) => println!("reloaded the Herdr server's config"),
-            Err(error) => println!("could not reload the Herdr config ({error}); run `herdr server reload-config`"),
-        }
-    }
-}
-
-/// After `configure`: reload, then the default by-need agent order.
-pub fn apply_live(ctx: &Ctx) {
-    reload_config(ctx);
-    apply_view(ctx);
-    println!("Sidebar rows are drawn by your Herdr client: if they are not visible yet, run `reload config` in Herdr (prefix+shift+r).");
-}
-
-/// The default agent view, once the sidebar is configured. Herdr holds one
-/// view and has no way to read it, so this replaces another tool's view; it
-/// is applied at startup, after `configure` and on `unfocus` only.
-pub fn apply_view(ctx: &Ctx) {
-    let configured = load_journal(&ctx.config_dir).values().any(|o| o.kind == "config");
-    if !configured {
-        return;
-    }
-    if let Some(herdr) = session_herdr(ctx) {
-        let _ = herdr.agent_view_set(crate::sidebar::default_view());
-    }
+/// Ferrite: what the Projects view's "configure" runs: `configure` with no
+/// flags (every installed harness, the bundled skill). The notes say what changed.
+pub fn configure_ferrite(ctx: &Ctx) -> Result<Vec<String>> {
+    configure(ctx, &ConfigureOptions { clients: vec![], claude_home: None, codex_home: None, dry_run: false, hooks: true, skill: skill_source(&ctx.config_dir) })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const CMD: &str = "'/p/herdr-projects' --root /r hook --agent claude 2>/dev/null || true";
+    const CMD: &str = "'/p/ferrite-projects' --root /r hook --agent claude 2>/dev/null || true";
 
     #[test]
     fn the_hook_command_never_fails_even_with_a_missing_binary() {
-        let command = hook_command(Path::new("/no/such/herdr-projects"), Path::new("/r"), "claude");
+        let command = hook_command(Path::new("/no/such/ferrite-projects"), Path::new("/r"), "claude");
         let out = std::process::Command::new("/bin/sh").args(["-c", &command]).output().unwrap();
         assert!(out.status.success());
         assert!(out.stdout.is_empty() && out.stderr.is_empty());
@@ -574,7 +515,7 @@ mod tests {
         assert_eq!(added.matches("hook --agent claude").count(), 3);
         assert_eq!(hooks(&added, CMD, false).unwrap(), added);
         let removed = hooks(&added, CMD, true).unwrap();
-        assert!(!removed.contains("herdr-projects"));
+        assert!(!removed.contains("ferrite-projects"));
         assert!(removed.contains("keep"));
         assert!(hooks("[]", CMD, false).is_err());
     }
@@ -582,15 +523,15 @@ mod tests {
     #[test]
     fn a_moved_binary_replaces_the_old_entries_and_other_plugins_are_left_alone() {
         let old = hooks("{}", CMD, false).unwrap();
-        let moved = hooks(&old, "'/new/herdr-projects' --root /r hook --agent claude", false).unwrap();
-        assert!(!moved.contains("/p/herdr-projects"));
-        assert_eq!(moved.matches("/new/herdr-projects").count(), 3);
+        let moved = hooks(&old, "'/new/ferrite-projects' --root /r hook --agent claude", false).unwrap();
+        assert!(!moved.contains("/p/ferrite-projects"));
+        assert_eq!(moved.matches("/new/ferrite-projects").count(), 3);
         let with_other = "{\"hooks\":{\"PostToolUse\":[{\"matcher\":\"*\",\"hooks\":[{\"type\":\"command\",\"command\":\"'/x/herdr-progress' hook --agent claude\",\"timeout\":10}]}]}}";
         let added = hooks(with_other, CMD, false).unwrap();
         assert!(added.contains("herdr-progress"));
         assert!(has_agent_progress_hooks(&added));
         let removed = hooks(&added, CMD, true).unwrap();
-        assert!(removed.contains("herdr-progress") && !removed.contains("herdr-projects"));
+        assert!(removed.contains("herdr-progress") && !removed.contains("ferrite-projects"));
     }
 
     #[test]
@@ -599,21 +540,21 @@ mod tests {
         let env = Env::for_test(home.path(), &[("COPILOT_HOME", "/c")]);
         assert_eq!(hook_file(&env, "droid", None, None), home.path().join(".factory/settings.json"));
         assert_eq!(hook_file(&env, "gemini", None, None), home.path().join(".gemini/settings.json"));
-        assert_eq!(hook_file(&env, "copilot", None, None), Path::new("/c/hooks/herdr-projects.json"));
+        assert_eq!(hook_file(&env, "copilot", None, None), Path::new("/c/hooks/ferrite-projects.json"));
         // Copilot's hooks/ folder may not exist yet: its config directory counts.
         std::fs::create_dir_all(home.path().join(".copilot")).unwrap();
         let env = Env::for_test(home.path(), &[]);
         assert!(harness_installed(&env, "copilot", None, None));
         assert!(!harness_installed(&env, "gemini", None, None));
 
-        let gemini = hooks("{\"theme\":\"x\"}", "/b/herdr-projects --root /r hook --agent gemini", false).unwrap();
+        let gemini = hooks("{\"theme\":\"x\"}", "/b/ferrite-projects --root /r hook --agent gemini", false).unwrap();
         let value: serde_json::Value = serde_json::from_str(&gemini).unwrap();
         for event in ["SessionStart", "BeforeAgent", "AfterTool"] {
             assert_eq!(value["hooks"][event][0]["hooks"][0]["timeout"], 10_000, "{gemini}");
         }
         assert!(value["hooks"]["PostToolUse"].is_null());
 
-        let command = "/b/herdr-projects --root /r hook --agent copilot";
+        let command = "/b/ferrite-projects --root /r hook --agent copilot";
         let copilot = hooks("{}", command, false).unwrap();
         let value: serde_json::Value = serde_json::from_str(&copilot).unwrap();
         assert_eq!(value["version"], 1);
@@ -621,9 +562,9 @@ mod tests {
             assert_eq!(value["hooks"][event], serde_json::json!([{"type":"command","command":command,"timeoutSec":10}]), "{copilot}");
         }
         assert_eq!(hooks(&copilot, command, false).unwrap(), copilot);
-        let moved = hooks(&copilot, "/new/herdr-projects --root /r hook --agent copilot", false).unwrap();
-        assert_eq!(moved.matches("herdr-projects").count(), 3);
-        assert!(!hooks(&copilot, command, true).unwrap().contains("herdr-projects"));
+        let moved = hooks(&copilot, "/new/ferrite-projects --root /r hook --agent copilot", false).unwrap();
+        assert_eq!(moved.matches("ferrite-projects").count(), 3);
+        assert!(!hooks(&copilot, command, true).unwrap().contains("ferrite-projects"));
     }
 
     #[test]
@@ -634,7 +575,7 @@ mod tests {
         let edited_text = format!("{}\n", hooks("{\"theme\":\"dark\"}", CMD, false).unwrap());
         let edited = Owned { before: Some(edited_text.clone()), after: "x".into(), kind: "hooks".into(), command: Some(CMD.into()) };
         let baseline = removal_baseline(&previous, &edited).unwrap().unwrap();
-        assert!(baseline.contains("dark") && !baseline.contains("herdr-projects"));
+        assert!(baseline.contains("dark") && !baseline.contains("ferrite-projects"));
     }
 
     #[test]
@@ -649,7 +590,7 @@ mod tests {
         std::fs::write(claude.join("settings.json"), original).unwrap();
         let runner = crate::runner::fake::FakeRunner::new();
         let ctx = Ctx { env: &env, root: home.path().join("root"), config_dir: home.path().join("cfg"), runner: &runner, detached_ticker: false };
-        let options = ConfigureOptions { clients: vec![], claude_home: Some(claude.clone()), codex_home: Some(codex.clone()), dry_run: true, hooks: true, sidebar: false, key: None, herdr_config: None, skill: None };
+        let options = ConfigureOptions { clients: vec![], claude_home: Some(claude.clone()), codex_home: Some(codex.clone()), dry_run: true, hooks: true, skill: None };
         let notes = configure(&ctx, &options).unwrap();
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert_eq!(std::fs::read_to_string(claude.join("settings.json")).unwrap(), original, "dry run changed a file");
@@ -678,7 +619,7 @@ mod tests {
         std::fs::write(claude.join("settings.json"), text.replace("\"theme\"", "\"theme\"").replacen("{\n", "{\n  \"model\": \"opus\",\n", 1)).unwrap();
         unconfigure(&ctx).unwrap();
         let after = std::fs::read_to_string(claude.join("settings.json")).unwrap();
-        assert!(after.contains("\"model\": \"opus\"") && after.contains("say done") && !after.contains("herdr-projects"));
+        assert!(after.contains("\"model\": \"opus\"") && after.contains("say done") && !after.contains("ferrite-projects"));
     }
 
     #[test]
@@ -697,7 +638,7 @@ mod tests {
         std::fs::write(source.join("SKILL.md"), "---\nname: autoproject\n---\n").unwrap();
         let runner = crate::runner::fake::FakeRunner::new();
         let ctx = Ctx { env: &env, root: home.path().join("root"), config_dir: home.path().join("cfg"), runner: &runner, detached_ticker: false };
-        let options = |dry_run: bool, skill: &Path| ConfigureOptions { clients: vec![], claude_home: Some(claude.clone()), codex_home: Some(home.path().join("codex")), dry_run, hooks: true, sidebar: false, key: None, herdr_config: None, skill: Some(skill.to_path_buf()) };
+        let options = |dry_run: bool, skill: &Path| ConfigureOptions { clients: vec![], claude_home: Some(claude.clone()), codex_home: Some(home.path().join("codex")), dry_run, hooks: true, skill: Some(skill.to_path_buf()) };
         let link = std::fs::canonicalize(&shared).unwrap().join(SKILL);
 
         // A plain directory already there (the old personal copy) is never touched.
@@ -737,6 +678,35 @@ mod tests {
         assert!(link.is_symlink());
     }
 
+    #[test]
+    fn the_bundled_skill_is_written_once_and_repaired_when_it_differs() {
+        let cfg = tempfile::tempdir().unwrap();
+        let source = skill_source(cfg.path()).unwrap();
+        assert_eq!(source, cfg.path().join("skill").join(SKILL));
+        assert_eq!(std::fs::read_to_string(source.join("SKILL.md")).unwrap(), SKILL_FILES[0].1);
+        assert!(source.join("references/protocol.md").is_file());
+        std::fs::write(source.join("SKILL.md"), "stale").unwrap();
+        assert_eq!(skill_source(cfg.path()).unwrap(), source);
+        assert_eq!(std::fs::read_to_string(source.join("SKILL.md")).unwrap(), SKILL_FILES[0].1);
+    }
+
+    #[test]
+    fn configure_ferrite_installs_the_hooks_and_links_the_bundled_skill() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::for_test(home.path(), &[]);
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        let runner = crate::runner::fake::FakeRunner::new();
+        let ctx = Ctx { env: &env, root: home.path().join("root"), config_dir: home.path().join("cfg"), runner: &runner, detached_ticker: false };
+        configure_ferrite(&ctx).unwrap();
+        let settings = std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap();
+        assert_eq!(settings.matches("hook --agent claude").count(), 3);
+        let link = std::fs::canonicalize(home.path().join(".claude")).unwrap().join("skills").join(SKILL);
+        assert_eq!(skill_state(&link, &ctx.config_dir.join("skill").join(SKILL)), SkillState::Ours);
+        unconfigure(&ctx).unwrap();
+        assert!(!home.path().join(".claude/settings.json").exists());
+        assert_eq!(skill_state(&link, &ctx.config_dir.join("skill").join(SKILL)), SkillState::Missing);
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlinked_config_is_refused_without_touching_the_target() {
@@ -747,44 +717,5 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(read(&link).is_err());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "{\"user\":true}");
-    }
-
-    #[test]
-    fn configure_edits_herdrs_config_checks_the_key_and_unconfigure_restores_it() {
-        use crate::runner::fake::{FakeRunner, fail, ok};
-        let home = tempfile::tempdir().unwrap();
-        let env = Env::for_test(home.path(), &[]);
-        let config = home.path().join("herdr.toml");
-        let original = "# my theme\n[theme]\nname = \"catppuccin\"\n";
-        std::fs::write(&config, original).unwrap();
-        let runner = FakeRunner::new();
-        runner.on("--default-config", ok("[keys]\n# previous_tab = \"prefix+p\"\n"));
-        runner.on("config check", ok(""));
-        let ctx = Ctx { env: &env, root: home.path().join("root"), config_dir: home.path().join("cfg"), runner: &runner, detached_ticker: false };
-        let options = |key: Option<&str>| ConfigureOptions { clients: vec!["claude".into()], claude_home: Some(home.path().join("claude")), codex_home: None, dry_run: false, hooks: true, sidebar: true, key: key.map(str::to_string), herdr_config: Some(config.clone()), skill: None };
-        std::fs::create_dir_all(home.path().join("claude")).unwrap();
-
-        // A key Herdr already uses is refused before anything is written.
-        assert!(configure(&ctx, &options(Some("prefix+p"))).unwrap_err().to_string().contains("previous_tab"));
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-
-        configure(&ctx, &options(None)).unwrap();
-        let text = std::fs::read_to_string(&config).unwrap();
-        assert!(text.contains("# my theme") && text.contains("prefix+a") && text.contains("$hp_sub") && text.contains("needs-you --line"));
-        assert_eq!(runner.count("config check"), 1);
-        // A second run keeps the configured key.
-        configure(&ctx, &options(None)).unwrap();
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
-
-        unconfigure(&ctx).unwrap();
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-
-        // Herdr rejecting the candidate changes nothing.
-        let rejecting = FakeRunner::new();
-        rejecting.on("--default-config", ok(""));
-        rejecting.on("config check", fail(1, "bad row"));
-        let ctx = Ctx { runner: &rejecting, ..ctx };
-        assert!(configure(&ctx, &options(None)).is_err());
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     }
 }
