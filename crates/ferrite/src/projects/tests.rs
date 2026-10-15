@@ -56,11 +56,13 @@ fn typed(sheet: &Entity<ProjectsSheet>, cx: &mut VisualTestContext, text: &str) 
     }
 }
 
-/// The popup on `place`, as wide as a window's sheet.
+/// The popup on `place`, as wide as a window's sheet. The popup runs on a
+/// thread of its own, whose frames wake the window from off the scheduler.
 fn open<'a>(
     cx: &'a mut TestAppContext,
     place: Place,
 ) -> (Entity<ProjectsSheet>, &'a mut VisualTestContext) {
+    cx.executor().allow_parking();
     let (sheet, cx) = cx.add_window_view(|_, cx| ProjectsSheet::popup(place, None, cx));
     sheet.update(cx, |sheet, _| sheet.fit(1400.0, 600.0));
     (sheet, cx)
@@ -146,9 +148,11 @@ fn the_picker_filters_on_name_and_slug_and_scopes_the_popup(cx: &mut TestAppCont
     // Nothing matches: it says so.
     press(&sheet, cx, KeyCode::Char('/'));
     typed(&sheet, cx, "zz");
-    assert!(screen(&sheet, cx)
-        .iter()
-        .any(|line| line.starts_with("  no projects match")));
+    assert!(
+        screen(&sheet, cx)
+            .iter()
+            .any(|line| line.starts_with("  no projects match"))
+    );
 }
 
 #[gpui::test]
@@ -214,7 +218,10 @@ fn the_snapshot_lists_open_threads_by_need_with_their_sub_lines() {
         (project.slug.as_str(), project.name.as_str()),
         ("alpha", "Alpha")
     );
-    assert_eq!(project.summary, "1 need you · 2 working");
+    assert_eq!(
+        project.summary, "1 need you · 1 working",
+        "the line counts the groups the ticker recorded, as herdr-projects' sidebar does"
+    );
     let rows: Vec<(&str, Option<ThreadId>, Group, &str, &str)> = project
         .threads
         .iter()
