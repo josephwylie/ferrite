@@ -101,9 +101,11 @@ pub use delivery::{cleanup, Notifier};
 /// Delivery through alerter, macOS only as upstream is.
 #[cfg(target_os = "macos")]
 mod delivery {
+    use std::collections::HashMap;
     use std::io::{self, Read};
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use super::Alert;
@@ -121,7 +123,7 @@ mod delivery {
     /// Time the git calls behind one notification get, together (upstream's
     /// `LOOKUP_BUDGET`): a pathological repository costs at most this much
     /// delay, and the notification goes out with whatever was answered.
-    const LOOKUP_BUDGET: Duration = Duration::from_secs(2);
+    pub(super) const LOOKUP_BUDGET: Duration = Duration::from_secs(2);
 
     /// Removes stale generated state: upstream's `--cleanup`, which Herdr ran
     /// at plugin startup and Ferrite runs at launch.
@@ -130,16 +132,27 @@ mod delivery {
         rewrite_generated_scripts_without_activation()
     }
 
-    /// Posts and withdraws notifications through alerter.
+    /// Posts and withdraws notifications through alerter. Clones share the
+    /// notifications they have up.
     #[derive(Debug, Clone)]
     pub struct Notifier {
         notifier_bin: String,
+        /// Pane ids with a post still waiting on the operator, and how many:
+        /// a newer post can replace one whose thread has not finished yet.
+        standing: Arc<Mutex<HashMap<String, usize>>>,
     }
 
     impl Notifier {
         /// The installed alerter, or why there is none.
         pub fn find() -> Result<Self, String> {
-            resolve_notifier_bin().map(|notifier_bin| Self { notifier_bin })
+            resolve_notifier_bin().map(Self::new)
+        }
+
+        pub(super) fn new(notifier_bin: String) -> Self {
+            Self {
+                notifier_bin,
+                standing: Arc::default(),
+            }
         }
 
         /// Shows `alert`, replacing any standing notification with its pane
@@ -150,9 +163,24 @@ mod delivery {
             // Reset here rather than on the thread: a withdraw that follows at
             // once must find the marker this post would otherwise clear.
             let _ = reset_notification_clearance(&alert.pane_id);
-            let notifier_bin = self.notifier_bin.clone();
+            *self
+                .standing
+                .lock()
+                .unwrap()
+                .entry(alert.pane_id.clone())
+                .or_default() += 1;
+            let (notifier_bin, standing) = (self.notifier_bin.clone(), self.standing.clone());
             std::thread::spawn(move || {
-                if deliver(&alert, &notifier_bin) == Ok(true) {
+                let clicked_it = deliver(&alert, &notifier_bin) == Ok(true);
+                let mut standing = standing.lock().unwrap();
+                if let Some(count) = standing.get_mut(&alert.pane_id) {
+                    *count -= 1;
+                    if *count == 0 {
+                        standing.remove(&alert.pane_id);
+                    }
+                }
+                drop(standing);
+                if clicked_it {
                     clicked();
                 }
             });
@@ -167,6 +195,18 @@ mod delivery {
             std::thread::spawn(move || {
                 let _ = remove_notification(&pane_id, &notifier_bin);
             });
+        }
+
+        /// Takes back every notification still up, before returning. A click
+        /// comes back through the process that posted it (where upstream's
+        /// exec'd a helper of its own), so once that process is gone the click
+        /// would land nowhere: the app calls this as it quits.
+        pub fn withdraw_all(&self) {
+            let pane_ids: Vec<String> = self.standing.lock().unwrap().keys().cloned().collect();
+            for pane_id in pane_ids {
+                let _ = mark_notification_cleared(&pane_id);
+                let _ = remove_notification(&pane_id, &self.notifier_bin);
+            }
         }
     }
 
@@ -389,23 +429,47 @@ mod tests {
             }
         }
 
+        fn write_executable(path: &Path, content: &str) {
+            fs::write(path, content).unwrap();
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o700);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+
         /// A stand-in for alerter that logs its arguments and answers as the
         /// operator would have.
         fn fake_alerter(dir: &Path, answer: &str) -> (PathBuf, PathBuf) {
             let log = dir.join("alerter.log");
             let bin = dir.join("alerter");
-            fs::write(
+            write_executable(
                 &bin,
-                format!(
+                &format!(
                     "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{}'; done\nprintf '%s' '{answer}'\n",
                     log.display()
                 ),
-            )
-            .unwrap();
-            let mut permissions = fs::metadata(&bin).unwrap().permissions();
-            std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o700);
-            fs::set_permissions(&bin, permissions).unwrap();
+            );
             (bin, log)
+        }
+
+        /// A repository on `main` with one uncommitted change.
+        fn repo_with_a_change(dir: &Path) -> PathBuf {
+            let repo = dir.join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            let git = |args: &[&str]| {
+                let status = std::process::Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                    .args(args)
+                    .current_dir(&repo)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "git {args:?}");
+            };
+            git(&["init", "--quiet", "--initial-branch=main"]);
+            fs::write(repo.join("file"), "one\n").unwrap();
+            git(&["add", "file"]);
+            git(&["commit", "--quiet", "-m", "one"]);
+            fs::write(repo.join("file"), "one\ntwo\n").unwrap();
+            repo
         }
 
         #[test]
@@ -458,6 +522,72 @@ mod tests {
             alert.cwd = Some(repo);
             let labels = pane_labels(&alert, deadline);
             assert_eq!(labels.git.as_deref(), Some("feature/notify"));
+        }
+
+        #[test]
+        fn a_hanging_change_count_delays_the_notification_by_the_budget_at_most() {
+            let dir = TempDir::new("hang");
+            let repo = repo_with_a_change(&dir.0);
+            // `git diff` asks the fsmonitor hook what changed, and this one
+            // never answers in time. The trailing `:` keeps the shell from
+            // exec-ing into `sleep`, so the hang is a descendant (upstream's).
+            let hook = dir.0.join("hang");
+            write_executable(&hook, "#!/bin/sh\nsleep 30; :\n");
+            let status = std::process::Command::new("git")
+                .args(["config", "core.fsmonitor", hook.to_str().unwrap()])
+                .current_dir(&repo)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let mut alert = alert("hang-1", Status::Blocked);
+            alert.cwd = Some(repo);
+
+            let started = Instant::now();
+            let labels = pane_labels(&alert, started + LOOKUP_BUDGET);
+
+            assert!(
+                started.elapsed() < LOOKUP_BUDGET + Duration::from_secs(3),
+                "took {:?}",
+                started.elapsed()
+            );
+            // What answered in time is still shown: the branch, not the counts.
+            assert_eq!(labels.git.as_deref(), Some("main"));
+            assert_eq!(labels.tab.as_deref(), Some("Release"));
+        }
+
+        #[test]
+        fn a_spent_budget_skips_git_and_still_names_the_thread() {
+            let dir = TempDir::new("spent");
+            let mut alert = alert("spent-1", Status::Done);
+            alert.cwd = Some(repo_with_a_change(&dir.0));
+
+            let labels = pane_labels(&alert, Instant::now());
+
+            assert_eq!(labels.git, None);
+            assert_eq!(labels.tab.as_deref(), Some("Release"));
+        }
+
+        #[test]
+        fn quitting_takes_back_every_notification_still_up() {
+            let dir = TempDir::new("quit");
+            let log = dir.0.join("alerter.log");
+            let bin = dir.0.join("alerter");
+            // Logs a removal; anything else stands for a notification nobody
+            // has clicked yet.
+            write_executable(
+                &bin,
+                &format!(
+                    "#!/bin/sh\nif [ \"$1\" = --remove ]; then printf '%s\\n' \"$2\" >> '{}'; else sleep 5; fi\n",
+                    log.display()
+                ),
+            );
+            let notifier = Notifier::new(bin.to_str().unwrap().to_string());
+            notifier.post(alert("quit-1", Status::Blocked), || {});
+
+            notifier.withdraw_all();
+
+            assert_eq!(fs::read_to_string(&log).unwrap(), "ferrite-quit-1\n");
+            reset_notification_clearance("quit-1").unwrap();
         }
 
         #[test]

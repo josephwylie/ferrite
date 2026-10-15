@@ -109,7 +109,14 @@ delivered, and **how its click lands**:
   forward (the click handler activates the app, since alerter no longer
   does) and lands on the Thread as ADR 0017 describes, on its machine
   when that is off screen. Upstream's terminal learning (which app shows a
-  workspace) has nothing to learn here and is not used.
+  workspace) has nothing to learn here and is not used. The price of an
+  in-process click: a notification still up once Ferrite is gone would print
+  its click to a closed pipe and land nowhere, where upstream's exec'd
+  helper still worked. So Ferrite takes back every notification still up as
+  it quits (`Notifier::withdraw_all`); after a crash the stragglers stay
+  until dismissed or alerter's hour runs out, and a click on one does
+  nothing. Each posting also holds one OS thread, mostly asleep, while
+  alerter waits on the operator.
 - **What is not carried over.** Upstream's visibility monitor
   (`SendWithVisibilityMonitor`) watched, from a separate process, for the
   pane becoming visible and took the notification back; Ferrite's bell
