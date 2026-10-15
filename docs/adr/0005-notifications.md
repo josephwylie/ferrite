@@ -113,7 +113,11 @@ delivered, and **how its click lands**:
   in-process click: a notification still up once Ferrite is gone would print
   its click to a closed pipe and land nowhere, where upstream's exec'd
   helper still worked. So Ferrite takes back every notification still up as
-  it quits (`Notifier::withdraw_all`); after a crash the stragglers stay
+  it quits (`Notifier::withdraw_all`): it stops every posting's script, and
+  the alerter it started, before removing what alerter already showed, so
+  one that was on its way up cannot appear after the removal; the removals
+  run at once and quitting waits on them for two seconds at most, so a hung
+  alerter cannot hold the quit. After a crash the stragglers stay
   until dismissed or alerter's hour runs out, and a click on one does
   nothing. Each posting also holds one OS thread, mostly asleep, while
   alerter waits on the operator.

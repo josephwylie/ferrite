@@ -98,20 +98,25 @@ pub(crate) fn command_stdout_until(
 /// best-effort: the group is usually gone already, since a command that has
 /// exited and closed its stdout normally leaves nothing behind.
 fn kill_process_group(child: &mut Child) {
+    kill_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Kills every process in the group `group` leads, best-effort.
+pub(crate) fn kill_group(group: u32) {
     extern "C" {
         fn kill(pid: c_int, signal: c_int) -> c_int;
     }
     const SIGKILL: c_int = 9;
 
-    if let Ok(group) = c_int::try_from(child.id()) {
+    if let Ok(group) = c_int::try_from(group) {
         // SAFETY: `kill` only sends a signal; a negative pid names the process
         // group the child leads, which `process_group(0)` created for it.
         unsafe {
             kill(-group, SIGKILL);
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 pub(crate) fn sanitize_group_id(value: &str) -> String {

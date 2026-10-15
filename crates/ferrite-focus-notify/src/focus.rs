@@ -101,8 +101,9 @@ pub use delivery::{cleanup, Notifier};
 /// Delivery through alerter, macOS only as upstream is.
 #[cfg(target_os = "macos")]
 mod delivery {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::io::{self, Read};
+    use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
@@ -118,12 +119,19 @@ mod delivery {
     use crate::state::{
         cleanup_stale_state_files, mark_notification_cleared, reset_notification_clearance,
     };
-    use crate::util::command_stdout_until;
+    use crate::util::{command_stdout_until, kill_group, notification_group_id};
 
     /// Time the git calls behind one notification get, together (upstream's
     /// `LOOKUP_BUDGET`): a pathological repository costs at most this much
     /// delay, and the notification goes out with whatever was answered.
     pub(super) const LOOKUP_BUDGET: Duration = Duration::from_secs(2);
+
+    /// Time alerter's removals get as Ferrite quits, together: quitting waits
+    /// at most this long, even on an alerter that never answers.
+    pub(super) const QUIT_BUDGET: Duration = Duration::from_secs(2);
+
+    /// The process groups of the notification scripts still running.
+    pub(super) type Scripts = Mutex<HashSet<u32>>;
 
     /// Removes stale generated state: upstream's `--cleanup`, which Herdr ran
     /// at plugin startup and Ferrite runs at launch.
@@ -140,6 +148,7 @@ mod delivery {
         /// Pane ids with a post still waiting on the operator, and how many:
         /// a newer post can replace one whose thread has not finished yet.
         standing: Arc<Mutex<HashMap<String, usize>>>,
+        scripts: Arc<Scripts>,
     }
 
     impl Notifier {
@@ -152,6 +161,7 @@ mod delivery {
             Self {
                 notifier_bin,
                 standing: Arc::default(),
+                scripts: Arc::default(),
             }
         }
 
@@ -169,9 +179,13 @@ mod delivery {
                 .unwrap()
                 .entry(alert.pane_id.clone())
                 .or_default() += 1;
-            let (notifier_bin, standing) = (self.notifier_bin.clone(), self.standing.clone());
+            let (notifier_bin, standing, scripts) = (
+                self.notifier_bin.clone(),
+                self.standing.clone(),
+                self.scripts.clone(),
+            );
             std::thread::spawn(move || {
-                let clicked_it = deliver(&alert, &notifier_bin) == Ok(true);
+                let clicked_it = deliver(&alert, &notifier_bin, &scripts) == Ok(true);
                 let mut standing = standing.lock().unwrap();
                 if let Some(count) = standing.get_mut(&alert.pane_id) {
                     *count -= 1;
@@ -197,23 +211,46 @@ mod delivery {
             });
         }
 
-        /// Takes back every notification still up, before returning. A click
-        /// comes back through the process that posted it (where upstream's
-        /// exec'd a helper of its own), so once that process is gone the click
-        /// would land nowhere: the app calls this as it quits.
+        /// Takes back every notification still up, before returning, within
+        /// [`QUIT_BUDGET`]. A click comes back through the process that posted
+        /// it (where upstream's exec'd a helper of its own), so once that
+        /// process is gone the click would land nowhere: the app calls this as
+        /// it quits.
         pub fn withdraw_all(&self) {
             let pane_ids: Vec<String> = self.standing.lock().unwrap().keys().cloned().collect();
-            for pane_id in pane_ids {
-                let _ = mark_notification_cleared(&pane_id);
-                let _ = remove_notification(&pane_id, &self.notifier_bin);
+            // A script not yet started then never shows anything...
+            for pane_id in &pane_ids {
+                let _ = mark_notification_cleared(pane_id);
             }
+            // ...and one past its marker check is stopped, alerter with it, so
+            // nothing can show after the removals below. A script starts with
+            // the lock held, so it is either stopped here or sees the marker.
+            for &group in self.scripts.lock().unwrap().iter() {
+                kill_group(group);
+            }
+            // What alerter had already shown, all at once rather than one
+            // launch after another.
+            let deadline = Instant::now() + QUIT_BUDGET;
+            std::thread::scope(|scope| {
+                for pane_id in &pane_ids {
+                    let group = notification_group_id(pane_id);
+                    scope.spawn(move || {
+                        command_stdout_until(
+                            &self.notifier_bin,
+                            &["--remove", &group],
+                            &[],
+                            deadline,
+                        )
+                    });
+                }
+            });
         }
     }
 
     /// Shows the notification and waits for the operator: whether they
     /// clicked it. None of the alert's words is required; upstream's copy
     /// fills what is missing.
-    fn deliver(alert: &Alert, notifier_bin: &str) -> Result<bool, String> {
+    fn deliver(alert: &Alert, notifier_bin: &str, scripts: &Scripts) -> Result<bool, String> {
         let Some(mut notification) = notification_for(alert)? else {
             return Ok(false);
         };
@@ -225,7 +262,7 @@ mod delivery {
         // so the script never polls for visibility.
         let script = write_focus_script(&notification, notifier_bin, false, false)
             .map_err(|err| format!("failed to write focus script: {err}"))?;
-        run_reporting_click(&script)
+        run_reporting_click(&script, scripts)
     }
 
     /// The notification upstream builds from Herdr's
@@ -288,18 +325,28 @@ mod delivery {
     /// Runs the generated script and waits for it: whether the operator
     /// clicked. Where upstream detached the script and let a click exec the
     /// focus helper, Ferrite waits on it, so the click comes back in-process.
-    pub(super) fn run_reporting_click(script: &Path) -> Result<bool, String> {
-        let mut child = Command::new("sh")
-            .arg(script)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|err| format!("failed to run notification script: {err}"))?;
+    /// The script runs in a process group of its own, listed in `scripts`
+    /// while it runs, so that quitting can stop it and alerter together.
+    pub(super) fn run_reporting_click(script: &Path, scripts: &Scripts) -> Result<bool, String> {
+        let mut child = {
+            let mut running = scripts.lock().unwrap();
+            let child = Command::new("sh")
+                .arg(script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .map_err(|err| format!("failed to run notification script: {err}"))?;
+            running.insert(child.id());
+            child
+        };
         let mut stdout = String::new();
         if let Some(mut pipe) = child.stdout.take() {
             let _ = pipe.read_to_string(&mut stdout);
         }
+        // Unlisted before it is reaped, so its id is never killed once reused.
+        scripts.lock().unwrap().remove(&child.id());
         let status = child
             .wait()
             .map_err(|err| format!("failed to wait for notification script: {err}"))?;
@@ -591,6 +638,61 @@ mod tests {
         }
 
         #[test]
+        fn quitting_stops_an_alerter_still_on_its_way_up() {
+            let dir = TempDir::new("quit-race");
+            let (log, started) = (dir.0.join("alerter.log"), dir.0.join("started"));
+            let bin = dir.0.join("alerter");
+            // Launched, but not yet shown: it would show after the removal.
+            write_executable(
+                &bin,
+                &format!(
+                    "#!/bin/sh\nif [ \"$1\" = --remove ]; then printf 'removed\\n' >> '{log}'; exit 0; fi\n: > '{started}'\nsleep 1\nprintf 'shown\\n' >> '{log}'\n",
+                    log = log.display(),
+                    started = started.display(),
+                ),
+            );
+            let notifier = Notifier::new(bin.to_str().unwrap().to_string());
+            notifier.post(alert("quit-race-1", Status::Blocked), || {});
+            let launched = Instant::now();
+            while !started.exists() {
+                assert!(
+                    launched.elapsed() < Duration::from_secs(5),
+                    "alerter never ran"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            notifier.withdraw_all();
+            std::thread::sleep(Duration::from_millis(1500));
+
+            assert_eq!(fs::read_to_string(&log).unwrap(), "removed\n");
+            reset_notification_clearance("quit-race-1").unwrap();
+        }
+
+        #[test]
+        fn an_alerter_that_never_answers_delays_quitting_by_the_budget_at_most() {
+            let dir = TempDir::new("quit-hang");
+            let bin = dir.0.join("alerter");
+            write_executable(&bin, "#!/bin/sh\nsleep 30; :\n");
+            let notifier = Notifier::new(bin.to_str().unwrap().to_string());
+            for pane_id in ["quit-hang-1", "quit-hang-2", "quit-hang-3"] {
+                notifier.post(alert(pane_id, Status::Done), || {});
+            }
+
+            let started = Instant::now();
+            notifier.withdraw_all();
+
+            assert!(
+                started.elapsed() < QUIT_BUDGET + Duration::from_secs(1),
+                "took {:?}",
+                started.elapsed()
+            );
+            for pane_id in ["quit-hang-1", "quit-hang-2", "quit-hang-3"] {
+                reset_notification_clearance(pane_id).unwrap();
+            }
+        }
+
+        #[test]
         fn a_click_comes_back_and_the_alerter_gets_the_row() {
             let dir = TempDir::new("click");
             let (bin, log) = fake_alerter(&dir.0, "@CONTENTCLICKED");
@@ -601,7 +703,7 @@ mod tests {
             let script =
                 write_focus_script(&notification, bin.to_str().unwrap(), false, false).unwrap();
 
-            assert_eq!(run_reporting_click(&script), Ok(true));
+            assert_eq!(run_reporting_click(&script, &Scripts::default()), Ok(true));
             let args = fs::read_to_string(&log).unwrap();
             assert!(args.contains("--title=Blocked · Release"));
             assert!(args.contains("--message=Bash wants to run cargo publish"));
@@ -619,7 +721,7 @@ mod tests {
             let script =
                 write_focus_script(&notification, bin.to_str().unwrap(), false, false).unwrap();
 
-            assert_eq!(run_reporting_click(&script), Ok(false));
+            assert_eq!(run_reporting_click(&script, &Scripts::default()), Ok(false));
         }
 
         #[test]
@@ -632,7 +734,7 @@ mod tests {
                 write_focus_script(&notification, bin.to_str().unwrap(), false, false).unwrap();
             mark_notification_cleared(&alert.pane_id).unwrap();
 
-            assert_eq!(run_reporting_click(&script), Ok(false));
+            assert_eq!(run_reporting_click(&script, &Scripts::default()), Ok(false));
             assert!(!log.exists(), "alerter never ran");
             reset_notification_clearance(&alert.pane_id).unwrap();
         }
