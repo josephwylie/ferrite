@@ -45,6 +45,14 @@ pub(crate) struct ServerBands {
     restart_asked: bool,
 }
 
+#[cfg(test)]
+impl ServerBands {
+    /// What the no-Server band says, while it is up.
+    pub(crate) fn detached(&self) -> Option<Gone> {
+        self.detached
+    }
+}
+
 impl CockpitView {
     /// Say when there is no Server, and ask an older one running this
     /// window's own executable to restart onto it once its agents are idle.

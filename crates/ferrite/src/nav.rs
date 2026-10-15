@@ -1191,7 +1191,8 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
     let thread = row.thread.get();
     let key = SharedString::from(format!("nav-machine-{machine}-{thread}"));
     let title: SharedString = row.title.clone().unwrap_or_default().into();
-    row_frame(("nav-machine-row", thread as usize), key.clone(), false)
+    // Thread ids are per Server: the machine is part of the id.
+    wash(line().id(key.clone()), key.clone(), false)
         .debug_selector(move || key.to_string())
         .when(lost, |row| row.opacity(MACHINE_LOST_OPACITY))
         .child(blank_cell())

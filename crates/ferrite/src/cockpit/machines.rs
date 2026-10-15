@@ -11,6 +11,22 @@ use ferrite_core::cockpit::ServerState;
 use ferrite_core::machine::{self, Machine};
 use gpui::App;
 
+/// What a lost machine still shows (ADR 0026): `element` dimmed under a
+/// cover, `id`, that takes every press until the machine is back.
+pub(super) fn held(element: Div, id: &'static str) -> Div {
+    element
+        .relative()
+        .opacity(crate::theme::MACHINE_LOST_OPACITY)
+        .child(
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .absolute()
+                .inset_0()
+                .occlude(),
+        )
+}
+
 impl CockpitView {
     /// Every machine for the nav, when there is more than this computer.
     pub(super) fn machine_rows(&self, cx: &App) -> Option<Vec<MachineRow>> {
@@ -113,14 +129,20 @@ impl CockpitView {
         }
     }
 
-    /// Follow Settings' machines.
+    /// Follow Settings' machines. Turning off the one the window is on
+    /// puts the window on this computer: a turned-off machine is never
+    /// connected to.
     pub(super) fn machines_changed(&mut self, cx: &mut Context<Self>) {
         let saved = self.prefs.settings.machines.clone();
-        if let Some(machines) = &self.machines {
-            machines.update(cx, |machines, cx| {
-                machines.settings_changed(&saved);
-                cx.notify();
-            });
+        let Some(machines) = &self.machines else {
+            return;
+        };
+        let turned_off = machines.update(cx, |machines, cx| {
+            cx.notify();
+            machines.settings_changed(&saved)
+        });
+        if turned_off {
+            cx.emit(GoToMachine(0));
         }
     }
 

@@ -92,7 +92,8 @@ pub struct MachineRow {
 
 impl Machines {
     /// This computer, `saved`, and `remote` (a target, or a saved machine's
-    /// name or target), which the window starts on.
+    /// name or target), which the window starts on — unless it is turned
+    /// off in Settings: then on this computer, the machine listed as off.
     pub fn new(reach: Reach, saved: &[Machine], remote: Option<&str>) -> Self {
         let mut machines = Self {
             reach,
@@ -107,14 +108,14 @@ impl Machines {
                     .as_ref()
                     .is_some_and(|machine| machine.target == remote || machine.name == remote)
             });
-            machines.selected = known.unwrap_or_else(|| {
+            let index = known.unwrap_or_else(|| {
                 machines
                     .entries
                     .push(Entry::new(Some(Machine::new(remote)), true));
                 machines.entries.len() - 1
             });
+            machines.select(index);
         }
-        machines.sync_status();
         machines
     }
 
@@ -234,8 +235,10 @@ impl Machines {
 
     /// Follow Settings' machines: added, removed, renamed, enabled or not.
     /// A machine keeps its bridge and status across the change; the one
-    /// the window is on stays, unsaved, when Settings drops it.
-    pub fn settings_changed(&mut self, saved: &[Machine]) {
+    /// the window is on stays, unsaved, when Settings drops it. True when
+    /// Settings turned off the one the window is on: the window leaves it
+    /// for this computer.
+    pub fn settings_changed(&mut self, saved: &[Machine]) -> bool {
         let selected = self.entries[self.selected].machine.clone();
         let mut old: Vec<Entry> = self.entries.drain(1..).collect();
         let mut take = |target: &str| {
@@ -273,6 +276,7 @@ impl Machines {
             })
             .unwrap_or(0);
         self.sync_status();
+        self.entries[self.selected].disabled()
     }
 
     /// Where machine `index`'s Server is, and the Store its window reads.

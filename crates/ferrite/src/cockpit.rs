@@ -5570,7 +5570,7 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        if let Some(thread) = self.focused_thread() {
+        if let Some(thread) = self.focused_thread().filter(|_| !self.machine_lost()) {
             self.cockpit.interrupt(thread);
             self.facts.acted(&self.cockpit, thread);
         }
@@ -9579,7 +9579,10 @@ impl CockpitView {
         // dispatch starts above these handlers and cmd-n could never make the
         // first Thread. Fullscreen changes none of this: the fullscreened
         // Pane is the focused Pane (fullscreen follows focus), so the snap
-        // lands on the one Pane actually on screen.
+        // lands on the one Pane actually on screen. A machine whose Server
+        // went is read-only (ADR 0026): the root holds the keyboard, so no
+        // Composer or control on its board takes a key until it is back.
+        let lost = self.machine_lost();
         let wanted = self
             .rename
             .as_ref()
@@ -9628,7 +9631,9 @@ impl CockpitView {
             .unwrap_or_else(|| self.focus.clone());
         // The empty board's list holds the keyboard while it shows (F-13):
         // its rows answer ↑ ↓ ⏎ under the `EmptyBoard` context.
-        let wanted = if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
+        let wanted = if lost {
+            self.focus.clone()
+        } else if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
         } else {
             wanted
@@ -9643,24 +9648,25 @@ impl CockpitView {
                 || self.panes.get(self.focused()).is_some_and(|pane| {
                     pane.rich.output_focused(&pane.text_namespace(), window, cx)
                 }));
-        let pane_control_focused = self.panes.get(self.focused()).is_some_and(|pane| {
-            let controls = pane
-                .thread()
-                .and_then(|id| self.cockpit.thread(id))
-                .is_some_and(|thread| {
-                    !thread.activity().children().is_empty()
-                        || thread.activity().pending_decisions().len() > 1
-                        || thread.activity().pending_decisions().iter().any(|request| {
-                            request.subject.is_none()
-                                || pane::question_of(&request.decision).is_some()
-                        })
-                });
-            pane.agent_menu_open
-                || (controls
-                    && pane.controls_focus.contains_focused(window, cx)
-                    && !pane.controls_focus.is_focused(window)
-                    && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
-        });
+        let pane_control_focused = !lost
+            && self.panes.get(self.focused()).is_some_and(|pane| {
+                let controls = pane
+                    .thread()
+                    .and_then(|id| self.cockpit.thread(id))
+                    .is_some_and(|thread| {
+                        !thread.activity().children().is_empty()
+                            || thread.activity().pending_decisions().len() > 1
+                            || thread.activity().pending_decisions().iter().any(|request| {
+                                request.subject.is_none()
+                                    || pane::question_of(&request.decision).is_some()
+                            })
+                    });
+                pane.agent_menu_open
+                    || (controls
+                        && pane.controls_focus.contains_focused(window, cx)
+                        && !pane.controls_focus.is_focused(window)
+                        && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
+            });
         // A reader sits beside its Pane, outside the transcript, so its text
         // needs its own exemption or a click to select in it is undone.
         let reader_text_focused = self
@@ -9771,19 +9777,8 @@ impl CockpitView {
             grid
         };
 
-        // A machine whose Server went keeps what it showed, dimmed, and
-        // takes no press until it is back (ADR 0026).
-        let grid = if self.machine_lost() {
-            grid.relative()
-                .opacity(crate::theme::MACHINE_LOST_OPACITY)
-                .child(
-                    div()
-                        .id("machine-lost")
-                        .debug_selector(|| "machine-lost".into())
-                        .absolute()
-                        .inset_0()
-                        .occlude(),
-                )
+        let grid = if lost {
+            machines::held(grid, "machine-lost")
         } else {
             grid
         };
@@ -9811,12 +9806,32 @@ impl CockpitView {
             .when(level == Level::Wall, |wall| {
                 wall.key_context("Ferrite Wall")
             })
-            .on_action(cx.listener(Self::submit))
-            .on_action(cx.listener(Self::unqueue_from_backspace))
+            // Nothing that acts on a lost machine's Threads is listened for
+            // until it is back (ADR 0026).
+            .when(!lost, |root| {
+                root.on_action(cx.listener(Self::submit))
+                    .on_action(cx.listener(Self::unqueue_from_backspace))
+                    .on_action(cx.listener(Self::allow))
+                    .on_action(cx.listener(Self::deny))
+                    .on_action(cx.listener(Self::always))
+                    .on_action(cx.listener(Self::close_thread))
+                    .on_action(cx.listener(Self::reopen_thread))
+                    .on_action(cx.listener(Self::paste_into_composer))
+                    .on_action(cx.listener(|view, _: &PickOption1, window, cx| {
+                        view.pick_or_type(0, "1", window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &PickOption2, window, cx| {
+                        view.pick_or_type(1, "2", window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &PickOption3, window, cx| {
+                        view.pick_or_type(2, "3", window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &PickOption4, window, cx| {
+                        view.pick_or_type(3, "4", window, cx)
+                    }))
+                    .map(|root| self.register_decision_actions(root, cx))
+            })
             .on_action(cx.listener(Self::interrupt))
-            .on_action(cx.listener(Self::allow))
-            .on_action(cx.listener(Self::deny))
-            .on_action(cx.listener(Self::always))
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
             .on_action(cx.listener(Self::next_decision))
@@ -9829,22 +9844,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::band_cycle))
             .on_action(cx.listener(Self::tool_cycle_previous))
             .on_action(cx.listener(Self::toggle_tool_action))
-            .on_action(cx.listener(Self::close_thread))
-            .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::copy_selection))
-            .on_action(cx.listener(Self::paste_into_composer))
-            .on_action(cx.listener(|view, _: &PickOption1, window, cx| {
-                view.pick_or_type(0, "1", window, cx)
-            }))
-            .on_action(cx.listener(|view, _: &PickOption2, window, cx| {
-                view.pick_or_type(1, "2", window, cx)
-            }))
-            .on_action(cx.listener(|view, _: &PickOption3, window, cx| {
-                view.pick_or_type(2, "3", window, cx)
-            }))
-            .on_action(cx.listener(|view, _: &PickOption4, window, cx| {
-                view.pick_or_type(3, "4", window, cx)
-            }))
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::toggle_nav))
@@ -9882,7 +9882,6 @@ impl CockpitView {
             .on_action(cx.listener(Self::history_newer))
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
-            .map(|root| self.register_decision_actions(root, cx))
             .map(|root| self.register_palette_actions(root, cx))
             // Every press forgets the reader; one in a reader marks it again
             // as it bubbles (`reader_cell`).
@@ -13021,8 +13020,8 @@ impl CockpitView {
             tree = tree.child(nav::notice(error.clone()));
         }
         // With machines (ADR 0026): the one the window is on heads its own
-        // tree, which folds under it, dimmed while its Server is away; the
-        // others follow the tree.
+        // tree, which folds under it, and is held while its Server is away;
+        // the others follow the tree.
         let machines = self.machine_rows(cx);
         let on = machines
             .as_ref()
@@ -13031,9 +13030,9 @@ impl CockpitView {
             tree = tree.child(self.machine_heading(on, cx));
         }
         let folded = on.is_some_and(|on| on.folded);
-        let lost = on.is_some() && self.machine_lost();
+        let mut own: Vec<AnyElement> = Vec::new();
         if let Some(smart) = state.smart.as_ref().filter(|_| !folded) {
-            tree = tree.child(self.smart_sections_element(smart, cx));
+            own.push(self.smart_sections_element(smart, cx).into_any_element());
         }
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
@@ -13055,9 +13054,7 @@ impl CockpitView {
                     block = block.child(self.group_element(&state.groups[*group], origin, cx));
                 }
             }
-            tree = tree.child(block.when(lost, |block| {
-                block.opacity(crate::theme::MACHINE_LOST_OPACITY)
-            }));
+            own.push(block.into_any_element());
         }
         // An empty tree says so at its top, before the ground. It names the
         // Project the filter chose.
@@ -13066,11 +13063,18 @@ impl CockpitView {
                 .nav_filter
                 .and_then(|project| self.cockpit.registry().project(project))
                 .map(|project| project.title.clone());
-            tree = tree.child(nav::empty_filter(
-                filtered.as_deref(),
-                !state.parked.is_empty(),
-            ));
+            own.push(
+                nav::empty_filter(filtered.as_deref(), !state.parked.is_empty()).into_any_element(),
+            );
         }
+        tree = if self.machine_lost() {
+            tree.child(machines::held(
+                div().flex().flex_col().flex_shrink_0().children(own),
+                "machine-lost-tree",
+            ))
+        } else {
+            tree.children(own)
+        };
         if let Some(rows) = &machines {
             tree = tree.children(self.machines_off_screen(rows, cx));
         }
@@ -13178,6 +13182,11 @@ impl CockpitView {
         )
         .reveal_only();
         let section = section.child(fold);
+        let section = if self.machine_lost() {
+            machines::held(section, "machine-lost-parked")
+        } else {
+            section
+        };
         Some(section.into_any_element())
     }
 

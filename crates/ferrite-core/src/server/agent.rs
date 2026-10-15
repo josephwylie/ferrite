@@ -64,10 +64,21 @@ pub(super) fn start_detached(executable: &Path, args: &[&str]) -> io::Result<()>
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // A session of its own: the hangup when the session that started it
+    // ends (`ferrited bridge`'s ssh session, ADR 0026) never reaches it.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        // SAFETY: setsid is async-signal-safe, and nothing else runs
+        // between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     #[cfg(windows)]
     {

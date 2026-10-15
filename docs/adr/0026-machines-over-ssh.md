@@ -27,15 +27,24 @@ then carries stdin to its socket and the socket to stdout until either
 ends. What fails is said on stderr, which ssh hands back. Install it with
 `cargo install --path crates/ferrite-core --bin ferrited`.
 
+A Server started detached gets a session of its own (`setsid`), so the
+hangup when the ssh session that started it ends never reaches it. That
+does not escape systemd-logind: on a Linux host with
+`KillUserProcesses=yes`, everything in the login session's cgroup is
+killed when it ends, Server and agents with it. There the operator
+enables lingering (`loginctl enable-linger`) or starts `ferrited server`
+as a user service; Ferrite does not reach into the host's init.
+
 `store_dir` and `settings_dir` move from the app to `server`, shared by
 both binaries.
 
 ### The bridge (`machine::Bridge`)
 
-The window never speaks ssh. Each machine has a local socket
-(`~/.ferrite/machines/<hash>/bridge.sock`, made by `link::listen`: 0700
-directory, 0600 socket, peer uid checked), and each connection to it is
-one run of
+The window never speaks ssh. Each machine has a local socket per Ferrite
+process (`~/.ferrite/machines/<hash>/bridge-<pid>.sock`, made by
+`link::listen`: 0700 directory, 0600 socket, peer uid checked; the ones
+left by processes that are gone are swept when the bridge is made), and
+each connection to it is one run of
 
     ssh -T -o BatchMode=yes -C -o ServerAliveInterval=15 -o ServerAliveCountMax=4
         -o ControlMaster=auto -o ControlPath=~/.ferrite/machines/<hash>/c
@@ -55,7 +64,13 @@ How a run ended is read from its exit status and stderr
 255 with `Permission denied`, `Host key verification failed` (and the
 like) is "sign in"; anything else is ssh's last line. The bridge records
 it before it closes the window's end, so the attach that fails carries it
-(`io::Error` wrapping the `Failure`).
+(`io::Error` wrapping the `Failure`). That is why the socket is the
+process's own rather than shared between Ferrites: the failure is held
+in the process serving the socket, and a window attaching through
+another Ferrite's socket would never hear it — no sign-in band, and
+retries that never stop to wait for the operator. Sharing would save
+nothing else: the ssh master (`ControlPath`) is shared either way. If the
+socket's accepting stops, the next attach listens again.
 
 The tunnel is a seam (`machine::Dial`): production spawns ssh; tests
 dial the in-process Server's socket, or end at once with a scripted
@@ -110,16 +125,23 @@ their marks (working, needs you). The glyphs: `●` green online, `○`
 connecting, `●` yellow needs you (sign in, or no `ferrited`), faint `○`
 off. A press on another machine's heading or row goes there.
 
-A machine whose Server is not there stays visible: its tree and board
-dimmed (`MACHINE_LOST_OPACITY`), the board covered so it takes no press,
-and a band says why — "Sign in to box" (a click signs in), "box has no
+A machine whose Server is not there stays visible and read-only: its
+board, its tree (smart sections and Projects) and Parked dimmed
+(`MACHINE_LOST_OPACITY`) under covers that take every press; the
+window's root holds the keyboard, so no Composer or control takes a key;
+and the root stops listening for what acts on a Thread (send, the
+answers, close, reopen, paste; escape no longer interrupts). A band says
+why — "Sign in to box" (a click signs in), "box has no
 ferrited", or "box is not connected" once it was. A machine still being
 reached for the first time says so only by its glyph. Off-screen
 machines that go keep their last rows, dimmed.
 
 ### Settings
 
-`settings.machines`: `{name, target, enabled}` in nav order. Settings ›
+`settings.machines`: `{name, target, enabled}` in nav order. A machine
+turned off is never connected to: `--remote` naming one starts the
+window on this computer, the machine listed as off, and turning off the
+machine the window is on puts the window on this computer. Settings ›
 About › Machines lists each with sign in (when it needs one), turn
 on/off, remove — or save, for the `--remote` machine of this run — and a
 field to add one by its ssh target. "Start at login" is hidden while the

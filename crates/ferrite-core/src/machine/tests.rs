@@ -130,3 +130,23 @@ fn a_failed_tunnel_tells_the_window_why() {
     assert_eq!(failure(&error), Some(&Failure::NotInstalled));
     assert!(bridge.sign_in().is_err(), "a fake is not reached over ssh");
 }
+
+/// Each Ferrite serves a socket of its own; the ones left by Ferrites
+/// that are gone are removed, and a live one's never is.
+#[cfg(unix)]
+#[test]
+fn a_gone_ferrites_bridge_socket_is_swept() {
+    let dir = std::env::temp_dir().join(format!("fm-sweep-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let live = dir.join(format!("bridge-{}.sock", std::process::id()));
+    let gone = dir.join(format!("bridge-{}.sock", libc::pid_t::MAX));
+    let other = dir.join("c");
+    for path in [&live, &gone, &other] {
+        std::fs::write(path, "").unwrap();
+    }
+    sweep(&dir);
+    assert!(live.exists());
+    assert!(!gone.exists());
+    assert!(other.exists(), "only bridge sockets");
+    let _ = std::fs::remove_dir_all(&dir);
+}

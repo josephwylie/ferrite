@@ -157,16 +157,16 @@ const STDERR_WAIT: Duration = Duration::from_secs(1);
 const SIGN_IN_WAIT: Duration = Duration::from_secs(600);
 
 /// A machine's local socket: each connection a window makes to it is one
-/// Tunnel to the machine's Server.
+/// Tunnel to the machine's Server. The socket is this process's own, so
+/// how a Tunnel failed is heard by the window that asked.
 pub struct Bridge {
     name: String,
     socket: PathBuf,
     dial: Arc<Dial>,
     /// The SSH master's socket, for an ssh bridge: what signing in opens.
     ssh: Option<(String, PathBuf)>,
-    /// Some connection is serving the socket: this one, or another
-    /// Ferrite's, which serves this window just as well.
-    listening: Mutex<bool>,
+    /// The socket is being served; false again if its accepting stops.
+    listening: Arc<Mutex<bool>>,
     /// How the last Tunnel that failed ended.
     failure: Arc<Mutex<Option<Failure>>>,
     signed_in: Arc<AtomicBool>,
@@ -176,10 +176,12 @@ impl Bridge {
     /// The bridge to `machine` over the operator's own `ssh`.
     pub fn ssh(machine: &Machine, settings_dir: &Path) -> Self {
         let dir = dir(settings_dir, &machine.target);
+        #[cfg(unix)]
+        sweep(&dir);
         let control = dir.join("c");
         let mut bridge = Self::new(
             &machine.name,
-            dir.join("bridge.sock"),
+            dir.join(format!("bridge-{}.sock", std::process::id())),
             ssh_dial(machine.target.clone(), control.clone()),
         );
         bridge.ssh = Some((machine.target.clone(), control));
@@ -193,7 +195,7 @@ impl Bridge {
             socket,
             dial: Arc::new(dial),
             ssh: None,
-            listening: Mutex::new(false),
+            listening: Arc::default(),
             failure: Arc::default(),
             signed_in: Arc::default(),
         }
@@ -255,19 +257,16 @@ impl Bridge {
         self.signed_in.store(true, Ordering::Release);
     }
 
-    /// Serve the socket unless some Ferrite already does.
+    /// Serve the socket, unless it already is.
     fn listen(&self) -> io::Result<()> {
         let mut listening = lock(&self.listening);
         if *listening {
             return Ok(());
         }
-        let listener = match link::listen(&self.socket) {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == io::ErrorKind::AddrInUse => return Ok(()),
-            Err(error) => return Err(error),
-        };
+        let listener = link::listen(&self.socket)?;
         let dial = Arc::clone(&self.dial);
         let failure = Arc::clone(&self.failure);
+        let stopped = Arc::clone(&self.listening);
         std::thread::Builder::new()
             .name("ferrite-bridge-accept".into())
             .spawn(move || loop {
@@ -283,6 +282,8 @@ impl Bridge {
                     }
                     Err(error) => {
                         crate::log!("machine: the bridge stopped accepting: {error}");
+                        // The next attach listens again.
+                        *lock(&stopped) = false;
                         return;
                     }
                 }
@@ -328,6 +329,25 @@ fn carry(mut stream: link::Stream, dial: &Dial, failure: &Mutex<Option<Failure>>
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Remove the bridge sockets left in `dir` by Ferrites that are gone.
+#[cfg(unix)]
+fn sweep(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let pid = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("bridge-")?.strip_suffix(".sock"))
+            .and_then(|pid| pid.parse::<libc::pid_t>().ok());
+        // SAFETY: signal 0 only asks whether the process exists.
+        if pid.is_some_and(|pid| unsafe { libc::kill(pid, 0) } != 0) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 // ----------------------------------------------------------------- ssh

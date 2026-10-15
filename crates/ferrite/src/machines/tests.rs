@@ -98,3 +98,22 @@ fn a_machine_whose_target_is_an_option_is_never_listed() {
     let machines = Machines::new(reach("option"), &[Machine::new("-oProxyCommand=x")], None);
     assert!(!machines.listed());
 }
+
+#[test]
+fn a_remote_launch_on_a_turned_off_machine_starts_here() {
+    let machines = Machines::new(reach("off"), &saved(), Some("gpu"));
+    assert!(machines.selected().is_none(), "this computer");
+    assert_eq!(machines.rows(None)[2].connection, Connection::Disabled);
+    assert_eq!(streaming(&machines), [false, true, false]);
+}
+
+#[test]
+fn turning_off_the_machine_on_screen_says_the_window_must_leave() {
+    let mut machines = Machines::new(reach("turned-off"), &saved(), Some("me@build"));
+    assert!(!machines.settings_changed(&saved()));
+    let mut off = saved();
+    off[0].enabled = false;
+    assert!(machines.settings_changed(&off));
+    assert!(machines.select(0));
+    assert_eq!(streaming(&machines), [false, false, false]);
+}
