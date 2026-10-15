@@ -163,6 +163,17 @@ impl CockpitView {
         }
     }
 
+    /// Take down the bands this view put up: a window going to another
+    /// machine leaves them behind with it.
+    pub(crate) fn take_server_bands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.server_bands.detached.take().is_some() {
+            window.remove_notification::<Detached>(cx);
+        }
+        if std::mem::take(&mut self.server_bands.updating) {
+            window.remove_notification::<Updating>(cx);
+        }
+    }
+
     /// Whether the Server is an older build of this very executable: one
     /// running any other is never asked, since it restarts into itself.
     fn server_is_older(&self, server: &ferrite_core::protocol::ServerInfo) -> bool {

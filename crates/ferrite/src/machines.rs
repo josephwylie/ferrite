@@ -145,21 +145,27 @@ impl Machines {
 
     /// A window's Cockpit on the selected machine.
     pub fn cockpit(&mut self) -> io::Result<Cockpit> {
-        let (store, server) = self.endpoint(self.selected);
-        Cockpit::attach(Attach {
-            store,
-            server,
-            client: self.reach.client.clone(),
-            renderer: self.reach.renderer.clone(),
-            discovery: Box::new(spawner::Spawn::new(self.reach.defaults.clone(), None)),
-        })
+        self.attach(self.selected)
+    }
+
+    /// Put the window on another machine: a Cockpit attached there. `None`
+    /// when it already is, or the machine is disabled; the window stays
+    /// where it is when the Cockpit cannot be built.
+    pub fn go_to(&mut self, index: usize) -> Option<io::Result<Cockpit>> {
+        if !self.selectable(index) {
+            return None;
+        }
+        let cockpit = self.attach(index);
+        if cockpit.is_ok() {
+            self.select(index);
+        }
+        Some(cockpit)
     }
 
     /// Put the window on another machine. False when it already is, or
     /// the machine is disabled.
     pub fn select(&mut self, index: usize) -> bool {
-        let disabled = self.entries.get(index).is_none_or(Entry::disabled);
-        if index == self.selected || disabled {
+        if !self.selectable(index) {
             return false;
         }
         self.selected = index;
@@ -280,6 +286,21 @@ impl Machines {
     }
 
     /// Where machine `index`'s Server is, and the Store its window reads.
+    fn selectable(&self, index: usize) -> bool {
+        index != self.selected && !self.entries.get(index).is_none_or(Entry::disabled)
+    }
+
+    fn attach(&mut self, index: usize) -> io::Result<Cockpit> {
+        let (store, server) = self.endpoint(index);
+        Cockpit::attach(Attach {
+            store,
+            server,
+            client: self.reach.client.clone(),
+            renderer: self.reach.renderer.clone(),
+            discovery: Box::new(spawner::Spawn::new(self.reach.defaults.clone(), None)),
+        })
+    }
+
     fn endpoint(&mut self, index: usize) -> (PathBuf, Endpoint) {
         match self.bridge(index) {
             Some(bridge) => {

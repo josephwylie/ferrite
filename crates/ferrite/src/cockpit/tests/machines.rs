@@ -223,6 +223,13 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
         assert!(view.cockpit.machine().is_none(), "this computer");
         assert!(view.machine_rows(cx).unwrap()[0].selected);
     });
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        assert!(
+            window.notifications(cx).is_empty(),
+            "box's sign-in band stays with box"
+        );
+    });
 }
 
 /// A machine with no `ferrited` says so, and while it is away its board,

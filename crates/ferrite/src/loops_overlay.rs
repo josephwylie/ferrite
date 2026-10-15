@@ -123,10 +123,7 @@ impl CockpitWindow {
             };
             (machines, view.successor_preferences(), view.launch_provider())
         };
-        let core = machines.update(cx, |machines, _| {
-            machines.select(index).then(|| machines.cockpit())
-        });
-        let core = match core {
+        let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
             Some(Ok(core)) => core,
             Some(Err(error)) => {
                 ferrite_core::log!("the window could not go to that machine: {error}");
@@ -138,6 +135,7 @@ impl CockpitWindow {
             CockpitView::new_with_settings(core, provider, prefs, cx).with_machines(machines)
         });
         view.update(cx, |view, _| view.set_parts(self.overlay.is_some()));
+        self.cockpit.update(cx, |left, cx| left.take_server_bands(window, cx));
         self._going = Self::follow(&view, window, cx);
         self.cockpit = view;
         cx.notify();
