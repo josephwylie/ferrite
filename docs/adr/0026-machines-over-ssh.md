@@ -102,8 +102,8 @@ machine's log stays on the machine.
 ### One machine on screen
 
 `cockpit::ServerStatus` is a link that never sends `watch`: it hears the
-snapshot, every Thread's `thread` state, the Roster and the Decisions —
-never a history or an input. The app's `Machines` keeps one per enabled
+snapshot, every Thread's `thread` state, the Roster, the Decisions and
+the Notices — never a history or an input. The app's `Machines` keeps one per enabled
 machine the window is not on, and none for the one it is on, whose
 Cockpit watches its open Threads.
 
@@ -136,6 +136,16 @@ ferrited", or "box is not connected" once it was. A machine still being
 reached for the first time says so only by its glyph. Off-screen
 machines that go keep their last rows, dimmed.
 
+### Alerts from machines off screen
+
+A request on box reaches the operator while the window shows another
+machine: the window's bell hears each machine off screen through its
+status link and rings for it as it does here (ADR 0017, "Machines off
+screen") — a toast and a chime, and a system notification while the
+window is in the background, each naming the machine. Opening one goes
+to the machine (`GoToMachine` carries the alert) and the Cockpit built
+there opens it once attached (`CockpitView::land`).
+
 ### Settings
 
 `settings.machines`: `{name, target, enabled}` in nav order. A machine
@@ -153,5 +163,4 @@ window is on a machine: it is this computer's.
   offers the machine's registered Projects, but the Project editor picks
   local folders.
 - A machine's parked Threads are not listed (its log is on the machine).
-- Notifications (sound, system) for Decisions on a machine off screen.
 - Phone access (plan §6, "later").

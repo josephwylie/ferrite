@@ -54,6 +54,27 @@ means:
   shortcut before Windows shows its toasts. The package script makes no
   shortcut yet.
 
+**Machines off screen** (ADR 0026) ring through the same bell. Each
+one's status link hears its Server's Notices and requests as well as its
+Threads' states, and the bell hears every machine apart, keyed by machine
+(`MachineKey`, its ssh target): ids are per Store, so Thread 3 here and
+Thread 3 on box are two Threads, each with its own toast and its own
+system notification tag. What a machine held when the window first heard
+it is not news — the window has just left it, or met it already waiting
+— so only what it says afterwards rings. After that it is the same as
+here: the second's wait and the check again (against that machine's
+Notices), one toast per Thread, 8 s and 5 s, one chime with needs-you
+over done and the provider's mute read from the machine's Thread state,
+and a system notification while the window is in the background. Nobody
+looks at a machine off screen, so none of its alerts is ever in view.
+Its rows and toasts name the machine (`box › Release`), its toasts offer
+`⏎ open` alone (a status link answers nothing), and ⌫ does not dismiss
+its rows (only the machine's own windows change its Notices). Opening
+one — a toast, a row, a system notification's click — puts the window
+on that machine (`CockpitWindow::go_to`), and the Cockpit built there
+opens it once attached: the request or Notice if it still stands, else
+its Thread. The badge counts the unread requests off screen too.
+
 The timing lives in the window's `Bell` (fed `now` from the pump, so tests
 drive it with the executor's clock); the core keeps deciding what is
 unread. Tests and visual captures never play a sound: the Cockpit records

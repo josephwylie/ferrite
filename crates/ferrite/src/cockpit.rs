@@ -268,9 +268,36 @@ const MAIN_BRANCH: &str = "main";
 const PUMP_MS: u64 = 8;
 
 /// A Thread's system notification tag: a newer one for the same Thread
-/// replaces it in the notification centre.
-fn system_tag(thread: ThreadId) -> String {
-    format!("ferrite-thread-{thread}")
+/// replaces it in the notification centre. A Thread on a machine off
+/// screen (`away`) is named by its machine too: ids are per Store.
+fn system_tag(away: Option<&crate::machines::MachineKey>, thread: ThreadId) -> String {
+    match away {
+        None => format!("ferrite-thread-{thread}"),
+        Some(machine) => format!(
+            "ferrite-thread-{thread}@{}",
+            machine.0.as_deref().unwrap_or_default()
+        ),
+    }
+}
+
+/// What a machine's bell may not have heard yet: its Notices born after
+/// `after` (id, Thread, read) and its live requests (id, read).
+fn news(
+    notifications: &ferrite_core::notifications::Notifications,
+    after: Option<ferrite_core::notifications::NoticeId>,
+) -> (
+    Vec<(ferrite_core::notifications::NoticeId, ThreadId, bool)>,
+    Vec<(ferrite_core::notifications::DecisionNoticeId, bool)>,
+) {
+    let fresh = notifications
+        .since(after)
+        .map(|notice| (notice.id, notice.thread, notice.read))
+        .collect();
+    let requests = notifications
+        .decisions()
+        .map(|notice| (notice.id.clone(), notice.read))
+        .collect();
+    (fresh, requests)
 }
 
 /// How many frames a card waits for its geometry (`card_corner`).
@@ -548,9 +575,12 @@ pub struct CockpitView {
     /// The bell: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) bell: Bell,
-    /// The system notifications standing, one per Thread (their tag), and
-    /// what each opens when clicked.
-    system_alerts: std::collections::BTreeMap<ThreadId, RowTarget>,
+    /// The system notifications standing, by their tag (one per Thread),
+    /// and what each opens when clicked.
+    system_alerts: std::collections::BTreeMap<String, crate::notifications::Alert>,
+    /// What to open once the Cockpit is attached: the alert the window
+    /// came to this machine for (ADR 0026).
+    landing: Option<crate::notifications::Alert>,
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
@@ -596,8 +626,12 @@ pub struct CockpitView {
     machine_field: Option<Entity<gpui::component::input::InputState>>,
 }
 
-/// The Cockpit asks its window to put it on machine `.0` (ADR 0026).
-pub struct GoToMachine(pub usize);
+/// The Cockpit asks its window to put it on machine `index` (ADR 0026),
+/// and there to open `open`: an alert about one of its Threads.
+pub struct GoToMachine {
+    pub index: usize,
+    pub open: Option<crate::notifications::Alert>,
+}
 
 impl EventEmitter<GoToMachine> for CockpitView {}
 
@@ -1556,6 +1590,7 @@ impl CockpitView {
             group_error: None,
             bell: Bell::new(),
             system_alerts: Default::default(),
+            landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
             floats: palette::Floats::new(cx),
@@ -1608,6 +1643,12 @@ impl CockpitView {
     /// The window's machines (ADR 0026), listed in the nav and Settings.
     pub fn with_machines(mut self, machines: Entity<crate::machines::Machines>) -> Self {
         self.machines = Some(machines);
+        self
+    }
+
+    /// Open `alert` once the Cockpit is attached.
+    pub fn with_landing(mut self, alert: Option<crate::notifications::Alert>) -> Self {
+        self.landing = alert;
         self
     }
 
@@ -2016,6 +2057,7 @@ impl CockpitView {
         let frame = self.cockpit.pump();
         let server_moved = self.server_moved();
         self.apply_thread_rules(&frame, cx);
+        self.land(cx);
         self.ring_bell(cx);
         for pane in &self.panes {
             if let Some(thread) = pane.thread() {
@@ -12451,6 +12493,10 @@ impl CockpitView {
             // clears.
             Verb::MarkAllRead => self.cockpit.mark_notices_read(),
             Verb::Answer(..) => {}
+            Verb::GoTo(alert) => {
+                self.bell.open = false;
+                self.go_to_alert(alert, cx);
+            }
         }
         cx.notify();
     }
@@ -12580,6 +12626,7 @@ impl CockpitView {
             }
         };
         NoticeRow {
+            away: None,
             target: crate::notifications::RowTarget::Notice(notice.id),
             thread: notice.thread,
             title,
@@ -12592,99 +12639,120 @@ impl CockpitView {
     }
 
     /// Keep the bell up with the Notices and requests (FL-18, ADR 0017),
-    /// on every pump: hear what arrived, and ring what waited out its
-    /// delay and still stands — a toast, a sound, and while the window is
-    /// in the background a system notification.
+    /// on every pump: hear what arrived here and on the machines off
+    /// screen (ADR 0026), and ring what waited out its delay and still
+    /// stands — a toast, a sound, and while the window is in the
+    /// background a system notification.
     ///
     /// The operator is looking at an event, and nothing rings for it, while
-    /// the window has focus and its Thread is on the board.
+    /// the window has focus and its Thread is on the board. Nobody looks
+    /// at a machine off screen.
     fn ring_bell(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
+        let entity = self.machines.clone();
+        let machines = entity.as_ref().map(|machines| machines.read(cx));
         let notifications = self.cockpit.notifications();
-        let fresh: Vec<_> = notifications
-            .since(self.bell.presented())
-            .map(|notice| (notice.id, notice.thread, notice.read))
-            .collect();
-        let requests: Vec<_> = notifications
-            .decisions()
-            .map(|notice| (notice.id.clone(), notice.read))
-            .collect();
-        self.bell.hear(fresh, requests, now);
+        let (fresh, requests) = news(notifications, self.bell.presented(None));
+        self.bell.hear(None, fresh, requests, now);
+        for away in machines.iter().flat_map(|machines| machines.off_screen()) {
+            let (fresh, requests) = news(away.notifications, self.bell.presented(Some(&away.key)));
+            self.bell.hear(Some(away.key), fresh, requests, now);
+        }
+        let live =
+            |alert: &crate::notifications::Alert| machines::wanted(alert, notifications, machines);
         // A system notification the operator has since read, or whose
         // request resolved, is taken back out of the notification centre.
-        let stale: Vec<ThreadId> = self
+        let stale: Vec<String> = self
             .system_alerts
             .iter()
-            .filter(|(_, target)| !target.wants(notifications))
-            .map(|(thread, _)| *thread)
+            .filter(|(_, alert)| !live(alert))
+            .map(|(tag, _)| tag.clone())
             .collect();
-        for thread in stale {
-            self.system_alerts.remove(&thread);
-            cx.dismiss_system_notification(&system_tag(thread));
+        let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
+        if self.bell.busy() {
+            let present = self.cockpit.window_active();
+            let on_board: std::collections::HashSet<ThreadId> = self
+                .visible_indices()
+                .into_iter()
+                .filter_map(|index| self.panes[index].thread())
+                .collect();
+            let in_view = |alert: &crate::notifications::Alert| {
+                present && alert.away.is_none() && on_board.contains(&alert.thread)
+            };
+            let ring = self.bell.ring(now, &live, &in_view);
+            redraw = ring.redraw;
+            // Alerts that ring together chime once, needs-you over done.
+            let settings = &self.prefs.settings;
+            sound = ring
+                .rang
+                .iter()
+                .filter(|alert| {
+                    self.alert_provider(alert, machines)
+                        .is_some_and(|provider| settings.sounds_for(provider))
+                })
+                .map(|alert| {
+                    if alert.needs_you() {
+                        Sound::NeedsYou
+                    } else {
+                        Sound::Done
+                    }
+                })
+                .max_by_key(|sound| *sound == Sound::NeedsYou);
+            if !present && settings.system_notifications {
+                let now = ferrite_core::clock::system_time();
+                posts = ring
+                    .rang
+                    .into_iter()
+                    .filter_map(|alert| Some((self.alert_row(&alert, machines, now)?, alert)))
+                    .collect();
+            }
         }
-        if !self.bell.busy() {
-            return;
+        for tag in stale {
+            self.system_alerts.remove(&tag);
+            cx.dismiss_system_notification(&tag);
         }
-        let present = self.cockpit.window_active();
-        let on_board: std::collections::HashSet<ThreadId> = self
-            .visible_indices()
-            .into_iter()
-            .filter_map(|index| self.panes[index].thread())
-            .collect();
-        let in_view =
-            |alert: &crate::notifications::Alert| present && on_board.contains(&alert.thread);
-        let notifications = self.cockpit.notifications();
-        let live = |target: &RowTarget| target.wants(notifications);
-        let ring = self.bell.ring(now, &live, &in_view);
-        // Alerts that ring together chime once, needs-you over done.
-        let settings = &self.prefs.settings;
-        let sound = ring
-            .rang
-            .iter()
-            .filter(|alert| {
-                self.cockpit
-                    .thread(alert.thread)
-                    .is_some_and(|open| settings.sounds_for(open.provider()))
-            })
-            .map(|alert| {
-                if alert.needs_you() {
-                    Sound::NeedsYou
-                } else {
-                    Sound::Done
-                }
-            })
-            .max_by_key(|sound| *sound == Sound::NeedsYou);
         if let Some(sound) = sound {
             self.chime(sound);
         }
-        if !present && self.prefs.settings.system_notifications {
-            for alert in &ring.rang {
-                self.post_system_notification(alert, cx);
-            }
+        for (row, alert) in posts {
+            self.post_system_notification(row, alert, cx);
         }
-        if ring.redraw {
+        if redraw {
             cx.notify();
         }
     }
 
-    /// One alert's system notification, tagged with its Thread so a newer
-    /// one replaces it.
+    /// The provider an alert's Thread runs on, as far as its machine says.
+    fn alert_provider(
+        &self,
+        alert: &crate::notifications::Alert,
+        machines: Option<&crate::machines::Machines>,
+    ) -> Option<Provider> {
+        match &alert.away {
+            None => self
+                .cockpit
+                .thread(alert.thread)
+                .map(|open| open.provider()),
+            Some(key) => machines?.away(key)?.status.provider(alert.thread),
+        }
+    }
+
+    /// One alert's system notification, worded as `row`, tagged with its
+    /// Thread so a newer one replaces it.
     fn post_system_notification(
         &mut self,
-        alert: &crate::notifications::Alert,
+        row: NoticeRow,
+        alert: crate::notifications::Alert,
         cx: &mut Context<Self>,
     ) {
-        let Some(row) = self.alert_row(&alert.target, ferrite_core::clock::system_time()) else {
-            return;
-        };
+        let tag = system_tag(alert.away.as_ref(), alert.thread);
         cx.show_system_notification(gpui::SystemNotification {
-            tag: system_tag(alert.thread).into(),
+            tag: tag.clone().into(),
             title: format!("{} \u{b7} {}", row.word(), row.title).into(),
             body: row.detail.text().into(),
             actions: Vec::new(),
         });
-        self.system_alerts
-            .insert(alert.thread, alert.target.clone());
+        self.system_alerts.insert(tag, alert);
     }
 
     /// Play a chime: the operator's own file for it, else the built-in.
@@ -12699,43 +12767,45 @@ impl CockpitView {
     }
 
     /// The operator clicked a system notification: the app comes forward
-    /// (the window's doing) and lands on what it was about.
+    /// (the window's doing) and lands on what it was about — on its
+    /// machine, when that is off screen.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
-        let target = self
-            .system_alerts
-            .iter()
-            .find(|(thread, _)| system_tag(**thread) == tag)
-            .map(|(_, target)| target.clone());
-        if let Some(target) = target {
-            self.notice_verb(crate::notifications::target_verb(&target), cx);
+        if let Some(alert) = self.system_alerts.get(tag).cloned() {
+            self.notice_verb(alert.open_verb(), cx);
         }
     }
 
-    /// The row a toast or a system notification shows for `target`, while
+    /// The row a toast or a system notification shows for `alert`, while
     /// its record is there to word it.
-    fn alert_row(&self, target: &RowTarget, now: std::time::SystemTime) -> Option<NoticeRow> {
+    fn alert_row(
+        &self,
+        alert: &crate::notifications::Alert,
+        machines: Option<&crate::machines::Machines>,
+        now: std::time::SystemTime,
+    ) -> Option<NoticeRow> {
+        if let Some(key) = &alert.away {
+            return machines::away_row(&machines?.away(key)?, &alert.target, now);
+        }
         let notifications = self.cockpit.notifications();
-        Some(match target {
+        Some(match &alert.target {
             RowTarget::Notice(id) => self.notice_row(notifications.get(*id)?, now),
             RowTarget::Decision(id) => self.decision_row(notifications.decision(id)?, now),
         })
     }
 
-    /// A live request in the list's words (R7): an approval's `<Tool> wants
-    /// to run <command head>` (or `<Tool> wants to <verb> <path>`), a
-    /// question's text; its age from when it was raised.
+    /// A live request in the list's words (R7, `request_detail`); its age
+    /// from when it was raised.
     fn decision_row(
         &self,
         notice: &ferrite_core::notifications::DecisionNotice,
         now: std::time::SystemTime,
     ) -> NoticeRow {
-        use crate::notifications::{command_head, tool_verb, Detail, State};
+        use crate::notifications::{Detail, State};
         let thread = notice.id.thread;
-        let detail = self
-            .cockpit
-            .thread(thread)
+        let open = self.cockpit.thread(thread);
+        let detail = open
             .and_then(|open| {
                 open.activity()
                     .pending_decisions()
@@ -12744,37 +12814,10 @@ impl CockpitView {
                     .map(|request| request.decision.clone())
             })
             .map(|decision| {
-                if let Some(questions) = pane::questions_of(&decision) {
-                    return questions
-                        .first()
-                        .map(|question| Detail::Words(question.question.clone().into()))
-                        .unwrap_or(Detail::None);
-                }
-                if notice.kind == ferrite_core::notifications::RequestKind::Question {
-                    return Detail::Words(decision.description.clone().into());
-                }
-                // The tool and its command as the Decision's own head and
-                // well say them: Codex's `commandExecution` is `Bash`, its
-                // login-shell wrapper taken off (`Bash wants to run cargo
-                // test`, never `commandExecution wants to run /bin/zsh`).
-                let tool: SharedString = crate::decision::tool_word(&decision.tool_name)
-                    .to_string()
-                    .into();
-                if let Some(command) = decision
-                    .input
-                    .get("command")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    return Detail::Run {
-                        tool,
-                        command: command_head(&crate::decision::unwrap_shell(command)).into(),
-                    };
-                }
                 // Codex's patch request names no file; its gated call does.
                 let gated_path =
                     || {
-                        let open = self.cockpit.thread(thread)?;
-                        open.transcript().blocks().iter().rev().find_map(|block| {
+                        open?.transcript().blocks().iter().rev().find_map(|block| {
                             match &block.body {
                                 ferrite_core::transcript::Body::Tool(call)
                                     if !decision.tool_use_id.is_empty()
@@ -12794,32 +12837,14 @@ impl CockpitView {
                             }
                         })
                     };
-                let path = ["file_path", "path", "notebook_path", "url"]
-                    .iter()
-                    .find_map(|key| decision.input.get(*key).and_then(serde_json::Value::as_str))
-                    .map(str::to_string)
-                    .or_else(gated_path)
-                    .unwrap_or_else(|| decision.description.clone());
-                // Inside the Thread's checkout the path reads relative.
-                let path = self
-                    .cockpit
-                    .thread(thread)
+                let cwd = open
                     .and_then(|open| open.workspace())
-                    .and_then(|binding| {
-                        std::path::Path::new(&path)
-                            .strip_prefix(binding.cwd())
-                            .ok()
-                            .map(|rest| rest.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or(path);
-                Detail::Touch {
-                    verb: tool_verb(&tool),
-                    tool,
-                    path: path.into(),
-                }
+                    .map(|binding| binding.cwd());
+                crate::notifications::request_detail(&decision, notice.kind, cwd, gated_path)
             })
             .unwrap_or(Detail::None);
         NoticeRow {
+            away: None,
             target: crate::notifications::RowTarget::Decision(notice.id.clone()),
             thread,
             title: self.facts.name(thread),
@@ -12832,9 +12857,10 @@ impl CockpitView {
     }
 
     /// The list's rows (FL-16): the live requests first, in the order the
-    /// answer keys take them (the Needs-you queue), then finished turns
-    /// newest first, each Thread folded to its newest.
-    pub(super) fn bell_rows(&self) -> Vec<NoticeRow> {
+    /// answer keys take them (the Needs-you queue), then the machines off
+    /// screen's, then finished turns newest first — here, then off screen
+    /// — each Thread folded to its newest.
+    pub(super) fn bell_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
         let queue = self.cockpit.needs_you();
@@ -12849,11 +12875,14 @@ impl CockpitView {
                 .position(|thread| *thread == row.thread)
                 .unwrap_or(usize::MAX)
         });
+        let (away_requests, away_finished) = self.away_rows(cx);
+        rows.extend(away_requests);
         rows.extend(crate::notifications::fold(
             notifications
                 .notices()
                 .take(50)
                 .map(|notice| self.notice_row(notice, now))
+                .chain(away_finished)
                 .collect(),
         ));
         rows
@@ -12863,7 +12892,8 @@ impl CockpitView {
     /// waiting requests; a click raises the list, which hangs from the
     /// door's bounds as last laid out (`notices_float`).
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
-        let requests = self.cockpit.notifications().unread_requests();
+        let requests =
+            self.cockpit.notifications().unread_requests() + self.away_unread_requests(cx);
         let door = crate::notifications::door(requests, self.bell.open, cx).on_click(cx.listener(
             |view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
@@ -25166,7 +25196,7 @@ mod tests {
         };
         assert_eq!(
             tags(cx),
-            [system_tag(threads[0]), system_tag(threads[1])],
+            [system_tag(None, threads[0]), system_tag(None, threads[1])],
             "both Panes are on the board, but nobody is looking"
         );
         view.read_with(cx, |view, _| {
@@ -25179,7 +25209,7 @@ mod tests {
         });
 
         cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-            tag: system_tag(threads[1]).into(),
+            tag: system_tag(None, threads[1]).into(),
             action_id: None,
         });
         tick(cx);
@@ -25215,11 +25245,11 @@ mod tests {
                 .map(|notification| notification.tag.to_string())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(tags(cx), [system_tag(threads[1])]);
+        assert_eq!(tags(cx), [system_tag(None, threads[1])]);
         view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
 
         cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
-            tag: system_tag(threads[1]).into(),
+            tag: system_tag(None, threads[1]).into(),
             action_id: None,
         });
         tick(cx);

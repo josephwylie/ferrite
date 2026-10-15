@@ -1,15 +1,19 @@
 //! A Server the window is not showing (ADR 0026): attached and kept
 //! attached like the shown one, but it watches no Thread, so what streams
-//! is each open Thread's state and the Decisions — never a transcript.
-//! What the nav says of a machine the operator is not on.
+//! is each open Thread's state, the Decisions and the Notices — never a
+//! transcript. What the nav says of a machine the operator is not on, and
+//! what the bell hears of it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::PathBuf;
 
 use super::remote::{Arrival, Attach, Endpoint, Remote, ServerState};
+use crate::activity::DecisionHandle;
 use crate::engine::{SpawnRequest, Spawner};
-use crate::protocol::{Peer, ServerMessage, Snapshot, ThreadState, WireHandle};
+use crate::notifications::Notifications;
+use crate::protocol::{Peer, ServerMessage, Snapshot, ThreadState, WireDecision, WireHandle};
+use crate::store::Provider;
 use crate::ThreadId;
 
 pub struct ServerStatus {
@@ -18,7 +22,9 @@ pub struct ServerStatus {
     open: Vec<ThreadId>,
     states: HashMap<ThreadId, ThreadState>,
     /// The pending Decisions.
-    waiting: BTreeSet<(ThreadId, WireHandle)>,
+    waiting: BTreeMap<(ThreadId, WireHandle), WireDecision>,
+    /// The Server's Notices, read-only; `None` until the first snapshot.
+    notifications: Option<Notifications>,
     /// The snapshot's: a state message older than it is dropped.
     revision: u64,
 }
@@ -57,12 +63,14 @@ impl ServerStatus {
             remote,
             open: Vec::new(),
             states: HashMap::new(),
-            waiting: BTreeSet::new(),
+            waiting: BTreeMap::new(),
+            notifications: None,
             revision: 0,
         }
     }
 
-    /// Take what arrived. True when a row or the connection changed.
+    /// Take what arrived. True when a row, the Notices or the connection
+    /// changed.
     pub fn poll(&mut self) -> bool {
         let was = self.remote.state();
         let mut changed = false;
@@ -99,10 +107,42 @@ impl ServerStatus {
                     thread: *thread,
                     title: state.and_then(|state| state.title.clone()),
                     working: state.is_some_and(|state| state.working || state.starting),
-                    waiting: self.waiting.iter().any(|(waits, _)| waits == thread),
+                    waiting: self.waiting.keys().any(|(waits, _)| waits == thread),
                 }
             })
             .collect()
+    }
+
+    /// The Server's Notices and live requests, as its windows read them;
+    /// `None` until it was first heard from. A Server that went keeps the
+    /// ones it last had.
+    pub fn notifications(&self) -> Option<&Notifications> {
+        self.notifications.as_ref()
+    }
+
+    /// An open Thread's title, as far as it has one.
+    pub fn title(&self, thread: ThreadId) -> Option<&str> {
+        self.states.get(&thread)?.title.as_deref()
+    }
+
+    pub fn provider(&self, thread: ThreadId) -> Option<Provider> {
+        Some(self.states.get(&thread)?.provider)
+    }
+
+    /// A pending Decision, as it was asked.
+    pub fn decision(&self, thread: ThreadId, handle: &DecisionHandle) -> Option<&WireDecision> {
+        self.waiting.get(&(thread, handle.into()))
+    }
+
+    /// Fixtures only: take `message` as if the Server had sent it, a
+    /// `Snapshot` as an attach's.
+    pub fn fixture_receive(&mut self, message: ServerMessage) {
+        match message {
+            ServerMessage::Snapshot(snapshot) => self.reset(snapshot),
+            message => {
+                self.heard(message);
+            }
+        }
     }
 
     fn reset(&mut self, snapshot: Snapshot) {
@@ -116,8 +156,11 @@ impl ServerStatus {
         self.waiting = snapshot
             .decisions
             .into_iter()
-            .map(|pending| (pending.thread, pending.handle))
+            .map(|pending| ((pending.thread, pending.handle), pending.decision))
             .collect();
+        self.notifications = Some(Notifications::from_wire(
+            snapshot.notices.as_deref().unwrap_or_default(),
+        ));
     }
 
     fn heard(&mut self, message: ServerMessage) -> bool {
@@ -130,9 +173,18 @@ impl ServerStatus {
                 self.open = roster.open;
                 true
             }
-            ServerMessage::Decision { thread, handle, .. } => self.waiting.insert((thread, handle)),
+            ServerMessage::Notices { revision, notices } if revision >= self.revision => {
+                self.notifications = Some(Notifications::from_wire(&notices));
+                true
+            }
+            ServerMessage::Decision {
+                thread,
+                handle,
+                decision,
+                ..
+            } => self.waiting.insert((thread, handle), decision).is_none(),
             ServerMessage::DecisionClosed { thread, handle, .. } => {
-                self.waiting.remove(&(thread, handle))
+                self.waiting.remove(&(thread, handle)).is_some()
             }
             _ => false,
         }

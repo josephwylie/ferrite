@@ -176,7 +176,12 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     let (root, cx) = machine_window(cx, core, machines);
     let shown = |cx: &mut gpui::VisualTestContext| shown(&root, cx);
     let first = shown(cx);
-    first.update(cx, |_, cx| cx.emit(GoToMachine(1)));
+    first.update(cx, |_, cx| {
+        cx.emit(GoToMachine {
+            index: 1,
+            open: None,
+        })
+    });
     tick(cx);
     let on_box = shown(cx);
     assert_ne!(on_box.entity_id(), first.entity_id(), "built afresh");
@@ -215,7 +220,12 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     });
 
     // And back: the window follows the Cockpit it built last.
-    on_box.update(cx, |_, cx| cx.emit(GoToMachine(0)));
+    on_box.update(cx, |_, cx| {
+        cx.emit(GoToMachine {
+            index: 0,
+            open: None,
+        })
+    });
     tick(cx);
     let home = shown(cx);
     assert_ne!(home.entity_id(), on_box.entity_id(), "built afresh again");
@@ -315,5 +325,251 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
             view.machine_rows(cx).unwrap()[1].connection,
             Connection::Disabled
         );
+    });
+}
+
+/// A Thread on box, as its Server says it: Claude, `title`, idle.
+fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadState {
+    ferrite_core::protocol::ThreadState {
+        thread,
+        generation: 1,
+        provider: Provider::Claude,
+        model: None,
+        effort: None,
+        title: Some(title.into()),
+        workspace: None,
+        session_project_root: None,
+        first_prompt_sent: true,
+        has_prompt_history: true,
+        starting: false,
+        working: false,
+        tuning: false,
+        native_queue_pending: false,
+        queued: vec![],
+        suggestion: None,
+        commands: vec![],
+        models: vec![],
+        permission_mode: None,
+        permission_modes: vec![],
+        controls: vec![],
+        store_error: None,
+        for_draft: false,
+        recovered: vec![],
+        wants_listing: false,
+        history_errors: vec![],
+    }
+}
+
+/// ADR 0026 with ADR 0017: a Decision on a machine off screen toasts and
+/// chimes once, names its machine, and with the window in the background
+/// posts a system notification. What box held when first heard is not
+/// news. Clicking the notification puts the window on box, which opens
+/// the request once it is attached.
+#[gpui::test]
+fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut TestAppContext) {
+    use crate::notifications::{Alert, Detail, RowTarget};
+    use ferrite_core::protocol::{
+        ServerMessage, SharedRoster, Snapshot, WireDecision, WireDecisionKind, WireDelivery,
+        WireHandle, WireNotice, WirePolicy, WireSubject,
+    };
+    let (core, _fake) = cockpit("machines-alert", 1);
+    let machines = cx.new(|_| machines("alert", None));
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+    let (root, cx) = machine_window(cx, core, machines.clone());
+    let first = shown(&root, cx);
+    let thread = ThreadId::new(1);
+    let hear = |message: ServerMessage, cx: &mut gpui::VisualTestContext| {
+        machines.update(cx, |machines, _| {
+            machines.status_mut(1).unwrap().fixture_receive(message)
+        });
+    };
+    let handle = |serial: u64| WireHandle {
+        generation: 1,
+        serial,
+        request_id: format!("r{serial}"),
+    };
+    let request = |serial: u64| WireNotice::Request {
+        thread,
+        handle: handle(serial),
+        subject: Some(WireSubject::Main),
+        question: false,
+        read: false,
+        at_ms: 0,
+        seq: serial,
+        dismissed: false,
+    };
+    hear(
+        ServerMessage::Snapshot(Snapshot {
+            boot_id: "box".into(),
+            revision: 1,
+            threads: vec![box_thread(thread, "Release")],
+            roster: SharedRoster {
+                open: vec![thread],
+                parked: vec![],
+            },
+            decisions: vec![],
+            groups: None,
+            registry: None,
+            notices: Some(vec![request(1)]),
+            providers: None,
+        }),
+        cx,
+    );
+    ring(cx);
+    first.read_with(cx, |view, _| {
+        assert!(view.bell.toasts().is_empty(), "held when first heard");
+        assert!(view.chimed.is_empty());
+    });
+
+    cx.deactivate_window();
+    hear(
+        ServerMessage::Decision {
+            thread,
+            subject: Some(WireSubject::Main),
+            handle: handle(2),
+            decision: WireDecision {
+                id: "r2".into(),
+                delivery: WireDelivery::Blocking,
+                kind: WireDecisionKind::Approval,
+                policy: WirePolicy {
+                    allow: true,
+                    deny: true,
+                    prefer_deny: false,
+                    interaction_required: false,
+                },
+                tool_use_id: "toolu_2".into(),
+                tool_name: "Bash".into(),
+                description: "Publish".into(),
+                input: serde_json::json!({ "command": "cargo publish --dry-run" }),
+                suggestions: vec![],
+            },
+        },
+        cx,
+    );
+    hear(
+        ServerMessage::Notices {
+            revision: 2,
+            notices: vec![request(1), request(2)],
+        },
+        cx,
+    );
+    tick(cx);
+    first.read_with(cx, |view, _| {
+        assert!(view.bell.toasts().is_empty(), "it waits its second")
+    });
+    ring(cx);
+    ring(cx);
+    let key = crate::machines::MachineKey(Some("me@box".into()));
+    let asked = RowTarget::Decision(ferrite_core::notifications::DecisionNoticeId {
+        thread,
+        handle: (&handle(2)).into(),
+    });
+    let alert = Alert {
+        away: Some(key.clone()),
+        target: asked.clone(),
+        thread,
+    };
+    first.read_with(cx, |view, cx| {
+        assert_eq!(view.chimed, [Sound::NeedsYou], "once");
+        let toasts = view.bell.toasts();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].alert, alert);
+        let rows = view.bell_rows(cx);
+        let row = rows.iter().find(|row| row.target == asked).unwrap();
+        assert_eq!(
+            row.title.as_ref(),
+            "box \u{203a} Release",
+            "named by its machine"
+        );
+        assert_eq!(
+            row.detail,
+            Detail::Run {
+                tool: "Bash".into(),
+                command: "cargo publish".into(),
+            }
+        );
+        assert_eq!(
+            row.open_verb(),
+            Verb::GoTo(alert.clone()),
+            "a toast's open too"
+        );
+    });
+    let tag = system_tag(Some(&key), thread);
+    assert_eq!(
+        cx.delivered_system_notifications()
+            .iter()
+            .map(|notification| notification.tag.to_string())
+            .collect::<Vec<_>>(),
+        [tag.clone()]
+    );
+
+    cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+        tag: tag.into(),
+        action_id: None,
+    });
+    tick(cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), first.entity_id(), "the window went");
+    on_box.read_with(cx, |view, _| {
+        assert_eq!(
+            view.cockpit.machine().map(|bridge| bridge.name()),
+            Some("box")
+        );
+        assert_eq!(
+            view.landing,
+            Some(Alert {
+                away: None,
+                target: asked,
+                thread,
+            }),
+            "opened once box answers"
+        );
+    });
+}
+
+/// Once its Cockpit is attached, the window opens what it came to the
+/// machine for: the request, read, and its Thread focused.
+#[gpui::test]
+fn the_window_opens_what_it_came_for_once_attached(cx: &mut TestAppContext) {
+    use crate::notifications::{Alert, RowTarget};
+    let (core, fake) = cockpit("machines-landing", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+    let off = view.read_with(cx, |view, _| {
+        threads
+            .iter()
+            .position(|thread| Some(*thread) != view.focused_thread())
+            .unwrap()
+    });
+    fake.streams.borrow()[off].send(decision("there")).unwrap();
+    tick(cx);
+    let id = view.read_with(cx, |view, _| {
+        view.cockpit
+            .notifications()
+            .decisions()
+            .next()
+            .unwrap()
+            .id
+            .clone()
+    });
+    view.update(cx, |view, _| {
+        view.landing = Some(Alert {
+            away: None,
+            target: RowTarget::Decision(id),
+            thread: threads[off],
+        })
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.focused_thread(), Some(threads[off]), "on its Thread");
+        assert!(
+            view.cockpit
+                .notifications()
+                .decisions()
+                .next()
+                .unwrap()
+                .read
+        );
+        assert!(view.landing.is_none());
     });
 }

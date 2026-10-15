@@ -108,14 +108,21 @@ impl CockpitWindow {
         cx: &mut Context<Self>,
     ) -> gpui::Subscription {
         cx.subscribe_in(cockpit, window, |this, _, going: &GoToMachine, window, cx| {
-            this.go_to(going.0, window, cx)
+            this.go_to(going.index, going.open.clone(), window, cx)
         })
     }
 
     /// Put the window on machine `index`: a Cockpit attached there, with
-    /// the settings the window has now. The one it leaves lets its
-    /// machine's Threads go; that machine streams status from here on.
-    fn go_to(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// the settings the window has now, which opens `open` once attached.
+    /// The one it leaves lets its machine's Threads go; that machine
+    /// streams status from here on.
+    fn go_to(
+        &mut self,
+        index: usize,
+        open: Option<crate::notifications::Alert>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (machines, prefs, provider) = {
             let view = self.cockpit.read(cx);
             let Some(machines) = view.machines() else {
@@ -132,7 +139,9 @@ impl CockpitWindow {
             None => return,
         };
         let view = cx.new(|cx| {
-            CockpitView::new_with_settings(core, provider, prefs, cx).with_machines(machines)
+            CockpitView::new_with_settings(core, provider, prefs, cx)
+                .with_machines(machines)
+                .with_landing(open)
         });
         view.update(cx, |view, _| view.set_parts(self.overlay.is_some()));
         self.cockpit.update(cx, |left, cx| left.take_server_bands(window, cx));
