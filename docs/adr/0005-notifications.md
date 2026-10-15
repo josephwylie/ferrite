@@ -72,16 +72,21 @@ delivered, and **how its click lands**:
   its own terminal, so the Thread's Pane being the focused one and the
   window having the system's focus stand for those
   (`ferrite_focus_notify::notification_decision`). Where this overlapped
-  ADR 0017's rules, focus-notify's wins, both ways. ADR 0017 posted only
-  while the window was in the background; now a Thread off the board that
-  rings while the window is frontmost posts a system notification beside
-  its toast. And ADR 0017 kept quiet about anything in view; the bell still
-  does (no toast, no chime), but an event in view whose Pane is not the
-  focused one still posts a system notification when its delay is up, as
-  upstream sends for any pane but the focused one. So the only alert that
-  never posts is the focused Pane's while the window is frontmost. (A
-  Notice in view is usually seen, so read, before its delay is up, and
-  then never posts; a request stands until answered, so it does.)
+  ADR 0017's rule (a system notification only while the window is in the
+  background), focus-notify's wins: a Thread off the board that rings while
+  the window is frontmost now posts a system notification beside its toast.
+  Where it overlaps Ferrite's rules for what is in view, Ferrite's win.
+  Upstream sends for any pane but the focused one. Ferrite reads every
+  Notice and request of a Pane's shown Subject while the window has focus
+  (**seen**), on its next pump, well inside the second's wait; and the bell
+  keeps quiet about whatever still stands on a Thread on the board (ADR
+  0017), such as a Subagent's request while its Pane shows Main. So while
+  the window has focus nothing on the board posts, focused Pane or not: a
+  system notification is for what the operator is not looking at, and
+  Ferrite decides what that is. focus-notify's skip (the focused Pane in
+  the frontmost window) therefore repeats what the board already kept
+  quiet; it stays as the vendored decision rather than being special-cased
+  away.
   Upstream's other overlap, notifying only `blocked` and `done`, already
   holds: a live request is blocked, a finished turn done; a failed turn is a
   Notice and goes as done, its words saying it failed.

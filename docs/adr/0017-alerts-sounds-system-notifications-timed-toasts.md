@@ -45,8 +45,8 @@ means:
   needs-you over done, so Threads finishing at once never pile up chimes;
 - a **system notification** (superseded in part by ADR 0005's
   2026-10-15 update: herdr-focus-notify now decides whether one is posted,
-  also while the window is frontmost and for what is in view on a Pane
-  that is not focused, and delivers it on macOS) through
+  also while the window is frontmost for a Thread off the board, and
+  delivers it on macOS) through
   GPUI's `show_system_notification` (`UNUserNotificationCenter` on
   macOS, which needs the app bundle, so a dev build posts none; toast
   notifications on Windows). Its tag is the Thread's, so a newer one

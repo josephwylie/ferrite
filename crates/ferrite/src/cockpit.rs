@@ -12762,9 +12762,9 @@ impl CockpitView {
     /// Thread's Pane is focused in the frontmost window (focus-notify's
     /// rule, ADR 0005's update).
     ///
-    /// The operator is looking at an event, and nothing rings for it, while
-    /// the window has focus and its Thread is on the board. Nobody looks
-    /// at a machine off screen.
+    /// The operator is looking at an event, and nothing rings for it — no
+    /// system notification either — while the window has focus and its
+    /// Thread is on the board. Nobody looks at a machine off screen.
     fn ring_bell(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let entity = self.machines.clone();
@@ -12825,13 +12825,9 @@ impl CockpitView {
             if settings.system_notifications {
                 let now = ferrite_core::clock::system_time();
                 let focused = self.focused_thread();
-                // focus-notify's rule (ADR 0005's update): what rang, and
-                // what stood in view, unless its Pane is the focused one in
-                // the frontmost window.
                 posts = ring
                     .rang
                     .into_iter()
-                    .chain(ring.in_view)
                     .filter(|alert| {
                         let focused = alert.away.is_none() && focused == Some(alert.thread);
                         crate::system_notifications::wanted(focused, present)
@@ -25339,42 +25335,6 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.cockpit.window_active());
             assert_eq!(view.bell.toasts().len(), 1);
-        });
-        assert_eq!(
-            cx.delivered_system_notifications()
-                .iter()
-                .map(|notification| notification.tag.to_string())
-                .collect::<Vec<_>>(),
-            [system_tag(&crate::machines::MachineKey(None), threads[off])]
-        );
-    }
-
-    /// ADR 0005's update (focus-notify's rule): with the window frontmost
-    /// and both Panes on the board, neither request toasts or chimes (both
-    /// are in view), but the one whose Pane is not focused still posts a
-    /// system notification.
-    #[gpui::test]
-    fn a_request_in_view_posts_unless_its_pane_is_focused(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("system-notification-in-view", 2);
-        let group = group_all(&mut core);
-        cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.enter_group(group, cx));
-        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-        let off = view.read_with(cx, |view, _| {
-            threads
-                .iter()
-                .position(|thread| Some(*thread) != view.focused_thread())
-                .unwrap()
-        });
-        for at in [0, 1] {
-            fake.streams.borrow()[at].send(decision("waits")).unwrap();
-        }
-        tick(cx);
-        ring(cx);
-        view.read_with(cx, |view, _| {
-            assert!(view.cockpit.window_active());
-            assert!(view.bell.toasts().is_empty() && view.chimed.is_empty());
         });
         assert_eq!(
             cx.delivered_system_notifications()

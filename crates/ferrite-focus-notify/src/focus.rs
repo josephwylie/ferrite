@@ -342,6 +342,7 @@ mod tests {
         use crate::state::{mark_notification_cleared, reset_notification_clearance};
 
         fn alert(pane_id: &str, status: Status) -> Alert {
+            isolate_state();
             Alert {
                 pane_id: pane_id.to_string(),
                 status,
@@ -350,6 +351,21 @@ mod tests {
                 detail: Some("Bash wants to run cargo publish".to_string()),
                 cwd: None,
             }
+        }
+
+        /// Points the crate's state at a scratch directory of this test run,
+        /// so scripts, icons, markers and stale-file cleanup never touch the
+        /// directory a running Ferrite uses (upstream's tests set
+        /// `HERDR_PLUGIN_STATE_DIR` on each process they spawn).
+        fn isolate_state() {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                let dir = std::env::temp_dir().join(format!(
+                    "ferrite-focus-notify-adapter-state-{}",
+                    std::process::id()
+                ));
+                std::env::set_var("FERRITE_FOCUS_NOTIFY_STATE_DIR", dir);
+            });
         }
 
         /// A scratch directory removed when the test ends, pass or fail.

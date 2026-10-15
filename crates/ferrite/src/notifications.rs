@@ -387,14 +387,10 @@ pub struct Toast {
 }
 
 /// What one `Bell::ring` did: the events that rang (each owes its sound and
-/// its system notification), the events that stood but stayed quiet because
-/// they are in view (owed a system notification all the same unless their
-/// Pane is the focused one: focus-notify's rule, ADR 0005's update), and
-/// whether the toasts changed.
+/// its system notification), and whether the toasts changed.
 #[derive(Debug, Default)]
 pub struct Ring {
     pub rang: Vec<Alert>,
-    pub in_view: Vec<Alert>,
     pub redraw: bool,
 }
 
@@ -585,8 +581,7 @@ impl Bell {
     /// Bring the bell up to `now`. A standing toast goes once it expired,
     /// is no longer `live` (read, resolved, dismissed) or is `in_view`. A
     /// waiting event whose delay is up is checked again: still live and
-    /// not in view, it rings — toasting in place of its Thread's toast;
-    /// still live but in view, it is reported as such and stays quiet.
+    /// not in view, it rings — toasting in place of its Thread's toast.
     /// `live` is `None` while the alert's machine has not been heard from:
     /// its toast stands on, and a waiting event waits for it as long as its
     /// toast would have stood.
@@ -608,11 +603,7 @@ impl Bell {
         self.pending = waiting;
         for (alert, due) in due {
             match live(&alert) {
-                Some(true) if in_view(&alert) => {
-                    ring.in_view.push(alert);
-                    continue;
-                }
-                Some(true) => {}
+                Some(true) if !in_view(&alert) => {}
                 None if now < due + alert.stands() => {
                     self.pending.push((alert, due));
                     continue;
@@ -1261,14 +1252,6 @@ mod tests {
             thread: ThreadId::new(2),
         };
         assert_eq!(ring.rang, [toast], "the one in view stays quiet");
-        assert_eq!(
-            ring.in_view
-                .iter()
-                .map(|alert| alert.thread)
-                .collect::<Vec<_>>(),
-            [ThreadId::new(1)],
-            "but is reported, for its system notification"
-        );
         assert!(ring.redraw);
         assert_eq!(bell.toasts().len(), 1);
         // Heard once: hearing the same requests again adds nothing.
