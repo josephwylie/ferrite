@@ -378,7 +378,6 @@ impl Spawn {
                 visuals: self.visuals(defaults.visuals),
                 env,
                 args,
-                ..Default::default()
             }),
             Provider::Codex => {
                 // Written for Codex's terminal UI (ADR 0030); what they set
@@ -399,7 +398,6 @@ impl Spawn {
                     visuals: self.visuals(defaults.visuals),
                     env,
                     args: launch.args,
-                    ..Default::default()
                 })
             }
         }

@@ -1353,7 +1353,7 @@ impl Engine {
                 return Err(io::Error::other(e.to_string()));
             }
         }
-        let agent_args = (!args.is_empty()).then(|| launch_args::LaunchArgs { provider, args });
+        let agent_args = (!args.is_empty()).then_some(launch_args::LaunchArgs { provider, args });
         if let Some(saved) = &agent_args {
             if let Err(e) = launch_args::save(&launch_args::path(self.store.dir(), id), saved) {
                 let _ = self.store.delete(id);

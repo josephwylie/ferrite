@@ -60,10 +60,7 @@ fn typed(sheet: &Entity<ProjectsSheet>, cx: &mut VisualTestContext, text: &str) 
 
 /// The popup on `place`, as wide as a window's sheet. The popup runs on a
 /// thread of its own, whose frames wake the window from off the scheduler.
-fn open<'a>(
-    cx: &'a mut TestAppContext,
-    place: Place,
-) -> (Entity<ProjectsSheet>, &'a mut VisualTestContext) {
+fn open(cx: &mut TestAppContext, place: Place) -> (Entity<ProjectsSheet>, &mut VisualTestContext) {
     cx.executor().allow_parking();
     let (sheet, cx) = cx.add_window_view(|_, cx| ProjectsSheet::popup(place, None, cx));
     sheet.update(cx, |sheet, _| sheet.fit(1400.0, 600.0));

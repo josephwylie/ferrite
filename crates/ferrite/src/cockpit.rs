@@ -8465,7 +8465,7 @@ impl CockpitView {
         };
         // Projects' blocks come first, and their Threads are theirs alone;
         // focused on one, the nav shows that block and nothing else.
-        let blocks = self.project_blocks(&row);
+        let blocks = self.project_blocks(row);
         let claimed = projects::claimed(&blocks);
         let project_focus = projects::focused(&self.projects, &blocks);
 

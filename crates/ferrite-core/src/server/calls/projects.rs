@@ -59,7 +59,7 @@ impl Server {
         {
             return Ok(directory.to_path_buf());
         }
-        let worktree_of_project = workspace::checkout_of(&cwd).is_some_and(|checkout| {
+        let worktree_of_project = workspace::checkout_of(cwd).is_some_and(|checkout| {
             checkout.linked
                 && entry
                     .directories()
