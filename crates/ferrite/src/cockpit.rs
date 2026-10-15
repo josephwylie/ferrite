@@ -4534,25 +4534,35 @@ impl CockpitView {
     }
 
     /// What an agent or a script asked of the windows through the API
-    /// (ADR 0027): to land on a Thread, as its nav row would, or a toast,
-    /// which fades as a finished turn's does.
+    /// (ADR 0027).
     fn present_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for asked in self.cockpit.take_asked() {
+            self.present(asked, window, cx);
+        }
+    }
+
+    /// One ask: to land on a Thread, as its nav row would, or a toast,
+    /// which fades as a finished turn's does.
+    fn present(
+        &mut self,
+        asked: ferrite_core::cockpit::Asked,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use ferrite_core::cockpit::Asked;
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        for asked in self.cockpit.take_asked() {
-            match asked {
-                Asked::Focus(thread) => self.land_on_thread(thread, cx),
-                Asked::Notification { title, body } => {
-                    let mut toast = Notification::new()
-                        .title(title)
-                        .with_type(NotificationType::Info)
-                        .autohide(true);
-                    if let Some(body) = body {
-                        toast = toast.message(body);
-                    }
-                    window.push_notification(toast, cx);
+        match asked {
+            Asked::Focus(thread) => self.land_on_thread(thread, cx),
+            Asked::Notification { title, body } => {
+                let mut toast = Notification::new()
+                    .title(title)
+                    .with_type(NotificationType::Info)
+                    .autohide(true);
+                if let Some(body) = body {
+                    toast = toast.message(body);
                 }
+                window.push_notification(toast, cx);
             }
         }
     }
