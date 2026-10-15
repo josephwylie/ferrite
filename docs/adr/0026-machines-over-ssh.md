@@ -49,7 +49,10 @@ as the plan's §1 asks — the LaunchAgent's counterpart (`agent::systemd`):
   answers and the unit is not active — one `ferrited bridge` started
   detached — the unit's Server finds the Store taken and stops; it says
   that too: the service takes over at the first connection after that
-  Server stops.
+  Server stops. A unit already running keeps the old `ferrited` until
+  its Server next starts, as the LaunchAgent does. The path is the ssh
+  shell's `XDG_CONFIG_HOME`, not the user manager's; where the two
+  differ, `enable` finds no unit and install fails, saying so.
 - `ferrited service uninstall` removes the unit and its
   `default.target.wants` link by hand rather than `systemctl disable`,
   which needs both the user bus and the unit file, then reloads the user
