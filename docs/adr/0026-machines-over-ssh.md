@@ -25,15 +25,50 @@ on a headless Linux box. `ferrited server` is `server::run`;
 (`agent::ensure_running`, which starts `ferrited server` detached) and
 then carries stdin to its socket and the socket to stdout until either
 ends. What fails is said on stderr, which ssh hands back. Install it with
-`cargo install --path crates/ferrite-core --bin ferrited`.
+`cargo install --path crates/ferrite-core --bin ferrited`, then, on
+Linux, `ferrited service install`.
 
 A Server started detached gets a session of its own (`setsid`), so the
 hangup when the ssh session that started it ends never reaches it. That
 does not escape systemd-logind: on a Linux host with
 `KillUserProcesses=yes`, everything in the login session's cgroup is
-killed when it ends, Server and agents with it. There the operator
-enables lingering (`loginctl enable-linger`) or starts `ferrited server`
-as a user service; Ferrite does not reach into the host's init.
+killed when it ends, Server and agents with it, and nothing restarts a
+Server that crashed. So on Linux the Server runs under `systemd --user`,
+as the plan's §1 asks — the LaunchAgent's counterpart (`agent::systemd`):
+
+- `ferrited service install` writes
+  `$XDG_CONFIG_HOME/systemd/user/ferrited.service` (`~/.config` by
+  default; rewritten when `ferrited` moved) — `ExecStart` the running
+  `ferrited` with `server`, `Restart=on-failure` as launchd's
+  `SuccessfulExit = false`, `WantedBy=default.target`, and the default
+  `KillMode`, so the agents stop with the Server as on macOS — then runs
+  `systemctl --user daemon-reload` and `enable --now`. When
+  `loginctl show-user` reports `Linger=no` it says so: without lingering
+  the user manager, and the Server with it, stops at the last logout, so
+  the operator runs `loginctl enable-linger`. When a Server already
+  answers and the unit is not active — one `ferrited bridge` started
+  detached — the unit's Server finds the Store taken and stops; it says
+  that too: the service takes over at the first connection after that
+  Server stops. A unit already running keeps the old `ferrited` until
+  its Server next starts, as the LaunchAgent does. The path is the ssh
+  shell's `XDG_CONFIG_HOME`, not the user manager's; where the two
+  differ, `enable` finds no unit and install fails, saying so.
+- `ferrited service uninstall` removes the unit and its
+  `default.target.wants` link by hand rather than `systemctl disable`,
+  which needs both the user bus and the unit file, then reloads the user
+  manager if it can. As on macOS, the running Server is not stopped:
+  that would end its agents.
+- `agent::ensure_running`, for the operator's own Store, runs
+  `systemctl --user start ferrited.service` when the unit is installed
+  and waits for the socket, as the macOS path kickstarts the LaunchAgent;
+  with no unit, or a start that fails, it starts the Server detached as
+  before.
+
+A Server that cannot claim the Store exits 0, so systemd, like launchd,
+does not respawn it in a loop. The `systemctl` and `loginctl` calls go
+through a seam (`systemd::Run`) the tests script. Nothing is added to the
+window's "Start at login" on Linux: the window's own Server is not this
+work's subject.
 
 `store_dir` and `settings_dir` move from the app to `server`, shared by
 both binaries.

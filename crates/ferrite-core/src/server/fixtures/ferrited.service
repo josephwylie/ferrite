@@ -1,0 +1,9 @@
+[Unit]
+Description=Ferrite server
+
+[Service]
+ExecStart="/home/me/my \"tools\"/50%%/ferrited$$" server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
