@@ -29,7 +29,8 @@ fn extend_path() {
 fn main() {
     extend_path();
     if let Err(error) = cli::run() {
-        eprintln!("herdr-projects: {error:#}");
+        // Ferrite: the binary is ferrite-projects.
+        eprintln!("ferrite-projects: {error:#}");
         std::process::exit(1);
     }
 }

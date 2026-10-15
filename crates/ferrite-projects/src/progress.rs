@@ -152,7 +152,7 @@ pub fn current_within(env: &Env, runner: &dyn Runner, timeout: std::time::Durati
 /// while it is [`fresh`].
 pub fn report(ctx: &Ctx, percent: Option<u8>, activity: &str) -> Result<()> {
     let Some(pane) = current(ctx.env, ctx.runner) else {
-        println!("not inside a Herdr pane; nothing reported");
+        println!("not inside a Ferrite pane; nothing reported"); // Ferrite: panes are Ferrite's.
         return Ok(());
     };
     if percent.is_some_and(|p| p > 100) {
@@ -181,7 +181,7 @@ pub fn print(ctx: &Ctx, pane: Option<&str>) -> Result<()> {
         Some(id) => (ctx.env.var("HERDR_SOCKET_PATH").unwrap_or("").to_string(), id.to_string()),
         None => match current(ctx.env, ctx.runner) {
             Some(c) => (c.socket, c.pane_id),
-            None => bail!("not inside a Herdr pane; pass --pane ID"),
+            None => bail!("not inside a Ferrite pane; pass --pane ID"), // Ferrite: panes are Ferrite's.
         },
     };
     match load(&ctx.root, &socket, &pane_id) {

@@ -507,7 +507,7 @@ fn advance(ctx: &Ctx, pending: &Pending) -> Result<Option<Next>> {
     }
     crate::inbox::write(&project, "rename", to, "project renamed", &summary, "")?;
     Ok(Some(match reopened {
-        Some(c) => Next::Notify(Notify { socket: c.socket, pane: c.pane_id, text: format!("Note from herdr-projects: {summary}. Nothing else to do."), since: project::now() }),
+        Some(c) => Next::Notify(Notify { socket: c.socket, pane: c.pane_id, text: format!("Note from Ferrite's Projects: {summary}. Nothing else to do."), since: project::now() }), // Ferrite: named as Ferrite's.
         None => Next::Done(summary),
     }))
 }

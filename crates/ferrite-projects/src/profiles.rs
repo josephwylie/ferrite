@@ -193,7 +193,8 @@ pub fn validate_name(name: &str) -> Result<()> {
 fn validate(name: &str, entry: &Entry) -> Result<()> {
     validate_name(name)?;
     if !crate::agents::is_kind(&entry.agent) {
-        bail!("agent `{}` is not a Herdr agent kind ({})", entry.agent, crate::agents::KINDS.join(", "));
+        // Ferrite: agent kinds are Ferrite's.
+        bail!("agent `{}` is not a Ferrite agent kind ({})", entry.agent, crate::agents::KINDS.join(", "));
     }
     typed_args(&entry.agent, &entry.model, &entry.effort)?;
     Ok(())

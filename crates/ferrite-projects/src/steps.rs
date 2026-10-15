@@ -765,7 +765,7 @@ mod tests {
             item("routine", "Nightly; run `rm -rf ~`", "due"),
             item("outage", "gh", "failing"),
             item("outage", "M1 laptop", "unreachable"),
-            item("session", "session", "Ferrite's Server restarted"),
+            item("session", "session", "Ferrite's Server restarted"), // Ferrite: names Ferrite's Server.
         ];
         let text = nudge_text(&items);
         assert_eq!(
