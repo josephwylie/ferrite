@@ -2024,6 +2024,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        let server_moved = self.server_moved();
         self.apply_thread_rules(&frame, cx);
         self.ring_bell(cx);
         for pane in &self.panes {
@@ -2135,6 +2136,7 @@ impl CockpitView {
             && !models_changed
             && !commands_changed
             && !walls_settled
+            && !server_moved
         {
             return;
         }
@@ -2184,6 +2186,7 @@ impl CockpitView {
         }
         let precise = restarted.is_empty()
             && !swept_change
+            && !server_moved
             && !startup_changed
             && !models_changed
             && !commands_changed

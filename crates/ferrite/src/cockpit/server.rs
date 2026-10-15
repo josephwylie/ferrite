@@ -43,6 +43,8 @@ pub(crate) struct ServerBands {
     updating: bool,
     /// The restart onto this build is asked for once per run.
     restart_asked: bool,
+    /// The Server's state as the pump last saw it.
+    seen: Option<ServerState>,
 }
 
 #[cfg(test)]
@@ -54,6 +56,18 @@ impl ServerBands {
 }
 
 impl CockpitView {
+    /// Whether the Server's state moved since the pump last looked: an
+    /// attach that fails or succeeds streams nothing, and the bands and
+    /// the nav's glyph are drawn from the state alone.
+    pub(super) fn server_moved(&mut self) -> bool {
+        let now = self.cockpit.server();
+        if self.server_bands.seen == now {
+            return false;
+        }
+        self.server_bands.seen = now;
+        true
+    }
+
     /// Say when there is no Server, and ask an older one running this
     /// window's own executable to restart onto it once its agents are idle.
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {

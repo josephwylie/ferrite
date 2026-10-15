@@ -222,11 +222,24 @@ fn going_to_a_machine_that_needs_a_sign_in_says_so_and_holds_still(cx: &mut Test
     home.read_with(cx, |view, cx| {
         assert!(view.cockpit.machine().is_none(), "this computer");
         assert!(view.machine_rows(cx).unwrap()[0].selected);
+        assert_eq!(
+            view.server_bands.detached(),
+            Some(Gone::NoServer),
+            "this computer's Server cannot start"
+        );
+    });
+    on_box.read_with(cx, |view, _| {
+        assert_eq!(
+            view.server_bands.detached(),
+            None,
+            "box's band went with it"
+        );
     });
     cx.update(|window, cx| {
         use gpui::component::WindowExt;
-        assert!(
-            window.notifications(cx).is_empty(),
+        assert_eq!(
+            window.notifications(cx).len(),
+            1,
             "box's sign-in band stays with box"
         );
     });
