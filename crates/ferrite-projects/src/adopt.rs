@@ -12,7 +12,7 @@ use crate::runner::Cmd;
 use crate::thread::{self, Kind, Status, Thread};
 use crate::{coordinator, threads, ticker};
 
-const DEFAULT_TASK: &str = "Continue the work you were already doing in this pane. It now belongs to the project described above: follow its instructions, and when you finish or stop to wait for the user, write the report.";
+pub(crate) const DEFAULT_TASK: &str = "Continue the work you were already doing in this pane. It now belongs to the project described above: follow its instructions, and when you finish or stop to wait for the user, write the report.";
 
 /// The refusals shared by `thread adopt` and `adopt-workspace`, checked before
 /// anything is created. Returns the agent herdr detects in the pane.

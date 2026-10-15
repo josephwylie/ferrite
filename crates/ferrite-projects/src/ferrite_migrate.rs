@@ -5,7 +5,7 @@
 //! Ferrite kept one entry per registered Project in `coordinators.json`
 //! beside its Store, the Project's title and roots in `registry.json`, its
 //! memory in `memory/project-<id>.md`, and each Thread's working directory
-//! in the header of `<id>/log.jsonl`. Each entry becomes a project under the
+//! in the facts of `<id>/log.jsonl`. Each entry becomes a project under the
 //! root through the same writers `new`, `open` and `thread adopt` use; the
 //! file is then renamed `coordinators.json.migrated`, so a second run finds
 //! nothing to do.
@@ -81,9 +81,11 @@ struct Registered {
     additional_roots: Vec<PathBuf>,
 }
 
-/// The part of a Thread log's first line a migration reads.
+/// The part of a Thread's facts a migration reads: the log's first line
+/// says them, and every later line that changes them (`facts`, `mark`, a
+/// schema-13 `handover`) restates them whole, so the newest one is the truth.
 #[derive(Deserialize)]
-struct LogHeader {
+struct Facts {
     provider: String,
     #[serde(default)]
     workspace: Option<Binding>,
@@ -100,7 +102,25 @@ enum Binding {
     Worktree { path: PathBuf },
 }
 
-impl LogHeader {
+/// A log line that restates the facts.
+#[derive(Deserialize)]
+struct Restated {
+    facts: Facts,
+}
+
+impl Facts {
+    /// The newest facts in a Thread log. A line that does not parse (a torn
+    /// tail) restates nothing.
+    fn newest(log: &str) -> Option<Facts> {
+        let mut lines = log.lines();
+        let header = lines.next()?;
+        lines
+            .rev()
+            .find_map(|line| serde_json::from_str::<Restated>(line).ok())
+            .map(|restated| restated.facts)
+            .or_else(|| serde_json::from_str(header).ok())
+    }
+
     /// Where the Thread's agent runs: Ferrite's `effective_cwd` chain, the
     /// directory the adapter reports as its pane's `cwd`.
     fn cwd(&self) -> Option<&Path> {
@@ -150,7 +170,8 @@ fn migrate(ctx: &Ctx, file: &Path) -> Result<Vec<String>> {
 /// The entry's project name: its Ferrite title (or `Project <id>`), numbered
 /// when an earlier entry of the same file already slugs the same, so two
 /// Projects called `app` become `app` and `app-2`. Deterministic, so a rerun
-/// after a failure names every entry the same.
+/// after a failure names every entry the same and, since a failed entry
+/// leaves no project behind, migrates it then.
 fn unclaimed_name(registered: Option<&Registered>, id: u64, claimed: &mut Vec<String>) -> Result<String> {
     let base = registered
         .map(|p| p.title.clone())
@@ -168,11 +189,33 @@ fn unclaimed_name(registered: Option<&Registered>, id: u64, claimed: &mut Vec<St
     Ok(name)
 }
 
-fn migrate_one(ctx: &Ctx, store: &Path, registry: &Registry, entry: &Coordination, name: &str, (thread_profile, coordinator_profile): &(String, String), prefix: &str) -> Result<Vec<String>> {
+fn migrate_one(ctx: &Ctx, store: &Path, registry: &Registry, entry: &Coordination, name: &str, defaults: &(String, String), prefix: &str) -> Result<Vec<String>> {
     let slug = project::slug_from_name(name)?;
     if ctx.root.join(&slug).exists() {
         return Ok(vec![format!("Ferrite's coordinator of {name}: `{slug}` already exists, skipped")]);
     }
+    let project = match create(ctx, store, registry, entry, name, defaults, prefix) {
+        Ok(project) => project,
+        Err(error) => {
+            // No half-made project: a rerun would skip it as already there.
+            let _ = std::fs::remove_dir_all(ctx.root.join(&slug));
+            return Err(error);
+        }
+    };
+    let mut notes = vec![format!(
+        "Ferrite's coordinator of {name}: migrated to `{}`; Thread {} is no longer its coordinator and still holds its ADR 0028 brief; run `{prefix} open {}` to start one",
+        project.slug, entry.coordinator, project.slug
+    )];
+    for worker in entry.workers.iter().filter(|w| !w.merged.as_ref().is_some_and(|m| m.resolved)) {
+        if let Err(error) = adopt_worker(ctx, store, &project, worker) {
+            notes.push(format!("  worker Thread {} of {name}: not migrated ({error:#})", worker.thread));
+        }
+    }
+    Ok(notes)
+}
+
+/// The entry's project, everything but its workers.
+fn create(ctx: &Ctx, store: &Path, registry: &Registry, entry: &Coordination, name: &str, (thread_profile, coordinator_profile): &(String, String), prefix: &str) -> Result<Project> {
     let repos = registry
         .projects
         .iter()
@@ -199,16 +242,7 @@ fn migrate_one(ctx: &Ctx, store: &Path, registry: &Registry, entry: &Coordinatio
         c.socket = socket;
         c.cwd = cwd;
     })?;
-    let mut notes = vec![format!(
-        "Ferrite's coordinator of {name}: migrated to `{}`; Thread {} is no longer its coordinator, `{prefix} open {}` starts one",
-        project.slug, entry.coordinator, project.slug
-    )];
-    for worker in entry.workers.iter().filter(|w| !w.merged.as_ref().is_some_and(|m| m.resolved)) {
-        if let Err(error) = adopt_worker(ctx, store, &project, worker) {
-            notes.push(format!("  worker Thread {} of {name}: not migrated ({error:#})", worker.thread));
-        }
-    }
-    Ok(notes)
+    Ok(project)
 }
 
 /// The body under PROJECT.md's front matter becomes the standing instructions.
@@ -244,13 +278,15 @@ fn disable_pr_followup(project: &Project) -> Result<()> {
 
 /// An open worker becomes what `thread adopt` makes of a running pane: an
 /// adopted thread whose pane is its Thread, recorded in its working
-/// directory, with a thread directory and brief. Nothing is launched; the
-/// ticker prompts it with the brief once it is ready, as for any adoption.
+/// directory, with a thread directory and brief. Its task is the one Ferrite
+/// gave it followed by adoption's own, so a worker that already finished
+/// reports instead of starting over. Nothing is launched; the ticker prompts
+/// it with the brief once it is ready, as for any adoption.
 fn adopt_worker(ctx: &Ctx, store: &Path, project: &Project, worker: &Worker) -> Result<()> {
     let log = store.join(worker.thread.to_string()).join("log.jsonl");
     let text = std::fs::read_to_string(&log).with_context(|| format!("{} is gone", log.display()))?;
-    let header: LogHeader = serde_json::from_str(text.lines().next().unwrap_or_default()).with_context(|| format!("{} has no header", log.display()))?;
-    let cwd = header.cwd().with_context(|| format!("{} records no working directory", log.display()))?.to_string_lossy().into_owned();
+    let facts = Facts::newest(&text).with_context(|| format!("{} has no header", log.display()))?;
+    let cwd = facts.cwd().with_context(|| format!("{} records no working directory", log.display()))?.to_string_lossy().into_owned();
 
     // The working directory's repository and branch, when it is in one.
     let git = |args: &[&str]| -> Option<String> {
@@ -269,19 +305,20 @@ fn adopt_worker(ctx: &Ctx, store: &Path, project: &Project, worker: &Worker) -> 
         t.repo = repo;
         t.branch = branch;
         t.origin = origin;
-        t.agent = header.provider.clone();
-        t.agent_name = header.title.clone().unwrap_or_default();
+        t.agent = facts.provider.clone();
+        t.agent_name = facts.title.clone().unwrap_or_default();
         t.cwd = cwd.clone();
         t.tab_id = id.clone();
         t.pane_id = id;
     })?;
+    let task = format!("{}\n\n{}", worker.task.trim_end(), crate::adopt::DEFAULT_TASK);
     let briefed = (|| -> Result<String> {
         {
             let _lock = project.lock()?;
-            project::write_atomic(&thread::task_path(project, &created.id), worker.task.as_bytes())?;
+            project::write_atomic(&thread::task_path(project, &created.id), task.as_bytes())?;
         }
         let dir = thread::thread_dir(&cwd, &project.slug, &created.id);
-        let brief = thread::brief_for(project, &Thread { thread_dir: dir.clone(), ..created.clone() }, &worker.task, false)?;
+        let brief = thread::brief_for(project, &Thread { thread_dir: dir.clone(), ..created.clone() }, &task, false)?;
         std::fs::create_dir_all(Path::new(&dir).join("library")).with_context(|| format!("could not create {dir}"))?;
         crate::threads::exclude_from_git(ctx.runner, &cwd)?;
         project::write_atomic(&Path::new(&dir).join("brief.md"), brief.as_bytes())?;
@@ -380,7 +417,8 @@ mod tests {
 
         let notes = migrate(&ctx, &file).unwrap();
         assert_eq!(notes.len(), 5, "{notes:?}");
-        assert!(notes[0].contains("migrated to `billing-app`; Thread 12 is no longer its coordinator"), "{notes:?}");
+        assert!(notes[0].contains("migrated to `billing-app`; Thread 12 is no longer its coordinator and still holds its ADR 0028 brief; run `"), "{notes:?}");
+        assert!(notes[0].ends_with(" open billing-app` to start one"), "{notes:?}");
         assert!(notes[1].contains("worker Thread 16 of Billing App: not migrated"), "{notes:?}");
         assert!(notes[2].contains("`taken` already exists, skipped"), "{notes:?}");
         assert!(notes[4].contains("migrated to `billing-app-2`"), "two Projects with one name both survive: {notes:?}");

@@ -71,7 +71,12 @@ fn run(binary: &Path, env: &[(&str, OsString)], args: &[&OsStr]) {
     let said = args.join(OsStr::new(" "));
     let said = said.to_string_lossy();
     match output {
-        Ok(output) if output.status.success() => {}
+        // What it says on success is for the user: the migration's notes.
+        Ok(output) if output.status.success() => {
+            for note in String::from_utf8_lossy(&output.stdout).lines() {
+                crate::log!("server: Projects: {note}");
+            }
+        }
         Ok(output) => crate::log!(
             "server: `ferrite-projects {said}` failed ({}): {}",
             output.status,

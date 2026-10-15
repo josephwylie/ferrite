@@ -67,6 +67,11 @@ JSON). Names are append-only and parameters added later are optional, as in
 the client contract; each operation's request is frozen as a fixture under
 `api/fixtures/v1`.
 
+One exception: ADR 0028's `coordinator.start`, `coordinator.get`,
+`coordinator.update` and `worker.start` were removed with the design they
+served when ADR 0030 made Projects Ferrite's coordinator, fixtures and all.
+A caller that still asks for one is refused as for any unknown method.
+
 | Operation | Does |
 |---|---|
 | `thread.start` | `open` a Thread in `cwd` (a fresh worktree with `worktree`), titled |
