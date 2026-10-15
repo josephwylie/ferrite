@@ -232,7 +232,8 @@ pub fn eligible(event: &serde_json::Value) -> bool {
     if !matches!(name, "SessionStart" | "PostToolUse" | "UserPromptSubmit") {
         return false;
     }
-    if name == "PostToolUse" && event["tool_input"].to_string().contains("herdr-projects") && event["tool_input"].to_string().contains(" report ") {
+    // Ferrite: the binary is ferrite-projects.
+    if name == "PostToolUse" && event["tool_input"].to_string().contains("ferrite-projects") && event["tool_input"].to_string().contains(" report ") {
         return false;
     }
     true
@@ -399,8 +400,8 @@ mod tests {
     fn helpers_and_the_reporters_own_call_do_not_trigger() {
         assert!(!eligible(&json!({"hook_event_name":"PostToolUse","agent_id":"child"})));
         assert!(!eligible(&json!({"hook_event_name":"PostToolUse","transcript_path":"/x/subagents/y.jsonl"})));
-        assert!(!eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/herdr-projects --root /r report --percent 5 --activity x"}})));
-        assert!(eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/herdr-projects --root /r context demo"}})));
+        assert!(!eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/ferrite-projects --root /r report --percent 5 --activity x"}})));
+        assert!(eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/ferrite-projects --root /r context demo"}})));
         assert!(eligible(&json!({"hook_event_name":"SessionStart","source":"compact"})));
         assert!(!eligible(&json!({"hook_event_name":"Stop"})));
     }

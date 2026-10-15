@@ -240,7 +240,8 @@ pub fn typed_args(agent: &str, model: &str, effort: &str) -> Result<Vec<String>>
     }
     if !effort.is_empty() {
         let Some(values) = effort_values(agent) else {
-            bail!("herdr-projects knows no reasoning-effort flag for {agent}; leave effort empty and put the flag in the profile's args");
+            // Ferrite: the binary is ferrite-projects.
+            bail!("ferrite-projects knows no reasoning-effort flag for {agent}; leave effort empty and put the flag in the profile's args");
         };
         if !values.contains(&effort) {
             bail!("effort `{effort}` is not one of {} for {agent}", values.join(", "));

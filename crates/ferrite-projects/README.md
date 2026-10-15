@@ -126,7 +126,14 @@ Herdr's name is replaced where it means Ferrite; behaviour is unchanged.
   errors are prefixed `ferrite-projects:` (the popup strips that prefix),
   help and messages name Ferrite panes and Ferrite agent kinds, and the
   rename note to a reopened coordinator is "Note from Ferrite's Projects".
-- Left as upstream: `--session`/`--socket`, the workspace a slug resolves
-  from, `focus`/`unfocus` and `adopt-workspace`, whose meaning is the
-  adapter's; and `doctor`'s advice to run `herdr plugin disable
-  agent-progress`, which names Herdr's own plugin.
+  Every command the text tells someone to type is `ferrite-projects`: the
+  `safety` refusal and listing, the inbox item on refused launch flags, the
+  effort error and the Thread brief's progress line. The progress hook
+  recognises the reporter's own call by that name too, as upstream does by
+  its own.
+- Left as upstream: `--session`/`--socket` (and `herdr --session` in its
+  help), the workspace a slug resolves from ("current herdr workspace"),
+  `focus`/`unfocus` and `adopt-workspace`, whose meaning is the adapter's;
+  `doctor`'s advice to run `herdr plugin disable agent-progress`, which
+  names Herdr's own plugin; the hostile `[herdr-projects ticker]` strings in
+  tests; and `docs/*.md`, upstream's documentation of the Herdr plugin.
