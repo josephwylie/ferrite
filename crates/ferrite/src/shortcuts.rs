@@ -443,7 +443,7 @@ mod tests {
         assert!(labels("cmd-k").contains(&"commands"), "a chord matches");
         assert!(labels("zzzz").is_empty());
         let (_, lit) = filter(&rows, "park").remove(0);
-        assert_eq!(lit, [0..4]);
+        assert_eq!(lit, vec![0..4]);
     }
 
     /// The sheet reads the operator's keys: a rebound action shows its new

@@ -2255,10 +2255,10 @@ impl HeadSlot {
 }
 
 /// The state vocabulary, shared by the Group head and the wall:
-/// `needs you` > `failing` > `failed` > `working` > `done` > `interrupted`
-/// > `parked`; idle is nothing. A finish is `done` only while `unread` (not
-/// yet seen), as the nav row's mark is (`nav::RowStatus::of`); seen, it is
-/// idle.
+/// `needs you` > `failing` > `failed` > `working` > `done` >
+/// `interrupted` > `parked`; idle is nothing. A finish is `done` only while
+/// `unread` (not yet seen), as the nav row's mark is
+/// (`nav::RowStatus::of`); seen, it is idle.
 fn state_word(
     state: WallState,
     kind: Option<&'static str>,

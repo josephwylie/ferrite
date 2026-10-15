@@ -295,7 +295,7 @@ pub(crate) fn closed(fence: &str) -> bool {
     };
     let marker = if open.starts_with("~~~") { '~' } else { '`' };
     lines
-        .last()
+        .next_back()
         .is_some_and(|line| line.len() >= 3 && line.chars().all(|c| c == marker))
 }
 

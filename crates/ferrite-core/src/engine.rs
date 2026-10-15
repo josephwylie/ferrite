@@ -1038,10 +1038,7 @@ impl Engine {
             .into_iter()
             .any(|thread| self.project_id(thread) == Some(project));
         if recorded {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Threads still record this project",
-            ));
+            return Err(io::Error::other("Threads still record this project"));
         }
         self.registry.remove_project(project)
     }
@@ -4499,7 +4496,7 @@ fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
                 cut -= 1;
             }
             only.truncate(cut);
-            only.push_str("…");
+            only.push('…');
         }
     }
     entries.reverse();

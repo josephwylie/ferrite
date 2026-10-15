@@ -1549,16 +1549,16 @@ fn focus_and_toasts_reach_the_windows() {
     assert_eq!(shown["result"]["windows"], 1, "{shown}");
     let mut told = Vec::new();
     while told.len() < 2 {
-        match window
+        let message = window
             .client
             .messages
             .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-        {
-            message @ (ServerMessage::Focus { .. } | ServerMessage::Notification { .. }) => {
-                told.push(message)
-            }
-            _ => {}
+            .unwrap();
+        if matches!(
+            message,
+            ServerMessage::Focus { .. } | ServerMessage::Notification { .. }
+        ) {
+            told.push(message);
         }
     }
     assert_eq!(
