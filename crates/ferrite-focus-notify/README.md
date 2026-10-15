@@ -27,19 +27,24 @@ See ADR 0005's 2026-10-15 update.
 - `focus.rs` is the Ferrite adapter (the Herdr adapter it replaces read
   Herdr's CLI and socket). It keeps upstream's `NotificationDecision` table
   and builds each notification from a Herdr-shaped event, so `event.rs`'s copy
-  and icons are upstream's.
+  and icons are upstream's. Since a click comes back to the process that
+  posted it, `Notifier::withdraw_all` takes back what is still up as Ferrite
+  quits, stopping each posting's script (run in a process group of its own)
+  first.
 - `script.rs`: a click prints `focus` for Ferrite, which runs the script and
   waits on it, instead of exec'ing upstream's binary with `--focus-pane`; the
   Herdr binary and the pruning of Herdr workspace bindings are gone.
 - `state.rs`: the state directory is `$FERRITE_FOCUS_NOTIFY_STATE_DIR`, else
   `$TMPDIR/ferrite-focus-notify`; Herdr workspace pruning is gone.
-- `util.rs`: notification groups are `ferrite-…`.
+- `util.rs`: notification groups are `ferrite-…`; `kill_group` is split out
+  of `kill_process_group` for `withdraw_all`.
 - `executable.rs`: Herdr binary lookup is gone.
 - Gone entirely: `main.rs` and `cli.rs` (the Herdr plugin entry point),
   `terminal/` (raising the iTerm2 or kitty window running a Herdr client),
   `tests/cli_test.rs` (the plugin binary's process contract; the parts that
-  still apply are ported as the adapter's tests), `herdr-plugin.toml`, and
-  upstream's READMEs.
+  still apply, the git lookup budget among them, are ported as the adapter's
+  tests), `herdr-plugin.toml`, and upstream's READMEs. Upstream's
+  `CHANGELOG.md` stays, to tell a merge which versions it brings.
 - New: `lib.rs`, this README, `LICENSE`. Helpers only Herdr paths called
   (terminal learning, focus-origin markers) stay, so merges stay small.
 

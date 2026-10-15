@@ -152,6 +152,13 @@ mod alerter {
     fn start(notifier: Notifier, cx: &mut App) -> Alerter {
         // Upstream's `--cleanup`, which Herdr ran at plugin start.
         let _ = ferrite_focus_notify::cleanup();
+        // A click comes back to this process, so none may outlive it.
+        let quitting = notifier.clone();
+        cx.on_app_quit(move |_| {
+            quitting.withdraw_all();
+            async {}
+        })
+        .detach();
         let handler: Handler = Rc::default();
         let (clicks, mut heard) = mpsc::unbounded::<String>();
         let slot = handler.clone();
