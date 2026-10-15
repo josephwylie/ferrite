@@ -25,7 +25,7 @@ impl Server {
         match heard {
             api::Heard::Joined(caller, answers) => self.api.join(caller, answers),
             api::Heard::Request(caller, request) => self.api_request(caller, request),
-            api::Heard::Gone(caller) => self.api.leave(caller),
+            api::Heard::Hungup(caller) => self.api.hang_up(caller),
         }
     }
 

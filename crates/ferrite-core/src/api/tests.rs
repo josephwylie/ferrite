@@ -472,6 +472,11 @@ fn a_line_that_is_not_a_request_is_answered_with_why() {
         wrong,
         Err(Response::Error { ref id, ref error }) if id == "4" && error.code == Code::InvalidRequest
     ));
+    let numbered = decode(br#"{"id":7,"method":"thread.list","params":{}}"#);
+    assert!(matches!(
+        numbered,
+        Err(Response::Error { ref id, ref error }) if id == "7" && error.code == Code::InvalidRequest
+    ));
     let garbage = decode(b"not json");
     assert!(matches!(
         garbage,

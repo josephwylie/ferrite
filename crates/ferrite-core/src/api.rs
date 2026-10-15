@@ -13,7 +13,7 @@
 //! several things; a wait holds its own answer, not the connection. A
 //! connection that closes ends its waits and subscriptions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -215,11 +215,16 @@ impl Event {
 }
 
 /// A line as a request, or the error that answers it: an unknown method
-/// is told apart from a malformed request.
+/// is told apart from a malformed request. An id that is not a string (so
+/// refused) comes back as its JSON text, for the caller to match.
 pub fn decode(line: &[u8]) -> Result<Request, Response> {
     serde_json::from_slice(line).map_err(|error| {
         let value: Value = serde_json::from_slice(line).unwrap_or_default();
-        let id = value["id"].as_str().unwrap_or_default().to_string();
+        let id = match &value["id"] {
+            Value::String(id) => id.clone(),
+            Value::Null => String::new(),
+            id => id.to_string(),
+        };
         let known = value["method"]
             .as_str()
             .map(|method| Method::OPERATIONS.iter().any(|op| op.name == method));
@@ -334,7 +339,9 @@ pub enum Heard {
     /// Always heard before anything it asks.
     Joined(CallerId, Sender<Vec<u8>>),
     Request(CallerId, Request),
-    Gone(CallerId),
+    /// The connection asks nothing more: its reading side closed. It may
+    /// still be listening (`echo … | nc -U` half-closes once it has asked).
+    Hungup(CallerId),
 }
 
 /// Serve every API connection `listener` accepts, for as long as the pump
@@ -405,7 +412,7 @@ fn serve(caller: CallerId, stream: link::Stream, heard: Sender<link::Heard>) -> 
                     }
                 }
             }
-            let _ = heard.send(link::Heard::Api(Heard::Gone(caller)));
+            let _ = heard.send(link::Heard::Api(Heard::Hungup(caller)));
         })?;
     Ok(())
 }
@@ -442,6 +449,9 @@ pub struct Api {
     subscriptions: Vec<Subscription>,
     open: Vec<ThreadId>,
     attention: BTreeMap<ThreadId, Attention>,
+    /// Callers that ask nothing more, kept while a wait or subscription
+    /// still owes them lines.
+    hung_up: BTreeSet<CallerId>,
 }
 
 impl Api {
@@ -449,9 +459,37 @@ impl Api {
         self.callers.insert(caller, answers);
     }
 
+    /// The connection asks nothing more: it is let go once nothing it
+    /// asked still owes it an answer. A subscription keeps it until an
+    /// event cannot be written.
+    pub fn hang_up(&mut self, caller: CallerId) {
+        self.hung_up.insert(caller);
+        self.release_hung_up();
+    }
+
+    fn release_hung_up(&mut self) {
+        let owed = |caller: &CallerId| {
+            self.waits.iter().any(|waiting| waiting.caller == *caller)
+                || self
+                    .subscriptions
+                    .iter()
+                    .any(|subscription| subscription.caller == *caller)
+        };
+        let done: Vec<CallerId> = self
+            .hung_up
+            .iter()
+            .copied()
+            .filter(|caller| !owed(caller))
+            .collect();
+        for caller in done {
+            self.leave(caller);
+        }
+    }
+
     /// The connection is gone: so are its waits and subscriptions.
-    pub fn leave(&mut self, caller: CallerId) {
+    fn leave(&mut self, caller: CallerId) {
         self.callers.remove(&caller);
+        self.hung_up.remove(&caller);
         self.waits.retain(|waiting| waiting.caller != caller);
         self.subscriptions
             .retain(|subscription| subscription.caller != caller);
@@ -599,6 +637,7 @@ impl Api {
                 None => self.waits.push(waiting),
             }
         }
+        self.release_hung_up();
     }
 
     fn publish(&mut self, event: Event) {

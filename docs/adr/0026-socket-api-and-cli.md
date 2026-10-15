@@ -43,8 +43,13 @@ Herdr's shape: one JSON object per line.
 - after `events.subscribe` succeeds, `{"id":"1","event":{"event":…}}` lines.
 
 A connection may ask several things; a wait holds its answer, not the
-connection. A connection that closes ends its waits and subscriptions, as
-Herdr's waits end when their caller goes. API connections are numbered from
+connection. `id` is a string; a request whose `id` is not one is refused
+`invalid_request` with that id's JSON text, so `7` comes back as `"7"`.
+A connection whose reading side closes (`echo … | nc -U api.sock`
+half-closes once it has asked) is still answered: it is let go once no wait
+or subscription owes it a line. A connection that is gone is found when a
+line cannot be written to it, and its waits and subscriptions end then; a
+wait from a caller killed mid-wait lingers until it settles. API connections are numbered from
 2³², so a Decision's `answered {client}` names an API caller apart from any
 window.
 
@@ -85,9 +90,11 @@ ignores them, as the contract allows.
 The API reports and waits on **Attention** (ADR 0015), computed by the
 Server from what it knows exactly (`Engine::attention`): blocked while a
 Decision waits, working while Main or its background work runs, done while
-an unseen Notice stands, else idle. A prompt in the provider's queue (or
-being taken into it) counts as work: the turn before it can end a pass
-before the queued prompt starts, and the agent is not at rest in between.
+an unseen Notice stands, else idle. A prompt not yet taken counts as work:
+one in the provider's queue (or being taken into it), since the turn before
+it can end a pass before it starts, and one held for a starting Session (a
+held send or a new Thread's first prompt), so a plain `agent.wait` after
+`agent.prompt` is not answered by the idle before the agent has the prompt.
 `Attention` moves to core; the window reads the same type.
 
 ### Waiting, Herdr's semantics
@@ -128,11 +135,13 @@ takes after each pass.
 ### Caller context
 
 Every Session's environment carries `FERRITE_THREAD_ID`, and, when the
-Server takes API connections, `FERRITE_SOCKET` and `FERRITE_BIN` (the
-Server's executable: an app bundle's binary is rarely on `PATH`). They are
-set over whatever the CLI inherited, and stripped from a Session's
-environment where Ferrite has no API (`--demo`), like the other inherited
-markers. `--current` reads `FERRITE_THREAD_ID`.
+Server takes API connections, `FERRITE_SOCKET` and `FERRITE_BIN`. The plan
+says every Session; only a Server has an API, so a Session run in-process
+(`--demo`, tests) or under a Server whose `api.sock` could not be bound gets
+the Thread id alone. `FERRITE_BIN` is the Server's executable: an app
+bundle's binary is rarely on `PATH`. They are set over whatever the CLI
+inherited, and stripped from a Session's environment where Ferrite has no
+API, like the other inherited markers. `--current` reads `FERRITE_THREAD_ID`.
 
 ### The CLI is the app's binary
 

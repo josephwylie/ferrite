@@ -1352,6 +1352,83 @@ fn a_starting_session_holds_one_prompt_and_refuses_another() {
     assert!(!text.contains("and again"), "{read}");
 }
 
+/// A prompt held for a starting Session is work: a plain `agent.wait` after
+/// it is not answered by the idle before the agent even has it.
+#[test]
+fn a_held_prompt_keeps_a_plain_wait_waiting() {
+    let (harness, gate) = start_gated("api-held");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir }),
+    );
+    let thread = started["result"]["thread"]["thread"].as_u64().unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let sent = caller.answer(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "review" }),
+    );
+    assert!(sent.get("result").is_some(), "{sent}");
+
+    caller.ask("3", "agent.wait", serde_json::json!({ "thread": thread }));
+    caller.quiet();
+    gate.send(()).unwrap();
+    caller.quiet();
+    turn_ends(&provider);
+    let settled = caller.next();
+    assert_eq!(settled["id"], "3", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+}
+
+/// A caller that half-closes once it has asked (`echo … | nc -U`) still
+/// hears its wait's answer.
+#[cfg(unix)]
+#[test]
+fn a_half_closed_caller_still_hears_its_wait() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let harness = start("api-half-closed");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let mut caller = call(&harness);
+    caller.answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+
+    let mut script = UnixStream::connect(&harness.api).unwrap();
+    let request = serde_json::json!({
+        "id": "w",
+        "method": "agent.wait",
+        "params": { "thread": thread },
+    });
+    writeln!(script, "{request}").unwrap();
+    script.shutdown(std::net::Shutdown::Write).unwrap();
+    caller.quiet();
+    turn_ends(&provider);
+    script
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(script).read_line(&mut line).unwrap();
+    let settled: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(settled["id"], "w", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+}
+
 /// What the CLI prints, one write per line.
 struct Printed(Sender<String>);
 
