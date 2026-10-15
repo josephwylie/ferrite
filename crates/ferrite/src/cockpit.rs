@@ -338,7 +338,8 @@ pub struct CockpitView {
     /// frame: a Project the chip has not named yet, every draft's Project
     /// on each branch refresh, and the Project whose band popover opens
     /// are all asked about off the UI thread (`look_up_checkouts`), and the
-    /// last answer stands until the new one lands.
+    /// last answer stands until the new one lands. On a machine, its Server
+    /// answers each draft's Project once (`list_repo`).
     checked_out: std::cell::RefCell<std::collections::HashMap<ProjectId, SharedString>>,
     /// Projects whose checkout is being asked about: one lookup each at a
     /// time, however many frames name it meanwhile.
@@ -348,7 +349,8 @@ pub struct CockpitView {
     /// popover opens and kept by project: the rows show the last answer
     /// at once and take the fresh one when it lands. Never read per frame.
     repo_listing: Option<(ProjectId, RepoListing)>,
-    /// On a machine, the listing its Server is reading for the popover.
+    /// On a machine, the listing its Server is reading for the popover or
+    /// a draft's chip.
     asking_repo: Option<(ProjectId, std::sync::mpsc::Receiver<std::io::Result<RepoListing>>)>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
@@ -4974,6 +4976,7 @@ impl CockpitView {
         self.popover = None;
         self.context_menu = None;
         self.bell.open = false;
+        self.list_remote_path(cx);
         cx.notify();
     }
 
@@ -5439,8 +5442,8 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        // The card's ↵ is its confirm — but in a machine's path field it
-        // adds the directory typed there.
+        // The card's ↵ is its confirm — but in a machine's path field that
+        // holds a path, it adds that directory.
         if self.project_editor.is_some() {
             if self.submit_remote_path(window, cx) {
                 return;

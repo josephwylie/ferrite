@@ -203,13 +203,11 @@ impl Engine {
                 self.apply_input(*thread, Input::Notice(text.clone()));
                 Ok(None)
             }
-            Op::ListDir { path } => crate::workspace::list_dir(path)
-                .map(|listing| Some(listing.into()))
-                .map_err(failed),
             Op::SettingsChanged
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
+            | Op::ListDir { .. }
             | Op::ListRepo { .. }
             | Op::Coordinate { .. }
             | Op::Restart { .. }

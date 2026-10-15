@@ -403,11 +403,13 @@ fn turning_off_the_machine_on_screen_goes_home(cx: &mut TestAppContext) {
 }
 
 /// On a machine the Project card has no folder dialog, which could only
-/// browse this computer: a path field completes against the machine's
-/// folders through its Server (`list_dir`), Tab taking the first and ↵
-/// adding it. The Project it makes is the machine's; a draft chooses it,
-/// its workspace chip offers what git on the machine lists (`list_repo`),
-/// and its first send starts the Thread in that directory on the machine.
+/// browse this computer: a path field, listing the machine's home from
+/// the start, completes against the machine's folders through its Server
+/// (`list_dir`), Tab taking the first, ↵ adding it and the next ↵
+/// confirming. The Project it makes is the machine's; a draft chooses it,
+/// its workspace chip names and offers what git on the machine lists
+/// (`list_repo`) — no git here is asked — and its first send starts the
+/// Thread in that directory on the machine.
 #[gpui::test]
 fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut TestAppContext) {
     cx.update(|cx| crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx));
@@ -442,6 +444,11 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         let field = view.project_editor.as_ref().unwrap().remote.as_ref();
         field.expect("a path field on a machine").field.clone()
     });
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap())
+            .contains(r#""op":"list_dir","path":"~/""#),
+        "the card lists the machine's home as it opens"
+    );
     cx.update(|window, cx| window.focus(&field.read(cx).focus_handle(cx), cx));
     field.update(cx, |field, cx| {
         field.set(format!("{}/re", folder.display()), cx)
@@ -466,14 +473,16 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         format!("{}/repo/", folder.display())
     );
     cx.simulate_keystrokes("enter");
-    let project = view.update(cx, |view, cx| {
+    view.update(cx, |view, cx| {
         assert_eq!(view.project_editor.as_ref().unwrap().staged, [repo.clone()]);
-        assert_eq!(
-            field.read(cx).text(),
-            format!("{}/", folder.display()),
-            "the field goes back to the directory, for the next"
+        assert_eq!(field.read(cx).text(), "", "the field empties");
+    });
+    cx.simulate_keystrokes("enter");
+    let project = view.update(cx, |view, _| {
+        assert!(
+            view.project_editor.is_none(),
+            "the next ↵ confirms the card, adding nothing more"
         );
-        view.confirm_project_editor(cx);
         let project = view.cockpit.registry().projects().last().unwrap().clone();
         assert_eq!(project.title, "repo");
         assert_eq!(project.root, std::fs::canonicalize(&repo).unwrap());
@@ -492,8 +501,23 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         assert!(offered, "the machine's Project is on the draft's chip");
         let composer = view.panes[view.focused()].composer.clone();
         view.pick_band(&BandChoice::Project(project), &composer, cx);
-        view.open_band_popover(pane::BandChip::Workspace, cx);
         composer
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.checked_out
+                .borrow()
+                .get(&project)
+                .map(|branch| branch.as_ref())
+                == Some("trunk")
+        })
+    });
+    view.update(cx, |view, cx| {
+        assert!(
+            view.checking_out.borrow().is_empty(),
+            "no git here was asked what the machine's checkout is on"
+        );
+        view.open_band_popover(pane::BandChip::Workspace, cx);
     });
     let rows = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {

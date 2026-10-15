@@ -156,17 +156,25 @@ cannot, the window does without.
 
 - **Folders.** The Project card's folder dialog could only browse this
   computer, so on a machine it is not offered. A path field stands in for
-  it, starting at `~/`: what is typed completes (a press, or Tab) against
-  the directory it names, listed by the machine's Server through a new
-  gen-1 command, `list_dir {path}`, replied `listing {path, entries[{name,
-  directory}]}` with `~` spelled out (`workspace::list_dir`). ↵ in the
-  field adds the directory to the card; Create registers the Project
-  through the existing `project` command. Additive under ADR 0025's rules:
-  an older Server answers `unsupported`, and the field then completes
-  nothing. A listing is one `read_dir` on the pump thread, never a walk;
-  a directory that cannot be read is not asked about again until the
-  field leaves it. Only a Server answers `list_dir`: a window that runs
-  its agents itself never shows the field.
+  it, starting at `~/`, whose listing is asked for as the card opens:
+  what is typed completes (a press, or Tab) against the directory it
+  names, listed by the machine's Server through a new gen-1 command,
+  `list_dir {path}`, replied `listing {path, entries[{name, directory}]}`
+  with `~` spelled out (`workspace::list_dir`). ↵ in the field adds the
+  directory to the card and empties the field, so a second ↵ confirms
+  the card rather than adding anything more; Create registers the
+  Project through the existing `project` command. The card stages the
+  path as the listing in hand spelled it out (of it, or of its parent),
+  so `~` is named for the home's leaf and one directory typed two ways
+  stages once; with no listing in hand it goes as typed, and the
+  registry spells `~` out. Additive under ADR 0025's rules: an older
+  Server answers `unsupported`, and the field then completes nothing. A
+  listing is one `read_dir`, never a walk, on a thread of its own as
+  `list_repo`'s git is, never the pump: a huge folder or a hung mount on
+  the machine holds up only the field. A directory that cannot be read
+  is not asked about again until the field leaves it. Only a Server
+  answers `list_dir`, as `list_repo`: the Server, not the Engine, owns
+  both, so a window that runs its agents itself never shows the field.
 - **`~`.** A path goes to the Server as typed; the registry spells out
   `~` against its own computer's home before canonicalizing
   (`workspace::expand_home`), so `path ~/src/x` on a draft's Project chip
@@ -181,8 +189,9 @@ cannot, the window does without.
   for a local repo, git's own listing, so worktrees made outside Ferrite
   and the repo's branches are offered too. Its two git calls run on a
   thread of their own, never the pump. The chip names the checkout's
-  branch from that answer; until the chip is first opened it reads
-  `main`. Whether a chosen worktree still stands is the Server's to say
+  branch from that answer, asked once for each draft's Project as soon
+  as a draft shows it (one at a time), and `main` when the machine
+  cannot say. Whether a chosen worktree still stands is the Server's to say
   when it starts (`DraftBinding::resolve(registry, here)`).
 - **No git here.** The branch labels and status (`workspace::branch_status`),
   the worktree listing that lets a binding follow its agent

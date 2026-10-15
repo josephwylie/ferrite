@@ -9,8 +9,9 @@ use super::*;
 use crate::machines::{Connection, MachineRow};
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::machine::{self, Machine};
-use ferrite_core::workspace::{DirEntry, Listing};
+use ferrite_core::workspace::Listing;
 use gpui::App;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
@@ -293,9 +294,12 @@ impl CockpitView {
 
     /// Take the machine's answer to `ask_machine_repo`, once it lands: the
     /// popover's rows, and the branch its checkout is on, which no git
-    /// here could name.
+    /// here could name — `main` when it cannot say, as for a local Project.
+    /// With nothing on its way, ask about a draft's Project whose branch
+    /// the chip has no answer for yet.
     pub(super) fn poll_machine_repo(&mut self, cx: &mut Context<Self>) {
         let Some((project, answer)) = &self.asking_repo else {
+            self.ask_drafted_checkout();
             return;
         };
         let project = *project;
@@ -304,14 +308,34 @@ impl CockpitView {
             Ok(listing) => listing.unwrap_or_default(),
             Err(TryRecvError::Disconnected) => RepoListing::default(),
         };
-        if let Some(branch) = &listing.checked_out {
-            self.checked_out
-                .borrow_mut()
-                .insert(project, branch.clone().into());
-        }
+        let branch = listing.checked_out.as_deref().unwrap_or(MAIN_BRANCH);
+        self.checked_out
+            .borrow_mut()
+            .insert(project, SharedString::from(branch.to_string()));
         self.repo_listing = Some((project, listing));
         self.asking_repo = None;
         self.sync_workspace_rows(cx);
+        cx.notify();
+    }
+
+    /// A draft's workspace chip names its checkout's branch, which on a
+    /// machine only its Server can read: ask about the first drafted
+    /// Project it has no answer for.
+    fn ask_drafted_checkout(&mut self) {
+        if !self.on_machine() || self.machine_lost() {
+            return;
+        }
+        let unknown = {
+            let known = self.checked_out.borrow();
+            self.panes
+                .iter()
+                .filter_map(PaneView::draft)
+                .map(|draft| draft.binding.project())
+                .find(|project| !known.contains_key(project))
+        };
+        if let Some(project) = unknown {
+            self.ask_machine_repo(project);
+        }
     }
 }
 
@@ -320,9 +344,9 @@ impl CockpitView {
 /// names there, listed by the machine's Server (`list_dir`).
 pub(super) struct RemotePath {
     pub(super) field: Entity<Composer>,
-    /// The entries the completions come from, of the directory as typed:
-    /// none when it could not be read, which is not asked again.
-    listed: Option<(String, Vec<DirEntry>)>,
+    /// The listing the completions come from, of the directory as typed:
+    /// empty when it could not be read, which is not asked again.
+    listed: Option<(String, Listing)>,
     /// A listing asked for and not answered yet, of the directory as typed.
     asking: Option<(String, Receiver<std::io::Result<Listing>>)>,
 }
@@ -332,6 +356,19 @@ const REMOTE_HOME: &str = "~/";
 
 /// How many completions the card lists under the field.
 const REMOTE_COMPLETIONS: usize = 8;
+
+/// `path` as the machine's Server spelled it out in the listing in hand —
+/// of it, or of the directory it is in — so `~` stages as the machine's
+/// home, named for its leaf, and one directory typed two ways stages
+/// once. As typed otherwise: the Server spells `~` out when it registers.
+fn spelled_out(remote: &RemotePath, path: &str) -> PathBuf {
+    let (directory, leaf) = split_typed(path);
+    match &remote.listed {
+        Some((listed, listing)) if listed.trim_end_matches('/') == path => listing.path.clone(),
+        Some((listed, listing)) if listed == directory => listing.path.join(leaf),
+        _ => path.into(),
+    }
+}
 
 /// A typed path's directory, to list, and the start of the name in it, to
 /// complete: `~/src/fe` is `~/src/` and `fe`.
@@ -354,10 +391,8 @@ impl CockpitView {
             field.set_role(crate::composer::Role::Field(None), cx);
             field.set(REMOTE_HOME.into(), cx);
         });
-        cx.subscribe(&field, |view, _, _: &Edited, cx| {
-            view.remote_path_edited(cx)
-        })
-        .detach();
+        cx.subscribe(&field, |view, _, _: &Edited, cx| view.list_remote_path(cx))
+            .detach();
         Some(RemotePath {
             field,
             listed: None,
@@ -374,9 +409,9 @@ impl CockpitView {
         self.project_editor.as_mut()?.remote.as_mut()
     }
 
-    /// The field moved: list the directory it now names, unless that
-    /// listing is already in hand or on its way.
-    fn remote_path_edited(&mut self, cx: &mut Context<Self>) {
+    /// List the directory the open card's field names — on opening, and
+    /// each time it moves — unless that listing is in hand or on its way.
+    pub(super) fn list_remote_path(&mut self, cx: &mut Context<Self>) {
         let Some(remote) = self.open_remote_path() else {
             return;
         };
@@ -412,14 +447,17 @@ impl CockpitView {
         let Some((directory, answer)) = &remote.asking else {
             return;
         };
-        let entries = match answer.try_recv() {
+        let listing = match answer.try_recv() {
             Err(TryRecvError::Empty) => return,
-            Ok(Ok(listing)) => Some(listing.entries),
-            Ok(Err(_)) => Some(Vec::new()),
+            Ok(Ok(listing)) => Some(listing),
+            Ok(Err(_)) => Some(Listing {
+                path: directory.into(),
+                entries: Vec::new(),
+            }),
             Err(TryRecvError::Disconnected) => None,
         };
-        if let Some(entries) = entries {
-            remote.listed = Some((directory.clone(), entries));
+        if let Some(listing) = listing {
+            remote.listed = Some((directory.clone(), listing));
         }
         remote.asking = None;
         cx.notify();
@@ -433,14 +471,15 @@ impl CockpitView {
         };
         let typed = remote.field.read(cx).text();
         let (directory, start) = split_typed(typed);
-        let Some((_, entries)) = remote
+        let Some((_, listing)) = remote
             .listed
             .as_ref()
             .filter(|(listed, _)| listed == directory)
         else {
             return Vec::new();
         };
-        entries
+        listing
+            .entries
             .iter()
             .filter(|entry| {
                 entry.directory
@@ -478,15 +517,14 @@ impl CockpitView {
     }
 
     /// ↵ in the path field: the directory it names joins the card, and the
-    /// field goes back to the directory it was in, for the next. False
-    /// when the field does not hold the keyboard or holds nothing.
+    /// field empties, so the next ↵ confirms the card. False when the
+    /// field does not hold the keyboard or holds nothing.
     pub(super) fn submit_remote_path(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         self.remote_path_focused(window, cx) && self.add_remote_path(cx)
     }
 
-    /// Add the directory the field names to the card. It goes to the
-    /// Server as typed: `~` is the machine's home, spelled out there.
-    pub(super) fn add_remote_path(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Add the directory the field names to the card, and empty the field.
+    fn add_remote_path(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(remote) = self.open_remote_path() else {
             return false;
         };
@@ -497,10 +535,9 @@ impl CockpitView {
             "" => return false,
             path => path,
         };
-        self.adopt_editor_directory(path.into(), cx);
-        let (directory, _) = split_typed(path);
-        let directory = directory.to_string();
-        field.update(cx, |field, cx| field.set(directory, cx));
+        let path = spelled_out(remote, path);
+        self.adopt_editor_directory(path, cx);
+        field.update(cx, |field, cx| field.set(String::new(), cx));
         true
     }
 
