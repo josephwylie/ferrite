@@ -75,20 +75,95 @@ What differs from upstream, beyond the adapter.
   `herdr::MIN_VERSION`) and the Server at `$FERRITE_SOCKET`
   (`paths::resolve_session`) instead of Herdr and its session; the sidebar
   check is removed. Every other check is upstream's. Those two checks rest
-  on the adapter and the API: `herdr::version`, Ferrite's minimum version
-  and `resolve_session`'s `FERRITE_SOCKET` are the adapter's (`herdr.rs`,
-  `paths.rs`), `ferrite --version` the CLI's. Until both are in, `version`
-  answers `not_wired`, so `doctor` fails and so do its tests
-  `new_ferrite_passes_and_warnings_do_not_fail`,
-  `old_ferrite_fails_and_names_the_minimum` and
-  `fix_links_the_skill_only_for_a_configured_harness…`.
+  on the adapter (`herdr::version` reads `ferrite --version` against
+  `herdr::MIN_VERSION`, 0.4.0; `resolve_session` reads `FERRITE_SOCKET`, else
+  `~/.ferrite/threads/api.sock`).
 - **Tested in CI** on macOS (`cargo test -p ferrite-projects`); it is
   Unix-only.
+
+### The adapter
+
+`src/herdr.rs` answers every herdr call upstream makes from Ferrite's API
+(ADR 0027, and the operations ADR 0030 adds), through the `ferrite` CLI:
+
+- **Panes, tabs and agents are Threads** (`thread list`/`get`), their state
+  the Thread's Attention, `state_change_seq` its `attention_seq`, the agent
+  session its `provider_session`. A Space is a Ferrite Project (`project
+  list`/`get`/`open`/`rename`/`close`), except a Thread in a linked worktree,
+  whose Space is the worktree, named by its path.
+- **Placement is staged.** A Thread is born with its agent, so `tab create`,
+  `workspace create` (which opens the Project) and `worktree open` return a
+  staged pane, `new:<focus>:<space>:<cwd>`, and `worktree create` has the
+  Server make the worktree first (`ferrite worktree create`, in its
+  registry's layout, forwarded with `--machine` to a machine's Server), so
+  the brief is written into it, then stages its Thread there. `agent start`
+  starts the Thread (`thread start --ready`; a resume among the agent's
+  arguments, `agents::resume_args`, becomes its `--resume`, the rest go as
+  `--args`, written as for the agent's terminal UI; Ferrite's Codex
+  Provider turns Codex's into app-server settings, ADR 0027). A Thread
+  staged in a Project's Space starts in it (`--project`), working in its
+  own cwd. The ticker and `open` record the started Thread as the pane
+  (`ticker.rs`, `coordinator.rs`), also when the start answers
+  `agent_not_ready`: that refusal names the Thread it left, as Herdr's pane
+  stays. A staged pane counts as a shell at its prompt (`thread.rs`,
+  `pane_idle_shell`): Escape, Ctrl+C or Enter there does nothing, and any
+  other call that needs its Thread is refused `agent_not_started` before
+  anything runs (a refusal before typing). A start whose answer was lost is
+  found by title and directory, never started twice.
+- **Prompts** go whole (`agent prompt`); a confirmed one waits `--until
+  working --until blocked` (`agent_prompt_stalled`, `timeout` and no reply
+  are unconfirmed; `agent_blocked`, `agent_starting`, `agent_not_started`,
+  `pane_not_found` and `unreachable` are refusals before sending).
+- **No screen is read.** `agent read` is the transcript's tail; the input
+  box and trust screens are read from the Thread's exact state
+  (`PaneState`: a draft, a held or queued prompt, the pending Decisions):
+  `prompt_box::Screen`, which a Terminal's screen still implements.
+- **Keys mean what they meant**: `esc` and `ctrl+c` interrupt (`agent
+  interrupt`); a menu key answers the pending Decision (`decision answer`)
+  as its menu would: Enter the first item, a digit that item (an approval's
+  allow, its suggestions, deny; a question's options; a single choice
+  field's options), `y` allow and `n` deny (a yes/no field's answer), and
+  Enter on a form its defaults. Enter with nothing pending sends nothing, as
+  in an empty input box. Anything else is refused, `no_decision` or
+  `invalid_answer`, before anything is sent. `pane send-text` answers the
+  pending Decision that takes typed text (a question's own answer, a form's
+  single text field); there is no input box to type into otherwise
+  (`no_decision`). A Decision whose answer is being submitted is not
+  pending (`decision.list` leaves it out), so `thread keys --text X enter`
+  answers once and its Enter sends nothing.
+- **Closing**: `tab`/`pane close` is `thread close`; `workspace close` is
+  `project close`, or closes the Threads of a worktree's Space; `worktree
+  remove` is `ferrite worktree remove` of the Space's path (never forced:
+  `dirty_worktree_requires_force`; a Project's Space is no worktree,
+  `worktree_not_found`).
+- `notification show` keeps its sound (`request` is important), `focus`/
+  `unfocus` are `nav focus` (the project's slug, passed on unread), `machine
+  list` is `ferrite machine list` (`result.machines`).
+- **Silent successes**: `report-metadata` and `workspace.move` (the nav
+  draws and orders its rows from the crate's data).
+- **Refused** (`not_wired`, nothing runs): `pane process-info` (a Thread is
+  never a shell; `pane_idle_shell` answers from the staged id, true only
+  before its agent starts), and any call upstream may add before it is
+  mapped.
+
+Ferrite error codes reach callers under Herdr's names: `unknown_thread`
+is `pane_not_found`, `project_not_found` `workspace_not_found`,
+`server_unavailable` `unreachable`. A kind Ferrite has no Provider for
+(only `claude` and `codex` run) fails `no_provider`, as a missing binary
+does. `open --here` never runs a coordinator on the caller's terminal: a
+Thread is never a shell.
+
+A **checkout thread** works in the user's own repository, so its Thread
+belongs to that repository's Ferrite project, not to the coordinator's
+(upstream it is a tab in the coordinator's Space; `thread start --project`
+refuses a cwd outside the Project, so its start goes without it): archiving the project
+(`lifecycle::close_workspaces`, `project close` on the coordinator's
+project) leaves it open, and it is closed on its own (`thread close`).
 
 ### Machines
 
 - Saved machines are Ferrite's: `ferrite machine list` (its reply's
-  `result`, `[{id, label, target}]`), with `[machines.X] ssh` in
+  `result.machines`, `[{id, label, target}]`), with `[machines.X] ssh` in
   `config.toml` as before. Errors name `ferrite machine list`.
 - On another machine the binary is `ferrite-projects` (`profile resolve`,
   `profile list`); an old or missing one says to update Ferrite there.

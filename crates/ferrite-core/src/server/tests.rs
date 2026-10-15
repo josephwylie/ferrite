@@ -1584,6 +1584,50 @@ fn a_blocked_agent_refuses_prompts_and_its_decision_is_answered_once() {
     ));
 }
 
+/// A Decision whose answer is being submitted (an async one's, which the
+/// provider closes later) is answered already: `decision.list` no longer
+/// offers it, so a key meant for the next Decision never answers it twice.
+#[test]
+fn a_decision_whose_answer_is_being_submitted_is_not_listed() {
+    let harness = start("api-submitting");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    let mut caller = call(&harness);
+
+    let SessionEvent::DecisionRequested { mut decision } = decision() else {
+        unreachable!()
+    };
+    decision.delivery = crate::DecisionDelivery::Async;
+    provider
+        .send(SessionEvent::DecisionRequested { decision })
+        .unwrap();
+    window.until(|window| !window.decisions.is_empty());
+    let listed = caller.answer("1", "decision.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["decisions"][0]["decision"]["id"], "perm_01",
+        "{listed}"
+    );
+
+    let answered = caller.answer(
+        "2",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread,
+            "decision": "perm_01",
+            "answer": { "kind": "allow", "input": {} },
+        }),
+    );
+    assert!(answered.get("result").is_some(), "{answered}");
+    let listed = caller.answer("3", "decision.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["decisions"],
+        serde_json::json!([]),
+        "{listed}"
+    );
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+}
+
 /// Subscribed before the snapshot is read: the first answer is the state
 /// now, and every change after it follows as an event under the same id.
 #[test]

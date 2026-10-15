@@ -172,6 +172,9 @@ pub struct OpenOptions {
 /// The pane `open` runs in, when the coordinator can start right there: the
 /// command runs in a Herdr pane of this session that no agent occupies, and
 /// not in a plugin pane or action (the popup must never become the coordinator).
+///
+/// Ferrite: a Thread is never a shell (and has no `HERDR_*` variables), so
+/// `--here` starts a Thread in the project folder as `open` always does.
 fn here_pane(ctx: &Ctx, options: &OpenOptions, socket: &str, agents: &[Agent]) -> Option<String> {
     if !options.here || ctx.env.var("HERDR_PLUGIN_STATE_DIR").is_some() || ctx.env.var("HERDR_SOCKET_PATH") != Some(socket) {
         return None;
@@ -368,6 +371,10 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
                 if !session_id.is_empty() {
                     c.agent_session = session_id;
                 }
+                // Ferrite: the Thread started in the staged pane is the pane now.
+                c.workspace_id = agent.workspace_id.clone();
+                c.tab_id = agent.tab_id.clone();
+                c.pane_id = agent.pane_id.clone();
             })?;
             if resume.is_empty() {
                 println!("started {kind} as {name}; it reads AGENTS.md and primes itself");
@@ -375,11 +382,18 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
                 println!("started {kind} as {name}, resuming session {}", record.agent_session);
             }
         }
-        Err(error) => println!(
-            "{kind} is not ready yet ({error}). If it shows a dialog, answer it in pane {}; it primes itself from AGENTS.md.",
-            record.pane_id
-        ),
+        Err(error) => {
+            // Ferrite: the Thread a start not ready yet left is the pane now.
+            let pane = error.thread.clone().unwrap_or_else(|| record.pane_id.clone());
+            project.update_coordinator(|c| {
+                c.tab_id = pane.clone();
+                c.pane_id = pane.clone();
+            })?;
+            println!("{kind} is not ready yet ({error}). If it shows a dialog, answer it in pane {pane}; it primes itself from AGENTS.md.")
+        }
     }
+    // Ferrite: as the start recorded it.
+    let record = project.coordinator().unwrap_or(record);
     report_tokens(&herdr, &project, &record.pane_id);
     ticker::start(ctx)?;
     println!("opened `{slug}` in workspace {} (pane {})", record.workspace_id, record.pane_id);

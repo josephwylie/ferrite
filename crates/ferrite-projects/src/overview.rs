@@ -32,7 +32,8 @@ pub fn project_for_workspace(ctx: &Ctx, workspace_id: &str, socket: &str) -> Opt
     }
     let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), socket, ctx.runner);
     let mut panes: Vec<crate::herdr::Pane> = herdr.pane_list().unwrap_or_default().into_iter().filter(|p| p.workspace_id == workspace_id).collect();
-    let focused = ctx.env.var("HERDR_PANE_ID").unwrap_or("");
+    // Ferrite: the pane this runs in is the calling Thread.
+    let focused = ctx.env.var("FERRITE_THREAD_ID").unwrap_or("");
     panes.sort_by_key(|p| p.pane_id != focused);
     let open_threads = |project: &Project| thread::list(project).into_iter().filter(|t| !t.is_remote() && t.status != thread::Status::Resolved).collect::<Vec<_>>();
     for pane in &panes {
@@ -216,6 +217,8 @@ pub fn unfocus(ctx: &Ctx, session: &crate::paths::SessionFlags) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Ferrite: the fake Server answers `nav focus`.
+    use crate::runner::fake::ok;
     use crate::scenarios::World;
     use crate::thread::{Kind, Thread};
 
@@ -282,14 +285,16 @@ mod tests {
         let home = alpha.canonical_dir().to_string_lossy().into_owned();
         let sub = alpha.canonical_dir().join("threads").to_string_lossy().into_owned();
         // The coordinator was reopened in w5 (the record still says w1, which
-        // beta also records), a shell in w6 works elsewhere.
-        *world.panes.borrow_mut() = format!(
+        // beta also records), a shell in w6 works elsewhere. Ferrite: every
+        // pane is a Thread.
+        let thread = |w: &str, p: &str, cwd: &str| crate::scenarios::agent_json(w, p, p, cwd, "", "idle");
+        *world.agents.borrow_mut() = format!(
             "[{},{},{},{},{}]",
-            crate::scenarios::pane_json("w5", "w5:t1", "w5:p1", "/elsewhere"),
-            crate::scenarios::pane_json("w5", "w5:t1", "w5:p2", &home),
-            crate::scenarios::pane_json("w8", "w8:t1", "w8:p1", &worktree.to_string_lossy()),
-            crate::scenarios::pane_json("w6", "w6:t1", "w6:p1", "/elsewhere"),
-            crate::scenarios::pane_json("w9", "w9:t1", "w9:p1", &sub),
+            thread("w5", "w5:p1", "/elsewhere"),
+            thread("w5", "w5:p2", &home),
+            thread("w8", "w8:p1", &worktree.to_string_lossy()),
+            thread("w6", "w6:p1", "/elsewhere"),
+            thread("w9", "w9:p1", &sub),
         );
         let ctx = world.ctx();
         assert_eq!(project_for_workspace(&ctx, "w5", &socket).as_deref(), Some("alpha"));
@@ -311,12 +316,13 @@ mod tests {
         let alpha = world.project("alpha", "a.sock");
         let beta = world.project("beta", "a.sock");
         let socket = alpha.coordinator().unwrap().socket;
-        *world.panes.borrow_mut() = format!(
+        // Ferrite: two Threads of Project w5, the command run from the second.
+        *world.agents.borrow_mut() = format!(
             "[{},{}]",
-            crate::scenarios::pane_json("w5", "w5:t1", "w5:p1", &alpha.canonical_dir().to_string_lossy()),
-            crate::scenarios::pane_json("w5", "w5:t1", "w5:p2", &beta.canonical_dir().to_string_lossy()),
+            crate::scenarios::agent_json("w5", "w5:p1", "w5:p1", &alpha.canonical_dir().to_string_lossy(), "", "idle"),
+            crate::scenarios::agent_json("w5", "w5:p2", "w5:p2", &beta.canonical_dir().to_string_lossy(), "", "idle"),
         );
-        let env = crate::paths::Env::for_test(world.home.path(), &[("HERDR_PANE_ID", "w5:p2")]);
+        let env = crate::paths::Env::for_test(world.home.path(), &[("FERRITE_THREAD_ID", "w5:p2")]);
         let ctx = Ctx { env: &env, ..world.ctx() };
         assert_eq!(project_for_workspace(&ctx, "w5", &socket).as_deref(), Some("beta"));
         assert_eq!(project_for_workspace(&world.ctx(), "w5", &socket).as_deref(), Some("alpha"));
@@ -326,15 +332,16 @@ mod tests {
     fn focus_filters_on_the_project_token_and_sorts_by_rank_in_the_projects_socket() {
         let world = World::new();
         let project = world.project("demo", "a.sock");
+        // Ferrite: the view is the nav's focus on the project's block, by
+        // its slug; the nav sorts by need itself.
+        world.runner.on("nav focus", ok(r#"{"result":{"project":"demo","windows":1}}"#));
         focus(&world.ctx(), Some("demo")).unwrap();
-        let requests = world.runner.socket_requests.borrow();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].0.to_string_lossy(), project.coordinator().unwrap().socket);
-        let request: serde_json::Value = serde_json::from_str(&requests[0].1).unwrap();
-        assert_eq!(request["method"], "agent.view.set");
-        assert_eq!(request["params"]["source"], "herdr-projects");
-        assert_eq!(request["params"]["filter"], serde_json::json!({"op":"eq","field":{"token":"hp_project"},"value":"demo"}));
-        assert_eq!(request["params"]["sort"], serde_json::json!([{"field":{"token":"hp_group"},"order":"asc"},{"field":{"token":"hp_rank"},"order":"asc"}]));
+        let calls = world.runner.calls.borrow();
+        let focused: Vec<_> = calls.iter().filter(|c| c.display().contains("nav focus")).collect();
+        assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].args, ["nav", "focus", "--project", "demo"]);
+        assert_eq!(focused[0].env, [("FERRITE_SOCKET".to_string(), project.coordinator().unwrap().socket)]);
+        assert!(world.runner.socket_requests.borrow().is_empty());
     }
 
     #[test]

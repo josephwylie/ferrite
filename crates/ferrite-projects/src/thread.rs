@@ -644,7 +644,8 @@ pub fn needs_rename(thread: &Thread, agent: &Agent) -> bool {
 /// it when the live state equals the recorded one and zero otherwise.
 pub fn live_state(thread: &Thread, agents: &[Agent], panes: &[Pane], now: jiff::Timestamp) -> Live {
     let agent = agents.iter().find(|a| agent_matches(thread, a));
-    let pane_exists = agent.is_some() || panes.iter().any(|p| pane_matches(thread, p));
+    // Ferrite: a staged pane is there until its agent starts in it.
+    let pane_exists = agent.is_some() || panes.iter().any(|p| pane_matches(thread, p)) || crate::herdr::staged(&thread.pane_id);
     // A pane whose ids match but which holds someone else's agent is not ours.
     let foreign = agent.is_none() && agents.iter().any(|a| a.pane_id == thread.pane_id) && thread.kind != Kind::Adopted;
     let agent_state = agent.map(|a| a.agent_status.clone());

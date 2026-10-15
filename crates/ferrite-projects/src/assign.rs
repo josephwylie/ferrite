@@ -302,7 +302,8 @@ mod tests {
         let ctx = world.ctx();
         std::fs::create_dir_all(&ctx.config_dir).unwrap();
         std::fs::write(ctx.config_dir.join("config.toml"), "[machines.vm]\nprofiles = [\"claude\", \"cheap\"]\n\n[machines.m1]\nprofiles = [\"extra\"]\n").unwrap();
-        world.runner.on("machine list", ok(r#"{"id":"1","result":[{"id":"1","label":"m1","target":"me@m1"},{"id":"2","label":"down","target":"me@down"}]}"#));
+        // Ferrite: `ferrite machine list` answers its machines under `machines`.
+        world.runner.on("machine list", ok(r#"{"id":"1","result":{"machines":[{"id":"1","label":"m1","target":"me@m1"},{"id":"2","label":"down","target":"me@down"}]}}"#));
         world.runner.on_fn(|c| c.program == "ssh" && c.args.iter().any(|a| a == "me@m1"), |_| Ok(ok("claude\npi\n")));
         world.runner.on("me@down", fail(255, "ssh: connect to host down port 22: Connection timed out"));
         let first = load(&ctx, &project, false).unwrap();

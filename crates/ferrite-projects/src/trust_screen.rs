@@ -6,7 +6,8 @@
 //! `blocked` (a new harness screen may read as `idle`), so the screen itself
 //! is read right before any prompt is sent.
 
-use crate::prompt_box::{self, Draft};
+// Ferrite: any `Screen`.
+use crate::prompt_box::{self, Draft, Screen};
 
 /// Lines that only a trust screen draws, from the harnesses' own strings.
 const PHRASES: &[&str] = &[
@@ -33,7 +34,14 @@ const PHRASES: &[&str] = &[
 /// A screen whose input box is visible and empty is the agent's prompt, and a
 /// phrase on it is only transcript text (an agent quoting a dialog); menus,
 /// dialogs and unknown layouts have no empty box.
-pub fn detect(kind: &str, screen: &str) -> Option<&'static str> {
+///
+/// Ferrite: a Thread shows a trust screen only as a pending Decision that
+/// asks it (`Screen::trust_text`); the transcript quoting one never counts.
+pub fn detect(kind: &str, screen: &(impl Screen + ?Sized)) -> Option<&'static str> {
+    let Some(screen) = screen.terminal() else {
+        let plain = screen.trust_text(kind)?;
+        return PHRASES.iter().copied().find(|phrase| plain.contains(phrase));
+    };
     if prompt_box::check(kind, screen) == Draft::Empty {
         return None;
     }
