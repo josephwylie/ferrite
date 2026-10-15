@@ -32,6 +32,7 @@ mod palette;
 mod pane;
 mod platform_text;
 mod pointer;
+mod pr;
 mod prefs;
 mod project_editor;
 mod prompt_drop;
@@ -715,8 +716,8 @@ mod tests {
     use ferrite_core::store::{Provider, Store};
     use ferrite_core::workspace::WorkspaceChoice;
 
-    /// The keymap's action names are strings; startup rebuilds real actions
-    /// from them. Without this, a renamed action would only fail at launch.
+    /// The keymap's action names are strings (the ones with no default key
+    /// too); startup rebuilds real actions from them. Without this, a renamed action would only fail at launch.
     #[gpui::test]
     fn every_table_entry_builds_for_both_platforms(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
@@ -725,6 +726,9 @@ mod tests {
                     load_bindings(keymap::bindings(platform), cx).len(),
                     keymap::bindings(platform).len()
                 );
+            }
+            for (action, _) in keymap::UNBOUND {
+                assert!(cx.build_action(action, None).is_ok(), "{action}");
             }
         });
     }

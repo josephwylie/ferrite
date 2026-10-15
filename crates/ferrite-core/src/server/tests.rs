@@ -582,6 +582,26 @@ fn a_review_is_read_by_git_where_the_server_runs() {
     );
 }
 
+/// A Thread row's PR is read by `gh` where the Server runs: a window asks
+/// for a checkout's PR and hears the Server's reading. A checkout with no
+/// GitHub remote has none to say, and that silence is an answer, not an
+/// error.
+#[test]
+fn a_pull_request_is_read_by_gh_where_the_server_runs() {
+    let harness = start("pull-request");
+    let repo = repository(&harness.dir);
+    let mut window = cockpit(&harness);
+    let answer = window.pull_request(&repo).unwrap();
+    let landed = std::cell::RefCell::new(None);
+    pump_until(&mut window, |_| {
+        if let Ok(read) = answer.try_recv() {
+            *landed.borrow_mut() = Some(read);
+        }
+        landed.borrow().is_some()
+    });
+    assert_eq!(landed.into_inner().unwrap().unwrap(), None);
+}
+
 /// A request id is unique only within one provider process: an answer to
 /// a replaced Session's Decision is refused even when its successor asks
 /// with the same id, and the successor's own Decision stays pending.

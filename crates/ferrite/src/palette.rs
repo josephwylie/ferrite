@@ -150,6 +150,8 @@ pub(crate) enum Command {
     BackgroundTasks,
     ShowChanges,
     ShowChecks,
+    RefreshPr,
+    OpenPr,
     ShowPlan,
     UpdateClis,
     UpdateFerrite,

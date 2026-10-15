@@ -302,6 +302,12 @@ pub enum Op {
     ListCommits {
         path: PathBuf,
     },
+    /// The PR of the branch checked out at `path`, read by `gh` on the
+    /// Server's computer, where the checkout is: what a Thread row's PR
+    /// label says. Replied `pull_request`.
+    PullRequest {
+        path: PathBuf,
+    },
     Restart {
         when: When,
     },
@@ -809,6 +815,13 @@ pub enum Done {
     /// A `list_commits`' commits, newest first.
     Commits {
         commits: Vec<WireCommit>,
+    },
+    /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
+    /// (`workspace::pr_view`), or none when `gh` had nothing to say — no
+    /// `gh`, not logged in, no PR for the branch.
+    PullRequest {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        json: Option<String>,
     },
     #[serde(other)]
     Unknown,

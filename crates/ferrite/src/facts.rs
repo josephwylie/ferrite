@@ -16,7 +16,7 @@ use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::{FileChange, Instruments};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::workspace::{BranchStatus, WorkspaceBinding};
+use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
 use ferrite_core::ThreadId;
 use gpui::SharedString;
 
@@ -36,10 +36,12 @@ pub struct ThreadFacts {
     /// checkout has no text.
     pub branch: Option<SharedString>,
     /// What the checkout's second header line says (#29): drift against the
-    /// upstream, the working tree's dirt, and the branch's PR and CI when
-    /// `gh` can answer. Collected on the same slow cadence as the branch
-    /// itself, and `None` until it has been.
+    /// upstream and the working tree's dirt. Collected on the same slow
+    /// cadence as the branch itself, and `None` until it has been.
     pub status: Option<BranchStatus>,
+    /// The branch's PR and its CI, when `gh` can answer: the row's label
+    /// and the checks card both read it, on its own cadence (`pr`).
+    pub pr: crate::pr::PrWatch,
     /// Directory label and branch for every root attached to the Project.
     pub project_branches: Vec<(SharedString, SharedString)>,
     /// The Project the Thread recorded (#29) — what the nav filter matches
@@ -316,6 +318,21 @@ impl Facts {
             facts.status = status;
         }
         changed
+    }
+
+    /// Whether to ask `gh` for the Thread's PR now (`PrWatch::ask`).
+    pub fn ask_pr(&mut self, thread: ThreadId, now: Instant, manual: bool) -> bool {
+        self.threads.entry(thread).or_default().pr.ask(now, manual)
+    }
+
+    /// Adopt what `gh` said about the Thread's PR. Whether its label moved.
+    pub fn pr_answered(&mut self, thread: ThreadId, reading: Option<PullRequest>) -> bool {
+        self.threads.entry(thread).or_default().pr.answered(reading)
+    }
+
+    /// The Thread's last PR reading.
+    pub fn pr(&self, thread: ThreadId) -> Option<&PullRequest> {
+        self.get(thread)?.pr.reading.as_ref()
     }
 
     /// Adopt each Project root's branch; answers the Threads whose branches

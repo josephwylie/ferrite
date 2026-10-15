@@ -14,13 +14,10 @@
 //! so Ferrite's own paths self-heal). Documented, not built for.
 
 use crate::spawn::NoConsoleWindow;
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 pub mod follow;
 pub mod registry;
@@ -396,10 +393,10 @@ pub fn pick_default_branch(origin_head: Option<&str>, has_branch: impl Fn(&str) 
         .to_string()
 }
 
-/// How far a checkout has drifted, and what the forge says about it — the
-/// Pane header's second line (#29). Every field is `Option`-ish in spirit:
-/// a tree with no upstream reports no ahead/behind, and a repo with no
-/// `gh` (or no PR) reports no PR. Nothing here is invented.
+/// How far a checkout has drifted — the Pane header's second line (#29)
+/// and the nav row's details. Every field is `Option`-ish in spirit: a tree
+/// with no upstream reports no ahead/behind. Nothing here is invented. Its
+/// PR is read apart, on its own cadence (`pull_request`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BranchStatus {
     /// The branch by name, or a short commit id on a detached HEAD.
@@ -412,9 +409,6 @@ pub struct BranchStatus {
     /// Working-tree entries `git status --porcelain` lists — modified,
     /// staged and untracked alike. Zero is a clean tree.
     pub dirty: u32,
-    /// What `gh` says about the branch's pull request, when `gh` is
-    /// installed, authenticated, and the branch has one.
-    pub pr: Option<PullRequest>,
 }
 
 /// The branch's pull request, as the forge reports it.
@@ -423,18 +417,19 @@ pub struct PullRequest {
     pub number: u64,
     pub state: PrState,
     pub draft: bool,
+    /// Where the PR lives on the forge; `None` when `gh` did not say.
+    pub url: Option<String>,
     /// The rollup of the PR's checks. `None` when the PR has no checks at
     /// all — an honest silence, not a pass.
     pub checks: Option<CheckState>,
     /// Every check behind that rollup, in the order the forge lists them:
-    /// what the header's `ci` mark opens onto. Empty exactly when `checks`
+    /// what the checks card lists. Empty exactly when `checks`
     /// is `None` — the rollup *is* this list, folded.
     pub runs: Vec<Check>,
 }
 
 impl PullRequest {
-    /// How the runs divide. The header's mark is a count, and this is what
-    /// it counts.
+    /// How the runs divide: the checks card's counts.
     pub fn tally(&self) -> Tally {
         let mut tally = Tally::default();
         for run in &self.runs {
@@ -507,11 +502,9 @@ pub enum CheckState {
     Skipped,
 }
 
-/// Read the checkout's drift and its PR in one place, off the UI thread.
-/// One `git status --porcelain=v2 --branch` answers branch, upstream,
-/// ahead/behind and dirt together; `gh` is asked separately and its
-/// absence costs only the failed spawn. `None` where `cwd` is not a
-/// checkout at all.
+/// Read the checkout's drift, off the UI thread. One `git status
+/// --porcelain=v2 --branch` answers branch, upstream, ahead/behind and dirt
+/// together. `None` where `cwd` is not a checkout at all.
 pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
     let listed = git(cwd, &["status", "--porcelain=v2", "--branch"]).ok()?;
     let mut status = BranchStatus::default();
@@ -538,7 +531,6 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
             .map(|head| head.trim().to_string())
             .filter(|head| !head.is_empty());
     }
-    status.pr = cached_pull_request(cwd);
     Some(status)
 }
 
@@ -547,49 +539,27 @@ fn parse_signed(token: &str) -> Option<u32> {
     token.trim_start_matches(['+', '-']).parse::<u32>().ok()
 }
 
-/// How long a PR reading is reused before `gh` is asked again. The branch
-/// half of the status is local git and rides the caller's own cadence; the
-/// PR half crosses the network, so it gets its own, far slower one. A
-/// header that is a minute stale about CI is right; one that spawns `gh`
-/// every couple of seconds per Thread is not.
-const PR_TTL: Duration = Duration::from_secs(60);
-
-/// The last PR reading per checkout, with when it was taken. Keyed by cwd
-/// because that is what the caller has; a worktree and its repo are
-/// different branches and so different answers.
-static PR_CACHE: Mutex<Option<HashMap<PathBuf, (Instant, Option<PullRequest>)>>> = Mutex::new(None);
-
-/// The branch's PR, from cache while it is fresh and from `gh` when it is
-/// not.
-fn cached_pull_request(cwd: &Path) -> Option<PullRequest> {
-    let mut guard = PR_CACHE.lock().ok()?;
-    let cache = guard.get_or_insert_with(HashMap::new);
-    if let Some((taken, pr)) = cache.get(cwd) {
-        if taken.elapsed() < PR_TTL {
-            return pr.clone();
-        }
-    }
-    // Held across the call on purpose: several Threads in one worktree ask
-    // together on the tick, and one `gh` for them is the whole point.
-    let pr = pull_request(cwd);
-    cache.insert(cwd.to_path_buf(), (Instant::now(), pr.clone()));
-    pr
+/// The branch's PR through `gh`, as `pr_view` reads it.
+pub fn pull_request(cwd: &Path) -> Option<PullRequest> {
+    parse_pr_json(&pr_view(cwd)?)
 }
 
-/// The branch's PR through `gh`. Every failure — no `gh`, not logged
-/// in, not a GitHub remote, no PR for this branch — is the same
-/// answer: the header says nothing about a PR. `gh` reads the checkout
-/// through `git`, so it is held to the same no-optional-locks rule.
-fn pull_request(cwd: &Path) -> Option<PullRequest> {
-    parse_pr_json(&gh(
+/// `gh pr view`'s JSON for the branch checked out at `cwd`: what a Server
+/// answers a window with (`pull_request` on the wire), for the window to
+/// read with `parse_pr_json`. Every failure — no `gh`, not logged in, not
+/// a GitHub remote, no PR for this branch — is the same answer: nothing to
+/// say about a PR. `gh` reads the checkout through `git`, so it is held to
+/// the same no-optional-locks rule.
+pub fn pr_view(cwd: &Path) -> Option<String> {
+    gh(
         cwd,
         &[
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,statusCheckRollup",
+            "number,state,isDraft,url,statusCheckRollup",
         ],
-    )?)
+    )
 }
 
 /// Run one `gh` command in `cwd`, answering its stdout; `None` on every
@@ -745,7 +715,7 @@ pub(crate) fn parse_line_comments_json(body: &str) -> Vec<Remark> {
 /// side by side, with different keys for the same three facts — so
 /// each element is read for whichever pair it carries. An element with no
 /// name at all is dropped rather than listed as a blank row.
-fn parse_pr_json(body: &str) -> Option<PullRequest> {
+pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let number = value.get("number")?.as_u64()?;
     let state = match value.get("state").and_then(serde_json::Value::as_str)? {
@@ -757,6 +727,10 @@ fn parse_pr_json(body: &str) -> Option<PullRequest> {
         .get("isDraft")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let url = value
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let runs: Vec<Check> = value
         .get("statusCheckRollup")
         .and_then(serde_json::Value::as_array)
@@ -769,6 +743,7 @@ fn parse_pr_json(body: &str) -> Option<PullRequest> {
         number,
         state,
         draft,
+        url,
         checks,
         runs,
     })
@@ -1013,10 +988,10 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 mod tests {
 
     /// `gh`'s JSON is read for the PR's own facts, and a failing check
-    /// anywhere in the rollup is what the header must say.
+    /// anywhere in the rollup is what the label must say.
     #[test]
     fn a_pr_reading_takes_the_worst_check_in_the_rollup() {
-        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","statusCheckRollup":[
+        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","url":"https://github.com/o/r/pull/47","statusCheckRollup":[
             {"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
             {"name":"test","status":"COMPLETED","conclusion":"FAILURE"}
         ]}"#;
@@ -1024,6 +999,7 @@ mod tests {
         assert_eq!(pr.number, 47);
         assert_eq!(pr.state, PrState::Open);
         assert!(!pr.draft);
+        assert_eq!(pr.url.as_deref(), Some("https://github.com/o/r/pull/47"));
         assert_eq!(pr.checks, Some(CheckState::Failing));
     }
 
@@ -1734,7 +1710,7 @@ mod tests {
         let repo = init_repo(&root);
         let index = repo.join(".git").join("index");
         let before = fs::read(&index).unwrap();
-        let touched = std::time::SystemTime::now() + Duration::from_secs(60);
+        let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         fs::File::options()
             .write(true)
             .open(repo.join("file.txt"))

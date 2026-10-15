@@ -1272,6 +1272,23 @@ impl Cockpit {
         }
     }
 
+    /// The PR of the branch checked out at `path`, read by `gh` where
+    /// `review_diff` reads git: on the Server that owns the checkout, or
+    /// here when this window runs its agents itself. `None` whenever `gh`
+    /// has nothing to say.
+    pub fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Option<crate::workspace::PullRequest>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.pull_request(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || Ok(crate::workspace::pull_request(&path))))
+            }
+        }
+    }
+
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
         self.act(
             |engine| engine.control(thread, action.clone()),

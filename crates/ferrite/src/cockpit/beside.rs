@@ -65,8 +65,9 @@ fn renders_markdown(document: &crate::attachment_preview::Document) -> bool {
     document.is_markdown() && document.line.is_none()
 }
 
-/// How often a review looks for its git read's answer.
-const REVIEW_POLL: std::time::Duration = std::time::Duration::from_millis(30);
+/// How often a read on another thread (a review's git, a PR's `gh`) is
+/// looked at for its answer.
+const ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(30);
 
 /// What `open_beside` opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -728,6 +729,25 @@ fn reveal_in_reader(
     }
 }
 
+/// The answer to a read on another thread (`Cockpit::review_diff`,
+/// `Cockpit::pull_request`), awaited without holding the UI thread.
+pub(super) async fn answered<T>(
+    answer: std::io::Result<std::sync::mpsc::Receiver<std::io::Result<T>>>,
+    cx: &gpui::AsyncApp,
+) -> std::io::Result<T> {
+    let answer = answer?;
+    loop {
+        cx.background_executor().timer(ANSWER_POLL).await;
+        match answer.try_recv() {
+            Ok(read) => return read,
+            Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(std::io::Error::other("the read ended"))
+            }
+        }
+    }
+}
+
 /// Hand a review's read to `show` once it lands — or say why it could
 /// not be read — unless `current` says the review moved on meanwhile.
 fn land<T: 'static>(
@@ -739,19 +759,7 @@ fn land<T: 'static>(
 ) {
     let review = review.downgrade();
     cx.spawn(async move |_, cx| {
-        let read = match answer {
-            Ok(answer) => loop {
-                cx.background_executor().timer(REVIEW_POLL).await;
-                match answer.try_recv() {
-                    Ok(read) => break read,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        break Err(std::io::Error::other("the read ended"))
-                    }
-                }
-            },
-            Err(error) => Err(error),
-        };
+        let read = answered(answer, cx).await;
         review
             .update(cx, |review, cx| {
                 if !current(review) {

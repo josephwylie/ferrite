@@ -90,9 +90,12 @@ a key that collides with their muscle memory.
   launch (reset applies at once). No setting is read back from the file
   while the window runs (the window is what writes it), so live keys would
   need a file watcher the rest of Settings does not have. A Settings page
-  for keys, binding a key to a user command, and binding an action the
-  default table does not bind are not built: commands are reached from
-  the palette, and `keys` only moves keys the table already has.
+  for keys and binding a key to a user command are not built: commands are
+  reached from the palette. `keys` moves keys the table already has, and
+  binds the few actions listed with no default (`keymap::UNBOUND`: the PR
+  label's `cockpit::RefreshPrStatus` and `cockpit::OpenPrInBrowser`, ADR
+  0026), each in its own context under the same refusals; a refused one
+  stays unbound.
 - Two keys in different named contexts that meet on one focused node (a
   Palette's field is also a Composer) are left to the table's order; only
   a clash with a no-context key is refused.
