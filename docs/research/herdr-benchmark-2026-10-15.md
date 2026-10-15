@@ -42,13 +42,13 @@ end of 2026-10-15. "Partial" names what is missing.
 | Upgrade by restart-when-idle | Done | `server restart {when: idle\|now}`, tied to self-update (ADR 0023, 0025) |
 | #2 Socket API + CLI | Partial | ADR 0027: `api.sock`, one operations table, `thread.*`, `agent.prompt/wait/read`, `decision.*`, `events.subscribe`, `notification.show`, `FERRITE_THREAD_ID`/`FERRITE_SOCKET`/`FERRITE_BIN`, `--machine`. Not done: named agents (Threads are addressed by id), `layout export/apply`. `worktree create` is `thread.start --worktree`. CLI output is not visible from a Windows terminal |
 | #3 Bundled agent skill | Done | `skills/ferrite/SKILL.md`, `ferrite --skill [install]` |
-| #6 Remote over SSH | Partial | ADR 0026: `ferrited bridge`, `--remote`, saved machines in the nav, status-only links, parked and new Threads, off-screen alerts. Not done on a machine: live branch label and status, opened files and user commands (run locally), review beyond the last turn, an open Thread's Project; phone access deferred by plan |
+| #6 Remote over SSH | Partial | ADR 0026: `ferrited bridge`, `--remote`, saved machines in the nav, status-only links, parked and new Threads, off-screen alerts. Not done on a machine: live branch label and status, opened files and user commands (run locally), an open Thread's Project; phone access deferred by plan |
 | Four-state status | Done | ADR 0015: blocked > done > working > idle from protocol events |
 | Attention sort, roll-up headings, collapsed rail | Done | ADR 0015; rail digits are jump keys |
 | Row details (#7 ahead/behind, CI, waiting reason, background work) | Done | `nav::RowGit`; reason words `approval` / `plan` / `question`; green ring for background work |
 | #5 Palette filters, workspace jump, cwd footer | Done | `b` `w` `i` `d` `a` |
 | #4 Sounds + OS notifications + toasts | Done | ADR 0017: two chimes, custom files, per-provider mute (not per-agent), click focuses, 1 s delay, 8 s / 5 s expiry |
-| Review slot | Done | ADR 0021: uncommitted / branch / last turn, line comments |
+| Review slot | Done | ADR 0021: uncommitted / branch / commits / last turn, line comments; git runs where the checkout is (the owning Server, on a machine too) |
 | Session import + allowance warning | Done | ADR 0022 |
 | Custom palette commands + user keymap | Done | ADR 0024 |
 | Coordinator Threads | Done | ADR 0028: briefs, worktree workers, `## Remember` memory, need ordering, opt-in PR follow-up (CI, reviews, inline comments) |
@@ -187,7 +187,8 @@ Start with "`ferrited` must already be on the remote PATH". Phone access later
 ## Features taken from plugins
 
 - **Review slot** (herdr-reviewr, 885★, MIT): diff beside the Thread scoped
-  to uncommitted / branch / last turn; line comments become prompt context.
+  to uncommitted / branch / commits / last turn; line comments become
+  prompt context.
 - **Searchable session import** (memex): search past Claude/Codex sessions
   and resume one.
 - **Low-allowance warning** (herdr-agent-usage) at 5 h / weekly thresholds.

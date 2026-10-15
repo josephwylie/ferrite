@@ -1,6 +1,6 @@
 //! The Review slot's body (ADR 0021): a diff beside the Thread, scoped to
-//! the uncommitted work, the branch against its base, or the last turn,
-//! whose lines take comments. The bar and footer are chrome; the diff reads
+//! the uncommitted work, the branch against its base, one of the branch's
+//! commits, or the last turn, whose lines take comments. The bar and footer are chrome; the diff reads
 //! at the operator's reading size, like every diff in a transcript.
 //!
 //! The bar names the scopes (`menu::token`, the chosen one inverse) and
@@ -12,10 +12,14 @@
 //! `+ comment` beside the pick) opens a one-line field under it; ⏎ (or its
 //! `add`) there adds the comment to the Pane's Composer, where it waits on
 //! the shelf for the next send (`review::attach`). ⌫ (or a comment's `×`)
-//! takes back the latest comment under the pick. The cockpit loads each
+//! takes back the latest comment under the pick. The commits scope first
+//! lists the branch's commits, newest first: ↑↓ or a click picks one, ⏎ (or
+//! the click) reviews it, and the scope again goes back to the list. The
+//! cockpit loads each
 //! scope's edits (`cockpit/beside.rs`) and hands them over with `show`;
 //! they are a snapshot, read again on `r` or on picking the scope again.
 
+use ferrite_core::review::git::Commit;
 use ferrite_core::review::{self, Line, Scope, Selection};
 use ferrite_core::FileEdit;
 use gpui::prelude::*;
@@ -62,8 +66,22 @@ const FOOTER: [(&str, &str); 7] = [
     ("esc", ""),
 ];
 
-/// The operator picked another scope; the cockpit loads it and calls `show`.
+/// The slot's keys while it lists the branch's commits.
+const COMMITS_FOOTER: [(&str, &str); 5] = [
+    ("\u{2191}\u{2193}", "commit"),
+    ("\u{23ce}", "review"),
+    ("\u{21e5}", "scope"),
+    ("r", "reread"),
+    ("esc", ""),
+];
+
+/// The operator picked another scope; the cockpit loads it and calls
+/// `show` (`show_commits` for the commits scope).
 pub(crate) struct ScopePicked(pub Scope);
+
+/// The operator picked one of the listed commits, by its id; the cockpit
+/// loads its diff and calls `show`.
+pub(crate) struct CommitPicked(pub String);
 
 pub(crate) struct ReviewView {
     /// The Pane's own prompt: where comments gather, and are read back to
@@ -84,9 +102,16 @@ pub(crate) struct ReviewView {
     selection: Option<Selection>,
     /// The comment being written under the pick.
     editor: Option<Entity<Composer>>,
+    /// The commits scope's list; `None` while it is being read.
+    commits: Option<Vec<Commit>>,
+    /// The listed commit the arrows are on.
+    commit_pick: usize,
+    /// The commit under review; `None` while the list shows.
+    commit: Option<Commit>,
 }
 
 impl EventEmitter<ScopePicked> for ReviewView {}
+impl EventEmitter<CommitPicked> for ReviewView {}
 
 impl ReviewView {
     pub(crate) fn new(
@@ -107,11 +132,46 @@ impl ReviewView {
             highlights: Vec::new(),
             selection: None,
             editor: None,
+            commits: None,
+            commit_pick: 0,
+            commit: None,
         }
     }
 
     pub(crate) fn scope(&self) -> Scope {
         self.scope
+    }
+
+    /// The id of the commit under review, if one is.
+    pub(crate) fn commit(&self) -> Option<&str> {
+        self.commit.as_ref().map(|commit| commit.id.as_str())
+    }
+
+    /// The commits scope's list has been read: show it, the newest picked.
+    pub(crate) fn show_commits(&mut self, commits: Vec<Commit>, cx: &mut Context<Self>) {
+        self.commits = Some(commits);
+        self.commit_pick = 0;
+        self.error = None;
+        self.scroll.scroll_to_item(0);
+        cx.notify();
+    }
+
+    /// Whether the commits scope lists commits rather than one's diff.
+    fn listing_commits(&self) -> bool {
+        self.scope == Scope::Commits && self.commit.is_none()
+    }
+
+    /// Review the listed commit at `index`: its diff when it is read.
+    fn open_commit(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(commit) = self.commits.as_ref().and_then(|commits| commits.get(index)) else {
+            return;
+        };
+        self.commit_pick = index;
+        self.commit = Some(commit.clone());
+        self.edits = None;
+        self.error = None;
+        cx.emit(CommitPicked(commit.id.clone()));
+        cx.notify();
     }
 
     /// The operator changed the reading size: the rows follow it.
@@ -182,6 +242,8 @@ impl ReviewView {
         self.highlights.clear();
         self.selection = None;
         self.editor = None;
+        self.commits = None;
+        self.commit = None;
         cx.emit(ScopePicked(scope));
         cx.notify();
     }
@@ -200,6 +262,19 @@ impl ReviewView {
     }
 
     fn step(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
+        if self.listing_commits() {
+            let last = self
+                .commits
+                .as_ref()
+                .map_or(0, |commits| commits.len().saturating_sub(1));
+            self.commit_pick = match down {
+                true => (self.commit_pick + 1).min(last),
+                false => self.commit_pick.saturating_sub(1),
+            };
+            self.scroll.scroll_to_item(self.commit_pick);
+            cx.notify();
+            return;
+        }
         let Some(selection) = self.selection else {
             self.pick(0, false, cx);
             return;
@@ -213,6 +288,10 @@ impl ReviewView {
     }
 
     fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.listing_commits() {
+            self.open_commit(self.commit_pick, cx);
+            return;
+        }
         if self.selection.is_none() {
             return;
         }
@@ -480,6 +559,45 @@ impl ReviewView {
             )
             .into_any_element()
     }
+
+    /// A listed commit: its short id and subject; a click reviews it.
+    fn commit_row(&self, index: usize, commit: &Commit, cx: &mut Context<Self>) -> AnyElement {
+        let cell = self.grid.cell();
+        div()
+            .id(("review-commit", index))
+            .debug_selector(move || format!("review-commit-{index}"))
+            .flex()
+            .gap(px(2. * cell))
+            .h(px(self.grid.line))
+            .px(px(cell))
+            .whitespace_nowrap()
+            .cursor_pointer()
+            .when(index == self.commit_pick, |row| row.bg(paint::SELECTION))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(SharedString::from(short(&commit.id).to_string())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT))
+                    .child(SharedString::from(commit.subject.clone())),
+            )
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                window.focus(&view.focus, cx);
+                view.open_commit(index, cx);
+            }))
+            .into_any_element()
+    }
+}
+
+/// A commit's id as git abbreviates it for people.
+fn short(id: &str) -> &str {
+    id.get(..7).unwrap_or(id)
 }
 
 /// A file's `+N −N`, the way a tool row's trail reads it.
@@ -522,6 +640,18 @@ impl Render for ReviewView {
             );
         }
         bar = bar
+            .children(self.commit.as_ref().map(|commit| {
+                div()
+                    .debug_selector(|| "review-commit-reviewed".into())
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(SharedString::from(format!(
+                        "{} {}",
+                        short(&commit.id),
+                        commit.subject
+                    )))
+            }))
             .child(div().flex_1())
             .children(self.edits.as_ref().map(|edits| {
                 div()
@@ -530,12 +660,38 @@ impl Render for ReviewView {
                     .child(review::stat(edits))
             }));
         let comments = self.composer.read(cx).review_comments().to_vec();
+        let listing = self.listing_commits();
         let body = match (&self.edits, &self.error) {
             (_, Some(error)) => crate::menu::note(format!(
                 "can\u{2019}t read {} \u{b7} {error}",
                 self.scope.label()
             ))
             .into_any_element(),
+            _ if listing => match &self.commits {
+                None => crate::menu::note("reading\u{2026}").into_any_element(),
+                Some(commits) if commits.is_empty() => {
+                    crate::menu::note("no commits on this branch").into_any_element()
+                }
+                Some(commits) => div()
+                    .id("review-commits")
+                    .debug_selector(|| "review-commits".into())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .font_family(FONT_CODE)
+                    .text_size(px(self.grid.size))
+                    .line_height(px(self.grid.line))
+                    .children(
+                        commits
+                            .iter()
+                            .enumerate()
+                            .map(|(index, commit)| self.commit_row(index, commit, cx)),
+                    )
+                    .into_any_element(),
+            },
             (None, None) => crate::menu::note("reading\u{2026}").into_any_element(),
             (Some(edits), None) if edits.is_empty() => {
                 crate::menu::note(format!("nothing changed \u{b7} {}", self.scope.label()))
@@ -580,7 +736,11 @@ impl Render for ReviewView {
             )
             .child(bar)
             .child(body)
-            .child(crate::menu::footer(&FOOTER))
+            .child(crate::menu::footer(if listing {
+                &COMMITS_FOOTER[..]
+            } else {
+                &FOOTER[..]
+            }))
     }
 }
 

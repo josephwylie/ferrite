@@ -10,9 +10,11 @@
 //! focus — closes it, and the tree it was spliced into closes back over it,
 //! restoring the board as it was.
 //!
-//! A review reads its scope's edits here: the uncommitted work and the
-//! branch from git, off the UI thread; the last turn from Main's
-//! transcript. Picking another scope in it comes back here to be read.
+//! A review reads its scope's edits here: the uncommitted work, the branch
+//! and its commits from git where the checkout is (`Cockpit::review_diff`,
+//! `review_commits`), off the UI thread; the last turn from Main's
+//! transcript. Picking another scope, or a commit, comes back here to be
+//! read.
 //!
 //! Another Thread opens as a second Pane: beside the current one in Solo (a
 //! pair on the Solo board, for as long as focus stays on one of the two),
@@ -21,9 +23,10 @@
 //! a member.
 
 use super::*;
-use crate::review::{ReviewView, ScopePicked};
+use crate::review::{CommitPicked, ReviewView, ScopePicked};
+use ferrite_core::review::git::Diff;
 use ferrite_core::review::Scope;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Find in the reader (⌘F when the reader took the last press or holds the
 /// keyboard; the bar is the transcript's, `crate::find`): a file's lines, or
@@ -61,6 +64,9 @@ impl ReaderFind {
 fn renders_markdown(document: &crate::attachment_preview::Document) -> bool {
     document.is_markdown() && document.line.is_none()
 }
+
+/// How often a review looks for its git read's answer.
+const REVIEW_POLL: std::time::Duration = std::time::Duration::from_millis(30);
 
 /// What `open_beside` opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +153,10 @@ impl CockpitView {
                 view.read_review(thread, review, *scope, cx)
             })
             .detach();
+            cx.subscribe(&review, move |view, review, CommitPicked(commit), cx| {
+                view.read_commit(thread, review, commit.clone(), cx)
+            })
+            .detach();
             review
         });
         let title = self
@@ -160,10 +170,10 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Read `scope`'s edits for `thread` into `review`. The git scopes read
-    /// off the UI thread; a read that lands after the operator moved on to
-    /// another scope is dropped. On a machine only the last turn reads: the
-    /// checkout is the machine's, and no git here can read it (ADR 0026).
+    /// Read `scope` for `thread` into `review`: the last turn from Main's
+    /// transcript; the rest by git where the checkout is — by the Server,
+    /// which on a machine reads the machine's — landing later. A read that
+    /// lands after the operator moved on is dropped.
     fn read_review(
         &mut self,
         thread: ThreadId,
@@ -174,11 +184,6 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread) else {
             return;
         };
-        let base = self
-            .facts
-            .get(thread)
-            .and_then(|facts| facts.default_branch.clone())
-            .map_or_else(|| MAIN_BRANCH.to_string(), |branch| branch.to_string());
         let diff = match scope {
             Scope::LastTurn => {
                 let edits = self
@@ -191,39 +196,51 @@ impl CockpitView {
                 review.update(cx, |review, cx| review.show(scope, edits, cx));
                 return;
             }
-            Scope::Uncommitted | Scope::Branch if self.on_machine() => {
-                let machine = self.cockpit.machine().map_or("", |bridge| bridge.name());
-                review.update(cx, |review, cx| {
-                    review.fail(
-                        format!("this checkout is on {machine}: only the last turn reads here"),
-                        cx,
-                    )
-                });
+            Scope::Commits => {
+                let commits = self.cockpit.review_commits(&workspace);
+                land(
+                    review,
+                    commits,
+                    cx,
+                    move |review| review.scope() == scope && review.commit().is_none(),
+                    |review, commits, cx| review.show_commits(commits, cx),
+                );
                 return;
             }
-            Scope::Uncommitted => cx
-                .background_executor()
-                .spawn(async move { git_uncommitted(&workspace) }),
-            Scope::Branch => cx
-                .background_executor()
-                .spawn(async move { git_diff(&workspace, &base) }),
+            Scope::Uncommitted => Diff::Uncommitted,
+            Scope::Branch => Diff::Branch,
         };
-        let review = review.downgrade();
-        cx.spawn(async move |_, cx| {
-            let diff = diff.await;
-            review
-                .update(cx, |review, cx| {
-                    if review.scope() != scope {
-                        return;
-                    }
-                    match diff {
-                        Ok(diff) => review.show(scope, parse_git_diff(&diff), cx),
-                        Err(error) => review.fail(error, cx),
-                    }
-                })
-                .ok();
-        })
-        .detach();
+        let edits = self.cockpit.review_diff(&workspace, diff);
+        land(
+            review,
+            edits,
+            cx,
+            move |review| review.scope() == scope,
+            move |review, edits, cx| review.show(scope, edits, cx),
+        );
+    }
+
+    /// Read the diff of `commit`, one listed in the commits scope.
+    fn read_commit(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        commit: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let edits = self
+            .cockpit
+            .review_diff(&workspace, Diff::Commit(commit.clone()));
+        land(
+            review,
+            edits,
+            cx,
+            move |review| review.commit() == Some(commit.as_str()),
+            |review, edits, cx| review.show(Scope::Commits, edits, cx),
+        );
     }
 
     /// Another Thread as its own Pane beside the focused one (F-15).
@@ -698,6 +715,45 @@ fn reveal_in_reader(
     }
 }
 
+/// Hand a review's read to `show` once it lands — or say why it could
+/// not be read — unless `current` says the review moved on meanwhile.
+fn land<T: 'static>(
+    review: Entity<ReviewView>,
+    answer: std::io::Result<std::sync::mpsc::Receiver<std::io::Result<T>>>,
+    cx: &mut Context<CockpitView>,
+    current: impl Fn(&ReviewView) -> bool + 'static,
+    show: impl FnOnce(&mut ReviewView, T, &mut Context<ReviewView>) + 'static,
+) {
+    let review = review.downgrade();
+    cx.spawn(async move |_, cx| {
+        let read = match answer {
+            Ok(answer) => loop {
+                cx.background_executor().timer(REVIEW_POLL).await;
+                match answer.try_recv() {
+                    Ok(read) => break read,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        break Err(std::io::Error::other("the read ended"))
+                    }
+                }
+            },
+            Err(error) => Err(error),
+        };
+        review
+            .update(cx, |review, cx| {
+                if !current(review) {
+                    return;
+                }
+                match read {
+                    Ok(read) => show(review, read, cx),
+                    Err(error) => review.fail(error.to_string(), cx),
+                }
+            })
+            .ok();
+    })
+    .detach();
+}
+
 /// Each frame while a Markdown reveal is due: once the active occurrence
 /// has painted, a new query moves to the first occurrence in view (or the
 /// first below it) and paints again; then an occurrence outside the
@@ -738,264 +794,9 @@ fn settle_markdown_found(find: &mut ReaderFind, scroll: &gpui::ScrollHandle, win
     }
 }
 
-/// `git diff --no-color base...HEAD` in `workspace`, against
-/// `origin/<base>` when only the remote has the branch.
-fn git_diff(workspace: &Path, base: &str) -> Result<String, String> {
-    let diff = |base: &str| {
-        git_read(
-            workspace,
-            &["diff", "--no-color", &format!("{base}...HEAD")],
-        )
-    };
-    diff(base).or_else(|error| diff(&format!("origin/{base}")).map_err(|_| error))
-}
-
-/// The checkout against its last commit, staged or not, and each untracked
-/// file as all-new (`git diff --no-index /dev/null <file>`).
-fn git_uncommitted(workspace: &Path) -> Result<String, String> {
-    let mut diff = git_read(workspace, &["diff", "--no-color", "HEAD"])?;
-    let untracked = git_read(
-        workspace,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    )?;
-    for path in untracked.split('\0').filter(|path| !path.is_empty()) {
-        diff.push_str(&git_read(
-            workspace,
-            &["diff", "--no-color", "--no-index", "--", "/dev/null", path],
-        )?);
-    }
-    Ok(diff)
-}
-
-/// What a git read in `workspace` printed, or the first line of why git
-/// refused. Exit 1 still counts: `diff --no-index` says "they differ" so.
-fn git_read(workspace: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(workspace)
-        .args(args)
-        // A read, never a lock on the index an agent may be writing.
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|error| format!("git: {error}"))?;
-    if matches!(out.status.code(), Some(0 | 1)) {
-        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    Err(stderr
-        .lines()
-        .next()
-        .unwrap_or("git failed")
-        .trim()
-        .to_string())
-}
-
-/// git's multi-file unified diff into file edits: one per `diff --git`
-/// section (named by its `+++ b/` path, else its `--- a/` path for a
-/// deletion), its hunks as git printed them.
-pub(crate) fn parse_git_diff(diff: &str) -> Vec<ferrite_core::FileEdit> {
-    let mut edits: Vec<ferrite_core::FileEdit> = Vec::new();
-    let mut old_path: Option<String> = None;
-    let mut hunk: Option<ferrite_core::Hunk> = None;
-    let flush = |edits: &mut Vec<ferrite_core::FileEdit>, hunk: &mut Option<ferrite_core::Hunk>| {
-        if let (Some(done), Some(edit)) = (hunk.take(), edits.last_mut()) {
-            edit.hunks.push(done);
-        }
-    };
-    for line in diff.lines() {
-        if line.starts_with("diff --git ") {
-            flush(&mut edits, &mut hunk);
-            old_path = None;
-            continue;
-        }
-        // git ends a path holding a space with a tab on these two lines.
-        if let Some(path) = line
-            .strip_prefix("--- ")
-            .map(|path| path.trim_end_matches('\t'))
-        {
-            if hunk.is_none() {
-                old_path = path.strip_prefix("a/").map(str::to_string);
-                continue;
-            }
-        }
-        if let Some(path) = line
-            .strip_prefix("+++ ")
-            .map(|path| path.trim_end_matches('\t'))
-        {
-            if hunk.is_none() {
-                flush(&mut edits, &mut hunk);
-                let path = path
-                    .strip_prefix("b/")
-                    .map(str::to_string)
-                    .or_else(|| old_path.clone())
-                    .unwrap_or_else(|| path.to_string());
-                edits.push(ferrite_core::FileEdit {
-                    path,
-                    hunks: Vec::new(),
-                });
-                continue;
-            }
-        }
-        if let Some((old_start, old_lines, new_start, new_lines, section)) = hunk_header(line) {
-            flush(&mut edits, &mut hunk);
-            hunk = Some(ferrite_core::Hunk {
-                old_start,
-                old_lines,
-                new_start,
-                new_lines,
-                section,
-                lines: Vec::new(),
-            });
-            continue;
-        }
-        if let Some(open) = hunk.as_mut() {
-            if matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-')) {
-                open.lines.push(line.to_string());
-            }
-        }
-    }
-    flush(&mut edits, &mut hunk);
-    edits.retain(|edit| !edit.hunks.is_empty());
-    edits
-}
-
-/// `@@ -208,7 +208,11 @@ fn thread_row` → (208, 7, 208, 11).
-/// A hunk header's ranges and the section git names after it
-/// (`@@ -88,6 +88,9 @@ fn draw`).
-fn hunk_header(line: &str) -> Option<(u32, u32, u32, u32, Option<String>)> {
-    let (old, rest) = line.strip_prefix("@@ -")?.split_once(" +")?;
-    let (new, section) = rest.split_once(" @@")?;
-    let section = Some(section.trim())
-        .filter(|section| !section.is_empty())
-        .map(str::to_string);
-    let range = |range: &str| -> Option<(u32, u32)> {
-        let (start, count) = range.split_once(',').unwrap_or((range, "1"));
-        Some((start.parse().ok()?, count.parse().ok()?))
-    };
-    let (old_start, old_lines) = range(old)?;
-    let (new_start, new_lines) = range(new)?;
-    Some((old_start, old_lines, new_start, new_lines, section))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const DIFF: &str = "\
-diff --git a/crates/ferrite/src/nav.rs b/crates/ferrite/src/nav.rs
-index 1111111..2222222 100644
---- a/crates/ferrite/src/nav.rs
-+++ b/crates/ferrite/src/nav.rs
-@@ -208,7 +208,8 @@ fn thread_row
-     let facts = self.facts.get(&t.id);
--    let mut row = div();
-+    let live = t.session.is_some();
-+    let mut row = div().h(px(ROW_H));
-     row
-diff --git a/old.rs b/old.rs
-deleted file mode 100644
---- a/old.rs
-+++ /dev/null
-@@ -1,2 +0,0 @@
--fn gone() {}
--
-";
-
-    /// git's multi-file diff parses into one edit per file — a deletion
-    /// named by its old path.
-    #[test]
-    fn git_diff_parses_into_file_edits() {
-        let edits = parse_git_diff(DIFF);
-        assert_eq!(edits.len(), 2);
-        assert_eq!(edits[0].path, "crates/ferrite/src/nav.rs");
-        assert_eq!(edits[0].hunks.len(), 1);
-        let hunk = &edits[0].hunks[0];
-        assert_eq!(
-            (
-                hunk.old_start,
-                hunk.old_lines,
-                hunk.new_start,
-                hunk.new_lines
-            ),
-            (208, 7, 208, 8)
-        );
-        assert_eq!(hunk.lines.len(), 5);
-        assert_eq!(edits[1].path, "old.rs");
-        assert!(parse_git_diff("").is_empty());
-    }
-
-    /// The uncommitted scope holds edits to tracked files and every
-    /// untracked file as all-new; ignored files stay out.
-    #[test]
-    fn uncommitted_includes_untracked_files() {
-        let dir = std::env::temp_dir().join(format!("ferrite-review-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(&dir)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}: {out:?}");
-        };
-        git(&["init", "-q"]);
-        git(&["config", "user.email", "operator@example.invalid"]);
-        git(&["config", "user.name", "operator"]);
-        std::fs::write(dir.join("kept.rs"), "one\n").unwrap();
-        std::fs::write(dir.join(".gitignore"), "target\n").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "root"]);
-        std::fs::write(dir.join("kept.rs"), "two\n").unwrap();
-        std::fs::write(dir.join("new file.rs"), "fresh\n").unwrap();
-        std::fs::write(dir.join("target"), "built\n").unwrap();
-        let edits = parse_git_diff(&git_uncommitted(&dir).unwrap());
-        let files: Vec<(&str, &[String])> = edits
-            .iter()
-            .map(|edit| (edit.path.as_str(), edit.hunks[0].lines.as_slice()))
-            .collect();
-        assert_eq!(
-            files,
-            [
-                ("kept.rs", &["-one".to_string(), "+two".to_string()][..]),
-                ("new file.rs", &["+fresh".to_string()][..]),
-            ]
-        );
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// The branch scope falls back to the remote's base when the checkout
-    /// has no local one, and says why when neither resolves.
-    #[test]
-    fn the_branch_reads_against_the_remote_base_when_only_it_exists() {
-        let dir = std::env::temp_dir().join(format!("ferrite-branch-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(&dir)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}: {out:?}");
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["config", "user.email", "operator@example.invalid"]);
-        git(&["config", "user.name", "operator"]);
-        std::fs::write(dir.join("a.rs"), "one\n").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "root"]);
-        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        git(&["checkout", "-q", "-b", "dev"]);
-        git(&["branch", "-q", "-D", "main"]);
-        std::fs::write(dir.join("a.rs"), "two\n").unwrap();
-        git(&["commit", "-q", "-am", "two"]);
-        let edits = parse_git_diff(&git_diff(&dir, "main").unwrap());
-        assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0].hunks[0].lines, ["-one", "+two"]);
-        assert!(git_diff(&dir, "trunk").is_err_and(|error| !error.is_empty()));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
 
     /// A file's line too long for the reader starts further in on the
     /// line the find is on, so its occurrence shows: a third of the way

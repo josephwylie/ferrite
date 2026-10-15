@@ -22,19 +22,34 @@ the branch against `main`, read-only, in the reader slot.
    palette's `review changes` and the files-changed card's `review` open it
    at the uncommitted scope. A Review already open beside
    the Pane switches scope rather than opening another.
-2. **Three scopes, read by the cockpit.** *Uncommitted* is `git diff HEAD`
-   plus every untracked, unignored file as all-new (`git diff --no-index
-   /dev/null <file>`); *branch* is `git diff <base>...HEAD`, the base being
-   the Project's default branch (else `main`), or `origin/<base>` when the
-   checkout has no local one. Both read off the UI thread; a read that
-   lands after the operator moved on is dropped, and a read git refuses
-   shows git's reason in place of the diff. A file with no hunks (a binary
-   one) is left out of both, so the bar counts only what the rows show;
-   each untracked file costs one `git diff` process. *Last turn*
-   reads the diffs Main's tool results already carry after the latest
-   prompt (`ferrite_core::review::last_turn`), one entry per edit and never
-   merged, because each edit numbers the file as it stood then. The Review
-   only draws; the cockpit reads (`cockpit/beside.rs`). Each read is a
+2. **Four scopes; git runs where the checkout is.** *Uncommitted* is `git
+   diff HEAD` plus every untracked, unignored file as all-new (`git diff
+   --no-index /dev/null <file>`); *branch* is `git diff <base>...HEAD`, the
+   base being the repo's default branch (`workspace::default_branch`, else
+   `main`), or `origin/<base>` when the checkout has no local one;
+   *commits* (herdr-reviewr's fourth) lists the branch's commits since that
+   base, newest first (at most 500): ↑↓ or a click picks one, ⏎ or the
+   click reviews `git show --diff-merges=first-parent <id>`, and the scope
+   again (or `r`) goes back to the list. These reads are
+   `ferrite_core::review::git` and run on the computer that has the code:
+   the Server that owns the Thread answers `review_diff {path, scope,
+   commit?}` with git's diff text (`diff {text}`) and `list_commits {path}`
+   with `commits {commits[{id, subject}]}`, gen-1 additions (ADR 0025), off
+   its pump as `list_repo` is. So a Thread on a machine (ADR 0026) reviews
+   the machine's checkout, and a window on this computer's Server asks it
+   the same way; only a window that runs its agents itself reads git in
+   its own process, on a thread of its own. The window only parses and
+   draws. A diff past 8 MB is refused ("too large to review here") rather
+   than carried or drawn; a path that is no repo, or a machine with no
+   git, says so in git's words (or "git is not installed") in place of the
+   diff, as any refused read does. A file with no hunks (a binary one) is
+   left out, so the bar counts only what the rows show; each untracked
+   file costs one `git diff` process. An older Server answers
+   `unsupported`, and the slot shows that reason. *Last turn* reads the
+   diffs Main's tool results already carry after the latest prompt
+   (`ferrite_core::review::last_turn`), one entry per edit and never
+   merged, because each edit numbers the file as it stood then. A read
+   that lands after the operator moved on is dropped. Each read is a
    snapshot: it does not follow the agent's further edits. `r`, or picking
    the scope again, reads it afresh.
 3. **Unified rows, every line selectable.** The Review draws its own
@@ -72,8 +87,8 @@ the branch against `main`, read-only, in the reader slot.
 
 - Comments survive closing the Review and switching scope, and go with the
   next send; a recalled prompt shows them as the text that was sent.
-- A large branch diff renders every row (as the compare did); virtualising
-  would need uniform rows, which the inline comments break. Each row's
+- A large branch diff (up to 8 MB) renders every row (as the compare
+  did); virtualising would need uniform rows, which the inline comments break. Each row's
   syntax colours are worked out once per read, not per frame.
 - A comment holds a path, a numbered range, where its last line sits (new
   number, else old for a removed line) and the quoted lines, not the scope

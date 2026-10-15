@@ -209,6 +209,8 @@ impl Engine {
             | Op::SearchFiles { .. }
             | Op::ListDir { .. }
             | Op::ListRepo { .. }
+            | Op::ReviewDiff { .. }
+            | Op::ListCommits { .. }
             | Op::Coordinate { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }

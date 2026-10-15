@@ -305,8 +305,8 @@ type Search = (
     Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>,
 );
 
-/// A read off the pump — git's for a `list_repo`, a folder's for a
-/// `list_dir`: who asked, in which command, and the reply it makes.
+/// A read off the pump — git's for a `list_repo`, `review_diff` or
+/// `list_commits`, a folder's for a `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
 struct Server {
@@ -569,6 +569,35 @@ impl Server {
                 self.read_off_pump(id, request, move || {
                     crate::workspace::list_dir(&path)
                         .map(|listing| Some(listing.into()))
+                        .map_err(failed)
+                });
+                return;
+            }
+            Op::ReviewDiff {
+                path,
+                scope,
+                commit,
+            } => match scope.diff(commit.clone()) {
+                Some(diff) => {
+                    let path = path.clone();
+                    self.read_off_pump(id, request, move || {
+                        crate::review::git::read(&path, &diff)
+                            .map(|text| Some(Done::Diff { text }))
+                            .map_err(failed)
+                    });
+                    return;
+                }
+                None => Err(failed("this server cannot read that scope")),
+            },
+            Op::ListCommits { path } => {
+                let path = path.clone();
+                self.read_off_pump(id, request, move || {
+                    crate::review::git::commits(&path)
+                        .map(|commits| {
+                            Some(Done::Commits {
+                                commits: commits.into_iter().map(Into::into).collect(),
+                            })
+                        })
                         .map_err(failed)
                 });
                 return;

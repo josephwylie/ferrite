@@ -278,9 +278,9 @@ cannot, the window does without.
   when it starts (`DraftBinding::resolve(registry, here)`).
 - **No git here.** The branch labels and status (`workspace::branch_status`),
   the worktree listing that lets a binding follow its agent
-  (`refresh_branches`), the checkout and default-branch lookups, a
-  review's uncommitted and branch scopes (the last turn still reads), and
-  the `@` menu's walk of the checkout are skipped on a machine.
+  (`refresh_branches`), the checkout and default-branch lookups, and
+  the `@` menu's walk of the checkout are skipped on a machine. A review
+  reads every scope: git runs on the machine (ADR 0021, `review_diff`).
 - **No Finder.** "Reveal in Finder" is not offered for a machine's
   Thread: its path is not on this computer. "Copy path" stays.
 
@@ -295,8 +295,7 @@ feature, which only the app's dev-dependencies turn on).
   machine read as the Thread works, not once per chip open as
   `list_repo` is.
 - On a machine, a file opened beside a Pane and the operator's own
-  commands (ADR 0024) still read or run on this computer; a review reads
-  only the last turn.
+  commands (ADR 0024) still read or run on this computer.
 - An open Thread's Project on a machine: the `thread` state does not
   carry it, so a machine's open Threads group under no Project. A drop
   the Server refuses (a Thread with no Project) shows as allowed while
