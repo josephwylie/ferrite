@@ -172,13 +172,20 @@ non-delivery; never resend blindly; don't prompt your own Thread.
   so the CLI's output is not seen from a terminal there yet.
 - `--machine <name>` (plan §2) asks a saved machine's Server (ADR 0026),
   found by name, else by ssh target; one turned off is refused. The CLI
-  runs `ssh -T … <target> ferrited bridge --api` with the window's options
+  runs `ssh -T … <target> ferrited api-bridge` with the window's options
   (`machine::bridge_args`, one builder for both): `BatchMode=yes`, so it
   never prompts, and the window's master under `~/.ferrite/machines/`, so
-  a window's sign-in carries it. `ferrited bridge --api` carries stdio to
+  a window's sign-in carries it. `ferrited api-bridge` carries stdio to
   the machine's `api.sock` as `bridge` does to `server.sock`, but starts
-  no Server: with none, its words come back as `server_unavailable`. So
-  does an ssh that ended with no answer, in the words of its `Failure`
-  (no `ferrited`, or a sign-in the operator must do from a window); a CLI
+  no Server: with none, its words come back as `server_unavailable`. It
+  is a word of its own, not a flag on `bridge`, because a `ferrited` older
+  than it would read `bridge --api` as `bridge`, start a Server and speak
+  the window protocol to the CLI; an older one refuses `api-bridge` with
+  its usage, which the CLI reads as "update `ferrited` there". An ssh
+  that broke with no answer is refused in the words of its `Failure` (no
+  `ferrited`, or a sign-in the operator must do from a window); a CLI
   cannot sign in. Thread ids are per Store, so `--current` is refused with
-  `--machine`, and `FERRITE_SOCKET` is not consulted.
+  `--machine`, and `FERRITE_SOCKET` is not consulted. Paths are the
+  machine's too: a `cwd` is never filled in from this computer's
+  directory, so `thread start` and `coordinator start` need `--cwd` with
+  an absolute path on the machine.

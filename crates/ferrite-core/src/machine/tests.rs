@@ -43,7 +43,7 @@ fn the_bridge_never_asks_and_keeps_its_connection_alive() {
         args[..args.len() - 2],
         "the same ssh"
     );
-    assert_eq!(api[api.len() - 3..], ["ferrited", "bridge", "--api"]);
+    assert_eq!(api[api.len() - 2..], ["ferrited", "api-bridge"]);
 }
 
 #[test]

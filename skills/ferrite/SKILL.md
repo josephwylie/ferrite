@@ -209,7 +209,8 @@ machine's server instead, over ssh.
 ```
 
 A machine's Threads have its own numbers: name them by number, never with
-`--current` (refused). `server_unavailable` from a machine says why: no
+`--current` (refused). Starting a Thread there needs `--cwd` with an
+absolute path on that machine. `server_unavailable` from a machine says why: no
 `ferrited` on it, or the user must sign in to it from a Ferrite window
 first. Tell the user; do not retry in a loop.
 

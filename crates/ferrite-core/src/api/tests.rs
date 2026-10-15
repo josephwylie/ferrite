@@ -520,7 +520,7 @@ fn op(name: &str) -> &'static Operation {
 fn context() -> Context {
     Context {
         thread: Some("7".into()),
-        cwd: PathBuf::from("/work/app"),
+        cwd: Some(PathBuf::from("/work/app")),
     }
 }
 
@@ -697,6 +697,33 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
     assert_eq!(reviewer.provider, Some(Provider::Codex));
     assert!(reviewer.worktree);
     assert_eq!(reviewer.title.as_deref(), Some("reviewer"));
+}
+
+/// On a machine this computer's directory means nothing: a `cwd` is the
+/// machine's own absolute path, and never left out.
+#[test]
+fn on_a_machine_a_cwd_is_given_whole() {
+    let remote = Context {
+        cwd: None,
+        ..context()
+    };
+    let start = |name: &str, args: &[&str]| cli::parse(op(name), args, &remote);
+    match start("thread.start", &["--cwd", "/srv/app"]).map(|request| request.method) {
+        Ok(Method::ThreadStart(params)) => assert_eq!(params.cwd, PathBuf::from("/srv/app")),
+        other => panic!("{other:?}"),
+    }
+    for (name, args) in [
+        ("thread.start", &[][..]),
+        ("thread.start", &["--cwd", "app"][..]),
+        ("coordinator.start", &["--goal", "Ship billing"][..]),
+    ] {
+        let refused = start(name, args).unwrap_err();
+        assert!(
+            refused.contains("absolute path there"),
+            "{name} {args:?}: {refused}"
+        );
+    }
+    assert!(start("thread.list", &[]).is_ok(), "no cwd, none asked");
 }
 
 /// A coordinator names itself with `--current`: its task comes next, and

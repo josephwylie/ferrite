@@ -1694,9 +1694,9 @@ fn the_cli_prints_answers_refusals_and_events() {
 }
 
 /// `--machine`: the same call through a machine's Tunnel (here a socket
-/// to this Server's API, where `ssh … ferrited bridge --api` would be),
-/// and an ssh that ends without an answer refused as `server_unavailable`
-/// in the words of its Failure.
+/// to this Server's API, where `ssh … ferrited api-bridge` would be),
+/// and an ssh that ends without an answer, or before it could be asked,
+/// refused as `server_unavailable` in the words of its Failure.
 #[test]
 fn the_cli_asks_a_machine_through_its_tunnel() {
     let harness = start("api-cli-machine");
@@ -1722,24 +1722,57 @@ fn the_cli_asks_a_machine_through_its_tunnel() {
         serde_json::json!(thread)
     );
 
+    /// An ssh already gone: its stdin is a broken pipe.
+    struct Gone;
+    impl io::Write for Gone {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let usage = "usage: ferrited server | ferrited bridge".to_string();
     for (failure, says) in [
         (crate::machine::Failure::SignIn, "sign in"),
         (crate::machine::Failure::NotInstalled, "`ferrited`"),
+        (crate::machine::Failure::Unreachable(usage), "older"),
     ] {
-        let ended: crate::machine::Dial = Box::new(move || {
+        for gone in [false, true] {
             let failure = failure.clone();
-            Ok(crate::machine::Tunnel {
-                from: Box::new(io::empty()),
-                to: Box::new(io::sink()),
-                ended: Box::new(move || Some(failure)),
-            })
-        });
-        let (status, said, refused) = call(&ended);
-        assert_eq!((status, said.len()), (1, 0), "{said:?}");
-        assert_eq!(refused[0]["error"]["code"], "server_unavailable");
-        let message = refused[0]["error"]["message"].as_str().unwrap();
-        assert!(message.contains(says), "{message}");
+            let ended: crate::machine::Dial = Box::new(move || {
+                let failure = failure.clone();
+                Ok(crate::machine::Tunnel {
+                    from: Box::new(io::empty()),
+                    to: if gone {
+                        Box::new(Gone)
+                    } else {
+                        Box::new(io::sink())
+                    },
+                    ended: Box::new(move || Some(failure)),
+                })
+            });
+            let (status, said, refused) = call(&ended);
+            assert_eq!((status, said.len()), (1, 0), "{said:?}");
+            assert_eq!(refused[0]["error"]["code"], "server_unavailable");
+            let message = refused[0]["error"]["message"].as_str().unwrap();
+            assert!(message.contains(says), "{message}");
+        }
     }
+}
+
+/// `ferrited api-bridge` never starts a Server: with none it says so and
+/// fails, which the CLI's ssh hands back as `server_unavailable`.
+#[test]
+fn the_api_bridge_with_no_server_fails_without_starting_one() {
+    let store = std::env::temp_dir().join(format!("ferrite-api-bridge-{}", std::process::id()));
+    std::fs::create_dir_all(&store).unwrap();
+    assert_eq!(super::bridge::api(&store), 1);
+    assert!(
+        std::fs::read_dir(&store).unwrap().next().is_none(),
+        "no Server was started in the Store"
+    );
+    let _ = std::fs::remove_dir_all(&store);
 }
 
 /// A repository with one commit, under `dir`: a Project workers can make

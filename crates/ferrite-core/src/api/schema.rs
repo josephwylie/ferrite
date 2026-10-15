@@ -104,7 +104,7 @@ pub struct Empty {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadStartParams {
     /// The directory the agent works in. The CLI sends its own when none
-    /// is given.
+    /// is given, except with `--machine`.
     pub cwd: PathBuf,
     /// The operator's default Provider when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,7 +189,7 @@ pub struct NotificationShowParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CoordinatorStartParams {
     /// A directory of the Project. The CLI sends its own when none is
-    /// given.
+    /// given, except with `--machine`.
     pub cwd: PathBuf,
     /// The operator's default Provider when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,8 +1,8 @@
 //! `ferrited bridge` (ADR 0026): what a window's `ssh` runs on a machine.
 //! It makes sure the machine's Server runs, then carries stdin to the
 //! Server's socket and the socket to stdout until either ends — one
-//! window's connection, spoken over ssh's stdio. `ferrited bridge --api`
-//! is the CLI's (ADR 0027): the same, to the Server's API, and like the
+//! window's connection, spoken over ssh's stdio. `ferrited api-bridge` is
+//! the CLI's (ADR 0027): the same, to the Server's API, and like the
 //! CLI it never starts a Server.
 
 use std::io;

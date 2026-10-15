@@ -81,7 +81,7 @@ pub fn settings_dir() -> PathBuf {
 /// `ferrited` (ADR 0026): the Server alone, for a machine a window reaches
 /// over ssh — no window, so none of its libraries. `ferrited server` runs
 /// it; `ferrited bridge` is what the window's ssh runs, and `ferrited
-/// bridge --api` the CLI's (ADR 0027).
+/// api-bridge` the CLI's (ADR 0027).
 pub fn ferrited(args: &[String]) -> i32 {
     let executable = std::env::current_exe().unwrap_or_else(|_| "ferrited".into());
     match args.get(1).map(String::as_str) {
@@ -95,12 +95,10 @@ pub fn ferrited(args: &[String]) -> i32 {
                 .and_then(|at| args.get(at + 1))
                 .and_then(|pid| pid.parse().ok()),
         }),
-        Some("bridge") if args.get(2).is_some_and(|arg| arg == "--api") => {
-            bridge::api(&store_dir())
-        }
+        Some("api-bridge") => bridge::api(&store_dir()),
         Some("bridge") => bridge::run(&store_dir(), &executable),
         _ => {
-            eprintln!("usage: ferrited server | ferrited bridge [--api]");
+            eprintln!("usage: ferrited server | ferrited bridge | ferrited api-bridge");
             2
         }
     }

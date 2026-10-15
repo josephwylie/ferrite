@@ -5,7 +5,8 @@
 //! `--flag` typed by its JSON Schema, and after `--` every word is an
 //! argument. `--current` names the calling Thread (`FERRITE_THREAD_ID`); a
 //! `cwd` not given is the CLI's own. `--machine <name>` asks a saved
-//! machine's Server instead, over the window's ssh (ADR 0026).
+//! machine's Server instead, over the window's ssh (ADR 0026): there this
+//! computer's directory means nothing, so a `cwd` is given whole.
 //!
 //! Exit status, as Herdr's: 0 answered, 1 refused by the Server (the error
 //! on stderr, as JSON) or no Server reached, 2 a wrong command line.
@@ -169,7 +170,10 @@ fn command(group: &str, rest: &[&str], to: &To) -> i32 {
     };
     let context = Context {
         thread: std::env::var("FERRITE_THREAD_ID").ok(),
-        cwd: std::env::current_dir().unwrap_or_default(),
+        cwd: match to {
+            To::Local(_) => Some(std::env::current_dir().unwrap_or_default()),
+            To::Machine(..) => None,
+        },
     };
     let request = match parse(op, args, &context) {
         Ok(request) => request,
@@ -200,8 +204,9 @@ fn command(group: &str, rest: &[&str], to: &To) -> i32 {
 pub struct Context {
     /// `FERRITE_THREAD_ID`: the Thread `--current` names.
     pub thread: Option<String>,
-    /// Where a `cwd` is resolved from, and what one not given is.
-    pub cwd: PathBuf,
+    /// Where a `cwd` is resolved from, and what one not given is. `None`
+    /// on a machine: a `cwd` must then be its absolute path there.
+    pub cwd: Option<PathBuf>,
 }
 
 /// The request one operation's arguments make.
@@ -270,9 +275,17 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
         params.insert(name.into(), kind(&properties[name], defs).parse(arg)?);
     }
     if properties.contains_key("cwd") {
-        let cwd = match params.get("cwd").and_then(Value::as_str) {
-            Some(given) => context.cwd.join(given),
-            None => context.cwd.clone(),
+        let given = params.get("cwd").and_then(Value::as_str).map(PathBuf::from);
+        let cwd = match (&context.cwd, given) {
+            (Some(here), Some(given)) => here.join(given),
+            (Some(here), None) => here.clone(),
+            (None, Some(given)) if given.has_root() => given,
+            (None, _) => {
+                return Err(format!(
+                    "`{}` on a machine needs --cwd, its absolute path there",
+                    op.name
+                ))
+            }
         };
         params.insert("cwd".into(), json!(cwd));
     }
@@ -373,8 +386,9 @@ pub fn usage(group: Option<&str>) -> String {
     out.push_str(
         "\n--current names the calling Thread; after --, every word is an argument\n\
          (`agent prompt 12 -- \"--flags in the prompt\"`). --machine <name> asks a\n\
-         saved machine's Server over ssh, its Threads by id. Answers are JSON lines;\n\
-         a refusal is JSON on stderr with exit status 1, a wrong command line exits 2.\n",
+         saved machine's Server over ssh, its Threads by id and its --cwd an absolute\n\
+         path there. Answers are JSON lines; a refusal is JSON on stderr with exit\n\
+         status 1, a wrong command line exits 2.\n",
     );
     out
 }
@@ -439,7 +453,7 @@ pub fn call(request: &Request, socket: &Path, out: &mut impl Write, err: &mut im
 }
 
 /// Ask the machine `name`'s Server through a Tunnel `dial` opens (`ssh …
-/// ferrited bridge --api`), and print what comes back ([`exchange`]).
+/// ferrited api-bridge`), and print what comes back ([`exchange`]).
 pub fn call_machine(
     request: &Request,
     name: &str,
@@ -458,8 +472,8 @@ pub fn call_machine(
 
 /// Ask, and print what comes back, a whole line at a time: the answer to
 /// `out`, or a refusal to `err`, and after a subscription's answer every
-/// event until the Server closes the connection. A Tunnel that ends with
-/// no answer says why, as `server_unavailable`.
+/// event until the Server closes the connection. A Tunnel that breaks
+/// says why, as `server_unavailable`: in its ssh's words when it has some.
 fn exchange<E: Write>(
     request: &Request,
     tunnel: Result<Tunnel, ApiError>,
@@ -483,38 +497,41 @@ fn exchange<E: Write>(
     };
     // `to` stays open until the answer: a bridge takes its closing as the
     // caller gone.
-    if let Err(error) = link::send(&mut to, request) {
-        return refused(err, lost(error));
-    }
-    let mut lines = link::Lines::new(from);
-    let streams = matches!(request.method, Method::EventsSubscribe(_));
-    let mut answered = false;
-    loop {
-        match lines.next_line() {
-            Ok(Some(line)) => {
-                let line = String::from_utf8_lossy(&line);
-                let answer: Value = serde_json::from_str(&line).unwrap_or_default();
-                if answer.get("error").is_some() {
-                    print(err, &line);
-                    return 1;
+    let broke = match link::send(&mut to, request) {
+        Err(error) => error,
+        Ok(()) => {
+            let mut lines = link::Lines::new(from);
+            let streams = matches!(request.method, Method::EventsSubscribe(_));
+            let mut answered = false;
+            loop {
+                match lines.next_line() {
+                    Ok(Some(line)) => {
+                        let line = String::from_utf8_lossy(&line);
+                        let answer: Value = serde_json::from_str(&line).unwrap_or_default();
+                        if answer.get("error").is_some() {
+                            print(err, &line);
+                            return 1;
+                        }
+                        print(out, &line);
+                        if !streams {
+                            return 0;
+                        }
+                        answered = true;
+                    }
+                    Ok(None) if answered => return 0,
+                    Ok(None) => break io::ErrorKind::UnexpectedEof.into(),
+                    Err(error) => break error,
                 }
-                print(out, &line);
-                if !streams {
-                    return 0;
-                }
-                answered = true;
             }
-            Ok(None) if answered => return 0,
-            Ok(None) => {
-                let error = match ended() {
-                    Some(failure) => unreachable(&failure),
-                    None => lost(io::ErrorKind::UnexpectedEof.into()),
-                };
-                return refused(err, error);
-            }
-            Err(error) => return refused(err, lost(error)),
         }
-    }
+    };
+    // Closed, so an ssh still running ends and says how.
+    drop(to);
+    let error = match ended() {
+        Some(failure) => unreachable(&failure),
+        None => lost(broke),
+    };
+    refused(err, error)
 }
 
 /// Why a machine's Server did not answer, and what the operator can do.
@@ -522,6 +539,10 @@ fn unreachable(failure: &Failure) -> ApiError {
     let message = match failure {
         Failure::SignIn => {
             format!("{failure}: sign in from a Ferrite window, then ask again")
+        }
+        // A `ferrited` older than `api-bridge` refuses it with its usage.
+        Failure::Unreachable(said) if said.starts_with("usage: ferrited") => {
+            "the machine's `ferrited` is older than this `ferrite`: update it there".into()
         }
         failure => failure.to_string(),
     };

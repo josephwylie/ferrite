@@ -381,8 +381,9 @@ fn ssh_options(control: &Path) -> Vec<String> {
 pub const WINDOW: &[&str] = &["ferrited", "bridge"];
 
 /// What the CLI's ssh runs (ADR 0027): the bridge to the Server's API,
-/// which never starts a Server.
-pub const API: &[&str] = &["ferrited", "bridge", "--api"];
+/// which never starts a Server. A word of its own, so a `ferrited` older
+/// than it refuses it rather than bridging a window.
+pub const API: &[&str] = &["ferrited", "api-bridge"];
 
 /// `ssh … <target> <remote>`, never asking anything: a connection that
 /// needs the operator fails, and they sign in (`Bridge::sign_in`).
