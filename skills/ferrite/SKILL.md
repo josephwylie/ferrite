@@ -149,7 +149,7 @@ it. Prefer `agent wait` when you only need to know when a Thread settles.
 
 ## Coordinate a project
 
-A project's coordinator and its threads are Projects' (ADR 0030), not this skill's: run `ferrite-projects skill` and follow what it prints.
+A project's coordinator and its threads are Projects' (ADR 0030), not this skill's: the project folder's AGENTS.md names the full `ferrite-projects --root …` command; run its `skill` subcommand and follow what it prints.
 
 ## Tell the user
 

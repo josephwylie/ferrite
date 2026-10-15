@@ -95,14 +95,18 @@ entries are rewritten to herdr-projects' terms.
 
 A one-time migration runs on first start when `coordinators.json` is
 beside the Store: each entry becomes a project under the Projects root
-(`PROJECT.md` from its goal and standing instructions, `MEMORY.md` from
-its memory file, the `pr-followup` routine when it followed PRs, a thread
-record per open worker naming its Thread), and the file is renamed
-`coordinators.json.migrated`. With no file there is nothing to do.
-The Server runs it at start as `ferrite-projects
+(`PROJECT.md` from its goal, standing instructions and the configured
+default profiles, `MEMORY.md` from its memory file, the `pr-followup`
+routine enabled when it followed PRs, and each open worker adopted as a
+thread in its Thread's working directory, re-briefed once it is ready),
+and the file is renamed `coordinators.json.migrated`. With no file there
+is nothing to do. The old coordinator Thread works in its repository, not
+the project folder, so it is not carried over as a coordinator; `open`
+starts one. The Server runs it at start as `ferrite-projects
 migrate-ferrite-coordinators <store_dir>/coordinators.json`, which exits 0
-when there is nothing to do and skips, with a note, a project whose slug
-already exists.
+when there is nothing to do, numbers a name an earlier entry already
+slugged (`app`, `app-2`), and skips, with a note, a project whose slug
+already exists under the root.
 
 ### Upstream updates
 

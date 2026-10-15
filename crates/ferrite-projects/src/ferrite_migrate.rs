@@ -3,20 +3,24 @@
 //! has no such file.
 //!
 //! Ferrite kept one entry per registered Project in `coordinators.json`
-//! beside its Store, the Project's title and roots in `registry.json`, and
-//! its memory in `memory/project-<id>.md`. Each entry becomes a project
-//! under the root through the same writers `new`, `open` and `thread adopt`
-//! use; the file is then renamed `coordinators.json.migrated`, so a second
-//! run finds nothing to do.
+//! beside its Store, the Project's title and roots in `registry.json`, its
+//! memory in `memory/project-<id>.md`, and each Thread's working directory
+//! in the header of `<id>/log.jsonl`. Each entry becomes a project under the
+//! root through the same writers `new`, `open` and `thread adopt` use; the
+//! file is then renamed `coordinators.json.migrated`, so a second run finds
+//! nothing to do.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::paths::Ctx;
+use crate::profiles::{self, Role};
 use crate::project::{self, Project, Repo};
-use crate::thread::{self, Kind, Status};
+use crate::runner::Cmd;
+use crate::thread::{self, Kind, Status, Thread};
 
 /// The only `coordinators.json` version Ferrite wrote.
 const VERSION: u32 = 1;
@@ -77,7 +81,37 @@ struct Registered {
     additional_roots: Vec<PathBuf>,
 }
 
-/// `migrate-ferrite-coordinators <coordinators.json>`: one note per entry.
+/// The part of a Thread log's first line a migration reads.
+#[derive(Deserialize)]
+struct LogHeader {
+    provider: String,
+    #[serde(default)]
+    workspace: Option<Binding>,
+    #[serde(default)]
+    session_project_root: Option<PathBuf>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Binding {
+    Main { checkout: PathBuf },
+    Worktree { path: PathBuf },
+}
+
+impl LogHeader {
+    /// Where the Thread's agent runs: Ferrite's `effective_cwd` chain, the
+    /// directory the adapter reports as its pane's `cwd`.
+    fn cwd(&self) -> Option<&Path> {
+        self.session_project_root.as_deref().or(match self.workspace.as_ref()? {
+            Binding::Main { checkout } => Some(checkout),
+            Binding::Worktree { path } => Some(path),
+        })
+    }
+}
+
+/// `migrate-ferrite-coordinators <coordinators.json>`: one note per line.
 /// No file: nothing to do.
 pub fn run(ctx: &Ctx, file: &Path) -> Result<()> {
     for note in migrate(ctx, file)? {
@@ -98,9 +132,14 @@ fn migrate(ctx: &Ctx, file: &Path) -> Result<Vec<String>> {
     }
     let store = file.parent().context("coordinators.json has no folder")?;
     let registry: Registry = project::read_json(&store.join("registry.json")).unwrap_or_default();
+    let config = profiles::load(&ctx.config_dir)?;
+    let defaults = (config.new_project_default(Role::Thread), config.new_project_default(Role::Coordinator));
+    let prefix = crate::coordinator::current_prefix(&ctx.root)?;
+    let mut claimed = Vec::new();
     let mut notes = Vec::new();
     for entry in &book.projects {
-        notes.push(migrate_one(ctx, store, &registry, entry)?);
+        let name = unclaimed_name(registry.projects.iter().find(|p| p.id == entry.project), entry.project, &mut claimed)?;
+        notes.extend(migrate_one(ctx, store, &registry, entry, &name, &defaults, &prefix)?);
     }
     let mut migrated = file.as_os_str().to_owned();
     migrated.push(".migrated");
@@ -108,42 +147,68 @@ fn migrate(ctx: &Ctx, file: &Path) -> Result<Vec<String>> {
     Ok(notes)
 }
 
-fn migrate_one(ctx: &Ctx, store: &Path, registry: &Registry, entry: &Coordination) -> Result<String> {
-    let registered = registry.projects.iter().find(|p| p.id == entry.project);
-    let name = registered
+/// The entry's project name: its Ferrite title (or `Project <id>`), numbered
+/// when an earlier entry of the same file already slugs the same, so two
+/// Projects called `app` become `app` and `app-2`. Deterministic, so a rerun
+/// after a failure names every entry the same.
+fn unclaimed_name(registered: Option<&Registered>, id: u64, claimed: &mut Vec<String>) -> Result<String> {
+    let base = registered
         .map(|p| p.title.clone())
         .filter(|title| project::slug_from_name(title).is_ok())
-        .unwrap_or_else(|| format!("Project {}", entry.project));
-    let slug = project::slug_from_name(&name)?;
-    if ctx.root.join(&slug).exists() {
-        return Ok(format!("Ferrite's coordinator of {name}: `{slug}` already exists, skipped"));
+        .unwrap_or_else(|| format!("Project {id}"));
+    let mut name = base.clone();
+    for n in 2.. {
+        let slug = project::slug_from_name(&name)?;
+        if !claimed.contains(&slug) {
+            claimed.push(slug);
+            break;
+        }
+        name = format!("{base} {n}");
     }
-    let repos = registered
-        .into_iter()
+    Ok(name)
+}
+
+fn migrate_one(ctx: &Ctx, store: &Path, registry: &Registry, entry: &Coordination, name: &str, (thread_profile, coordinator_profile): &(String, String), prefix: &str) -> Result<Vec<String>> {
+    let slug = project::slug_from_name(name)?;
+    if ctx.root.join(&slug).exists() {
+        return Ok(vec![format!("Ferrite's coordinator of {name}: `{slug}` already exists, skipped")]);
+    }
+    let repos = registry
+        .projects
+        .iter()
+        .filter(|p| p.id == entry.project)
         .flat_map(|p| std::iter::once(&p.root).chain(&p.additional_roots))
         .map(|root| Repo { path: root.to_string_lossy().into_owned(), machine: None })
         .collect();
-    let project = project::create(&ctx.root, &name, &entry.goal, repos)?;
+    let project = project::create(&ctx.root, name, &entry.goal, repos)?;
+    profiles::write_project_defaults(&project, thread_profile, coordinator_profile)?;
     if !entry.instructions.trim().is_empty() {
         write_instructions(&project, &entry.instructions)?;
     }
     write_memory(&project, &store.join("memory").join(format!("project-{}.md", entry.project)))?;
-    project::write_priming(&project, &crate::coordinator::current_prefix(&ctx.root)?)?;
+    project::write_priming(&project, prefix)?;
     if !entry.follow_prs {
-        crate::settings::routine_toggle(ctx, &project.slug, "pr-followup", Some(false))?;
+        disable_pr_followup(&project)?;
     }
+    // What `open` records, minus a pane: Ferrite's coordinator Thread works
+    // in the repository, not the project folder, so it is no coordinator
+    // here. The socket lets the ticker follow the adopted workers.
     let socket = store.join("api.sock").to_string_lossy().into_owned();
     let cwd = project.canonical_dir().to_string_lossy().into_owned();
     project.update_coordinator(|c| {
         c.socket = socket;
-        c.tab_id = entry.coordinator.to_string();
-        c.pane_id = entry.coordinator.to_string();
         c.cwd = cwd;
     })?;
+    let mut notes = vec![format!(
+        "Ferrite's coordinator of {name}: migrated to `{}`; Thread {} is no longer its coordinator, `{prefix} open {}` starts one",
+        project.slug, entry.coordinator, project.slug
+    )];
     for worker in entry.workers.iter().filter(|w| !w.merged.as_ref().is_some_and(|m| m.resolved)) {
-        adopt_worker(&project, worker)?;
+        if let Err(error) = adopt_worker(ctx, store, &project, worker) {
+            notes.push(format!("  worker Thread {} of {name}: not migrated ({error:#})", worker.thread));
+        }
     }
-    Ok(format!("Ferrite's coordinator of {name}: migrated to `{}`", project.slug))
+    Ok(notes)
 }
 
 /// The body under PROJECT.md's front matter becomes the standing instructions.
@@ -169,27 +234,83 @@ fn write_memory(project: &Project, ferrite_memory: &Path) -> Result<()> {
     project::write_atomic(&index, text.as_bytes())
 }
 
-/// An open worker becomes an adopted thread whose pane is its Thread: it is
-/// already running, so nothing is launched or briefed again.
-fn adopt_worker(project: &Project, worker: &Worker) -> Result<()> {
+/// The default routine stays, switched off: the coordinator did not follow PRs.
+fn disable_pr_followup(project: &Project) -> Result<()> {
+    let path = project.dir().join(project::PR_FOLLOWUP);
+    let text = std::fs::read_to_string(&path)?.replacen("\nenabled = true\n", "\nenabled = false\n", 1);
+    crate::routine::parse("pr-followup", &text)?;
+    project::write_atomic(&path, text.as_bytes())
+}
+
+/// An open worker becomes what `thread adopt` makes of a running pane: an
+/// adopted thread whose pane is its Thread, recorded in its working
+/// directory, with a thread directory and brief. Nothing is launched; the
+/// ticker prompts it with the brief once it is ready, as for any adoption.
+fn adopt_worker(ctx: &Ctx, store: &Path, project: &Project, worker: &Worker) -> Result<()> {
+    let log = store.join(worker.thread.to_string()).join("log.jsonl");
+    let text = std::fs::read_to_string(&log).with_context(|| format!("{} is gone", log.display()))?;
+    let header: LogHeader = serde_json::from_str(text.lines().next().unwrap_or_default()).with_context(|| format!("{} has no header", log.display()))?;
+    let cwd = header.cwd().with_context(|| format!("{} records no working directory", log.display()))?.to_string_lossy().into_owned();
+
+    // The working directory's repository and branch, when it is in one.
+    let git = |args: &[&str]| -> Option<String> {
+        let out = ctx.runner.run(&Cmd::new("git", Duration::from_secs(5)).args(["-C", &cwd]).args(args.iter().copied())).ok()?;
+        out.success().then(|| out.stdout.trim().to_string()).filter(|s| !s.is_empty())
+    };
+    let repo = git(&["rev-parse", "--show-toplevel"]).unwrap_or_default();
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD").unwrap_or_default();
+    let origin = git(&["remote", "get-url", "origin"]).unwrap_or_default();
+
     let id = worker.thread.to_string();
     let title = worker.task.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("Ferrite worker").to_string();
     let created = thread::allocate(project, |t| {
         t.title = title;
         t.kind = Kind::Adopted;
-        t.status = Status::Open;
+        t.repo = repo;
+        t.branch = branch;
+        t.origin = origin;
+        t.agent = header.provider.clone();
+        t.agent_name = header.title.clone().unwrap_or_default();
+        t.cwd = cwd.clone();
         t.tab_id = id.clone();
         t.pane_id = id;
     })?;
-    let _lock = project.lock()?;
-    project::write_atomic(&thread::task_path(project, &created.id), worker.task.as_bytes())
+    let briefed = (|| -> Result<String> {
+        {
+            let _lock = project.lock()?;
+            project::write_atomic(&thread::task_path(project, &created.id), worker.task.as_bytes())?;
+        }
+        let dir = thread::thread_dir(&cwd, &project.slug, &created.id);
+        let brief = thread::brief_for(project, &Thread { thread_dir: dir.clone(), ..created.clone() }, &worker.task, false)?;
+        std::fs::create_dir_all(Path::new(&dir).join("library")).with_context(|| format!("could not create {dir}"))?;
+        crate::threads::exclude_from_git(ctx.runner, &cwd)?;
+        project::write_atomic(&Path::new(&dir).join("brief.md"), brief.as_bytes())?;
+        Ok(dir)
+    })();
+    match briefed {
+        Ok(dir) => thread::update(project, &created.id, |t| {
+            t.thread_dir = dir;
+            t.status = Status::Open;
+            t.prompt_pending = true;
+            t.last_state_change = project::now();
+        })?,
+        Err(error) => {
+            let message = format!("{error:#}");
+            thread::update(project, &created.id, |t| {
+                t.status = Status::Failed;
+                t.error = message;
+            })?;
+            return Err(error);
+        }
+    };
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::paths::Env;
-    use crate::runner::fake::FakeRunner;
+    use crate::runner::fake::{FakeRunner, fail};
 
     const BOOK: &str = r#"{
   "version": 1,
@@ -203,11 +324,13 @@ mod tests {
       "workers": [
         { "thread": 13, "task": "Add invoices\n\nWith PDFs.", "sent": ["remark:IC_1"] },
         { "thread": 14, "task": "Old work", "merged": { "pr": 7, "head": "abc", "resolved": true } },
-        { "thread": 15, "task": "Merged, not yet cleaned", "merged": { "pr": 8, "head": "def" } }
+        { "thread": 15, "task": "Merged, not yet cleaned", "merged": { "pr": 8, "head": "def" } },
+        { "thread": 16, "task": "Its Thread was deleted" }
       ]
     },
     { "project": 4, "coordinator": 20 },
-    { "project": 9, "coordinator": 30, "goal": "Unregistered" }
+    { "project": 9, "coordinator": 30, "goal": "Unregistered" },
+    { "project": 5, "coordinator": 40, "goal": "Same name" }
   ]
 }"#;
 
@@ -216,34 +339,58 @@ mod tests {
   "next_project": 10,
   "projects": [
     { "id": 3, "title": "Billing App", "root": "/work/billing", "additional_roots": ["/work/shared"], "minted": 2 },
-    { "id": 4, "title": "taken", "root": "/work/taken", "minted": 0 }
+    { "id": 4, "title": "taken", "root": "/work/taken", "minted": 0 },
+    { "id": 5, "title": "billing app", "root": "/work/billing-2", "minted": 0 }
   ],
   "worktrees": []
 }"#;
 
+    fn header(workspace: &str, root: &str) -> String {
+        format!(r#"{{"schema":13,"provider":"codex","workspace":{workspace},"session_project_root":{root},"model":null,"project_id":3,"title":"worker","effort":null}}"#) + "\n{}\n"
+    }
+
     #[test]
     fn each_coordinator_becomes_a_project_once() {
         let home = tempfile::tempdir().unwrap();
-        let store = home.path().join(".ferrite");
+        let store = home.path().join(".ferrite/threads");
         std::fs::create_dir_all(store.join("memory")).unwrap();
         let file = store.join("coordinators.json");
         std::fs::write(&file, BOOK).unwrap();
         std::fs::write(store.join("registry.json"), REGISTRY).unwrap();
         std::fs::write(store.join("memory/project-3.md"), "- Run cargo check\n").unwrap();
+        let tree = home.path().join("billing-wt-13");
+        let checkout = home.path().join("billing");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::create_dir_all(checkout.join("app")).unwrap();
+        for (id, log) in [
+            (13, header(&format!(r#"{{"kind":"worktree","repo":"/work/billing","path":"{}"}}"#, tree.display()), "null")),
+            (15, header(&format!(r#"{{"kind":"main","checkout":"{}"}}"#, checkout.display()), &format!(r#""{}""#, checkout.join("app").display()))),
+        ] {
+            std::fs::create_dir_all(store.join(id.to_string())).unwrap();
+            std::fs::write(store.join(id.to_string()).join("log.jsonl"), log).unwrap();
+        }
+        let config = home.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("config.toml"), "[defaults]\nthread_profile = \"codex\"\ncoordinator_profile = \"codex\"\n").unwrap();
         let env = Env::for_test(home.path(), &[]);
         let runner = FakeRunner::new();
-        let ctx = Ctx { env: &env, root: home.path().join("projects"), config_dir: home.path().join("config"), runner: &runner, detached_ticker: false };
+        runner.on("git", fail(128, "not a git repository"));
+        let ctx = Ctx { env: &env, root: home.path().join("projects"), config_dir: config, runner: &runner, detached_ticker: false };
         project::create(&ctx.root, "taken", "", vec![]).unwrap();
 
         let notes = migrate(&ctx, &file).unwrap();
-        assert_eq!(notes.len(), 3, "{notes:?}");
-        assert!(notes[1].contains("`taken` already exists, skipped"), "{notes:?}");
+        assert_eq!(notes.len(), 5, "{notes:?}");
+        assert!(notes[0].contains("migrated to `billing-app`; Thread 12 is no longer its coordinator"), "{notes:?}");
+        assert!(notes[1].contains("worker Thread 16 of Billing App: not migrated"), "{notes:?}");
+        assert!(notes[2].contains("`taken` already exists, skipped"), "{notes:?}");
+        assert!(notes[4].contains("migrated to `billing-app-2`"), "two Projects with one name both survive: {notes:?}");
         assert!(!file.exists() && store.join("coordinators.json.migrated").is_file());
 
         let billing = Project::load(&ctx.root, "billing-app").unwrap();
         let (settings, body) = billing.read_project_md().unwrap();
         assert_eq!((settings.name.as_str(), settings.goal.as_str()), ("Billing App", "Ship billing"));
         assert_eq!(settings.repos.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), ["/work/billing", "/work/shared"]);
+        assert_eq!((settings.thread_profile.as_str(), settings.coordinator_profile.as_str()), ("codex", "codex"), "the configured defaults, as `new` writes them");
         assert_eq!(body, "# Instructions\n\nNever push to main.\n");
         let index = std::fs::read_to_string(billing.dir().join("MEMORY.md")).unwrap();
         assert!(index.ends_with(MEMORY_INDEX_LINE));
@@ -253,21 +400,33 @@ mod tests {
         assert!(project::priming_problems(&billing, &crate::coordinator::current_prefix(&ctx.root).unwrap()).is_empty());
 
         let record = billing.coordinator().unwrap();
-        assert_eq!((record.pane_id.as_str(), record.tab_id.as_str()), ("12", "12"));
+        assert!(record.pane_id.is_empty() && record.tab_id.is_empty(), "the old coordinator Thread works in its repo, not here");
         assert_eq!(record.socket, store.join("api.sock").to_string_lossy());
         assert_eq!(record.cwd, billing.canonical_dir().to_string_lossy());
 
         let threads = thread::list(&billing);
-        let panes: Vec<_> = threads.iter().map(|t| (t.pane_id.as_str(), t.title.as_str(), t.kind, t.status)).collect();
-        assert_eq!(panes, [("13", "Add invoices", Kind::Adopted, Status::Open), ("15", "Merged, not yet cleaned", Kind::Adopted, Status::Open)]);
+        let panes: Vec<_> = threads.iter().map(|t| (t.pane_id.as_str(), t.title.as_str(), t.kind, t.status, t.prompt_pending)).collect();
+        assert_eq!(
+            panes,
+            [
+                ("13", "Add invoices", Kind::Adopted, Status::Open, true),
+                ("15", "Merged, not yet cleaned", Kind::Adopted, Status::Open, true),
+            ]
+        );
+        let cwds: Vec<_> = threads.iter().map(|t| t.cwd.clone()).collect();
+        assert_eq!(cwds, [tree.to_string_lossy().into_owned(), checkout.join("app").to_string_lossy().into_owned()]);
+        assert_eq!((threads[0].agent.as_str(), threads[0].agent_name.as_str()), ("codex", "worker"));
+        assert_eq!(threads[0].thread_dir, thread::thread_dir(&threads[0].cwd, "billing-app", &threads[0].id));
+        let brief = std::fs::read_to_string(Path::new(&threads[0].thread_dir).join("brief.md")).unwrap();
+        assert!(brief.contains("With PDFs."));
         assert_eq!(std::fs::read_to_string(thread::task_path(&billing, &threads[0].id)).unwrap(), "Add invoices\n\nWith PDFs.");
 
         let unregistered = Project::load(&ctx.root, "project-9").unwrap();
         let (settings, body) = unregistered.read_project_md().unwrap();
         assert_eq!(settings.goal, "Unregistered");
         assert!(body.starts_with("# Instructions\n\nStanding instructions"), "the template stays");
-        let (routines, _) = crate::routine::load_all(&unregistered);
-        assert!(routines.iter().any(|r| r.name == "pr-followup" && !r.enabled), "written, but off");
+        let (routines, broken) = crate::routine::load_all(&unregistered);
+        assert!(broken.is_empty() && routines.iter().any(|r| r.name == "pr-followup" && !r.enabled), "written, but off");
         assert!(thread::list(&unregistered).is_empty());
 
         assert!(migrate(&ctx, &file).unwrap().is_empty(), "nothing left to do");

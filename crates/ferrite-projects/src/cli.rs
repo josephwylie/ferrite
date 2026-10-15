@@ -58,6 +58,9 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         coordinator_profile: Option<String>,
     },
+    /// Ferrite: turn Ferrite's own coordinators into projects, once (ADR 0030)
+    #[command(hide = true)]
+    MigrateFerriteCoordinators { file: PathBuf },
     /// List projects
     List {
         /// Include archived projects
@@ -263,9 +266,6 @@ enum Command {
         #[command(subcommand)]
         command: TickerCommand,
     },
-    /// Ferrite: turn Ferrite's own coordinators into projects, once (ADR 0030)
-    #[command(hide = true)]
-    MigrateFerriteCoordinators { file: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -628,6 +628,7 @@ pub fn run() -> Result<()> {
             println!("next: {prefix} open {}", project.slug);
             Ok(())
         }
+        Command::MigrateFerriteCoordinators { file } => crate::ferrite_migrate::run(&ctx, &file),
         Command::List { all } => {
             for slug in project::list_slugs(&ctx.root) {
                 let project = Project::load(&ctx.root, &slug)?;
@@ -847,6 +848,5 @@ pub fn run() -> Result<()> {
             TickerCommand::Stop => ticker::stop(&ctx.root),
             TickerCommand::Status => ticker::status(&ctx.root),
         },
-        Command::MigrateFerriteCoordinators { file } => crate::ferrite_migrate::run(&ctx, &file),
     }
 }
