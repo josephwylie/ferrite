@@ -4,7 +4,8 @@
 //! worktree on its own branch, briefed with the Project's goal, standing
 //! instructions and memory. What a worker reports under `## Remember`
 //! joins the memory for the next one; its PR's failing checks and review
-//! remarks go back to it when the Project follows PRs.
+//! remarks go back to it when the Project follows PRs, and once its PR
+//! merges and it is at rest, its worktree is removed and it is resolved.
 //!
 //! This is the bookkeeping and the words, beside the Store and never in a
 //! repo: `coordinators.json`, one memory file per Project, the briefs, the
@@ -72,6 +73,30 @@ pub struct Worker {
     /// sent once.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub sent: BTreeSet<String>,
+    /// Its PR merged and, at rest, it was parked for its worktree to be
+    /// removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged: Option<Merged>,
+}
+
+impl Worker {
+    /// Its PR merged and its worktree is gone: no longer one of its
+    /// coordinator's open workers.
+    pub fn resolved(&self) -> bool {
+        self.merged.as_ref().is_some_and(|merged| merged.resolved)
+    }
+}
+
+/// A worker whose PR merged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Merged {
+    pub pr: u64,
+    /// The commit at the PR's head: the worker's branch is deleted only
+    /// while its tip is this commit.
+    pub head: String,
+    /// Its worktree is gone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -162,15 +187,19 @@ impl Coordinators {
         Ok(found)
     }
 
-    /// Note feedback as sent to `worker`.
-    pub fn mark_sent(&mut self, worker: ThreadId, keys: Vec<String>) -> io::Result<()> {
+    /// Change what the book holds of `worker`, wherever it is one.
+    pub fn update_worker(
+        &mut self,
+        worker: ThreadId,
+        change: impl FnOnce(&mut Worker),
+    ) -> io::Result<()> {
         self.edit(|projects| {
             if let Some(entry) = projects
                 .iter_mut()
                 .flat_map(|entry| entry.workers.iter_mut())
                 .find(|entry| entry.thread == worker)
             {
-                entry.sent.extend(keys);
+                change(entry);
             }
         })
     }
@@ -440,6 +469,24 @@ pub fn feedback(pr: &PrFeedback) -> Vec<Feedback> {
             text: format!("@{} wrote: {}", remark.author, remark.body.trim()),
         });
     checks.chain(remarks).collect()
+}
+
+/// What a coordinator is told once a worker's merged PR is cleaned up
+/// after; `kept` names the branch left in place, if one was.
+pub fn merged_prompt(worker: ThreadId, task: &str, pr: u64, kept: Option<&str>) -> String {
+    let branch = match kept {
+        Some(branch) => {
+            format!("its branch `{branch}` is kept, as it is not at the pull request's head commit")
+        }
+        None => "its branch is deleted".to_string(),
+    };
+    format!(
+        "Pull request #{pr} of worker Thread {worker} merged. Its worktree is removed, \
+         {branch}, and the worker is parked and has left your Group. Its task was:\n\n\
+         {task}\n\n\
+         Report it to the user and plan what comes next.",
+        task = task.trim(),
+    )
 }
 
 /// The prompt that sends a PR's new feedback back to its worker.

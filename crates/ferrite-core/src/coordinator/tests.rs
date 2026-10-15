@@ -39,12 +39,15 @@ fn the_book_round_trips_and_one_project_has_one_coordinator() {
                 thread: ThreadId::new(8),
                 task: "Add invoices".into(),
                 sent: BTreeSet::new(),
+                merged: None,
             });
         })
         .unwrap());
     assert!(!book.update(ThreadId::new(99), |_| {}).unwrap());
-    book.mark_sent(ThreadId::new(8), vec!["remark:IC_1".into()])
-        .unwrap();
+    book.update_worker(ThreadId::new(8), |worker| {
+        worker.sent.insert("remark:IC_1".into());
+    })
+    .unwrap();
 
     let reloaded = Coordinators::load(&dir).unwrap();
     let entry = reloaded.led_by(ThreadId::new(7)).expect("its coordinator");
@@ -227,6 +230,7 @@ fn pr(state: PrState) -> PrFeedback {
             ],
         },
         author: "op".into(),
+        head: "c0ffee".into(),
         remarks: vec![
             Remark {
                 id: "PRR_1".into(),

@@ -184,7 +184,10 @@ As the coordinator, name yourself with `--current`:
 - With `--follow-prs` (or `coordinator update --current --follow-prs`),
   workers are briefed to push their branch and open a pull request, and
   failing checks and review remarks on it are sent back to that worker;
-  `--follow-prs=false` stops it.
+  `--follow-prs=false` stops it. Once a worker's PR merges and it has
+  finished, Ferrite parks it, removes its worktree (and its branch when
+  nothing on it would be lost), and tells you: plan the next task. It is
+  listed under `closed` with its `merged` PR.
 
 ## Tell the user
 

@@ -28,7 +28,7 @@ issues/discussions, and reviews (linked at the end).
 | — | Upgrade by restart-when-idle + resume, not live handoff | Yes |
 | — | Calmer, more minimal nav and top band | Yes |
 | — | Worktree setup steps on create | No |
-| — | Worktree removal/cleanup | No |
+| — | Worktree removal/cleanup | No, except a coordinator worker's once its PR merges |
 | — | Separate data folder for debug builds | No |
 
 ## Status
@@ -51,14 +51,14 @@ end of 2026-10-15. "Partial" names what is missing.
 | Review slot | Done | ADR 0021: uncommitted / branch / last turn, line comments |
 | Session import + allowance warning | Done | ADR 0022 |
 | Custom palette commands + user keymap | Done | ADR 0024 |
-| Coordinator Threads | Done | ADR 0028: briefs, worktree workers, `## Remember` memory, need ordering, opt-in PR follow-up (CI, reviews, inline comments) |
+| Coordinator Threads | Done | ADR 0028: briefs, worktree workers, `## Remember` memory, need ordering, opt-in PR follow-up (CI, reviews, inline comments), a merged PR resolves its worker and removes its worktree and branch |
 | Mermaid diagrams | Done | ADR 0016 |
 | Hygiene: durable settings, banner, clean env, diagnostics, find, self-update, staggered revival | Done | ADRs 0018–0020, 0023 |
 | Hygiene: confirm quit while working | Superseded | Added, then dropped by ADR 0025: quitting the window no longer stops agents |
 | UI cleanliness 1, 2, 3, 6 | Done | ADR 0014: band kept for the window drag but empty; one bottom bar |
 | UI cleanliness 4, 5 | Done | ADR 0015: needs-you strip gone, one heading style |
 | Store never reuses a Thread id | Done | ADR 0029 (found while building the API) |
-| Worktree setup / cleanup, debug data folder | Not done | Declined in the plan |
+| Worktree setup / cleanup, debug data folder | Not done | Declined in the plan; a coordinator worker's cleanup on merge is the one exception (ADR 0028) |
 
 ## Where Ferrite is already ahead
 

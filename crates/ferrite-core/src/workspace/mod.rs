@@ -616,6 +616,9 @@ pub struct PrFeedback {
     /// Who opened it: a worker's `gh` is the operator's, so what it says
     /// on its own PR is under this name too.
     pub author: String,
+    /// The commit at the PR's head: what a merged PR's branch must still
+    /// be at for nothing on it to be lost. Empty when the forge says none.
+    pub head: String,
     /// Reviews, then conversation comments, then line comments on the
     /// diff, in the forge's order.
     pub remarks: Vec<Remark>,
@@ -646,7 +649,7 @@ pub fn pr_feedback(cwd: &Path) -> Option<PrFeedback> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,author,statusCheckRollup,reviews,comments",
+            "number,state,isDraft,author,headRefOid,statusCheckRollup,reviews,comments",
         ],
     )?)?;
     if feedback.pr.state == PrState::Open {
@@ -687,6 +690,11 @@ fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
     Some(PrFeedback {
         pr,
         author: login(&value),
+        head: value
+            .get("headRefOid")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         remarks,
     })
 }
@@ -933,6 +941,27 @@ pub fn remove_worktree(repo: &Path, path: &Path) -> Result<(), GitError> {
     Ok(())
 }
 
+/// Delete the local `branch` only while its tip is `commit`, so nothing
+/// on it is lost; whether it is gone, as it is when it never was. A squash
+/// or rebase merge leaves a branch `git branch -d` calls unmerged, so a
+/// caller that knows the commit the work landed from compares against it
+/// instead. A branch some worktree has checked out is refused by git.
+pub fn delete_branch_at(repo: &Path, branch: &str, commit: &str) -> Result<bool, GitError> {
+    let reference = format!("refs/heads/{branch}");
+    let tip = git(
+        repo,
+        &["for-each-ref", "--format=%(objectname)", &reference],
+    )?;
+    match tip.trim() {
+        "" => Ok(true),
+        tip if tip == commit => {
+            git(repo, &["branch", "-D", branch])?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 /// Test-only: run one git command and unwrap — the shared plumbing the
 /// cockpit's binding tests drive their scratch repos with.
 #[cfg(test)]
@@ -1003,7 +1032,7 @@ mod tests {
     /// author.
     #[test]
     fn pr_feedback_reads_reviews_and_comments_beside_the_checks() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","author":{"login":"op"},"statusCheckRollup":[
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","author":{"login":"op"},"headRefOid":"c0ffee","statusCheckRollup":[
             {"name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci/1"}
         ],"reviews":[
             {"id":"PRR_1","author":{"login":"ana"},"body":"Rename this.","state":"CHANGES_REQUESTED"},
@@ -1016,6 +1045,7 @@ mod tests {
         assert_eq!(feedback.pr.number, 9);
         assert_eq!(feedback.pr.checks, Some(CheckState::Failing));
         assert_eq!(feedback.author, "op");
+        assert_eq!(feedback.head, "c0ffee");
         let remarks: Vec<(&str, &str, &str, bool)> = feedback
             .remarks
             .iter()
@@ -1418,6 +1448,24 @@ mod tests {
             fs::read_to_string(tree.join("wip.txt")).unwrap(),
             "uncommitted work\n"
         );
+    }
+
+    /// A merged branch is deleted only while it is at the commit the work
+    /// landed from: one with a commit past it is kept, and one already
+    /// gone is gone.
+    #[test]
+    fn a_branch_is_deleted_only_at_the_commit_given() {
+        let root = scratch("delete-branch");
+        let repo = init_repo(&root);
+        git(&repo, &["branch", "side"]).unwrap();
+        let base = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        let base = base.trim();
+
+        assert!(!delete_branch_at(&repo, "side", "c0ffee").unwrap());
+        assert!(branches(&repo).unwrap().contains(&"side".to_string()));
+        assert!(delete_branch_at(&repo, "side", base).unwrap());
+        assert!(!branches(&repo).unwrap().contains(&"side".to_string()));
+        assert!(delete_branch_at(&repo, "side", base).unwrap());
     }
 
     /// A worktree deleted by hand comes back on demand — same path, same

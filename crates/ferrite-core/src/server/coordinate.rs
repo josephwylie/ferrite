@@ -1,7 +1,7 @@
 //! Coordinator Threads on the Server (ADR 0028): the API's coordinator
 //! and worker operations and a window's `coordinate`, the lessons read out
-//! of a worker's finished turn into its Project's memory, and its PR's
-//! feedback sent back to it.
+//! of a worker's finished turn into its Project's memory, its PR's
+//! feedback sent back to it, and its worktree removed once that PR merged.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,13 +14,14 @@ use super::Server;
 use crate::api::schema::{AgentPromptParams, CoordinatorUpdateParams, WorkerStartParams};
 use crate::api::{thread_info, thread_result, ApiError, Code};
 use crate::coordinator::{
-    self, Brief, BriefChange, Coordination, Coordinators, Feedback, Need, Worker,
+    self, Brief, BriefChange, Coordination, Coordinators, Feedback, Merged, Need, Worker,
 };
+use crate::groups::GroupChange;
 use crate::protocol::{Done, Op, WireChoice};
 use crate::store::Provider;
 use crate::transcript::{BlockId, Body};
 use crate::workspace::registry::ProjectId;
-use crate::workspace::PrFeedback;
+use crate::workspace::{PrFeedback, PrState, WorkspaceBinding};
 use crate::{Attention, ThreadId};
 
 /// How often the followed workers' PRs are read: the Pane header's own
@@ -33,9 +34,37 @@ pub(super) struct Coordinating {
     /// Each open worker's last Block read for lessons (`None`: none yet).
     /// What follows it is read once the worker is at rest.
     read: BTreeMap<ThreadId, Option<BlockId>>,
-    /// The followed PRs being read, off the pump thread.
-    reading: Option<Receiver<Vec<(ThreadId, PrFeedback)>>>,
+    /// The followed PRs being read and the merged workers' worktrees
+    /// being removed, off the pump thread.
+    reading: Option<Receiver<Reading>>,
     read_at: Option<Instant>,
+}
+
+/// What one pass off the pump thread found.
+struct Reading {
+    /// Each followed worker's PR, and for a merged one whether its
+    /// checkout is clean: nothing modified, nothing untracked.
+    prs: Vec<(ThreadId, PrFeedback, bool)>,
+    /// What became of each parked merged worker's worktree.
+    cleanups: Vec<(ThreadId, Cleanup)>,
+}
+
+/// A parked merged worker's checkout, to be removed.
+struct Retiring {
+    thread: ThreadId,
+    repo: PathBuf,
+    /// Its worktree; `None` once it is bound to the main checkout.
+    worktree: Option<PathBuf>,
+    /// The branch Ferrite made it, deleted while at `head`.
+    branch: Option<String>,
+    head: String,
+}
+
+enum Cleanup {
+    /// The worktree is gone, and the branch with it unless named here.
+    Removed { kept: Option<String> },
+    /// The worktree stays: git refused it, logged.
+    Refused,
 }
 
 impl Coordinating {
@@ -194,13 +223,14 @@ impl Server {
 
     /// `coordinator.get`: the brief, the memory, and the workers — the open
     /// ones in the order of what needs the operator, start order among
-    /// equals, then the closed ones.
+    /// equals, then the closed ones, the resolved among them.
     pub(super) fn coordinator_result(&self, coordinator: ThreadId) -> Result<Value, ApiError> {
         let book = &self.coordinating.book;
         let coordination = book.led_by(coordinator).ok_or_else(not_a_coordinator)?;
         let mut open: Vec<(Need, Value)> = coordination
             .workers
             .iter()
+            .filter(|worker| !worker.resolved())
             .filter_map(|worker| {
                 let info = thread_info(&self.engine, worker.thread)?;
                 let need = Need::of(info.attention);
@@ -214,8 +244,10 @@ impl Server {
         let closed: Vec<Value> = coordination
             .workers
             .iter()
-            .filter(|worker| self.engine.thread(worker.thread).is_none())
-            .map(|worker| json!({ "thread": worker.thread, "task": worker.task }))
+            .filter(|worker| worker.resolved() || self.engine.thread(worker.thread).is_none())
+            .map(|worker| {
+                json!({ "thread": worker.thread, "task": worker.task, "merged": worker.merged })
+            })
             .collect();
         let project = coordination.project;
         Ok(json!({
@@ -298,6 +330,7 @@ impl Server {
                 thread,
                 task: params.task.clone(),
                 sent: Default::default(),
+                merged: None,
             })
         });
         if let Err(error) = recorded {
@@ -402,14 +435,16 @@ impl Server {
         self.coordinating.read = read;
     }
 
-    /// Read the followed workers' PRs every `FOLLOW_EVERY`, one reading at
-    /// a time, and send each its new feedback when the reading lands.
+    /// Every `FOLLOW_EVERY`, one pass at a time and off the pump thread:
+    /// the parked merged workers' worktrees are removed, and the followed
+    /// workers' PRs read. When the pass lands, each worker is resolved,
+    /// retired or sent its new feedback.
     fn follow_prs(&mut self) {
         if let Some(reading) = &self.coordinating.reading {
             match reading.try_recv() {
                 Ok(read) => {
                     self.coordinating.reading = None;
-                    self.send_feedback(read);
+                    self.land(read);
                 }
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => self.coordinating.reading = None,
@@ -428,12 +463,14 @@ impl Server {
             .iter()
             .filter(|coordination| coordination.follow_prs)
             .flat_map(|coordination| &coordination.workers)
+            .filter(|worker| !worker.resolved())
             .filter_map(|worker| {
                 let cwd = self.engine.thread(worker.thread)?.workspace()?.cwd();
                 Some((worker.thread, cwd.to_path_buf()))
             })
             .collect();
-        if followed.is_empty() {
+        let retiring = self.retiring();
+        if followed.is_empty() && retiring.is_empty() {
             return;
         }
         self.coordinating.read_at = Some(Instant::now());
@@ -441,17 +478,176 @@ impl Server {
         let spawned = std::thread::Builder::new()
             .name("ferrite-follow-prs".into())
             .spawn(move || {
-                let read = followed
+                let cleanups = retiring
+                    .iter()
+                    .map(|retiring| (retiring.thread, clean_up(retiring)))
+                    .collect();
+                let prs = followed
                     .into_iter()
                     .filter_map(|(thread, cwd)| {
-                        Some((thread, crate::workspace::pr_feedback(&cwd)?))
+                        let pr = crate::workspace::pr_feedback(&cwd)?;
+                        let clean = pr.pr.state == PrState::Merged
+                            && crate::workspace::is_clean(&cwd).unwrap_or(false);
+                        Some((thread, pr, clean))
                     })
                     .collect();
-                let _ = tell.send(read);
+                let _ = tell.send(Reading { prs, cleanups });
             });
         match spawned {
             Ok(_) => self.coordinating.reading = Some(reading),
             Err(error) => crate::log!("server: the workers' PRs could not be read: {error}"),
+        }
+    }
+
+    fn land(&mut self, reading: Reading) {
+        for (thread, cleanup) in reading.cleanups {
+            self.resolve(thread, cleanup);
+        }
+        let mut feedback = Vec::new();
+        for (thread, pr, clean) in reading.prs {
+            if pr.pr.state == PrState::Merged {
+                self.retire(thread, &pr, clean);
+            } else {
+                feedback.push((thread, pr));
+            }
+        }
+        self.send_feedback(feedback);
+    }
+
+    /// `thread`'s entry in the book while its Project follows PRs.
+    fn followed_worker(&self, thread: ThreadId) -> Option<&Worker> {
+        self.coordinating
+            .book
+            .iter()
+            .filter(|coordination| coordination.follow_prs)
+            .flat_map(|coordination| &coordination.workers)
+            .find(|worker| worker.thread == thread)
+    }
+
+    /// A followed worker whose PR merged is parked, for its worktree to be
+    /// removed on the next pass, once it is at rest: done or idle, nothing
+    /// queued. One whose checkout holds uncommitted or untracked work is
+    /// left open and logged, and asked again at the next reading.
+    fn retire(&mut self, thread: ThreadId, pr: &PrFeedback, clean: bool) {
+        if self.followed_worker(thread).is_none() {
+            return;
+        }
+        let at_rest = matches!(
+            self.engine.attention(thread),
+            Some(Attention::Done | Attention::Idle)
+        ) && self
+            .engine
+            .thread(thread)
+            .is_some_and(|view| view.queued().is_none());
+        if !at_rest {
+            return;
+        }
+        let number = pr.pr.number;
+        if !clean {
+            crate::log!(
+                "worker {thread}: PR #{number} merged, but its worktree holds uncommitted \
+                 or untracked work: left in place"
+            );
+            return;
+        }
+        let merged = Merged {
+            pr: number,
+            head: pr.head.clone(),
+            resolved: false,
+        };
+        let recorded = self
+            .coordinating
+            .book
+            .update_worker(thread, |worker| worker.merged = Some(merged));
+        if let Err(error) = recorded {
+            crate::log!("worker {thread}: its merged PR was not recorded: {error}");
+            return;
+        }
+        if let Err(error) = self.execute(Op::Park { thread }) {
+            crate::log!(
+                "worker {thread}: not parked for its merged PR: {}",
+                error.message
+            );
+            return;
+        }
+        // Its worktree goes on the next pass, at once.
+        self.coordinating.read_at = None;
+    }
+
+    /// The merged workers parked and not yet resolved, with what to remove.
+    /// One opened again since is left to its next reading.
+    fn retiring(&self) -> Vec<Retiring> {
+        self.coordinating
+            .book
+            .iter()
+            .flat_map(|coordination| &coordination.workers)
+            .filter_map(|worker| {
+                let merged = worker.merged.as_ref().filter(|merged| !merged.resolved)?;
+                let (repo, worktree) = match self.engine.parked_workspace(worker.thread)? {
+                    WorkspaceBinding::Worktree { repo, path } => (repo, Some(path)),
+                    WorkspaceBinding::Main { checkout } => (checkout, None),
+                };
+                let branch = worktree
+                    .as_deref()
+                    .and_then(|path| self.engine.registry().branch_for(path))
+                    .map(String::from);
+                Some(Retiring {
+                    thread: worker.thread,
+                    repo,
+                    worktree,
+                    branch,
+                    head: merged.head.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// A merged worker whose worktree is gone is resolved: bound to the
+    /// main checkout, out of its coordinator's Group, and its coordinator
+    /// told. One opened again meanwhile, or whose binding could not be
+    /// moved, is left to the next pass, which finds its worktree gone.
+    fn resolve(&mut self, thread: ThreadId, cleanup: Cleanup) {
+        let Cleanup::Removed { kept } = cleanup else {
+            return;
+        };
+        if let Err(error) = self.engine.retire_worktree(thread) {
+            crate::log!("worker {thread}: not resolved: {error}");
+            return;
+        }
+        let recorded = self.coordinating.book.update_worker(thread, |worker| {
+            if let Some(merged) = &mut worker.merged {
+                merged.resolved = true;
+            }
+        });
+        if let Err(error) = recorded {
+            crate::log!("worker {thread}: its resolution was not recorded: {error}");
+            return;
+        }
+        if self.engine.groups().of(thread).is_some() {
+            if let Err(error) = self.engine.apply_group(GroupChange::Leave { thread }) {
+                crate::log!("worker {thread}: kept its Group seat: {error}");
+            }
+        }
+        let told = self.coordinating.book.iter().find_map(|coordination| {
+            let worker = coordination.workers.iter().find(|w| w.thread == thread)?;
+            let pr = worker.merged.as_ref()?.pr;
+            let text = coordinator::merged_prompt(thread, &worker.task, pr, kept.as_deref());
+            Some((coordination.coordinator, text))
+        });
+        let Some((coordinator, text)) = told else {
+            return;
+        };
+        let told = self.prompt(&AgentPromptParams {
+            thread: coordinator,
+            text,
+            wait: false,
+            timeout_ms: None,
+        });
+        if let Err(error) = told {
+            crate::log!(
+                "coordinator {coordinator}: worker {thread}'s merge was not told: {}",
+                error.message
+            );
         }
     }
 
@@ -461,14 +657,7 @@ impl Server {
     /// again on the next reading.
     fn send_feedback(&mut self, read: Vec<(ThreadId, PrFeedback)>) {
         for (thread, pr) in read {
-            let Some(worker) = self
-                .coordinating
-                .book
-                .iter()
-                .filter(|coordination| coordination.follow_prs)
-                .flat_map(|coordination| &coordination.workers)
-                .find(|worker| worker.thread == thread)
-            else {
+            let Some(worker) = self.followed_worker(thread) else {
                 continue;
             };
             let items = coordinator::feedback(&pr);
@@ -480,7 +669,7 @@ impl Server {
                 continue;
             }
             let text = coordinator::feedback_prompt(pr.pr.number, &new);
-            let keys = new.iter().map(|item| item.key.clone()).collect();
+            let keys: Vec<String> = new.iter().map(|item| item.key.clone()).collect();
             let sent = self.prompt(&AgentPromptParams {
                 thread,
                 text,
@@ -489,7 +678,11 @@ impl Server {
             });
             match sent {
                 Ok(()) => {
-                    if let Err(error) = self.coordinating.book.mark_sent(thread, keys) {
+                    let recorded = self
+                        .coordinating
+                        .book
+                        .update_worker(thread, |worker| worker.sent.extend(keys));
+                    if let Err(error) = recorded {
                         crate::log!("worker {thread}: feedback sent was not recorded: {error}");
                     }
                 }
@@ -499,6 +692,40 @@ impl Server {
             }
         }
     }
+}
+
+/// Remove a merged worker's worktree, never forced, then its branch while
+/// that is at the PR's head, so nothing on either is lost. Each refusal is
+/// logged; a worktree already gone is gone.
+fn clean_up(retiring: &Retiring) -> Cleanup {
+    let Retiring {
+        thread,
+        repo,
+        worktree,
+        branch,
+        head,
+    } = retiring;
+    if let Some(path) = worktree.as_deref().filter(|path| path.exists()) {
+        if let Err(error) = crate::workspace::remove_worktree(repo, path) {
+            crate::log!("worker {thread}: its worktree stays: {error}");
+            return Cleanup::Refused;
+        }
+    }
+    let Some(branch) = branch else {
+        return Cleanup::Removed { kept: None };
+    };
+    let kept = match crate::workspace::delete_branch_at(repo, branch, head) {
+        Ok(true) => None,
+        Ok(false) => {
+            crate::log!("worker {thread}: branch {branch} is kept: it is not at the PR's head");
+            Some(branch.clone())
+        }
+        Err(error) => {
+            crate::log!("worker {thread}: branch {branch} is kept: {error}");
+            Some(branch.clone())
+        }
+    };
+    Cleanup::Removed { kept }
 }
 
 #[cfg(test)]

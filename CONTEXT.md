@@ -212,7 +212,8 @@ _Avoid_: manager, orchestrator, lead agent.
 A Thread a Coordinator started for one task, in a new worktree on its own
 branch, briefed with the Project's goal, standing instructions and
 Memory. Its PR's failing checks and review remarks come back to it when
-the Project follows PRs.
+the Project follows PRs, and once that PR merges and it is at rest, it is
+resolved: parked, its worktree removed, out of the Group.
 _Avoid_: subagent (that is Main's own delegate), task (that is what it
 works on).
 

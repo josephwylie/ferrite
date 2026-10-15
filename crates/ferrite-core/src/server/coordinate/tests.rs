@@ -65,6 +65,7 @@ fn coordinated(
                 thread: worker,
                 task: "Add invoices".into(),
                 sent: Default::default(),
+                merged: None,
             }],
         })
         .unwrap();
@@ -92,6 +93,7 @@ fn review(id: &str, body: &str) -> PrFeedback {
             runs: Vec::new(),
         },
         author: "op".into(),
+        head: "c0ffee".into(),
         remarks: vec![Remark {
             id: id.into(),
             author: "ana".into(),
@@ -150,6 +152,7 @@ fn a_start_records_its_brief_and_a_successor_keeps_the_book() {
         thread: ThreadId::new(99),
         task: "Add invoices".into(),
         sent: ["remark:PRR_1".to_string()].into(),
+        merged: None,
     };
     let recorded = worker.clone();
     server
@@ -402,5 +405,211 @@ fn lessons_not_remembered_are_read_again() {
     assert_eq!(
         server.coordinating.book.memory(project),
         "- Invoices live in app/billing\n"
+    );
+}
+
+fn reading(state: PrState, head: &str) -> PrFeedback {
+    let mut pr = review("PRR_1", "Rename `total`.");
+    pr.pr.state = state;
+    pr.head = head.into();
+    pr
+}
+
+/// A coordinator following PRs, at rest, and its worker in its own
+/// worktree, at rest with a commit on its branch: the commit, and where
+/// the worktree is.
+fn merging(
+    server: &mut Server,
+    project: ProjectId,
+    providers: &Receiver<Sender<SessionEvent>>,
+) -> (ThreadId, ThreadId, Sender<SessionEvent>, String, PathBuf) {
+    let follow = BriefChange {
+        follow_prs: Some(true),
+        ..Default::default()
+    };
+    let coordinator = server
+        .start_coordinator(project, Provider::Claude, follow)
+        .unwrap();
+    let coordinator_provider = provider(providers);
+    server
+        .start_worker(WorkerStartParams {
+            thread: coordinator,
+            task: "Add invoices".into(),
+            title: None,
+            provider: None,
+        })
+        .unwrap();
+    let worker_provider = provider(providers);
+    let worker = server
+        .coordinating
+        .book
+        .of_project(project)
+        .unwrap()
+        .workers[0]
+        .thread;
+    for provider in [&coordinator_provider, &worker_provider] {
+        provider.send(text("Done.")).unwrap();
+        turn_ends(provider);
+    }
+    server.engine.pump();
+    let tree = server
+        .engine
+        .thread(worker)
+        .unwrap()
+        .workspace()
+        .unwrap()
+        .cwd()
+        .to_path_buf();
+    std::fs::write(tree.join("invoices.md"), "invoices\n").unwrap();
+    let git = |args: &[&str]| crate::workspace::git_for_tests(&tree, args);
+    git(&["add", "invoices.md"]);
+    git(&[
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-qm",
+        "invoices",
+    ]);
+    let head = git(&["rev-parse", "HEAD"]).trim().to_string();
+    (coordinator, worker, worker_provider, head, tree)
+}
+
+/// One pass off the pump thread, landed.
+fn pass(server: &mut Server) {
+    server.coordinating.read_at = None;
+    server.follow_prs();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.coordinating.reading.is_some() {
+        assert!(Instant::now() < deadline, "the pass never landed");
+        std::thread::sleep(Duration::from_millis(10));
+        server.follow_prs();
+    }
+}
+
+fn merged(server: &Server, worker: ThreadId) -> Option<Merged> {
+    server
+        .coordinating
+        .book
+        .iter()
+        .flat_map(|coordination| &coordination.workers)
+        .find(|entry| entry.thread == worker)
+        .and_then(|entry| entry.merged.clone())
+}
+
+/// A worker whose PR merged is parked once at rest; its worktree goes,
+/// and its branch, at the PR's head; it is resolved: out of the open
+/// workers and the Group, its coordinator told, and bound to the main
+/// checkout, so a revive builds no worktree again.
+#[test]
+fn a_merged_worker_at_rest_is_cleaned_up_and_resolved() {
+    let (mut server, project, providers) = boot("coordinate-merged");
+    let (coordinator, worker, _provider, head, tree) = merging(&mut server, project, &providers);
+    let branch = server
+        .engine
+        .registry()
+        .branch_for(&tree)
+        .unwrap()
+        .to_string();
+    let repo = server
+        .engine
+        .registry()
+        .project(project)
+        .unwrap()
+        .root
+        .clone();
+    assert!(server.engine.groups().of(worker).is_some());
+
+    server.land(Reading {
+        prs: vec![(worker, reading(PrState::Merged, &head), true)],
+        cleanups: Vec::new(),
+    });
+    assert!(server.engine.thread(worker).is_none(), "parked");
+    pass(&mut server);
+
+    assert!(!tree.exists());
+    let branches = crate::workspace::branches(&repo).unwrap();
+    assert!(!branches.contains(&branch), "{branches:?}");
+    assert!(merged(&server, worker).unwrap().resolved);
+    assert!(server.engine.groups().of(worker).is_none());
+    let got = server.coordinator_result(coordinator).unwrap();
+    assert_eq!(got["workers"], json!([]));
+    assert_eq!(got["closed"][0]["merged"]["resolved"], json!(true));
+    server.engine.pump();
+    let told = said(&server, coordinator);
+    assert!(told.contains("Pull request #4 of worker Thread"), "{told}");
+    assert!(told.contains("its branch is deleted"), "{told}");
+
+    server.execute(Op::Revive { thread: worker }).unwrap();
+    let _revived = provider(&providers);
+    let workspace = server.engine.thread(worker).unwrap().workspace().cloned();
+    assert_eq!(workspace, Some(WorkspaceBinding::Main { checkout: repo }));
+    assert!(!tree.exists());
+    pass(&mut server);
+    assert!(server.engine.thread(worker).is_some(), "resolved once");
+}
+
+/// A closed PR, a working worker and a dirty checkout leave the worker
+/// open. A worktree git refuses to remove stays, and goes at a later
+/// pass; a branch that is not at the PR's head is kept.
+#[test]
+fn a_merged_worker_is_cleaned_up_only_when_nothing_is_lost() {
+    let (mut server, project, providers) = boot("coordinate-merged-kept");
+    let (coordinator, worker, worker_provider, _head, tree) =
+        merging(&mut server, project, &providers);
+    let branch = server
+        .engine
+        .registry()
+        .branch_for(&tree)
+        .unwrap()
+        .to_string();
+    let repo = server
+        .engine
+        .registry()
+        .project(project)
+        .unwrap()
+        .root
+        .clone();
+    let land = |server: &mut Server, state: PrState, clean: bool| {
+        server.land(Reading {
+            prs: vec![(worker, reading(state, "c0ffee"), clean)],
+            cleanups: Vec::new(),
+        });
+    };
+
+    land(&mut server, PrState::Closed, true);
+    server
+        .execute(Op::Send {
+            thread: worker,
+            text: "Add totals.".into(),
+        })
+        .unwrap();
+    land(&mut server, PrState::Merged, true);
+    assert!(merged(&server, worker).is_none(), "a working worker stays");
+    turn_ends(&worker_provider);
+    server.engine.pump();
+    land(&mut server, PrState::Merged, false);
+    assert!(merged(&server, worker).is_none(), "a dirty checkout stays");
+    assert!(server.engine.thread(worker).is_some());
+
+    land(&mut server, PrState::Merged, true);
+    assert!(server.engine.thread(worker).is_none(), "parked");
+    std::fs::write(tree.join("wip.md"), "wip\n").unwrap();
+    pass(&mut server);
+    assert!(tree.join("wip.md").exists(), "never forced");
+    assert!(!merged(&server, worker).unwrap().resolved);
+
+    std::fs::remove_file(tree.join("wip.md")).unwrap();
+    pass(&mut server);
+    assert!(!tree.exists());
+    assert!(merged(&server, worker).unwrap().resolved);
+    let branches = crate::workspace::branches(&repo).unwrap();
+    assert!(branches.contains(&branch), "kept: {branches:?}");
+    server.engine.pump();
+    let told = said(&server, coordinator);
+    assert!(
+        told.contains(&format!("its branch `{branch}` is kept")),
+        "{told}"
     );
 }

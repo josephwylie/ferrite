@@ -141,11 +141,46 @@ comments on a worker's PR are not followed either; the operator tells a
 worker directly in its Thread. Turning `follow_prs` off stops a reading
 already under way from being sent.
 
+### A merged PR resolves its worker
+
+herdr-projects' rule: a merged pull request resolves the thread and
+removes its worktree and branch once its agent has finished. Where the
+Project follows PRs, the reading that finds a worker's PR merged, with
+the worker at rest (done or idle, no Decision, nothing queued) and its
+checkout clean (nothing modified, nothing untracked: `git status`, asked
+in the same pass off the pump thread), parks the worker and records the
+merge (the PR and its head commit) in `coordinators.json`. The next pass,
+at once and still off the pump thread, removes the worktree with a plain
+`git worktree remove`, never forced, and deletes the branch Ferrite made
+for it only while that branch's tip is the PR's head commit as `gh`
+reports it (`headRefOid`): a squash or rebase merge leaves a branch
+`git branch -d` calls unmerged, and a branch with a commit past the PR
+would lose it. A kept branch is logged and named to the coordinator.
+
+The worker is then resolved: bound to its repo's main checkout (a parked
+Thread bound to a worktree that is gone would have it rebuilt on demand
+by a revive) and forgotten by the worktree menu, recorded as resolved,
+taken out of the coordinator's Group, and the coordinator is told, by
+`agent.prompt`'s rules, so it can plan the next task; one a Decision
+blocks is logged, and `coordinator get` lists the worker among the
+closed, with its merge. A revived resolved worker works in the main
+checkout and is no longer followed.
+
+Nothing destructive is retried blindly, and every step can be repeated:
+a dirty checkout is left open, logged, and asked again at the next
+reading; a worktree git still refuses once parked (written to in
+between) stays, logged, and is tried again at the next pass; a worktree
+already gone is gone, and so is a branch. A worker opened again before
+it was resolved is left to its next reading. A closed, unmerged PR does
+nothing.
+
 ## Consequences
 
 - Every act a coordinator takes is an API request: a script can do what
   a coordinator does, and the operator's palette does what a script can.
-- Worktrees and branches the workers made are left in place: the plan
-  rules worktree removal out.
+- A worker's worktree, and its branch when nothing on it would be lost,
+  are removed once its PR merges, for coordinator Projects that follow
+  PRs only. Every other worktree is left in place: general worktree
+  cleanup stays out of scope.
 - An unreadable `coordinators.json` is logged and started afresh, as
   unreadable settings are.
