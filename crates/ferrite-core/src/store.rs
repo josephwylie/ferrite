@@ -104,7 +104,7 @@ const OPEN_MARKER: &str = ".open";
 const OPEN_STATE_MARKER: &str = ".open-state-v1";
 
 /// The store's high-water mark: the id the next Thread takes. It only
-/// rises, so a deleted Thread's id is never handed out again (ADR 0009).
+/// rises, so a deleted Thread's id is never handed out again (ADR 0029).
 const NEXT_ID: &str = "next-id";
 
 /// The store's single-writer claim (ADR 0009): the process holding an
@@ -4611,20 +4611,27 @@ mod tests {
     #[test]
     fn a_deleted_threads_id_is_never_reused() {
         let dir = scratch("never-reuse");
+        let create = |store: &Store| {
+            store
+                .create(Provider::Claude, None, main_choice())
+                .unwrap()
+                .0
+        };
         let store = Store::open(&dir).unwrap();
-        let (first, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        let first = create(&store);
         assert_eq!(first, ThreadId::new(1));
         store.delete(first).unwrap();
-        let (second, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        let second = create(&store);
         assert_eq!(second, ThreadId::new(2));
 
         store.delete(second).unwrap();
+        drop(store);
         let store = Store::open(&dir).unwrap();
-        let (third, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        let third = create(&store);
         assert_eq!(third, ThreadId::new(3));
 
         fs::remove_file(dir.join(NEXT_ID)).unwrap();
-        let (fourth, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        let fourth = create(&store);
         assert_eq!(fourth, ThreadId::new(4), "seeded from the Threads held");
     }
 
