@@ -6,12 +6,13 @@
 //!
 //! Upstream runs on macOS only (alerter, `lsappinfo`, `open -b`); elsewhere
 //! only the decision of whether to notify is built.
-
-// Vendored with minimal changes so upstream can be merged: helpers the
-// Herdr-only paths used (terminal learning, focus-origin markers) stay.
-#![allow(dead_code)]
+//!
+//! Vendored with minimal changes so upstream can be merged: the modules
+//! marked `allow(dead_code)` keep helpers only the Herdr paths used (event
+//! JSON, foreground delivery, terminal learning, focus-origin markers).
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod event;
 #[cfg(target_os = "macos")]
 mod executable;
@@ -23,12 +24,15 @@ mod icons;
 #[cfg(target_os = "macos")]
 mod notification;
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod notifier;
 #[cfg(target_os = "macos")]
 mod script;
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod state;
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod util;
 
 pub use focus::*;

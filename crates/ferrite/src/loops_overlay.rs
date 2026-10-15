@@ -82,6 +82,8 @@ impl CockpitWindow {
         let clicked = cx.entity().downgrade();
         crate::system_notifications::on_click(
             move |tag, cx| {
+                // alerter leaves bringing the app forward to its caller.
+                cx.activate(true);
                 let _ = handle.update(cx, |_, window, _| window.activate_window());
                 let _ = clicked.update(cx, |this, cx| {
                     this.cockpit

@@ -72,9 +72,16 @@ delivered, and **how its click lands**:
   its own terminal, so the Thread's Pane being the focused one and the
   window having the system's focus stand for those
   (`ferrite_focus_notify::notification_decision`). Where this overlapped
-  ADR 0017's rule (a system notification only while the window is in the
-  background), focus-notify's wins: a Thread off the board that rings while
-  the window is frontmost now posts a system notification beside its toast.
+  ADR 0017's rules, focus-notify's wins, both ways. ADR 0017 posted only
+  while the window was in the background; now a Thread off the board that
+  rings while the window is frontmost posts a system notification beside
+  its toast. And ADR 0017 kept quiet about anything in view; the bell still
+  does (no toast, no chime), but an event in view whose Pane is not the
+  focused one still posts a system notification when its delay is up, as
+  upstream sends for any pane but the focused one. So the only alert that
+  never posts is the focused Pane's while the window is frontmost. (A
+  Notice in view is usually seen, so read, before its delay is up, and
+  then never posts; a request stands until answered, so it does.)
   Upstream's other overlap, notifying only `blocked` and `done`, already
   holds: a live request is blocked, a finished turn done; a failed turn is a
   Notice and goes as done, its words saying it failed.
@@ -94,6 +101,17 @@ delivered, and **how its click lands**:
 - **Click.** Upstream exec'd itself to focus the Herdr pane over Herdr's
   socket and raise the terminal window running it. Ferrite waits on the
   notification itself, and a click comes back in-process: the window comes
-  forward and lands on the Thread as ADR 0017 describes, on its machine
+  forward (the click handler activates the app, since alerter no longer
+  does) and lands on the Thread as ADR 0017 describes, on its machine
   when that is off screen. Upstream's terminal learning (which app shows a
   workspace) has nothing to learn here and is not used.
+- **What is not carried over.** Upstream's visibility monitor
+  (`SendWithVisibilityMonitor`) watched, from a separate process, for the
+  pane becoming visible and took the notification back; Ferrite's bell
+  already takes back every posting whose Notice or request is read on its
+  next pump, in-process, so the decision is treated as a plain send.
+  Upstream found alerter afresh on every event, being a fresh process per
+  event; Ferrite looks once per run, so alerter installed while Ferrite
+  runs is used from the next launch. Upstream is macOS only, so there is no
+  upstream delivery to adopt on Windows and Linux: GPUI's notification
+  centre stays the carrier there rather than none at all.
