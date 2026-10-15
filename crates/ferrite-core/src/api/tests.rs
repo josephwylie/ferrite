@@ -185,6 +185,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "project.open",
             "project.rename",
             "project.close",
+            "worktree.create",
             "worktree.remove",
             "machine.list",
             "nav.focus",

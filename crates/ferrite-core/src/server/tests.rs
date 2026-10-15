@@ -2154,7 +2154,7 @@ fn projects_are_opened_renamed_focused_and_closed() {
     let closed = caller.answer("10", "project.close", serde_json::json!({ "project": id }));
     assert_eq!(
         closed["result"]["parked"],
-        serde_json::json!([thread]),
+        serde_json::json!([thread, nested["result"]["thread"]["thread"]]),
         "{closed}"
     );
     assert_eq!(closed["result"]["project"]["thread_count"], 0, "{closed}");
