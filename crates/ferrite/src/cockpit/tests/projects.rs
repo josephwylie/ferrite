@@ -161,6 +161,34 @@ fn a_server_notification_rings_the_chime_it_names(cx: &mut TestAppContext) {
     assert_eq!(toasts(cx), before + 3, "each one a toast");
 }
 
+/// The all-sounds switch off silences a Server notification's chime too;
+/// the toast still shows.
+#[gpui::test]
+fn a_server_notification_is_silent_with_sounds_off(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::Asked;
+    use ferrite_core::protocol::WireSound;
+    let (core, _fake) = cockpit("projects-chime-off", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, _| {
+        view.chimed.clear();
+        view.prefs.settings.sounds = false;
+    });
+    let before = toasts(cx);
+
+    view.update_in(cx, |view, window, cx| {
+        let asked = Asked::Notification {
+            title: "Alpha \u{b7} t-0001".into(),
+            body: Some("needs you".into()),
+            sound: WireSound::Request.sound(),
+            important: true,
+        };
+        view.present(asked, window, cx);
+        assert!(view.chimed.is_empty(), "sounds off: no chime");
+    });
+    assert_eq!(toasts(cx), before + 1, "the toast still shows");
+}
+
 /// `nav.focus` from the Server focuses the nav as the palette's `focus`
 /// does, and its clear shows everything again.
 #[gpui::test]

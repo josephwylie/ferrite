@@ -4579,7 +4579,8 @@ impl CockpitView {
                     toast = toast.message(body);
                 }
                 window.push_notification(toast, cx);
-                if let Some(sound) = sound {
+                // No provider to ask: only the all-sounds switch applies.
+                if let Some(sound) = sound.filter(|_| self.prefs.settings.sounds) {
                     self.chime(sound);
                 }
             }
