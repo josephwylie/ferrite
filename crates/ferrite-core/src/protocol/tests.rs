@@ -926,6 +926,26 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("stopping", Sample::Server(ServerMessage::Stopping)),
         (
+            "focus",
+            Sample::Server(ServerMessage::Focus {
+                thread: ThreadId::new(7),
+            }),
+        ),
+        (
+            "notification",
+            Sample::Server(ServerMessage::Notification {
+                title: "Review ready".into(),
+                body: Some("3 findings".into()),
+            }),
+        ),
+        (
+            "notification_title_only",
+            Sample::Server(ServerMessage::Notification {
+                title: "Review ready".into(),
+                body: None,
+            }),
+        ),
+        (
             "input_record_text",
             input(
                 1,

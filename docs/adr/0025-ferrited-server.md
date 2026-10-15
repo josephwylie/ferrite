@@ -170,9 +170,9 @@ then exits 0.
 
 One JSON object per line, internally tagged by `type`, over the socket.
 The connection opens with `hello` and nothing else; the Server answers
-`welcome`, then `snapshot`. The automation API and CLI (plan §2) will
-share the listener with another `role` in `hello`; nothing here depends
-on it.
+`welcome`, then `snapshot`. The automation API and CLI (plan §2) were
+to share the listener with another `role` in `hello`; ADR 0026 gives them
+a socket of their own instead. Nothing here depends on it.
 
 The contract rules, frozen with generation 1 and kept for as long as an
 app or Server of generation 1 can exist:

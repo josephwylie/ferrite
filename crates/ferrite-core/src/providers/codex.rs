@@ -126,6 +126,9 @@ pub struct CodexConfig {
     /// tool (and description) it began with — so the level only shapes new
     /// threads; the renderer still answers a resumed thread's calls.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited.
+    pub env: Vec<(&'static str, std::ffi::OsString)>,
 }
 
 impl Default for CodexConfig {
@@ -140,6 +143,7 @@ impl Default for CodexConfig {
             sandbox: None,
             resume: None,
             visuals: None,
+            env: Vec::new(),
         }
     }
 }
@@ -287,7 +291,8 @@ impl CodexSession {
         command
             .arg("app-server")
             .no_console_window()
-            .agent_environment();
+            .agent_environment()
+            .envs(config.env.iter().cloned());
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.

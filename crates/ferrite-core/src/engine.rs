@@ -45,6 +45,9 @@ mod queue;
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
 /// choice through it, so a new fact travels to all of them at once (#25).
 pub struct SpawnRequest<'a> {
+    /// The Thread it serves: told to the agent (`FERRITE_THREAD_ID`), so it
+    /// can name its own Thread to the API (ADR 0026).
+    pub thread: ThreadId,
     pub provider: Provider,
     /// The Thread's chosen model, verbatim as the provider announced it.
     /// `None` is the provider's own default.
@@ -1079,6 +1082,7 @@ impl Engine {
         let spawned = self.spawner.start_after(
             placement(&self.registry, self.store.dir(), thread.workspace.as_ref(), id),
             SpawnRequest {
+                thread: id,
                 provider: thread.provider,
                 model: thread.model.as_deref(),
                 effort: thread.effort.as_deref(),
@@ -1247,6 +1251,7 @@ impl Engine {
             }
         }
         let session = match self.spawner.start(SpawnRequest {
+            thread: id,
             provider,
             model: model.as_deref(),
             effort: effort.as_deref(),
@@ -1561,6 +1566,7 @@ impl Engine {
             .start_after(
                 placement(&self.registry, self.store.dir(), state.workspace.as_ref(), thread),
                 SpawnRequest {
+                    thread,
                     provider,
                     model: model.as_deref(),
                     effort: effort.as_deref(),
@@ -1894,6 +1900,7 @@ impl Engine {
             .start_after(
                 prepare,
                 SpawnRequest {
+                    thread,
                     provider,
                     model: model.as_deref(),
                     effort: effort.as_deref(),
@@ -2035,6 +2042,7 @@ impl Engine {
             match self.spawner.start_after(
                 place,
                 SpawnRequest {
+                    thread,
                     provider: state.provider,
                     model: state.model.as_deref(),
                     effort: state.effort.as_deref(),
@@ -3543,6 +3551,22 @@ impl Engine {
                 .threads
                 .values()
                 .all(|state| state.settled() && state.queued.is_none())
+    }
+
+    /// An open Thread's Attention, as the Server knows it (ADR 0015): a
+    /// Decision waiting, any work running, an unseen Notice, else idle.
+    pub fn attention(&self, thread: ThreadId) -> Option<crate::Attention> {
+        use crate::Attention;
+        let view = self.thread(thread)?;
+        Some(if view.pending().is_some() {
+            Attention::Blocked
+        } else if view.working() || view.background_work() {
+            Attention::Working
+        } else if self.notifications.attention(thread) {
+            Attention::Done
+        } else {
+            Attention::Idle
+        })
     }
 
     /// Everything a window draws before any transcript (ADR 0025).

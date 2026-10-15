@@ -69,6 +69,8 @@ struct Harness {
     relaunched: Receiver<PathBuf>,
     dir: PathBuf,
     address: PathBuf,
+    /// The API's socket.
+    api: PathBuf,
     sessions: Receiver<Sender<SessionEvent>>,
     answers: Answers,
 }
@@ -78,6 +80,8 @@ fn start(name: &str) -> Harness {
     let store = dir.join("threads");
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
+    let api = crate::api::address(&store);
+    let api_listener = link::listen(&api).unwrap();
     let (sessions, started) = mpsc::channel();
     let answers = Answers::default();
     let spawn = Spawn {
@@ -100,6 +104,7 @@ fn start(name: &str) -> Harness {
             Ok(())
         });
         let (heard, hear) = mpsc::channel();
+        crate::api::accept_all(api_listener, heard.clone()).unwrap();
         link::accept_all(listener, heard).unwrap();
         server.serve(hear)
     });
@@ -108,6 +113,7 @@ fn start(name: &str) -> Harness {
         relaunched,
         dir,
         address,
+        api,
         sessions: started,
         answers,
     }
@@ -948,4 +954,262 @@ fn a_boot_staggers_the_sessions_it_resumes() {
     for (nth, wait) in waits.iter().enumerate() {
         assert!(*wait >= LAUNCH_STAGGER * nth as u32, "{waits:?}");
     }
+}
+
+// ------------------------------------------------------------- the API
+
+/// An API caller's end (ADR 0026): one connection, every line it is sent.
+struct Caller {
+    stream: link::Stream,
+    heard: Receiver<serde_json::Value>,
+}
+
+fn call(harness: &Harness) -> Caller {
+    let stream = link::connect(&harness.api).unwrap();
+    let mut lines = link::Lines::new(link::TryClone::try_clone(&stream).unwrap());
+    let (tell, heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(Some(line)) = lines.next_line() {
+            if tell.send(serde_json::from_slice(&line).unwrap()).is_err() {
+                return;
+            }
+        }
+    });
+    Caller { stream, heard }
+}
+
+impl Caller {
+    fn ask(&mut self, id: &str, method: &str, params: serde_json::Value) {
+        let request = serde_json::json!({ "id": id, "method": method, "params": params });
+        link::send(&mut self.stream, &request).unwrap();
+    }
+
+    /// The next line, within five seconds.
+    fn next(&self) -> serde_json::Value {
+        self.heard
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an answer within five seconds")
+    }
+
+    /// Nothing arrives for a while.
+    fn quiet(&self) {
+        let line = self.heard.recv_timeout(Duration::from_millis(300));
+        assert!(line.is_err(), "unexpected {line:?}");
+    }
+
+    fn answer(&mut self, id: &str, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.ask(id, method, params);
+        let answer = self.next();
+        assert_eq!(answer["id"], id, "{answer}");
+        answer
+    }
+}
+
+fn turn_ends(provider: &Sender<SessionEvent>) {
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+}
+
+/// `thread.start` opens a titled Thread a window sees; `agent.prompt` with
+/// `wait` holds its answer while the agent works and gives it once the
+/// turn has ended.
+#[test]
+fn a_prompt_with_wait_answers_once_the_agent_worked_and_settled() {
+    let harness = start("api-wait");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "title": "reviewer" }),
+    );
+    let info = &started["result"]["thread"];
+    assert_eq!(info["title"], "reviewer", "{started}");
+    assert_eq!(info["provider"], "claude");
+    let thread = info["thread"].as_u64().unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    caller.ask(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "review", "wait": true }),
+    );
+    caller.quiet();
+    turn_ends(&provider);
+    let settled = caller.next();
+    assert_eq!(settled["id"], "2", "{settled}");
+    assert_ne!(
+        settled["result"]["thread"]["attention"], "working",
+        "{settled}"
+    );
+
+    let read = caller.answer("3", "agent.read", serde_json::json!({ "thread": thread }));
+    assert!(
+        read["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("> review"),
+        "{read}"
+    );
+}
+
+/// Herdr's rule: a prompt never goes to an agent a Decision blocks. The
+/// Decision is listed under its provider's id, an `agent.wait` for
+/// `blocked` hears it, and the API's answer wins like a window's would.
+#[test]
+fn a_blocked_agent_refuses_prompts_and_its_decision_is_answered_once() {
+    let harness = start("api-blocked");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    let mut caller = call(&harness);
+
+    caller.ask(
+        "1",
+        "agent.wait",
+        serde_json::json!({ "thread": thread, "until": "blocked" }),
+    );
+    caller.quiet();
+    provider.send(decision()).unwrap();
+    let blocked = caller.next();
+    assert_eq!(
+        blocked["result"]["thread"]["attention"], "blocked",
+        "{blocked}"
+    );
+
+    let refused = caller.answer(
+        "2",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "carry on" }),
+    );
+    assert_eq!(refused["error"]["code"], "agent_blocked", "{refused}");
+
+    let listed = caller.answer("3", "decision.list", serde_json::json!({}));
+    assert_eq!(
+        listed["result"]["decisions"][0]["decision"]["id"], "perm_01",
+        "{listed}"
+    );
+
+    let answered = caller.answer(
+        "4",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread,
+            "decision": "perm_01",
+            "answer": { "kind": "allow", "input": {} },
+        }),
+    );
+    assert!(answered.get("result").is_some(), "{answered}");
+    assert_eq!(harness.answers.lock().unwrap().len(), 1);
+    let again = caller.answer(
+        "5",
+        "decision.answer",
+        serde_json::json!({
+            "thread": thread,
+            "decision": "perm_01",
+            "answer": { "kind": "allow", "input": {} },
+        }),
+    );
+    assert_eq!(again["error"]["code"], "unknown_decision", "{again}");
+    window.until(|window| !window.closed().is_empty());
+    assert!(matches!(
+        window.closed()[..],
+        [ClosedBy::Answered { client }] if client >= 1 << 32
+    ));
+}
+
+/// Subscribed before the snapshot is read: the first answer is the state
+/// now, and every change after it follows as an event under the same id.
+#[test]
+fn a_subscriber_hears_the_threads_now_then_every_change() {
+    let harness = start("api-events");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    let mut subscriber = call(&harness);
+    let now = subscriber.answer(
+        "events",
+        "events.subscribe",
+        serde_json::json!({ "threads": [thread] }),
+    );
+    assert_eq!(now["result"]["threads"][0]["attention"], "idle", "{now}");
+    assert_eq!(now["result"]["decisions"], serde_json::json!([]));
+
+    let mut caller = call(&harness);
+    caller.answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+    let working = subscriber.next();
+    assert_eq!(working["id"], "events");
+    assert_eq!(
+        working["event"],
+        serde_json::json!({ "event": "attention", "thread": thread, "attention": "working" })
+    );
+    provider.send(decision()).unwrap();
+    let asked = subscriber.next();
+    assert_eq!(asked["event"]["event"], "decision_requested", "{asked}");
+    let blocked = subscriber.next();
+    assert_eq!(blocked["event"]["attention"], "blocked", "{blocked}");
+}
+
+/// `thread.focus` and `notification.show` reach every window.
+#[test]
+fn focus_and_toasts_reach_the_windows() {
+    let harness = start("api-windows");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut caller = call(&harness);
+
+    caller.answer("1", "thread.focus", serde_json::json!({ "thread": thread }));
+    let shown = caller.answer(
+        "2",
+        "notification.show",
+        serde_json::json!({ "title": "Review ready" }),
+    );
+    assert_eq!(shown["result"]["windows"], 1, "{shown}");
+    let mut told = Vec::new();
+    while told.len() < 2 {
+        match window
+            .client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            message @ (ServerMessage::Focus { .. } | ServerMessage::Notification { .. }) => {
+                told.push(message)
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        told,
+        [
+            ServerMessage::Focus { thread },
+            ServerMessage::Notification {
+                title: "Review ready".into(),
+                body: None,
+            },
+        ]
+    );
+    let unknown = caller.answer("3", "thread.focus", serde_json::json!({ "thread": 999 }));
+    assert_eq!(unknown["error"]["code"], "unknown_thread", "{unknown}");
+}
+
+/// A line that is not a request is answered with why, and the connection
+/// stays open for the next.
+#[test]
+fn an_unknown_method_is_answered_and_the_connection_goes_on() {
+    let harness = start("api-unknown");
+    let mut caller = call(&harness);
+    let unknown = caller.answer("9", "agent.dance", serde_json::json!({}));
+    assert_eq!(unknown["error"]["code"], "unknown_method", "{unknown}");
+    let listed = caller.answer("10", "thread.list", serde_json::json!({}));
+    assert_eq!(listed["result"]["threads"], serde_json::json!([]));
 }

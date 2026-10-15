@@ -892,6 +892,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         sandbox: Some("workspace-write".into()),
         resume: None,
         visuals: None,
+        env: Vec::new(),
     })
     .unwrap();
     session.send("hi").unwrap();

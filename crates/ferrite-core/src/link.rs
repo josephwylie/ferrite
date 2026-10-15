@@ -348,6 +348,8 @@ pub enum Heard {
     Message(ClientId, ClientMessage),
     /// The connection ended, or broke the protocol.
     Gone(ClientId),
+    /// An automation API connection's (ADR 0026), on its own socket.
+    Api(crate::api::Heard),
 }
 
 /// One client's end on the Server: its outbox, drained by a writer

@@ -5,6 +5,8 @@
 //! transcript, store, cockpit — added as their tickets land.
 
 pub mod activity;
+pub mod api;
+mod attention;
 pub mod cadence;
 pub mod clock;
 pub mod cockpit;
@@ -44,6 +46,7 @@ pub mod workspace;
 
 mod session_event;
 mod thread;
+pub use attention::Attention;
 pub use session_event::{
     validate_form, ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer,
     DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy, FileEdit, FormChoice,

@@ -1419,6 +1419,7 @@ mod tests {
         let mut spawn = Spawn::new(false);
         let revived = spawn
             .spawn(SpawnRequest {
+                thread: ferrite_core::ThreadId::new(1),
                 provider: Provider::Claude,
                 model: None,
                 effort: None,

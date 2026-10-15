@@ -14,6 +14,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::api::Api;
 use crate::engine::Engine;
 use crate::link::{self, ClientId, Connection, Heard, Ring};
 use crate::roster::DraftId;
@@ -23,10 +24,11 @@ use crate::protocol::{
 };
 use crate::settings::Settings;
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
-use crate::store::Store;
+use crate::store::{Provider, Store};
 use crate::ThreadId;
 
 pub mod agent;
+mod calls;
 mod render;
 mod signals;
 
@@ -85,13 +87,25 @@ pub fn run(options: Options) -> i32 {
             return 1;
         }
     };
+    // The API is the agents' (ADR 0026): without it they still run.
+    let api_address = crate::api::address(&options.store);
+    let api = match link::listen(&api_address) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            crate::log!("server: the API is unavailable: {error}");
+            None
+        }
+    };
     let settings = Settings::load(&options.settings_dir).unwrap_or_else(|error| {
         crate::log!("server: settings.json could not be read: {error}");
         Settings::default()
     });
     let defaults = Arc::new(Mutex::new(SessionDefaults::from_settings(&settings)));
     let (renderer, renders) = render::remote();
-    let spawner = Spawn::new(defaults.clone(), Some(Arc::new(renderer)));
+    let spawner = Spawn {
+        api: api.is_some().then_some(api_address),
+        ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
+    };
     let mut engine = match Engine::try_new(store, Box::new(spawner)) {
         Ok(engine) => engine,
         Err(error) => {
@@ -101,6 +115,11 @@ pub fn run(options: Options) -> i32 {
     };
     engine.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
     let (heard, hear) = mpsc::channel();
+    if let Some(api) = api {
+        if let Err(error) = crate::api::accept_all(api, heard.clone()) {
+            crate::log!("server: cannot accept API connections: {error}");
+        }
+    }
     if let Err(error) = link::accept_all(listener, heard) {
         crate::log!("server: cannot accept connections: {error}");
         return 1;
@@ -201,6 +220,10 @@ struct Server {
     stopping: Option<When>,
     /// `restart` was asked for, likewise.
     restarting: Option<When>,
+    /// The automation API's connections, waits and subscriptions.
+    api: Api,
+    /// The operator's Provider, for a `thread.start` that names none.
+    default_provider: Provider,
     /// How this Server starts its successor (`relaunch`; a test's own).
     relaunch: Box<Relaunch>,
 }
@@ -230,6 +253,8 @@ impl Server {
             settings_dir,
             stopping: None,
             restarting: None,
+            api: Api::default(),
+            default_provider: Provider::Claude,
             relaunch: Box::new(relaunch),
         }
     }
@@ -262,6 +287,7 @@ impl Server {
             self.answer_searches();
             self.forward_renders();
             self.broadcast();
+            self.api.pump(&self.engine);
             if let Some(why) = signals::stop_requested() {
                 crate::log!("server: stopping: {why}");
                 self.stop();
@@ -302,6 +328,7 @@ impl Server {
                 self.renders.client_gone(id);
             }
             Heard::Message(id, message) => self.message(id, message),
+            Heard::Api(heard) => self.api_heard(heard),
         }
     }
 
@@ -485,6 +512,7 @@ impl Server {
             .set_suggestions_enabled(settings.placeholder_suggestions);
         self.engine
             .set_allowance_thresholds(settings.allowance_warnings.clone());
+        self.default_provider = settings.default_provider;
     }
 
     /// A first send that settled answers the command that started it.
@@ -569,6 +597,7 @@ impl Server {
         let mut messages = self.engine.take_messages();
         messages.extend(self.decision_changes());
         for message in messages {
+            self.api.relay(&message);
             match &message {
                 ServerMessage::Input { thread, seq, .. } => {
                     self.rings

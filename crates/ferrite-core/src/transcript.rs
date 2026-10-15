@@ -2735,6 +2735,52 @@ fn bold_at(rest: &str) -> Option<(&str, usize)> {
     (end > 0).then_some((&body[..end], end + 4))
 }
 
+/// A transcript as plain text, the way the operator would paste it
+/// somewhere else and the API's `agent.read` hands it to an agent: prompts
+/// quoted, prose flat, code fenced, tool rows as their one line plus the
+/// result line indented under it. Thinking stays out — it is not the
+/// conversation.
+pub fn plain_text(blocks: &[Block]) -> String {
+    let flat = |spans: &[Span]| -> String { spans.iter().map(|span| span.text.as_str()).collect() };
+    let mut out = String::new();
+    for block in blocks {
+        let piece = match &block.body {
+            Body::Prompt(text) => format!("> {text}"),
+            Body::Paragraph { spans } => flat(spans),
+            Body::Heading { spans, .. } => format!("## {}", flat(spans)),
+            Body::Bullet { spans } => format!("• {}", flat(spans)),
+            Body::Code {
+                language, source, ..
+            } => format!(
+                "```{}\n{source}\n```",
+                language.as_deref().unwrap_or_default()
+            ),
+            Body::Tool(tool) => {
+                let mut line = format!("● {}", tool.name);
+                if !tool.summary.is_empty() {
+                    line.push_str(&format!(" ({})", tool.summary));
+                }
+                // The elbow is painted, never text: the result hangs at
+                // its column, as a sweep across the row copies it.
+                if let Some(result) = &tool.result_line {
+                    line.push_str(&format!("\n    {result}"));
+                }
+                line
+            }
+            Body::Thinking(_) => continue,
+            Body::Notice(text) | Body::Meta(text) => text.clone(),
+            Body::TurnEnd(end) => end.text(),
+            // The page is a picture; its words are its title and caption.
+            Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
+        };
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&piece);
+    }
+    out
+}
+
 /// `[text](url) …` → ("text", bytes consumed). Only the text survives.
 fn link_at(rest: &str) -> Option<(&str, usize)> {
     let body = rest.strip_prefix('[')?;

@@ -39,6 +39,7 @@ fn live_config() -> CodexConfig {
         sandbox: Some("read-only".into()),
         resume: None,
         visuals: None,
+        env: Vec::new(),
     }
 }
 

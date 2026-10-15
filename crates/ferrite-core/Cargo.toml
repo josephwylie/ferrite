@@ -14,6 +14,9 @@ ureq = "3"
 # Ferrite's own update is checked against the SHA-256 GitHub publishes
 # for the installer (`self_update`). Already in the tree via gpui.
 sha2 = "0.10"
+# The API's JSON Schema, generated from its one declaration of each
+# operation (`api::schema`). Already in the tree via gpui-component.
+schemars = "1"
 
 # Stopping an operator's command ends its process group (`user_commands`).
 [target.'cfg(unix)'.dependencies]

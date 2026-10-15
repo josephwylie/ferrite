@@ -99,6 +99,9 @@ pub struct ClaudeConfig {
     /// level and the app's renderer. `None`, or a level of Off, offers
     /// nothing. Fixed for the Session: the CLI lists its tools once.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited.
+    pub env: Vec<(&'static str, std::ffi::OsString)>,
 }
 
 impl Default for ClaudeConfig {
@@ -114,6 +117,7 @@ impl Default for ClaudeConfig {
             permission_mode: None,
             resume: None,
             visuals: None,
+            env: Vec::new(),
         }
     }
 }
@@ -221,7 +225,10 @@ impl ClaudeSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
-        command.no_console_window().agent_environment();
+        command
+            .no_console_window()
+            .agent_environment()
+            .envs(config.env.iter().cloned());
         command.args([
             "-p",
             "--input-format",
