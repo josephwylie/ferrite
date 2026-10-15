@@ -822,6 +822,15 @@ impl CockpitView {
                 Command::NewThreadIn(*project),
             );
         }
+        for (project, title) in &projects {
+            add(
+                true,
+                format!("coordinate {}", title.to_lowercase()),
+                "one agent that delegates",
+                None,
+                Command::Coordinate(*project),
+            );
+        }
         add(
             self.nav_filter.is_some(),
             "filter: all projects".into(),
@@ -1099,6 +1108,7 @@ impl CockpitView {
             Command::OpenGroup => self.open_palette(PaletteScope::Groups, "", window, cx),
             Command::ReopenLast => self.reopen_thread(&ReopenThread, window, cx),
             Command::NewThreadIn(project) => self.open_draft_in_project(project, cx),
+            Command::Coordinate(project) => self.coordinate(project, cx),
             Command::FilterAll => self.choose_nav_filter(None, cx),
             Command::FilterProject(project) => self.choose_nav_filter(Some(project), cx),
             Command::SortCreated => self.set_thread_order(ThreadListOrder::Created, cx),

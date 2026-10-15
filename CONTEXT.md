@@ -200,6 +200,26 @@ one Thread can start, prompt, wait on and read other Threads. Only the
 operator answers a Decision; an agent passes the operator's answer on.
 _Avoid_: MCP, RPC, plugin API.
 
+**Coordinator**
+A Thread that leads one Project's work and never does it itself: it
+plans with the operator, and on their go-ahead starts a Worker per task.
+It heads a Group of its Workers, read by what needs the operator: needs
+you, then ready for review, then working. One per Project.
+_Avoid_: manager, orchestrator, lead agent.
+
+**Worker**
+A Thread a Coordinator started for one task, in a new worktree on its own
+branch, briefed with the Project's goal, standing instructions and
+Memory. Its PR's failing checks and review remarks come back to it when
+the Project follows PRs.
+_Avoid_: subagent (that is Main's own delegate), task (that is what it
+works on).
+
+**Memory**
+A Project's lessons, one Markdown file beside the Store: what Workers
+reported under `## Remember`, and anything the operator wrote there.
+Every Worker's brief carries it.
+
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,

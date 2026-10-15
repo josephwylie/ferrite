@@ -26,6 +26,12 @@ use super::GitError;
 #[serde(transparent)]
 pub struct ProjectId(u64);
 
+impl ProjectId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// One registered project: a root the operator (or a Thread binding) named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {

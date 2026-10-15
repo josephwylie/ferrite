@@ -1,0 +1,1 @@
+{"id":"1","method":"coordinator.start","params":{"cwd":"/work/app","provider":"claude","goal":"Ship billing","instructions":"Never push to main.","follow_prs":true}}

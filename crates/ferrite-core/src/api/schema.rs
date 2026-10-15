@@ -87,6 +87,14 @@ operations! {
         "What the Threads are now, then every change as it happens.";
     NotificationShow(NotificationShowParams) => "notification.show", ["title"],
         "Show a toast in every Ferrite window.";
+    CoordinatorStart(CoordinatorStartParams) => "coordinator.start", [],
+        "Start the coordinator of the Project in a directory, or answer the one it has.";
+    CoordinatorGet(ThreadParams) => "coordinator.get", ["thread"],
+        "A coordinator's brief and its workers, what needs the operator first.";
+    CoordinatorUpdate(CoordinatorUpdateParams) => "coordinator.update", ["thread"],
+        "Change a coordinator's goal, standing instructions or PR follow-up.";
+    WorkerStart(WorkerStartParams) => "worker.start", ["thread", "task"],
+        "Start a coordinator's worker on one task in a new worktree. Only on the operator's go-ahead.";
 }
 
 /// No parameters.
@@ -176,4 +184,48 @@ pub struct NotificationShowParams {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorStartParams {
+    /// A directory of the Project. The CLI sends its own when none is
+    /// given.
+    pub cwd: PathBuf,
+    /// The operator's default Provider when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    /// What the Project is for: every worker is briefed with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    /// What every worker must always do or never do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// Send failing checks and review remarks on a worker's PR back to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_prs: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorUpdateParams {
+    /// The coordinator.
+    pub thread: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_prs: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkerStartParams {
+    /// The coordinator the worker reports to.
+    pub thread: ThreadId,
+    /// The work, complete on its own: the worker knows only its brief.
+    pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The operator's default Provider when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
 }

@@ -126,6 +126,8 @@ pub enum Code {
     ThreadClosed,
     AlreadyAnswered,
     InvalidAnswer,
+    /// The Thread leads no Project's workers.
+    NotACoordinator,
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,

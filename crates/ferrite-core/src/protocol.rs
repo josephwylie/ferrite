@@ -268,6 +268,11 @@ pub enum Op {
         thread: ThreadId,
         query: String,
     },
+    /// Start a Project's coordinator, or answer the one it has (ADR 0028).
+    Coordinate {
+        project: ProjectId,
+        provider: Provider,
+    },
     Restart {
         when: When,
     },
