@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 pub use crate::activity::ToolTiming;
 use crate::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityUpdate, ActivityView, AgentKey, DecisionHandle,
-    Subject,
+    PendingDecision, Subject,
 };
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
@@ -3812,6 +3812,19 @@ impl Engine {
 
     /// Every open Thread's pending Decisions.
     pub fn pending_decisions(&self) -> Vec<protocol::PendingEntry> {
+        self.decisions_where(|_| true)
+    }
+
+    /// The pending Decisions still waiting for an answer: one whose answer
+    /// is being submitted (an async question's) is answered already.
+    pub fn unanswered_decisions(&self) -> Vec<protocol::PendingEntry> {
+        self.decisions_where(|pending| !pending.submitting)
+    }
+
+    fn decisions_where(
+        &self,
+        wanted: impl Fn(&PendingDecision) -> bool + Copy,
+    ) -> Vec<protocol::PendingEntry> {
         self.threads
             .iter()
             .flat_map(|(&thread, state)| {
@@ -3820,6 +3833,7 @@ impl Engine {
                     .view()
                     .decisions()
                     .iter()
+                    .filter(move |pending| wanted(pending))
                     .map(move |pending| protocol::PendingEntry {
                         thread,
                         subject: pending.subject.as_ref().map(Into::into),

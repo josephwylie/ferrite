@@ -148,10 +148,14 @@ impl<'a> Herdr<'a> {
 /// A herdr call that failed. `code` is herdr's own error code (for example
 /// `agent_blocked` or `pane_not_found`), or `timeout` / `unreachable` / `failed`
 /// when herdr never answered with one.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct HerdrError {
     pub code: String,
     pub message: String,
+    /// Ferrite: the Thread a refusal left behind (`agent_not_ready`: the
+    /// Thread started, its agent not ready yet): the pane it is, as Herdr's
+    /// pane stays after that refusal.
+    pub thread: Option<String>,
 }
 
 impl std::fmt::Display for HerdrError {
@@ -166,8 +170,12 @@ impl std::error::Error for HerdrError {}
 pub const NOT_WIRED: &str = "not_wired";
 
 fn refused<T>(code: &str, message: impl Into<String>) -> Result<T, HerdrError> {
-    Err(HerdrError { code: code.into(), message: message.into() })
+    Err(HerdrError { code: code.into(), message: message.into(), thread: None })
 }
+
+/// Ferrite: the code a call to a [`Staged`] pane is refused with when it
+/// needs the Thread, which starts with its agent (`agent_start`).
+pub const NOT_STARTED: &str = "agent_not_started";
 
 /// Ferrite: refuses a herdr call Ferrite has no meaning for.
 fn not_wired<T>(call: &str, why: &str) -> Result<T, HerdrError> {
@@ -190,10 +198,10 @@ pub const PROMPT_WAIT: Duration = Duration::from_secs(8);
 
 /// herdr refused the prompt before typing anything.
 ///
-/// Ferrite: `agent_starting` (a starting Session already holds a prompt) is a
-/// refusal before sending too.
+/// Ferrite: `agent_starting` (a starting Session already holds a prompt) and
+/// [`NOT_STARTED`] (no Thread yet) are refusals before sending too.
 pub fn refused_before_typing(error: &HerdrError) -> bool {
-    matches!(error.code.as_str(), "agent_blocked" | "pane_not_found" | "unreachable" | "agent_starting")
+    matches!(error.code.as_str(), "agent_blocked" | "pane_not_found" | "unreachable" | "agent_starting" | NOT_STARTED)
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
@@ -670,17 +678,19 @@ impl<'a> Herdr<'a> {
 
     /// Ferrite: runs one `ferrite` command and returns the `result` of its
     /// reply: one JSON line, a refusal on stderr with exit status 1.
+    /// A staged pane has no Thread yet, so nothing is asked about it.
     fn ferrite(&self, args: &[&str], timeout: Duration) -> Result<Value, HerdrError> {
+        if let Some(pane) = args.windows(2).find(|pair| pair[0] == "--thread" && staged(pair[1])).map(|pair| pair[1]) {
+            return refused(NOT_STARTED, format!("pane {pane} has no agent yet: its Thread starts with `agent start`"));
+        }
         let cmd = self.cmd(timeout).args(args.iter().copied());
         let out = self.runner.run(&cmd).map_err(|e| HerdrError {
             code: "unreachable".into(),
             message: format!("{e:#}"),
+            thread: None,
         })?;
         if out.timed_out {
-            return Err(HerdrError {
-                code: "timeout".into(),
-                message: format!("`ferrite {}` timed out", args.join(" ")),
-            });
+            return refused("timeout", format!("`ferrite {}` timed out", args.join(" ")));
         }
         // Which stream the reply lands on is not something to depend on.
         let reply = [&out.stdout, &out.stderr]
@@ -691,24 +701,19 @@ impl<'a> Herdr<'a> {
                 return Err(HerdrError {
                     code: herdr_code(error["code"].as_str().unwrap_or("failed")).to_string(),
                     message: error["message"].as_str().unwrap_or("").to_string(),
+                    thread: Some(id_text(&error["thread"])).filter(|id| !id.is_empty()),
                 });
             }
             if out.success() {
                 return Ok(reply.get("result").cloned().unwrap_or(Value::Null));
             }
         }
-        Err(HerdrError {
-            code: "failed".into(),
-            message: format!("`ferrite {}`: {}", args.join(" "), out.error_text()),
-        })
+        refused("failed", format!("`ferrite {}`: {}", args.join(" "), out.error_text()))
     }
 
     fn ferrite_as<T: serde::de::DeserializeOwned>(&self, args: &[&str], field: &str, timeout: Duration) -> Result<T, HerdrError> {
         let result = self.ferrite(args, timeout)?;
-        serde_json::from_value(result[field].clone()).map_err(|e| HerdrError {
-            code: "failed".into(),
-            message: format!("`ferrite {}` reply changed: {e}", args.join(" ")),
-        })
+        serde_json::from_value(result[field].clone()).or_else(|e| refused("failed", format!("`ferrite {}` reply changed: {e}", args.join(" "))))
     }
 
     fn thread_reply(&self, args: &[&str], timeout: Duration) -> Result<ThreadInfo, HerdrError> {
@@ -878,7 +883,8 @@ impl<'a> Herdr<'a> {
     ///
     /// Ferrite: starts the Thread staged in `pane`, titled with the agent's
     /// name, its CLI given `agent_args`, and answers once it is ready
-    /// (`agent_not_ready` otherwise; the Thread stays). A resume among the
+    /// (`agent_not_ready` otherwise; the Thread stays, named in the error's
+    /// `thread`, and is the pane from then on). A resume among the
     /// arguments is the start's own (`--resume`); a Thread staged in a
     /// worktree opens it as it is. A start whose answer was lost left its
     /// Thread running: that one is the answer, never a second.
@@ -891,9 +897,6 @@ impl<'a> Herdr<'a> {
             return Ok(running.agent());
         }
         let timeout_ms = AGENT_START_TIMEOUT.as_millis().to_string();
-        // The Server finds the Thread's Project by its directory: `--project`
-        // would move a Thread staged in a Project's subdirectory (a tab
-        // thread's folder) to the Project's own directory.
         let mut args = vec!["thread", "start", "--cwd", &staged.cwd, "--provider", provider, "--title", name, "--ready", "--timeout-ms", &timeout_ms];
         if staged.focus {
             args.push("--focus");
@@ -906,7 +909,20 @@ impl<'a> Herdr<'a> {
             args.extend(["--args", arg.as_str()]);
         }
         // The Server enforces the timeout itself; the outer deadline only guards a hang.
-        Ok(self.thread_reply(&args, AGENT_START_TIMEOUT + Duration::from_secs(5))?.agent())
+        let timeout = AGENT_START_TIMEOUT + Duration::from_secs(5);
+        // A Thread staged in a Project's Space joins that Project, working in
+        // its cwd (a tab thread's folder). A checkout thread's cwd, the
+        // user's repository, is not the Project's: refused before anything
+        // starts, it joins the Project its directory is, as Herdr's tab
+        // would not (README).
+        if !Path::new(&staged.space).is_absolute() {
+            let in_project = [args.as_slice(), &["--project", staged.space.as_str()]].concat();
+            match self.thread_reply(&in_project, timeout) {
+                Err(error) if error.code == "invalid_request" => {}
+                started => return started.map(|thread| thread.agent()),
+            }
+        }
+        Ok(self.thread_reply(&args, timeout)?.agent())
     }
 
     /// Submits a prompt. herdr's parser takes positionals first and options
@@ -927,7 +943,7 @@ impl<'a> Herdr<'a> {
         let timeout_ms = PROMPT_WAIT.as_millis().to_string();
         let args = ["agent", "prompt", "--thread", target, "--text", text, "--until", "working", "--until", "blocked", "--timeout-ms", &timeout_ms];
         match self.ferrite(&args, PROMPT_WAIT + Duration::from_secs(5))? {
-            Value::Null => Err(HerdrError { code: "no_reply".into(), message: "`ferrite agent prompt --until` answered without a result".into() }),
+            Value::Null => refused("no_reply", "`ferrite agent prompt --until` answered without a result"),
             _ => Ok(()),
         }
     }
@@ -973,6 +989,10 @@ impl<'a> Herdr<'a> {
     /// is never left in one. Anything else is refused (`no_decision`,
     /// `invalid_answer`) before anything is sent.
     pub fn agent_send_keys(&self, target: &str, keys: &[String]) -> Result<(), HerdrError> {
+        // Escape, Ctrl+C or Enter at a staged pane's shell prompt does nothing.
+        if staged(target) && matches!(keys, [key] if key == "esc" || key == "ctrl+c" || key == "enter") {
+            return Ok(());
+        }
         if matches!(keys, [key] if key == "esc" || key == "ctrl+c") {
             return self.ferrite(&["agent", "interrupt", "--thread", target], CALL_TIMEOUT).map(|_| ());
         }
@@ -1145,7 +1165,7 @@ mod tests {
         assert_eq!((agent.pane_id.as_str(), agent.workspace_id.as_str()), ("21", "1"));
         assert_eq!(
             last(&runner, "thread start"),
-            ["thread", "start", "--cwd", "/home/demo", "--provider", "claude", "--title", "hpc-demo", "--ready", "--timeout-ms", "20000", "--focus", "--args", "--model", "--args", "opus"]
+            ["thread", "start", "--cwd", "/home/demo", "--provider", "claude", "--title", "hpc-demo", "--ready", "--timeout-ms", "20000", "--focus", "--args", "--model", "--args", "opus", "--project", "1"]
         );
         // Closing or renaming a staged pane has nothing to act on.
         herdr(&runner).call(&["tab", "close", &created.tab_id], CALL_TIMEOUT).unwrap();
@@ -1171,11 +1191,48 @@ mod tests {
         assert_eq!(herdr(&runner).agent_start("x", "claude", "21", &[]).unwrap_err().code, "agent_pane_occupied");
         // A worktree's Thread opens the worktree as it is.
         runner.on("thread start", fail(1, r#"{"error":{"code":"agent_not_ready","message":"Thread 22 started, but its agent is blocked","thread":22}}"#));
-        assert_eq!(herdr(&runner).agent_start("hp-demo-t-0002", "codex", &pane, &[]).unwrap_err().code, "agent_not_ready");
+        let error = herdr(&runner).agent_start("hp-demo-t-0002", "codex", &pane, &[]).unwrap_err();
+        // The Thread stays, and is the pane now.
+        assert_eq!((error.code.as_str(), error.thread.as_deref()), ("agent_not_ready", Some("22")));
         assert_eq!(
             last(&runner, "thread start"),
             ["thread", "start", "--cwd", "/wt", "--provider", "codex", "--title", "hp-demo-t-0002", "--ready", "--timeout-ms", "20000"]
         );
+    }
+
+    #[test]
+    fn a_checkout_thread_outside_the_project_starts_in_its_own() {
+        let runner = FakeRunner::new();
+        runner.on("thread list", ok(r#"{"result":{"threads":[]}}"#));
+        runner.on("--project 1", fail(1, r#"{"error":{"code":"invalid_request","message":"/r/app is not in that Project's directories"}}"#));
+        runner.on("thread start", ok(r#"{"result":{"thread":{"thread":23,"provider":"claude","attention":"idle","cwd":"/r/app","project":"5"}}}"#));
+        let pane = Staged { space: "1".into(), focus: false, cwd: "/r/app".into() }.id();
+        let agent = herdr(&runner).agent_start("hp-demo-t-0003", "claude", &pane, &[]).unwrap();
+        assert_eq!((agent.pane_id.as_str(), agent.workspace_id.as_str()), ("23", "5"));
+        assert_eq!(runner.count("thread start"), 2);
+        assert!(!last(&runner, "thread start").contains(&"--project".to_string()));
+    }
+
+    #[test]
+    fn a_staged_pane_is_asked_nothing_until_its_thread_starts() {
+        let runner = FakeRunner::new();
+        let pane = Staged { space: "1".into(), focus: false, cwd: "/home/demo".into() }.id();
+        // Escape, Ctrl+C or Enter at its shell prompt does nothing.
+        for key in ["esc", "ctrl+c", "enter"] {
+            herdr(&runner).agent_send_keys(&pane, &keys(&[key])).unwrap();
+        }
+        // Anything that needs the Thread is refused, before typing.
+        let refusals = [
+            herdr(&runner).agent_send_keys(&pane, &keys(&["1"])).unwrap_err(),
+            herdr(&runner).agent_prompt(&pane, "go").unwrap_err(),
+            herdr(&runner).agent_focus(&pane).unwrap_err(),
+            herdr(&runner).pane_send_text(&pane, "yes").unwrap_err(),
+        ];
+        for error in &refusals {
+            assert_eq!(error.code, NOT_STARTED, "{error}");
+            assert!(refused_before_typing(error));
+        }
+        assert!(runner.calls.borrow().is_empty());
     }
 
     #[test]
@@ -1186,9 +1243,9 @@ mod tests {
         let pane = Staged { space: "1".into(), focus: false, cwd: "/home/demo".into() }.id();
         let strings = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
         herdr(&runner).agent_start("hpc-demo", "claude", &pane, &strings(&["--model", "opus", "--resume", "s-1"])).unwrap();
-        assert_eq!(last(&runner, "thread start")[11..], ["--resume", "s-1", "--args", "--model", "--args", "opus"]);
+        assert_eq!(last(&runner, "thread start")[11..], ["--resume", "s-1", "--args", "--model", "--args", "opus", "--project", "1"]);
         herdr(&runner).agent_start("hpc-demo", "codex", &pane, &strings(&["-m", "gpt-5.5", "resume", "019a"])).unwrap();
-        assert_eq!(last(&runner, "thread start")[11..], ["--resume", "019a", "--args", "-m", "--args", "gpt-5.5"]);
+        assert_eq!(last(&runner, "thread start")[11..], ["--resume", "019a", "--args", "-m", "--args", "gpt-5.5", "--project", "1"]);
         // A word that only looks like a resume stays the agent's.
         assert_eq!(split_resume("claude", &strings(&["--resume", "--dangerous"])), (strings(&["--resume", "--dangerous"]), None));
         assert_eq!(split_resume("codex", &strings(&["--resume", "x"])), (strings(&["--resume", "x"]), None));
@@ -1261,7 +1318,7 @@ mod tests {
         assert_eq!(error.code, "agent_prompt_stalled");
         assert!(!refused_before_typing(&error), "a stalled prompt may have arrived");
         for code in ["agent_blocked", "agent_starting", "pane_not_found", "unreachable"] {
-            assert!(refused_before_typing(&HerdrError { code: code.into(), message: String::new() }), "{code}");
+            assert!(refused_before_typing(&HerdrError { code: code.into(), ..Default::default() }), "{code}");
         }
         let blocked = FakeRunner::new();
         blocked.on("agent prompt", fail(1, r#"{"error":{"code":"agent_blocked","message":"a Decision waits on this Thread; nothing was sent"}}"#));

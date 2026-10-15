@@ -81,7 +81,7 @@ A caller that still asks for one is refused as for any unknown method.
 | `agent.prompt` | refuse `agent_blocked` while a Decision waits; else `send`, or `queue` when the Composer would; `wait` as below. A Session still starting gets `send`, which holds one prompt until it is up |
 | `agent.wait` | until settled, or `until` one Attention |
 | `agent.read` | the last lines of the transcript as plain text (`transcript::plain_text`, the window's copy) |
-| `decision.list` / `decision.answer` | pending Decisions; an answer named by the provider's id, through the window's `answer` (first valid wins) |
+| `decision.list` / `decision.answer` | pending Decisions still unanswered (one whose answer is being submitted, as an async question's is until its provider closes it, is not listed); an answer named by the provider's id, through the window's `answer` (first valid wins) |
 | `events.subscribe` | snapshot, then `thread_opened`, `thread_closed`, `attention`, `decision_requested`, `decision_closed` |
 | `notification.show` | `notification {title, body}` to every window, drawn as a toast |
 

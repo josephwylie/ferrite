@@ -99,18 +99,21 @@ What differs from upstream, beyond the adapter.
   the brief is written into it, then stages its Thread there. `agent start`
   starts the Thread (`thread start --ready`; a resume among the agent's
   arguments, `agents::resume_args`, becomes its `--resume`, the rest go as
-  `--args`). Ferrite's Codex Provider reads `codex`'s own flags from them
-  (model, approval policy and sandbox, yolo's
-  `--dangerously-bypass-approvals-and-sandbox` among them) and refuses one
-  it cannot honour (`invalid_request`, ADR 0027). The ticker and `open`
-  record the started Thread as the pane (`ticker.rs`, `coordinator.rs`); a
-  staged pane counts as a shell at its prompt (`thread.rs`,
-  `pane_idle_shell`). A start whose answer was lost is found by title and
-  directory, never started twice.
+  `--args`, written as for the agent's terminal UI; Ferrite's Codex
+  Provider turns Codex's into app-server settings, ADR 0027). A Thread
+  staged in a Project's Space starts in it (`--project`), working in its
+  own cwd. The ticker and `open` record the started Thread as the pane
+  (`ticker.rs`, `coordinator.rs`), also when the start answers
+  `agent_not_ready`: that refusal names the Thread it left, as Herdr's pane
+  stays. A staged pane counts as a shell at its prompt (`thread.rs`,
+  `pane_idle_shell`): Escape, Ctrl+C or Enter there does nothing, and any
+  other call that needs its Thread is refused `agent_not_started` before
+  anything runs (a refusal before typing). A start whose answer was lost is
+  found by title and directory, never started twice.
 - **Prompts** go whole (`agent prompt`); a confirmed one waits `--until
   working --until blocked` (`agent_prompt_stalled`, `timeout` and no reply
-  are unconfirmed; `agent_blocked`, `agent_starting`, `pane_not_found` and
-  `unreachable` are refusals before sending).
+  are unconfirmed; `agent_blocked`, `agent_starting`, `agent_not_started`,
+  `pane_not_found` and `unreachable` are refusals before sending).
 - **No screen is read.** `agent read` is the transcript's tail; the input
   box and trust screens are read from the Thread's exact state
   (`PaneState`: a draft, a held or queued prompt, the pending Decisions):
@@ -125,7 +128,9 @@ What differs from upstream, beyond the adapter.
   `invalid_answer`, before anything is sent. `pane send-text` answers the
   pending Decision that takes typed text (a question's own answer, a form's
   single text field); there is no input box to type into otherwise
-  (`no_decision`).
+  (`no_decision`). A Decision whose answer is being submitted is not
+  pending (`decision.list` leaves it out), so `thread keys --text X enter`
+  answers once and its Enter sends nothing.
 - **Closing**: `tab`/`pane close` is `thread close`; `workspace close` is
   `project close`, or closes the Threads of a worktree's Space; `worktree
   remove` is `ferrite worktree remove` of the Space's path (never forced:
@@ -150,7 +155,8 @@ Thread is never a shell.
 
 A **checkout thread** works in the user's own repository, so its Thread
 belongs to that repository's Ferrite project, not to the coordinator's
-(upstream it is a tab in the coordinator's Space): archiving the project
+(upstream it is a tab in the coordinator's Space; `thread start --project`
+refuses a cwd outside the Project, so its start goes without it): archiving the project
 (`lifecycle::close_workspaces`, `project close` on the coordinator's
 project) leaves it open, and it is closed on its own (`thread close`).
 

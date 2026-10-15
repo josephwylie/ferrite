@@ -199,6 +199,7 @@ mod tests {
         let brief = std::fs::read_to_string(format!("{}/brief.md", t.thread_dir)).unwrap();
         assert!(brief.contains("Finish the refactor."));
         assert_eq!(world.runner.count("agent prompt"), 1);
+        // Ferrite: `agent start` is `thread start`.
         assert_eq!(world.runner.count("thread start"), 0);
 
         // A second pane in the same directory gets its own thread directory.
@@ -223,6 +224,7 @@ mod tests {
         assert_eq!(world.runner.count("agent prompt"), 1);
         assert!(!thread::load(&project, "t-0001").unwrap().prompt_pending);
         // The ticker never tries to start an agent in an adopted pane it found busy.
+        // Ferrite: `agent start` is `thread start`.
         assert_eq!(world.runner.count("thread start"), 0);
     }
 

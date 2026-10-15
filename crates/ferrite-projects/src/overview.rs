@@ -217,6 +217,7 @@ pub fn unfocus(ctx: &Ctx, session: &crate::paths::SessionFlags) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Ferrite: the fake Server answers `nav focus`.
     use crate::runner::fake::ok;
     use crate::scenarios::World;
     use crate::thread::{Kind, Thread};

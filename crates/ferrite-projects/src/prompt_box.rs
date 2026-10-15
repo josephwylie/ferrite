@@ -6,8 +6,8 @@
 //! that like a draft: it never types into a box it cannot see is empty.
 //!
 //! Ferrite: a Thread has no screen; what its box holds is known exactly
-//! (`herdr::PaneState`). Both are a [`Screen`]: the parsing of a Terminal's
-//! screen below is upstream's, kept with its fixture tests.
+//! (`herdr::PaneState`). Both are a [`Screen`]: a Terminal's is read below
+//! as upstream reads it, a Thread's exact state answers for itself.
 
 /// What the input box holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,58 +219,45 @@ fn input_box(kind: &str, lines: &[Line]) -> Option<Vec<Line>> {
     }
 }
 
-/// Ferrite: what an agent's input box and conversation are read from.
+/// Ferrite: what an agent's input box and conversation are read from: a
+/// Terminal's screen, read as upstream reads it, or a Thread's exact state,
+/// which answers each question itself.
 pub trait Screen {
-    /// The text typed in the input box, its lines joined by spaces (empty
-    /// for an empty box), or `None` when the box is not on the screen.
-    fn box_text(&self, kind: &str) -> Option<String>;
-    /// The screen's plain text, styling dropped.
-    fn plain(&self) -> String;
-    /// The text a trust screen would be drawn in (`trust_screen`), or `None`
-    /// where none can be.
-    fn trust_text(&self, kind: &str) -> Option<String>;
+    /// The Terminal's screen, as `agent read --source visible --format ansi`
+    /// prints it; `None` for a Thread's exact state.
+    fn terminal(&self) -> Option<&str> {
+        None
+    }
+    /// For exact state: as [`box_text`].
+    fn box_text(&self, _kind: &str) -> Option<String> {
+        None
+    }
+    /// For exact state: as [`plain`].
+    fn plain(&self) -> String {
+        String::new()
+    }
+    /// For exact state: the text a trust screen would be drawn in
+    /// (`trust_screen::detect`), or `None` where none can be.
+    fn trust_text(&self, _kind: &str) -> Option<String> {
+        None
+    }
 }
 
-/// A Terminal's screen, as `agent read --source visible --format ansi`
-/// prints it.
 impl Screen for str {
-    fn box_text(&self, kind: &str) -> Option<String> {
-        let lines = parse(self);
-        let rows = input_box(kind, &lines)?;
-        let typed: Vec<String> = rows.iter().map(|row| typed(row).trim().to_string()).filter(|t| !t.is_empty()).collect();
-        match typed.as_slice() {
-            [only] if placeholders(kind).iter().any(|p| only.starts_with(p)) => Some(String::new()),
-            _ => Some(typed.join(" ")),
-        }
-    }
-
-    fn plain(&self) -> String {
-        parse(self).iter().map(|line| text(line)).collect::<Vec<_>>().join("\n")
-    }
-
-    /// A screen whose input box is visible and empty is the agent's prompt,
-    /// and a phrase on it is only transcript text.
-    fn trust_text(&self, kind: &str) -> Option<String> {
-        (check(kind, self) != Draft::Empty).then(|| crate::trust_screen::plain_text(self))
+    fn terminal(&self) -> Option<&str> {
+        Some(self)
     }
 }
 
 impl Screen for String {
-    fn box_text(&self, kind: &str) -> Option<String> {
-        self.as_str().box_text(kind)
-    }
-
-    fn plain(&self) -> String {
-        self.as_str().plain()
-    }
-
-    fn trust_text(&self, kind: &str) -> Option<String> {
-        self.as_str().trust_text(kind)
+    fn terminal(&self) -> Option<&str> {
+        Some(self)
     }
 }
 
 /// Reads the input box of an agent of `kind` from its screen, as `agent read
 /// --source visible --format ansi` prints it.
+// Ferrite: any `Screen`.
 pub fn check(kind: &str, screen: &(impl Screen + ?Sized)) -> Draft {
     match box_text(kind, screen) {
         None => Draft::Unknown,
@@ -281,8 +268,16 @@ pub fn check(kind: &str, screen: &(impl Screen + ?Sized)) -> Draft {
 
 /// The text typed in the input box, its lines joined by spaces (empty for an
 /// empty box), or `None` when the box is not on the screen.
+// Ferrite: any `Screen`; exact state answers itself.
 pub fn box_text(kind: &str, screen: &(impl Screen + ?Sized)) -> Option<String> {
-    screen.box_text(kind)
+    let Some(screen) = screen.terminal() else { return screen.box_text(kind) };
+    let lines = parse(screen);
+    let rows = input_box(kind, &lines)?;
+    let typed: Vec<String> = rows.iter().map(|row| typed(row).trim().to_string()).filter(|t| !t.is_empty()).collect();
+    match typed.as_slice() {
+        [only] if placeholders(kind).iter().any(|p| only.starts_with(p)) => Some(String::new()),
+        _ => Some(typed.join(" ")),
+    }
 }
 
 /// True for the kinds whose input box this module can find.
@@ -291,12 +286,12 @@ pub fn knows(kind: &str) -> bool {
 }
 
 /// The screen's plain text, styling dropped.
+// Ferrite: any `Screen`; exact state answers itself.
 pub fn plain(screen: &(impl Screen + ?Sized)) -> String {
-    screen.plain()
+    let Some(screen) = screen.terminal() else { return screen.plain() };
+    parse(screen).iter().map(|line| text(line)).collect::<Vec<_>>().join("\n")
 }
 
-// Ferrite: upstream's tests of reading a Terminal's screen; Ferrite's exact
-// state is tested with the adapter (`herdr::tests`).
 #[cfg(test)]
 mod tests {
     use super::*;

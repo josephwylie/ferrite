@@ -6,7 +6,8 @@
 //! `blocked` (a new harness screen may read as `idle`), so the screen itself
 //! is read right before any prompt is sent.
 
-use crate::prompt_box::Screen;
+// Ferrite: any `Screen`.
+use crate::prompt_box::{self, Draft, Screen};
 
 /// Lines that only a trust screen draws, from the harnesses' own strings.
 const PHRASES: &[&str] = &[
@@ -34,16 +35,23 @@ const PHRASES: &[&str] = &[
 /// phrase on it is only transcript text (an agent quoting a dialog); menus,
 /// dialogs and unknown layouts have no empty box.
 ///
-/// Ferrite: a Thread shows a trust screen as a pending Decision that asks
-/// it; the screen's own rule is the `Screen`'s (`trust_text`).
+/// Ferrite: a Thread shows a trust screen only as a pending Decision that
+/// asks it (`Screen::trust_text`); the transcript quoting one never counts.
 pub fn detect(kind: &str, screen: &(impl Screen + ?Sized)) -> Option<&'static str> {
-    let plain = screen.trust_text(kind)?;
+    let Some(screen) = screen.terminal() else {
+        let plain = screen.trust_text(kind)?;
+        return PHRASES.iter().copied().find(|phrase| plain.contains(phrase));
+    };
+    if prompt_box::check(kind, screen) == Draft::Empty {
+        return None;
+    }
+    let plain = plain_text(screen);
     PHRASES.iter().copied().find(|phrase| plain.contains(phrase))
 }
 
 /// The screen's text with escape sequences dropped and runs of spaces joined,
 /// so a phrase drawn with styled or padded words still matches.
-pub(crate) fn plain_text(screen: &str) -> String {
+fn plain_text(screen: &str) -> String {
     let mut out = String::new();
     let mut chars = screen.chars().peekable();
     while let Some(ch) = chars.next() {

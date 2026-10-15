@@ -459,6 +459,7 @@ mod tests {
     fn runner_with_ferrite(version: herdr::Version) -> FakeRunner {
         let runner = FakeRunner::new();
         runner.on(&format!("{} --version", Env::for_test(Path::new("/"), &[]).herdr_bin()), ok(&format!("ferrite {version}\n")));
+        // Ferrite: no `session list`: the one session is the Server's.
         runner.on("git --version", ok("git version 2.50.0\n"));
         runner.on("ssh -V", ok(""));
         runner.on("rsync --version", ok("rsync 3\n"));

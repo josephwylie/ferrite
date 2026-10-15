@@ -118,7 +118,7 @@ impl Server {
             Method::DecisionList(params) => {
                 let decisions: Vec<_> = self
                     .engine
-                    .pending_decisions()
+                    .unanswered_decisions()
                     .into_iter()
                     .filter(|pending| params.thread.is_none_or(|thread| pending.thread == thread))
                     .collect();

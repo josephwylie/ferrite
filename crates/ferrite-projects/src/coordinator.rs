@@ -382,10 +382,15 @@ pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
                 println!("started {kind} as {name}, resuming session {}", record.agent_session);
             }
         }
-        Err(error) => println!(
-            "{kind} is not ready yet ({error}). If it shows a dialog, answer it in pane {}; it primes itself from AGENTS.md.",
-            record.pane_id
-        ),
+        Err(error) => {
+            // Ferrite: the Thread a start not ready yet left is the pane now.
+            let pane = error.thread.clone().unwrap_or_else(|| record.pane_id.clone());
+            project.update_coordinator(|c| {
+                c.tab_id = pane.clone();
+                c.pane_id = pane.clone();
+            })?;
+            println!("{kind} is not ready yet ({error}). If it shows a dialog, answer it in pane {pane}; it primes itself from AGENTS.md.")
+        }
     }
     // Ferrite: as the start recorded it.
     let record = project.coordinator().unwrap_or(record);

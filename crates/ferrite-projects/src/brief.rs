@@ -341,6 +341,7 @@ mod tests {
         assert!(!pass(&ctx));
         let t = record(&project);
         assert!(!t.prompt_pending);
+        // Ferrite: no key is pressed; a menu key would answer a Decision.
         assert_eq!((prompts(&world), world.runner.count("decision answer")), (1, 0));
         // The next tick sends nothing either.
         crate::ticker::tick_project(&ctx, &project).unwrap();
