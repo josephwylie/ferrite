@@ -835,7 +835,9 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         Command::Configure { clients, claude_home, codex_home, dry_run } => {
-            let options = crate::setup::ConfigureOptions { clients, claude_home, codex_home, dry_run, hooks: true, skill: crate::setup::skill_source(&ctx.config_dir) };
+            // Ferrite: the bundled skill is written out by a real run only.
+            let skill = if dry_run { crate::setup::skill_source(&ctx.config_dir) } else { crate::setup::install_skill(&ctx.config_dir)? };
+            let options = crate::setup::ConfigureOptions { clients, claude_home, codex_home, dry_run, hooks: true, skill: Some(skill) };
             for note in crate::setup::configure(&ctx, &options)? {
                 println!("{note}");
             }

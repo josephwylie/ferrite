@@ -65,7 +65,7 @@ When the user says something about an area an open thread covers, choose intelli
 - **Prompt it**: `hp thread prompt <slug> <id> --text-file -` with the text on standard input. Every prompt is recorded in the thread's task file, so a restarted thread sees it.
 - **Add or change a task** in `TASKS.md` (see Tasks).
 
-Use `hp thread restart <slug> <id>` when a thread's pane is gone or its start failed; `--profile <name>` restarts it on another allowed profile. Never hand-assemble `ferrite` commands for starting, restarting, prompting, reading a pane or sending keys, and never call `ferrite agent prompt` or `ferrite agent read` directly: they would not target the project's session or the thread's machine.
+Use `hp thread restart <slug> <id>` when a thread's pane is gone or its start failed; `--profile <name>` restarts it on another allowed profile. Never hand-assemble `ferrite` commands for starting, restarting, prompting, reading a pane or sending keys, and never call `ferrite agent prompt`, `ferrite agent read` or `ferrite agent send-keys` directly: they would not target the project's session or the thread's machine.
 
 ## Next actions
 

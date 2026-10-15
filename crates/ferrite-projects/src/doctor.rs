@@ -4,7 +4,6 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
-
 use crate::herdr::{self, Herdr};
 use crate::paths::{self, Ctx, Env, SessionFlags};
 use crate::project;
@@ -42,7 +41,28 @@ fn github_hosts(root: &Path, runner: &dyn Runner) -> std::collections::BTreeMap<
 /// ships with Ferrite, Ferrite updates itself, and Projects are drawn natively).
 pub fn run(ctx: &Ctx, session: &SessionFlags, fix: bool) -> (String, bool) {
     let skill = crate::setup::skill_source(&ctx.config_dir);
-    report(ctx.env, &ctx.root, &ctx.config_dir, session, ctx.runner, fix, skill.as_deref())
+    report(ctx.env, &ctx.root, &ctx.config_dir, session, ctx.runner, fix, Some(&skill))
+}
+
+/// Ferrite: the shipped `ferrite-projects` ([`paths::binary`]) and its
+/// version: this build's when it is the running executable, else its own
+/// `--version`, since the Projects view runs this inside `ferrite`.
+fn shipped(runner: &dyn Runner) -> (String, String) {
+    let binary = match paths::binary() {
+        Ok(binary) => binary,
+        Err(error) => return (format!("unknown ({error:#})"), crate::VERSION.into()),
+    };
+    let running = std::env::current_exe().and_then(std::fs::canonicalize).is_ok_and(|exe| exe == binary);
+    let version = if running {
+        crate::VERSION.to_string()
+    } else {
+        match runner.run(&Cmd::new(binary.to_string_lossy(), TOOL_TIMEOUT).arg("--version")) {
+            Ok(out) if out.success() => out.stdout.split_whitespace().last().unwrap_or("").to_string(),
+            Ok(out) => format!("unknown ({})", out.error_text()),
+            Err(error) => format!("unknown ({error:#})"),
+        }
+    };
+    (binary.display().to_string(), version)
 }
 
 fn report(
@@ -68,11 +88,10 @@ fn report(
         let _ = writeln!(out, "[{mark}] {label}: {detail}");
     };
 
-    let binary = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|e| format!("unknown ({e})"));
+    // Ferrite: the shipped binary, also when this runs inside `ferrite`.
+    let (binary, version) = shipped(runner);
     let _ = writeln!(out, "binary:     {binary}");
-    let _ = writeln!(out, "version:    {}", crate::VERSION);
+    let _ = writeln!(out, "version:    {version}");
     let _ = writeln!(out, "root:       {}", root.display());
     let _ = writeln!(out, "config dir: {}", config_dir.display());
     let _ = writeln!(out);
@@ -180,7 +199,7 @@ fn report(
             format!(
                 "running, version {} (this binary: {}), root {}",
                 info.version,
-                crate::VERSION,
+                version,
                 info.root
             ),
         ),
@@ -364,7 +383,19 @@ fn report(
     // `--fix` links it only for a harness the user already ran `configure`
     // for (its hooks or the link are journaled), so an update alone brings a
     // newly bundled skill to existing users without a new opt-in.
-    if let Some(source) = skill.map(Path::to_path_buf).filter(|s| s.join("SKILL.md").is_file()) {
+    // Ferrite: the bundled skill is built in and written out under the config
+    // dir by `configure`; an update of Ferrite leaves an older copy there.
+    let bundled = crate::setup::skill_source(config_dir);
+    if skill == Some(bundled.as_path()) && bundled.exists() && !crate::setup::skill_current(&bundled) {
+        match fix {
+            true => match crate::setup::install_skill(config_dir) {
+                Ok(_) => check(&mut out, Some(true), "skill files", format!("fixed: {} has this binary's `{}` skill", bundled.display(), crate::setup::SKILL)),
+                Err(error) => check(&mut out, Some(false), "skill files", format!("could not fix: {error:#}")),
+            },
+            false => check(&mut out, None, "skill files", format!("{} is not this binary's `{}` skill; `doctor --fix` rewrites it", bundled.display(), crate::setup::SKILL)),
+        }
+    }
+    if let Some(source) = skill.map(Path::to_path_buf).filter(|s| s.join("SKILL.md").is_file() || *s == bundled) {
         for agent in ["claude", "codex"] {
             if !crate::setup::hook_file(env, agent, None, None).parent().is_some_and(Path::is_dir) {
                 continue;
@@ -378,7 +409,9 @@ fn report(
             if fix && opted_in && repairable {
                 let options = crate::setup::ConfigureOptions { clients: vec![agent.to_string()], claude_home: None, codex_home: None, dry_run: false, hooks: false, skill: Some(source.clone()) };
                 let ctx = Ctx { env, root: root.to_path_buf(), config_dir: config_dir.to_path_buf(), runner, detached_ticker: false };
-                match crate::setup::configure(&ctx, &options) {
+                // Ferrite: the bundled skill is written out before it is linked.
+                let installed = if source == bundled { crate::setup::install_skill(config_dir).map(drop) } else { Ok(()) };
+                match installed.and_then(|()| crate::setup::configure(&ctx, &options)) {
                     Ok(_) => check(&mut out, Some(true), &label, format!("fixed: {} now links the bundled `{}` skill", link.display(), crate::setup::SKILL)),
                     Err(error) => check(&mut out, Some(false), &label, format!("could not fix: {error:#}")),
                 }
@@ -597,6 +630,33 @@ mod tests {
         let (text, _) = report(&env, &root, &cfg, &flags, &runner, true, Some(&moved));
         assert!(text.contains("is not this plugin's link"), "{text}");
         assert_eq!(crate::setup::skill_state(&link, &moved), crate::setup::SkillState::Foreign);
+    }
+
+    #[test]
+    fn the_bundled_skill_is_written_by_fix_only() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::for_test(home.path(), &[]);
+        let runner = runner_with_ferrite(herdr::MIN_VERSION);
+        let root = home.path().join("root");
+        let cfg = home.path().join("cfg");
+        let flags = SessionFlags::default();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        let bundled = crate::setup::skill_source(&cfg);
+
+        // Never configured: the missing link is named, nothing is written.
+        let (text, _) = report(&env, &root, &cfg, &flags, &runner, false, Some(&bundled));
+        assert!(text.contains("`configure` links the bundled skill"), "{text}");
+        assert!(!bundled.exists(), "doctor without --fix wrote the skill");
+
+        // An older Ferrite's copy: named without `--fix`, rewritten with it.
+        crate::setup::install_skill(&cfg).unwrap();
+        std::fs::write(bundled.join("SKILL.md"), "older").unwrap();
+        let (text, _) = report(&env, &root, &cfg, &flags, &runner, false, Some(&bundled));
+        assert!(text.contains("[warn] skill files:") && text.contains("`doctor --fix` rewrites it"), "{text}");
+        assert!(!crate::setup::skill_current(&bundled));
+        let (text, _) = report(&env, &root, &cfg, &flags, &runner, true, Some(&bundled));
+        assert!(text.contains("[ok  ] skill files: fixed:"), "{text}");
+        assert!(crate::setup::skill_current(&bundled));
     }
 
     #[test]

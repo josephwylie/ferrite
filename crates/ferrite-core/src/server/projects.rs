@@ -14,7 +14,9 @@ const COORDINATORS: &str = "coordinators.json";
 
 /// Start the Projects for the Store in `store`, in the background.
 pub(super) fn start(store: &Path) {
-    let Ok(exe) = std::env::current_exe() else {
+    // Links resolved, so a `ferrite` linked onto `PATH` finds its sibling.
+    let exe = std::env::current_exe().map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe));
+    let Ok(exe) = exe else {
         crate::log!("server: Projects are off: this executable's path is unknown");
         return;
     };

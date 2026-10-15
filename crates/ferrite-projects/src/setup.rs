@@ -81,8 +81,11 @@ pub struct Owned {
 
 pub type Journal = BTreeMap<String, Owned>;
 
+/// Ferrite: its own journal beside upstream's `owned.json`, since the config
+/// directory is shared with an upstream herdr-projects install: neither then
+/// restores, removes or takes over what the other configured.
 pub fn journal_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("owned.json")
+    config_dir.join("ferrite-owned.json")
 }
 
 pub fn load_journal(config_dir: &Path) -> Journal {
@@ -166,10 +169,21 @@ fn cst_value(value: &serde_json::Value) -> CstInputValue {
 }
 
 /// Whether a hook entry is one of ours: it runs `ferrite-projects … hook`.
-fn is_our_entry(value: &serde_json::Value) -> bool {
-    // Ferrite: this binary is `ferrite-projects`.
-    let ours = |h: &serde_json::Value| h["command"].as_str().is_some_and(|c| c.contains("ferrite-projects") && c.contains(" hook --agent "));
+/// Ferrite: or this binary under the name `$FERRITE_PROJECTS_BIN` gives it,
+/// which `command` carries.
+fn is_our_entry(value: &serde_json::Value, command: &str) -> bool {
+    let ours = |h: &serde_json::Value| h["command"].as_str().is_some_and(|c| (c.contains("ferrite-projects") || program_name(c) == program_name(command)) && c.contains(" hook --agent "));
     ours(value) || value["hooks"].as_array().is_some_and(|hooks| hooks.iter().any(ours))
+}
+
+/// Ferrite: the file name of the program a hook command runs, which
+/// [`hook_command`] quotes.
+fn program_name(command: &str) -> &str {
+    let program = match command.strip_prefix('\'') {
+        Some(rest) => rest.split('\'').next(),
+        None => command.split_whitespace().next(),
+    };
+    program.and_then(|p| p.rsplit('/').next()).unwrap_or("")
 }
 
 /// Adds (or removes) the plugin's hook entry under each event, keeping
@@ -203,7 +217,7 @@ pub fn hooks(input: &str, command: &str, remove: bool) -> Result<String> {
                 } else {
                     found = true;
                 }
-            } else if value.as_ref().is_some_and(is_our_entry) {
+            } else if value.as_ref().is_some_and(|v| is_our_entry(v, command)) {
                 // Ours, but with another command (the binary moved): replaced.
                 entry.remove();
             }
@@ -257,19 +271,29 @@ const SKILL_FILES: [(&str, &str); 2] = [
     ("references/protocol.md", include_str!("../skill/autoproject/references/protocol.md")),
 ];
 
-/// Ferrite: the bundled skill, written out under the config directory
-/// (`<config_dir>/skill/autoproject`) whenever it differs from this binary's,
-/// so the link follows the installed Ferrite. `None` when it cannot be written.
-pub fn skill_source(config_dir: &Path) -> Option<PathBuf> {
-    let dir = config_dir.join("skill").join(SKILL);
+/// Ferrite: where the bundled skill is written out and linked from, so the
+/// link follows the installed Ferrite. Only [`install_skill`] writes there.
+pub fn skill_source(config_dir: &Path) -> PathBuf {
+    config_dir.join("skill").join(SKILL)
+}
+
+/// Ferrite: whether the skill at `source` is this binary's.
+pub fn skill_current(source: &Path) -> bool {
+    SKILL_FILES.iter().all(|(name, text)| std::fs::read_to_string(source.join(name)).ok().as_deref() == Some(*text))
+}
+
+/// Ferrite: writes the bundled skill to [`skill_source`] where it differs;
+/// run by `configure` and `doctor --fix`, never by a dry run or a check.
+pub fn install_skill(config_dir: &Path) -> Result<PathBuf> {
+    let dir = skill_source(config_dir);
     for (name, text) in SKILL_FILES {
         let path = dir.join(name);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
-            std::fs::create_dir_all(path.parent()?).ok()?;
-            std::fs::write(&path, text).ok()?;
+            std::fs::create_dir_all(path.parent().context("skill file has no parent")?)?;
+            std::fs::write(&path, text).with_context(|| format!("could not write {}", path.display()))?;
         }
     }
-    Some(dir)
+    Ok(dir)
 }
 
 /// Where a harness looks for user skills: Claude Code's `<config dir>/skills`,
@@ -375,7 +399,8 @@ pub fn configure(ctx: &Ctx, options: &ConfigureOptions) -> Result<Vec<String>> {
                 continue;
             }
             seen.push(link.clone());
-            if !source.join("SKILL.md").is_file() {
+            // Ferrite: a dry run does not write the bundled skill out first.
+            if !options.dry_run && !source.join("SKILL.md").is_file() {
                 notes.push(format!("{}: no bundled skill at {}; not linked", link.display(), source.display()));
                 break;
             }
@@ -489,7 +514,8 @@ pub fn unconfigure(ctx: &Ctx) -> Result<Vec<String>> {
 /// Ferrite: what the Projects view's "configure" runs: `configure` with no
 /// flags (every installed harness, the bundled skill). The notes say what changed.
 pub fn configure_ferrite(ctx: &Ctx) -> Result<Vec<String>> {
-    configure(ctx, &ConfigureOptions { clients: vec![], claude_home: None, codex_home: None, dry_run: false, hooks: true, skill: skill_source(&ctx.config_dir) })
+    let skill = install_skill(&ctx.config_dir)?;
+    configure(ctx, &ConfigureOptions { clients: vec![], claude_home: None, codex_home: None, dry_run: false, hooks: true, skill: Some(skill) })
 }
 
 #[cfg(test)]
@@ -679,15 +705,77 @@ mod tests {
     }
 
     #[test]
-    fn the_bundled_skill_is_written_once_and_repaired_when_it_differs() {
+    fn the_bundled_skill_is_written_only_by_install_and_repaired_when_it_differs() {
         let cfg = tempfile::tempdir().unwrap();
-        let source = skill_source(cfg.path()).unwrap();
+        let source = skill_source(cfg.path());
         assert_eq!(source, cfg.path().join("skill").join(SKILL));
+        assert!(!source.exists() && !skill_current(&source), "skill_source writes nothing");
+        assert_eq!(install_skill(cfg.path()).unwrap(), source);
+        assert!(skill_current(&source));
         assert_eq!(std::fs::read_to_string(source.join("SKILL.md")).unwrap(), SKILL_FILES[0].1);
         assert!(source.join("references/protocol.md").is_file());
         std::fs::write(source.join("SKILL.md"), "stale").unwrap();
-        assert_eq!(skill_source(cfg.path()).unwrap(), source);
-        assert_eq!(std::fs::read_to_string(source.join("SKILL.md")).unwrap(), SKILL_FILES[0].1);
+        assert!(!skill_current(&source));
+        install_skill(cfg.path()).unwrap();
+        assert!(skill_current(&source));
+    }
+
+    #[test]
+    fn every_file_of_the_skill_is_bundled() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("skill").join(SKILL);
+        let mut on_disk = Vec::new();
+        let mut pending = vec![dir.clone()];
+        while let Some(next) = pending.pop() {
+            for entry in std::fs::read_dir(next).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    on_disk.push(path.strip_prefix(&dir).unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+        on_disk.sort();
+        let mut bundled: Vec<String> = SKILL_FILES.iter().map(|(name, _)| name.to_string()).collect();
+        bundled.sort();
+        assert_eq!(on_disk, bundled, "a skill file upstream added must join SKILL_FILES");
+    }
+
+    #[test]
+    fn a_binary_named_by_the_override_is_recognised_as_ours() {
+        let old = hooks("{}", "'/opt/fp' --root /r hook --agent claude 2>/dev/null || true", false).unwrap();
+        let moved = hooks(&old, "'/new/fp' --root /r hook --agent claude 2>/dev/null || true", false).unwrap();
+        assert!(!moved.contains("/opt/fp"));
+        assert_eq!(moved.matches("/new/fp").count(), 3);
+        assert!(!hooks(&moved, "'/new/fp' --root /r hook --agent claude 2>/dev/null || true", true).unwrap().contains("/fp"));
+        // The default name is ours under any override; another plugin's is not.
+        let renamed = hooks(&hooks("{}", CMD, false).unwrap(), "'/opt/fp' --root /r hook --agent claude", false).unwrap();
+        assert!(!renamed.contains("ferrite-projects"));
+        assert_eq!(program_name("'/x/herdr-progress' hook --agent claude"), "herdr-progress");
+        assert_eq!(program_name("/b/ferrite-projects --root /r hook --agent gemini"), "ferrite-projects");
+    }
+
+    #[test]
+    fn a_dry_run_writes_nothing_and_ferrites_journal_leaves_upstreams_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::for_test(home.path(), &[]);
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        let runner = crate::runner::fake::FakeRunner::new();
+        let cfg = home.path().join("cfg");
+        let ctx = Ctx { env: &env, root: home.path().join("root"), config_dir: cfg.clone(), runner: &runner, detached_ticker: false };
+        let options = ConfigureOptions { clients: vec![], claude_home: None, codex_home: None, dry_run: true, hooks: true, skill: Some(skill_source(&cfg)) };
+        let notes = configure(&ctx, &options).unwrap();
+        assert!(notes.iter().any(|n| n.contains("linking the `autoproject` skill")), "{notes:?}");
+        assert!(!cfg.exists() && !home.path().join(".claude/settings.json").exists(), "dry run changed a file");
+
+        // An upstream herdr-projects journal, with its Herdr config edit.
+        std::fs::create_dir_all(&cfg).unwrap();
+        let upstream = r#"{"/h/.config/herdr/config.toml":{"before":null,"after":"x","kind":"config","command":null}}"#;
+        std::fs::write(cfg.join("owned.json"), upstream).unwrap();
+        configure_ferrite(&ctx).unwrap();
+        unconfigure(&ctx).unwrap();
+        assert_eq!(std::fs::read_to_string(cfg.join("owned.json")).unwrap(), upstream);
+        assert!(!home.path().join(".claude/settings.json").exists());
     }
 
     #[test]
