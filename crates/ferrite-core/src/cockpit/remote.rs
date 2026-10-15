@@ -22,11 +22,12 @@ use crate::protocol::{
     ServerMessage, Snapshot, WireError, WirePng,
 };
 use crate::providers::FileSuggestion;
+use crate::review::git::{Commit, Diff};
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{DirEntry, ListedWorktree, Listing, RepoListing};
-use crate::ThreadId;
+use crate::{FileEdit, ThreadId};
 
 /// Where a later-answered command's reply goes (`Remote::ask`).
 type Answer = Box<dyn FnOnce(io::Result<Option<Done>>) + Send>;
@@ -438,6 +439,30 @@ impl Remote {
                     .collect(),
                 branches,
             }),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn review_diff(
+        &mut self,
+        path: &Path,
+        diff: &Diff,
+    ) -> io::Result<Receiver<io::Result<Vec<FileEdit>>>> {
+        self.ask(Op::review_diff(path, diff), |done| match done {
+            Done::Diff { text } => Some(crate::review::git::parse(&text)),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn review_commits(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<Commit>>>> {
+        let op = Op::ListCommits {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::Commits { commits } => Some(commits.into_iter().map(Into::into).collect()),
             _ => None,
         })
     }

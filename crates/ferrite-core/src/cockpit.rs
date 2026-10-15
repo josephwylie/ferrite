@@ -11,7 +11,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use crate::activity::{DecisionHandle, Subject};
@@ -621,6 +621,17 @@ impl Cockpit {
     }
 }
 
+/// A git read on a thread of its own, answered as a Server's would be.
+fn read_here<T: Send + 'static>(
+    read: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Receiver<io::Result<T>> {
+    let (answer, answered) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = answer.send(read().map_err(io::Error::other));
+    });
+    answered
+}
+
 /// A command whose reply carries nothing the window needs.
 fn run(server: &mut remote::Remote, op: Op) -> io::Result<()> {
     server.execute(op).map(drop).map_err(io::Error::from)
@@ -1224,6 +1235,41 @@ impl Cockpit {
         project: ProjectId,
     ) -> io::Result<Receiver<io::Result<crate::workspace::RepoListing>>> {
         self.remote()?.list_repo(project)
+    }
+
+    /// A review's `diff` of the checkout at `path`, read by git where the
+    /// Server runs — on a machine, the machine's checkout (ADR 0021) — or
+    /// here, off this thread, when this window runs its agents itself.
+    pub fn review_diff(
+        &mut self,
+        path: &Path,
+        diff: crate::review::git::Diff,
+    ) -> io::Result<Receiver<io::Result<Vec<crate::FileEdit>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_diff(path, &diff),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || {
+                    crate::review::git::read(&path, &diff)
+                        .map(|text| crate::review::git::parse(&text))
+                }))
+            }
+        }
+    }
+
+    /// The branch's commits for a review's commits scope, read where
+    /// `review_diff` reads.
+    pub fn review_commits(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<crate::review::git::Commit>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_commits(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || crate::review::git::commits(&path)))
+            }
+        }
     }
 
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {

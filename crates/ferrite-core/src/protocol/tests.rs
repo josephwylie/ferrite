@@ -651,6 +651,37 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_list_repo", command(39, Op::ListRepo { project })),
         (
+            "command_review_diff",
+            command(
+                40,
+                Op::ReviewDiff {
+                    path: "/home/me/src/ferrite".into(),
+                    scope: WireScope::Uncommitted,
+                    commit: None,
+                },
+            ),
+        ),
+        (
+            "command_review_diff_commit",
+            command(
+                41,
+                Op::ReviewDiff {
+                    path: "/home/me/src/ferrite".into(),
+                    scope: WireScope::Commit,
+                    commit: Some("9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into()),
+                },
+            ),
+        ),
+        (
+            "command_list_commits",
+            command(
+                42,
+                Op::ListCommits {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
             "welcome",
             Sample::Server(ServerMessage::Welcome {
                 generation: 1,
@@ -846,6 +877,30 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         },
                     ],
                     branches: vec!["main".into(), "fix".into()],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_diff",
+            Sample::Server(ServerMessage::Reply {
+                id: 40,
+                ok: Some(Done::Diff {
+                    text: "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-one\n+two\n"
+                        .into(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_commits",
+            Sample::Server(ServerMessage::Reply {
+                id: 42,
+                ok: Some(Done::Commits {
+                    commits: vec![WireCommit {
+                        id: "9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into(),
+                        subject: "Clippy: the Herdr lanes' mechanical warnings".into(),
+                    }],
                 }),
                 error: None,
             }),

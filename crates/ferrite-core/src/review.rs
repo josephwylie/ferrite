@@ -3,13 +3,15 @@
 //! gathered on the Thread's Composer and sent ahead of its next prompt as
 //! plain text addressed to the Thread.
 //!
-//! Headless: the git reads and the drawing live in the UI crate; this is
-//! what both sides agree on, and what the tests pin.
+//! Headless: the drawing lives in the UI crate. The git scopes are read
+//! where the checkout is (`git`): on a machine, by its Server.
 
 use std::path::Path;
 
 use crate::transcript::{Body, Transcript};
 use crate::FileEdit;
+
+pub mod git;
 
 /// What a review compares.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -19,6 +21,8 @@ pub enum Scope {
     Uncommitted,
     /// The branch against its base (`git diff base...HEAD`).
     Branch,
+    /// One commit of the branch's, picked from its commits since the base.
+    Commits,
     /// What Main's edits changed since the operator's last prompt, edit by
     /// edit, from the tool results the transcript already holds.
     LastTurn,
@@ -26,12 +30,18 @@ pub enum Scope {
 
 impl Scope {
     /// The scopes in the order the slot's bar draws them.
-    pub const ALL: [Scope; 3] = [Scope::Uncommitted, Scope::Branch, Scope::LastTurn];
+    pub const ALL: [Scope; 4] = [
+        Scope::Uncommitted,
+        Scope::Branch,
+        Scope::Commits,
+        Scope::LastTurn,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Scope::Uncommitted => "uncommitted",
             Scope::Branch => "branch",
+            Scope::Commits => "commits",
             Scope::LastTurn => "last turn",
         }
     }
@@ -357,11 +367,12 @@ mod tests {
     fn the_scopes_cycle_in_bar_order() {
         assert_eq!(Scope::default(), Scope::Uncommitted);
         assert_eq!(Scope::Uncommitted.next(), Scope::Branch);
-        assert_eq!(Scope::Branch.next(), Scope::LastTurn);
+        assert_eq!(Scope::Branch.next(), Scope::Commits);
+        assert_eq!(Scope::Commits.next(), Scope::LastTurn);
         assert_eq!(Scope::LastTurn.next(), Scope::Uncommitted);
         assert_eq!(
             Scope::ALL.map(Scope::label),
-            ["uncommitted", "branch", "last turn"]
+            ["uncommitted", "branch", "commits", "last turn"]
         );
     }
 

@@ -18,7 +18,7 @@
 //! and are append-only.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -288,6 +288,20 @@ pub enum Op {
     ListRepo {
         project: ProjectId,
     },
+    /// A review's git scope of the checkout at `path`, read by git on the
+    /// Server's computer: how a window reviews a Thread's checkout, on
+    /// this computer or a machine (ADR 0021). Replied `diff`.
+    ReviewDiff {
+        path: PathBuf,
+        scope: WireScope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
+    /// The branch's commits since its base at `path`, for a review's
+    /// commits scope (ADR 0021). Replied `commits`.
+    ListCommits {
+        path: PathBuf,
+    },
     Restart {
         when: When,
     },
@@ -305,6 +319,49 @@ pub enum WireDirection {
     Newer,
     #[serde(other)]
     Unknown,
+}
+
+/// What a `review_diff` reads; the last turn is read from the transcript
+/// the window already holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireScope {
+    Uncommitted,
+    Branch,
+    /// The command's `commit`.
+    Commit,
+    #[serde(other)]
+    Unknown,
+}
+
+impl Op {
+    pub fn review_diff(path: &Path, diff: &crate::review::git::Diff) -> Op {
+        use crate::review::git::Diff;
+        let (scope, commit) = match diff {
+            Diff::Uncommitted => (WireScope::Uncommitted, None),
+            Diff::Branch => (WireScope::Branch, None),
+            Diff::Commit(id) => (WireScope::Commit, Some(id.clone())),
+        };
+        Op::ReviewDiff {
+            path: path.to_path_buf(),
+            scope,
+            commit,
+        }
+    }
+}
+
+impl WireScope {
+    /// The diff it names, unless this Server does not know it (or a
+    /// commit scope names no commit).
+    pub fn diff(self, commit: Option<String>) -> Option<crate::review::git::Diff> {
+        use crate::review::git::Diff;
+        match (self, commit) {
+            (WireScope::Uncommitted, _) => Some(Diff::Uncommitted),
+            (WireScope::Branch, _) => Some(Diff::Branch),
+            (WireScope::Commit, Some(id)) => Some(Diff::Commit(id)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -744,6 +801,15 @@ pub enum Done {
         worktrees: Vec<WireWorktree>,
         branches: Vec<String>,
     },
+    /// A `review_diff`'s unified diff, as git printed it (at most
+    /// `review::git::MAX_DIFF`).
+    Diff {
+        text: String,
+    },
+    /// A `list_commits`' commits, newest first.
+    Commits {
+        commits: Vec<WireCommit>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -753,6 +819,12 @@ pub struct WireEntry {
     pub name: String,
     #[serde(default)]
     pub directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireCommit {
+    pub id: String,
+    pub subject: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -776,6 +848,24 @@ impl From<crate::workspace::RepoListing> for Done {
                 })
                 .collect(),
             branches: listing.branches,
+        }
+    }
+}
+
+impl From<crate::review::git::Commit> for WireCommit {
+    fn from(commit: crate::review::git::Commit) -> Self {
+        WireCommit {
+            id: commit.id,
+            subject: commit.subject,
+        }
+    }
+}
+
+impl From<WireCommit> for crate::review::git::Commit {
+    fn from(commit: WireCommit) -> Self {
+        Self {
+            id: commit.id,
+            subject: commit.subject,
         }
     }
 }

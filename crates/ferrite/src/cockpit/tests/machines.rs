@@ -1151,3 +1151,109 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
         [std::fs::canonicalize(&repo).unwrap()]
     );
 }
+
+/// A review beside a machine's Thread reads its checkout through the
+/// machine's Server (`review_diff`, `list_commits`, ADR 0021) — no git here
+/// is asked — and its lines take comments as a local review's do: the
+/// uncommitted work, then one of the branch's commits picked from the list.
+#[gpui::test]
+fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx));
+    let machines = cx.new(|_| machines_through("reviewed", Some("me@box"), serving));
+    let repo = repo_in(&settings_dir("reviewed").join("src"));
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["branch", "-M", "main"]);
+    git(&["checkout", "-q", "-b", "dev"]);
+    std::fs::write(repo.join("nav.rs"), "fn row() {}\n").unwrap();
+    git(&["add", "nav.rs"]);
+    git(&["commit", "-q", "-m", "Tidy the nav"]);
+    std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
+    let _ = ferrite_core::server::fixture_machine(
+        settings_dir("reviewed").join("box"),
+        Box::new(OnBox(Default::default())),
+    )
+    .unwrap();
+    let core = machines
+        .update(cx, |machines, _| machines.cockpit())
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new(core, cx).with_machines(machines)
+    });
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            matches!(
+                view.cockpit.server(),
+                Some(ferrite_core::cockpit::ServerState::Attached { .. })
+            )
+        })
+    });
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        view.sync_panes(cx);
+    });
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| !view.panes.is_empty())
+    });
+    let open_review = |scope, cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.open_beside(beside::Beside::Review(scope), window, cx)
+            })
+        });
+    };
+    let comments = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let composer = view.panes[0].composer.read(cx);
+            composer
+                .review_comments()
+                .iter()
+                .map(|comment| (comment.location(), comment.text.clone()))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    open_review(ferrite_core::review::Scope::Uncommitted, cx);
+    until(cx, |cx| cx.debug_bounds("review-lines").is_some());
+    assert!(
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"review_diff""#),
+        "the machine's Server read the checkout"
+    );
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("why notes?");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(comments(cx), [("notes.md:1".into(), "why notes?".into())]);
+
+    open_review(ferrite_core::review::Scope::Commits, cx);
+    until(cx, |cx| cx.debug_bounds("review-commit-0").is_some());
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| cx.debug_bounds("review-lines").is_some());
+    assert!(cx.debug_bounds("review-commit-reviewed").is_some());
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("keep it");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        comments(cx),
+        [
+            ("notes.md:1".into(), "why notes?".into()),
+            ("nav.rs:1".into(), "keep it".into()),
+        ],
+        "a commit's lines take comments as the uncommitted work's do"
+    );
+}

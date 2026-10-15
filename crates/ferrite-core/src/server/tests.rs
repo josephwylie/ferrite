@@ -523,6 +523,65 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     assert_eq!(listing.branches, ["fix", "main", "spare"]);
 }
 
+/// A review reads git where the Server runs (ADR 0021): a window asks
+/// for a checkout's uncommitted work, its branch's commits and one
+/// commit's diff, and hears git's reason when the path is no repo.
+#[test]
+fn a_review_is_read_by_git_where_the_server_runs() {
+    let harness = start("review");
+    let repo = repository(&harness.dir);
+    let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
+    git(&["checkout", "-q", "-b", "dev"]);
+    std::fs::write(repo.join("README.md"), "app, reviewed\n").unwrap();
+    git(&[
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-qam",
+        "reviewed",
+    ]);
+    std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
+    let mut window = cockpit(&harness);
+    fn landed<T>(
+        window: &mut crate::cockpit::Cockpit,
+        answer: io::Result<Receiver<io::Result<T>>>,
+    ) -> io::Result<T> {
+        let answer = answer.unwrap();
+        let landed = std::cell::RefCell::new(None);
+        pump_until(window, |_| {
+            if let Ok(read) = answer.try_recv() {
+                *landed.borrow_mut() = Some(read);
+            }
+            landed.borrow().is_some()
+        });
+        landed.into_inner().unwrap()
+    }
+
+    let asked = window.review_diff(&repo, crate::review::git::Diff::Uncommitted);
+    let uncommitted = landed(&mut window, asked).unwrap();
+    assert_eq!(uncommitted.len(), 1);
+    assert_eq!(uncommitted[0].path, "notes.md");
+
+    let asked = window.review_commits(&repo);
+    let commits = landed(&mut window, asked).unwrap();
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].subject, "reviewed");
+    let commit = crate::review::git::Diff::Commit(commits[0].id.clone());
+    let asked = window.review_diff(&repo, commit);
+    let edits = landed(&mut window, asked).unwrap();
+    assert_eq!(edits[0].path, "README.md");
+    assert_eq!(edits[0].hunks[0].lines, ["-app", "+app, reviewed"]);
+
+    let asked = window.review_diff(&harness.dir, crate::review::git::Diff::Branch);
+    let refused = landed(&mut window, asked).unwrap_err();
+    assert!(
+        refused.to_string().contains("not a git repository"),
+        "{refused}"
+    );
+}
+
 /// A request id is unique only within one provider process: an answer to
 /// a replaced Session's Decision is refused even when its successor asks
 /// with the same id, and the successor's own Decision stays pending.
