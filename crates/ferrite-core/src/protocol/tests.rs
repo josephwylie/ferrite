@@ -596,6 +596,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_stop", command(26, Op::Stop { when: When::Now })),
         (
+            "command_coordinate",
+            command(
+                27,
+                Op::Coordinate {
+                    project,
+                    provider: Provider::Codex,
+                },
+            ),
+        ),
+        (
             "welcome",
             Sample::Server(ServerMessage::Welcome {
                 generation: 1,

@@ -10,6 +10,7 @@ mod attention;
 pub mod cadence;
 pub mod clock;
 pub mod cockpit;
+pub mod coordinator;
 pub mod diagnostics;
 pub mod docview;
 pub mod draft;

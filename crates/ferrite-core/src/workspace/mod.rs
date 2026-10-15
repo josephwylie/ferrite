@@ -552,6 +552,81 @@ fn pull_request(cwd: &Path) -> Option<PullRequest> {
     parse_pr_json(&body)
 }
 
+/// What a branch's PR asks of the agent on it (ADR 0028): the PR with
+/// its checks, and what reviewers and commenters wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrFeedback {
+    pub pr: PullRequest,
+    /// Who opened it: a worker's `gh` is the operator's, so what it says
+    /// on its own PR is under this name too.
+    pub author: String,
+    /// Reviews, then conversation comments, in the forge's order.
+    pub remarks: Vec<Remark>,
+}
+
+/// One review or comment on a PR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remark {
+    /// The forge's own id: a remark edited later is the same remark.
+    pub id: String,
+    pub author: String,
+    pub body: String,
+    /// An approving review: it asks for nothing.
+    pub approves: bool,
+}
+
+/// The branch's PR and its remarks through `gh`, uncached: a coordinator
+/// reads its workers' on its own slow cadence. `None` on every failure,
+/// as `pull_request`.
+pub fn pr_feedback(cwd: &Path) -> Option<PrFeedback> {
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            "--json",
+            "number,state,isDraft,author,statusCheckRollup,reviews,comments",
+        ])
+        .current_dir(cwd)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .no_console_window()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_feedback_json(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
+    let pr = parse_pr_json(body)?;
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let login = |node: &serde_json::Value| {
+        node.pointer("/author/login")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("someone")
+            .to_string()
+    };
+    let remarks = ["reviews", "comments"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter_map(|node| {
+            let text = |key: &str| node.get(key).and_then(serde_json::Value::as_str);
+            Some(Remark {
+                id: text("id")?.to_string(),
+                author: login(node),
+                body: text("body").unwrap_or_default().to_string(),
+                approves: text("state") == Some("APPROVED"),
+            })
+        })
+        .collect();
+    Some(PrFeedback {
+        pr,
+        author: login(&value),
+        remarks,
+    })
+}
+
 /// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
 /// Actions jobs (`CheckRun`) and posted commit statuses (`StatusContext`)
 /// side by side, with different keys for the same three facts — so
@@ -784,6 +859,47 @@ mod tests {
         assert_eq!(pr.state, PrState::Open);
         assert!(!pr.draft);
         assert_eq!(pr.checks, Some(CheckState::Failing));
+    }
+
+    /// A coordinator's reading of a worker's PR: the checks as the header
+    /// reads them, who opened it, and every review and comment with its
+    /// author.
+    #[test]
+    fn pr_feedback_reads_reviews_and_comments_beside_the_checks() {
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","author":{"login":"op"},"statusCheckRollup":[
+            {"name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci/1"}
+        ],"reviews":[
+            {"id":"PRR_1","author":{"login":"ana"},"body":"Rename this.","state":"CHANGES_REQUESTED"},
+            {"id":"PRR_4","author":{"login":"ana"},"body":"LGTM","state":"APPROVED"}
+        ],"comments":[
+            {"id":"IC_2","author":{"login":"bo"},"body":"Also the docs."},
+            {"id":"IC_3","body":"anonymous"}
+        ]}"#;
+        let feedback = parse_feedback_json(body).expect("a PR");
+        assert_eq!(feedback.pr.number, 9);
+        assert_eq!(feedback.pr.checks, Some(CheckState::Failing));
+        assert_eq!(feedback.author, "op");
+        let remarks: Vec<(&str, &str, &str, bool)> = feedback
+            .remarks
+            .iter()
+            .map(|remark| {
+                (
+                    remark.id.as_str(),
+                    remark.author.as_str(),
+                    remark.body.as_str(),
+                    remark.approves,
+                )
+            })
+            .collect();
+        assert_eq!(
+            remarks,
+            [
+                ("PRR_1", "ana", "Rename this.", false),
+                ("PRR_4", "ana", "LGTM", true),
+                ("IC_2", "bo", "Also the docs.", false),
+                ("IC_3", "someone", "anonymous", false),
+            ]
+        );
     }
 
     /// A PR with no checks at all claims nothing — silence, never a pass.

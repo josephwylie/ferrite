@@ -14,6 +14,7 @@ use crate::api::{
     self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
     ThreadInfo, Until, Wait,
 };
+use crate::coordinator::BriefChange;
 use crate::protocol::{Done, Op, ServerMessage, WireChoice};
 use crate::ThreadId;
 
@@ -111,13 +112,30 @@ impl Server {
                 });
                 Ok(json!({ "windows": windows }))
             }
+            Method::CoordinatorStart(params) => self
+                .project_at(&params.cwd)
+                .and_then(|project| {
+                    self.start_coordinator(
+                        project,
+                        params.provider.unwrap_or(self.default_provider),
+                        BriefChange {
+                            goal: params.goal,
+                            instructions: params.instructions,
+                            follow_prs: params.follow_prs.then_some(true),
+                        },
+                    )
+                })
+                .and_then(|thread| self.coordinator_result(thread)),
+            Method::CoordinatorGet(params) => self.coordinator_result(params.thread),
+            Method::CoordinatorUpdate(params) => self.update_coordinator(params),
+            Method::WorkerStart(params) => self.start_worker(params),
         };
         // What the request changed reaches the windows before its answer.
         self.broadcast();
         self.api.reply(caller, id, result);
     }
 
-    fn execute(&mut self, op: Op) -> Result<Option<Done>, ApiError> {
+    pub(super) fn execute(&mut self, op: Op) -> Result<Option<Done>, ApiError> {
         self.engine.execute(&op).map_err(ApiError::from)
     }
 
@@ -149,7 +167,7 @@ impl Server {
     /// a send to a stopped one is; only one is held, so a second is
     /// refused rather than replace the first. A prompt to a working agent
     /// waits its turn in the provider's queue, as the Composer's does.
-    fn prompt(&mut self, params: &AgentPromptParams) -> Result<(), ApiError> {
+    pub(super) fn prompt(&mut self, params: &AgentPromptParams) -> Result<(), ApiError> {
         let (thread, text) = (params.thread, params.text.clone());
         let view = self.engine.thread(thread).ok_or_else(unknown_thread)?;
         if view.pending().is_some() {

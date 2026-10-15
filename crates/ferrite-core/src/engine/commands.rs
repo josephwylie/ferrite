@@ -207,6 +207,7 @@ impl Engine {
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }
+            | Op::Coordinate { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Unknown => Err(unknown()),

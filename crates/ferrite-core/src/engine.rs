@@ -937,6 +937,21 @@ impl Engine {
         self.groups.apply(change)
     }
 
+    /// Seat a coordinator's worker in the Group it leads (ADR 0028).
+    pub fn enlist(
+        &mut self,
+        coordinator: ThreadId,
+        worker: ThreadId,
+        title: &str,
+    ) -> Result<GroupId, ApplyError> {
+        self.groups.enlist(coordinator, worker, title)
+    }
+
+    /// Where the Store lives: what else the Server keeps beside it.
+    pub fn store_dir(&self) -> &Path {
+        self.store.dir()
+    }
+
     pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
         self.groups.preview_drop(drag, target)
     }
