@@ -67,7 +67,7 @@ take reviewr itself instead, so its fixes and features keep arriving.
 4. **The last turn is reviewr's turn tracking, fed Ferrite's agents.**
    Upstream's `turn.rs` is vendored whole; where herdr fed it each agent's
    status, the Engine feeds it every live Session's checkout and status
-   (`ferrite::agents_changed`, on each pump that changed them: streaming
+   (its `ferrite::TurnSource`, on each pump that changed them: streaming
    is `working`, blocked `blocked`, idle `idle`, closed `done`). Each
    checkout an agent works in gets reviewr's `TurnHost` on a thread of its
    own, reviewed or not. A turn is reviewr's: the checkout going from
@@ -85,10 +85,10 @@ take reviewr itself instead, so its fixes and features keep arriving.
    restart the last turn is still the one Ferrite (or reviewr, sharing the
    ref) last saw; every turn of every Session is seen, from the moment the
    Engine starts it, so the first turn that writes replaces it. Before any
-   turn, the scope says it waits for the first. These, and reviewr's index
-   copies under the git dir (gone when the Engine halts,
-   `git::end_sessions`), are the only writes; the real index and the
-   worktree are never touched.
+   turn, the scope says it waits for the first. These, the base pick (⇧B,
+   point 7) and reviewr's index copies under the git dir (gone when the
+   Engine halts, `git::end_sessions`) are the only writes; the real index
+   and the worktree are never touched.
 5. **Rows as reviewr builds them, drawn as Ferrite draws diffs.** Each
    file is a head (its path, a rename's `old → new`, its `+N −N`) over its
    rows: numbered on both sides, signed and washed like every diff in a
@@ -140,8 +140,29 @@ take reviewr itself instead, so its fixes and features keep arriving.
    note?}` — its number, title, state, branches, mergeability, how the
    checkout stands against it, its checks and its conversation — or
    reviewr's note in its place (no remote, no CLI, not signed in, no PR
-   yet). A Thread row's PR label reads `gh` on its own (`pull_request`,
-   ADR 0026). `r` reads again what shows; esc goes back to the diff.
+   yet). A self-hosted forge is named in the settings' `forge_hosts`
+   (`github`, `gitlab`, `azure_devops`: reviewr's `*_host` keys, checked
+   as reviewr checks them; one it refuses drops them all, and the log says
+   why); the Server reads its own settings file, a window that runs its
+   agents itself the window's. A Thread row's PR label reads `gh` on its
+   own (`pull_request`, ADR 0026). `a` lists every file of the checkout as
+   reviewr's tree (`file_list`, vendored: directories collapsed, first,
+   single-child chains joined; the scope's changed files in the accent and
+   a closed directory holding one marked `•`; an ignored directory one
+   quiet row, not opened): `list_files {path}` answers `all_files
+   {entries[{path, ignored?, dir?}]}`; ↑↓ walk it, ⏎ or a click opens a
+   directory or a file whole. ⇧B is reviewr's base picker: `list_bases
+   {path}` answers `bases {bases[{name, default?, current?, tip, oid?}],
+   picked?}` — the branches, local and `origin` merged, the default first,
+   then the newest, and a revision the pick names — under a field that
+   filters them as reviewr does (`neo_frizbee`); ⏎ or a click picks one,
+   or, when none is kept, what the field reads (any revision git
+   resolves), with `pick_base {path, base}` (answered `changed`), which
+   writes reviewr's per-worktree pick (`refs/worktree/reviewr/base-pick`;
+   the default branch clears it), and the branch scope is read over it.
+   Reviewr's promotion of an open PR's target to the top is not taken: it
+   would cost a forge read per open. `r` reads again what shows; esc goes
+   back to the diff.
 8. **Keys in their own context.** The Review's keys are bound in `Review
    && !Composer` (never while a field of it takes text), the comment
    field's ⏎/esc in `ReviewComment`, the search field's ↑↓/⏎/esc in
@@ -171,5 +192,6 @@ take reviewr itself instead, so its fixes and features keep arriving.
   watcher, reviewr cannot tell it raced.
 - The search engine holds one index per searched checkout for as long as
   the Server runs.
-- A self-hosted forge (reviewr's `*_host` settings) is not configurable
-  yet: its pull request says the host is unsupported.
+- An ignored directory in the all-files list does not open: reviewr
+  lists its entries on demand (`git::all_files_in`), which would need a
+  read per directory.

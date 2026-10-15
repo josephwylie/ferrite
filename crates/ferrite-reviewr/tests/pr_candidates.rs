@@ -96,6 +96,20 @@ fn an_upstream_read_failure_never_falls_through_to_origin() {
 }
 
 #[test]
+fn a_github_com_prefixed_host_is_only_supported_when_configured_literally() {
+    let repo = worktree();
+    repo.git(&["remote", "set-url", "origin", "https://github.com/acme/widgets.git"]);
+    repo.git(&["remote", "add", "upstream", "git@github.com-work:enterprise/widgets.git"]);
+
+    let input = fetch_input(repo.path(), None, &defaults()).unwrap();
+    assert_target(&input.repository, "github.com", "acme", "widgets");
+
+    let config = PluginConfig::with_hosts(Some("github.com-work"), None, None).unwrap();
+    let input = fetch_input(repo.path(), None, &config).unwrap();
+    assert_target(&input.repository, "github.com-work", "enterprise", "widgets");
+}
+
+#[test]
 fn push_head_other_name_adds_the_pushed_name() {
     // `git push origin HEAD:other` without `-u`: the pushed name joins the branch's names.
     let repo = worktree();
@@ -626,6 +640,18 @@ fn a_missing_origin_is_absence_but_a_non_repo_is_failure() {
         fetch_input(dir.path(), None, &defaults()).is_err(),
         "a non-repo directory is a failure"
     );
+}
+
+#[test]
+fn fetch_input_uses_instead_of_rewrite_and_ignores_pushurl() {
+    let repo = worktree();
+    repo.git(&["remote", "set-url", "origin", "corp:owner/repo.git"]);
+    repo.git(&["config", "url.https://github.company.com/.insteadOf", "corp:"]);
+    repo.git(&["remote", "set-url", "--push", "origin", "git@gitlab.com:owner/repo.git"]);
+
+    let config = PluginConfig::with_hosts(Some("github.company.com"), None, None).unwrap();
+    let input = fetch_input(repo.path(), None, &config).expect("fetch input");
+    assert_target(&input.repository, "github.company.com", "owner", "repo");
 }
 
 #[test]

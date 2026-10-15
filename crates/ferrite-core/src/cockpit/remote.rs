@@ -30,8 +30,8 @@ use crate::workspace::{
     parse_pr_json, DirEntry, ListedWorktree, Listing, PullRequest, RepoListing,
 };
 use crate::ThreadId;
-use ferrite_reviewr::ferrite::{FileSides, Read};
-use ferrite_reviewr::git::CommitRow;
+use ferrite_reviewr::ferrite::{Bases, FileSides, Read};
+use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
 use ferrite_reviewr::search::SearchResults;
 
 /// Where a later-answered command's reply goes (`Remote::ask`).
@@ -527,6 +527,44 @@ impl Remote {
                 noun,
                 pr: pr.ok_or_else(|| note.unwrap_or_default()),
             }),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn review_files(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<WorktreeEntry>>>> {
+        let op = Op::ListFiles {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::AllFiles { entries } => Some(entries.into_iter().map(Into::into).collect()),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn review_bases(&mut self, path: &Path) -> io::Result<Receiver<io::Result<Bases>>> {
+        let op = Op::ListBases {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::Bases { bases, picked } => Some(crate::protocol::bases(bases, picked)),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn pick_review_base(
+        &mut self,
+        path: &Path,
+        base: &str,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        let op = Op::PickBase {
+            path: path.to_path_buf(),
+            base: base.to_string(),
+        };
+        self.ask(op, |done| match done {
+            Done::Changed { .. } => Some(()),
             _ => None,
         })
     }

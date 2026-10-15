@@ -919,8 +919,10 @@ pub struct Engine {
     windows: windows::Windows,
     /// Each open Thread's Attention changes, counted for the API.
     attention_count: windows::AttentionCount,
-    /// The live Sessions as reviewr's turn tracking last heard of them.
+    /// The live Sessions as reviewr's turn tracking last heard of them,
+    /// and this Engine's feed into it.
     turn_agents: Vec<ferrite_reviewr::ferrite::Agent>,
+    turns: ferrite_reviewr::ferrite::TurnSource,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
@@ -969,6 +971,7 @@ impl Engine {
             windows: Default::default(),
             attention_count: Default::default(),
             turn_agents: Vec::new(),
+            turns: Default::default(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
         })
@@ -3130,7 +3133,7 @@ impl Engine {
             .collect();
         if agents != self.turn_agents {
             self.turn_agents = agents.clone();
-            ferrite_reviewr::ferrite::agents_changed(agents, crate::clock::instant());
+            self.turns.agents_changed(agents, crate::clock::instant());
         }
     }
 

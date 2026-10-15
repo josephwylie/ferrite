@@ -14,8 +14,9 @@
 //! the Thread, or off the UI thread when this window runs its agents
 //! itself — with the vendored review core (`Cockpit::review_diff`,
 //! `review_commits`, `search_repo`, `read_review_file`,
-//! `review_pull_request`). Picking another scope, a commit, a search's
-//! file or the pull request comes back here to be read.
+//! `review_pull_request`, `review_files`, `review_bases`,
+//! `pick_review_base`). Picking another scope, a commit, a search's file,
+//! the pull request, every file or a base comes back here to be read.
 //!
 //! Another Thread opens as a second Pane: beside the current one in Solo (a
 //! pair on the Solo board, for as long as focus stays on one of the two),
@@ -25,7 +26,8 @@
 
 use super::*;
 use crate::review::{
-    CommitPicked, FileOpened, MenuAsked, PrAsked, ReviewView, ScopePicked, Searched,
+    BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
+    ScopePicked, Searched,
 };
 use ferrite_reviewr::ferrite::Read;
 use ferrite_reviewr::model::{CommitPick, Scope};
@@ -171,6 +173,18 @@ impl CockpitView {
             .detach();
             cx.subscribe(&review, move |view, review, _: &PrAsked, cx| {
                 view.read_pull_request(thread, review, cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, _: &FilesAsked, cx| {
+                view.read_review_files(thread, review, cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, _: &BasesAsked, cx| {
+                view.read_review_bases(thread, review, cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, BasePicked(base), cx| {
+                view.pick_review_base(thread, review, base.clone(), cx)
             })
             .detach();
             cx.subscribe(&review, move |view, _, MenuAsked { at, line }, cx| {
@@ -328,6 +342,70 @@ impl CockpitView {
             cx,
             ReviewView::pr_open,
             |review, pr, cx| review.show_pr(pr, cx),
+            ReviewView::fail,
+        );
+    }
+
+    /// Read every file of the checkout for the review's all-files list.
+    fn read_review_files(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let files = self.cockpit.review_files(&workspace);
+        land(
+            review,
+            files,
+            cx,
+            ReviewView::tree_open,
+            |review, files, cx| review.show_tree(Ok(files), cx),
+            |review, error, cx| review.show_tree(Err(error), cx),
+        );
+    }
+
+    /// Read the bases the branch scope can read against, for the picker.
+    fn read_review_bases(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let bases = self.cockpit.review_bases(&workspace);
+        land(
+            review,
+            bases,
+            cx,
+            ReviewView::bases_open,
+            |review, bases, cx| review.show_bases(Ok(bases), cx),
+            |review, error, cx| review.show_bases(Err(error), cx),
+        );
+    }
+
+    /// Make `base` the branch scope's base, then read the branch over it.
+    fn pick_review_base(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        base: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let picked = self.cockpit.pick_review_base(&workspace, &base);
+        land(
+            review,
+            picked,
+            cx,
+            |_| true,
+            |review, (), cx| review.pick_scope(Scope::Branch, cx),
             ReviewView::fail,
         );
     }

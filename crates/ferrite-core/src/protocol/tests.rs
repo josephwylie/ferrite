@@ -727,6 +727,34 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_list_files",
+            command(
+                48,
+                Op::ListFiles {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_list_bases",
+            command(
+                49,
+                Op::ListBases {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_pick_base",
+            command(
+                50,
+                Op::PickBase {
+                    path: "/home/me/src/ferrite".into(),
+                    base: "develop".into(),
+                },
+            ),
+        ),
+        (
             "command_pull_request",
             command(
                 43,
@@ -1024,6 +1052,53 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     }],
                     file_total: 1,
                     code_more: false,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_all_files",
+            Sample::Server(ServerMessage::Reply {
+                id: 48,
+                ok: Some(Done::AllFiles {
+                    entries: vec![
+                        WireTreeEntry {
+                            path: "src/lib.rs".into(),
+                            ignored: false,
+                            dir: false,
+                        },
+                        WireTreeEntry {
+                            path: "target".into(),
+                            ignored: true,
+                            dir: true,
+                        },
+                    ],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_bases",
+            Sample::Server(ServerMessage::Reply {
+                id: 49,
+                ok: Some(Done::Bases {
+                    bases: vec![
+                        WireBase {
+                            name: "main".into(),
+                            default: true,
+                            current: false,
+                            tip: 1_760_000_000,
+                            oid: None,
+                        },
+                        WireBase {
+                            name: "develop".into(),
+                            default: false,
+                            current: true,
+                            tip: 1_760_500_000,
+                            oid: None,
+                        },
+                    ],
+                    picked: Some("main".into()),
                 }),
                 error: None,
             }),

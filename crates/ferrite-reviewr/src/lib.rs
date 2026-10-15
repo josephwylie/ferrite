@@ -13,6 +13,7 @@ pub mod config;
 pub mod diff;
 pub mod export;
 pub mod ferrite;
+pub mod file_list;
 pub mod forge;
 pub mod git;
 pub mod gitlab;

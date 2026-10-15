@@ -76,6 +76,9 @@ pub struct Cockpit {
     /// until told, and again after every attach: a Server forgets a window
     /// that left.
     told: Option<Told>,
+    /// The self-hosted forges a review's pull request is read from here,
+    /// when this window runs its agents itself (`settings_changed`).
+    forge: ferrite_reviewr::config::PluginConfig,
 }
 
 /// What only a window knows and the API reports (ADR 0030): the Thread it
@@ -149,6 +152,7 @@ impl Cockpit {
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
+            forge: Default::default(),
             told: None,
         }
     }
@@ -1393,10 +1397,60 @@ impl Cockpit {
         match &mut self.link {
             Link::Server(server) => server.review_pull_request(path),
             Link::InProcess(_) => {
+                let (path, forge) = (path.to_path_buf(), self.forge.clone());
+                Ok(read_here(move || {
+                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
+                    Ok(crate::protocol::ReviewPullRequest::of(view, noun))
+                }))
+            }
+        }
+    }
+
+    /// Every file of the checkout at `path`, for a review's all-files
+    /// list, read where `review_diff` reads.
+    pub fn review_files(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::WorktreeEntry>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_files(path),
+            Link::InProcess(_) => {
                 let path = path.to_path_buf();
                 Ok(read_here(move || {
-                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path);
-                    Ok(crate::protocol::ReviewPullRequest::of(view, noun))
+                    ferrite_reviewr::ferrite::all_files(&path)
+                }))
+            }
+        }
+    }
+
+    /// The bases a review's branch scope can read against, read where
+    /// `review_diff` reads.
+    pub fn review_bases(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<ferrite_reviewr::ferrite::Bases>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_bases(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || ferrite_reviewr::ferrite::bases(&path)))
+            }
+        }
+    }
+
+    /// Make `base` the branch scope's base for the checkout at `path`,
+    /// written where `review_diff` reads.
+    pub fn pick_review_base(
+        &mut self,
+        path: &Path,
+        base: &str,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        match &mut self.link {
+            Link::Server(server) => server.pick_review_base(path, base),
+            Link::InProcess(_) => {
+                let (path, base) = (path.to_path_buf(), base.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::pick_base(&path, &base)
                 }))
             }
         }
@@ -1714,8 +1768,10 @@ impl Cockpit {
     }
 
     /// Settings changed on disk: whether completed turns predict a
-    /// follow-up, and where an allowance warns, among them.
+    /// follow-up, where an allowance warns, and the self-hosted forges a
+    /// review reads, among them.
     pub fn settings_changed(&mut self, settings: &crate::settings::Settings) {
+        self.forge = settings.forge_hosts.review_config();
         self.act(
             |engine| {
                 engine.set_suggestions_enabled(settings.placeholder_suggestions);

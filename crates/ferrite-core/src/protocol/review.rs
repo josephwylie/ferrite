@@ -6,9 +6,9 @@
 use serde::{Deserialize, Serialize};
 
 use ferrite_reviewr::diff::Notice;
-use ferrite_reviewr::ferrite::FileSides;
+use ferrite_reviewr::ferrite::{BaseRow, Bases, FileSides};
 use ferrite_reviewr::forge::{self, PrView};
-use ferrite_reviewr::git::CommitRow;
+use ferrite_reviewr::git::{CommitRow, WorktreeEntry};
 use ferrite_reviewr::model::{ChangeKind, ChangedFile};
 use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 
@@ -223,6 +223,84 @@ impl From<super::WireCommit> for CommitRow {
             merge: false,
         }
     }
+}
+
+/// One `list_files` entry: a file, or an ignored directory standing for
+/// everything under it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireTreeEntry {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignored: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dir: bool,
+}
+
+impl From<WorktreeEntry> for WireTreeEntry {
+    fn from(entry: WorktreeEntry) -> Self {
+        Self {
+            path: entry.path,
+            ignored: entry.ignored,
+            dir: entry.is_dir,
+        }
+    }
+}
+
+impl From<WireTreeEntry> for WorktreeEntry {
+    fn from(entry: WireTreeEntry) -> Self {
+        Self {
+            path: entry.path,
+            ignored: entry.ignored,
+            is_dir: entry.dir,
+        }
+    }
+}
+
+/// One `list_bases` row: a branch, with whether it is the default and the
+/// one checked out and when its tip was made; or the revision (`oid`) the
+/// pick names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireBase {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+    #[serde(default)]
+    pub tip: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oid: Option<String>,
+}
+
+impl From<Bases> for Done {
+    fn from(Bases { rows, picked }: Bases) -> Self {
+        let bases = rows
+            .into_iter()
+            .map(|row| WireBase {
+                name: row.name,
+                default: row.is_default,
+                current: row.current,
+                tip: row.tip_secs,
+                oid: row.oid,
+            })
+            .collect();
+        Done::Bases { bases, picked }
+    }
+}
+
+/// A `bases` answer as the window's picker reads it.
+pub fn bases(bases: Vec<WireBase>, picked: Option<String>) -> Bases {
+    let rows = bases
+        .into_iter()
+        .map(|base| BaseRow {
+            name: base.name,
+            is_default: base.default,
+            current: base.current,
+            tip_secs: base.tip,
+            oid: base.oid,
+        })
+        .collect();
+    Bases { rows, picked }
 }
 
 /// A `review_pull_request`'s pull request: what its forge's CLI read.

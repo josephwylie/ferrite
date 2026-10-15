@@ -308,7 +308,7 @@ type Search = (
 
 /// A read off the pump — git's for a `list_repo` or a review's commands
 /// (`review_diff`, `list_commits`, `search_repo`, `read_file`,
-/// `review_pull_request`), `gh`'s for a `pull_request`, a folder's for a
+/// `review_pull_request`, `list_files`, `list_bases`, `pick_base`), `gh`'s for a `pull_request`, a folder's for a
 /// `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
@@ -346,6 +346,8 @@ struct Server {
     nav_focus: Option<String>,
     /// How this Server starts its successor (`relaunch`; a test's own).
     relaunch: Box<Relaunch>,
+    /// The self-hosted forges a review's pull request is read from.
+    forge: ferrite_reviewr::config::PluginConfig,
 }
 
 impl Server {
@@ -378,6 +380,7 @@ impl Server {
             default_provider: Provider::Claude,
             nav_focus: None,
             relaunch: Box::new(relaunch),
+            forge: Default::default(),
         }
     }
 
@@ -638,12 +641,43 @@ impl Server {
                 return;
             }
             Op::ReviewPullRequest { path } => {
-                let path = path.clone();
+                let (path, forge) = (path.clone(), self.forge.clone());
                 self.read_off_pump(id, request, move || {
-                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path);
+                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
                     Ok(Some(
                         crate::protocol::ReviewPullRequest::of(view, noun).into(),
                     ))
+                });
+                return;
+            }
+            Op::ListFiles { path } => {
+                let path = path.clone();
+                self.read_off_pump(id, request, move || {
+                    ferrite_reviewr::ferrite::all_files(&path)
+                        .map(|entries| {
+                            Some(Done::AllFiles {
+                                entries: entries.into_iter().map(Into::into).collect(),
+                            })
+                        })
+                        .map_err(failed)
+                });
+                return;
+            }
+            Op::ListBases { path } => {
+                let path = path.clone();
+                self.read_off_pump(id, request, move || {
+                    ferrite_reviewr::ferrite::bases(&path)
+                        .map(|bases| Some(bases.into()))
+                        .map_err(failed)
+                });
+                return;
+            }
+            Op::PickBase { path, base } => {
+                let (path, base) = (path.clone(), base.clone());
+                self.read_off_pump(id, request, move || {
+                    ferrite_reviewr::ferrite::pick_base(&path, &base)
+                        .map(|()| Some(Done::Changed { changed: true }))
+                        .map_err(failed)
                 });
                 return;
             }
@@ -739,6 +773,7 @@ impl Server {
         self.engine
             .set_allowance_thresholds(settings.allowance_warnings.clone());
         self.default_provider = settings.default_provider;
+        self.forge = settings.forge_hosts.review_config();
     }
 
     /// A first send that settled answers the command that started it.

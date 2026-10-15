@@ -14,7 +14,8 @@ vendored for Ferrite's Review slot (ADR 0021). MIT, © 2026 Dmitry Persiyanov
 
 Verbatim from upstream (`src/`): `azure_devops.rs`, `diff.rs`, `forge.rs`,
 `git.rs`, `gitlab.rs`, `keymap.rs`, `log.rs`, `model.rs`, `proc.rs`,
-`search.rs`, `snippet.rs`, `test_support.rs`, `text.rs`, `turn.rs`; and
+`search.rs`, `snippet.rs`, `test_support.rs`, `text.rs`, `turn.rs`,
+`file_list.rs`; and
 `assets/*.tmTheme`, the syntax themes the highlighter's tests load (each under
 its own licence: Catppuccin Mocha, Rosé Pine, ayu and Everforest MIT, Tokyo
 Night Apache-2.0).
@@ -35,12 +36,17 @@ Ferrite's own:
   (`herdr.rs`, `herdr_socket.rs`): each scope's changeset and sides (after
   upstream's `world::scope_build` and `App::content_sides`), the file view,
   turn tracking's feed (after upstream's `herdr_socket.rs`: the Engine's
-  agents in place of herdr's, a `TurnHost` per checkout), the commit list, the comment anchor (upstream's
+  agents in place of herdr's, a `TurnHost` per checkout), the commit list,
+  the all-files listing (upstream's `world::all_files_entries`), the base
+  picker's rows, filter and pick (upstream's `App::open_base_picker`,
+  `BasePicker::filtered` and `App::base_picker_pick` with its probe), the comment anchor (upstream's
   `app::anchor`), the prompt text, the per-checkout search workers and the
   pull request read with its notes (upstream's `ui::pr_empty_msg`).
 - `config.rs`, `theme.rs`, `wake.rs`, `watch.rs`: stand-ins for upstream
   modules of the same names that were dropped, holding only what the kept
-  modules call (the forge host set and host grammar; the syntax theme
+  modules call (the forge host set, now built from Ferrite's
+  `forge_hosts` setting with upstream's `parse_forge_host` check, and the
+  host grammar; the syntax theme
   choice; the search worker's sender; the watcher's gathering span, which
   sizes turn tracking's race window). Ferrite runs no watcher, so every
   turn is judged at its end by the worktree itself, as upstream judges a
@@ -48,16 +54,16 @@ Ferrite's own:
 
 Dropped: the terminal UI and its loop (`app.rs`, `ui.rs`, `input*`,
 `wake.rs`, `theme.rs`, `roles.rs`, `markdown.rs`, `marks.rs`, `rendered.rs`,
-`selection.rs`, `file_list.rs`, `browser.rs`, `editor.rs`, `schedule.rs`,
+`selection.rs`, `browser.rs`, `editor.rs`, `schedule.rs`,
 `world.rs`, `watch.rs`, `actions.rs`, `config.rs`, `main.rs`), the
 herdr adapter (`herdr.rs`, `herdr_socket.rs`), the plugin manifest and
 scripts. Ferrite draws the review with GPUI (`crates/ferrite/src/review.rs`)
-and feeds turn tracking its own agents (`ferrite::agents_changed`).
+and feeds turn tracking its own agents (`ferrite::TurnSource`).
 
 Tests: every unit test of the kept modules, `tests/git_repo.rs` (its scope
 reads go through the adapter's `changed` instead of upstream's world build)
-and `tests/pr_candidates.rs` (without the two tests that write a reviewr
-config file, which Ferrite does not read). The others drive the terminal UI or
+and `tests/pr_candidates.rs` (its two tests that write a reviewr config
+file build the same config from hosts, as Ferrite does, instead). The others drive the terminal UI or
 herdr, or check upstream's own source style (`comment_shape.rs`).
 
 ## Updating

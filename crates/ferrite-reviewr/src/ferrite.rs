@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::config::PluginConfig;
 use crate::diff::{DiffCache, FileDiff, MAX_BYTES, Notice, Row, over_byte_budget};
+use crate::file_list::Entry;
 use crate::forge::{PrInputError, PrView};
 use crate::git;
 use crate::highlight::Highlighter;
@@ -30,7 +32,7 @@ pub enum Read {
     /// The worktree against the merge base of the resolved base branch.
     Branch,
     /// The worktree against its snapshot when the last turn that changed it began
-    /// ([`agents_changed`]).
+    /// ([`TurnSource`]).
     LastTurn,
     /// A picked run of commits, `oldest^` against `newest`.
     Commits(CommitPick),
@@ -247,27 +249,70 @@ pub struct Agent {
     pub status: Status,
 }
 
-/// The Engine's agents changed, `at` when it saw them: turn tracking follows them, as upstream's
-/// follows herdr's `agent_status` (`herdr_socket.rs`). Every checkout an agent works in gets a
-/// [`TurnHost`] on a thread of its own, which snapshots its turn's start and promotes it to
-/// `last turn` once the turn ends having changed the checkout. Ferrite runs no watcher, so a
-/// turn is judged at its end, as upstream judges one its watcher was down for.
-pub fn agents_changed(agents: Vec<Agent>, at: Instant) {
-    static TURNS: OnceLock<Mutex<mpsc::Sender<(Vec<Agent>, Instant)>>> = OnceLock::new();
-    let turns = TURNS.get_or_init(|| {
-        let (tx, rx) = mpsc::channel();
-        let _ = std::thread::Builder::new().name("turns".into()).spawn(move || track_turns(&rx));
-        Mutex::new(tx)
-    });
-    let _ = turns.lock().unwrap_or_else(PoisonError::into_inner).send((agents, at));
+/// One source's agents, and when it saw them so.
+type Sighting = (u64, Vec<Agent>, Instant);
+/// Every source's agents as every checkout's turn host shares them.
+type Shared = (Arc<Vec<Agent>>, Instant);
+
+/// One Engine's feed into turn tracking, as upstream's herdr connection feeds its own
+/// (`herdr_socket.rs`). Every checkout an agent works in gets a [`TurnHost`] on a thread of its
+/// own, which snapshots a turn's start and promotes it to `last turn` once the turn ends having
+/// changed the checkout. Ferrite runs no watcher, so a turn is judged at its end, as upstream
+/// judges one its watcher was down for. Its agents leave with it.
+#[derive(Debug)]
+pub struct TurnSource {
+    id: u64,
 }
 
-/// Find each agent's checkout and tell every checkout's turn host what the agents are now.
-fn track_turns(news: &mpsc::Receiver<(Vec<Agent>, Instant)>) {
+impl Default for TurnSource {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self { id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+    }
+}
+
+impl TurnSource {
+    /// This source's agents changed, `at` when it saw them.
+    pub fn agents_changed(&self, agents: Vec<Agent>, at: Instant) {
+        static TURNS: OnceLock<Mutex<mpsc::Sender<Sighting>>> = OnceLock::new();
+        let turns = TURNS.get_or_init(|| {
+            let (tx, rx) = mpsc::channel();
+            let _ =
+                std::thread::Builder::new().name("turns".into()).spawn(move || track_turns(&rx));
+            Mutex::new(tx)
+        });
+        let _ = turns.lock().unwrap_or_else(PoisonError::into_inner).send((self.id, agents, at));
+    }
+}
+
+impl Drop for TurnSource {
+    fn drop(&mut self) {
+        self.agents_changed(Vec::new(), Instant::now());
+    }
+}
+
+/// Find each agent's checkout and tell every checkout's turn host what the agents are now, each
+/// named by its source too, so two sources' threads never share a name.
+fn track_turns(news: &mpsc::Receiver<Sighting>) {
+    let mut sources: HashMap<u64, Vec<Agent>> = HashMap::new();
     // A resolved root never moves, so it is kept; outside and unknown are asked again.
     let mut roots: HashMap<PathBuf, PathBuf> = HashMap::new();
-    let mut hosts: HashMap<PathBuf, mpsc::Sender<(Arc<Vec<Agent>>, Instant)>> = HashMap::new();
-    for (agents, at) in news {
+    let mut hosts: HashMap<PathBuf, mpsc::Sender<Shared>> = HashMap::new();
+    for (source, agents, at) in news {
+        if agents.is_empty() {
+            sources.remove(&source);
+        } else {
+            sources.insert(source, agents);
+        }
+        let agents: Vec<Agent> = sources
+            .iter()
+            .flat_map(|(source, agents)| {
+                agents.iter().map(move |agent| Agent {
+                    thread: format!("{source}:{}", agent.thread),
+                    ..agent.clone()
+                })
+            })
+            .collect();
         for agent in &agents {
             if roots.contains_key(&agent.cwd) || !agent.cwd.is_absolute() {
                 continue;
@@ -287,8 +332,8 @@ fn track_turns(news: &mpsc::Receiver<(Vec<Agent>, Instant)>) {
 
 /// The turn host of the checkout at `root`, on its own thread so one slow snapshot holds up no
 /// other checkout's turn.
-fn turn_host(root: PathBuf) -> mpsc::Sender<(Arc<Vec<Agent>>, Instant)> {
-    let (tx, rx) = mpsc::channel::<(Arc<Vec<Agent>>, Instant)>();
+fn turn_host(root: PathBuf) -> mpsc::Sender<Shared> {
+    let (tx, rx) = mpsc::channel::<Shared>();
     let _ = std::thread::Builder::new().name("turn-host".into()).spawn(move || {
         session_started(&root);
         let mut host = TurnHost::open(root);
@@ -325,6 +370,114 @@ pub fn commits(repo: &Path) -> Result<Vec<git::CommitRow>, String> {
     let resolution = git::resolve_base(repo, None).map_err(|error| error.0)?;
     let merge_base = resolution.status.winner.as_ref().and_then(|w| git::merge_base(repo, w.oid()));
     git::list_commits(repo, merge_base.as_deref()).map_err(|error| format!("{error:#}"))
+}
+
+/// Every worktree entry, sorted, for the all-files list (upstream's `All files` tab). An ignored
+/// directory is one entry.
+pub fn all_files(repo: &Path) -> Result<Vec<git::WorktreeEntry>, String> {
+    if !git::is_repo(repo) {
+        return Err("not a git repository".to_string());
+    }
+    git::all_files(repo).map_err(|error| format!("{error:#}"))
+}
+
+/// The all-files list's entries: `listed`, each annotated with its change in `changed`. Upstream's
+/// `world::all_files_entries`.
+pub fn all_files_entries(listed: Vec<git::WorktreeEntry>, changed: &[ChangedFile]) -> Vec<Entry> {
+    let by_path: HashMap<&str, &ChangedFile> =
+        changed.iter().map(|f| (f.path.as_str(), f)).collect();
+    listed
+        .into_iter()
+        .map(|entry| {
+            let annotation = by_path.get(entry.path.as_str()).map(|f| (*f).clone());
+            Entry::from_worktree(entry, annotation)
+        })
+        .collect()
+}
+
+/// One base picker row: a branch with its trail facts, or a revision (`oid`) the pick names.
+/// Upstream's `app::BaseChoice`, less the PR target, which would cost a forge read per open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaseRow {
+    pub name: String,
+    pub is_default: bool,
+    pub current: bool,
+    pub tip_secs: u64,
+    pub oid: Option<String>,
+}
+
+/// The base picker's rows, default first then by recency, and the base the branch scope now
+/// reads against. Upstream's `App::open_base_picker`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Bases {
+    pub rows: Vec<BaseRow>,
+    pub picked: Option<String>,
+}
+
+/// `repo`'s base picker rows.
+pub fn bases(repo: &Path) -> Result<Bases, String> {
+    if !git::is_repo(repo) {
+        return Err("not a git repository".to_string());
+    }
+    let resolution = git::resolve_base(repo, None).map_err(|e| e.0)?;
+    let (winner, default) = (resolution.status.winner, resolution.default);
+    let branches = git::list_branches(repo).map_err(|e| e.0)?;
+    let current = git::checked_out_branch(repo).map_err(|e| e.0)?;
+    let mut rows: Vec<BaseRow> = branches
+        .into_iter()
+        .map(|b| BaseRow {
+            is_default: default.as_deref() == Some(b.name.as_str()),
+            current: current.as_deref() == Some(b.name.as_str()),
+            tip_secs: b.tip_secs,
+            name: b.name,
+            oid: None,
+        })
+        .collect();
+    // A stable sort, so recency still orders the rest.
+    rows.sort_by_key(|r| !r.is_default);
+    if let Some(git::ResolvedBase::Rev { spelling, oid }) = &winner
+        && !rows.iter().any(|r| r.name == *spelling)
+    {
+        let rev = BaseRow {
+            name: spelling.clone(),
+            is_default: false,
+            current: false,
+            tip_secs: 0,
+            oid: Some(oid.clone()),
+        };
+        rows.insert(0, rev);
+    }
+    Ok(Bases { rows, picked: winner.as_ref().map(|w| w.name().to_string()) })
+}
+
+/// The rows `query` fuzzily matches, best first, ties in listed order. Upstream's
+/// `BasePicker::filtered`.
+pub fn filter_bases(rows: &[BaseRow], query: &str) -> Vec<usize> {
+    if query.is_empty() {
+        return (0..rows.len()).collect();
+    }
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    let config = neo_frizbee::Config::default();
+    let matches = neo_frizbee::Matcher::new(query, &config).match_list(&names);
+    matches.into_iter().map(|m| m.index as usize).collect()
+}
+
+/// Make `name` (a listed branch, else any branch or revision it spells) the branch scope's
+/// base; the default branch clears the pick. Upstream's `App::base_picker_pick` with its probe.
+pub fn pick_base(repo: &Path, name: &str) -> Result<(), String> {
+    let listed = git::list_branches(repo).map_err(|e| e.0)?;
+    let name = if listed.iter().any(|b| b.name == name) {
+        name.to_string()
+    } else {
+        match git::resolve_spelling(repo, name).map_err(|e| e.0)? {
+            Some(git::ResolvedBase::Branch { name, .. }) => name,
+            Some(git::ResolvedBase::Rev { spelling, oid }) => {
+                git::complete_sha_prefix(&spelling, &oid)
+            }
+            None => return Err(format!("no branch or revision {name}")),
+        }
+    };
+    git::write_base_pick(repo, &name).map_err(|e| e.0)
 }
 
 /// The `(side, start, end, snippet)` of diff rows: new side unless all deletions. Upstream's
@@ -470,10 +623,10 @@ impl Searcher {
 }
 
 /// `repo`'s pull request as its forge's CLI reads it (`gh`, `glab` or `az`, read-only), and the
-/// forge's noun for one (`PR`, `MR`).
-pub fn pull_request(repo: &Path) -> (PrView, &'static str) {
-    let config = crate::config::PluginConfig::default();
-    match crate::forge::fetch_input(repo, None, &config) {
+/// forge's noun for one (`PR`, `MR`). `config` names the self-hosted forges besides the built-in
+/// hosts.
+pub fn pull_request(repo: &Path, config: &PluginConfig) -> (PrView, &'static str) {
+    match crate::forge::fetch_input(repo, None, config) {
         Ok(input) => {
             let noun = match &input.repository {
                 git::RepositoryIdentity::Repository(target) => target.forge().noun(),
@@ -658,14 +811,15 @@ mod tests {
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", "root"]);
         let agent = |status| Agent { thread: "t1".into(), cwd: repo.to_path_buf(), status };
-        agents_changed(vec![agent(Status::Idle)], Instant::now());
+        let source = TurnSource::default();
+        source.agents_changed(vec![agent(Status::Idle)], Instant::now());
         // A write that lands before the start's snapshot is part of it, so each try writes anew
         // after giving the snapshot time.
         for attempt in 0..20 {
-            agents_changed(vec![agent(Status::Working)], Instant::now());
+            source.agents_changed(vec![agent(Status::Working)], Instant::now());
             std::thread::sleep(Duration::from_millis(200));
             std::fs::write(repo.join("a.txt"), format!("edit {attempt}\n")).unwrap();
-            agents_changed(vec![agent(Status::Idle)], Instant::now());
+            source.agents_changed(vec![agent(Status::Idle)], Instant::now());
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
                 if git::read_baseline_ref(repo).is_some() {
@@ -697,7 +851,7 @@ mod tests {
         std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", "root"]);
-        let (view, noun) = pull_request(dir.path());
+        let (view, noun) = pull_request(dir.path(), &PluginConfig::default());
         assert_eq!(view, PrView::NeedsForgeRemote);
         assert!(pr_note(&view, noun, crate::keymap::Key::plain('r')).contains("remote named"));
         assert_eq!(

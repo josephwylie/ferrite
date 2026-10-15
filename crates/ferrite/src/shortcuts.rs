@@ -200,7 +200,11 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::SaveComment"
         | "review::CancelComment"
         | "review::OpenFound"
-        | "review::CloseSearch" => Hidden,
+        | "review::CloseSearch"
+        | "review::AllFiles"
+        | "review::PickBase"
+        | "review::ChooseBase"
+        | "review::CloseBases" => Hidden,
         _ => return None,
     })
 }

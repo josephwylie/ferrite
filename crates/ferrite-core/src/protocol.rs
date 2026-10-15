@@ -337,6 +337,24 @@ pub enum Op {
     ReviewPullRequest {
         path: PathBuf,
     },
+    /// Every file of the checkout at `path`, for a review's all-files
+    /// list (ADR 0021). Replied `all_files`.
+    ListFiles {
+        path: PathBuf,
+    },
+    /// The branches a review's branch scope can read the checkout at
+    /// `path` against, and the base it reads against now (ADR 0021).
+    /// Replied `bases`.
+    ListBases {
+        path: PathBuf,
+    },
+    /// Make `base` (a branch, or any revision git resolves) the base the
+    /// branch scope reads the checkout at `path` against: reviewr's
+    /// per-worktree pick (ADR 0021). Replied `changed`.
+    PickBase {
+        path: PathBuf,
+        base: String,
+    },
     /// The PR of the branch checked out at `path`, read by `gh` on the
     /// Server's computer, where the checkout is: what a Thread row's PR
     /// label says. Replied `pull_request`.
@@ -937,6 +955,18 @@ pub enum Done {
         pr: Option<WirePr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+    },
+    /// A `list_files`' entries in path order: every file, and each
+    /// ignored directory whole.
+    AllFiles {
+        entries: Vec<WireTreeEntry>,
+    },
+    /// A `list_bases`' branches, the default first, then the newest; and
+    /// the base the branch scope reads against now.
+    Bases {
+        bases: Vec<WireBase>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        picked: Option<String>,
     },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no

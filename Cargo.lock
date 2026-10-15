@@ -2129,6 +2129,7 @@ dependencies = [
  "dirs 7.0.0",
  "fff-search",
  "ignore",
+ "neo_frizbee",
  "process-wrap",
  "serde_json",
  "similar",

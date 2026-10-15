@@ -22,7 +22,11 @@
 //! `fff-search` — and a result opens its file whole (the file view), whose
 //! lines take comments too; esc goes back to the diff. ⌘F finds in the
 //! rows shown. `m` renders each Markdown file's new side. `p` shows the
-//! pull request, as its forge's CLI reads it. The commits scope first lists
+//! pull request, as its forge's CLI reads it. `a` lists every file of the
+//! checkout as reviewr's tree (the scope's changed files marked), whose
+//! files open whole. ⇧B picks the base the branch scope reads against
+//! (reviewr's base picker: the branches, filtered as typed, or any
+//! revision typed), and shows the branch scope over it. The commits scope first lists
 //! the branch's commits, newest first: ↑↓ or a click picks one, ⇧↑↓ or a
 //! shift-click stretches the pick to a run of them, ⏎ (or the click)
 //! reviews the pick — a run's changes together — and the scope again goes
@@ -30,15 +34,17 @@
 //! cockpit reads each of these where the checkout is (`cockpit/beside.rs`)
 //! and hands it over; each is a snapshot, read again on `r`.
 
+use std::collections::HashSet;
 use std::ops::Range;
 
 use ferrite_core::protocol::{
     ReviewPullRequest, WireCheckStatus, WireMerge, WirePr, WirePrCommentKind, WirePrState, WireSync,
 };
 use ferrite_reviewr::diff::{FileDiff, Row};
-use ferrite_reviewr::ferrite::{self as reviewr, FileSides};
-use ferrite_reviewr::git::{abbreviate_oid, CommitRow};
-use ferrite_reviewr::model::{Comment as ReviewComment, CommitPick, Rev, Scope};
+use ferrite_reviewr::ferrite::{self as reviewr, Bases, FileSides};
+use ferrite_reviewr::file_list::{self, Entry as TreeEntry, RowKind};
+use ferrite_reviewr::git::{abbreviate_oid, CommitRow, WorktreeEntry};
+use ferrite_reviewr::model::{ChangedFile, Comment as ReviewComment, CommitPick, Rev, Scope};
 use ferrite_reviewr::search::SearchResults;
 use gpui::prelude::*;
 use gpui::{
@@ -57,8 +63,8 @@ gpui::actions!(
     [
         // In the `Review` context: walk and stretch the pick, comment on
         // it or take a comment back, step or reread the scope, search the
-        // checkout, render Markdown, show the pull request, go back or
-        // close the slot.
+        // checkout, render Markdown, show the pull request, list every
+        // file, pick the branch's base, go back or close the slot.
         Next,
         Previous,
         ExtendNext,
@@ -70,6 +76,8 @@ gpui::actions!(
         Search,
         ToggleMarkdown,
         ShowPullRequest,
+        AllFiles,
+        PickBase,
         Close,
         // In the comment field's `ReviewComment` context.
         SaveComment,
@@ -77,11 +85,14 @@ gpui::actions!(
         // In the search field's `ReviewSearch` context.
         OpenFound,
         CloseSearch,
+        // In the base field's `ReviewBase` context.
+        ChooseBase,
+        CloseBases,
     ]
 );
 
 /// The slot's keys, as its footer spells them.
-const FOOTER: [(&str, &str); 9] = [
+const FOOTER: [(&str, &str); 11] = [
     ("\u{2191}\u{2193}", "line"),
     ("\u{21e7}\u{2191}\u{2193}", "range"),
     ("c", "comment"),
@@ -90,6 +101,8 @@ const FOOTER: [(&str, &str); 9] = [
     ("/", "search"),
     ("m", "markdown"),
     ("p", "PR"),
+    ("a", "files"),
+    ("\u{21e7}B", "base"),
     ("esc", ""),
 ];
 
@@ -107,6 +120,21 @@ const COMMITS_FOOTER: [(&str, &str); 6] = [
 const SEARCH_FOOTER: [(&str, &str); 3] = [
     ("\u{2191}\u{2193}", "result"),
     ("\u{23ce}", "open"),
+    ("esc", ""),
+];
+
+/// The keys while every file is listed.
+const TREE_FOOTER: [(&str, &str); 4] = [
+    ("\u{2191}\u{2193}", "file"),
+    ("\u{23ce}", "open"),
+    ("r", "reread"),
+    ("esc", "back"),
+];
+
+/// The base field's keys.
+const BASE_FOOTER: [(&str, &str); 3] = [
+    ("\u{2191}\u{2193}", "base"),
+    ("\u{23ce}", "pick"),
     ("esc", ""),
 ];
 
@@ -135,6 +163,18 @@ pub(crate) struct FileOpened {
 /// `show_pr`.
 pub(crate) struct PrAsked;
 
+/// The operator asked for every file of the checkout; the cockpit reads
+/// them and calls `show_tree`.
+pub(crate) struct FilesAsked;
+
+/// The operator opened the base picker; the cockpit reads the bases and
+/// calls `show_bases`.
+pub(crate) struct BasesAsked;
+
+/// The operator picked the branch scope's base; the cockpit writes the
+/// pick and, once written, reads the branch scope again.
+pub(crate) struct BasePicked(pub String);
+
 /// The operator right-clicked row `line` (the pick holds it); the cockpit
 /// opens the slot's context menu `at` the pointer.
 pub(crate) struct MenuAsked {
@@ -149,6 +189,8 @@ struct ReviewFile {
     additions: u32,
     deletions: u32,
     new: Option<String>,
+    /// The change the scope read; `None` for a file opened whole.
+    changed: Option<ChangedFile>,
 }
 
 impl ReviewFile {
@@ -158,6 +200,7 @@ impl ReviewFile {
             additions: sides.file.additions,
             deletions: sides.file.deletions,
             new: sides.sides.ok().map(|(_, new)| new),
+            changed: Some(sides.file),
         }
     }
 
@@ -205,6 +248,44 @@ impl SearchPanel {
             text: Some(hit.text.clone()),
         });
         files.chain(code).collect()
+    }
+}
+
+/// Every file of the checkout (`a`), as reviewr's tree: its entries once
+/// read, the directories flipped from collapsed, and the row the arrows
+/// are on.
+struct TreePanel {
+    entries: Option<Result<Vec<TreeEntry>, String>>,
+    toggled: HashSet<String>,
+    pick: usize,
+    scroll: ScrollHandle,
+}
+
+impl TreePanel {
+    fn rows(&self) -> Vec<file_list::Row> {
+        match &self.entries {
+            Some(Ok(entries)) => file_list::build(entries, &self.toggled, false),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// The base picker (⇧B): its filter field, the bases once read, and the
+/// row the arrows are on among those the filter keeps.
+struct BasePanel {
+    field: Entity<Composer>,
+    bases: Option<Result<Bases, String>>,
+    pick: usize,
+    _edited: gpui::Subscription,
+}
+
+impl BasePanel {
+    /// The rows the field's words keep, best first.
+    fn visible(&self, cx: &gpui::App) -> Vec<usize> {
+        match &self.bases {
+            Some(Ok(bases)) => reviewr::filter_bases(&bases.rows, self.field.read(cx).text()),
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -306,6 +387,10 @@ pub(crate) struct ReviewView {
     /// The commits under review; `None` while the list shows.
     commit: Option<CommitPick>,
     search: Option<SearchPanel>,
+    /// Every file, listed in the diff's place.
+    tree: Option<TreePanel>,
+    /// The base picker, over the slot.
+    bases: Option<BasePanel>,
     /// Find in the rows shown (⌘F).
     find: Option<crate::find::Find>,
     /// Native text for the Markdown view.
@@ -318,6 +403,9 @@ impl EventEmitter<Searched> for ReviewView {}
 impl EventEmitter<FileOpened> for ReviewView {}
 impl EventEmitter<PrAsked> for ReviewView {}
 impl EventEmitter<MenuAsked> for ReviewView {}
+impl EventEmitter<FilesAsked> for ReviewView {}
+impl EventEmitter<BasesAsked> for ReviewView {}
+impl EventEmitter<BasePicked> for ReviewView {}
 
 impl ReviewView {
     pub(crate) fn new(
@@ -350,6 +438,8 @@ impl ReviewView {
             commit_anchor: None,
             commit: None,
             search: None,
+            tree: None,
+            bases: None,
             find: None,
             rich: crate::rich::TextCache::default(),
         }
@@ -379,6 +469,16 @@ impl ReviewView {
         self.pr_open
     }
 
+    /// Whether every file is listed: its answer still lands.
+    pub(crate) fn tree_open(&self) -> bool {
+        self.tree.is_some()
+    }
+
+    /// Whether the base picker is open: its answer still lands.
+    pub(crate) fn bases_open(&self) -> bool {
+        self.bases.is_some()
+    }
+
     /// The commits scope's list has been read: show it, the newest picked.
     pub(crate) fn show_commits(&mut self, commits: Vec<CommitRow>, cx: &mut Context<Self>) {
         self.commits = Some(commits);
@@ -396,7 +496,7 @@ impl ReviewView {
 
     /// Whether the scope's diff is what the slot shows.
     fn showing_diff(&self) -> bool {
-        !self.pr_open && self.file.is_none()
+        !self.pr_open && self.file.is_none() && self.tree.is_none()
     }
 
     /// The listed commits the pick spans, newest first: the run from the
@@ -485,6 +585,9 @@ impl ReviewView {
             self.search
                 .as_ref()
                 .map(|search| search.field.focus_handle(cx)),
+            self.bases
+                .as_ref()
+                .map(|bases| bases.field.focus_handle(cx)),
         ];
         if self
             .find
@@ -525,6 +628,7 @@ impl ReviewView {
             additions: 0,
             deletions: 0,
             new: Some(text),
+            changed: None,
         });
         let line = view.line;
         self.error = None;
@@ -569,6 +673,45 @@ impl ReviewView {
         cx.notify();
     }
 
+    /// Every file of the checkout has been read: listed as a tree, the
+    /// scope's changed files marked.
+    pub(crate) fn show_tree(
+        &mut self,
+        listed: Result<Vec<WorktreeEntry>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let changed: Vec<ChangedFile> = self
+            .diff
+            .iter()
+            .flatten()
+            .filter_map(|file| file.changed.clone())
+            .collect();
+        let Some(tree) = self.tree.as_mut() else {
+            return;
+        };
+        tree.entries = Some(listed.map(|listed| reviewr::all_files_entries(listed, &changed)));
+        tree.pick = 0;
+        cx.notify();
+    }
+
+    /// The bases have been read: listed under the field, the one the
+    /// branch scope reads against picked.
+    pub(crate) fn show_bases(&mut self, bases: Result<Bases, String>, cx: &mut Context<Self>) {
+        let Some(panel) = self.bases.as_mut() else {
+            return;
+        };
+        panel.pick = match &bases {
+            Ok(bases) => bases
+                .rows
+                .iter()
+                .position(|row| Some(&row.name) == bases.picked.as_ref())
+                .unwrap_or(0),
+            Err(_) => 0,
+        };
+        panel.bases = Some(bases);
+        cx.notify();
+    }
+
     /// What was asked could not be read: say why in its place.
     pub(crate) fn fail(&mut self, error: String, cx: &mut Context<Self>) {
         self.error = Some(error);
@@ -582,6 +725,7 @@ impl ReviewView {
         self.diff = None;
         self.error = None;
         self.file = None;
+        self.tree = None;
         self.pr_open = false;
         self.selection = None;
         self.editor = None;
@@ -596,6 +740,8 @@ impl ReviewView {
     fn reread(&mut self, cx: &mut Context<Self>) {
         if self.pr_open {
             self.open_pr(cx);
+        } else if self.tree.is_some() {
+            self.open_tree(cx);
         } else if let Some(path) = self.file.as_ref().map(|file| file.path.clone()) {
             let line = self.file.as_ref().and_then(|file| file.line);
             self.open_file(path, line, cx);
@@ -606,6 +752,7 @@ impl ReviewView {
 
     /// `p`, or the bar's `PR`: the pull request, read afresh.
     fn open_pr(&mut self, cx: &mut Context<Self>) {
+        self.tree = None;
         self.pr_open = true;
         self.pr = None;
         self.error = None;
@@ -616,6 +763,7 @@ impl ReviewView {
 
     /// File `path` whole, at `line` once read.
     fn open_file(&mut self, path: String, line: Option<u64>, cx: &mut Context<Self>) {
+        self.tree = None;
         self.pr_open = false;
         self.error = None;
         self.editor = None;
@@ -634,6 +782,10 @@ impl ReviewView {
     fn back(&mut self, cx: &mut Context<Self>) -> bool {
         if self.pr_open {
             self.pr_open = false;
+        } else if self.tree.take().is_some() {
+            self.selection = self
+                .selection
+                .or_else(|| self.first_content().map(Selection::at));
         } else if self.file.take().is_some() {
             self.rebuild();
             self.selection = self.first_content().map(Selection::at);
@@ -802,6 +954,26 @@ impl ReviewView {
     }
 
     fn step(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
+        let walk = |at: usize, len: usize| match down {
+            true => (at + 1).min(len.saturating_sub(1)),
+            false => at.saturating_sub(1),
+        };
+        if let Some(bases) = &self.bases {
+            let len = bases.visible(cx).len();
+            if let Some(bases) = self.bases.as_mut() {
+                bases.pick = walk(bases.pick, len);
+            }
+            cx.notify();
+            return;
+        }
+        if self.search.is_none() {
+            if let Some(tree) = self.tree.as_mut() {
+                tree.pick = walk(tree.pick, tree.rows().len());
+                tree.scroll.scroll_to_item(tree.pick);
+                cx.notify();
+                return;
+            }
+        }
         if let Some(search) = self.search.as_mut() {
             let last = search.rows().len().saturating_sub(1);
             search.pick = match down {
@@ -861,6 +1033,10 @@ impl ReviewView {
     /// `c` or ⏎: review the listed commit, open the fold, or open the
     /// comment field under the pick.
     pub(crate) fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pick) = self.tree.as_ref().map(|tree| tree.pick) {
+            self.open_tree_row(pick, cx);
+            return;
+        }
         if self.listing_commits() {
             self.open_commits(cx);
             return;
@@ -997,6 +1173,102 @@ impl ReviewView {
         };
         self.close_search(window, cx);
         self.open_file(found.path, found.line, cx);
+    }
+
+    /// `a`: every file of the checkout, read afresh, in the diff's place.
+    fn open_tree(&mut self, cx: &mut Context<Self>) {
+        let toggled = self
+            .tree
+            .take()
+            .map(|tree| tree.toggled)
+            .unwrap_or_default();
+        self.pr_open = false;
+        self.file = None;
+        self.error = None;
+        self.editor = None;
+        self.tree = Some(TreePanel {
+            entries: None,
+            toggled,
+            pick: 0,
+            scroll: ScrollHandle::new(),
+        });
+        cx.emit(FilesAsked);
+        cx.notify();
+    }
+
+    /// ⏎ on a listed row, or a click: a directory opens or closes, a file
+    /// opens whole.
+    fn open_tree_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(tree) = self.tree.as_mut() else {
+            return;
+        };
+        tree.pick = index;
+        let Some(row) = tree.rows().into_iter().nth(index) else {
+            return;
+        };
+        match row.kind {
+            RowKind::Dir { path, .. } => {
+                if !tree.toggled.remove(&path) {
+                    tree.toggled.insert(path);
+                }
+                cx.notify();
+            }
+            RowKind::File { index } => {
+                let path = match &tree.entries {
+                    Some(Ok(entries)) => entries[index].path.clone(),
+                    _ => return,
+                };
+                self.open_file(path, None, cx);
+            }
+        }
+    }
+
+    /// ⇧B: the base picker over the slot, holding the keyboard.
+    fn open_bases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = cx.new(|cx| {
+            let mut line = Composer::new(cx);
+            line.set_role(Role::Field(Some("ReviewBase")), cx);
+            line.set_visible_row_limit(1, cx);
+            line
+        });
+        let edited = cx.subscribe(&field, |view, _, _: &Edited, cx| {
+            if let Some(bases) = view.bases.as_mut() {
+                bases.pick = 0;
+            }
+            cx.notify();
+        });
+        window.focus(&field.focus_handle(cx), cx);
+        self.bases = Some(BasePanel {
+            field,
+            bases: None,
+            pick: 0,
+            _edited: edited,
+        });
+        cx.emit(BasesAsked);
+        cx.notify();
+    }
+
+    fn close_bases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.bases = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// ⏎ in the base picker, or a click: the picked base, else what the
+    /// field reads (a revision), becomes the branch scope's base.
+    fn choose_base(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = &self.bases else {
+            return;
+        };
+        let visible = panel.visible(cx);
+        let typed = panel.field.read(cx).text().trim().to_string();
+        let picked = match (&panel.bases, visible.get(panel.pick)) {
+            (Some(Ok(bases)), Some(&row)) => bases.rows[row].name.clone(),
+            _ if !typed.is_empty() => typed,
+            _ => return,
+        };
+        self.close_bases(window, cx);
+        cx.emit(BasePicked(picked));
     }
 
     /// `m`: Markdown files rendered, or back to their rows.
@@ -1642,10 +1914,187 @@ impl ReviewView {
             .into_any_element()
     }
 
+    /// Every file as reviewr's tree: directories first, a changed file in
+    /// the accent, a closed directory holding one marked, an ignored entry
+    /// quiet.
+    fn tree_body(&self, tree: &TreePanel, cx: &mut Context<Self>) -> AnyElement {
+        let entries = match &tree.entries {
+            None => return crate::menu::note("reading\u{2026}").into_any_element(),
+            Some(Err(error)) => {
+                return crate::menu::note(format!("can\u{2019}t list the files \u{b7} {error}"))
+                    .into_any_element()
+            }
+            Some(Ok(entries)) => entries,
+        };
+        let rows = tree.rows();
+        if rows.is_empty() {
+            return crate::menu::note("no files").into_any_element();
+        }
+        let cell = self.grid.cell();
+        div()
+            .id("review-tree")
+            .debug_selector(|| "review-tree".into())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&tree.scroll)
+            .font_family(FONT_CODE)
+            .text_size(px(self.grid.size))
+            .line_height(px(self.grid.line))
+            .children(rows.into_iter().enumerate().map(|(index, row)| {
+                let (label, ink) = match &row.kind {
+                    RowKind::Dir {
+                        expanded,
+                        has_change,
+                        ..
+                    } => {
+                        let mark = if *has_change && !expanded {
+                            " \u{2022}"
+                        } else {
+                            ""
+                        };
+                        let glyph = if *expanded { "\u{25be}" } else { "\u{25b8}" };
+                        (format!("{glyph} {}/{mark}", row.name), PATH_INK)
+                    }
+                    RowKind::File { index } => {
+                        let ink = if entries[*index].annotation.is_some() {
+                            ACCENT
+                        } else {
+                            TEXT
+                        };
+                        (row.name.clone(), ink)
+                    }
+                };
+                div()
+                    .id(("review-tree", index))
+                    .debug_selector(move || format!("review-tree-{index}"))
+                    .flex()
+                    .h(px(self.grid.line))
+                    .pl(px(cell + 2. * cell * row.depth as f32))
+                    .pr(px(cell))
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .when(index == tree.pick, |line| line.bg(paint::SELECTION))
+                    .text_color(rgb(if row.ignored { TEXT_MUTED } else { ink }))
+                    .child(div().min_w_0().truncate().child(SharedString::from(label)))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        window.focus(&view.focus, cx);
+                        view.open_tree_row(index, cx);
+                    }))
+            }))
+            .into_any_element()
+    }
+
+    /// The base picker over the slot: its field, then the bases it keeps,
+    /// each with whether it is the default, checked out, or the base now.
+    fn bases_body(&self, panel: &BasePanel, cx: &mut Context<Self>) -> AnyElement {
+        let cell = self.grid.cell();
+        let list: AnyElement = match &panel.bases {
+            None => crate::menu::note("reading\u{2026}").into_any_element(),
+            Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
+            Some(Ok(bases)) => {
+                let visible = panel.visible(cx);
+                if visible.is_empty() {
+                    let typed = panel.field.read(cx).text().trim().to_string();
+                    let note = match typed.is_empty() {
+                        true => "no branches".to_string(),
+                        false => format!("\u{23ce} reads the branch over {typed}"),
+                    };
+                    crate::menu::note(note).into_any_element()
+                } else {
+                    div()
+                        .id("review-bases")
+                        .debug_selector(|| "review-bases".into())
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .font_family(FONT_CODE)
+                        .text_size(px(self.grid.size))
+                        .line_height(px(self.grid.line))
+                        .children(visible.into_iter().enumerate().map(|(index, row)| {
+                            let base = &bases.rows[row];
+                            let mut facts = Vec::new();
+                            if bases.picked.as_ref() == Some(&base.name) {
+                                facts.push("base");
+                            }
+                            if base.is_default {
+                                facts.push("default");
+                            }
+                            if base.current {
+                                facts.push("checked out");
+                            }
+                            if base.oid.is_some() {
+                                facts.push("revision");
+                            }
+                            div()
+                                .id(("review-base", index))
+                                .debug_selector(move || format!("review-base-{index}"))
+                                .flex()
+                                .gap(px(2. * cell))
+                                .h(px(self.grid.line))
+                                .px(px(cell))
+                                .whitespace_nowrap()
+                                .cursor_pointer()
+                                .when(index == panel.pick, |line| line.bg(paint::SELECTION))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(rgb(PATH_INK))
+                                        .child(SharedString::from(base.name.clone())),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_color(rgb(TEXT_MUTED))
+                                        .child(SharedString::from(facts.join(" \u{b7} "))),
+                                )
+                                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                                    if let Some(bases) = view.bases.as_mut() {
+                                        bases.pick = index;
+                                    }
+                                    view.choose_base(window, cx);
+                                }))
+                        }))
+                        .into_any_element()
+                }
+            }
+        };
+        div()
+            .debug_selector(|| "review-base-picker".into())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(FLOAT_ROW_H))
+                    .px(px(CH))
+                    .gap(px(CH))
+                    .child(crate::components::prompt_mark(ACCENT))
+                    .child(div().flex_1().min_w_0().child(panel.field.clone())),
+            )
+            .child(list)
+            .into_any_element()
+    }
+
     /// What the slot shows under the bar.
     fn body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(bases) = &self.bases {
+            return self.bases_body(bases, cx);
+        }
         if let Some(search) = &self.search {
             return self.search_body(search, cx);
+        }
+        if let Some(tree) = &self.tree {
+            return self.tree_body(tree, cx);
         }
         if let Some(error) = &self.error {
             let what = if self.pr_open {
@@ -1848,8 +2297,12 @@ impl Focusable for ReviewView {
 
 impl Render for ReviewView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let footer: &[(&str, &str)] = if self.search.is_some() {
+        let footer: &[(&str, &str)] = if self.bases.is_some() {
+            &BASE_FOOTER
+        } else if self.search.is_some() {
             &SEARCH_FOOTER
+        } else if self.tree.is_some() {
+            &TREE_FOOTER
         } else if self.listing_commits() {
             &COMMITS_FOOTER
         } else if self.pr_open || self.file.is_some() {
@@ -1899,6 +2352,10 @@ impl Render for ReviewView {
             .on_action(cx.listener(|view, _: &Search, window, cx| view.open_search(window, cx)))
             .on_action(cx.listener(|view, _: &ToggleMarkdown, _, cx| view.toggle_markdown(cx)))
             .on_action(cx.listener(|view, _: &ShowPullRequest, _, cx| view.open_pr(cx)))
+            .on_action(cx.listener(|view, _: &AllFiles, _, cx| view.open_tree(cx)))
+            .on_action(cx.listener(|view, _: &PickBase, window, cx| view.open_bases(window, cx)))
+            .on_action(cx.listener(|view, _: &ChooseBase, window, cx| view.choose_base(window, cx)))
+            .on_action(cx.listener(|view, _: &CloseBases, window, cx| view.close_bases(window, cx)))
             // Back from the pull request or a file; at the diff, the slot
             // closes (the reader's own handler, above).
             .on_action(cx.listener(|view, _: &Close, _, cx| {
@@ -2232,6 +2689,121 @@ mod tests {
             assert_eq!(pick, &CommitPick::single(&"c".repeat(40)));
             assert_eq!(review.commit_label(pick), "ccccccc third");
         });
+    }
+
+    /// `a` lists every file as reviewr's tree, directories collapsed and
+    /// the scope's changed file marked inside them; ⏎ opens a directory,
+    /// then a file whole; esc goes back to the diff.
+    #[gpui::test]
+    fn every_file_lists_as_a_tree_and_opens_whole(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        cx.simulate_keystrokes("a");
+        cx.run_until_parked();
+        assert!(review.read_with(cx, |r, _| r.tree_open()));
+        review.update(cx, |review, cx| {
+            let entry = |path: &str, ignored, is_dir| WorktreeEntry {
+                path: path.into(),
+                ignored,
+                is_dir,
+            };
+            let listed = vec![
+                entry("README.md", false, false),
+                entry("src/a.rs", false, false),
+                entry("src/b.rs", false, false),
+                entry("target", true, true),
+            ];
+            review.show_tree(Ok(listed), cx);
+        });
+        cx.run_until_parked();
+        let names = |cx: &mut gpui::VisualTestContext| {
+            review.read_with(cx, |review, _| {
+                let tree = review.tree.as_ref().unwrap();
+                tree.rows()
+                    .into_iter()
+                    .map(|row| row.name)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(names(cx), ["src", "target", "README.md"]);
+        review.read_with(cx, |review, _| {
+            let rows = review.tree.as_ref().unwrap().rows();
+            assert!(
+                matches!(
+                    rows[0].kind,
+                    RowKind::Dir {
+                        has_change: true,
+                        ..
+                    }
+                ),
+                "src holds the scope's change"
+            );
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(names(cx), ["src", "a.rs", "b.rs", "target", "README.md"]);
+        cx.simulate_keystrokes("down down enter");
+        cx.run_until_parked();
+        assert_eq!(
+            review.read_with(cx, |r, _| r.file_open().map(str::to_string)),
+            Some("src/b.rs".into())
+        );
+        assert!(!review.read_with(cx, |r, _| r.tree_open()));
+        cx.simulate_keystrokes("a escape");
+        cx.run_until_parked();
+        assert!(!review.read_with(cx, |r, _| r.tree_open()), "back");
+    }
+
+    /// ⇧B opens the base picker on the base now; typing filters the
+    /// branches, ⏎ picks one, and a word no branch matches is picked as a
+    /// revision.
+    #[gpui::test]
+    fn the_base_picker_picks_a_branch_or_a_typed_revision(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        let picked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let seen = picked.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&review, move |_, BasePicked(base), _| {
+                seen.borrow_mut().push(base.clone())
+            })
+            .detach();
+        });
+        let row = |name: &str, is_default| reviewr::BaseRow {
+            name: name.into(),
+            is_default,
+            current: false,
+            tip_secs: 0,
+            oid: None,
+        };
+        let bases = || Bases {
+            rows: vec![
+                row("main", true),
+                row("develop", false),
+                row("feature/x", false),
+            ],
+            picked: Some("develop".into()),
+        };
+        cx.simulate_keystrokes("shift-b");
+        cx.run_until_parked();
+        assert!(review.read_with(cx, |r, _| r.bases_open()));
+        review.update(cx, |review, cx| review.show_bases(Ok(bases()), cx));
+        cx.run_until_parked();
+        assert_eq!(
+            review.read_with(cx, |r, _| r.bases.as_ref().unwrap().pick),
+            1
+        );
+        cx.simulate_input("feat");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!review.read_with(cx, |r, _| r.bases_open()));
+        cx.simulate_keystrokes("shift-b");
+        cx.run_until_parked();
+        review.update(cx, |review, cx| review.show_bases(Ok(bases()), cx));
+        cx.simulate_input("v1.2.0");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(*picked.borrow(), ["feature/x", "v1.2.0"]);
     }
 
     struct Host(Entity<ReviewView>);
