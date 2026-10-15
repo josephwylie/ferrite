@@ -40,17 +40,21 @@ fn streaming(machines: &Machines) -> Vec<bool> {
 }
 
 #[test]
-fn a_machine_whose_cockpit_cannot_be_built_is_not_gone_to() {
+fn a_cockpit_that_cannot_be_built_is_not_gone_to() {
     let reach = reach("unbuilt");
-    // A file where the machine's Threads would go.
-    let blocked = machine::dir(&reach.settings_dir, "me@build");
-    std::fs::create_dir_all(blocked.parent().unwrap()).unwrap();
-    std::fs::write(&blocked, "").unwrap();
-    let mut machines = Machines::new(reach, &saved(), None);
-    assert!(machines.go_to(1).unwrap().is_err());
-    assert!(machines.selected().is_none(), "still on this computer");
-    assert_eq!(streaming(&machines), [false, true, false]);
-    assert!(machines.go_to(0).is_none(), "already on it");
+    // A file where this computer's Threads would go. A machine's are its
+    // Server's, so only this computer's Store can stop a go-to.
+    std::fs::create_dir_all(&reach.settings_dir).unwrap();
+    std::fs::write(&reach.store, "").unwrap();
+    let mut machines = Machines::new(reach, &saved(), Some("me@build"));
+    assert!(machines.go_to(0).unwrap().is_err());
+    assert_eq!(
+        machines.selected().unwrap().target,
+        "me@build",
+        "still on the machine"
+    );
+    assert_eq!(streaming(&machines), [true, false, false]);
+    assert!(machines.go_to(1).is_none(), "already on it");
 }
 
 #[test]
