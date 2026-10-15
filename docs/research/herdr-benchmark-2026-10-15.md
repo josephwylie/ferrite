@@ -31,6 +31,35 @@ issues/discussions, and reviews (linked at the end).
 | — | Worktree removal/cleanup | No |
 | — | Separate data folder for debug builds | No |
 
+## Status
+
+Where `feat/terminal-ui-overhaul` stands on every item below, as of the
+end of 2026-10-15. "Partial" names what is missing.
+
+| Item | Status | Notes |
+|---|---|---|
+| #1 `ferrited` server | Done | ADR 0025: Engine carved out of Cockpit, frozen gen-1 contract, snapshot + replay reconnect, one owner per Decision, flush on Decisions and turn end, interrupted turns, macOS logout flush, LaunchAgent / Windows Run key, `systemd --user` (ADR 0026) |
+| Upgrade by restart-when-idle | Done | `server restart {when: idle\|now}`, tied to self-update (ADR 0023, 0025) |
+| #2 Socket API + CLI | Partial | ADR 0027: `api.sock`, one operations table, `thread.*`, `agent.prompt/wait/read`, `decision.*`, `events.subscribe`, `notification.show`, `FERRITE_THREAD_ID`/`FERRITE_SOCKET`/`FERRITE_BIN`, `--machine`. Not done: named agents (Threads are addressed by id), `layout export/apply`. `worktree create` is `thread.start --worktree`. CLI output is not visible from a Windows terminal |
+| #3 Bundled agent skill | Done | `skills/ferrite/SKILL.md`, `ferrite --skill [install]` |
+| #6 Remote over SSH | Partial | ADR 0026: `ferrited bridge`, `--remote`, saved machines in the nav, status-only links, parked and new Threads, off-screen alerts. Not done on a machine: live branch label and status, opened files and user commands (run locally), review beyond the last turn, an open Thread's Project; phone access deferred by plan |
+| Four-state status | Done | ADR 0015: blocked > done > working > idle from protocol events |
+| Attention sort, roll-up headings, collapsed rail | Done | ADR 0015; rail digits are jump keys |
+| Row details (#7 ahead/behind, CI, waiting reason, background work) | Done | `nav::RowGit`; reason words `approval` / `plan` / `question`; green ring for background work |
+| #5 Palette filters, workspace jump, cwd footer | Done | `b` `w` `i` `d` `a` |
+| #4 Sounds + OS notifications + toasts | Done | ADR 0017: two chimes, custom files, per-provider mute (not per-agent), click focuses, 1 s delay, 8 s / 5 s expiry |
+| Review slot | Done | ADR 0021: uncommitted / branch / last turn, line comments |
+| Session import + allowance warning | Done | ADR 0022 |
+| Custom palette commands + user keymap | Done | ADR 0024 |
+| Coordinator Threads | Done | ADR 0028: briefs, worktree workers, `## Remember` memory, need ordering, opt-in PR follow-up (CI, reviews, inline comments) |
+| Mermaid diagrams | Done | ADR 0016 |
+| Hygiene: durable settings, banner, clean env, diagnostics, find, self-update, staggered revival | Done | ADRs 0018–0020, 0023 |
+| Hygiene: confirm quit while working | Superseded | Added, then dropped by ADR 0025: quitting the window no longer stops agents |
+| UI cleanliness 1, 2, 3, 6 | Done | ADR 0014: band kept for the window drag but empty; one bottom bar |
+| UI cleanliness 4, 5 | Done | ADR 0015: needs-you strip gone, one heading style |
+| Store never reuses a Thread id | Done | ADR 0029 (found while building the API) |
+| Worktree setup / cleanup, debug data folder | Not done | Declined in the plan |
+
 ## Where Ferrite is already ahead
 
 - **Exact state.** Herdr guesses state by regex-matching the screen
