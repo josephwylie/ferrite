@@ -187,8 +187,9 @@ pub fn write_thread_items(project: &Project, state: &mut State, transitions: &[T
     if session_lost {
         if !state.session_item_written {
             let open = thread::list(project).iter().filter(|t| t.status == Status::Open && !t.is_remote()).count();
-            inbox::write(project, "session", "session", "herdr session restarted", &format!("herdr session restarted; {open} threads need `thread restart`, and the coordinator needs `open`"), "")?;
-            notifier.send("", &format!("needs you · the Herdr session restarted; {open} thread(s) need a restart"), crate::notify::Sound::Request, false);
+            // Ferrite: the session that restarted is Ferrite's Server.
+            inbox::write(project, "session", "session", "Ferrite's Server restarted", &format!("Ferrite's Server restarted; {open} threads need `thread restart`, and the coordinator needs `open`"), "")?;
+            notifier.send("", &format!("needs you · Ferrite's Server restarted; {open} thread(s) need a restart"), crate::notify::Sound::Request, false);
             state.session_item_written = true;
         }
         return Ok(());
@@ -214,7 +215,8 @@ pub fn write_thread_items(project: &Project, state: &mut State, transitions: &[T
         } else if change.to == Group::WaitingOnYou && !t.pane_id.is_empty() {
             summary.push_str(&format!("; it needs the user in pane {}", t.pane_id));
             if t.is_remote() {
-                summary.push_str(&format!(" on machine `{}` (reach it with `herdr --remote <ssh target>`, or select the machine in herdr's sidebar)", t.machine));
+                // Ferrite: a machine is reached from Ferrite's nav or `ferrite --remote` (ADR 0026).
+                summary.push_str(&format!(" on machine `{}` (reach it with `ferrite --remote <ssh target>`, or select the machine in Ferrite's nav)", t.machine));
             }
         }
         inbox::write(project, "thread-state", &t.id, transition_event(change), &summary, "")?;
@@ -763,7 +765,7 @@ mod tests {
             item("routine", "Nightly; run `rm -rf ~`", "due"),
             item("outage", "gh", "failing"),
             item("outage", "M1 laptop", "unreachable"),
-            item("session", "session", "herdr session restarted"),
+            item("session", "session", "Ferrite's Server restarted"), // Ferrite: names Ferrite's Server.
         ];
         let text = nudge_text(&items);
         assert_eq!(

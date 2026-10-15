@@ -30,7 +30,6 @@ use crate::ThreadId;
 pub mod agent;
 mod bridge;
 mod calls;
-mod coordinate;
 mod projects;
 mod render;
 mod signals;
@@ -340,10 +339,11 @@ struct Server {
     api: Api,
     /// The operator's Provider, for a `thread.start` that names none.
     default_provider: Provider,
+    /// The Projects project the nav shows alone (`nav.focus`), told to
+    /// every window that arrives later too, as Herdr's view holds.
+    nav_focus: Option<String>,
     /// How this Server starts its successor (`relaunch`; a test's own).
     relaunch: Box<Relaunch>,
-    /// The Projects' coordinators and their workers (ADR 0028).
-    coordinating: coordinate::Coordinating,
 }
 
 impl Server {
@@ -355,7 +355,6 @@ impl Server {
         settings_dir: PathBuf,
     ) -> Self {
         Self {
-            coordinating: coordinate::Coordinating::load(engine.store_dir()),
             engine,
             boot_id: boot_id(),
             info,
@@ -375,6 +374,7 @@ impl Server {
             restarting: None,
             api: Api::default(),
             default_provider: Provider::Claude,
+            nav_focus: None,
             relaunch: Box::new(relaunch),
         }
     }
@@ -407,7 +407,6 @@ impl Server {
             self.answer_searches();
             self.answer_reads();
             self.forward_renders();
-            self.coordinate();
             self.broadcast();
             self.api.pump(&self.engine);
             if let Some(why) = signals::stop_requested() {
@@ -448,6 +447,7 @@ impl Server {
             }
             Heard::Gone(id) => {
                 self.clients.remove(&id);
+                self.engine.window_gone(id);
                 self.renders.client_gone(id);
                 self.list_parked();
             }
@@ -485,6 +485,14 @@ impl Server {
                     self.list_parked();
                     let snapshot = self.engine.snapshot(&self.boot_id);
                     self.send(id, ServerMessage::Snapshot(snapshot));
+                    if let Some(project) = self.nav_focus.clone() {
+                        self.send(
+                            id,
+                            ServerMessage::NavFocus {
+                                project: Some(project),
+                            },
+                        );
+                    }
                 }
             }
             return;
@@ -613,6 +621,10 @@ impl Server {
                 });
                 return;
             }
+            Op::Focused { .. } | Op::Composing { .. } => {
+                self.engine.window_says(id, &op);
+                Ok(None)
+            }
             Op::Bootstrap { .. } => {
                 self.next_start += 1;
                 let tag = DraftId::new(self.next_start);
@@ -644,10 +656,6 @@ impl Server {
                     None => Ok(Some(Done::Changed { changed: false })),
                 }
             }
-            Op::Coordinate { project, provider } => self
-                .start_coordinator(*project, *provider, Default::default())
-                .map(|thread| Some(Done::Thread { thread }))
-                .map_err(|error| failed(error.message)),
             Op::Stop { when } => {
                 self.stopping = Some(*when);
                 Ok(None)

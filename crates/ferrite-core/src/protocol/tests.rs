@@ -631,16 +631,6 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_stop", command(26, Op::Stop { when: When::Now })),
         (
-            "command_coordinate",
-            command(
-                27,
-                Op::Coordinate {
-                    project,
-                    provider: Provider::Codex,
-                },
-            ),
-        ),
-        (
             "command_list_dir",
             command(
                 38,
@@ -1154,6 +1144,8 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Notification {
                 title: "Review ready".into(),
                 body: Some("3 findings".into()),
+                sound: WireSound::None,
+                important: false,
             }),
         ),
         (
@@ -1161,7 +1153,65 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Notification {
                 title: "Review ready".into(),
                 body: None,
+                sound: WireSound::None,
+                important: false,
             }),
+        ),
+        (
+            "notification_chime",
+            Sample::Server(ServerMessage::Notification {
+                title: "Review ready".into(),
+                body: None,
+                sound: WireSound::Request,
+                important: true,
+            }),
+        ),
+        (
+            "nav_focus",
+            Sample::Server(ServerMessage::NavFocus {
+                project: Some("billing".into()),
+            }),
+        ),
+        (
+            "nav_focus_clear",
+            Sample::Server(ServerMessage::NavFocus { project: None }),
+        ),
+        (
+            "command_focused",
+            command(
+                40,
+                Op::Focused {
+                    thread: Some(thread),
+                },
+            ),
+        ),
+        (
+            "command_focused_away",
+            command(41, Op::Focused { thread: None }),
+        ),
+        (
+            "command_composing",
+            command(
+                42,
+                Op::Composing {
+                    thread,
+                    unsent: true,
+                },
+            ),
+        ),
+        (
+            "command_open_named_worktree",
+            command(
+                43,
+                Op::Open {
+                    provider: Provider::Codex,
+                    workspace: WireChoice::NamedWorktree {
+                        repo: "/src/ferrite".into(),
+                        branch: "hp/demo/t-0001".into(),
+                        base: Some("main".into()),
+                    },
+                },
+            ),
         ),
         (
             "input_record_text",

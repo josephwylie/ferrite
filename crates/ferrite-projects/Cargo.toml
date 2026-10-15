@@ -4,7 +4,7 @@ version = "0.2.34"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
-description = "Projects for herdr: a coordinator conversation, parallel worker threads, shared memory and an overview"
+description = "Ferrite's Projects: a coordinator conversation, parallel worker threads, shared memory and an overview"
 
 [dependencies]
 anyhow = "1"

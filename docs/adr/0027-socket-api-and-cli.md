@@ -67,6 +67,11 @@ JSON). Names are append-only and parameters added later are optional, as in
 the client contract; each operation's request is frozen as a fixture under
 `api/fixtures/v1`.
 
+One exception: ADR 0028's `coordinator.start`, `coordinator.get`,
+`coordinator.update` and `worker.start` were removed with the design they
+served when ADR 0030 made Projects Ferrite's coordinator, fixtures and all.
+A caller that still asks for one is refused as for any unknown method.
+
 | Operation | Does |
 |---|---|
 | `thread.start` | `open` a Thread in `cwd` (a fresh worktree with `worktree`), titled |
@@ -79,6 +84,38 @@ the client contract; each operation's request is frozen as a fixture under
 | `decision.list` / `decision.answer` | pending Decisions; an answer named by the provider's id, through the window's `answer` (first valid wins) |
 | `events.subscribe` | snapshot, then `thread_opened`, `thread_closed`, `attention`, `decision_requested`, `decision_closed` |
 | `notification.show` | `notification {title, body}` to every window, drawn as a toast |
+
+Added for Projects (ADR 0030), each what herdr-projects asks of Herdr:
+
+| Operation | Does |
+|---|---|
+| `thread.start` | gains `focus`, `args` (the CLI's, after Ferrite's own, for every Session of that provider; saved beside the Thread's log, so a revive or a Server restart keeps them), `resume` (the provider's own conversation id to carry on), `branch`/`base` (a new worktree on that branch; a `cwd` that is a linked worktree already is opened as one), `project`, and `ready` with `timeout_ms` (answered once the agent is up and idle or done, else `agent_not_ready` naming the Thread; 20 s by default) |
+| `thread.close` | the window's `park` |
+| `agent.prompt` | gains `until`: answered as soon as the agent is seen in one of those states after the prompt (`working`, `blocked`: the prompt was taken) |
+| `agent.interrupt` | the window's `interrupt` |
+| `project.list` / `project.get` | the registry's Projects: `id` (its number, as a string), `label` (its title), `focused`, `thread_count` (open), `worktree` (`repo_key`, `checkout_path`, `is_linked_worktree`, read from `.git`) |
+| `project.open` | the Project holding `cwd` (or a linked worktree's repository), else `cwd` registered, titled `label` |
+| `project.rename` / `project.close` | the window's project rename; park every open Thread of it |
+| `worktree.create` | `git worktree add -b branch` from `base` in the registry's layout, for a Thread to start in; `{worktree {path, branch}, project}` |
+| `worktree.remove` | by `path`: `worktree_not_found` unless a linked worktree is there; refuse `dirty_worktree_requires_force` unless `git status` is clean, then park its open Threads, `git worktree remove` (never forced), bind its Threads to the main checkout; the branch stays |
+| `machine.list` | the enabled saved machines, `{id, label, target}` by name |
+| `nav.focus` | `nav_focus {project}` to every window: only that Projects project's block in the nav (by its slug, passed on unread), or all; the Server holds it and tells each window that arrives later, as Herdr's view holds (not across a Server restart) |
+
+`notification.show` gains `sound` (`request`, `done`, `none`) and
+`important`. A Thread's answer gains `focused` and `draft`, which the
+windows tell the Server (`focused`, `composing`, gen-1 commands only a
+Server hears), `project`, `provider_session` (the provider's own id,
+which it resumes from), `attention_seq` (Attention changes the Server
+has counted since it started; Thread ids hold across a restart, ADR
+0029), `held_prompt`, `queued_prompts`, `worktree` and its `branch`.
+Herdr-projects reads a Terminal's screen for a draft in the prompt box
+and for trust dialogs; Ferrite answers the first with `draft` and has no
+second: whatever an agent asks the operator is a Decision, so `blocked`. `ferrite
+--version` prints `ferrite <semver>`. No open Thread stays
+`unknown_thread` (Herdr's `pane_not_found`; codes are append-only like
+names), beside the new `project_not_found`, `worktree_not_found`,
+`dirty_worktree_requires_force` and `agent_not_ready`; the codes are
+listed in `api::schema`.
 
 Every act that changes a Thread is the window's own command through
 `Engine::execute`, so an agent and the operator go through one door. `focus`
@@ -189,5 +226,5 @@ non-delivery; never resend blindly; don't prompt your own Thread.
   `FERRITE_THREAD_ID` is not refused: only `--current` reads it, and
   refusing it would keep every agent inside a Thread from `--machine`. Paths are the
   machine's too: a `cwd` is never filled in from this computer's
-  directory, so `thread start` and `coordinator start` need `--cwd` with
-  an absolute path on the machine.
+  directory, so `thread start` needs `--cwd` with an absolute path on
+  the machine.

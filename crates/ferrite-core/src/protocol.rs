@@ -271,10 +271,18 @@ pub enum Op {
         thread: ThreadId,
         query: String,
     },
-    /// Start a Project's coordinator, or answer the one it has (ADR 0028).
-    Coordinate {
-        project: ProjectId,
-        provider: Provider,
+    /// The Thread this window's focused Pane shows while the window has the
+    /// operator's focus; none once it lost it (a Thread's `focused` in the
+    /// API, ADR 0030). Only a Server hears it: it names the window.
+    Focused {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread: Option<ThreadId>,
+    },
+    /// Whether this window's Composer for a Thread holds text not yet sent
+    /// (a Thread's `draft` in the API). Only a Server hears it.
+    Composing {
+        thread: ThreadId,
+        unsent: bool,
     },
     /// A directory's entries on the Server's computer, `~` its home: how a
     /// window on a machine browses the machine's folders (ADR 0026).
@@ -399,6 +407,12 @@ pub enum WireChoice {
     ExistingWorktree {
         repo: PathBuf,
         path: PathBuf,
+    },
+    NamedWorktree {
+        repo: PathBuf,
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
     },
     #[serde(other)]
     Unknown,
@@ -647,6 +661,18 @@ pub enum ServerMessage {
         title: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<String>,
+        #[serde(default, skip_serializing_if = "WireSound::is_none")]
+        sound: WireSound,
+        /// Left up until dismissed, rather than fading.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        important: bool,
+    },
+    /// An API caller asked every window's nav to show only this Projects
+    /// project's block, by its slug; none shows them all again
+    /// (`nav.focus`, ADR 0030).
+    NavFocus {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
     },
     /// The Server is about to restart: reconnect.
     Restarting {
@@ -655,6 +681,37 @@ pub enum ServerMessage {
     Stopping,
     #[serde(other)]
     Unknown,
+}
+
+/// Which chime an API caller's toast rings: a request's (the operator is
+/// needed) or a finish's, or none.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WireSound {
+    #[default]
+    None,
+    Request,
+    Done,
+    #[serde(other)]
+    #[schemars(skip)]
+    Unknown,
+}
+
+impl WireSound {
+    pub fn is_none(&self) -> bool {
+        *self == WireSound::None
+    }
+
+    /// The chime to play; one this window does not know rings none.
+    pub fn sound(self) -> Option<crate::sound::Sound> {
+        match self {
+            WireSound::Request => Some(crate::sound::Sound::NeedsYou),
+            WireSound::Done => Some(crate::sound::Sound::Done),
+            WireSound::None | WireSound::Unknown => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2325,6 +2382,11 @@ impl From<&WorkspaceChoice> for WireChoice {
                 checkout: checkout.clone(),
             },
             WorkspaceChoice::NewWorktree { repo } => Self::NewWorktree { repo: repo.clone() },
+            WorkspaceChoice::NamedWorktree { repo, branch, base } => Self::NamedWorktree {
+                repo: repo.clone(),
+                branch: branch.clone(),
+                base: base.clone(),
+            },
             WorkspaceChoice::ExistingWorktree { repo, path } => Self::ExistingWorktree {
                 repo: repo.clone(),
                 path: path.clone(),
@@ -2348,6 +2410,11 @@ impl TryFrom<&WireChoice> for WorkspaceChoice {
                 checkout: checkout.clone(),
             },
             WireChoice::NewWorktree { repo } => Self::NewWorktree { repo: repo.clone() },
+            WireChoice::NamedWorktree { repo, branch, base } => Self::NamedWorktree {
+                repo: repo.clone(),
+                branch: branch.clone(),
+                base: base.clone(),
+            },
             WireChoice::ExistingWorktree { repo, path } => Self::ExistingWorktree {
                 repo: repo.clone(),
                 path: path.clone(),

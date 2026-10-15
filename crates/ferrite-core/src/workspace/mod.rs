@@ -61,11 +61,30 @@ impl WorkspaceBinding {
 /// choice into a `WorkspaceBinding`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
-    Main { checkout: PathBuf },
-    Branch { checkout: PathBuf, branch: String },
-    NewBranch { checkout: PathBuf },
-    NewWorktree { repo: PathBuf },
-    ExistingWorktree { repo: PathBuf, path: PathBuf },
+    Main {
+        checkout: PathBuf,
+    },
+    Branch {
+        checkout: PathBuf,
+        branch: String,
+    },
+    NewBranch {
+        checkout: PathBuf,
+    },
+    NewWorktree {
+        repo: PathBuf,
+    },
+    /// A fresh worktree on a new branch the caller names, made from `base`
+    /// (the repo's HEAD when none): the API's `thread.start --branch`.
+    NamedWorktree {
+        repo: PathBuf,
+        branch: String,
+        base: Option<String>,
+    },
+    ExistingWorktree {
+        repo: PathBuf,
+        path: PathBuf,
+    },
 }
 
 impl WorkspaceChoice {
@@ -75,7 +94,7 @@ impl WorkspaceChoice {
         match self {
             Self::Main { checkout } => checkout,
             Self::Branch { checkout, .. } | Self::NewBranch { checkout } => checkout,
-            Self::NewWorktree { repo } => repo,
+            Self::NewWorktree { repo } | Self::NamedWorktree { repo, .. } => repo,
             Self::ExistingWorktree { path, .. } => path,
         }
     }
@@ -324,6 +343,68 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
         git(repo, &["worktree", "add", path, branch])?;
     }
     Ok(())
+}
+
+/// Add a worktree at `path` on a new branch `branch`, made from `base` (the
+/// repo's HEAD when none). Git refuses a branch that already exists: a new
+/// worktree never takes over another's work.
+pub fn add_worktree(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<(), GitError> {
+    git(repo, &["worktree", "prune"])?;
+    let mut args = vec!["worktree", "add", "-b", branch, path_str(path)?];
+    args.extend(base);
+    git(repo, &args).map(|_| ())
+}
+
+/// Which repository the checkout at `root` belongs to, read from its `.git`
+/// without running git: a main checkout's is a directory; a linked
+/// worktree's is a file naming its admin directory, which holds the
+/// `commondir` it shares with the main checkout. `None` outside git. A
+/// submodule's `.git` file has no `commondir`: it is a checkout of its own.
+pub fn checkout_of(root: &Path) -> Option<Checkout> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(Checkout {
+            repo: root.to_path_buf(),
+            linked: false,
+        });
+    }
+    let pointer = fs::read_to_string(&dot_git).ok()?;
+    let admin = root.join(pointer.trim().strip_prefix("gitdir:")?.trim());
+    let Ok(common) = fs::read_to_string(admin.join("commondir")) else {
+        return Some(Checkout {
+            repo: root.to_path_buf(),
+            linked: false,
+        });
+    };
+    let common = fs::canonicalize(admin.join(common.trim())).ok()?;
+    Some(Checkout {
+        repo: common.parent()?.to_path_buf(),
+        linked: true,
+    })
+}
+
+/// Whether `a` and `b` are one directory, however spelled (a symlink, a
+/// trailing `.`); paths not on disk are compared as written.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (fs::canonicalize(a), fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// A checkout, as `checkout_of` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkout {
+    /// The repository's main checkout.
+    pub repo: PathBuf,
+    /// A linked worktree of `repo`, not the main checkout itself.
+    pub linked: bool,
 }
 
 /// Command arguments are strings; a path that is not UTF-8 cannot be handed
@@ -578,138 +659,6 @@ fn gh(cwd: &Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// What a branch's PR asks of the agent on it (ADR 0028): the PR with
-/// its checks, and what reviewers and commenters wrote.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrFeedback {
-    pub pr: PullRequest,
-    /// Who opened it: a worker's `gh` is the operator's, so what it says
-    /// on its own PR is under this name too.
-    pub author: String,
-    /// The commit at the PR's head: what a merged PR's branch must still
-    /// be at for nothing on it to be lost. Empty when the forge says none.
-    pub head: String,
-    /// Reviews, then conversation comments, then line comments on the
-    /// diff, in the forge's order.
-    pub remarks: Vec<Remark>,
-}
-
-/// One review or comment on a PR.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Remark {
-    /// The forge's own id: a remark edited later is the same remark.
-    pub id: String,
-    pub author: String,
-    pub body: String,
-    /// An approving review: it asks for nothing.
-    pub approves: bool,
-}
-
-/// The branch's PR and its remarks through `gh`, uncached: a coordinator
-/// reads its workers' on its own slow cadence. `None` on every failure,
-/// as `pull_request`.
-///
-/// `gh pr view` has no line comments on the diff, so an open PR's are a
-/// second call. Its failure costs only those: the PR is read without
-/// them, and the next reading asks again.
-pub fn pr_feedback(cwd: &Path) -> Option<PrFeedback> {
-    let mut feedback = parse_feedback_json(&gh(
-        cwd,
-        &[
-            "pr",
-            "view",
-            "--json",
-            "number,state,isDraft,author,headRefOid,statusCheckRollup,reviews,comments",
-        ],
-    )?)?;
-    if feedback.pr.state == PrState::Open {
-        let endpoint = format!(
-            "repos/{{owner}}/{{repo}}/pulls/{}/comments",
-            feedback.pr.number
-        );
-        if let Some(body) = gh(cwd, &["api", &endpoint, "--paginate"]) {
-            feedback.remarks.extend(parse_line_comments_json(&body));
-        }
-    }
-    Some(feedback)
-}
-
-fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
-    let pr = parse_pr_json(body)?;
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    let login = |node: &serde_json::Value| {
-        node.pointer("/author/login")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("someone")
-            .to_string()
-    };
-    let remarks = ["reviews", "comments"]
-        .into_iter()
-        .filter_map(|key| value.get(key).and_then(serde_json::Value::as_array))
-        .flatten()
-        .filter_map(|node| {
-            let text = |key: &str| node.get(key).and_then(serde_json::Value::as_str);
-            Some(Remark {
-                id: text("id")?.to_string(),
-                author: login(node),
-                body: text("body").unwrap_or_default().to_string(),
-                approves: text("state") == Some("APPROVED"),
-            })
-        })
-        .collect();
-    Some(PrFeedback {
-        pr,
-        author: login(&value),
-        head: value
-            .get("headRefOid")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        remarks,
-    })
-}
-
-/// Read `gh api .../pulls/<n>/comments --paginate`: one JSON array per
-/// page, back to back. Each comment leads with the `path:line` it is on
-/// (`original_line` once the diff moved past it; no line on a comment on
-/// the whole file). A comment with no words is no remark: its location
-/// alone would read as one.
-pub(crate) fn parse_line_comments_json(body: &str) -> Vec<Remark> {
-    serde_json::Deserializer::from_str(body)
-        .into_iter::<Vec<serde_json::Value>>()
-        .map_while(Result::ok)
-        .flatten()
-        .filter_map(|node| {
-            let text = node.get("body")?.as_str()?.trim();
-            if text.is_empty() {
-                return None;
-            }
-            let id = match node.get("node_id").and_then(serde_json::Value::as_str) {
-                Some(id) => id.to_string(),
-                None => node.get("id")?.as_u64()?.to_string(),
-            };
-            let path = node.get("path")?.as_str()?;
-            let line = ["line", "original_line"]
-                .into_iter()
-                .find_map(|key| node.get(key).and_then(serde_json::Value::as_u64));
-            let place = match line {
-                Some(line) => format!("{path}:{line}"),
-                None => path.to_string(),
-            };
-            Some(Remark {
-                id,
-                author: node
-                    .pointer("/user/login")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("someone")
-                    .to_string(),
-                body: format!("`{place}`: {text}"),
-                approves: false,
-            })
-        })
-        .collect()
-}
-
 /// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
 /// Actions jobs (`CheckRun`) and posted commit statuses (`StatusContext`)
 /// side by side, with different keys for the same three facts — so
@@ -916,27 +865,6 @@ pub fn remove_worktree(repo: &Path, path: &Path) -> Result<(), GitError> {
     Ok(())
 }
 
-/// Delete the local `branch` only while its tip is `commit`, so nothing
-/// on it is lost; whether it is gone, as it is when it never was. A squash
-/// or rebase merge leaves a branch `git branch -d` calls unmerged, so a
-/// caller that knows the commit the work landed from compares against it
-/// instead. A branch some worktree has checked out is refused by git.
-pub fn delete_branch_at(repo: &Path, branch: &str, commit: &str) -> Result<bool, GitError> {
-    let reference = format!("refs/heads/{branch}");
-    let tip = git(
-        repo,
-        &["for-each-ref", "--format=%(objectname)", &reference],
-    )?;
-    match tip.trim() {
-        "" => Ok(true),
-        tip if tip == commit => {
-            git(repo, &["branch", "-D", branch])?;
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
-}
-
 /// Test-only: run one git command and unwrap — the shared plumbing the
 /// cockpit's binding tests drive their scratch repos with.
 #[cfg(test)]
@@ -1001,83 +929,6 @@ mod tests {
         assert!(!pr.draft);
         assert_eq!(pr.url.as_deref(), Some("https://github.com/o/r/pull/47"));
         assert_eq!(pr.checks, Some(CheckState::Failing));
-    }
-
-    /// A coordinator's reading of a worker's PR: the checks as the header
-    /// reads them, who opened it, and every review and comment with its
-    /// author.
-    #[test]
-    fn pr_feedback_reads_reviews_and_comments_beside_the_checks() {
-        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","author":{"login":"op"},"headRefOid":"c0ffee","statusCheckRollup":[
-            {"name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci/1"}
-        ],"reviews":[
-            {"id":"PRR_1","author":{"login":"ana"},"body":"Rename this.","state":"CHANGES_REQUESTED"},
-            {"id":"PRR_4","author":{"login":"ana"},"body":"LGTM","state":"APPROVED"}
-        ],"comments":[
-            {"id":"IC_2","author":{"login":"bo"},"body":"Also the docs."},
-            {"id":"IC_3","body":"anonymous"}
-        ]}"#;
-        let feedback = parse_feedback_json(body).expect("a PR");
-        assert_eq!(feedback.pr.number, 9);
-        assert_eq!(feedback.pr.checks, Some(CheckState::Failing));
-        assert_eq!(feedback.author, "op");
-        assert_eq!(feedback.head, "c0ffee");
-        let remarks: Vec<(&str, &str, &str, bool)> = feedback
-            .remarks
-            .iter()
-            .map(|remark| {
-                (
-                    remark.id.as_str(),
-                    remark.author.as_str(),
-                    remark.body.as_str(),
-                    remark.approves,
-                )
-            })
-            .collect();
-        assert_eq!(
-            remarks,
-            [
-                ("PRR_1", "ana", "Rename this.", false),
-                ("PRR_4", "ana", "LGTM", true),
-                ("IC_2", "bo", "Also the docs.", false),
-                ("IC_3", "someone", "anonymous", false),
-            ]
-        );
-    }
-
-    /// Line comments on the diff, read across `--paginate`'s pages: each
-    /// leads with where it is, an outdated one with the line it was on, a
-    /// whole-file one with its path alone; one with no words is dropped.
-    #[test]
-    fn line_comments_lead_with_where_they_are() {
-        let body = r#"[
-            {"id":101,"node_id":"PRRC_1","user":{"login":"ana"},"path":"src/bill.rs",
-             "line":12,"original_line":10,"body":"Rename `total`.\n"},
-            {"id":102,"node_id":"PRRC_2","user":{"login":"bo"},"path":"src/bill.rs",
-             "line":null,"original_line":40,"body":"Still needed?"}
-        ][
-            {"id":103,"node_id":"PRRC_3","user":{"login":"ana"},"path":"README.md",
-             "line":null,"original_line":null,"subject_type":"file","body":"Mention billing."},
-            {"id":104,"node_id":"PRRC_4","user":{"login":"ana"},"path":"src/bill.rs",
-             "line":3,"body":"  "},
-            {"id":105,"path":"src/tax.rs","line":7,"body":"Round here."}
-        ]"#;
-        let remarks: Vec<(String, String, String, bool)> = parse_line_comments_json(body)
-            .into_iter()
-            .map(|remark| (remark.id, remark.author, remark.body, remark.approves))
-            .collect();
-        let remark = |id: &str, author: &str, body: &str| {
-            (id.to_string(), author.to_string(), body.to_string(), false)
-        };
-        assert_eq!(
-            remarks,
-            [
-                remark("PRRC_1", "ana", "`src/bill.rs:12`: Rename `total`."),
-                remark("PRRC_2", "bo", "`src/bill.rs:40`: Still needed?"),
-                remark("PRRC_3", "ana", "`README.md`: Mention billing."),
-                remark("105", "someone", "`src/tax.rs:7`: Round here."),
-            ]
-        );
     }
 
     /// A PR with no checks at all claims nothing — silence, never a pass.
@@ -1426,24 +1277,6 @@ mod tests {
         );
     }
 
-    /// A merged branch is deleted only while it is at the commit the work
-    /// landed from: one with a commit past it is kept, and one already
-    /// gone is gone.
-    #[test]
-    fn a_branch_is_deleted_only_at_the_commit_given() {
-        let root = scratch("delete-branch");
-        let repo = init_repo(&root);
-        git(&repo, &["branch", "side"]).unwrap();
-        let base = git(&repo, &["rev-parse", "HEAD"]).unwrap();
-        let base = base.trim();
-
-        assert!(!delete_branch_at(&repo, "side", "c0ffee").unwrap());
-        assert!(branches(&repo).unwrap().contains(&"side".to_string()));
-        assert!(delete_branch_at(&repo, "side", base).unwrap());
-        assert!(!branches(&repo).unwrap().contains(&"side".to_string()));
-        assert!(delete_branch_at(&repo, "side", base).unwrap());
-    }
-
     /// A worktree deleted by hand comes back on demand — same path, same
     /// branch, prior commits intact. Probed: without a prune, the stale
     /// registration blocks the branch.
@@ -1725,5 +1558,63 @@ mod tests {
             fs::read(&index).unwrap() == before,
             "reading the checkout rewrote its index"
         );
+    }
+
+    /// A named worktree starts from the base it was given, on its own new
+    /// branch; a branch that already exists is git's refusal, not a reuse.
+    #[test]
+    fn a_named_worktree_is_a_new_branch_from_its_base() {
+        let root = scratch("named");
+        let repo = init_repo(&root);
+        let base = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("file.txt"), "moved on\n").unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qam",
+                "later",
+            ],
+        )
+        .unwrap();
+        let tree = root.join("tree");
+
+        add_worktree(&repo, &tree, "feature/named", Some(base.trim())).unwrap();
+
+        assert_eq!(branch_of(&tree), "feature/named");
+        assert_eq!(fs::read_to_string(tree.join("file.txt")).unwrap(), "base\n");
+        let again = add_worktree(&repo, &root.join("again"), "feature/named", None);
+        assert!(again.is_err(), "an existing branch is never taken over");
+    }
+
+    /// A checkout's repository is read from its `.git` alone: the main
+    /// checkout is its own, a linked worktree names the main checkout, and
+    /// a plain directory is no checkout.
+    #[test]
+    fn a_checkout_names_its_repository_without_running_git() {
+        let root = scratch("checkout-of");
+        let repo = init_repo(&root);
+        let tree = root.join("linked");
+        ensure_worktree(&repo, &tree, "ferrite/linked").unwrap();
+
+        assert_eq!(
+            checkout_of(&repo),
+            Some(Checkout {
+                repo: repo.clone(),
+                linked: false,
+            })
+        );
+        assert_eq!(
+            checkout_of(&tree),
+            Some(Checkout {
+                repo: fs::canonicalize(&repo).unwrap(),
+                linked: true,
+            })
+        );
+        assert_eq!(checkout_of(&root), None);
     }
 }

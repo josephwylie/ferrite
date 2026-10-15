@@ -3,14 +3,24 @@
 //! `coordinators.json`, then the Projects ticker. Both are the shipped
 //! `ferrite-projects`, run off the pump's thread; a failure is logged and
 //! never holds the Server up. `ticker start` itself does nothing when the
-//! Projects root has no project.
+//! Projects root has no project. The migration's notes are for the user:
+//! besides the log, they are a toast once a window is there to show it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use crate::api::schema::{Method, NotificationShowParams};
+use crate::api::Request;
 
 /// What ADR 0028's coordinators were kept in, beside the Store.
 const COORDINATORS: &str = "coordinators.json";
+
+/// How often, and how many times, the migration's notes look for a window:
+/// the Server starts before its first window says hello.
+const TELL_EVERY: Duration = Duration::from_secs(2);
+const TELL_TRIES: u32 = 150;
 
 /// Start the Projects for the Store in `store`, in the background.
 pub(super) fn start(store: &Path) {
@@ -28,7 +38,10 @@ pub(super) fn start(store: &Path) {
     // What `ferrite-projects` reaches this Server with.
     let env = [
         ("FERRITE_BIN", exe.into_os_string()),
-        ("FERRITE_SOCKET", crate::api::address(store).into_os_string()),
+        (
+            "FERRITE_SOCKET",
+            crate::api::address(store).into_os_string(),
+        ),
     ];
     let store = store.to_path_buf();
     let started = std::thread::Builder::new()
@@ -50,17 +63,62 @@ fn binary(given: Option<OsString>, exe: &Path) -> PathBuf {
 
 fn startup(binary: &Path, store: &Path, env: &[(&str, OsString)]) {
     let coordinators = store.join(COORDINATORS);
-    if coordinators.exists() {
+    let notes = if coordinators.exists() {
         run(
             binary,
             env,
-            &["migrate-ferrite-coordinators".as_ref(), coordinators.as_os_str()],
-        );
-    }
+            &[
+                "migrate-ferrite-coordinators".as_ref(),
+                coordinators.as_os_str(),
+            ],
+        )
+    } else {
+        Vec::new()
+    };
     run(binary, env, &["ticker".as_ref(), "start".as_ref()]);
+    let socket = crate::api::address(store);
+    tell(&notes, |body| toast(&socket, body), TELL_EVERY, TELL_TRIES);
 }
 
-fn run(binary: &Path, env: &[(&str, OsString)], args: &[&OsStr]) {
+/// The notes as one toast, asked for until a window shows it.
+fn tell(notes: &[String], mut show: impl FnMut(&str) -> bool, every: Duration, tries: u32) {
+    if notes.is_empty() {
+        return;
+    }
+    let body = notes.join("\n");
+    for _ in 0..tries {
+        if show(&body) {
+            return;
+        }
+        std::thread::sleep(every);
+    }
+    crate::log!("server: Projects: no window showed the migration's notes");
+}
+
+/// A toast in every window through the Server's own API; true when a
+/// window was there to show it.
+fn toast(socket: &Path, body: &str) -> bool {
+    let request = Request {
+        id: "projects".into(),
+        method: Method::NotificationShow(NotificationShowParams {
+            title: "Ferrite's coordinators are now projects".into(),
+            body: Some(body.into()),
+            sound: crate::protocol::WireSound::None,
+            important: false,
+        }),
+    };
+    let mut answer = Vec::new();
+    if crate::api::cli::call(&request, socket, &mut answer, &mut std::io::sink()) != 0 {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(&answer)
+        .ok()
+        .and_then(|answer| answer["result"]["windows"].as_u64())
+        .is_some_and(|windows| windows > 0)
+}
+
+/// What `ferrite-projects` said on success, line by line; a failure is logged.
+fn run(binary: &Path, env: &[(&str, OsString)], args: &[&OsStr]) -> Vec<String> {
     let output = Command::new(binary)
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))
@@ -71,7 +129,17 @@ fn run(binary: &Path, env: &[(&str, OsString)], args: &[&OsStr]) {
     let said = args.join(OsStr::new(" "));
     let said = said.to_string_lossy();
     match output {
-        Ok(output) if output.status.success() => {}
+        // What it says on success is for the user: the migration's notes.
+        Ok(output) if output.status.success() => {
+            let notes: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect();
+            for note in &notes {
+                crate::log!("server: Projects: {note}");
+            }
+            return notes;
+        }
         Ok(output) => crate::log!(
             "server: `ferrite-projects {said}` failed ({}): {}",
             output.status,
@@ -79,6 +147,7 @@ fn run(binary: &Path, env: &[(&str, OsString)], args: &[&OsStr]) {
         ),
         Err(error) => crate::log!("server: `ferrite-projects {said}` did not run: {error}"),
     }
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -87,7 +156,8 @@ mod tests {
 
     /// A fresh per-test scratch directory.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ferrite-projects-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-projects-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -128,7 +198,10 @@ mod tests {
     fn coordinators_are_migrated_before_the_ticker_starts() {
         let dir = scratch("order");
         let (script, calls) = recorder(&dir, 0);
-        let env = [("FERRITE_BIN", "/f".into()), ("FERRITE_SOCKET", "/s".into())];
+        let env = [
+            ("FERRITE_BIN", "/f".into()),
+            ("FERRITE_SOCKET", "/s".into()),
+        ];
         startup(&script, &dir, &env);
         assert_eq!(
             std::fs::read_to_string(&calls).unwrap(),
@@ -147,6 +220,42 @@ mod tests {
                 coordinators.display()
             )
         );
+    }
+
+    #[test]
+    fn the_notes_are_one_toast_once_a_window_shows_it() {
+        let mut asked = Vec::new();
+        let notes = [
+            "migrated to `app`".to_string(),
+            "  worker Thread 3: not migrated".to_string(),
+        ];
+        tell(
+            &notes,
+            |body| {
+                asked.push(body.to_string());
+                asked.len() == 3
+            },
+            Duration::ZERO,
+            10,
+        );
+        assert_eq!(
+            asked,
+            vec![notes.join("\n"); 3],
+            "asked until a window was there"
+        );
+
+        asked.clear();
+        tell(
+            &notes,
+            |body| {
+                asked.push(body.to_string());
+                false
+            },
+            Duration::ZERO,
+            4,
+        );
+        assert_eq!(asked.len(), 4, "then given up on");
+        tell(&[], |_| unreachable!("nothing to say"), Duration::ZERO, 4);
     }
 
     #[cfg(unix)]

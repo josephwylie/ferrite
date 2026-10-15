@@ -1443,6 +1443,7 @@ mod tests {
                 cwd: None,
                 name: None,
                 additional_directories: Vec::new(),
+                args: &[],
             })
             .expect("demo spawns never fail");
         let events = revived.events();
