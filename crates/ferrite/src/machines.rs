@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use ferrite_core::cockpit::{Attach, Cockpit, Endpoint, ServerState, ServerStatus, StatusRow};
 use ferrite_core::machine::{self, Bridge, Machine};
+use ferrite_core::notifications::Notifications;
 use ferrite_core::protocol::Peer;
 use ferrite_core::spawner::{self, SessionDefaults};
 use ferrite_core::visual::Renderer;
@@ -52,6 +53,20 @@ struct Entry {
     unsaved: bool,
     /// The nav shows its heading alone.
     folded: bool,
+}
+
+/// A machine as alerts name it (ADR 0017): an index moves when Settings
+/// change, a target does not. `None` is this computer.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MachineKey(pub(crate) Option<String>);
+
+/// A machine off screen whose Server has been heard from: what the bell
+/// hears of it.
+pub struct OffScreen<'a> {
+    pub key: MachineKey,
+    pub name: String,
+    pub notifications: &'a Notifications,
+    pub status: &'a ServerStatus,
 }
 
 /// A machine's connection, as its glyph in the nav says it.
@@ -133,6 +148,52 @@ impl Machines {
     /// Machine `index`; `None` for this computer.
     pub fn machine(&self, index: usize) -> Option<&Machine> {
         self.entries.get(index)?.machine.as_ref()
+    }
+
+    /// The machine the window is on, as alerts name it.
+    pub fn selected_key(&self) -> MachineKey {
+        self.entries[self.selected].key()
+    }
+
+    /// Where the machine `key` names is listed now.
+    pub fn index(&self, key: &MachineKey) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.key() == *key)
+    }
+
+    /// The machine `key` names, while it is off screen and has been heard
+    /// from.
+    pub fn away(&self, key: &MachineKey) -> Option<OffScreen<'_>> {
+        self.off_screen().find(|away| away.key == *key)
+    }
+
+    /// Every machine off screen that has been heard from.
+    pub fn off_screen(&self) -> impl Iterator<Item = OffScreen<'_>> {
+        self.entries.iter().filter_map(|entry| {
+            let status = entry.status.as_ref()?;
+            Some(OffScreen {
+                key: entry.key(),
+                name: entry.name(),
+                notifications: status.notifications()?,
+                status,
+            })
+        })
+    }
+
+    /// The bell's `mark all read` on every machine off screen.
+    pub fn mark_notices_read(&mut self) {
+        for status in self
+            .entries
+            .iter_mut()
+            .filter_map(|entry| entry.status.as_mut())
+        {
+            status.mark_notices_read();
+        }
+    }
+
+    /// Machine `index`'s status link, while it is off screen.
+    #[cfg(test)]
+    pub fn status_mut(&mut self, index: usize) -> Option<&mut ServerStatus> {
+        self.entries.get_mut(index)?.status.as_mut()
     }
 
     /// The `--remote` machine, while it is not saved.
@@ -358,6 +419,10 @@ impl Entry {
             unsaved,
             folded: false,
         }
+    }
+
+    fn key(&self) -> MachineKey {
+        MachineKey(self.target().map(str::to_string))
     }
 
     fn target(&self) -> Option<&str> {

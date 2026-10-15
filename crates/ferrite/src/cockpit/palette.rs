@@ -1303,7 +1303,7 @@ impl CockpitView {
     // --------------------------------------------------- the notifications
 
     fn step_notices(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.bell_rows().len();
+        let count = self.bell_rows(cx).len();
         if count == 0 || !self.bell.open {
             return;
         }
@@ -1314,7 +1314,7 @@ impl CockpitView {
 
     /// ⏎ on the list: open the cursor's Thread (its request), and close.
     fn open_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.bell_rows();
+        let rows = self.bell_rows(cx);
         let Some(row) = rows.get(self.bell.cursor.min(rows.len().saturating_sub(1))) else {
             return;
         };
@@ -1328,17 +1328,19 @@ impl CockpitView {
     /// a finished turn with every one folded under it); the cursor stays on
     /// the row that takes its place.
     fn dismiss_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.bell_rows();
+        let rows = self.bell_rows(cx);
         let Some(row) = rows.get(self.bell.cursor.min(rows.len().saturating_sub(1))) else {
             return;
         };
-        let verb = crate::notifications::dismiss_verb(&row.target);
+        let Some(verb) = row.dismiss_verb() else {
+            return;
+        };
         let folded = row.folded.clone();
         self.notice_verb(verb, cx);
         for id in folded {
             self.notice_verb(crate::notifications::Verb::Dismiss(id), cx);
         }
-        let left = self.bell_rows().len();
+        let left = self.bell_rows(cx).len();
         self.bell.cursor = self.bell.cursor.min(left.saturating_sub(1));
         cx.notify();
     }
@@ -1410,8 +1412,9 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let target = self.bell.toasts().last()?.alert.target.clone();
-        let row = self.alert_row(&target, ferrite_core::clock::system_time())?;
+        let alert = &self.bell.toasts().last()?.alert;
+        let machines = self.machines.as_ref().map(|machines| machines.read(cx));
+        let row = self.alert_row(alert, machines, ferrite_core::clock::system_time())?;
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
@@ -1436,7 +1439,7 @@ impl CockpitView {
             return None;
         }
         let door = self.bell.door.get()?;
-        let rows = self.bell_rows();
+        let rows = self.bell_rows(cx);
         let cursor = self.bell.cursor.min(rows.len().saturating_sub(1));
         let handle = self.notice_handle(cx);
         let bell = self.bell.door.clone();

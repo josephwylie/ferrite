@@ -1,14 +1,16 @@
 //! The window's machines (ADR 0026): their headings and their Threads in
 //! the nav, the window going to another one, what a machine that went
-//! looks like, and Settings › Machines. A window with only this computer
-//! draws none of it.
+//! looks like, what the bell says of the machines off screen, and Settings
+//! › Machines. A window with only this computer draws none of it.
 
 use std::rc::Rc;
 
 use super::*;
-use crate::machines::{Connection, MachineRow};
+use crate::machines::{Connection, MachineRow, Machines, OffScreen};
+use crate::notifications::{Alert, Detail, State};
 use ferrite_core::cockpit::ServerState;
 use ferrite_core::machine::{self, Machine};
+use ferrite_core::notifications::Notifications;
 use gpui::App;
 
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
@@ -72,7 +74,7 @@ impl CockpitView {
                     if selected {
                         view.fold_machine(index, cx);
                     } else {
-                        cx.emit(GoToMachine(index));
+                        cx.emit(GoToMachine { index, open: None });
                     }
                 }),
             )
@@ -99,13 +101,104 @@ impl CockpitView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_, _: &MouseDownEvent, _, cx| {
-                            cx.emit(GoToMachine(index));
+                            cx.emit(GoToMachine { index, open: None });
                         }),
                     )
                     .into_any_element()
             }));
         }
         drawn
+    }
+
+    /// Go to the machine an alert is about and open it there (a toast's
+    /// or a row's open, a system notification's click). The window builds
+    /// a Cockpit on it, which opens the alert once attached (`land`).
+    pub(super) fn go_to_alert(&mut self, alert: Alert, cx: &mut Context<Self>) {
+        let index = alert.away.as_ref().and_then(|key| {
+            self.machines
+                .as_ref()
+                .and_then(|machines| machines.read(cx).index(key))
+        });
+        if let Some(index) = index {
+            cx.emit(GoToMachine {
+                index,
+                open: Some(Alert {
+                    away: None,
+                    ..alert
+                }),
+            });
+        }
+    }
+
+    /// Whether the Cockpit's Server answers (or it runs an Engine of its
+    /// own): what it mirrors is the Server's.
+    pub(super) fn attached(&self) -> bool {
+        self.cockpit
+            .server()
+            .is_none_or(|server| matches!(server, ServerState::Attached { .. }))
+    }
+
+    /// Open what the window came to this machine for, once its Server is
+    /// there: the alert while it still stands, else its Thread (revived
+    /// when parked). A machine that does not answer by the landing's
+    /// deadline opens nothing: the operator has moved on.
+    pub(super) fn land(&mut self, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let expired = self.landing.as_ref().is_some_and(|(_, until)| now > *until);
+        if !expired && !self.attached() {
+            return;
+        }
+        let Some((alert, _)) = self.landing.take().filter(|_| !expired) else {
+            return;
+        };
+        if alert.target.wants(self.cockpit.notifications()) {
+            self.notice_verb(alert.open_verb(), cx);
+        } else {
+            self.land_on_thread(alert.thread, cx);
+        }
+    }
+
+    /// The bell's rows for the machines off screen: their live requests,
+    /// then their finished turns with when each finished, each named by
+    /// its machine.
+    pub(super) fn away_rows(
+        &self,
+        cx: &App,
+    ) -> (Vec<NoticeRow>, Vec<(std::time::SystemTime, NoticeRow)>) {
+        let now = ferrite_core::clock::system_time();
+        let (mut requests, mut finished) = (Vec::new(), Vec::new());
+        let Some(machines) = &self.machines else {
+            return (requests, finished);
+        };
+        for away in machines.read(cx).off_screen() {
+            requests.extend(
+                away.notifications
+                    .decisions()
+                    .take(50)
+                    .filter_map(|notice| {
+                        away_row(&away, &RowTarget::Decision(notice.id.clone()), now)
+                    }),
+            );
+            finished.extend(away.notifications.notices().take(50).filter_map(|notice| {
+                Some((
+                    notice.at,
+                    away_row(&away, &RowTarget::Notice(notice.id), now)?,
+                ))
+            }));
+        }
+        (requests, finished)
+    }
+
+    /// The unread live requests on the machines off screen: what the
+    /// bell's badge adds to the ones here.
+    pub(super) fn away_unread_requests(&self, cx: &App) -> usize {
+        self.machines.as_ref().map_or(0, |machines| {
+            machines
+                .read(cx)
+                .off_screen()
+                .map(|away| away.notifications.unread_requests())
+                .sum()
+        })
     }
 
     fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -142,7 +235,10 @@ impl CockpitView {
             machines.settings_changed(&saved)
         });
         if turned_off {
-            cx.emit(GoToMachine(0));
+            cx.emit(GoToMachine {
+                index: 0,
+                open: None,
+            });
         }
     }
 
@@ -279,4 +375,79 @@ fn connection_hint(target: &str, connection: Connection) -> String {
         Connection::Disabled => crate::theme::words::OFF,
     };
     format!("{target} · {state}")
+}
+
+/// Whether an alert's record still wants the operator, on its machine:
+/// `here` (once attached), or the machine off screen it is on. `None`
+/// while that machine has not been heard from (`Bell::ring`).
+pub(super) fn wanted(
+    alert: &Alert,
+    here: Option<&Notifications>,
+    machines: Option<&Machines>,
+) -> Option<bool> {
+    let notifications = match &alert.away {
+        None => here?,
+        Some(key) => machines?.away(key)?.notifications,
+    };
+    Some(alert.target.wants(notifications))
+}
+
+/// A row about a machine off screen, worded from what its status link
+/// hears and titled with the machine's name. It hears no transcript, so a
+/// finish says only whether it failed.
+pub(super) fn away_row(
+    away: &OffScreen<'_>,
+    target: &RowTarget,
+    now: std::time::SystemTime,
+) -> Option<NoticeRow> {
+    let (thread, state, detail, at, read) = match target {
+        RowTarget::Notice(id) => {
+            let notice = away.notifications.get(*id)?;
+            let (state, detail) = match &notice.outcome {
+                ferrite_core::TurnOutcome::Error(error) => (
+                    State::Failed,
+                    Detail::Words(
+                        ferrite_core::progress::one_line(error, ferrite_core::progress::ROW_CHARS)
+                            .into(),
+                    ),
+                ),
+                _ => (State::Done, Detail::None),
+            };
+            (notice.thread, state, detail, notice.at, notice.read)
+        }
+        RowTarget::Decision(id) => {
+            let notice = away.notifications.decision(id)?;
+            let detail = away
+                .status
+                .decision(id.thread, &id.handle)
+                .and_then(|decision| ferrite_core::Decision::try_from(decision).ok())
+                .map(|decision| {
+                    crate::notifications::request_detail(&decision, notice.kind, None, || None)
+                })
+                .unwrap_or(Detail::None);
+            (
+                id.thread,
+                State::NeedsYou(notice.kind),
+                detail,
+                notice.at,
+                notice.read,
+            )
+        }
+    };
+    let title = away
+        .status
+        .title(thread)
+        .filter(|title| !title.is_empty())
+        .unwrap_or(crate::facts::NEW_THREAD);
+    Some(NoticeRow {
+        away: Some(away.key.clone()),
+        target: target.clone(),
+        thread,
+        title: crate::notifications::away_title(&away.name, title),
+        state,
+        detail,
+        when: crate::facts::age_label(at, now),
+        read,
+        folded: Vec::new(),
+    })
 }

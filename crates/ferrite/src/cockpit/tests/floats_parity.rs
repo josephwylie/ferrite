@@ -533,7 +533,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         (panel.left() - door.left()).abs() <= px(1.),
         "on the bell's left"
     );
-    let rows = view.read_with(cx, |view, _| view.bell_rows());
+    let rows = view.read_with(cx, |view, cx| view.bell_rows(cx));
     assert_eq!(rows.len(), 5);
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
@@ -550,7 +550,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     cx.simulate_keystrokes("backspace");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.bell_rows().len()),
+        view.read_with(cx, |view, cx| view.bell_rows(cx).len()),
         4,
         "⌫ dismisses"
     );
@@ -565,11 +565,11 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         .expect("`mark all read` always shows");
     cx.simulate_click(mark.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let notifications = view.cockpit.notifications();
         assert_eq!(notifications.unread(), 0);
         assert_eq!(notifications.unread_requests(), 0);
-        assert_eq!(view.bell_rows().len(), 4, "nothing is removed");
+        assert_eq!(view.bell_rows(cx).len(), 4, "nothing is removed");
     });
     assert!(
         cx.debug_bounds("notifications-badge").is_none(),
