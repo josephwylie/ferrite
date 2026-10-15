@@ -182,7 +182,7 @@ impl Bridge {
         let mut bridge = Self::new(
             &machine.name,
             dir.join(format!("bridge-{}.sock", std::process::id())),
-            ssh_dial(machine.target.clone(), control.clone()),
+            ssh_dial(machine.target.clone(), control.clone(), WINDOW),
         );
         bridge.ssh = Some((machine.target.clone(), control));
         bridge
@@ -377,17 +377,21 @@ fn ssh_options(control: &Path) -> Vec<String> {
     options
 }
 
-/// `ssh … <target> ferrited bridge`, never asking anything: a connection
-/// that needs the operator fails, and they sign in (`Bridge::sign_in`).
-pub fn bridge_args(target: &str, control: &Path) -> Vec<String> {
+/// What a window's ssh runs on the machine: the bridge to its Server.
+pub const WINDOW: &[&str] = &["ferrited", "bridge"];
+
+/// What the CLI's ssh runs (ADR 0027): the bridge to the Server's API,
+/// which never starts a Server. A word of its own, so a `ferrited` older
+/// than it refuses it rather than bridging a window.
+pub const API: &[&str] = &["ferrited", "api-bridge"];
+
+/// `ssh … <target> <remote>`, never asking anything: a connection that
+/// needs the operator fails, and they sign in (`Bridge::sign_in`).
+pub fn bridge_args(target: &str, control: &Path, remote: &[&str]) -> Vec<String> {
     let mut args = vec!["-T".to_string(), "-o".into(), "BatchMode=yes".into()];
     args.extend(ssh_options(control));
-    args.extend([
-        "--".into(),
-        target.into(),
-        "ferrited".into(),
-        "bridge".into(),
-    ]);
+    args.extend(["--".into(), target.into()]);
+    args.extend(remote.iter().map(|word| word.to_string()));
     args
 }
 
@@ -399,13 +403,19 @@ pub fn sign_in_args(target: &str, control: &Path) -> Vec<String> {
     args
 }
 
-fn ssh_dial(target: String, control: PathBuf) -> Dial {
+/// The CLI's Tunnels to `machine`'s API, through the window's master.
+pub fn api_dial(machine: &Machine, settings_dir: &Path) -> Dial {
+    let control = dir(settings_dir, &machine.target).join("c");
+    ssh_dial(machine.target.clone(), control, API)
+}
+
+fn ssh_dial(target: String, control: PathBuf, remote: &'static [&'static str]) -> Dial {
     Box::new(move || {
         if let Some(dir) = control.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let mut child = Command::new("ssh")
-            .args(bridge_args(&target, &control))
+            .args(bridge_args(&target, &control, remote))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

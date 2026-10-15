@@ -197,6 +197,23 @@ As the coordinator, name yourself with `--current`:
 many saw it); `thread focus` brings a Thread on screen. Focus a Thread only
 when the user asked to see it: it moves their view.
 
+## Another machine
+
+Only when the user asks for work on one of their saved machines (Ferrite's
+remote computers), add `--machine <name>` to a command: it asks that
+machine's server instead, over ssh.
+
+```bash
+"$F" thread list --machine build-box
+"$F" agent prompt 3 "Run the test suite." --wait --machine build-box
+```
+
+A machine's Threads have its own numbers: name them by number, never with
+`--current` (refused). Starting a Thread there needs `--cwd` with an
+absolute path on that machine. `server_unavailable` from a machine says why: no
+`ferrited` on it, or the user must sign in to it from a Ferrite window
+first. Tell the user; do not retry in a loop.
+
 ## Safety rules
 
 - **Never answer another agent's Decision without the user.** A Decision is

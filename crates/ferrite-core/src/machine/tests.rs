@@ -22,7 +22,7 @@ fn a_saved_machine_is_enabled_unless_it_says_not() {
 
 #[test]
 fn the_bridge_never_asks_and_keeps_its_connection_alive() {
-    let args = bridge_args("me@box", Path::new("/tmp/m/c"));
+    let args = bridge_args("me@box", Path::new("/tmp/m/c"), WINDOW);
     let has = |pair: &str| args.windows(2).any(|w| w[0] == "-o" && w[1] == pair);
     assert!(has("BatchMode=yes"));
     assert!(has("ServerAliveInterval=15"));
@@ -37,6 +37,13 @@ fn the_bridge_never_asks_and_keeps_its_connection_alive() {
         ["--", "me@box", "ferrited", "bridge"],
         "the target can never be read as an option"
     );
+    let api = bridge_args("me@box", Path::new("/tmp/m/c"), API);
+    assert_eq!(
+        api[..args.len() - 2],
+        args[..args.len() - 2],
+        "the same ssh"
+    );
+    assert_eq!(api[api.len() - 2..], ["ferrited", "api-bridge"]);
 }
 
 #[test]

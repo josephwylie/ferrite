@@ -520,7 +520,7 @@ fn op(name: &str) -> &'static Operation {
 fn context() -> Context {
     Context {
         thread: Some("7".into()),
-        cwd: PathBuf::from("/work/app"),
+        cwd: Some(PathBuf::from("/work/app")),
     }
 }
 
@@ -597,6 +597,71 @@ fn current_names_the_calling_thread_and_frees_its_position() {
     assert!(refused.contains("takes no Thread"), "{refused}");
 }
 
+/// `--machine` is the CLI's own, anywhere before `--`; it never names a
+/// Thread with `--current`, whose id is this computer's Store's.
+#[test]
+fn machine_is_a_global_flag_before_the_arguments() {
+    let split = cli::machine_flag;
+    assert_eq!(
+        split(&["--machine", "box", "thread", "list"]),
+        Ok((Some("box"), vec!["thread", "list"]))
+    );
+    assert_eq!(
+        split(&["thread", "get", "3", "--machine=me@box"]),
+        Ok((Some("me@box"), vec!["thread", "get", "3"]))
+    );
+    assert_eq!(
+        split(&["agent", "prompt", "3", "--", "--machine", "box"]),
+        Ok((None, vec!["agent", "prompt", "3", "--", "--machine", "box"]))
+    );
+    assert_eq!(
+        split(&["agent", "prompt", "--current", "hi"]),
+        Ok((None, vec!["agent", "prompt", "--current", "hi"]))
+    );
+    assert!(split(&["thread", "list", "--machine"]).is_err());
+    assert!(split(&["--machine", "a", "--machine", "b", "thread", "list"]).is_err());
+    let refused = split(&["--machine", "box", "agent", "read", "--current"]).unwrap_err();
+    assert!(refused.contains("by id"), "{refused}");
+    assert_eq!(
+        split(&[
+            "--machine",
+            "box",
+            "agent",
+            "prompt",
+            "3",
+            "--",
+            "--current"
+        ]),
+        Ok((Some("box"), vec!["agent", "prompt", "3", "--", "--current"]))
+    );
+}
+
+/// A machine is found among the saved ones by name or ssh target; one
+/// unknown is a wrong command line, one turned off is refused, and neither
+/// is dialed.
+#[test]
+fn machine_names_a_saved_enabled_machine() {
+    let dir = std::env::temp_dir().join(format!("ferrite-cli-machines-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("settings.json"),
+        r#"{"machines":[{"name":"box","target":"me@box","enabled":false}]}"#,
+    )
+    .unwrap();
+    let run = |words: &[&str]| {
+        let args: Vec<String> = std::iter::once("ferrite")
+            .chain(words.iter().copied())
+            .map(String::from)
+            .collect();
+        cli::run(&args, &dir.join("threads"), &dir)
+    };
+    assert_eq!(run(&["--machine", "elsewhere", "thread", "list"]), Some(2));
+    assert_eq!(run(&["--machine", "box", "thread", "list"]), Some(1));
+    assert_eq!(run(&["--machine", "me@box", "thread", "list"]), Some(1));
+    assert_eq!(run(&["--machine", "box", "--skill"]), Some(2));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// After `--` nothing is a flag: a prompt may start with dashes.
 #[test]
 fn after_a_double_dash_every_word_is_an_argument() {
@@ -632,6 +697,33 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
     assert_eq!(reviewer.provider, Some(Provider::Codex));
     assert!(reviewer.worktree);
     assert_eq!(reviewer.title.as_deref(), Some("reviewer"));
+}
+
+/// On a machine this computer's directory means nothing: a `cwd` is the
+/// machine's own absolute path, and never left out.
+#[test]
+fn on_a_machine_a_cwd_is_given_whole() {
+    let remote = Context {
+        cwd: None,
+        ..context()
+    };
+    let start = |name: &str, args: &[&str]| cli::parse(op(name), args, &remote);
+    match start("thread.start", &["--cwd", "/srv/app"]).map(|request| request.method) {
+        Ok(Method::ThreadStart(params)) => assert_eq!(params.cwd, PathBuf::from("/srv/app")),
+        other => panic!("{other:?}"),
+    }
+    for (name, args) in [
+        ("thread.start", &[][..]),
+        ("thread.start", &["--cwd", "app"][..]),
+        ("coordinator.start", &["--goal", "Ship billing"][..]),
+    ] {
+        let refused = start(name, args).unwrap_err();
+        assert!(
+            refused.contains("absolute path there"),
+            "{name} {args:?}: {refused}"
+        );
+    }
+    assert!(start("thread.list", &[]).is_ok(), "no cwd, none asked");
 }
 
 /// A coordinator names itself with `--current`: its task comes next, and
@@ -701,6 +793,7 @@ fn help_lists_every_command_with_its_arguments() {
     assert!(help.contains("[--timeout-ms <n>]"));
     assert!(help.contains("[--until <idle|working|done|blocked>]"));
     assert!(help.contains("--answer <json>"));
+    assert!(help.contains("--machine <name>"));
     let agent = cli::usage(Some("agent"));
     assert!(agent.contains("ferrite agent wait") && !agent.contains("ferrite thread"));
 }
@@ -720,10 +813,10 @@ fn the_cli_leaves_the_apps_own_arguments_alone() {
         &["--import", "a.jsonl"][..],
         &["server"][..],
     ] {
-        assert_eq!(cli::run(&args(app), store), None, "{app:?}");
+        assert_eq!(cli::run(&args(app), store, store), None, "{app:?}");
     }
-    assert_eq!(cli::run(&args(&["thread"]), store), Some(0));
-    assert_eq!(cli::run(&args(&["thread", "dance"]), store), Some(2));
+    assert_eq!(cli::run(&args(&["thread"]), store, store), Some(0));
+    assert_eq!(cli::run(&args(&["thread", "dance"]), store, store), Some(2));
 }
 
 #[test]

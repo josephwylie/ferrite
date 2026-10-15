@@ -1626,6 +1626,20 @@ fn cli(
     (status, lines(said), lines(refused))
 }
 
+/// One CLI call to a machine through `dial`, as [`cli`].
+fn cli_machine(
+    dial: &crate::machine::Dial,
+    method: &str,
+    params: serde_json::Value,
+) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let ((mut out, said), (mut err, refused)) = (printed(), printed());
+    let status =
+        crate::api::cli::call_machine(&request(method, params), "box", dial, &mut out, &mut err);
+    drop((out, err));
+    let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
+    (status, lines(said), lines(refused))
+}
+
 /// The CLI over a real socket: an answer on stdout with status 0, a
 /// refusal on stderr with status 1, no Server as `server_unavailable`, and
 /// a subscription's events as they come.
@@ -1677,6 +1691,88 @@ fn the_cli_prints_answers_refusals_and_events() {
         serde_json::json!({ "thread": thread, "text": "go" }),
     );
     assert_eq!(next()["event"]["attention"], "working");
+}
+
+/// `--machine`: the same call through a machine's Tunnel (here a socket
+/// to this Server's API, where `ssh … ferrited api-bridge` would be),
+/// and an ssh that ends without an answer, or before it could be asked,
+/// refused as `server_unavailable` in the words of its Failure.
+#[test]
+fn the_cli_asks_a_machine_through_its_tunnel() {
+    let harness = start("api-cli-machine");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let call = |dial: &crate::machine::Dial| {
+        cli_machine(dial, "thread.get", serde_json::json!({ "thread": thread }))
+    };
+
+    let api = harness.api.clone();
+    let tunnel: crate::machine::Dial = Box::new(move || {
+        let stream = link::connect(&api)?;
+        Ok(crate::machine::Tunnel {
+            from: Box::new(link::TryClone::try_clone(&stream)?),
+            to: Box::new(stream),
+            ended: Box::new(|| None),
+        })
+    });
+    let (status, said, refused) = call(&tunnel);
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    assert_eq!(
+        said[0]["result"]["thread"]["thread"],
+        serde_json::json!(thread)
+    );
+
+    /// An ssh already gone: its stdin is a broken pipe.
+    struct Gone;
+    impl io::Write for Gone {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let usage = "usage: ferrited server | ferrited bridge".to_string();
+    for (failure, says) in [
+        (crate::machine::Failure::SignIn, "sign in"),
+        (crate::machine::Failure::NotInstalled, "`ferrited`"),
+        (crate::machine::Failure::Unreachable(usage), "older"),
+    ] {
+        for gone in [false, true] {
+            let failure = failure.clone();
+            let ended: crate::machine::Dial = Box::new(move || {
+                let failure = failure.clone();
+                Ok(crate::machine::Tunnel {
+                    from: Box::new(io::empty()),
+                    to: if gone {
+                        Box::new(Gone)
+                    } else {
+                        Box::new(io::sink())
+                    },
+                    ended: Box::new(move || Some(failure)),
+                })
+            });
+            let (status, said, refused) = call(&ended);
+            assert_eq!((status, said.len()), (1, 0), "{said:?}");
+            assert_eq!(refused[0]["error"]["code"], "server_unavailable");
+            let message = refused[0]["error"]["message"].as_str().unwrap();
+            assert!(message.contains(says), "{message}");
+        }
+    }
+}
+
+/// `ferrited api-bridge` never starts a Server: with none it says so and
+/// fails, which the CLI's ssh hands back as `server_unavailable`.
+#[test]
+fn the_api_bridge_with_no_server_fails_without_starting_one() {
+    let store = std::env::temp_dir().join(format!("ferrite-api-bridge-{}", std::process::id()));
+    std::fs::create_dir_all(&store).unwrap();
+    assert_eq!(super::bridge::api(&store), 1);
+    assert!(
+        std::fs::read_dir(&store).unwrap().next().is_none(),
+        "no Server was started in the Store"
+    );
+    let _ = std::fs::remove_dir_all(&store);
 }
 
 /// A repository with one commit, under `dir`: a Project workers can make
