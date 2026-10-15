@@ -7,7 +7,9 @@ use std::rc::Rc;
 
 use ferrite_core::ThreadId;
 use ferrite_projects::keys::{KeyCode, KeyEvent, KeyModifiers};
+use ferrite_projects::paths::{self, Ctx, Env, SessionFlags};
 use ferrite_projects::project;
+use ferrite_projects::runner::{Cmd, Output, Runner};
 use ferrite_projects::thread::{self, Group};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
@@ -148,11 +150,9 @@ fn the_picker_filters_on_name_and_slug_and_scopes_the_popup(cx: &mut TestAppCont
     // Nothing matches: it says so.
     press(&sheet, cx, KeyCode::Char('/'));
     typed(&sheet, cx, "zz");
-    assert!(
-        screen(&sheet, cx)
-            .iter()
-            .any(|line| line.starts_with("  no projects match"))
-    );
+    assert!(screen(&sheet, cx)
+        .iter()
+        .any(|line| line.starts_with("  no projects match")));
 }
 
 #[gpui::test]
@@ -264,8 +264,156 @@ fn the_snapshot_lists_open_threads_by_need_with_their_sub_lines() {
         model.project_of(ThreadId::new(13)).is_none(),
         "a resolved thread is no one's"
     );
+}
+
+/// The CLI as the adapter runs it: `thread list` answers one Thread, 7,
+/// working in `/work`; nothing else answers.
+struct OneThread;
+
+impl Runner for OneThread {
+    fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
+        let listed = cmd.args.windows(2).any(|pair| pair == ["thread", "list"]);
+        Ok(if listed {
+            Output {
+                code: Some(0),
+                stdout: r#"{"result":{"threads":[{"thread":7,"provider":"claude","attention":"idle","cwd":"/work"}]}}"#.into(),
+                ..Output::default()
+            }
+        } else {
+            Output {
+                code: Some(1),
+                ..Output::default()
+            }
+        })
+    }
+
+    fn socket_request(
+        &self,
+        _: &std::path::Path,
+        _: &str,
+        _: std::time::Duration,
+    ) -> anyhow::Result<String> {
+        anyhow::bail!("no socket here")
+    }
+
+    fn run_foreground(&self, _: &Cmd, _: &mut dyn FnMut() -> bool) -> anyhow::Result<Option<i32>> {
+        anyhow::bail!("no terminal here")
+    }
+}
+
+/// "Continue this Thread as a project" refuses before its dialog opens, as
+/// upstream's action did: a Thread with no agent, and one a project
+/// already has, each with `adopt::adoptable_agent`'s words.
+#[test]
+fn adopting_refuses_a_thread_without_an_agent_or_already_a_projects() {
+    let scratch = Scratch::new("adoptable");
+    let place = scratch.place(&["Alpha"]);
+    let env = Env::from_process().unwrap();
+    let ctx = Ctx {
+        env: &env,
+        root: place.root.clone(),
+        config_dir: place.config_dir.clone(),
+        runner: &OneThread,
+        detached_ticker: false,
+    };
+    assert_eq!(data::adoptable_in(&ctx, ThreadId::new(7)), Ok(()));
+    let refused = data::adoptable_in(&ctx, ThreadId::new(8)).unwrap_err();
+    assert!(
+        refused.starts_with("no agent is detected in pane 8"),
+        "{refused}"
+    );
+
+    let session = paths::resolve_session(&SessionFlags::default(), &env, &OneThread).unwrap();
+    let alpha = project::Project::load(&place.root, "alpha").unwrap();
+    alpha
+        .update_coordinator(|record| {
+            record.socket = session.socket.to_string_lossy().into_owned();
+            record.cwd = alpha.dir().to_string_lossy().into_owned();
+        })
+        .unwrap();
+    thread::allocate(&alpha, |t| {
+        t.title = "Adopted".into();
+        t.status = thread::Status::Open;
+        t.kind = thread::Kind::Adopted;
+        t.pane_id = "7".into();
+        t.cwd = "/work".into();
+    })
+    .unwrap();
     assert_eq!(
-        adopt_refusal(&model, ThreadId::new(11)).as_deref(),
-        Some("pane 11 is already thread t-0001 of `alpha`")
+        data::adoptable_in(&ctx, ThreadId::new(7)),
+        Err("pane 7 is already thread t-0001 of `alpha`".into())
+    );
+}
+
+/// The configure action is `setup::configure_ferrite`, run in process —
+/// no CLI flags to fall out of step with the parser — and says so in
+/// herdr-projects' words.
+#[test]
+fn configure_says_what_it_set_or_why_not() {
+    assert_eq!(
+        data::configured(Ok(vec!["claude: hooks added".into()])),
+        (
+            "Projects configured".into(),
+            "Progress hooks and the autoproject skill are set.".into(),
+            false
+        )
+    );
+    assert_eq!(
+        data::configured(Err("no harness is installed".into())),
+        (
+            "Projects: configure failed".into(),
+            "no harness is installed".into(),
+            true
+        )
+    );
+}
+
+/// The configure action itself, in a scratch home where Claude is
+/// installed: it succeeds, writes the progress hooks and the skill, and
+/// says so — where `configure --hooks-only` failed on an unknown flag.
+#[test]
+fn the_configure_action_sets_the_hooks_and_the_skill() {
+    let scratch = Scratch::new("configure");
+    let place = scratch.place(&[]);
+    let home = scratch.0.join("home");
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    let env = Env::for_test(&home, &[]);
+    let ctx = Ctx {
+        env: &env,
+        root: place.root.clone(),
+        config_dir: place.config_dir.clone(),
+        runner: &OneThread,
+        detached_ticker: false,
+    };
+    let (title, body, failed) = data::configured(data::configure_in(&ctx));
+    assert_eq!(
+        (title.as_str(), body.as_str(), failed),
+        (
+            "Projects configured",
+            "Progress hooks and the autoproject skill are set.",
+            false
+        )
+    );
+    let settings = std::fs::read_to_string(home.join(".claude/settings.json")).unwrap();
+    assert!(settings.contains("hook --agent claude"), "{settings}");
+    assert!(ferrite_projects::setup::skill_source(&place.config_dir)
+        .join("SKILL.md")
+        .is_file());
+}
+
+/// A popup row whose pane id names no Thread says so rather than closing
+/// on nothing.
+#[test]
+fn a_jump_to_a_pane_that_is_no_thread_is_refused_in_words() {
+    assert_eq!(
+        Jump::of("box", "7"),
+        Ok(Jump {
+            machine: "box".into(),
+            thread: ThreadId::new(7)
+        })
+    );
+    assert_eq!(
+        Jump::of("", "w1:p2"),
+        Err("pane `w1:p2` is not a Ferrite Thread; there is nothing to jump to".into())
     );
 }

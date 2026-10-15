@@ -743,12 +743,12 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
             Some("box")
         );
         assert_eq!(
-            view.landing.as_ref().map(|(alert, _)| alert.clone()),
-            Some(Alert {
+            view.landing.as_ref().map(|(landing, _)| landing.clone()),
+            Some(Landing::Alert(Alert {
                 away: None,
                 target: asked,
                 thread,
-            }),
+            })),
             "opened once box answers"
         );
         // Once box answers, its requests are no news: both rang, or were
@@ -841,7 +841,10 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
         assert_eq!(
             view.landing
                 .as_ref()
-                .map(|(Alert { away, thread, .. }, _)| (away.clone(), *thread)),
+                .and_then(|(landing, _)| match landing {
+                    Landing::Alert(Alert { away, thread, .. }) => Some((away.clone(), *thread)),
+                    Landing::Thread(_) => None,
+                }),
             Some((None, here)),
             "on its Thread once it answers"
         );
@@ -893,12 +896,12 @@ fn a_toast_press_goes_to_its_machine(cx: &mut TestAppContext) {
             Some("box")
         );
         assert_eq!(
-            view.landing.as_ref().map(|(alert, _)| alert.clone()),
-            Some(Alert {
+            view.landing.as_ref().map(|(landing, _)| landing.clone()),
+            Some(Landing::Alert(Alert {
                 away: None,
                 target: box_asked(thread, 1),
                 thread,
-            })
+            }))
         );
     });
 }
@@ -931,11 +934,11 @@ fn the_window_opens_what_it_came_for_once_attached(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         let until = cx.background_executor().now() + Duration::from_secs(10);
         view.landing = Some((
-            Alert {
+            Landing::Alert(Alert {
                 away: None,
                 target: RowTarget::Decision(id),
                 thread: threads[off],
-            },
+            }),
             until,
         ))
     });
@@ -964,10 +967,12 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
     core.park(threads[1]).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let gone = |thread: ThreadId| Alert {
-        away: None,
-        target: RowTarget::Notice(ferrite_core::notifications::NoticeId::from_u64(99)),
-        thread,
+    let gone = |thread: ThreadId| {
+        Landing::Alert(Alert {
+            away: None,
+            target: RowTarget::Notice(ferrite_core::notifications::NoticeId::from_u64(99)),
+            thread,
+        })
     };
     view.update(cx, |view, cx| {
         let until = cx.background_executor().now() + Duration::from_secs(10);
@@ -1256,4 +1261,79 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         ],
         "a commit's lines take comments as the uncommitted work's do"
     );
+}
+
+/// A Projects row's ↵ on a Thread lands on it where it runs: here when
+/// the record names no machine, else the window goes to the machine the
+/// record names and lands there once attached.
+#[gpui::test]
+fn a_projects_jump_lands_on_its_thread_on_its_machine(cx: &mut TestAppContext) {
+    use crate::projects::Jump;
+    let (core, _fake) = cockpit("machines-jump", 2);
+    let machines = cx.new(|_| machines("jump", None));
+    let (root, cx) = machine_window(cx, core, machines);
+    let first = shown(&root, cx);
+    let here = first.read_with(cx, |view, _| {
+        let threads = view.cockpit.threads();
+        *threads
+            .iter()
+            .find(|thread| Some(**thread) != view.focused_thread())
+            .unwrap()
+    });
+    first.update_in(cx, |view, window, cx| {
+        view.jump_to(Jump::of("", &here.to_string()).unwrap(), window, cx)
+    });
+    tick(cx);
+    assert_eq!(shown(&root, cx).entity_id(), first.entity_id(), "stays");
+    first.read_with(cx, |view, _| assert_eq!(view.focused_thread(), Some(here)));
+
+    first.update_in(cx, |view, window, cx| {
+        view.jump_to(Jump::of("box", "7").unwrap(), window, cx)
+    });
+    tick(cx);
+    let on_box = shown(&root, cx);
+    assert_ne!(on_box.entity_id(), first.entity_id(), "the window went");
+    on_box.read_with(cx, |view, _| {
+        assert_eq!(
+            view.cockpit.machine().map(|bridge| bridge.name()),
+            Some("box")
+        );
+        assert_eq!(
+            view.landing.as_ref().map(|(landing, _)| landing.clone()),
+            Some(Landing::Thread(ThreadId::new(7))),
+            "on its Thread once box answers"
+        );
+    });
+}
+
+/// "Continue this Thread as a project" on a window on another machine is
+/// refused before any check or dialog: as upstream, only a running local
+/// agent pane can be adopted, and this computer's Server is the one asked.
+#[gpui::test]
+fn adopting_on_another_machine_is_refused_up_front(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("machines-adopt", 1);
+    let machines = cx.new(|_| machines("adopt", Some("box")));
+    let (root, cx) = machine_window(cx, core, machines);
+    let on_box = shown(&root, cx);
+    let toasts = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            gpui::component::Root::read(window, cx)
+                .notification
+                .read(cx)
+                .notifications()
+                .len()
+        })
+    };
+    let before = toasts(cx);
+    on_box.update_in(cx, |view, window, cx| {
+        assert_eq!(view.away_machine(cx).as_deref(), Some("box"));
+        view.projects.place = Some(crate::projects::Place {
+            root: std::env::temp_dir().join("ferrite-projects-adopt-away"),
+            config_dir: std::env::temp_dir().join("ferrite-projects-adopt-away"),
+        });
+        view.run_projects_command(crate::projects::Command::Adopt, window, cx);
+        assert!(view.projects.sheet.is_none(), "no dialog");
+    });
+    tick(cx);
+    assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
 }

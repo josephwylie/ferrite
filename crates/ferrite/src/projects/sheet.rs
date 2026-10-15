@@ -23,7 +23,7 @@ use gpui::{
     SharedString, Window,
 };
 
-use super::data::{self, Place, Verb};
+use super::data::{self, Jump, Place, Verb};
 use crate::components;
 use crate::theme::*;
 
@@ -31,8 +31,11 @@ use crate::theme::*;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SheetEvent {
     Close,
-    /// The popup closed on a Thread to land on (`↵` on a row).
-    Jump(ThreadId),
+    /// The popup closed on a Thread to land on (`↵` on a row), maybe on
+    /// another machine.
+    Jump(Jump),
+    /// The popup closed on a jump that lands nowhere: why.
+    Refused(String),
     /// A file to open: a text one in the reader, else the system opener.
     Open(PathBuf),
     Copy(String),
@@ -174,8 +177,10 @@ impl ProjectsSheet {
                 });
             }
             if frame.quit {
-                if let Some(thread) = frame.jump {
-                    events.push(SheetEvent::Jump(thread));
+                match frame.jump {
+                    Some(Ok(jump)) => events.push(SheetEvent::Jump(jump)),
+                    Some(Err(why)) => events.push(SheetEvent::Refused(why)),
+                    None => {}
                 }
                 events.push(SheetEvent::Close);
             }
@@ -406,7 +411,7 @@ struct Frame {
     seq: u64,
     lines: Vec<Line>,
     quit: bool,
-    jump: Option<ThreadId>,
+    jump: Option<Result<Jump, String>>,
     requests: Vec<Request>,
 }
 
@@ -444,7 +449,7 @@ impl Live {
                             jump: popup
                                 .jump
                                 .take()
-                                .and_then(|(_, machine, pane)| data::thread_of(&pane, &machine)),
+                                .map(|(_, machine, pane)| Jump::of(&machine, &pane)),
                             requests: std::mem::take(&mut popup.requests),
                         };
                         if outbox.send(frame).is_err() || wake.unbounded_send(()).is_err() {

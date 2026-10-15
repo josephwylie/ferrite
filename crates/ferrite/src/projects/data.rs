@@ -6,11 +6,12 @@
 use std::path::PathBuf;
 
 use ferrite_core::ThreadId;
-use ferrite_projects::paths::{self, Ctx, Env};
+use ferrite_projects::herdr::Herdr;
+use ferrite_projects::paths::{self, Ctx, Env, SessionFlags};
 use ferrite_projects::project::{self, Project, Status};
 use ferrite_projects::runner::RealRunner;
 use ferrite_projects::thread::{self, Group};
-use ferrite_projects::{coordinator, sidebar, ticker};
+use ferrite_projects::{adopt, coordinator, setup, sidebar, ticker};
 
 /// Where Projects keeps its projects and the operator's settings for them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +60,29 @@ pub(crate) fn thread_of(pane: &str, machine: &str) -> Option<ThreadId> {
         .is_empty()
         .then(|| pane.parse().ok().map(ThreadId::new))
         .flatten()
+}
+
+/// A Thread the popup jumps to: the machine it runs on (as the thread
+/// record names it; empty for this computer) and its id there, where a
+/// pane is a Thread too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Jump {
+    pub machine: String,
+    pub thread: ThreadId,
+}
+
+impl Jump {
+    /// `popup.jump`'s `(socket, machine, pane)`; a pane id that names no
+    /// Thread is said, not jumped to.
+    pub(crate) fn of(machine: &str, pane: &str) -> Result<Jump, String> {
+        let thread = pane.parse().map_err(|_| {
+            format!("pane `{pane}` is not a Ferrite Thread; there is nothing to jump to")
+        })?;
+        Ok(Jump {
+            machine: machine.to_string(),
+            thread: ThreadId::new(thread),
+        })
+    }
 }
 
 /// What the nav, the bottom bar and the scope read, refreshed every
@@ -228,26 +252,22 @@ pub(crate) fn adopt(
     }
 }
 
-/// The refusals `adopt::adoptable_agent` makes about a Thread a project
-/// already has, said before any dialog opens.
-pub(crate) fn adopt_refusal(model: &Model, thread: ThreadId) -> Option<String> {
-    let project = model.project_of(thread)?;
-    Some(
-        match project
-            .threads
-            .iter()
-            .find(|row| row.thread == Some(thread))
-        {
-            Some(row) => format!(
-                "pane {thread} is already thread {} of `{}`",
-                row.id, project.slug
-            ),
-            None => format!(
-            "pane {thread} is a coordinator of `{}` (its working directory is the project folder)",
-            project.slug
-        ),
-        },
-    )
+/// `adopt::adoptable_agent`, as upstream's action ran it before its pane
+/// opened: an agent runs in `thread`, and it is no project's coordinator or
+/// thread yet. Its refusal is said before any dialog asks for a name.
+pub(crate) fn adoptable(place: &Place, thread: ThreadId) -> Result<(), String> {
+    place.with_ctx(|ctx| adoptable_in(ctx, thread))?
+}
+
+/// `adoptable` in `ctx`: on the session `adopt-workspace` resolves.
+pub(super) fn adoptable_in(ctx: &Ctx, thread: ThreadId) -> Result<(), String> {
+    let session = paths::resolve_session(&SessionFlags::default(), ctx.env, ctx.runner)
+        .map_err(|error| format!("{error:#}"))?;
+    let herdr = Herdr::new(ctx.env.herdr_bin(), &session.socket, ctx.runner);
+    let socket = session.socket.to_string_lossy();
+    adopt::adoptable_agent(ctx, &herdr, &socket, &thread.to_string())
+        .map(drop)
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// The project verbs a picker or the current project runs: `open`, `pause`
@@ -281,9 +301,27 @@ pub(crate) fn doctor_body(healthy: bool) -> &'static str {
     }
 }
 
-/// The configure action's notification, and the CLI run it is: the
-/// progress hooks and the skill (Ferrite draws the rows Herdr's config did).
+/// The configure action's notification: what `setup::configure_ferrite`
+/// sets (Ferrite draws the rows Herdr's config did).
 pub(crate) const CONFIGURED_TITLE: &str = "Projects configured";
 pub(crate) const CONFIGURED_BODY: &str = "Progress hooks and the autoproject skill are set.";
 pub(crate) const CONFIGURE_FAILED_TITLE: &str = "Projects: configure failed";
-pub(crate) const CONFIGURE: [&str; 2] = ["configure", "--hooks-only"];
+
+/// The configure action: `setup::configure_ferrite` on this place, in this
+/// process (the CLI's `configure` with no flags), as its toast: title,
+/// words, whether it failed.
+pub(crate) fn configure(place: &Place) -> (String, String, bool) {
+    configured(place.with_ctx(configure_in).and_then(|done| done))
+}
+
+/// `configure` in `ctx`.
+pub(super) fn configure_in(ctx: &Ctx) -> Result<Vec<String>, String> {
+    setup::configure_ferrite(ctx).map_err(|error| format!("{error:#}"))
+}
+
+pub(super) fn configured(done: Result<Vec<String>, String>) -> (String, String, bool) {
+    match done {
+        Ok(_) => (CONFIGURED_TITLE.into(), CONFIGURED_BODY.into(), false),
+        Err(error) => (CONFIGURE_FAILED_TITLE.into(), error, true),
+    }
+}

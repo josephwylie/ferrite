@@ -11,8 +11,7 @@ mod sheet;
 mod tests;
 
 pub(crate) use data::{
-    adopt_refusal, doctor_body, pickable, Model, Place, Verb, CONFIGURE, CONFIGURED_BODY,
-    CONFIGURED_TITLE, CONFIGURE_FAILED_TITLE, DOCTOR_TITLE,
+    adoptable, configure, doctor_body, pickable, Jump, Model, Place, Verb, DOCTOR_TITLE,
 };
 #[cfg(test)]
 pub(crate) use data::{ProjectEntry, ThreadEntry};

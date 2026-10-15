@@ -131,10 +131,10 @@ impl CockpitView {
         if let Some(index) = index {
             cx.emit(GoToMachine {
                 index,
-                open: Some(Alert {
+                open: Some(Landing::Alert(Alert {
                     away: None,
                     ..alert
-                }),
+                })),
             });
         }
     }
@@ -148,7 +148,7 @@ impl CockpitView {
     }
 
     /// Open what the window came to this machine for, once its Server is
-    /// there: the alert while it still stands, else its Thread (revived
+    /// there: an alert while it still stands, else its Thread (revived
     /// when parked). A machine that does not answer by the landing's
     /// deadline opens nothing: the operator has moved on.
     pub(super) fn land(&mut self, cx: &mut Context<Self>) {
@@ -157,13 +157,16 @@ impl CockpitView {
         if !expired && !self.attached() {
             return;
         }
-        let Some((alert, _)) = self.landing.take().filter(|_| !expired) else {
-            return;
-        };
-        if alert.target.wants(self.cockpit.notifications()) {
-            self.notice_verb(alert.open_verb(), cx);
-        } else {
-            self.land_on_thread(alert.thread, cx);
+        match self.landing.take().filter(|_| !expired) {
+            Some((Landing::Alert(alert), _))
+                if alert.target.wants(self.cockpit.notifications()) =>
+            {
+                self.notice_verb(alert.open_verb(), cx)
+            }
+            Some((Landing::Alert(Alert { thread, .. }) | Landing::Thread(thread), _)) => {
+                self.land_on_thread(thread, cx)
+            }
+            None => {}
         }
     }
 

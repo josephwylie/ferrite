@@ -70,3 +70,7 @@ winresource = { version = "0.1", default-features = false }
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 # The in-process machine the window's tests attach to.
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+# A Projects test runs `configure` on a scratch home, not the operator's.
+ferrite-projects = { path = "../ferrite-projects", features = ["test-support"] }
+# A Projects test's stand-in for the CLI it runs speaks the crate's `Runner`.
+anyhow = "1"

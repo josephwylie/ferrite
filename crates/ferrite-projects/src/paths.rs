@@ -29,7 +29,7 @@ impl Env {
         Ok(Env { vars, home })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(home: &Path, vars: &[(&str, &str)]) -> Self {
         Env {
             vars: vars
