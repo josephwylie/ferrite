@@ -90,8 +90,6 @@ struct Facts {
     #[serde(default)]
     workspace: Option<Binding>,
     #[serde(default)]
-    session_project_root: Option<PathBuf>,
-    #[serde(default)]
     title: Option<String>,
 }
 
@@ -121,13 +119,16 @@ impl Facts {
             .or_else(|| serde_json::from_str(header).ok())
     }
 
-    /// Where the Thread's agent runs: Ferrite's `effective_cwd` chain, the
-    /// directory the adapter reports as its pane's `cwd`.
+    /// The Thread's workspace binding's directory: what `thread.list`
+    /// reports as its `cwd`, so what the adapter gives as its pane's and
+    /// agent's `cwd` and what `thread adopt` records. A session project
+    /// root below it does not count; an adopted thread whose `cwd` differs
+    /// from its pane's is gone to the ticker.
     fn cwd(&self) -> Option<&Path> {
-        self.session_project_root.as_deref().or(match self.workspace.as_ref()? {
+        match self.workspace.as_ref()? {
             Binding::Main { checkout } => Some(checkout),
             Binding::Worktree { path } => Some(path),
-        })
+        }
     }
 }
 
@@ -452,7 +453,7 @@ mod tests {
             ]
         );
         let cwds: Vec<_> = threads.iter().map(|t| t.cwd.clone()).collect();
-        assert_eq!(cwds, [tree.to_string_lossy().into_owned(), checkout.join("app").to_string_lossy().into_owned()]);
+        assert_eq!(cwds, [tree.to_string_lossy().into_owned(), checkout.to_string_lossy().into_owned()], "the binding's directory, as `thread.list` reports it, not the session project root");
         assert_eq!((threads[0].agent.as_str(), threads[0].agent_name.as_str()), ("codex", "worker"));
         assert_eq!(threads[0].thread_dir, thread::thread_dir(&threads[0].cwd, "billing-app", &threads[0].id));
         let brief = std::fs::read_to_string(Path::new(&threads[0].thread_dir).join("brief.md")).unwrap();
