@@ -52,14 +52,74 @@ end of 2026-10-15. "Partial" names what is missing.
 | Review slot | Done | ADR 0021: uncommitted / branch / commits / last turn, line comments; git runs where the checkout is (the owning Server, on a machine too) |
 | Session import + allowance warning | Done | ADR 0022 |
 | Custom palette commands + user keymap | Done | ADR 0024 |
-| Coordinator Threads | Done | ADR 0028: briefs, worktree workers, `## Remember` memory, need ordering, opt-in PR follow-up (CI, reviews, inline comments), a merged PR resolves its worker and removes its worktree and branch |
+| Coordinator Threads | Superseded | ADR 0028's own coordinator was removed; herdr-projects is vendored instead (ADR 0030), see the parity table below |
+| Projects (herdr-projects) | Done | ADR 0030: `crates/ferrite-projects`, upstream 0.2.34 verbatim but for its seams; parity table below |
 | Mermaid diagrams | Done | ADR 0016 |
 | Hygiene: durable settings, banner, clean env, diagnostics, find, self-update, staggered revival | Done | ADRs 0018–0020, 0023 |
 | Hygiene: confirm quit while working | Superseded | Added, then dropped by ADR 0025: quitting the window no longer stops agents |
 | UI cleanliness 1, 2, 3, 6 | Done | ADR 0014: band kept for the window drag but empty; one bottom bar |
 | UI cleanliness 4, 5 | Done | ADR 0015: needs-you strip gone, one heading style |
 | Store never reuses a Thread id | Done | ADR 0029 (found while building the API) |
-| Worktree setup / cleanup, debug data folder | Not done | Declined in the plan; a coordinator worker's cleanup on merge is the one exception (ADR 0028) |
+| Worktree setup / cleanup, debug data folder | Not done | Declined in the plan; a Projects thread's cleanup once resolved (merged PR, `resolve`, `auto_resolve_days`) is the one exception (ADR 0030) |
+
+### herdr-projects parity
+
+Every herdr-projects feature and where it is in Ferrite. "the sheet" is
+the Projects sheet (`crates/ferrite/src/projects/`), opened with
+`cmd-shift-a` (`projects::Toggle`, upstream's `prefix+a`) or the palette's
+`Projects`; "the CLI" is the `ferrite-projects` binary shipped beside
+`ferrite` (agents call it from the skill, as upstream). The adapter
+(`src/herdr.rs`) answers every herdr call from the Server API (ADR 0027).
+
+| herdr-projects feature | In Ferrite | How to reach it |
+|---|---|---|
+| Coordinator that delegates, never does the work | Vendored skill (`skill/COORDINATOR.md`, `THREAD.md`, `autoproject`) | Palette `Projects: open project`, or `ferrite-projects open <slug>`; talk to the coordinator Thread |
+| New project | Sheet ask (upstream's `new` pane) | Palette `Projects: new project`, or `ferrite-projects new "Name" --repo <dir>` |
+| Open / pause / resume / archive / delete / rename | CLI verbs; open/pause/resume as palette commands with a project picker | Palette `Projects: open/pause/resume project`; the sheet's settings; `ferrite-projects archive\|delete\|rename` |
+| Threads on their own worktree and branch, or in a tab | `worktree.create` + staged `thread.start` (`--project`, `--ready`, `--args`, `--resume`) | Coordinator's `ferrite-projects thread start`; Threads appear under the project in the nav |
+| Briefs: goal, standing instructions, memory, task | Vendored `brief.rs` | `PROJECT.md`, `MEMORY.md`, `memory/` under `~/.herdr-projects/<slug>/` |
+| `## Remember` lessons flow into memory | Vendored `report`/memory | Thread reports; the sheet's memory section |
+| Tasks (`TASKS.md`, task owners) | Vendored `tasks.rs` | The sheet's tasks section; the coordinator keeps `TASKS.md` |
+| Inbox | Vendored `inbox.rs` | The sheet's inbox section; `ferrite-projects inbox` |
+| Routines (PR follow-up, approved commands) | Vendored `routine.rs`, run by the ticker | The sheet's routines section; `ferrite-projects routine approve` in a terminal |
+| Settings and safety (`start_threads`, yolo, `auto_resolve_days`) | Vendored `settings.rs`, `safety.rs` | The sheet's settings section; `ferrite-projects safety` |
+| Per-thread next steps (number keys) | Popup screen drawn line for line | The sheet's threads section, digits |
+| Sidebar rows grouped by project, coordinator first, needs-you first | Nav project blocks (`cockpit/projects.rs`), from the crate's data | The nav, while the ticker runs |
+| Row detail line (`review · PR #4`, `~40%`, activity) | Nav sub-lines under each Thread row | The nav |
+| Tab bar `projects: N need you` | Bottom-bar word | Bottom bar; click opens the sheet |
+| Sidebar focus / unfocus on one project | `nav.focus` op; nav shows one project's block | Palette `Projects: focus nav on this project` / `Projects: clear nav focus` |
+| Text overview | Sheet's overview body | Palette `Projects: overview`; `ferrite-projects overview` |
+| `adopt-workspace` / `thread adopt` | Sheet ask (upstream's `adopt` pane) | Palette `Projects: continue this Thread as a project`; `ferrite-projects thread adopt` |
+| Needs-you from agents' own progress reports | Progress hooks (`configure`) and Ferrite's Attention | Palette `Projects: configure` |
+| Notifications naming project and thread | `notification.show` (sound kept), click focuses the Thread | macOS notifications / toasts |
+| PR follow-up: failing checks and review comments back to the thread | Ticker, `gh` | Automatic while the ticker runs |
+| Merged PR resolves the thread, removes worktree and branch (never forced) | Ticker + `worktree.remove` | Automatic; `ferrite-projects thread resolve`, `sweep` |
+| Remote threads on saved SSH machines, reports copied home | `machine.list`, `--machine` (ADR 0026) | Saved machines in `config.toml`; select the machine in the nav |
+| Agent kinds | Claude Code and Codex (Ferrite's Providers) | Agent profiles in the sheet's settings |
+| Ticker | Started by the Server at start (replaces Herdr's `[[startup]]`) | `ferrite-projects ticker status\|start\|stop` |
+| `configure` / `unconfigure` (hooks, skill links) | `setup::configure_ferrite`; Herdr `config.toml` edits removed | Palette `Projects: configure`; `ferrite-projects configure` |
+| `doctor [--fix]` | Checks Ferrite version and Server socket instead of Herdr | Palette `Projects: doctor` (notification); `ferrite-projects doctor` |
+| Ferrite's old coordinators | One-time `migrate-ferrite-coordinators` at Server start | Automatic; notes in one toast |
+| Trust / prompt-box screen reading | Read from the Thread's exact state (`PaneState`) | Internal |
+
+Not at parity, and why:
+
+- **`update` and the command link**: removed; Ferrite ships the binary and
+  updates itself (ADR 0023).
+- **Agent kinds beyond Claude Code and Codex** (OpenCode, Droid, …): fail
+  `no_provider`; Ferrite has no Provider for them. Their progress hooks are
+  still configured.
+- **`pane process-info`, `pane run`, raw keys**: a Thread is never a shell;
+  refused `not_wired`, or mapped to the operation meant (interrupt,
+  `decision.answer`).
+- **`open --here`**: never runs a coordinator on the caller's terminal.
+- **A checkout thread** belongs to its repository's Ferrite project, not the
+  coordinator's (upstream: a tab in the coordinator's Space), so archiving
+  the project leaves it open.
+- **Windows**: not built (Unix-only upstream).
+- **Remote**: inherits ADR 0026's gaps (no live branch or status for a
+  machine's Thread's Project).
+- **`docs/*.md`** in the crate stay upstream's Herdr documentation.
 
 ## Where Ferrite is already ahead
 
