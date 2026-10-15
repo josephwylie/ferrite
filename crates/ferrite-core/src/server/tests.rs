@@ -226,7 +226,11 @@ impl Window {
 
     /// Take what arrives until `done` holds, for at most five seconds.
     fn until(&mut self, done: impl Fn(&Self) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        self.until_within(Duration::from_secs(5), done);
+    }
+
+    fn until_within(&mut self, limit: Duration, done: impl Fn(&Self) -> bool) {
+        let deadline = Instant::now() + limit;
         while !done(self) {
             let left = deadline.saturating_duration_since(Instant::now());
             assert!(!left.is_zero(), "timed out");
@@ -621,7 +625,11 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
 
     let mut late = attach(&harness.address);
     late.watch(thread, None);
-    late.until(ends_with(format!("turn {}", turns - 1)));
+    // Tens of megabytes through a debug build: seconds, more on a busy machine.
+    late.until_within(
+        Duration::from_secs(120),
+        ends_with(format!("turn {}", turns - 1)),
+    );
     assert!(late.replies.is_empty(), "{:?}", late.replies);
     let reply = late.command(4, Op::SettingsChanged);
     assert!(matches!(reply, ServerMessage::Reply { error: None, .. }));

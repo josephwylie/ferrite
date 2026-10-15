@@ -694,7 +694,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     handle: handle(),
                     decision: decision(),
                 }],
-                groups: Some(json!({"version": 1, "groups": []})),
+                groups: Some(json!({"groups": [], "version": 1})),
                 registry: None,
                 notices: Some(vec![WireNotice::Finished {
                     id: 1,
@@ -955,7 +955,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 thread,
                 id: "toolu_09".into(),
                 name: "show_visual".into(),
-                input: json!({"title": "Chart", "html": "<div>"}),
+                input: json!({"html": "<div>", "title": "Chart"}),
             }),
         ),
         (
@@ -972,7 +972,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             "groups",
             Sample::Server(ServerMessage::Groups {
                 revision: 10,
-                groups: json!({"version": 1, "groups": []}),
+                groups: json!({"groups": [], "version": 1}),
             }),
         ),
         (
