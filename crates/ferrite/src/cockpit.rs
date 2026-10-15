@@ -243,6 +243,8 @@ actions!(
         FocusThread7,
         FocusThread8,
         FocusThread9,
+        RefreshPrStatus,
+        OpenPrInBrowser,
     ]
 );
 
@@ -587,6 +589,12 @@ pub struct CockpitView {
     /// The chimes that would have played (`chime`).
     #[cfg(test)]
     pub(crate) chimed: Vec<Sound>,
+    /// The Thread the pump last saw focused: focusing another asks for its
+    /// PR (`check_pr`).
+    pr_focus: Option<ThreadId>,
+    /// The PR reads `check_pr` would have sent `gh`: (Thread, manual).
+    #[cfg(test)]
+    pub(crate) pr_asked: Vec<(ThreadId, bool)>,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -989,6 +997,9 @@ enum MenuVerb {
     NewThread,
     Reveal,
     CopyPath,
+    /// The Thread's PR: ask `gh` again now, or open it in the browser.
+    RefreshPr,
+    OpenPr,
     Delete,
 }
 
@@ -1607,6 +1618,9 @@ impl CockpitView {
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
+            pr_focus: None,
+            #[cfg(test)]
+            pr_asked: Vec::new(),
             floats: palette::Floats::new(cx),
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
@@ -1756,6 +1770,57 @@ impl CockpitView {
     fn thread_opened(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let lookups = self.facts.opened(&self.cockpit, thread);
         self.look_up(lookups, cx);
+        self.check_pr(thread, false, cx);
+    }
+
+    /// Ask `gh` for the Thread's PR where its checkout is
+    /// (`Cockpit::pull_request`, on a machine its Server): at once when
+    /// `manual`, else at most once per `pr::AUTO_EVERY`. The row's symbol
+    /// turns until the answer lands.
+    pub(crate) fn check_pr(&mut self, thread: ThreadId, manual: bool, cx: &mut Context<Self>) {
+        let Some(path) = self.thread_path(thread) else {
+            return;
+        };
+        if !self
+            .facts
+            .ask_pr(thread, cx.background_executor().now(), manual)
+        {
+            return;
+        }
+        self.notify_part(parts::Part::Nav, cx);
+        // Tests and captures never run `gh`; a test reads what was asked.
+        if cfg!(any(test, feature = "visual-reference")) {
+            #[cfg(test)]
+            self.pr_asked.push((thread, manual));
+            return;
+        }
+        let answer = self.cockpit.pull_request(&path);
+        cx.spawn(async move |this, cx| {
+            // A read that failed is `gh` with nothing to say: no label.
+            let reading = beside::answered(answer, cx).await.ok().flatten();
+            this.update(cx, |view, cx| view.pr_landed(thread, reading, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Adopt what `gh` said about the Thread's PR.
+    fn pr_landed(
+        &mut self,
+        thread: ThreadId,
+        reading: Option<ferrite_core::workspace::PullRequest>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.facts.pr_answered(thread, reading) {
+            self.notify_part(parts::Part::Nav, cx);
+        }
+    }
+
+    /// Open the Thread's PR on the forge, in the browser on this computer.
+    pub(crate) fn open_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if let Some(url) = self.facts.pr(thread).and_then(|pr| pr.url.as_deref()) {
+            cx.open_url(url);
+        }
     }
 
     /// Run the facts' slow reads in the background and adopt what they
@@ -2147,6 +2212,13 @@ impl CockpitView {
                 );
             }
         }
+        let focused = self.focused_thread();
+        if focused != self.pr_focus {
+            self.pr_focus = focused;
+            if let Some(thread) = focused {
+                self.check_pr(thread, false, cx);
+            }
+        }
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -2446,7 +2518,11 @@ impl CockpitView {
                 );
                 let mut moved = false;
                 for (thread, listing) in listings {
-                    moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
+                    if view.cockpit.worktrees_listed(thread, listing, taken_at) {
+                        moved = true;
+                        // Into a worktree: its branch is another PR's.
+                        view.check_pr(thread, false, cx);
+                    }
                 }
                 // Git said what it said last time: nothing to redraw. A
                 // label that moved is its Thread's: its Pane and its nav
@@ -2937,12 +3013,7 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        let has_checks = self
-            .facts
-            .get(thread)
-            .and_then(|facts| facts.status.as_ref())
-            .and_then(|status| status.pr.as_ref())
-            .is_some_and(|pr| pr.checks.is_some());
+        let has_checks = self.facts.pr(thread).is_some_and(|pr| pr.checks.is_some());
         if !has_checks {
             return;
         }
@@ -3323,6 +3394,23 @@ impl CockpitView {
                 }
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
                 rows.push(None);
+                rows.push(Some((
+                    menu::Item::new("Refresh PR status").shortcut(
+                        crate::components::bound_chord("cockpit::RefreshPrStatus")
+                            .unwrap_or_default(),
+                    ),
+                    MenuVerb::RefreshPr,
+                )));
+                if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
+                    rows.push(Some((
+                        menu::Item::new("Open PR in browser").shortcut(
+                            crate::components::bound_chord("cockpit::OpenPrInBrowser")
+                                .unwrap_or_default(),
+                        ),
+                        MenuVerb::OpenPr,
+                    )));
+                }
+                rows.push(None);
                 if live {
                     rows.push(Some((
                         menu::Item::new("Park thread").shortcut(if shown { "cmd-W" } else { "" }),
@@ -3672,6 +3760,8 @@ impl CockpitView {
                     cx.reveal_path(&path);
                 }
             }
+            (MenuTarget::Thread(thread), MenuVerb::RefreshPr) => self.check_pr(thread, true, cx),
+            (MenuTarget::Thread(thread), MenuVerb::OpenPr) => self.open_pr(thread, cx),
             (_, MenuVerb::CopyPath) => {
                 if let Some(path) = self.target_path(target) {
                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -8697,10 +8787,10 @@ impl CockpitView {
             status,
             project: facts.and_then(|facts| facts.project_label.clone()),
             selected: false,
-            details: facts
-                .and_then(|facts| facts.status.as_ref())
-                .map(nav::RowDetails::of)
-                .unwrap_or_default(),
+            details: nav::RowDetails::of(
+                facts.and_then(|facts| facts.status.as_ref()),
+                facts.and_then(|facts| facts.pr.label()),
+            ),
             tail: nav::NavTail::of(status, slot.as_ref(), age),
         };
         #[cfg(test)]
@@ -9622,12 +9712,7 @@ impl CockpitView {
                 || self.focused_thread() != Some(thread)
                 || self.settings_open
                 || self.project_editor.is_some()
-                || self
-                    .facts
-                    .get(thread)
-                    .and_then(|facts| facts.status.as_ref())
-                    .and_then(|status| status.pr.as_ref())
-                    .is_none_or(|pr| pr.checks.is_none())
+                || self.facts.pr(thread).is_none_or(|pr| pr.checks.is_none())
         }) {
             self.context_checks = None;
             self.changed_files_card = None;
@@ -10068,6 +10153,16 @@ impl CockpitView {
                 cx.listener(|view, _: &FocusThread9, window, cx| view.focus_rail(9, window, cx)),
             )
             .on_action(cx.listener(Self::toggle_notifications))
+            .on_action(cx.listener(|view, _: &RefreshPrStatus, _, cx| {
+                if let Some(thread) = view.focused_thread() {
+                    view.check_pr(thread, true, cx);
+                }
+            }))
+            .on_action(cx.listener(|view, _: &OpenPrInBrowser, _, cx| {
+                if let Some(thread) = view.focused_thread() {
+                    view.open_pr(thread, cx);
+                }
+            }))
             .on_action(cx.listener(Self::menu_next))
             .on_action(cx.listener(Self::menu_previous))
             .on_action(cx.listener(Self::history_older))
@@ -12065,11 +12160,7 @@ impl CockpitView {
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
-        let pr = self
-            .facts
-            .get(thread)
-            .and_then(|facts| facts.status.as_ref())
-            .and_then(|status| status.pr.as_ref())?;
+        let pr = self.facts.pr(thread)?;
         let mut card = pane::checks_card().child(pane::checks_head(pr));
         let mut workflow: Option<Option<&str>> = None;
         for (index, run) in pr.runs.iter().enumerate() {
@@ -13762,6 +13853,7 @@ mod tests {
     mod loops_overlay;
     mod machines;
     mod nav_parity;
+    mod pr;
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;
@@ -15854,10 +15946,10 @@ mod tests {
         });
     }
 
-    /// A branch status carrying a PR whose checks are mixed — one Actions
-    /// job failing, one passing, and a posted commit status beside them.
-    fn branch_status_with_checks() -> ferrite_core::workspace::BranchStatus {
-        use ferrite_core::workspace::{BranchStatus, Check, CheckState, PrState, PullRequest};
+    /// A PR whose checks are mixed — one Actions job failing, one passing,
+    /// and a posted commit status beside them.
+    fn pr_with_checks() -> ferrite_core::workspace::PullRequest {
+        use ferrite_core::workspace::{Check, CheckState, PrState, PullRequest};
         let run =
             |name: &str, workflow: Option<&str>, state, detail: &str, url: Option<&str>| Check {
                 name: name.to_string(),
@@ -15866,35 +15958,29 @@ mod tests {
                 detail: detail.to_string(),
                 url: url.map(str::to_string),
             };
-        BranchStatus {
-            branch: Some("feat/thread-pane-header".into()),
-            upstream: Some("origin/feat/thread-pane-header".into()),
-            ahead: 2,
-            behind: 0,
-            dirty: 0,
-            pr: Some(PullRequest {
-                number: 48,
-                state: PrState::Open,
-                draft: false,
-                checks: Some(CheckState::Failing),
-                runs: vec![
-                    run(
-                        "test (windows-latest)",
-                        Some("CI"),
-                        CheckState::Failing,
-                        "failure",
-                        Some("https://github.com/o/r/actions/runs/1"),
-                    ),
-                    run("fmt", Some("CI"), CheckState::Passing, "success", None),
-                    run(
-                        "codecov/patch",
-                        None,
-                        CheckState::Pending,
-                        "pending",
-                        Some("https://codecov.io/x"),
-                    ),
-                ],
-            }),
+        PullRequest {
+            number: 48,
+            state: PrState::Open,
+            draft: false,
+            url: Some("https://github.com/o/r/pull/48".into()),
+            checks: Some(CheckState::Failing),
+            runs: vec![
+                run(
+                    "test (windows-latest)",
+                    Some("CI"),
+                    CheckState::Failing,
+                    "failure",
+                    Some("https://github.com/o/r/actions/runs/1"),
+                ),
+                run("fmt", Some("CI"), CheckState::Passing, "success", None),
+                run(
+                    "codecov/patch",
+                    None,
+                    CheckState::Pending,
+                    "pending",
+                    Some("https://codecov.io/x"),
+                ),
+            ],
         }
     }
 
@@ -15909,8 +15995,7 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
         view.update(cx, |view, cx| {
-            view.facts
-                .set_branches(vec![(thread, Some(branch_status_with_checks()))]);
+            view.facts.pr_answered(thread, Some(pr_with_checks()));
             cx.notify();
         });
         tick(cx);
@@ -15945,11 +16030,10 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
         view.update(cx, |view, cx| {
-            let mut status = branch_status_with_checks();
-            let pr = status.pr.as_mut().unwrap();
+            let mut pr = pr_with_checks();
             pr.checks = None;
             pr.runs.clear();
-            view.facts.set_branches(vec![(thread, Some(status))]);
+            view.facts.pr_answered(thread, Some(pr));
             cx.notify();
         });
         tick(cx);

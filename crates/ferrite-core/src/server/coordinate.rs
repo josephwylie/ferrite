@@ -24,8 +24,7 @@ use crate::workspace::registry::ProjectId;
 use crate::workspace::{PrFeedback, PrState, WorkspaceBinding};
 use crate::{Attention, ThreadId};
 
-/// How often the followed workers' PRs are read: the Pane header's own
-/// pace for `gh` (`workspace::PR_TTL`).
+/// How often the followed workers' PRs are read.
 const FOLLOW_EVERY: Duration = Duration::from_secs(60);
 
 /// The Server's side of coordination: the book, and what it watches.

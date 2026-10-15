@@ -26,7 +26,9 @@ use crate::review::git::{Commit, Diff};
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
-use crate::workspace::{DirEntry, ListedWorktree, Listing, RepoListing};
+use crate::workspace::{
+    parse_pr_json, DirEntry, ListedWorktree, Listing, PullRequest, RepoListing,
+};
 use crate::{FileEdit, ThreadId};
 
 /// Where a later-answered command's reply goes (`Remote::ask`).
@@ -463,6 +465,19 @@ impl Remote {
         };
         self.ask(op, |done| match done {
             Done::Commits { commits } => Some(commits.into_iter().map(Into::into).collect()),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Option<PullRequest>>>> {
+        let op = Op::PullRequest {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::PullRequest { json } => Some(json.as_deref().and_then(parse_pr_json)),
             _ => None,
         })
     }

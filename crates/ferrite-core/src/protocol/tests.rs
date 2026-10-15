@@ -682,6 +682,15 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_pull_request",
+            command(
+                43,
+                Op::PullRequest {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
             "welcome",
             Sample::Server(ServerMessage::Welcome {
                 generation: 1,
@@ -902,6 +911,24 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         subject: "Clippy: the Herdr lanes' mechanical warnings".into(),
                     }],
                 }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_pull_request",
+            Sample::Server(ServerMessage::Reply {
+                id: 43,
+                ok: Some(Done::PullRequest {
+                    json: Some(r#"{"number":48,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/48","statusCheckRollup":[]}"#.into()),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_no_pull_request",
+            Sample::Server(ServerMessage::Reply {
+                id: 43,
+                ok: Some(Done::PullRequest { json: None }),
                 error: None,
             }),
         ),

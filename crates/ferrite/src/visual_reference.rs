@@ -731,30 +731,34 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         ahead: 2,
                         behind: 1,
                         dirty: 3,
-                        pr: Some(PullRequest {
-                            number: 48,
-                            state: PrState::Open,
-                            draft: false,
-                            checks: Some(CheckState::Failing),
-                            runs: vec![
-                                run(
-                                    "test (windows-latest)",
-                                    CheckState::Failing,
-                                    "failure",
-                                    true,
-                                ),
-                                run(
-                                    "test (macos-latest)",
-                                    CheckState::Pending,
-                                    "in_progress",
-                                    true,
-                                ),
-                                run("fmt", CheckState::Passing, "success", true),
-                                run("clippy", CheckState::Skipped, "skipped", false),
-                            ],
-                        }),
                     }),
                 )]);
+                view.facts.pr_answered(
+                    thread,
+                    Some(PullRequest {
+                        number: 48,
+                        state: PrState::Open,
+                        draft: false,
+                        url: None,
+                        checks: Some(CheckState::Failing),
+                        runs: vec![
+                            run(
+                                "test (windows-latest)",
+                                CheckState::Failing,
+                                "failure",
+                                true,
+                            ),
+                            run(
+                                "test (macos-latest)",
+                                CheckState::Pending,
+                                "in_progress",
+                                true,
+                            ),
+                            run("fmt", CheckState::Passing, "success", true),
+                            run("clippy", CheckState::Skipped, "skipped", false),
+                        ],
+                    }),
+                );
                 view.context_checks = Some(thread);
                 cx.notify();
             });
@@ -780,26 +784,27 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     thread,
                     Some(BranchStatus {
                         branch: Some("feat/pane-chrome".into()),
-                        upstream: None,
-                        ahead: 0,
-                        behind: 0,
-                        dirty: 0,
-                        pr: Some(PullRequest {
-                            number: 212,
-                            state: PrState::Open,
-                            draft: false,
-                            checks: Some(CheckState::Failing),
-                            runs: vec![
-                                run("test (windows-latest)", CheckState::Failing, "failure"),
-                                run("test (macos-latest)", CheckState::Pending, "in_progress"),
-                                run("docs", CheckState::Pending, "queued"),
-                                run("fmt", CheckState::Passing, "success"),
-                                run("clippy", CheckState::Skipped, "skipped"),
-                                run("release", CheckState::Failing, "cancelled"),
-                            ],
-                        }),
+                        ..Default::default()
                     }),
                 )]);
+                view.facts.pr_answered(
+                    thread,
+                    Some(PullRequest {
+                        number: 212,
+                        state: PrState::Open,
+                        draft: false,
+                        url: None,
+                        checks: Some(CheckState::Failing),
+                        runs: vec![
+                            run("test (windows-latest)", CheckState::Failing, "failure"),
+                            run("test (macos-latest)", CheckState::Pending, "in_progress"),
+                            run("docs", CheckState::Pending, "queued"),
+                            run("fmt", CheckState::Passing, "success"),
+                            run("clippy", CheckState::Skipped, "skipped"),
+                            run("release", CheckState::Failing, "cancelled"),
+                        ],
+                    }),
+                );
                 view.context_checks = Some(thread);
                 cx.notify();
             });

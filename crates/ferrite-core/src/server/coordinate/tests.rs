@@ -89,6 +89,7 @@ fn review(id: &str, body: &str) -> PrFeedback {
             number: 4,
             state: PrState::Open,
             draft: false,
+            url: None,
             checks: Some(CheckState::Passing),
             runs: Vec::new(),
         },

@@ -702,10 +702,8 @@ impl CockpitView {
         });
         let facts = focused.and_then(|thread| self.facts.get(thread));
         let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty());
-        let checks = facts
-            .and_then(|facts| facts.status.as_ref())
-            .and_then(|status| status.pr.as_ref())
-            .is_some_and(|pr| pr.checks.is_some());
+        let pr = facts.and_then(|facts| facts.pr.reading.as_ref());
+        let checks = pr.is_some_and(|pr| pr.checks.is_some());
         let plan = open.is_some_and(|open| open.transcript().todos().is_some());
         let size = self.prefs.settings.reading_size;
         let mut rows: Vec<PaletteRow> = Vec::new();
@@ -1041,6 +1039,20 @@ impl CockpitView {
             Command::ShowChanges,
         );
         add(checks, "show checks".into(), "", None, Command::ShowChecks);
+        add(
+            focused.is_some(),
+            "refresh PR status".into(),
+            "",
+            bound_chord("cockpit::RefreshPrStatus"),
+            Command::RefreshPr,
+        );
+        add(
+            pr.is_some_and(|pr| pr.url.is_some()),
+            "open PR in browser".into(),
+            "",
+            bound_chord("cockpit::OpenPrInBrowser"),
+            Command::OpenPr,
+        );
         add(plan, "show plan".into(), "", None, Command::ShowPlan);
         add(
             !self.cli_updates.ready().is_empty(),
@@ -1206,6 +1218,16 @@ impl CockpitView {
                 }
             }
             Command::ShowChecks => self.open_checks(window, cx),
+            Command::RefreshPr => {
+                if let Some(thread) = thread {
+                    self.check_pr(thread, true, cx);
+                }
+            }
+            Command::OpenPr => {
+                if let Some(thread) = thread {
+                    self.open_pr(thread, cx);
+                }
+            }
             Command::ShowPlan => self.open_plan(window, cx),
             Command::UpdateClis => self.install_cli_updates(cx),
             Command::ImportSession => {

@@ -306,7 +306,7 @@ type Search = (
 );
 
 /// A read off the pump — git's for a `list_repo`, `review_diff` or
-/// `list_commits`, a folder's for a `list_dir`: who asked, in which command, and the reply it makes.
+/// `list_commits`, `gh`'s for a `pull_request`, a folder's for a `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
 struct Server {
@@ -599,6 +599,15 @@ impl Server {
                             })
                         })
                         .map_err(failed)
+                });
+                return;
+            }
+            Op::PullRequest { path } => {
+                let path = path.clone();
+                self.read_off_pump(id, request, move || {
+                    Ok(Some(Done::PullRequest {
+                        json: crate::workspace::pr_view(&path),
+                    }))
                 });
                 return;
             }

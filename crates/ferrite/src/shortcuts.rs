@@ -80,6 +80,8 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::NextDecision" => Row(Threads, "next request"),
         "cockpit::ToggleNotifications" => Row(Threads, "notifications"),
         "cockpit::OpenSettings" => Row(Threads, "settings"),
+        "cockpit::RefreshPrStatus" => Row(Threads, "refresh PR status"),
+        "cockpit::OpenPrInBrowser" => Row(Threads, "open PR in browser"),
         "ferrite::Quit" => Row(Threads, "quit"),
         // The board.
         "cockpit::NextPane" => Row(Board, "next pane"),
@@ -369,6 +371,9 @@ mod tests {
                     "{platform:?}: {keys} → {action} ({context:?}) has no label"
                 );
             }
+        }
+        for (action, context) in keymap::UNBOUND {
+            assert!(label(action, context).is_some(), "{action} has no label");
         }
     }
 

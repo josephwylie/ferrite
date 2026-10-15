@@ -427,6 +427,13 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     ]
 }
 
+/// Actions with no default key, for the operator to bind (Settings
+/// `keys`): each name and the context its key acts in.
+pub const UNBOUND: [(&str, Option<&str>); 2] = [
+    ("cockpit::RefreshPrStatus", None),
+    ("cockpit::OpenPrInBrowser", None),
+];
+
 /// The Review slot holds the keyboard itself, not a field inside it.
 const REVIEW: &str = "Review && !Composer";
 
@@ -445,8 +452,9 @@ const NO_ACTION: &str = "zed::NoAction";
 /// every default spelling of its action, in each context the action is
 /// bound in, so the table's precedence order holds. The key is the
 /// operator's: a default of another action on the same keystroke in the
-/// same context gives it up. Refused, the action keeping its defaults: an
-/// action the table does not bind, a keystroke gpui cannot parse, `cmd` on
+/// same context gives it up. An action with no default (`UNBOUND`) is bound
+/// in its own context. Refused, the action keeping its defaults: an
+/// action Ferrite does not know, a keystroke gpui cannot parse, `cmd` on
 /// Windows, one keystroke given to two actions, a key that `types` for an
 /// action bound anywhere a text field may hold the keyboard, and a key
 /// another action holds where one of the two is bound with no context —
@@ -459,16 +467,24 @@ pub fn with_user_keys(
     let mut refused = Vec::new();
     let mut rebound = Vec::new();
     for (name, keys) in keys {
+        let unbound = UNBOUND.iter().find(|(action, _)| action == name);
         let Some(action) = table
             .iter()
             .map(|(_, action, _)| *action)
+            .chain(unbound.map(|(action, _)| *action))
             .find(|action| action == name)
         else {
             refused.push(format!("`{name}` is not an action Ferrite binds"));
             continue;
         };
         match keys {
-            Some(keys) => rebound.push((action, keys)),
+            Some(keys) => {
+                // Its one row, spelled as asked; dropped below if refused.
+                if let Some((_, context)) = unbound {
+                    table.push((keys.clone(), action, *context));
+                }
+                rebound.push((action, keys));
+            }
             None => table.retain(|(_, bound, _)| *bound != action),
         }
     }
@@ -538,10 +554,13 @@ pub fn with_user_keys(
         );
     }
     table.retain(|(spelled, bound, context)| {
+        let refused_unbound = UNBOUND.iter().any(|(action, _)| action == bound)
+            && !taken.iter().any(|(_, _, holder)| holder == bound);
         let strokes = parse(spelled, platform).ok();
-        !taken.iter().any(|(held, held_context, holder)| {
-            holder != bound && held_context == context && Some(held) == strokes.as_ref()
-        })
+        !refused_unbound
+            && !taken.iter().any(|(held, held_context, holder)| {
+                holder != bound && held_context == context && Some(held) == strokes.as_ref()
+            })
     });
     (table, refused)
 }
@@ -1238,6 +1257,29 @@ mod tests {
     }
 
     /// With no keys of the operator's the table is the defaults.
+    /// The PR actions have no default key; the operator's key binds each
+    /// everywhere, and a refused one leaves no row behind.
+    #[test]
+    fn an_action_with_no_default_takes_the_operators_key() {
+        let (defaults, _) = with_user_keys(Platform::Mac, &BTreeMap::new());
+        for (action, _) in UNBOUND {
+            assert!(defaults.iter().all(|(_, bound, _)| *bound != action));
+        }
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("cockpit::RefreshPrStatus", Some("cmd-shift-r")),
+                ("cockpit::OpenPrInBrowser", Some("o")),
+            ]),
+        );
+        assert!(table.contains(&("cmd-shift-r".into(), "cockpit::RefreshPrStatus", None)));
+        assert!(table
+            .iter()
+            .all(|(_, action, _)| *action != "cockpit::OpenPrInBrowser"));
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains("would take that key from typing"));
+    }
+
     #[test]
     fn no_user_keys_is_the_defaults() {
         for platform in [Platform::Mac, Platform::Windows] {

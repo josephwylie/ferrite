@@ -222,6 +222,7 @@ fn pr(state: PrState) -> PrFeedback {
             number: 4,
             state,
             draft: false,
+            url: None,
             checks: Some(CheckState::Failing),
             runs: vec![
                 check("build", CheckState::Passing, None),
