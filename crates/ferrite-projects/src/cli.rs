@@ -12,7 +12,8 @@ use crate::threads::{self, ResolveArgs, StartArgs};
 use crate::{adopt, doctor, inbox, lifecycle, overview, routine, ticker};
 
 #[derive(Parser)]
-#[command(name = "herdr-projects", version = crate::VERSION, about = "Projects for herdr")]
+// Ferrite: the binary is ferrite-projects, Ferrite's Projects.
+#[command(name = "ferrite-projects", version = crate::VERSION, about = "Projects for Ferrite")]
 struct Cli {
     /// Projects root (default: $HERDR_PROJECTS_ROOT, then config.toml, then ~/.herdr-projects)
     #[arg(long, global = true, value_name = "DIR")]
@@ -67,8 +68,9 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    // Ferrite: panes are Ferrite's.
     /// Open a project: start a coordinator agent in its folder, in this pane when
-    /// run from a shell pane inside Herdr, else in the project's workspace
+    /// run from a shell pane inside Ferrite, else in the project's workspace
     Open {
         slug: String,
         /// The coordinator's profile, one the project allows (default: coordinator_profile in PROJECT.md); `profile list` shows them
@@ -77,8 +79,9 @@ enum Command {
         /// Start another coordinator even though one is running
         #[arg(long)]
         new: bool,
+        // Ferrite: panes are Ferrite's.
         /// Start the coordinator in a new tab even when run from a shell pane
-        /// inside Herdr (by default it starts in that pane)
+        /// inside Ferrite (by default it starts in that pane)
         #[arg(long)]
         tab: bool,
         /// Move the project to this session when its recorded socket no longer exists
@@ -241,7 +244,8 @@ enum Command {
     },
     /// Remove exactly what `configure` added
     Unconfigure,
-    /// Report your progress (run by an agent in its own Herdr pane)
+    // Ferrite: panes are Ferrite's.
+    /// Report your progress (run by an agent in its own Ferrite pane)
     Report {
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100), required_unless_present = "unknown", conflicts_with = "unknown")]
         percent: Option<u8>,
@@ -473,7 +477,8 @@ enum ProfileCommand {
     /// Add a profile (a person at a terminal only)
     Add {
         name: String,
-        /// The harness: a Herdr agent kind (claude, codex, cursor, gemini, opencode, copilot, omp, pi, ...)
+        // Ferrite: agent kinds are Ferrite's.
+        /// The harness: a Ferrite agent kind (claude, codex, cursor, gemini, opencode, copilot, omp, pi, ...)
         #[arg(long, value_name = "KIND")]
         agent: String,
         #[command(flatten)]

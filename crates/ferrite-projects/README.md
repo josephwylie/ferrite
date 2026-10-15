@@ -99,6 +99,41 @@ Only references to Herdr's UI that Ferrite does not have:
 - `COORDINATOR.md`, `THREAD.md`: "a Herdr project" is "a Ferrite project".
 - `COORDINATOR.md`: the popup (`prefix+a`) is Ferrite's Projects view, in
   the profile, `TASKS.md`, task notes, safety and routines rules;
-  `herdr agent prompt/read/send-keys` is `ferrite agent prompt/read/send-keys`;
   `herdr machine list` is `ferrite machine list`.
+- `COORDINATOR.md`: upstream forbids calling `herdr agent prompt`, `read`
+  and `send-keys` directly; Ferrite has no `send-keys`, so it forbids
+  `ferrite agent prompt`, `ferrite agent read` and `ferrite decision answer`
+  (answering a Thread's questions), and hand-assembled commands for
+  "answering its questions" instead of "sending keys".
 - `autoproject/` is unchanged.
+
+### Text agents and users read
+
+Herdr's name is replaced where it means Ferrite; behaviour is unchanged.
+
+- **`AGENTS.md` priming** names "the Ferrite project" and is "Written by
+  Ferrite's Projects". A file carrying either that mark or upstream's
+  "Written by herdr-projects" is ours and is refreshed, not kept aside as
+  `AGENTS.md.before-herdr-projects`. `doctor`'s priming check reads only the
+  binary prefix, so it is unchanged.
+- **Errors and inbox items** say "Ferrite's Server" where upstream says the
+  herdr session: not reachable, belongs to another Server, restarted. The
+  commands they recommend are upstream's.
+- **Remote Threads** are reached by selecting the machine in Ferrite's nav
+  or with `ferrite --remote <ssh target>` (ADR 0026), not Herdr's sidebar or
+  `herdr --remote`.
+- **CLI text**: the command is `ferrite-projects` ("Projects for Ferrite"),
+  errors are prefixed `ferrite-projects:` (the popup strips that prefix),
+  help and messages name Ferrite panes and Ferrite agent kinds, and the
+  rename note to a reopened coordinator is "Note from Ferrite's Projects".
+  Every command the text tells someone to type is `ferrite-projects`: the
+  `safety` refusal and listing, the inbox item on refused launch flags, the
+  effort error and the Thread brief's progress line. The progress hook
+  recognises the reporter's own call by that name too, as upstream does by
+  its own.
+- Left as upstream: `--session`/`--socket` (and `herdr --session` in its
+  help), the workspace a slug resolves from ("current herdr workspace"),
+  `focus`/`unfocus` and `adopt-workspace`, whose meaning is the adapter's;
+  `doctor`'s advice to run `herdr plugin disable agent-progress`, which
+  names Herdr's own plugin; the hostile `[herdr-projects ticker]` strings in
+  tests; and `docs/*.md`, upstream's documentation of the Herdr plugin.

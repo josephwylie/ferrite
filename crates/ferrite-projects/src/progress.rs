@@ -152,7 +152,7 @@ pub fn current_within(env: &Env, runner: &dyn Runner, timeout: std::time::Durati
 /// while it is [`fresh`].
 pub fn report(ctx: &Ctx, percent: Option<u8>, activity: &str) -> Result<()> {
     let Some(pane) = current(ctx.env, ctx.runner) else {
-        println!("not inside a Herdr pane; nothing reported");
+        println!("not inside a Ferrite pane; nothing reported"); // Ferrite: panes are Ferrite's.
         return Ok(());
     };
     if percent.is_some_and(|p| p > 100) {
@@ -181,7 +181,7 @@ pub fn print(ctx: &Ctx, pane: Option<&str>) -> Result<()> {
         Some(id) => (ctx.env.var("HERDR_SOCKET_PATH").unwrap_or("").to_string(), id.to_string()),
         None => match current(ctx.env, ctx.runner) {
             Some(c) => (c.socket, c.pane_id),
-            None => bail!("not inside a Herdr pane; pass --pane ID"),
+            None => bail!("not inside a Ferrite pane; pass --pane ID"), // Ferrite: panes are Ferrite's.
         },
     };
     match load(&ctx.root, &socket, &pane_id) {
@@ -232,7 +232,8 @@ pub fn eligible(event: &serde_json::Value) -> bool {
     if !matches!(name, "SessionStart" | "PostToolUse" | "UserPromptSubmit") {
         return false;
     }
-    if name == "PostToolUse" && event["tool_input"].to_string().contains("herdr-projects") && event["tool_input"].to_string().contains(" report ") {
+    // Ferrite: the binary is ferrite-projects.
+    if name == "PostToolUse" && event["tool_input"].to_string().contains("ferrite-projects") && event["tool_input"].to_string().contains(" report ") {
         return false;
     }
     true
@@ -399,8 +400,8 @@ mod tests {
     fn helpers_and_the_reporters_own_call_do_not_trigger() {
         assert!(!eligible(&json!({"hook_event_name":"PostToolUse","agent_id":"child"})));
         assert!(!eligible(&json!({"hook_event_name":"PostToolUse","transcript_path":"/x/subagents/y.jsonl"})));
-        assert!(!eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/herdr-projects --root /r report --percent 5 --activity x"}})));
-        assert!(eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/herdr-projects --root /r context demo"}})));
+        assert!(!eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/ferrite-projects --root /r report --percent 5 --activity x"}})));
+        assert!(eligible(&json!({"hook_event_name":"PostToolUse","tool_input":{"command":"/p/ferrite-projects --root /r context demo"}})));
         assert!(eligible(&json!({"hook_event_name":"SessionStart","source":"compact"})));
         assert!(!eligible(&json!({"hook_event_name":"Stop"})));
     }
