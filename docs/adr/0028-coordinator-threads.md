@@ -123,20 +123,23 @@ carry the memory as it is then.
 
 With `follow_prs` on, the Server reads each open worker's PR every minute
 (the Pane header's pace for `gh`), off the pump thread: `gh pr view` with
-the check rollup, the reviews and the conversation comments. Each failing
-check (named by its run, so a rerun's failure is new) and each review or
-comment with words in it is sent to the worker once, together, through
-`agent.prompt`'s own rules: queued behind a working turn, never sent to a
-blocked one. What could not be sent is tried at the next reading. A merged
-or closed PR asks nothing; neither does an approving review, nor anything
-the PR's own author wrote. A worker's `gh` is the operator's, so its
-replies on the PR carry the PR author's name, and following them would
-start the worker again on its own words, a paid turn each, possibly in
-a loop. The cost is that the operator's own comments on a worker's PR are
-not followed either; the operator tells a worker directly in its Thread.
-Turning `follow_prs` off stops a reading already under way from being
-sent. Line comments on the diff are not in `gh pr view` and are not
-followed.
+the check rollup, the reviews and the conversation comments, then, for an
+open PR, `gh api repos/{owner}/{repo}/pulls/<number>/comments --paginate`
+for the line comments on the diff, which `gh pr view` does not carry. Each
+line comment leads with the `path:line` it is on. A failure of that second
+call costs only its line comments, which the next reading asks for again.
+Each failing check (named by its run, so a rerun's failure is new) and
+each review or comment with words in it is sent to the worker once,
+together, through `agent.prompt`'s own rules: queued behind a working
+turn, never sent to a blocked one. What could not be sent is tried at the
+next reading. A merged or closed PR asks nothing; neither does an
+approving review, nor anything the PR's own author wrote. A worker's `gh`
+is the operator's, so its replies on the PR carry the PR author's name,
+and following them would start the worker again on its own words, a paid
+turn each, possibly in a loop. The cost is that the operator's own
+comments on a worker's PR are not followed either; the operator tells a
+worker directly in its Thread. Turning `follow_prs` off stops a reading
+already under way from being sent.
 
 ## Consequences
 

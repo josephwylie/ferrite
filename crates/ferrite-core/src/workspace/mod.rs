@@ -533,23 +533,31 @@ fn cached_pull_request(cwd: &Path) -> Option<PullRequest> {
 /// answer: the header says nothing about a PR. `gh` reads the checkout
 /// through `git`, so it is held to the same no-optional-locks rule.
 fn pull_request(cwd: &Path) -> Option<PullRequest> {
-    let output = Command::new("gh")
-        .args([
+    parse_pr_json(&gh(
+        cwd,
+        &[
             "pr",
             "view",
             "--json",
             "number,state,isDraft,statusCheckRollup",
-        ])
+        ],
+    )?)
+}
+
+/// Run one `gh` command in `cwd`, answering its stdout; `None` on every
+/// failure.
+fn gh(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("gh")
+        .args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .no_console_window()
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let body = String::from_utf8_lossy(&output.stdout);
-    parse_pr_json(&body)
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// What a branch's PR asks of the agent on it (ADR 0028): the PR with
@@ -560,7 +568,8 @@ pub struct PrFeedback {
     /// Who opened it: a worker's `gh` is the operator's, so what it says
     /// on its own PR is under this name too.
     pub author: String,
-    /// Reviews, then conversation comments, in the forge's order.
+    /// Reviews, then conversation comments, then line comments on the
+    /// diff, in the forge's order.
     pub remarks: Vec<Remark>,
 }
 
@@ -578,23 +587,30 @@ pub struct Remark {
 /// The branch's PR and its remarks through `gh`, uncached: a coordinator
 /// reads its workers' on its own slow cadence. `None` on every failure,
 /// as `pull_request`.
+///
+/// `gh pr view` has no line comments on the diff, so an open PR's are a
+/// second call. Its failure costs only those: the PR is read without
+/// them, and the next reading asks again.
 pub fn pr_feedback(cwd: &Path) -> Option<PrFeedback> {
-    let output = Command::new("gh")
-        .args([
+    let mut feedback = parse_feedback_json(&gh(
+        cwd,
+        &[
             "pr",
             "view",
             "--json",
             "number,state,isDraft,author,statusCheckRollup,reviews,comments",
-        ])
-        .current_dir(cwd)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .no_console_window()
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+        ],
+    )?)?;
+    if feedback.pr.state == PrState::Open {
+        let endpoint = format!(
+            "repos/{{owner}}/{{repo}}/pulls/{}/comments",
+            feedback.pr.number
+        );
+        if let Some(body) = gh(cwd, &["api", &endpoint, "--paginate"]) {
+            feedback.remarks.extend(parse_line_comments_json(&body));
+        }
     }
-    parse_feedback_json(&String::from_utf8_lossy(&output.stdout))
+    Some(feedback)
 }
 
 fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
@@ -625,6 +641,47 @@ fn parse_feedback_json(body: &str) -> Option<PrFeedback> {
         author: login(&value),
         remarks,
     })
+}
+
+/// Read `gh api .../pulls/<n>/comments --paginate`: one JSON array per
+/// page, back to back. Each comment leads with the `path:line` it is on
+/// (`original_line` once the diff moved past it; no line on a comment on
+/// the whole file). A comment with no words is no remark: its location
+/// alone would read as one.
+pub(crate) fn parse_line_comments_json(body: &str) -> Vec<Remark> {
+    serde_json::Deserializer::from_str(body)
+        .into_iter::<Vec<serde_json::Value>>()
+        .map_while(Result::ok)
+        .flatten()
+        .filter_map(|node| {
+            let text = node.get("body")?.as_str()?.trim();
+            if text.is_empty() {
+                return None;
+            }
+            let id = match node.get("node_id").and_then(serde_json::Value::as_str) {
+                Some(id) => id.to_string(),
+                None => node.get("id")?.as_u64()?.to_string(),
+            };
+            let path = node.get("path")?.as_str()?;
+            let line = ["line", "original_line"]
+                .into_iter()
+                .find_map(|key| node.get(key).and_then(serde_json::Value::as_u64));
+            let place = match line {
+                Some(line) => format!("{path}:{line}"),
+                None => path.to_string(),
+            };
+            Some(Remark {
+                id,
+                author: node
+                    .pointer("/user/login")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("someone")
+                    .to_string(),
+                body: format!("`{place}`: {text}"),
+                approves: false,
+            })
+        })
+        .collect()
 }
 
 /// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
@@ -898,6 +955,41 @@ mod tests {
                 ("PRR_4", "ana", "LGTM", true),
                 ("IC_2", "bo", "Also the docs.", false),
                 ("IC_3", "someone", "anonymous", false),
+            ]
+        );
+    }
+
+    /// Line comments on the diff, read across `--paginate`'s pages: each
+    /// leads with where it is, an outdated one with the line it was on, a
+    /// whole-file one with its path alone; one with no words is dropped.
+    #[test]
+    fn line_comments_lead_with_where_they_are() {
+        let body = r#"[
+            {"id":101,"node_id":"PRRC_1","user":{"login":"ana"},"path":"src/bill.rs",
+             "line":12,"original_line":10,"body":"Rename `total`.\n"},
+            {"id":102,"node_id":"PRRC_2","user":{"login":"bo"},"path":"src/bill.rs",
+             "line":null,"original_line":40,"body":"Still needed?"}
+        ][
+            {"id":103,"node_id":"PRRC_3","user":{"login":"ana"},"path":"README.md",
+             "line":null,"original_line":null,"subject_type":"file","body":"Mention billing."},
+            {"id":104,"node_id":"PRRC_4","user":{"login":"ana"},"path":"src/bill.rs",
+             "line":3,"body":"  "},
+            {"id":105,"path":"src/tax.rs","line":7,"body":"Round here."}
+        ]"#;
+        let remarks: Vec<(String, String, String, bool)> = parse_line_comments_json(body)
+            .into_iter()
+            .map(|remark| (remark.id, remark.author, remark.body, remark.approves))
+            .collect();
+        let remark = |id: &str, author: &str, body: &str| {
+            (id.to_string(), author.to_string(), body.to_string(), false)
+        };
+        assert_eq!(
+            remarks,
+            [
+                remark("PRRC_1", "ana", "`src/bill.rs:12`: Rename `total`."),
+                remark("PRRC_2", "bo", "`src/bill.rs:40`: Still needed?"),
+                remark("PRRC_3", "ana", "`README.md`: Mention billing."),
+                remark("105", "someone", "`src/tax.rs:7`: Round here."),
             ]
         );
     }

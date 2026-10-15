@@ -10,7 +10,7 @@ use crate::server::tests::{
     allow, decision, engine, open_in, repository, scratch, spawn, text, turn_ends,
 };
 use crate::server::{render, ServerInfo, SessionDefaults};
-use crate::workspace::{CheckState, PrState, PullRequest, Remark};
+use crate::workspace::{parse_line_comments_json, CheckState, PrState, PullRequest, Remark};
 use crate::SessionEvent;
 
 /// A Server on its own Store and a repository Project, its Sessions
@@ -224,6 +224,34 @@ fn pr_feedback_is_sent_once_and_waits_out_a_decision() {
     assert!(!said(&server, worker).contains("Rename"));
     server.follow_prs();
     assert!(server.coordinating.reading.is_none(), "nothing is read");
+}
+
+/// A line comment read from the forge reaches its worker once, led by
+/// the place on the diff it is about.
+#[test]
+fn a_line_comment_is_sent_once_with_its_place() {
+    let (mut server, project, providers) = boot("coordinate-line-comment");
+    let (worker, provider) = coordinated(&mut server, project, &providers, true);
+    let mut reading = review("PRR_1", "");
+    reading.remarks = parse_line_comments_json(
+        r#"[{"node_id":"PRRC_1","user":{"login":"ana"},"path":"src/bill.rs",
+             "line":12,"body":"Rename `total`."}]"#,
+    );
+
+    server.send_feedback(vec![(worker, reading.clone())]);
+    server.engine.pump();
+    assert_eq!(sent(&server, worker), ["remark:PRRC_1"]);
+    provider.send(text("Renamed.")).unwrap();
+    turn_ends(&provider);
+    server.engine.pump();
+    server.send_feedback(vec![(worker, reading)]);
+    server.engine.pump();
+    let told = said(&server, worker);
+    assert_eq!(
+        told.matches("`src/bill.rs:12`: Rename `total`.").count(),
+        1,
+        "{told}"
+    );
 }
 
 /// Lessons are read whenever the worker is at rest with something new:
