@@ -145,21 +145,29 @@ impl Server {
 
     /// Herdr's rule: nothing is sent to an agent a Decision blocks, since
     /// the prompt would read as that Decision's answer or be lost behind
-    /// it. A prompt to a working agent waits its turn, as the Composer's
-    /// does.
+    /// it. A prompt to a Session still starting is held until it is up, as
+    /// a send to a stopped one is; only one is held, so a second is
+    /// refused rather than replace the first. A prompt to a working agent
+    /// waits its turn in the provider's queue, as the Composer's does.
     fn prompt(&mut self, params: &AgentPromptParams) -> Result<(), ApiError> {
-        let view = self
-            .engine
-            .thread(params.thread)
-            .ok_or_else(unknown_thread)?;
+        let (thread, text) = (params.thread, params.text.clone());
+        let view = self.engine.thread(thread).ok_or_else(unknown_thread)?;
         if view.pending().is_some() {
             return Err(ApiError::new(
                 Code::AgentBlocked,
                 "a Decision waits on this Thread; nothing was sent",
             ));
         }
-        let (thread, text) = (params.thread, params.text.clone());
-        let op = if view.needs_queue() {
+        let op = if view.starting() {
+            if self.engine.holds_prompt(thread) {
+                return Err(ApiError::new(
+                    Code::AgentStarting,
+                    "this Thread's Session is starting and already holds a prompt; \
+                     nothing was sent: retry once the Thread is working",
+                ));
+            }
+            Op::Send { thread, text }
+        } else if view.needs_queue() {
             Op::Queue { thread, text }
         } else {
             Op::Send { thread, text }

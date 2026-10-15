@@ -50,7 +50,7 @@ fn a_prompts_wait_settles_only_after_its_agent_was_seen_working() {
     );
     assert_eq!(
         wait.observe(seen(Attention::Done), at(start, 61_000)),
-        Some(Settled::Reached(Attention::Done))
+        Some(Settled::Reached)
     );
 }
 
@@ -63,7 +63,7 @@ fn a_prompts_wait_settles_blocked_when_its_agent_asks_a_decision() {
 
     assert_eq!(
         wait.observe(seen(Attention::Blocked), at(start, 300)),
-        Some(Settled::Reached(Attention::Blocked))
+        Some(Settled::Reached)
     );
 }
 
@@ -129,16 +129,13 @@ fn a_plain_wait_answers_at_once_when_the_agent_is_settled() {
     let start = Instant::now();
     for attention in [Attention::Idle, Attention::Done, Attention::Blocked] {
         let mut wait = Wait::until(Until::Settled, None, start);
-        assert_eq!(
-            wait.observe(seen(attention), start),
-            Some(Settled::Reached(attention))
-        );
+        assert_eq!(wait.observe(seen(attention), start), Some(Settled::Reached));
     }
     let mut wait = Wait::until(Until::Settled, None, start);
     assert_eq!(wait.observe(seen(Attention::Working), start), None);
     assert_eq!(
         wait.observe(starting(), at(start, 60_000)),
-        Some(Settled::Reached(Attention::Idle))
+        Some(Settled::Reached)
     );
 }
 
@@ -157,7 +154,7 @@ fn a_wait_until_one_attention_passes_every_other() {
     }
     assert_eq!(
         wait.observe(seen(Attention::Blocked), at(start, 60_100)),
-        Some(Settled::Reached(Attention::Blocked))
+        Some(Settled::Reached)
     );
 }
 
@@ -460,9 +457,6 @@ fn answers_refusals_and_events_keep_their_shape() {
             serde_json::to_value(&told).unwrap(),
             json!({"id": "7", "event": shape})
         );
-        let line = protocol::encode(&told);
-        let read: Response = serde_json::from_slice(&line).unwrap();
-        assert_eq!(read, told);
     }
 }
 
@@ -574,6 +568,22 @@ fn current_names_the_calling_thread_and_frees_its_position() {
     assert!(refused.contains("takes no Thread"), "{refused}");
 }
 
+/// After `--` nothing is a flag: a prompt may start with dashes.
+#[test]
+fn after_a_double_dash_every_word_is_an_argument() {
+    assert_eq!(
+        parse("agent.prompt", &["--wait", "12", "--", "--dry-run first"]),
+        Ok(Method::AgentPrompt(AgentPromptParams {
+            thread: thread(),
+            text: "--dry-run first".into(),
+            wait: true,
+            timeout_ms: None,
+        }))
+    );
+    let refused = parse("agent.prompt", &["12", "--dry-run first"]).unwrap_err();
+    assert!(refused.contains("takes no --dry-run first"), "{refused}");
+}
+
 #[test]
 fn a_thread_starts_where_the_cli_runs_unless_told() {
     let started = |args: &[&str]| match parse("thread.start", args) {
@@ -670,13 +680,4 @@ fn the_bundled_skill_names_the_safety_rules() {
             op.name
         );
     }
-}
-
-#[test]
-fn an_agent_is_told_its_thread_and_where_to_reach_the_api() {
-    let env = caller_environment(thread(), Some(Path::new("/store/api.sock")));
-    assert_eq!(env[0], ("FERRITE_THREAD_ID", "12".into()));
-    assert_eq!(env[1], ("FERRITE_SOCKET", "/store/api.sock".into()));
-    assert_eq!(env[2].0, "FERRITE_BIN");
-    assert_eq!(caller_environment(thread(), None).len(), 1);
 }

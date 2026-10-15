@@ -68,7 +68,7 @@ the client contract; each operation's request is frozen as a fixture under
 | `thread.list` / `thread.get` | open Threads with their Attention |
 | `thread.focus` | `focus {thread}` to every window, which lands on it as a nav row does |
 | `thread.rename` | the window's `rename` |
-| `agent.prompt` | refuse `agent_blocked` while a Decision waits; else `send`, or `queue` when the Composer would; `wait` as below |
+| `agent.prompt` | refuse `agent_blocked` while a Decision waits; else `send`, or `queue` when the Composer would; `wait` as below. A Session still starting gets `send`, which holds one prompt until it is up |
 | `agent.wait` | until settled, or `until` one Attention |
 | `agent.read` | the last lines of the transcript as plain text (`transcript::plain_text`, the window's copy) |
 | `decision.list` / `decision.answer` | pending Decisions; an answer named by the provider's id, through the window's `answer` (first valid wins) |
@@ -85,12 +85,21 @@ ignores them, as the contract allows.
 The API reports and waits on **Attention** (ADR 0015), computed by the
 Server from what it knows exactly (`Engine::attention`): blocked while a
 Decision waits, working while Main or its background work runs, done while
-an unseen Notice stands, else idle. `Attention` moves to core; the window
-reads the same type.
+an unseen Notice stands, else idle. A prompt in the provider's queue (or
+being taken into it) counts as work: the turn before it can end a pass
+before the queued prompt starts, and the agent is not at rest in between.
+`Attention` moves to core; the window reads the same type.
 
 ### Waiting, Herdr's semantics
 
 - `agent.prompt` refuses `agent_blocked` before sending anything.
+- A prompt to a Session still starting (a Server's staggered revival, a
+  model or provider change) is held, as a send to a stopped Session is; the
+  Thread holds one, so another is refused `agent_starting` rather than
+  replace it. A prompt to a working agent goes to the provider's native
+  queue, as the Composer's does; until the provider has confirmed it can
+  queue, that is refused `failed` and nothing is sent (the window's Composer
+  keeps its draft in the same case).
 - With `wait`, the answer comes only after the agent was seen working (or
   blocked) and then settled: idle, done or blocked. The idle it was sent
   from never answers it. A prompt delivered marks its Thread working at
@@ -128,7 +137,8 @@ markers. `--current` reads `FERRITE_THREAD_ID`.
 ### The CLI is the app's binary
 
 `ferrite <group> <verb>` is dispatched in `main` before anything touches
-GPUI, as `ferrite server` is; the parser lives in core (`api::cli`). It
+GPUI, as `ferrite server` is; the parser lives in core (`api::cli`). After
+`--` every word is an argument, so a prompt may start with dashes. It
 prints the Server's answer line as it came; a refusal goes to stderr with
 exit status 1, a wrong command line exits 2 (Herdr's convention). It does
 not start a Server: agents run inside one, and a script that finds none is

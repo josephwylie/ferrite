@@ -79,9 +79,19 @@ Prompt it, and wait for it to finish:
 ```
 
 - `agent prompt` refuses with `agent_blocked` while a Decision waits on the
-  Thread, and sends nothing. A prompt to a working agent waits its turn.
+  Thread, and sends nothing.
+- A prompt to a working agent waits its turn in the agent's queue. Until the
+  agent has said it can queue (early in its Session), such a prompt is
+  refused `failed` and nothing is sent: `agent wait` for it to settle, then
+  send it.
+- A prompt to a Thread whose agent is still starting is held until it is up.
+  Only one is held: another is refused `agent_starting` and not sent; send
+  it again once `thread get` shows the agent `working`.
+- Put `--` before a prompt that starts with `-`:
+  `"$F" agent prompt 14 -- "--help is broken"`.
 - With `--wait` it answers only after the agent was seen working and then
-  settled (`idle`, `done` or `blocked`). It fails `agent_prompt_stalled` when
+  settled (`idle`, `done` or `blocked`); a turn that was already running
+  when you sent it does not answer it. It fails `agent_prompt_stalled` when
   the agent shows no work within 5 seconds of its Session being up, and
   `timeout` when `--timeout-ms` runs out first. Without a timeout it waits
   as long as the work takes.

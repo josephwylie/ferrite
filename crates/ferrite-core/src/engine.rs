@@ -3554,13 +3554,15 @@ impl Engine {
     }
 
     /// An open Thread's Attention, as the Server knows it (ADR 0015): a
-    /// Decision waiting, any work running, an unseen Notice, else idle.
+    /// Decision waiting, any work running or in the provider's queue, an
+    /// unseen Notice, else idle. A queued prompt counts as work: between a
+    /// turn's end and the next prompt's start the agent is not at rest.
     pub fn attention(&self, thread: ThreadId) -> Option<crate::Attention> {
         use crate::Attention;
         let view = self.thread(thread)?;
         Some(if view.pending().is_some() {
             Attention::Blocked
-        } else if view.working() || view.background_work() {
+        } else if view.working() || view.queue_pending() || view.background_work() {
             Attention::Working
         } else if self.notifications.attention(thread) {
             Attention::Done
@@ -3902,6 +3904,17 @@ impl Engine {
         Ok(true)
     }
 
+    /// Whether a prompt already waits on `thread`'s Session to start: a
+    /// held send, or a new Thread's first prompt. Another send would
+    /// replace or drop it.
+    pub fn holds_prompt(&self, thread: ThreadId) -> bool {
+        self.bootstraps.contains_key(&thread)
+            || self
+                .threads
+                .get(&thread)
+                .is_some_and(|state| state.queued.is_some())
+    }
+
     /// Whether `thread` is a Draft's first send still starting: its Pane is
     /// the Draft's until it settles.
     pub fn starting_for_draft(&self, thread: ThreadId) -> bool {
@@ -4126,9 +4139,12 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn needs_queue(&self) -> bool {
-        self.busy()
-            || self.state.activity.view().main_operator_turn()
-            || self.state.native_queue.pending()
+        self.busy() || self.state.activity.view().main_operator_turn() || self.queue_pending()
+    }
+
+    /// Whether the provider holds a queued prompt, or is still taking one.
+    pub fn queue_pending(&self) -> bool {
+        self.state.native_queue.pending()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.

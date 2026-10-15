@@ -2,13 +2,14 @@
 //! its answer printed as the JSON line the Server sent. It is built from
 //! the operations' one declaration (`schema`): `ferrite <group> <verb>`,
 //! the declared positional parameters in order, every other one as a
-//! `--flag` typed by its JSON Schema. `--current` names the calling Thread
-//! (`FERRITE_THREAD_ID`); a `cwd` not given is the CLI's own.
+//! `--flag` typed by its JSON Schema, and after `--` every word is an
+//! argument. `--current` names the calling Thread (`FERRITE_THREAD_ID`); a
+//! `cwd` not given is the CLI's own.
 //!
 //! Exit status, as Herdr's: 0 answered, 1 refused by the Server (the error
 //! on stderr, as JSON) or no Server reached, 2 a wrong command line.
 
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
@@ -82,7 +83,7 @@ fn command(group: &str, rest: &[&str], store: &Path) -> i32 {
             let socket = std::env::var_os("FERRITE_SOCKET")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| address(store));
-            call(&request, &socket)
+            call(&request, &socket, &mut io::stdout(), &mut io::stderr())
         }
         Err(error) => {
             eprint!("ferrite: {error}\n\n{}", usage(Some(group)));
@@ -111,6 +112,10 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
     let mut positional = Vec::new();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
+        if *arg == "--" {
+            positional.extend(args.by_ref());
+            break;
+        }
         if *arg == "--current" {
             if !properties.contains_key("thread") {
                 return Err(format!("`{}` takes no Thread", op.name));
@@ -262,8 +267,9 @@ pub fn usage(group: Option<&str>) -> String {
         );
     }
     out.push_str(
-        "\n--current names the calling Thread. Answers are JSON lines; a refusal is\n\
-         JSON on stderr with exit status 1, a wrong command line exits 2.\n",
+        "\n--current names the calling Thread; after --, every word is an argument\n\
+         (`agent prompt 12 -- \"--flags in the prompt\"`). Answers are JSON lines; a\n\
+         refusal is JSON on stderr with exit status 1, a wrong command line exits 2.\n",
     );
     out
 }
@@ -308,26 +314,33 @@ fn synopsis(op: &Operation) -> String {
     out
 }
 
-/// Ask, and print what comes back: the answer, and after a subscription's
-/// every event until the Server closes the connection.
-fn call(request: &Request, socket: &Path) -> i32 {
-    let refused = |error: ApiError| {
-        eprintln!("{}", json!({ "id": request.id, "error": error }));
+/// Ask, and print what comes back, a whole line at a time: the answer to
+/// `out`, or a refusal to `err`, and after a subscription's answer every
+/// event until the Server closes the connection.
+pub fn call<E: Write>(request: &Request, socket: &Path, out: &mut impl Write, err: &mut E) -> i32 {
+    let refused = |err: &mut E, error: ApiError| {
+        print(
+            err,
+            &json!({ "id": request.id, "error": error }).to_string(),
+        );
         1
     };
     let mut stream = match link::connect(socket) {
         Ok(stream) => stream,
         Err(error) => {
-            return refused(ApiError::new(
-                Code::ServerUnavailable,
-                format!("no Ferrite server at {}: {error}", socket.display()),
-            ))
+            return refused(
+                err,
+                ApiError::new(
+                    Code::ServerUnavailable,
+                    format!("no Ferrite server at {}: {error}", socket.display()),
+                ),
+            )
         }
     };
     let asked = link::send(&mut stream, request).and_then(|()| stream.try_clone());
     let mut lines = match asked {
         Ok(reader) => link::Lines::new(reader),
-        Err(error) => return refused(lost(error)),
+        Err(error) => return refused(err, lost(error)),
     };
     let streams = matches!(request.method, Method::EventsSubscribe(_));
     loop {
@@ -336,19 +349,24 @@ fn call(request: &Request, socket: &Path) -> i32 {
                 let line = String::from_utf8_lossy(&line);
                 let answer: Value = serde_json::from_str(&line).unwrap_or_default();
                 if answer.get("error").is_some() {
-                    eprintln!("{line}");
+                    print(err, &line);
                     return 1;
                 }
-                println!("{line}");
+                print(out, &line);
                 if !streams {
                     return 0;
                 }
             }
             Ok(None) if streams => return 0,
-            Ok(None) => return refused(lost(io::ErrorKind::UnexpectedEof.into())),
-            Err(error) => return refused(lost(error)),
+            Ok(None) => return refused(err, lost(io::ErrorKind::UnexpectedEof.into())),
+            Err(error) => return refused(err, lost(error)),
         }
     }
+}
+
+/// One line, in one write: a reader never sees half of it.
+fn print(to: &mut impl Write, line: &str) {
+    let _ = to.write_all(format!("{line}\n").as_bytes());
 }
 
 /// The connection broke before an answer: the request may have been

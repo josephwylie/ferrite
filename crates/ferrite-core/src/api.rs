@@ -79,7 +79,7 @@ pub struct Request {
     pub method: Method,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Response {
     Result { id: String, result: Value },
@@ -87,7 +87,7 @@ pub enum Response {
     Event { id: String, event: Event },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApiError {
     pub code: Code,
     pub message: String,
@@ -102,7 +102,7 @@ impl ApiError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Code {
     /// The line is not a request.
@@ -114,6 +114,9 @@ pub enum Code {
     UnknownDecision,
     /// A Decision waits on the Thread: the prompt was not sent.
     AgentBlocked,
+    /// The Thread's Session is starting and already holds a prompt: this
+    /// one was not sent.
+    AgentStarting,
     /// The agent was not seen at work within [`STALL`] of its prompt. The
     /// prompt may still have arrived.
     AgentPromptStalled,
@@ -126,8 +129,6 @@ pub enum Code {
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,
-    #[serde(other)]
-    Unknown,
 }
 
 impl From<WireError> for ApiError {
@@ -143,14 +144,14 @@ impl From<WireError> for ApiError {
 }
 
 /// One open Thread, as every answer about one names it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ThreadInfo {
     pub thread: ThreadId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub provider: Provider,
     pub attention: Attention,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
 }
 
@@ -177,7 +178,7 @@ pub fn unknown_thread() -> ApiError {
 }
 
 /// What a subscription hears.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     ThreadOpened {
@@ -262,7 +263,7 @@ pub struct Seen {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Settled {
-    Reached(Attention),
+    Reached,
     Stalled,
     TimedOut,
 }
@@ -306,7 +307,7 @@ impl Wait {
             self.unseen = false;
         }
         if !self.unseen && self.until.reached(seen.attention) {
-            return Some(Settled::Reached(seen.attention));
+            return Some(Settled::Reached);
         }
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             return Some(Settled::TimedOut);
@@ -636,7 +637,7 @@ fn settle(engine: &Engine, waiting: &mut Waiting, now: Instant) -> Option<Result
         starting: view.starting(),
     };
     Some(match waiting.wait.observe(seen, now)? {
-        Settled::Reached(_) => thread_result(engine, waiting.thread),
+        Settled::Reached => thread_result(engine, waiting.thread),
         Settled::Stalled => Err(ApiError::new(
             Code::AgentPromptStalled,
             "the agent showed no work within 5 s of its prompt; the prompt may still \
