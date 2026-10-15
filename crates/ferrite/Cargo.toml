@@ -64,3 +64,5 @@ winresource = { version = "0.1", default-features = false }
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+# The in-process machine the window's tests attach to.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }

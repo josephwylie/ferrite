@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Ferrite headless core: providers, transcript, store, workspace. No UI."
 
+[features]
+# What other crates' tests drive core with: `server::fixture_machine`.
+test-support = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

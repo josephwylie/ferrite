@@ -62,10 +62,9 @@ pub fn check_target(target: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Where Ferrite keeps what it needs for `target`: the bridge's socket,
-/// the SSH master's socket, and the empty Store a window reads parked
-/// Threads from (a machine's are on the machine). Owner-only, and short,
-/// since a socket's path is.
+/// Where Ferrite keeps what it needs for `target`: the bridge's socket and
+/// the SSH master's socket. Owner-only, and short, since a socket's path
+/// is.
 pub fn dir(settings_dir: &Path, target: &str) -> PathBuf {
     let hash = target
         .bytes()

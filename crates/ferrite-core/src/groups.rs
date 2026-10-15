@@ -285,6 +285,10 @@ struct PersistedGroup {
 #[derive(Clone)]
 pub struct Groups {
     dir: PathBuf,
+    /// Whether the Store at `dir` is on this computer, so a change is
+    /// checked against its Threads here: not in a copy of a machine's,
+    /// whose Server checks it when it applies the change (ADR 0026).
+    local: bool,
     groups: Vec<Group>,
     next_id: u64,
 }
@@ -378,6 +382,7 @@ impl Groups {
         let next_id = groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1;
         let this = Self {
             dir: dir.to_path_buf(),
+            local: true,
             groups,
             next_id,
         };
@@ -575,6 +580,9 @@ impl Groups {
     }
 
     fn validate_change(&self, change: &GroupChange) -> Result<(), ApplyError> {
+        if !self.local {
+            return Ok(());
+        }
         self.validate_all()?;
         match &change {
             GroupChange::Create { first, second } => {
@@ -812,19 +820,20 @@ impl Groups {
     }
 
     /// No Groups: a window's copy of the Store in `dir` before the Server's
-    /// lands.
-    pub(crate) fn empty(dir: &Path) -> Self {
+    /// lands; `local` when that Store is on this computer.
+    pub(crate) fn empty(dir: &Path, local: bool) -> Self {
         Self {
             dir: dir.to_path_buf(),
+            local,
             groups: Vec::new(),
             next_id: 1,
         }
     }
 
     /// A window's read-only copy of the Server's Groups for the Store in
-    /// `dir`, taken as the Server healed them. It is never written: every
-    /// change is the Server's.
-    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Self> {
+    /// `dir`, taken as the Server healed them; `local` when that Store is on
+    /// this computer. It is never written: every change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path, local: bool) -> io::Result<Self> {
         let persisted = serde_json::from_value::<PersistedGroups>(value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let groups: Vec<Group> = persisted
@@ -842,7 +851,7 @@ impl Groups {
         Ok(Self {
             next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
             groups,
-            ..Self::empty(dir)
+            ..Self::empty(dir, local)
         })
     }
 
@@ -980,7 +989,7 @@ mod tests {
 
         let reloaded = Groups::load(&dir).unwrap();
         assert_eq!(reloaded.led_by(coordinator).map(|led| led.id), Some(group));
-        let wired = Groups::from_wire(groups.to_wire(), &dir).unwrap();
+        let wired = Groups::from_wire(groups.to_wire(), &dir, true).unwrap();
         assert_eq!(wired.get(group).unwrap().coordinator, Some(coordinator));
 
         groups

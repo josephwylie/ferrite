@@ -159,6 +159,24 @@ fn project_id() -> ProjectId {
     serde_json::from_value(json!(2)).unwrap()
 }
 
+/// A parked Thread as a machine's Server lists it.
+fn parked_row() -> ParkedThread {
+    ParkedThread {
+        thread: ThreadId::new(2),
+        provider: Some(Provider::Codex),
+        title: None,
+        prompt_title: Some("Tidy the release notes".into()),
+        workspace: Some(WireBinding::Main {
+            checkout: "/src/ferrite".into(),
+        }),
+        session_project_root: None,
+        project: Some(project_id()),
+        last_used_ms: Some(1_759_990_000_000),
+        turns: Some(11),
+        subagents: Some(2),
+    }
+}
+
 fn record(input: Input) -> WireRecord {
     WireRecord::Known(Box::new(
         LogRecord::of(&input, None).expect("the log keeps it"),
@@ -240,6 +258,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     version: "0.9.0".into(),
                 },
                 capabilities: vec![Capability::RenderVisual],
+            }),
+        ),
+        (
+            "hello_parked_threads",
+            Sample::Client(ClientMessage::Hello {
+                generation: 1,
+                client: Peer {
+                    name: "ferrite".into(),
+                    version: "0.9.0".into(),
+                },
+                capabilities: vec![Capability::ParkedThreads],
             }),
         ),
         (
@@ -670,6 +699,25 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         weekly: None,
                     }),
                 }]),
+                parked: None,
+            })),
+        ),
+        (
+            "snapshot_parked",
+            Sample::Server(ServerMessage::Snapshot(Snapshot {
+                boot_id: "b-1".into(),
+                revision: 7,
+                threads: vec![],
+                roster: SharedRoster {
+                    open: vec![],
+                    parked: vec![ThreadId::new(2)],
+                },
+                decisions: vec![],
+                groups: None,
+                registry: None,
+                notices: None,
+                providers: None,
+                parked: Some(vec![parked_row()]),
             })),
         ),
         (
@@ -919,6 +967,27 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     models: vec![model("gpt-5.6")],
                     limits: None,
                 }],
+            }),
+        ),
+        (
+            "parked",
+            Sample::Server(ServerMessage::Parked {
+                revision: 14,
+                threads: vec![
+                    parked_row(),
+                    ParkedThread {
+                        thread: ThreadId::new(3),
+                        provider: None,
+                        title: None,
+                        prompt_title: None,
+                        workspace: None,
+                        session_project_root: None,
+                        project: None,
+                        last_used_ms: Some(1_760_000_000_000),
+                        turns: None,
+                        subagents: None,
+                    },
+                ],
             }),
         ),
         (

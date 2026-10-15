@@ -13,8 +13,9 @@ use crate::workspace::registry::Registry;
 use crate::{ModelInfo, ThreadId};
 
 pub(crate) struct Shared {
-    /// The Store these are of.
+    /// The Store these are of, and whether it is on this computer.
     dir: PathBuf,
+    local: bool,
     pub(crate) groups: Groups,
     pub(crate) registry: Registry,
     pub(crate) notifications: Notifications,
@@ -28,10 +29,11 @@ pub(crate) struct Shared {
 impl Shared {
     /// Nothing yet: the shared state of the Store in `dir` before the
     /// Engine's first messages.
-    pub(crate) fn new(dir: &Path) -> Self {
+    pub(crate) fn new(dir: &Path, local: bool) -> Self {
         Self {
             dir: dir.to_path_buf(),
-            groups: Groups::empty(dir),
+            local,
+            groups: Groups::empty(dir, local),
             registry: Registry::empty(dir),
             notifications: Notifications::default(),
             providers: Vec::new(),
@@ -40,25 +42,25 @@ impl Shared {
         }
     }
 
-    pub(crate) fn from_snapshot(snapshot: &Snapshot, dir: &Path) -> Self {
-        let mut shared = Self {
+    /// All of it afresh, as a Server's snapshot says it.
+    pub(crate) fn attached(&mut self, snapshot: &Snapshot) {
+        *self = Self {
             open: snapshot.roster.open.clone(),
-            ..Self::new(dir)
+            ..Self::new(&self.dir, self.local)
         };
         if let Some(groups) = &snapshot.groups {
-            shared.set_groups(groups);
+            self.set_groups(groups);
         }
         if let Some(registry) = &snapshot.registry {
-            shared.set_registry(registry);
+            self.set_registry(registry);
         }
         if let Some(notices) = &snapshot.notices {
-            shared.notifications = Notifications::from_wire(notices);
+            self.notifications = Notifications::from_wire(notices);
         }
         if let Some(providers) = &snapshot.providers {
-            shared.providers = providers.clone();
-            shared.models_changed = true;
+            self.providers = providers.clone();
+            self.models_changed = true;
         }
-        shared
     }
 
     pub(crate) fn receive(&mut self, message: &ServerMessage) {
@@ -85,7 +87,7 @@ impl Shared {
     /// A copy the Server sent that this build cannot read keeps the one
     /// before: a window older than its Server says so in its log.
     fn set_groups(&mut self, groups: &serde_json::Value) {
-        match Groups::from_wire(groups.clone(), &self.dir) {
+        match Groups::from_wire(groups.clone(), &self.dir, self.local) {
             Ok(groups) => self.groups = groups,
             Err(error) => crate::log!("the server's groups could not be read: {error}"),
         }

@@ -130,9 +130,42 @@ when the operator clicks. Other failures back off from 250 ms to 30 s
 behaviour, attached at once) or `Endpoint::Machine(Arc<Bridge>)`,
 attached in the background from the first `poll`, since ssh can take
 seconds. `ServerState::Detached` carries `attention`, the `Failure` only
-the operator can fix. A machine's window reads parked Threads from an
-empty Store of its own (`~/.ferrite/machines/<hash>/threads`): a
-machine's log stays on the machine.
+the operator can fix.
+
+### Parked Threads
+
+A machine's logs stay on the machine, so its window has no Store to
+read parked Threads from. Its Server publishes them instead: `parked
+{revision, threads[]}`, latest-wins, and the snapshot's `parked`, a
+gen-1 addition (ADR 0025). Each row is what the window would have read
+off the log — provider, title, the first prompt's title, binding,
+Project, last use (ms since the epoch), turns and Subagents — or only
+its age when the log cannot be read.
+
+Only a window that says `parked_threads` in its hello is sent rows: a
+window on a machine. While none is attached the Engine reads nothing,
+so this computer's Server and the in-process Engine pay nothing for
+them. While one is, the Engine reads the rows afresh after something
+may have moved one (the open Threads changed, a rename, delete, import
+or provider change), on a thread of their own rather than the pump: a
+row waits for a park's final mark, and a log from before schema 13 is
+replayed once for its counts (`Store::summary`). A read that began
+before the latest change is dropped and read again; rows that differ
+from the last published are published.
+
+`Cockpit` reads parked Threads through one seam (`cockpit::Parked`):
+this computer's Store (`Store::reader`, unchanged) or, on a machine,
+the published rows; the off-thread counts (`LogReader`) follow it. A
+row that moved tells the window to rebuild its parked rows
+(`take_parked_changed`), since on a machine there are none until the
+Server says so. Reopening is the `revive` command, as for any Thread.
+
+The empty per-machine Store is gone: nothing reads a machine's Threads
+from `Attach::store`, which only names the directory the window's
+copies of its Groups and Projects belong to, and nothing creates it.
+The window's copy of a machine's Groups checks a drop's shape only;
+whether its Threads exist and have a Project is the machine's Server's
+to check when it applies the change.
 
 ### One machine on screen
 
@@ -187,6 +220,9 @@ window is on a machine: it is this computer's.
 - Starting new Threads on a machine needs its Projects: the window
   offers the machine's registered Projects, but the Project editor picks
   local folders.
-- A machine's parked Threads are not listed (its log is on the machine).
+- An open Thread's Project on a machine: the `thread` state does not
+  carry it, so a machine's open Threads group under no Project. A drop
+  the Server refuses (a Thread with no Project) shows as allowed while
+  dragged, and is refused when it lands.
 - Notifications (sound, system) for Decisions on a machine off screen.
 - Phone access (plan §6, "later").

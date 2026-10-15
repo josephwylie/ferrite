@@ -285,7 +285,6 @@ impl Machines {
         self.entries[self.selected].disabled()
     }
 
-    /// Where machine `index`'s Server is, and the Store its window reads.
     fn selectable(&self, index: usize) -> bool {
         index != self.selected && !self.entries.get(index).is_none_or(Entry::disabled)
     }
@@ -301,6 +300,8 @@ impl Machines {
         })
     }
 
+    /// Where machine `index`'s Server is, and the Store path its window is
+    /// given (`Attach::store`).
     fn endpoint(&mut self, index: usize) -> (PathBuf, Endpoint) {
         match self.bridge(index) {
             Some(bridge) => {

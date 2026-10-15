@@ -40,8 +40,10 @@ const RESTART_GRACE: Duration = Duration::from_secs(2);
 /// What attaching needs: where the Server is, how to start one, and who
 /// this window is.
 pub struct Attach {
-    /// The Store the window reads parked Threads from: for this computer's
-    /// Server, the one it serves, its socket beside it.
+    /// For this computer's Server, the Store it serves, its socket beside
+    /// it, which the window reads parked Threads from. A machine's parked
+    /// Threads are what its Server publishes (ADR 0026); its path only
+    /// names the window's copies of the machine's Groups and Projects.
     pub store: PathBuf,
     pub server: Endpoint,
     pub client: Peer,
@@ -640,16 +642,20 @@ fn attach_to(
     }
 }
 
-/// Who this window is, and that it draws Visuals when it can.
+/// Who this window is, that it draws Visuals when it can, and that on a
+/// machine it lists the parked Threads its Server publishes.
 fn hello(attach: &Attach) -> ClientMessage {
+    let mut capabilities = Vec::new();
+    if attach.renderer.is_some() {
+        capabilities.push(Capability::RenderVisual);
+    }
+    if matches!(attach.server, Endpoint::Machine(_)) {
+        capabilities.push(Capability::ParkedThreads);
+    }
     ClientMessage::Hello {
         generation: protocol::GENERATION,
         client: attach.client.clone(),
-        capabilities: if attach.renderer.is_some() {
-            vec![Capability::RenderVisual]
-        } else {
-            Vec::new()
-        },
+        capabilities,
     }
 }
 

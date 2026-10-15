@@ -2015,6 +2015,11 @@ impl CockpitView {
         }
         let frame = self.cockpit.pump();
         let server_moved = self.server_moved();
+        // A machine's Server says when its parked Threads moved.
+        let parked_moved = self.cockpit.take_parked_changed();
+        if parked_moved {
+            self.parked_changed(cx);
+        }
         self.apply_thread_rules(&frame, cx);
         self.ring_bell(cx);
         for pane in &self.panes {
@@ -2127,6 +2132,7 @@ impl CockpitView {
             && !commands_changed
             && !walls_settled
             && !server_moved
+            && !parked_moved
         {
             return;
         }
@@ -2177,6 +2183,7 @@ impl CockpitView {
         let precise = restarted.is_empty()
             && !swept_change
             && !server_moved
+            && !parked_moved
             && !startup_changed
             && !models_changed
             && !commands_changed

@@ -173,6 +173,7 @@ enum Slot {
     Registry,
     Notices,
     Providers,
+    Parked,
 }
 
 fn slot(message: &ServerMessage) -> Option<Slot> {
@@ -184,6 +185,7 @@ fn slot(message: &ServerMessage) -> Option<Slot> {
         ServerMessage::Registry { .. } => Slot::Registry,
         ServerMessage::Notices { .. } => Slot::Notices,
         ServerMessage::Providers { .. } => Slot::Providers,
+        ServerMessage::Parked { .. } => Slot::Parked,
         _ => return None,
     })
 }
