@@ -21,6 +21,9 @@ cef = ["dep:cef"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# herdr-reviewr's review core, vendored: the Review slot's rows, comments and
+# their prompt text (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }

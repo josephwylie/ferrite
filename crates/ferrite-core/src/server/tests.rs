@@ -525,7 +525,8 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
 
 /// A review reads git where the Server runs (ADR 0021): a window asks
 /// for a checkout's uncommitted work, its branch's commits and one
-/// commit's diff, and hears git's reason when the path is no repo.
+/// commit's diff, a file of it, a search of it and its pull request, and
+/// hears why when the path is no repo.
 #[test]
 fn a_review_is_read_by_git_where_the_server_runs() {
     let harness = start("review");
@@ -559,22 +560,53 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         landed.into_inner().unwrap()
     }
 
-    let asked = window.review_diff(&repo, crate::review::git::Diff::Uncommitted);
+    use ferrite_reviewr::ferrite::Read;
+    let asked = window.review_diff(&repo, Read::Uncommitted);
     let uncommitted = landed(&mut window, asked).unwrap();
     assert_eq!(uncommitted.len(), 1);
-    assert_eq!(uncommitted[0].path, "notes.md");
+    assert_eq!(uncommitted[0].file.path, "notes.md");
+    assert_eq!(
+        uncommitted[0].sides,
+        Ok((String::new(), "fresh\n".to_string()))
+    );
 
     let asked = window.review_commits(&repo);
     let commits = landed(&mut window, asked).unwrap();
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0].subject, "reviewed");
-    let commit = crate::review::git::Diff::Commit(commits[0].id.clone());
-    let asked = window.review_diff(&repo, commit);
-    let edits = landed(&mut window, asked).unwrap();
-    assert_eq!(edits[0].path, "README.md");
-    assert_eq!(edits[0].hunks[0].lines, ["-app", "+app, reviewed"]);
+    assert_eq!(commits[0].author, "test");
+    let pick = ferrite_reviewr::model::CommitPick::single(&commits[0].sha);
+    let asked = window.review_diff(&repo, Read::Commits(pick));
+    let files = landed(&mut window, asked).unwrap();
+    assert_eq!(files[0].file.path, "README.md");
+    let (old, new) = files[0].sides.clone().unwrap();
+    assert_eq!(new, "app, reviewed\n");
+    assert_ne!(old, new);
 
-    let asked = window.review_diff(&harness.dir, crate::review::git::Diff::Branch);
+    let asked = window.read_review_file(&repo, "notes.md");
+    assert_eq!(landed(&mut window, asked).unwrap(), "fresh\n");
+    let asked = window.read_review_file(&repo, "../elsewhere");
+    assert!(
+        landed(&mut window, asked).is_err(),
+        "only inside the checkout"
+    );
+
+    let asked = window.search_repo(&repo, "reviewed");
+    let found = landed(&mut window, asked).unwrap();
+    assert!(
+        found.code.iter().any(|hit| hit.path == "README.md"),
+        "{found:?}"
+    );
+
+    let asked = window.pull_request(&repo);
+    let pr = landed(&mut window, asked).unwrap();
+    assert!(
+        pr.pr
+            .is_err_and(|note| note.contains("remote named upstream or origin")),
+        "no forge remote, so the note says what the PR tab needs"
+    );
+
+    let asked = window.review_diff(&harness.dir, Read::Branch);
     let refused = landed(&mut window, asked).unwrap_err();
     assert!(
         refused.to_string().contains("not a git repository"),

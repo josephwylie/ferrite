@@ -211,6 +211,9 @@ impl Engine {
             | Op::ListRepo { .. }
             | Op::ReviewDiff { .. }
             | Op::ListCommits { .. }
+            | Op::SearchRepo { .. }
+            | Op::ReadFile { .. }
+            | Op::PullRequest { .. }
             | Op::Coordinate { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }

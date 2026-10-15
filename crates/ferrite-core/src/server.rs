@@ -305,8 +305,10 @@ type Search = (
     Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>,
 );
 
-/// A read off the pump — git's for a `list_repo`, `review_diff` or
-/// `list_commits`, a folder's for a `list_dir`: who asked, in which command, and the reply it makes.
+/// A read off the pump — git's for a `list_repo` or a review's commands
+/// (`review_diff`, `list_commits`, `search_repo`, `read_file`,
+/// `pull_request`), a folder's for a `list_dir`: who asked, in which
+/// command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
 struct Server {
@@ -577,12 +579,16 @@ impl Server {
                 path,
                 scope,
                 commit,
-            } => match scope.diff(commit.clone()) {
-                Some(diff) => {
+            } => match scope.read(commit.clone()) {
+                Some(read) => {
                     let path = path.clone();
                     self.read_off_pump(id, request, move || {
-                        crate::review::git::read(&path, &diff)
-                            .map(|text| Some(Done::Diff { text }))
+                        ferrite_reviewr::ferrite::review(&path, &read)
+                            .map(|files| {
+                                Some(Done::Review {
+                                    files: files.into_iter().map(Into::into).collect(),
+                                })
+                            })
                             .map_err(failed)
                     });
                     return;
@@ -592,13 +598,39 @@ impl Server {
             Op::ListCommits { path } => {
                 let path = path.clone();
                 self.read_off_pump(id, request, move || {
-                    crate::review::git::commits(&path)
+                    ferrite_reviewr::ferrite::commits(&path)
                         .map(|commits| {
                             Some(Done::Commits {
                                 commits: commits.into_iter().map(Into::into).collect(),
                             })
                         })
                         .map_err(failed)
+                });
+                return;
+            }
+            Op::SearchRepo { path, query } => {
+                let (path, query) = (path.clone(), query.clone());
+                self.read_off_pump(id, request, move || {
+                    ferrite_reviewr::ferrite::search(&path, &query)
+                        .map(|results| Some(results.into()))
+                        .map_err(failed)
+                });
+                return;
+            }
+            Op::ReadFile { path, file } => {
+                let (path, file) = (path.clone(), file.clone());
+                self.read_off_pump(id, request, move || {
+                    ferrite_reviewr::ferrite::read_file(&path, &file)
+                        .map(|text| Some(Done::Text { text }))
+                        .map_err(|notice| failed(notice.message()))
+                });
+                return;
+            }
+            Op::PullRequest { path } => {
+                let path = path.clone();
+                self.read_off_pump(id, request, move || {
+                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path);
+                    Ok(Some(crate::protocol::PullRequest::of(view, noun).into()))
                 });
                 return;
             }

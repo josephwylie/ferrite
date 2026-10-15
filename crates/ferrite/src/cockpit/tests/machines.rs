@@ -1227,7 +1227,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         })
     };
 
-    open_review(ferrite_core::review::Scope::Uncommitted, cx);
+    open_review(ferrite_reviewr::model::Scope::Uncommitted, cx);
     until(cx, |cx| cx.debug_bounds("review-lines").is_some());
     assert!(
         String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"review_diff""#),
@@ -1239,7 +1239,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     tick(cx);
     assert_eq!(comments(cx), [("notes.md:1".into(), "why notes?".into())]);
 
-    open_review(ferrite_core::review::Scope::Commits, cx);
+    open_review(ferrite_reviewr::model::Scope::Commits, cx);
     until(cx, |cx| cx.debug_bounds("review-commit-0").is_some());
     cx.simulate_keystrokes("enter");
     until(cx, |cx| cx.debug_bounds("review-lines").is_some());

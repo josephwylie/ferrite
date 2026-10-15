@@ -10,6 +10,9 @@ description = "Ferrite headless core: providers, transcript, store, workspace. N
 test-support = []
 
 [dependencies]
+# herdr-reviewr's review core, vendored: the Review slot's git reads, search
+# and PR reads, answered where the checkout is (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"

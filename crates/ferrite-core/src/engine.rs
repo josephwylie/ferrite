@@ -4434,6 +4434,14 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
         wire.insert_str(operator, &format!("{carry}\n\n"));
     }
     session.set_suggestions_enabled(suggestions_enabled)?;
+    // The checkout as this turn begins is what a review's last turn reads
+    // against (ADR 0021).
+    if let Some(cwd) = crate::workspace::effective_cwd(
+        state.session_project_root.as_deref(),
+        state.workspace.as_ref(),
+    ) {
+        ferrite_reviewr::ferrite::turn_started(cwd);
+    }
     session.send(&wire)?;
     state.invalidate_suggestion();
     state.carry = None;

@@ -17,17 +17,20 @@ use base64::Engine as _;
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
 use crate::machine::{self, Bridge, Failure};
+use crate::protocol::PullRequest;
 use crate::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
 };
 use crate::providers::FileSuggestion;
-use crate::review::git::{Commit, Diff};
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{DirEntry, ListedWorktree, Listing, RepoListing};
-use crate::{FileEdit, ThreadId};
+use crate::ThreadId;
+use ferrite_reviewr::ferrite::{FileSides, Read};
+use ferrite_reviewr::git::CommitRow;
+use ferrite_reviewr::search::SearchResults;
 
 /// Where a later-answered command's reply goes (`Remote::ask`).
 type Answer = Box<dyn FnOnce(io::Result<Option<Done>>) + Send>;
@@ -446,10 +449,10 @@ impl Remote {
     pub(crate) fn review_diff(
         &mut self,
         path: &Path,
-        diff: &Diff,
-    ) -> io::Result<Receiver<io::Result<Vec<FileEdit>>>> {
-        self.ask(Op::review_diff(path, diff), |done| match done {
-            Done::Diff { text } => Some(crate::review::git::parse(&text)),
+        read: &Read,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSides>>>> {
+        self.ask(Op::review_diff(path, read), |done| match done {
+            Done::Review { files } => Some(files.into_iter().map(Into::into).collect()),
             _ => None,
         })
     }
@@ -457,12 +460,65 @@ impl Remote {
     pub(crate) fn review_commits(
         &mut self,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<Vec<Commit>>>> {
+    ) -> io::Result<Receiver<io::Result<Vec<CommitRow>>>> {
         let op = Op::ListCommits {
             path: path.to_path_buf(),
         };
         self.ask(op, |done| match done {
             Done::Commits { commits } => Some(commits.into_iter().map(Into::into).collect()),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn search_repo(
+        &mut self,
+        path: &Path,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<SearchResults>>> {
+        let op = Op::SearchRepo {
+            path: path.to_path_buf(),
+            query: query.to_string(),
+        };
+        self.ask(op, |done| match done {
+            Done::Found {
+                files,
+                code,
+                file_total,
+                code_more,
+            } => Some(crate::protocol::search_results(
+                files, code, file_total, code_more,
+            )),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn read_review_file(
+        &mut self,
+        path: &Path,
+        file: &str,
+    ) -> io::Result<Receiver<io::Result<String>>> {
+        let op = Op::ReadFile {
+            path: path.to_path_buf(),
+            file: file.to_string(),
+        };
+        self.ask(op, |done| match done {
+            Done::Text { text } => Some(text),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<PullRequest>>> {
+        let op = Op::PullRequest {
+            path: path.to_path_buf(),
+        };
+        self.ask(op, |done| match done {
+            Done::PullRequest { noun, pr, note } => Some(PullRequest {
+                noun,
+                pr: pr.ok_or_else(|| note.unwrap_or_default()),
+            }),
             _ => None,
         })
     }

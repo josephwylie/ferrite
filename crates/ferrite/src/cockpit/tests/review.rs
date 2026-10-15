@@ -1,53 +1,58 @@
-//! The Review slot (ADR 0021): a diff beside the Thread whose comments
-//! gather on the Composer and ride the next prompt.
+//! The Review slot (ADR 0021): a diff beside the Thread, read by the
+//! vendored review core, whose comments gather on the Composer and ride
+//! the next prompt.
 #[allow(unused_imports)]
 use super::*;
-use ferrite_core::review::Scope;
+use ferrite_reviewr::model::Scope;
 
-/// One Thread that took a prompt and made one edit in its checkout.
-fn edited(name: &str) -> (Cockpit, Fake) {
-    let (mut core, fake) = cockpit(name, 1);
-    let thread = core.threads()[0];
-    core.send(thread, "Tidy the nav".into());
-    let path = here().join("src/nav.rs").display().to_string();
-    let stream = fake.streams.borrow()[0].clone();
-    stream
-        .send(SessionEvent::ToolStarted {
-            id: "edit-1".into(),
-            name: "Edit".into(),
-            input: serde_json::json!({ "file_path": path }),
-        })
-        .unwrap();
-    stream
-        .send(SessionEvent::ToolCompleted {
-            id: "edit-1".into(),
-            output: String::new(),
-            is_error: false,
-            result: ferrite_core::ToolResult::FileEdit {
-                path,
-                hunks: vec![ferrite_core::Hunk {
-                    old_start: 7,
-                    old_lines: 2,
-                    new_start: 7,
-                    new_lines: 2,
-                    lines: vec![
-                        " fn row() {".into(),
-                        "-    let wide = 1;".into(),
-                        "+    let wide = 2;".into(),
-                    ],
-                    section: None,
-                }],
-            },
-        })
-        .unwrap();
-    stream
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    core.pump();
-    (core, fake)
+/// What the checkout's one file read before the Thread's edit.
+const NAV: &str = "fn row() {\n    let wide = 1;\n}\n";
+
+fn git(repo: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// One Thread in a scratch checkout of its own whose `src/nav.rs` has one
+/// uncommitted edit: its second line, `1` become `2`.
+fn edited(name: &str) -> (Cockpit, Fake, std::path::PathBuf) {
+    let base = scratch(name);
+    let repo = repo_in(&base);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/nav.rs"), NAV).unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "nav"]);
+    std::fs::write(repo.join("src/nav.rs"), NAV.replace('1', "2")).unwrap();
+    let fake = Fake::default();
+    let store = Store::open(base.join("store")).unwrap();
+    let mut core = Cockpit::new(store, Box::new(fake.clone()));
+    core.open(
+        Provider::Claude,
+        WorkspaceChoice::Main {
+            checkout: repo.clone(),
+        },
+    )
+    .unwrap();
+    (core, fake, repo)
+}
+
+/// Pump until `done`: a review reads its checkout off the UI thread.
+fn until(
+    cx: &mut gpui::VisualTestContext,
+    mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,
+) {
+    for _ in 0..500 {
+        tick(cx);
+        if done(cx) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("never happened");
 }
 
 fn open_review(view: &Entity<CockpitView>, scope: Scope, cx: &mut gpui::VisualTestContext) {
@@ -56,24 +61,34 @@ fn open_review(view: &Entity<CockpitView>, scope: Scope, cx: &mut gpui::VisualTe
             view.open_beside(beside::Beside::Review(scope), window, cx)
         })
     });
-    tick(cx);
+    until(cx, |cx| cx.debug_bounds("review-lines").is_some());
 }
 
-/// The last turn's edit opens beside the Thread holding the keyboard: the
+/// The comments on the Composer's shelf, by location and words.
+fn comments(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(String, String)> {
+    view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .read(cx)
+            .review_comments()
+            .iter()
+            .map(|comment| (comment.location(), comment.text.clone()))
+            .collect()
+    })
+}
+
+/// The uncommitted edit opens beside the Thread holding the keyboard: the
 /// keys pick a range and comment on it, esc closes the slot, and the next
-/// send carries the comment after the operator's words.
+/// send carries the comment after the operator's words, as herdr-reviewr
+/// sends a review.
 #[gpui::test]
-fn a_comment_on_the_last_turn_rides_the_next_prompt(cx: &mut TestAppContext) {
-    let (core, fake) = edited("review-last-turn");
+fn a_comment_on_the_uncommitted_work_rides_the_next_prompt(cx: &mut TestAppContext) {
+    let (core, fake, _repo) = edited("review-uncommitted");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    open_review(&view, Scope::LastTurn, cx);
-    assert!(
-        cx.debug_bounds("review-lines").is_some(),
-        "the diff is drawn"
-    );
+    open_review(&view, Scope::Uncommitted, cx);
     assert!(
         cx.debug_bounds("reader-head").is_some(),
         "in the reader slot"
@@ -88,14 +103,10 @@ fn a_comment_on_the_last_turn_rides_the_next_prompt(cx: &mut TestAppContext) {
         cx.debug_bounds("review-comment").is_some(),
         "the comment hangs under its lines"
     );
-    view.read_with(cx, |view, cx| {
-        let composer = view.panes[0].composer.read(cx);
-        let [comment] = composer.review_comments() else {
-            panic!("one comment: {:?}", composer.review_comments());
-        };
-        assert_eq!(comment.location(), "src/nav.rs:8");
-        assert_eq!(comment.quote, ["-    let wide = 1;", "+    let wide = 2;"]);
-    });
+    assert_eq!(
+        comments(&view, cx),
+        [("src/nav.rs:2".into(), "keep it 1".into())]
+    );
     assert!(
         cx.debug_bounds("review-attachment").is_some(),
         "the comments wait on the shelf"
@@ -112,8 +123,8 @@ fn a_comment_on_the_last_turn_rides_the_next_prompt(cx: &mut TestAppContext) {
     let sent = fake.sent.borrow().last().cloned().unwrap_or_default();
     assert_eq!(
         sent,
-        "Please address these.\n\nReview comments on your changes:\n\n\
-         src/nav.rs:8\n```diff\n-    let wide = 1;\n+    let wide = 2;\n```\nkeep it 1"
+        "Please address these.\n\n\
+         src/nav.rs:2\n-    let wide = 1;\n+    let wide = 2;\nkeep it 1"
     );
     assert!(
         view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),
@@ -125,12 +136,12 @@ fn a_comment_on_the_last_turn_rides_the_next_prompt(cx: &mut TestAppContext) {
 /// field, and a scope's token switches the review to it.
 #[gpui::test]
 fn the_mouse_picks_comments_and_switches_scope(cx: &mut TestAppContext) {
-    let (core, _fake) = edited("review-mouse");
+    let (core, _fake, _repo) = edited("review-mouse");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    open_review(&view, Scope::LastTurn, cx);
+    open_review(&view, Scope::Uncommitted, cx);
     let comment = cx
         .debug_bounds("review-add-comment")
         .expect("beside the pick");
@@ -140,23 +151,19 @@ fn the_mouse_picks_comments_and_switches_scope(cx: &mut TestAppContext) {
     cx.simulate_input("why?");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, cx| {
-        let comments = view.panes[0].composer.read(cx).review_comments().to_vec();
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].location(), "src/nav.rs:7");
-    });
+    assert_eq!(
+        comments(&view, cx),
+        [("src/nav.rs:1".into(), "why?".into())]
+    );
     let review = view
         .read_with(cx, |view, _| view.panes[0].preview.review())
         .expect("a review is open");
-    // The uncommitted scope reads this checkout for real, off the UI thread.
-    let token = cx
-        .debug_bounds("review-scope-uncommitted")
-        .expect("on the bar");
+    let token = cx.debug_bounds("review-scope-branch").expect("on the bar");
     cx.simulate_click(token.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
         review.read_with(cx, |review, _| review.scope()),
-        Scope::Uncommitted
+        Scope::Branch
     );
     assert!(
         view.read_with(cx, |view, _| view.panes[0].preview.review()) == Some(review),
@@ -169,12 +176,15 @@ fn the_mouse_picks_comments_and_switches_scope(cx: &mut TestAppContext) {
 /// once with the next send.
 #[gpui::test]
 fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
-    let (core, fake) = edited("review-history");
+    let (mut core, fake, _repo) = edited("review-history");
+    let thread = core.threads()[0];
+    core.send(thread, "Tidy the nav".into());
+    core.pump();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    open_review(&view, Scope::LastTurn, cx);
+    open_review(&view, Scope::Uncommitted, cx);
     cx.simulate_keystrokes("c");
     cx.simulate_input("why?");
     cx.simulate_keystrokes("enter escape");
@@ -206,7 +216,7 @@ fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
     tick(cx);
     let sent = fake.sent.borrow().last().cloned().unwrap_or_default();
     assert_eq!(
-        sent.matches("Review comments on your changes:").count(),
+        sent.matches("src/nav.rs:1").count(),
         1,
         "the comments go once: {sent}"
     );
@@ -217,7 +227,7 @@ fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
 /// `review` opens the Review; the shelf chip's × drops every comment.
 #[gpui::test]
 fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
-    let (core, _fake) = edited("review-range");
+    let (core, _fake, _repo) = edited("review-range");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -232,13 +242,11 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
         .debug_bounds("changed-files-review")
         .expect("on the card's head");
     cx.simulate_click(review.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
+    until(cx, |cx| cx.debug_bounds("review-lines").is_some());
     assert!(
         view.read_with(cx, |view, _| view.panes[0].preview.review().is_some()),
         "the card opens the Review"
     );
-    // The card opens the uncommitted scope; the last turn holds the edit.
-    open_review(&view, Scope::LastTurn, cx);
     let first = cx.debug_bounds("review-line-0").expect("drawn");
     let last = cx.debug_bounds("review-line-2").expect("drawn");
     cx.simulate_click(first.center(), gpui::Modifiers::none());
@@ -248,11 +256,10 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     cx.simulate_input("all of it");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, cx| {
-        let comments = view.panes[0].composer.read(cx).review_comments().to_vec();
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].location(), "src/nav.rs:7-8");
-    });
+    assert_eq!(
+        comments(&view, cx),
+        [("src/nav.rs:1-2".into(), "all of it".into())]
+    );
     let drop = cx
         .debug_bounds("drop-review-comments")
         .expect("the chip's ×");
@@ -271,17 +278,17 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
 /// line's file in the reader.
 #[gpui::test]
 fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
-    let (core, _fake) = edited("review-menu");
+    let (core, _fake, _repo) = edited("review-menu");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    open_review(&view, Scope::LastTurn, cx);
+    open_review(&view, Scope::Uncommitted, cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let none = gpui::Modifiers::none();
     let first = cx.debug_bounds("review-line-0").expect("drawn").center();
     let second = cx.debug_bounds("review-line-1").expect("drawn").center();
-    let last = cx.debug_bounds("review-line-2").expect("drawn").center();
+    let added = cx.debug_bounds("review-line-2").expect("drawn").center();
     let right_click = |at, cx: &mut gpui::VisualTestContext| {
         cx.simulate_mouse_down(at, gpui::MouseButton::Right, none);
         tick(cx);
@@ -318,7 +325,7 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
         "the range's lines, no signs or numbers"
     );
     // Outside the range, the right-click picks its line first.
-    right_click(last, cx);
+    right_click(added, cx);
     let comment = row(MenuVerb::Comment, cx);
     view.update_in(cx, |view, window, cx| {
         view.press_menu_row(comment, window, cx)
@@ -328,11 +335,10 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     cx.simulate_input("why 2?");
     cx.simulate_keystrokes("enter");
     tick(cx);
-    view.read_with(cx, |view, cx| {
-        let comments = view.panes[0].composer.read(cx).review_comments().to_vec();
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].location(), "src/nav.rs:8");
-    });
+    assert_eq!(
+        comments(&view, cx),
+        [("src/nav.rs:2".into(), "why 2?".into())]
+    );
     right_click(second, cx);
     let open = row(MenuVerb::OpenAtLine, cx);
     view.update_in(cx, |view, window, cx| view.press_menu_row(open, window, cx));
@@ -341,6 +347,50 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
         .read_with(cx, |view, _| view.panes[0].preview.document())
         .expect("the reader replaces the review");
     assert!(document.path.ends_with("src/nav.rs"), "{:?}", document.path);
-    assert_eq!(document.line, Some(8), "the removed line's old number");
+    assert_eq!(document.line, Some(2), "the removed line's old number");
     assert!(document.review.is_none());
+}
+
+/// A prompt to a reviewed checkout snapshots it as the turn begins (the
+/// vendored turn baseline), and the last turn reads only what changed
+/// since: not the edit that was already there.
+#[gpui::test]
+fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
+    let (core, _fake, repo) = edited("review-last-turn");
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    open_review(&view, Scope::Uncommitted, cx);
+    view.update(cx, |view, _| {
+        let thread = view.panes[0].thread().unwrap();
+        view.cockpit.send(thread, "Add notes".into());
+    });
+    let baseline = || {
+        std::process::Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/worktree/reviewr/turn-base",
+            ])
+            .current_dir(&repo)
+            .output()
+            .is_ok_and(|out| out.status.success())
+    };
+    until(cx, |_| baseline());
+    std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
+    let review = view
+        .read_with(cx, |view, _| view.panes[0].preview.review())
+        .expect("a review is open");
+    open_review(&view, Scope::LastTurn, cx);
+    until(cx, |cx| {
+        review.read_with(cx, |review, _| {
+            review.place(0).map(|(path, _)| path.to_string())
+        }) == Some("notes.md".into())
+    });
+    review.read_with(cx, |review, _| {
+        assert_eq!(review.place(0), Some(("notes.md", 1)));
+        assert_eq!(review.place(1), None, "only the turn's own change");
+    });
 }

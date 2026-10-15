@@ -30,6 +30,11 @@ use crate::transcript::Input;
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{WorkspaceBinding, WorkspaceChoice};
 use crate::{SessionEvent, ThreadId};
+use ferrite_reviewr::ferrite::Read;
+use ferrite_reviewr::model::CommitPick;
+
+mod review;
+pub use review::*;
 
 /// The only generation this build speaks.
 pub const GENERATION: u32 = 1;
@@ -290,7 +295,7 @@ pub enum Op {
     },
     /// A review's git scope of the checkout at `path`, read by git on the
     /// Server's computer: how a window reviews a Thread's checkout, on
-    /// this computer or a machine (ADR 0021). Replied `diff`.
+    /// this computer or a machine (ADR 0021). Replied `review`.
     ReviewDiff {
         path: PathBuf,
         scope: WireScope,
@@ -300,6 +305,23 @@ pub enum Op {
     /// The branch's commits since its base at `path`, for a review's
     /// commits scope (ADR 0021). Replied `commits`.
     ListCommits {
+        path: PathBuf,
+    },
+    /// Files and lines matching `query` in the checkout at `path`, from
+    /// the Server's search index of it (ADR 0021). Replied `found`.
+    SearchRepo {
+        path: PathBuf,
+        query: String,
+    },
+    /// The worktree file `file` (relative) of the checkout at `path`, for
+    /// a review's file view (ADR 0021). Replied `text`.
+    ReadFile {
+        path: PathBuf,
+        file: String,
+    },
+    /// The pull request of the branch checked out at `path`, as its
+    /// forge's CLI reads it (ADR 0021). Replied `pull_request`.
+    PullRequest {
         path: PathBuf,
     },
     Restart {
@@ -321,8 +343,7 @@ pub enum WireDirection {
     Unknown,
 }
 
-/// What a `review_diff` reads; the last turn is read from the transcript
-/// the window already holds.
+/// What a `review_diff` reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireScope {
@@ -330,17 +351,19 @@ pub enum WireScope {
     Branch,
     /// The command's `commit`.
     Commit,
+    /// Since the checkout's snapshot when its latest turn began.
+    LastTurn,
     #[serde(other)]
     Unknown,
 }
 
 impl Op {
-    pub fn review_diff(path: &Path, diff: &crate::review::git::Diff) -> Op {
-        use crate::review::git::Diff;
-        let (scope, commit) = match diff {
-            Diff::Uncommitted => (WireScope::Uncommitted, None),
-            Diff::Branch => (WireScope::Branch, None),
-            Diff::Commit(id) => (WireScope::Commit, Some(id.clone())),
+    pub fn review_diff(path: &Path, read: &Read) -> Op {
+        let (scope, commit) = match read {
+            Read::Uncommitted => (WireScope::Uncommitted, None),
+            Read::Branch => (WireScope::Branch, None),
+            Read::LastTurn => (WireScope::LastTurn, None),
+            Read::Commits(pick) => (WireScope::Commit, Some(pick.newest.clone())),
         };
         Op::ReviewDiff {
             path: path.to_path_buf(),
@@ -351,14 +374,18 @@ impl Op {
 }
 
 impl WireScope {
-    /// The diff it names, unless this Server does not know it (or a
-    /// commit scope names no commit).
-    pub fn diff(self, commit: Option<String>) -> Option<crate::review::git::Diff> {
-        use crate::review::git::Diff;
+    /// The read it names, unless this Server does not know it (or a
+    /// commit scope names no commit id: never an option or a range).
+    pub fn read(self, commit: Option<String>) -> Option<Read> {
         match (self, commit) {
-            (WireScope::Uncommitted, _) => Some(Diff::Uncommitted),
-            (WireScope::Branch, _) => Some(Diff::Branch),
-            (WireScope::Commit, Some(id)) => Some(Diff::Commit(id)),
+            (WireScope::Uncommitted, _) => Some(Read::Uncommitted),
+            (WireScope::Branch, _) => Some(Read::Branch),
+            (WireScope::LastTurn, _) => Some(Read::LastTurn),
+            (WireScope::Commit, Some(id))
+                if !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit()) =>
+            {
+                Some(Read::Commits(CommitPick::single(&id)))
+            }
             _ => None,
         }
     }
@@ -760,7 +787,8 @@ pub enum Done {
     Project {
         project: ProjectId,
     },
-    /// A prompt handed back to the Composer (`unqueue`).
+    /// A prompt handed back to the Composer (`unqueue`), or the file a
+    /// `read_file` read.
     Text {
         text: String,
     },
@@ -801,14 +829,37 @@ pub enum Done {
         worktrees: Vec<WireWorktree>,
         branches: Vec<String>,
     },
-    /// A `review_diff`'s unified diff, as git printed it (at most
-    /// `review::git::MAX_DIFF`).
+    /// What a Server before the vendored review core answered a
+    /// `review_diff` with: git's unified diff. A window reads it as no
+    /// answer (`review` replaced it).
     Diff {
         text: String,
     },
     /// A `list_commits`' commits, newest first.
     Commits {
         commits: Vec<WireCommit>,
+    },
+    /// A `review_diff`'s changed files, in path order, each with its sides.
+    Review {
+        files: Vec<WireReviewFile>,
+    },
+    /// A `search_repo`'s matches: paths first (`file_total` matched in
+    /// all), then lines (`code_more` when the cap or time budget cut them).
+    Found {
+        files: Vec<WireFileHit>,
+        code: Vec<WireCodeHit>,
+        file_total: usize,
+        #[serde(default)]
+        code_more: bool,
+    },
+    /// A `pull_request`'s pull request, or the note in its place, `noun`
+    /// the forge's word for one.
+    PullRequest {
+        noun: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pr: Option<WirePr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     #[serde(other)]
     Unknown,
@@ -825,6 +876,11 @@ pub struct WireEntry {
 pub struct WireCommit {
     pub id: String,
     pub subject: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// When it was committed, in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -848,24 +904,6 @@ impl From<crate::workspace::RepoListing> for Done {
                 })
                 .collect(),
             branches: listing.branches,
-        }
-    }
-}
-
-impl From<crate::review::git::Commit> for WireCommit {
-    fn from(commit: crate::review::git::Commit) -> Self {
-        WireCommit {
-            id: commit.id,
-            subject: commit.subject,
-        }
-    }
-}
-
-impl From<WireCommit> for crate::review::git::Commit {
-    fn from(commit: WireCommit) -> Self {
-        Self {
-            id: commit.id,
-            subject: commit.subject,
         }
     }
 }
