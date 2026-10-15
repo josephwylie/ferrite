@@ -1,0 +1,1 @@
+{"type":"reply","id":40,"ok":{"kind":"review","files":[{"path":"src/a.rs","change":"modified","additions":1,"deletions":1,"old":"one\n","new":"two\n"},{"path":"logo.png","change":"renamed","previous_path":"old.png","additions":0,"deletions":0,"notice":"binary"}]}}

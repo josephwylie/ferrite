@@ -194,8 +194,17 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::NextScope"
         | "review::Reread"
         | "review::Close"
+        | "review::Search"
+        | "review::ToggleMarkdown"
+        | "review::ShowPullRequest"
         | "review::SaveComment"
-        | "review::CancelComment" => Hidden,
+        | "review::CancelComment"
+        | "review::OpenFound"
+        | "review::CloseSearch"
+        | "review::AllFiles"
+        | "review::PickBase"
+        | "review::ChooseBase"
+        | "review::CloseBases" => Hidden,
         _ => return None,
     })
 }

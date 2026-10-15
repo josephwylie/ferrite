@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/ferrite-core", "crates/ferrite", "crates/ferrite-projects", "crates/ferrite-focus-notify"]
+members = [
+    "crates/ferrite-core",
+    "crates/ferrite",
+    "crates/ferrite-projects",
+    "crates/ferrite-focus-notify",
+    "crates/ferrite-reviewr",
+]
 # Spikes build standalone with their own lockfiles; panes24 is the pinned
 # perf fixture and must not churn with workspace dependency updates.
 exclude = [

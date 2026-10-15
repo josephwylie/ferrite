@@ -414,8 +414,13 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // The Review slot (ADR 0021), while it holds the keyboard and no
         // field in it is open: ↑↓ walk the lines, ⇧↑↓ stretch the pick, c
         // or ⏎ comment on it, ⌫ takes a comment back, ⇥ steps the scope,
-        // r rereads it, esc closes the slot. In its comment field ⏎ adds
-        // and esc cancels. Bound after the bare rows they shadow.
+        // r rereads it, / searches the checkout, m renders Markdown, p
+        // shows the pull request, a lists every file, ⇧B picks the branch
+        // scope's base, esc goes back or closes the slot. In its comment
+        // field ⏎ adds and esc cancels; in its search field ↑↓ walk the
+        // results, ⏎ opens one and esc closes it; in its base field ↑↓ walk
+        // the bases, ⏎ picks one and esc closes it. Bound after the bare
+        // rows they shadow.
         ("up".into(), "review::Previous", Some(REVIEW)),
         ("down".into(), "review::Next", Some(REVIEW)),
         ("shift-up".into(), "review::ExtendPrevious", Some(REVIEW)),
@@ -425,6 +430,11 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("backspace".into(), "review::Uncomment", Some(REVIEW)),
         ("tab".into(), "review::NextScope", Some(REVIEW)),
         ("r".into(), "review::Reread", Some(REVIEW)),
+        ("/".into(), "review::Search", Some(REVIEW)),
+        ("m".into(), "review::ToggleMarkdown", Some(REVIEW)),
+        ("p".into(), "review::ShowPullRequest", Some(REVIEW)),
+        ("a".into(), "review::AllFiles", Some(REVIEW)),
+        ("shift-b".into(), "review::PickBase", Some(REVIEW)),
         ("escape".into(), "review::Close", Some(REVIEW)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
         (
@@ -432,6 +442,14 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "review::CancelComment",
             Some("ReviewComment"),
         ),
+        ("up".into(), "review::Previous", Some("ReviewSearch")),
+        ("down".into(), "review::Next", Some("ReviewSearch")),
+        ("enter".into(), "review::OpenFound", Some("ReviewSearch")),
+        ("escape".into(), "review::CloseSearch", Some("ReviewSearch")),
+        ("up".into(), "review::Previous", Some("ReviewBase")),
+        ("down".into(), "review::Next", Some("ReviewBase")),
+        ("enter".into(), "review::ChooseBase", Some("ReviewBase")),
+        ("escape".into(), "review::CloseBases", Some("ReviewBase")),
         // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
         // closes it. Last, so its context wins every same-depth tie: send,
         // the Composer's new line, Groups (⌘G, ⌘⇧G) and interrupt.
@@ -1052,9 +1070,10 @@ mod tests {
     }
 
     /// The Review slot's keys live in its own context — never while its
-    /// comment field takes text — and sit after the bare rows they shadow.
+    /// comment or search field takes text — and sit after the bare rows
+    /// they shadow.
     #[test]
-    fn the_review_keys_are_scoped_to_the_slot_and_its_field() {
+    fn the_review_keys_are_scoped_to_the_slot_and_its_fields() {
         for platform in [Platform::Mac, Platform::Windows] {
             let table = bindings(platform);
             for (key, action) in [
@@ -1064,6 +1083,11 @@ mod tests {
                 ("backspace", "review::Uncomment"),
                 ("tab", "review::NextScope"),
                 ("r", "review::Reread"),
+                ("/", "review::Search"),
+                ("m", "review::ToggleMarkdown"),
+                ("p", "review::ShowPullRequest"),
+                ("a", "review::AllFiles"),
+                ("shift-b", "review::PickBase"),
                 ("escape", "review::Close"),
             ] {
                 assert!(
@@ -1086,6 +1110,13 @@ mod tests {
                 "review::CancelComment",
                 Some("ReviewComment")
             )));
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::OpenFound")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "review::CloseSearch")
+            );
         }
     }
 

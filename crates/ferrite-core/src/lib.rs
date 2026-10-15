@@ -28,7 +28,6 @@ mod prompt_history;
 pub mod protocol;
 pub mod providers;
 pub mod questions;
-pub mod review;
 pub mod roster;
 pub mod self_update;
 pub mod server;

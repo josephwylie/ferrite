@@ -20,7 +20,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use ferrite_core::{prompt_files, review};
+use ferrite_core::prompt_files;
+use ferrite_reviewr::model::{Comment as ReviewComment, CommentStore};
 
 use gpui::prelude::*;
 use gpui::{
@@ -140,7 +141,7 @@ pub struct Composer {
     files: Vec<PathBuf>,
     /// Review comments gathered from the reader beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
-    review: Vec<review::Comment>,
+    review: CommentStore,
     /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
     /// any occurrence still standing in the text paints as the comp's
     /// @-pill, whichever provider serves the Thread. Display only — the
@@ -207,7 +208,7 @@ impl Composer {
             files_focus: cx.focus_handle(),
             line: Line::default(),
             files: Vec::new(),
-            review: Vec::new(),
+            review: CommentStore::new(),
             mentions: Vec::new(),
             menu_open: false,
             history_available: false,
@@ -269,20 +270,21 @@ impl Composer {
         self.files.len() + usize::from(!self.review.is_empty())
     }
 
-    /// The review comments waiting for the next send.
-    pub fn review_comments(&self) -> &[review::Comment] {
+    /// The review comments waiting for the next send, each with an id
+    /// never reused.
+    pub fn review_comments(&self) -> &CommentStore {
         &self.review
     }
 
-    pub fn add_review_comment(&mut self, comment: review::Comment, cx: &mut Context<Self>) {
-        self.review.push(comment);
+    pub fn add_review_comment(&mut self, comment: ReviewComment, cx: &mut Context<Self>) {
+        self.review.add(comment);
         self.edited(cx);
     }
 
-    /// Drop the review comment at `index` on the shelf, and only that one.
-    pub fn remove_review_comment(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.review.len() {
-            self.review.remove(index);
+    /// Drop the review comment `id` from the shelf, and only that one.
+    pub fn remove_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(index) = self.review.index_of(id) {
+            self.review.take(index);
             self.edited(cx);
         }
     }
@@ -320,7 +322,7 @@ impl Composer {
                         })
                         .on_drop_review(move |window, cx| {
                             let _ = drop_review.update(cx, |composer, cx| {
-                                composer.review.clear();
+                                composer.review.take_all();
                                 composer.focus_handle.focus(window, cx);
                                 composer.edited(cx);
                             });
@@ -399,7 +401,7 @@ impl Composer {
         let text = self.prompt();
         self.line.take();
         self.files.clear();
-        self.review.clear();
+        self.review.take_all();
         self.mentions.clear();
         self.edited(cx);
         text
@@ -412,7 +414,10 @@ impl Composer {
     }
 
     pub fn prompt(&self) -> String {
-        prompt_files::compose(&review::attach(self.line.text(), &self.review), &self.files)
+        prompt_files::compose(
+            &ferrite_reviewr::ferrite::attach(self.line.text(), &self.review),
+            &self.files,
+        )
     }
 
     /// The line and its files without the review comments — what `set`

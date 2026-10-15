@@ -34,6 +34,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test core
         run: cargo test -p ferrite-core --locked
+      - name: Test the vendored review core
+        run: cargo test -p ferrite-reviewr --locked
       # Projects (vendored herdr-projects) is Unix-only, so macOS alone.
       - name: Test Projects
         run: cargo test -p ferrite-projects --locked
@@ -67,6 +69,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test core
         run: cargo test -p ferrite-core --locked
+      - name: Test the vendored review core
+        run: cargo test -p ferrite-reviewr --locked
       - name: Build app
         run: cargo build -p ferrite --locked
       # Visuals (ADR 0013): the app with Chromium, and proof that Chromium

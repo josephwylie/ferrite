@@ -23,6 +23,9 @@ cef = ["dep:cef"]
 ferrite-core = { path = "../ferrite-core" }
 # System notifications: herdr-focus-notify, vendored (its README).
 ferrite-focus-notify = { path = "../ferrite-focus-notify" }
+# herdr-reviewr's review core, vendored: the Review slot's rows, comments and
+# their prompt text (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
 # Projects (ADR 0030): herdr-projects, vendored; the window draws its data.
 ferrite-projects = { path = "../ferrite-projects" }
 # The kit facade keeps the renderer, native platform and components on one

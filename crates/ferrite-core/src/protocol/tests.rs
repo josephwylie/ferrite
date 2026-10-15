@@ -663,11 +663,92 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_review_read_commits",
+            command(
+                47,
+                Op::ReviewRead {
+                    path: "/home/me/src/ferrite".into(),
+                    scope: WireScope::Commit,
+                    commit: Some("9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into()),
+                    since: Some("1f2e3d4c5b6a79880716253443526170f8e9dacb".into()),
+                },
+            ),
+        ),
+        (
             "command_list_commits",
             command(
                 42,
                 Op::ListCommits {
                     path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_review_read_last_turn",
+            command(
+                43,
+                Op::ReviewRead {
+                    path: "/home/me/src/ferrite".into(),
+                    scope: WireScope::LastTurn,
+                    commit: None,
+                    since: None,
+                },
+            ),
+        ),
+        (
+            "command_search_repo",
+            command(
+                44,
+                Op::SearchRepo {
+                    path: "/home/me/src/ferrite".into(),
+                    query: "pars".into(),
+                },
+            ),
+        ),
+        (
+            "command_read_file",
+            command(
+                45,
+                Op::ReadFile {
+                    path: "/home/me/src/ferrite".into(),
+                    file: "docs/adr/0021-review-slot.md".into(),
+                },
+            ),
+        ),
+        (
+            "command_review_pull_request",
+            command(
+                46,
+                Op::ReviewPullRequest {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_list_files",
+            command(
+                48,
+                Op::ListFiles {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_list_bases",
+            command(
+                49,
+                Op::ListBases {
+                    path: "/home/me/src/ferrite".into(),
+                },
+            ),
+        ),
+        (
+            "command_pick_base",
+            command(
+                50,
+                Op::PickBase {
+                    path: "/home/me/src/ferrite".into(),
+                    base: "develop".into(),
                 },
             ),
         ),
@@ -899,7 +980,166 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     commits: vec![WireCommit {
                         id: "9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into(),
                         subject: "Clippy: the Herdr lanes' mechanical warnings".into(),
+                        author: None,
+                        time: None,
                     }],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_commits_author",
+            Sample::Server(ServerMessage::Reply {
+                id: 42,
+                ok: Some(Done::Commits {
+                    commits: vec![WireCommit {
+                        id: "9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7".into(),
+                        subject: "Review: the vendored core".into(),
+                        author: Some("Joseph".into()),
+                        time: Some(1_792_000_000),
+                    }],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_review",
+            Sample::Server(ServerMessage::Reply {
+                id: 40,
+                ok: Some(Done::Review {
+                    files: vec![
+                        WireReviewFile {
+                            path: "src/a.rs".into(),
+                            change: WireChange::Modified,
+                            previous_path: None,
+                            additions: 1,
+                            deletions: 1,
+                            old: Some("one\n".into()),
+                            new: Some("two\n".into()),
+                            notice: None,
+                        },
+                        WireReviewFile {
+                            path: "logo.png".into(),
+                            change: WireChange::Renamed,
+                            previous_path: Some("old.png".into()),
+                            additions: 0,
+                            deletions: 0,
+                            old: None,
+                            new: None,
+                            notice: Some(WireFileNotice::Binary),
+                        },
+                    ],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_found",
+            Sample::Server(ServerMessage::Reply {
+                id: 44,
+                ok: Some(Done::Found {
+                    files: vec![WireFileHit {
+                        path: "src/parse.rs".into(),
+                        spans: vec![(4, 8)],
+                    }],
+                    code: vec![WireCodeHit {
+                        path: "src/lib.rs".into(),
+                        line: 12,
+                        text: "mod parse;".into(),
+                        spans: vec![(4, 8)],
+                    }],
+                    file_total: 1,
+                    code_more: false,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_all_files",
+            Sample::Server(ServerMessage::Reply {
+                id: 48,
+                ok: Some(Done::AllFiles {
+                    entries: vec![
+                        WireTreeEntry {
+                            path: "src/lib.rs".into(),
+                            ignored: false,
+                            dir: false,
+                        },
+                        WireTreeEntry {
+                            path: "target".into(),
+                            ignored: true,
+                            dir: true,
+                        },
+                    ],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_bases",
+            Sample::Server(ServerMessage::Reply {
+                id: 49,
+                ok: Some(Done::Bases {
+                    bases: vec![
+                        WireBase {
+                            name: "main".into(),
+                            default: true,
+                            current: false,
+                            tip: 1_760_000_000,
+                            oid: None,
+                        },
+                        WireBase {
+                            name: "develop".into(),
+                            default: false,
+                            current: true,
+                            tip: 1_760_500_000,
+                            oid: None,
+                        },
+                    ],
+                    picked: Some("main".into()),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_review_pull_request",
+            Sample::Server(ServerMessage::Reply {
+                id: 46,
+                ok: Some(Done::ReviewPullRequest {
+                    noun: "PR".into(),
+                    pr: Some(WirePr {
+                        number: 118,
+                        title: "Vendor herdr-reviewr".into(),
+                        url: "https://github.com/josephwylie/ferrite/pull/118".into(),
+                        body: "The Review slot's core.".into(),
+                        state: WirePrState::Open,
+                        draft: false,
+                        head: "vendor/reviewr".into(),
+                        base: "main".into(),
+                        merge: WireMerge::Clean,
+                        sync: WireSync::Unpushed { commits: 2 },
+                        checks: vec![WireCheck {
+                            name: "macOS (Metal)".into(),
+                            status: WireCheckStatus::Running,
+                        }],
+                        comments: vec![WirePrComment {
+                            kind: WirePrCommentKind::Finding,
+                            author: "reviewer".into(),
+                            anchor: "src/a.rs:3-4".into(),
+                            body: "Off by one?".into(),
+                            snippet: Some("@@ -1,4 +1,4 @@\n-a\n+b".into()),
+                            created_at: "2026-10-15T09:00:00Z".into(),
+                            resolved: false,
+                            outdated: false,
+                            replies: vec![WireReply {
+                                author: "joseph".into(),
+                                body: "Fixed.".into(),
+                                created_at: "2026-10-15T10:00:00Z".into(),
+                            }],
+                        }],
+                        truncated: false,
+                    }),
+                    note: None,
                 }),
                 error: None,
             }),
@@ -910,6 +1150,18 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 id: 43,
                 ok: Some(Done::PullRequest {
                     json: Some(r#"{"number":48,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/48","statusCheckRollup":[]}"#.into()),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_review_pull_request_note",
+            Sample::Server(ServerMessage::Reply {
+                id: 46,
+                ok: Some(Done::ReviewPullRequest {
+                    noun: "MR".into(),
+                    pr: None,
+                    note: Some("No MR yet. Ready to ship?".into()),
                 }),
                 error: None,
             }),
@@ -1763,4 +2015,84 @@ fn an_unknown_decision_kind_reads_as_one_this_window_cannot_draw() {
     };
     let core = crate::Decision::try_from(&decision).unwrap();
     assert!(matches!(core.kind, crate::DecisionKind::Unsupported { .. }));
+}
+
+/// A review's commit scope reads commit ids and nothing else: an option
+/// or a revision range is refused before git sees it.
+#[test]
+fn a_review_reads_only_commit_ids() {
+    let id = "9a31c76e0d4b5f1a2c3d4e5f60718293a4b5c6d7";
+    let oldest = "1f2e3d4c5b6a79880716253443526170f8e9dacb";
+    assert_eq!(
+        WireScope::Commit.read(Some(id.into()), None),
+        Some(Read::Commits(CommitPick::single(id)))
+    );
+    assert_eq!(
+        WireScope::Commit.read(Some(id.into()), Some(oldest.into())),
+        Some(Read::Commits(CommitPick {
+            oldest: oldest.into(),
+            newest: id.into(),
+        }))
+    );
+    for refused in ["--output=/tmp/x", "main..HEAD", ""] {
+        assert_eq!(
+            WireScope::Commit.read(Some(refused.into()), None),
+            None,
+            "{refused}"
+        );
+        assert_eq!(
+            WireScope::Commit.read(Some(id.into()), Some(refused.into())),
+            None,
+            "since {refused}"
+        );
+    }
+    assert_eq!(WireScope::Commit.read(None, None), None);
+    assert_eq!(WireScope::LastTurn.read(None, None), Some(Read::LastTurn));
+    assert_eq!(WireScope::Unknown.read(None, None), None);
+}
+
+/// A run of commits goes over the wire as its two ends and comes back the
+/// same pick; one commit sends no `since`.
+#[test]
+fn a_commit_run_round_trips_through_review_read() {
+    let path = Path::new("/home/me/src/ferrite");
+    for pick in [
+        CommitPick::single("9a31c76e"),
+        CommitPick {
+            oldest: "1f2e3d4c".into(),
+            newest: "9a31c76e".into(),
+        },
+    ] {
+        let read = Read::Commits(pick);
+        let Op::ReviewRead {
+            scope,
+            commit,
+            since,
+            ..
+        } = Op::review_read(path, &read)
+        else {
+            unreachable!("review_read builds a ReviewRead");
+        };
+        assert_eq!(scope.read(commit, since), Some(read));
+    }
+}
+
+/// A `review_diff` names only what a Server from before `review_read`
+/// reads: a last turn or a run of commits is never sent as something less.
+#[test]
+fn review_diff_names_only_what_an_older_server_reads() {
+    let path = Path::new("/home/me/src/ferrite");
+    let single = Read::Commits(CommitPick::single("9a31c76e"));
+    for read in [Read::Uncommitted, Read::Branch, single] {
+        let Some(Op::ReviewDiff { scope, commit, .. }) = Op::review_diff(path, &read) else {
+            panic!("{read:?} is a review_diff");
+        };
+        assert_eq!(scope.read(commit, None), Some(read));
+    }
+    let run = Read::Commits(CommitPick {
+        oldest: "1f2e3d4c".into(),
+        newest: "9a31c76e".into(),
+    });
+    assert_eq!(Op::review_diff(path, &run), None);
+    assert_eq!(Op::review_diff(path, &Read::LastTurn), None);
 }

@@ -1110,7 +1110,7 @@ impl CockpitView {
             Command::ShowParked => self.show_parked(window, cx),
             Command::ReviewBranch => self.review_branch(window, cx),
             Command::ReviewChanges => self.open_beside(
-                beside::Beside::Review(ferrite_core::review::Scope::Uncommitted),
+                beside::Beside::Review(ferrite_reviewr::model::Scope::Uncommitted),
                 window,
                 cx,
             ),
@@ -1254,7 +1254,7 @@ impl CockpitView {
     fn review_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_palette(cx);
         self.open_beside(
-            beside::Beside::Review(ferrite_core::review::Scope::Branch),
+            beside::Beside::Review(ferrite_reviewr::model::Scope::Branch),
             window,
             cx,
         );

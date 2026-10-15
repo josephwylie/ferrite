@@ -10,11 +10,13 @@
 //! focus — closes it, and the tree it was spliced into closes back over it,
 //! restoring the board as it was.
 //!
-//! A review reads its scope's edits here: the uncommitted work, the branch
-//! and its commits from git where the checkout is (`Cockpit::review_diff`,
-//! `review_commits`), off the UI thread; the last turn from Main's
-//! transcript. Picking another scope, or a commit, comes back here to be
-//! read.
+//! A review reads here, where the checkout is — by the Server that owns
+//! the Thread, or off the UI thread when this window runs its agents
+//! itself — with the vendored review core (`Cockpit::review_diff`,
+//! `review_commits`, `search_repo`, `read_review_file`,
+//! `review_pull_request`, `review_files`, `review_bases`,
+//! `pick_review_base`). Picking another scope, a commit, a search's file,
+//! the pull request, every file or a base comes back here to be read.
 //!
 //! Another Thread opens as a second Pane: beside the current one in Solo (a
 //! pair on the Solo board, for as long as focus stays on one of the two),
@@ -23,15 +25,18 @@
 //! a member.
 
 use super::*;
-use crate::review::{CommitPicked, MenuAsked, ReviewView, ScopePicked};
-use ferrite_core::review::git::Diff;
-use ferrite_core::review::Scope;
+use crate::review::{
+    BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
+    ScopePicked, Searched,
+};
+use ferrite_reviewr::ferrite::Read;
+use ferrite_reviewr::model::{CommitPick, Scope};
 use std::path::PathBuf;
 
 /// Find in the reader (⌘F when the reader took the last press or holds the
 /// keyboard; the bar is the transcript's, `crate::find`): a file's lines, or
-/// a rendered Markdown document's text. A review is not searched — ⌘F there
-/// finds in the transcript.
+/// a rendered Markdown document's text. A review finds in its own rows
+/// (`review.rs`), while it holds the keyboard.
 pub(crate) struct ReaderFind {
     bar: crate::find::Find,
     /// The document it searches: the bar closes with it, and another one
@@ -158,6 +163,30 @@ impl CockpitView {
                 view.read_commit(thread, review, commit.clone(), cx)
             })
             .detach();
+            cx.subscribe(&review, move |view, review, Searched(query), cx| {
+                view.search_review(thread, review, query.clone(), cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, FileOpened { path }, cx| {
+                view.read_review_file(thread, review, path.clone(), cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, _: &PrAsked, cx| {
+                view.read_pull_request(thread, review, cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, _: &FilesAsked, cx| {
+                view.read_review_files(thread, review, cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, _: &BasesAsked, cx| {
+                view.read_review_bases(thread, review, cx)
+            })
+            .detach();
+            cx.subscribe(&review, move |view, review, BasePicked(base), cx| {
+                view.pick_review_base(thread, review, base.clone(), cx)
+            })
+            .detach();
             cx.subscribe(&review, move |view, _, MenuAsked { at, line }, cx| {
                 let target = MenuTarget::Review {
                     thread,
@@ -184,10 +213,9 @@ impl CockpitView {
         self.panes.get(self.pane_for(thread)?)?.preview.review()
     }
 
-    /// Read `scope` for `thread` into `review`: the last turn from Main's
-    /// transcript; the rest by git where the checkout is — by the Server,
-    /// which on a machine reads the machine's — landing later. A read that
-    /// lands after the operator moved on is dropped.
+    /// Read `scope` for `thread` into `review`, where the checkout is — by
+    /// the Server, which on a machine reads the machine's — landing later.
+    /// A read that lands after the operator moved on is dropped.
     fn read_review(
         &mut self,
         thread: ThreadId,
@@ -198,18 +226,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread) else {
             return;
         };
-        let diff = match scope {
-            Scope::LastTurn => {
-                let edits = self
-                    .cockpit
-                    .thread(thread)
-                    .map(|open| {
-                        ferrite_core::review::last_turn(open.transcript(), Some(&workspace))
-                    })
-                    .unwrap_or_default();
-                review.update(cx, |review, cx| review.show(scope, edits, cx));
-                return;
-            }
+        let read = match scope {
             Scope::Commits => {
                 let commits = self.cockpit.review_commits(&workspace);
                 land(
@@ -218,42 +235,178 @@ impl CockpitView {
                     cx,
                     move |review| review.scope() == scope && review.commit().is_none(),
                     |review, commits, cx| review.show_commits(commits, cx),
+                    ReviewView::fail,
                 );
                 return;
             }
-            Scope::Uncommitted => Diff::Uncommitted,
-            Scope::Branch => Diff::Branch,
+            Scope::Uncommitted => Read::Uncommitted,
+            Scope::Branch => Read::Branch,
+            Scope::LastTurn => Read::LastTurn,
         };
-        let edits = self.cockpit.review_diff(&workspace, diff);
+        let files = self.cockpit.review_diff(&workspace, read);
         land(
             review,
-            edits,
+            files,
             cx,
             move |review| review.scope() == scope,
-            move |review, edits, cx| review.show(scope, edits, cx),
+            move |review, files, cx| review.show(scope, files, cx),
+            ReviewView::fail,
         );
     }
 
-    /// Read the diff of `commit`, one listed in the commits scope.
+    /// Read the diff of `pick`, commits listed in the commits scope.
     fn read_commit(
         &mut self,
         thread: ThreadId,
         review: Entity<ReviewView>,
-        commit: String,
+        pick: CommitPick,
         cx: &mut Context<Self>,
     ) {
         let Some(workspace) = self.thread_path(thread) else {
             return;
         };
-        let edits = self
+        let files = self
             .cockpit
-            .review_diff(&workspace, Diff::Commit(commit.clone()));
+            .review_diff(&workspace, Read::Commits(pick.clone()));
         land(
             review,
-            edits,
+            files,
             cx,
-            move |review| review.commit() == Some(commit.as_str()),
-            |review, edits, cx| review.show(Scope::Commits, edits, cx),
+            move |review| review.commit() == Some(&pick),
+            |review, files, cx| review.show(Scope::Commits, files, cx),
+            ReviewView::fail,
+        );
+    }
+
+    /// Search the checkout for `query`; its answer lands while the field
+    /// still reads it.
+    fn search_review(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        query: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let found = self.cockpit.search_repo(&workspace, &query);
+        let (shown, failed) = (query.clone(), query.clone());
+        land(
+            review,
+            found,
+            cx,
+            ReviewView::searching,
+            move |review, results, cx| review.show_found(&shown, Ok(results), cx),
+            move |review, error, cx| review.show_found(&failed, Err(error), cx),
+        );
+    }
+
+    /// Read file `path` of the checkout for the review's file view.
+    fn read_review_file(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let text = self.cockpit.read_review_file(&workspace, &path);
+        let opened = path.clone();
+        land(
+            review,
+            text,
+            cx,
+            move |review| review.file_open() == Some(opened.as_str()),
+            move |review, text, cx| review.show_file(&path, text, cx),
+            ReviewView::fail,
+        );
+    }
+
+    /// Read the pull request of the branch checked out for `thread`.
+    fn read_pull_request(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let pr = self.cockpit.review_pull_request(&workspace);
+        land(
+            review,
+            pr,
+            cx,
+            ReviewView::pr_open,
+            |review, pr, cx| review.show_pr(pr, cx),
+            ReviewView::fail,
+        );
+    }
+
+    /// Read every file of the checkout for the review's all-files list.
+    fn read_review_files(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let files = self.cockpit.review_files(&workspace);
+        land(
+            review,
+            files,
+            cx,
+            ReviewView::tree_open,
+            |review, files, cx| review.show_tree(Ok(files), cx),
+            |review, error, cx| review.show_tree(Err(error), cx),
+        );
+    }
+
+    /// Read the bases the branch scope can read against, for the picker.
+    fn read_review_bases(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let bases = self.cockpit.review_bases(&workspace);
+        land(
+            review,
+            bases,
+            cx,
+            ReviewView::bases_open,
+            |review, bases, cx| review.show_bases(Ok(bases), cx),
+            |review, error, cx| review.show_bases(Err(error), cx),
+        );
+    }
+
+    /// Make `base` the branch scope's base, then read the branch over it.
+    fn pick_review_base(
+        &mut self,
+        thread: ThreadId,
+        review: Entity<ReviewView>,
+        base: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.thread_path(thread) else {
+            return;
+        };
+        let picked = self.cockpit.pick_review_base(&workspace, &base);
+        land(
+            review,
+            picked,
+            cx,
+            |_| true,
+            |review, (), cx| review.pick_scope(Scope::Branch, cx),
+            ReviewView::fail,
         );
     }
 
@@ -756,6 +909,7 @@ fn land<T: 'static>(
     cx: &mut Context<CockpitView>,
     current: impl Fn(&ReviewView) -> bool + 'static,
     show: impl FnOnce(&mut ReviewView, T, &mut Context<ReviewView>) + 'static,
+    fail: impl FnOnce(&mut ReviewView, String, &mut Context<ReviewView>) + 'static,
 ) {
     let review = review.downgrade();
     cx.spawn(async move |_, cx| {
@@ -767,7 +921,7 @@ fn land<T: 'static>(
                 }
                 match read {
                     Ok(read) => show(review, read, cx),
-                    Err(error) => review.fail(error.to_string(), cx),
+                    Err(error) => fail(review, error.to_string(), cx),
                 }
             })
             .ok();

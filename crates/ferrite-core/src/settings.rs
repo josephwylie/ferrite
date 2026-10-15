@@ -128,6 +128,40 @@ pub struct Settings {
     /// Other computers whose Servers the window can be on, over ssh (ADR
     /// 0026), in the nav's order. Default: none.
     pub machines: Vec<crate::machine::Machine>,
+    /// The self-hosted forges a review reads pull requests from, besides
+    /// github.com, gitlab.com and Azure DevOps (reviewr's `*_host` keys,
+    /// ADR 0021). Default: none.
+    pub forge_hosts: ForgeHosts,
+}
+
+/// One self-hosted host per forge, each a bare hostname (`ghe.corp.example`)
+/// no built-in forge already claims.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ForgeHosts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gitlab: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub azure_devops: Option<String>,
+}
+
+impl ForgeHosts {
+    /// What a review's pull request read resolves remotes against. Hosts
+    /// reviewr refuses are all dropped, as it refuses a config naming one,
+    /// and the log says why.
+    pub fn review_config(&self) -> ferrite_reviewr::config::PluginConfig {
+        ferrite_reviewr::config::PluginConfig::with_hosts(
+            self.github.as_deref(),
+            self.gitlab.as_deref(),
+            self.azure_devops.as_deref(),
+        )
+        .unwrap_or_else(|error| {
+            crate::log!("settings: forge_hosts refused: {error}");
+            ferrite_reviewr::config::PluginConfig::default()
+        })
+    }
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
@@ -227,6 +261,7 @@ impl Default for Settings {
             system_notifications: true,
             allowance_warnings: vec![80, 95],
             machines: Vec::new(),
+            forge_hosts: ForgeHosts::default(),
         }
     }
 }
@@ -416,6 +451,11 @@ mod tests {
                 target: "me@build.example.com".into(),
                 enabled: false,
             }],
+            forge_hosts: ForgeHosts {
+                github: Some("ghe.corp.example".into()),
+                gitlab: None,
+                azure_devops: None,
+            },
         }
     }
 

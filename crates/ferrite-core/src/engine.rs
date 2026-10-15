@@ -919,6 +919,10 @@ pub struct Engine {
     windows: windows::Windows,
     /// Each open Thread's Attention changes, counted for the API.
     attention_count: windows::AttentionCount,
+    /// The live Sessions as reviewr's turn tracking last heard of them,
+    /// and this Engine's feed into it.
+    turn_agents: Vec<ferrite_reviewr::ferrite::Agent>,
+    turns: ferrite_reviewr::ferrite::TurnSource,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
@@ -966,6 +970,8 @@ impl Engine {
             stale_sessions: BTreeSet::new(),
             windows: Default::default(),
             attention_count: Default::default(),
+            turn_agents: Vec::new(),
+            turns: Default::default(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
         })
@@ -2544,6 +2550,8 @@ impl Engine {
             state.replacement = None;
             state.session = None;
         }
+        // reviewr's private index copies leave each checkout's git dir.
+        ferrite_reviewr::git::end_sessions();
         // Every record accepted is written before Ferrite goes (E1); only
         // the final syncs are bounded.
         self.store.quit(QUIT_SYNC_DEADLINE);
@@ -3082,6 +3090,7 @@ impl Engine {
         for id in ended {
             self.request_suggestion(id);
         }
+        self.publish_turn_agents();
         for (thread, subject) in history_reloads {
             if let Err(error) = self.ensure_subject_history(thread, &subject) {
                 if let (Some(state), Subject::Subagent(key)) =
@@ -3092,6 +3101,40 @@ impl Engine {
             }
         }
         frame
+    }
+
+    /// Tell reviewr's turn tracking where each live Session works and
+    /// whether it is working, when that changed: a review's last turn is
+    /// the checkout since the latest turn that changed it began (ADR 0021).
+    fn publish_turn_agents(&mut self) {
+        use crate::transcript::Status as Turn;
+        use ferrite_reviewr::turn::Status;
+        let agents: Vec<_> = self
+            .threads
+            .iter()
+            .filter(|(_, state)| state.session.is_some())
+            .filter_map(|(id, state)| {
+                let cwd = crate::workspace::effective_cwd(
+                    state.session_project_root.as_deref(),
+                    state.workspace.as_ref(),
+                )?;
+                let status = match state.transcript().status() {
+                    Turn::Idle => Status::Idle,
+                    Turn::Streaming => Status::Working,
+                    Turn::Blocked => Status::Blocked,
+                    Turn::Closed => Status::Done,
+                };
+                Some(ferrite_reviewr::ferrite::Agent {
+                    thread: id.to_string(),
+                    cwd: cwd.to_path_buf(),
+                    status,
+                })
+            })
+            .collect();
+        if agents != self.turn_agents {
+            self.turn_agents = agents.clone();
+            self.turns.agents_changed(agents, crate::clock::instant());
+        }
     }
 
     /// Submit immediately; the provider owns admission and execution.

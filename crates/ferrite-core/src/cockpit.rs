@@ -76,6 +76,9 @@ pub struct Cockpit {
     /// until told, and again after every attach: a Server forgets a window
     /// that left.
     told: Option<Told>,
+    /// The self-hosted forges a review's pull request is read from here,
+    /// when this window runs its agents itself (`settings_changed`).
+    forge: ferrite_reviewr::config::PluginConfig,
 }
 
 /// What only a window knows and the API reports (ADR 0030): the Thread it
@@ -149,6 +152,7 @@ impl Cockpit {
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
+            forge: Default::default(),
             told: None,
         }
     }
@@ -1312,21 +1316,21 @@ impl Cockpit {
         self.remote()?.list_repo(project)
     }
 
-    /// A review's `diff` of the checkout at `path`, read by git where the
-    /// Server runs — on a machine, the machine's checkout (ADR 0021) — or
-    /// here, off this thread, when this window runs its agents itself.
+    /// A review's `read` of the checkout at `path`: its changed files with
+    /// both sides, read by the vendored review core where the Server runs —
+    /// on a machine, the machine's checkout (ADR 0021) — or here, off this
+    /// thread, when this window runs its agents itself.
     pub fn review_diff(
         &mut self,
         path: &Path,
-        diff: crate::review::git::Diff,
-    ) -> io::Result<Receiver<io::Result<Vec<crate::FileEdit>>>> {
+        read: ferrite_reviewr::ferrite::Read,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
         match &mut self.link {
-            Link::Server(server) => server.review_diff(path, &diff),
+            Link::Server(server) => server.review_diff(path, &read),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
                 Ok(read_here(move || {
-                    crate::review::git::read(&path, &diff)
-                        .map(|text| crate::review::git::parse(&text))
+                    ferrite_reviewr::ferrite::review(&path, &read)
                 }))
             }
         }
@@ -1337,12 +1341,117 @@ impl Cockpit {
     pub fn review_commits(
         &mut self,
         path: &Path,
-    ) -> io::Result<Receiver<io::Result<Vec<crate::review::git::Commit>>>> {
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::CommitRow>>>> {
         match &mut self.link {
             Link::Server(server) => server.review_commits(path),
             Link::InProcess(_) => {
                 let path = path.to_path_buf();
-                Ok(read_here(move || crate::review::git::commits(&path)))
+                Ok(read_here(move || ferrite_reviewr::ferrite::commits(&path)))
+            }
+        }
+    }
+
+    /// Files and lines matching `query` in the checkout at `path`, from
+    /// the search index where `review_diff` reads.
+    pub fn search_repo(
+        &mut self,
+        path: &Path,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<ferrite_reviewr::search::SearchResults>>> {
+        match &mut self.link {
+            Link::Server(server) => server.search_repo(path, query),
+            Link::InProcess(_) => {
+                let (path, query) = (path.to_path_buf(), query.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::search(&path, &query)
+                }))
+            }
+        }
+    }
+
+    /// The worktree file `file` of the checkout at `path`, for a review's
+    /// file view, read where `review_diff` reads.
+    pub fn read_review_file(
+        &mut self,
+        path: &Path,
+        file: &str,
+    ) -> io::Result<Receiver<io::Result<String>>> {
+        match &mut self.link {
+            Link::Server(server) => server.read_review_file(path, file),
+            Link::InProcess(_) => {
+                let (path, file) = (path.to_path_buf(), file.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::read_file(&path, &file)
+                        .map_err(|notice| notice.message().to_string())
+                }))
+            }
+        }
+    }
+
+    /// The pull request of the branch checked out at `path`, whole, read by
+    /// its forge's CLI for a review, where `review_diff` reads.
+    pub fn review_pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_pull_request(path),
+            Link::InProcess(_) => {
+                let (path, forge) = (path.to_path_buf(), self.forge.clone());
+                Ok(read_here(move || {
+                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
+                    Ok(crate::protocol::ReviewPullRequest::of(view, noun))
+                }))
+            }
+        }
+    }
+
+    /// Every file of the checkout at `path`, for a review's all-files
+    /// list, read where `review_diff` reads.
+    pub fn review_files(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::WorktreeEntry>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_files(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::all_files(&path)
+                }))
+            }
+        }
+    }
+
+    /// The bases a review's branch scope can read against, read where
+    /// `review_diff` reads.
+    pub fn review_bases(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<ferrite_reviewr::ferrite::Bases>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_bases(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || ferrite_reviewr::ferrite::bases(&path)))
+            }
+        }
+    }
+
+    /// Make `base` the branch scope's base for the checkout at `path`,
+    /// written where `review_diff` reads.
+    pub fn pick_review_base(
+        &mut self,
+        path: &Path,
+        base: &str,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        match &mut self.link {
+            Link::Server(server) => server.pick_review_base(path, base),
+            Link::InProcess(_) => {
+                let (path, base) = (path.to_path_buf(), base.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::pick_base(&path, &base)
+                }))
             }
         }
     }
@@ -1659,8 +1768,10 @@ impl Cockpit {
     }
 
     /// Settings changed on disk: whether completed turns predict a
-    /// follow-up, and where an allowance warns, among them.
+    /// follow-up, where an allowance warns, and the self-hosted forges a
+    /// review reads, among them.
     pub fn settings_changed(&mut self, settings: &crate::settings::Settings) {
+        self.forge = settings.forge_hosts.review_config();
         self.act(
             |engine| {
                 engine.set_suggestions_enabled(settings.placeholder_suggestions);

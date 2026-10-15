@@ -11030,7 +11030,7 @@ impl CockpitView {
                             cx.stop_propagation();
                             view.changed_files_card = None;
                             view.open_beside(
-                                beside::Beside::Review(ferrite_core::review::Scope::Uncommitted),
+                                beside::Beside::Review(ferrite_reviewr::model::Scope::Uncommitted),
                                 window,
                                 cx,
                             );

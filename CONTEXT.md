@@ -150,8 +150,10 @@ reads as code. Not a Visual: nobody asked for it, and it is not live.
 
 **Review**
 A diff of a Thread's changes beside its Pane — uncommitted, the branch
-against its base, or the last turn — whose lines take comments. The
-comments wait on the Composer and go to the Thread with its next prompt.
+against its base, the last turn, or one of the branch's commits — whose
+lines take comments; it also searches the checkout and shows the branch's
+pull request. herdr-reviewr's, vendored. The comments wait on the Composer
+and go to the Thread with its next prompt.
 _Avoid_: compare (the read-only view it replaced), code review (a PR's).
 
 **Notice**
