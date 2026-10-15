@@ -1,0 +1,30 @@
+id = "herdr-focus-notify"
+name = "Herdr Focus Notify"
+version = "0.8.0"
+min_herdr_version = "0.7.5"
+description = "Clickable desktop notifications that focus the relevant Herdr agent pane."
+platforms = ["macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[startup]]
+command = ["target/release/herdr-focus-notify", "--cleanup"]
+
+[[actions]]
+id = "test"
+title = "Send test focus notification"
+command = ["target/release/herdr-focus-notify", "--test"]
+
+[[actions]]
+id = "clear-terminal-bindings"
+title = "Clear saved terminal bindings"
+command = ["target/release/herdr-focus-notify", "--clear-terminal-bindings"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["target/release/herdr-focus-notify"]
+
+[[events]]
+on = "pane.focused"
+command = ["target/release/herdr-focus-notify"]
