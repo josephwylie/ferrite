@@ -118,8 +118,6 @@ pub(crate) enum Command {
     OpenGroup,
     ReopenLast,
     NewThreadIn(ProjectId),
-    /// Start the Project's coordinator, or land on it (ADR 0028).
-    Coordinate(ProjectId),
     FilterAll,
     FilterProject(ProjectId),
     SortCreated,

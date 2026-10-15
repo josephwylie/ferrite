@@ -1198,15 +1198,6 @@ impl Cockpit {
         )
     }
 
-    /// Start a Project's coordinator, or land on the one it has (ADR
-    /// 0028). Only a Server coordinates.
-    pub fn coordinate(&mut self, project: ProjectId, provider: Provider) -> io::Result<ThreadId> {
-        self.act(
-            |_| Err(io::Error::other("coordinators run on the Server")),
-            |server| started(server.execute(Op::Coordinate { project, provider })),
-        )
-    }
-
     pub fn send(&mut self, thread: ThreadId, text: String) {
         self.act(
             |engine| engine.send(thread, text.clone()),
@@ -1861,19 +1852,6 @@ impl Cockpit {
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
         self.in_process().fixture_notice(thread, outcome);
         self.settle();
-    }
-
-    /// A coordinator's worker seated in its Group, as the Server's
-    /// `worker.start` seats one.
-    pub fn fixture_enlist(
-        &mut self,
-        coordinator: ThreadId,
-        worker: ThreadId,
-        title: &str,
-    ) -> Result<GroupId, ApplyError> {
-        let enlisted = self.in_process().enlist(coordinator, worker, title);
-        self.settle();
-        enlisted
     }
 
     pub fn draft_starting(&self, draft: DraftId) -> bool {

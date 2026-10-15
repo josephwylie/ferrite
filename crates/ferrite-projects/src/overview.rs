@@ -166,7 +166,8 @@ pub fn render(project: &Project, rows: &[Row]) -> String {
                 if t.machine.is_empty() {
                     let _ = writeln!(out, "          needs you in pane {}", t.pane_id);
                 } else {
-                    let _ = writeln!(out, "          needs you in pane {} on machine `{}`: select the machine in herdr's sidebar, or run `herdr --remote <ssh target>`", t.pane_id, t.machine);
+                    // Ferrite: a machine is reached from Ferrite's nav or `ferrite --remote` (ADR 0026).
+                    let _ = writeln!(out, "          needs you in pane {} on machine `{}`: select the machine in Ferrite's nav, or run `ferrite --remote <ssh target>`", t.pane_id, t.machine);
                 }
             }
         }
@@ -197,7 +198,7 @@ pub fn focus(ctx: &Ctx, slug: Option<&str>) -> Result<()> {
     let slug = require_slug(ctx, slug)?;
     let project = Project::load(&ctx.root, &slug)?;
     let view = threads::session_view(ctx, &project)
-        .ok_or_else(|| anyhow::anyhow!("the herdr session of `{slug}` is not reachable; run `open {slug}` first"))?;
+        .ok_or_else(|| anyhow::anyhow!("Ferrite's Server for `{slug}` is not reachable; run `open {slug}` first"))?;
     view.herdr.agent_view_set(crate::sidebar::project_view(&slug)).map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("sidebar focused on `{slug}`; `unfocus` restores the by-need order (this replaced any view another tool had set)");
     Ok(())

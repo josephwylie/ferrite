@@ -203,25 +203,26 @@ operator answers a Decision; an agent passes the operator's answer on.
 _Avoid_: MCP, RPC, plugin API.
 
 **Coordinator**
-A Thread that leads one Project's work and never does it itself: it
-plans with the operator, and on their go-ahead starts a Worker per task.
-It heads a Group of its Workers, read by what needs the operator: needs
-you, then ready for review, then working. One per Project.
+Any agent whose working directory is exactly a Projects project's folder
+(ADR 0030, herdr-projects vendored as `ferrite-projects`): it plans with
+the operator and delegates each task to a project thread, never doing the
+work itself. A Projects project is a folder under the Projects root —
+`PROJECT.md` (settings and standing instructions), `TASKS.md`, the inbox,
+`threads/`, Memory — not a Ferrite Project (a registered repository
+root); the repositories it works in are listed in its `PROJECT.md`.
 _Avoid_: manager, orchestrator, lead agent.
 
-**Worker**
-A Thread a Coordinator started for one task, in a new worktree on its own
-branch, briefed with the Project's goal, standing instructions and
-Memory. Its PR's failing checks and review remarks come back to it when
-the Project follows PRs, and once that PR merges and it is at rest, it is
-resolved: parked, its worktree removed, out of the Group.
-_Avoid_: subagent (that is Main's own delegate), task (that is what it
-works on).
+**Project thread**
+One task of a Projects project, recorded as `threads/t-NNNN.toml`: a
+worktree, tab, checkout or adopted agent, each a Ferrite Thread, briefed
+with the project's instructions and Memory and reporting back to the
+coordinator through its report and the project's inbox.
+_Avoid_: worker, subagent (that is Main's own delegate).
 
 **Memory**
-A Project's lessons, one Markdown file beside the Store: what Workers
-reported under `## Remember`, and anything the operator wrote there.
-Every Worker's brief carries it.
+A Projects project's lasting knowledge: `MEMORY.md`, an index of one line
+per file in `memory/`. Every project thread's brief carries it; the
+coordinator keeps it.
 
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each

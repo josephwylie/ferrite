@@ -214,7 +214,6 @@ impl Engine {
             | Op::ReviewDiff { .. }
             | Op::ListCommits { .. }
             | Op::PullRequest { .. }
-            | Op::Coordinate { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Unknown => Err(unknown()),

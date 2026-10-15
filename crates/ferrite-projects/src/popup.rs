@@ -1513,7 +1513,7 @@ pub fn run_hp(ctx: &Ctx, args: &[String], stdin: Option<&str>) -> (bool, String)
     match ctx.runner.run(&cmd) {
         Ok(out) => {
             let text = if out.success() { out.stdout.clone() } else { format!("{}\n{}", out.stdout, out.stderr) };
-            let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("done").trim().trim_start_matches("herdr-projects: ").to_string();
+            let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("done").trim().trim_start_matches("ferrite-projects: ").to_string(); // Ferrite: main.rs's prefix.
             (out.success(), if out.success() { last } else { format!("error: {last}") })
         }
         Err(error) => (false, format!("error: {error:#}")),

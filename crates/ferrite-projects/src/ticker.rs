@@ -755,8 +755,9 @@ fn launch_pass(ctx: &Ctx, project: &Project, herdr: &Herdr, threads: &[thread::T
                 let (model, refused) = crate::agents::split_model_args(&t.agent, &t.agent_args);
                 if !refused.is_empty() {
                     thread::update(project, &t.id, |t| t.agent_args = model.clone())?;
+                    // Ferrite: the binary is ferrite-projects.
                     let summary = format!(
-                        "{}: launched without agent arguments that are not a model flag: {}. Launch flags belong in a profile, which only the user sets (`herdr-projects profile list`)",
+                        "{}: launched without agent arguments that are not a model flag: {}. Launch flags belong in a profile, which only the user sets (`ferrite-projects profile list`)",
                         t.id,
                         refused.join(" "),
                     );

@@ -142,7 +142,8 @@ pub fn resolve_profile(runner: &dyn Runner, target: &str, machine: &str, name: O
     let profile: RemoteProfile = serde_json::from_str(out.stdout.trim()).with_context(|| format!("`{machine}` answered `profile resolve` with something that is not a profile"))?;
     crate::profiles::validate_name(&profile.name)?;
     if !crate::agents::is_kind(&profile.agent) {
-        bail!("profile `{}` on `{machine}` runs `{}`, which is not a Herdr agent kind", profile.name, profile.agent);
+        // Ferrite: agent kinds are Ferrite's.
+        bail!("profile `{}` on `{machine}` runs `{}`, which is not a Ferrite agent kind", profile.name, profile.agent);
     }
     Ok(profile)
 }
@@ -435,7 +436,7 @@ mod tests {
         assert_eq!((fast.agent.as_str(), fast.args.len()), ("codex", 4));
         assert!(runner.calls.borrow()[0].args.last().unwrap().contains("ferrite-projects profile resolve -- fast"));
         assert_eq!(resolve_profile(&runner, "me@m1", "m1", None).unwrap().name, "claude");
-        assert!(resolve_profile(&runner, "me@m1", "m1", Some("bad")).unwrap_err().to_string().contains("not a Herdr agent kind"));
+        assert!(resolve_profile(&runner, "me@m1", "m1", Some("bad")).unwrap_err().to_string().contains("not a Ferrite agent kind")); // Ferrite: agent kinds are Ferrite's.
         assert!(resolve_profile(&runner, "me@m1", "m1", Some("gone")).unwrap_err().to_string().contains("no profile `gone`"));
         let old = FakeRunner::new();
         old.on("ssh", fail(2, "error: unrecognized subcommand 'resolve'"));

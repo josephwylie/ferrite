@@ -12,12 +12,13 @@ use crate::runner::Cmd;
 use crate::thread::{self, Kind, Status, Thread};
 use crate::{coordinator, threads, ticker};
 
-const DEFAULT_TASK: &str = "Continue the work you were already doing in this pane. It now belongs to the project described above: follow its instructions, and when you finish or stop to wait for the user, write the report.";
+pub(crate) const DEFAULT_TASK: &str = "Continue the work you were already doing in this pane. It now belongs to the project described above: follow its instructions, and when you finish or stop to wait for the user, write the report.";
 
 /// The refusals shared by `thread adopt` and `adopt-workspace`, checked before
 /// anything is created. Returns the agent herdr detects in the pane.
 pub fn adoptable_agent(ctx: &Ctx, herdr: &Herdr, socket: &str, pane: &str) -> Result<Agent> {
-    let agents = herdr.agent_list().map_err(|e| anyhow::anyhow!("the herdr session at {socket} is not reachable: {e}"))?;
+    // Ferrite: the session is Ferrite's Server.
+    let agents = herdr.agent_list().map_err(|e| anyhow::anyhow!("Ferrite's Server at {socket} is not reachable: {e}"))?;
     let agent = agents
         .into_iter()
         .find(|a| a.pane_id == pane)

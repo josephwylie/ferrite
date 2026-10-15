@@ -556,10 +556,11 @@ pub const SUBDIRS: [&str; 9] = ["memory", "scratch", "routines", "threads", "inb
 /// working directory, and tab threads run under `threads/<id>/`, so it says
 /// who is who by working directory. `prefix` is `<absolute binary> --root
 /// <root>`: bare `hp` is on no harness's `PATH`.
+// Ferrite: the project is a Ferrite project, written by Ferrite's Projects.
 pub fn agents_md(name: &str, slug: &str, prefix: &str) -> String {
     format!(
         "# {name}\n\n\
-         This folder is the home of the Herdr project \"{name}\" (`{slug}`). Written by herdr-projects; `doctor --fix` refreshes it.\n\n\
+         This folder is the home of the Ferrite project \"{name}\" (`{slug}`). Written by Ferrite's Projects; `doctor --fix` refreshes it.\n\n\
          If your working directory is exactly this folder, you are the coordinator of {name}: run `{prefix} skill` now and follow what it prints, and run `{prefix} context {slug}` now and whenever you need project state.\n\n\
          If your working directory is under `threads/`, you are a thread: your brief is in your own folder (`.herdr-project/{slug}-<id>/brief.md`); ignore the rest of this file.\n"
     )
@@ -599,7 +600,8 @@ pub fn write_priming(project: &Project, prefix: &str) -> Result<()> {
     let name = display_name(&settings.name, &project.slug);
     let agents = dir.join("AGENTS.md");
     if let Ok(existing) = std::fs::read_to_string(&agents)
-        && !existing.contains("Written by herdr-projects")
+        // Ferrite: ours under either name, so a file written before is refreshed, not kept aside.
+        && !["Written by Ferrite's Projects", "Written by herdr-projects"].iter().any(|mark| existing.contains(mark))
     {
         // Someone else's AGENTS.md: keep its text beside ours, once.
         let kept = dir.join("AGENTS.md.before-herdr-projects");
@@ -838,6 +840,14 @@ mod tests {
         assert!(problems[0].contains("does not exist"));
         write_priming(&project, &prefix).unwrap();
         assert!(priming_problems(&project, &prefix).is_empty());
+
+        // Ferrite: one written by herdr-projects is ours, refreshed rather than kept aside.
+        let before = agents_md("Demo Project", "demo-project", &prefix).replace("Ferrite project", "Herdr project").replace("Ferrite's Projects", "herdr-projects");
+        std::fs::write(project.dir().join("AGENTS.md"), before).unwrap();
+        write_priming(&project, &prefix).unwrap();
+        assert!(!project.dir().join("AGENTS.md.before-herdr-projects").exists());
+        let text = std::fs::read_to_string(project.dir().join("AGENTS.md")).unwrap();
+        assert!(text.contains("home of the Ferrite project \"Demo Project\"") && text.contains("Written by Ferrite's Projects"), "{text}");
 
         // A foreign AGENTS.md is kept beside ours.
         std::fs::write(project.dir().join("AGENTS.md"), "codex notes").unwrap();

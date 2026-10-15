@@ -15,7 +15,6 @@ use crate::api::{
     self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
     ThreadInfo, Until, Wait,
 };
-use crate::coordinator::BriefChange;
 use crate::engine::Launch;
 use crate::protocol::{Done, Op, ProjectAction, ServerMessage};
 use crate::workspace::{self, WorkspaceChoice};
@@ -160,23 +159,6 @@ impl Server {
                 });
                 Ok(json!({ "windows": self.windows() }))
             }
-            Method::CoordinatorStart(params) => self
-                .project_at(&params.cwd)
-                .and_then(|project| {
-                    self.start_coordinator(
-                        project,
-                        params.provider.unwrap_or(self.default_provider),
-                        BriefChange {
-                            goal: params.goal,
-                            instructions: params.instructions,
-                            follow_prs: params.follow_prs.then_some(true),
-                        },
-                    )
-                })
-                .and_then(|thread| self.coordinator_result(thread)),
-            Method::CoordinatorGet(params) => self.coordinator_result(params.thread),
-            Method::CoordinatorUpdate(params) => self.update_coordinator(params),
-            Method::WorkerStart(params) => self.start_worker(params),
         };
         // What the request changed reaches the windows before its answer.
         self.broadcast();

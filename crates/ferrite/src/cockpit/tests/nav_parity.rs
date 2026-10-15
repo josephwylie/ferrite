@@ -384,54 +384,6 @@ fn sort_attention_lifts_what_needs_you_and_the_heading_rolls_it_up(cx: &mut Test
     });
 }
 
-/// ADR 0028: a coordinator heads its Group, and its workers read in the
-/// order of what needs the operator — a Decision, then what is ready for
-/// review (finished, seen or not), then work — whatever the sort.
-#[gpui::test]
-fn a_coordinators_group_reads_what_needs_you_first(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("nav-coordinator", 5);
-    let threads = sorted_threads(&core);
-    let [coordinator, working, finished, blocked, idle] = threads[..] else {
-        unreachable!()
-    };
-    for worker in [working, finished, blocked, idle] {
-        core.fixture_enlist(coordinator, worker, "app coordinator")
-            .unwrap();
-    }
-    core.send(working, "work".into());
-    fake.streams.borrow()[1]
-        .send(SessionEvent::TextDelta {
-            text: "Working on it".into(),
-        })
-        .unwrap();
-    fake.streams.borrow()[2]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    fake.streams.borrow()[3].send(decision("perm_4")).unwrap();
-    core.pump();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    let members = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            let state = view.nav_state();
-            state.groups[0]
-                .members
-                .iter()
-                .map(|row| row.thread)
-                .collect::<Vec<_>>()
-        })
-    };
-    let wanted = vec![coordinator, blocked, finished, idle, working];
-    assert_eq!(members(&view, cx), wanted);
-    view.update(cx, |view, cx| {
-        view.set_thread_order(ThreadListOrder::Attention, cx)
-    });
-    assert_eq!(members(&view, cx), wanted, "the coordinator still heads it");
-}
-
 /// `sort: attention` ranks Groups too: the Group whose member waits
 /// rises above an older quiet one, and the waiting member leads its Group.
 #[gpui::test]
