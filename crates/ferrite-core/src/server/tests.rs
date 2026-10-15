@@ -1008,6 +1008,91 @@ fn a_boot_staggers_the_sessions_it_resumes() {
     }
 }
 
+/// The rows of the next `parked` message: the Engine reads them off its
+/// pump thread.
+fn next_parked(engine: &mut Engine) -> Vec<protocol::ParkedThread> {
+    for _ in 0..500 {
+        let rows = engine
+            .take_messages()
+            .into_iter()
+            .rev()
+            .find_map(|message| match message {
+                ServerMessage::Parked { threads, .. } => Some(threads),
+                _ => None,
+            });
+        if let Some(rows) = rows {
+            return rows;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("no parked message");
+}
+
+/// ADR 0026: a window on a machine lists its parked Threads off the
+/// `parked` message. Nothing is read until such a window asks, and a row
+/// is read again whenever its Thread changes while it stays parked.
+#[test]
+fn the_parked_rows_follow_every_change_to_a_parked_thread() {
+    let dir = scratch("parked-rows");
+    let (spawner, _providers) = spawn();
+    let mut engine = engine(&dir.join("threads"), spawner);
+    let thread = open_in(&mut engine, &dir);
+    engine.park(thread).unwrap();
+    for _ in 0..5 {
+        assert!(
+            !engine
+                .take_messages()
+                .iter()
+                .any(|message| matches!(message, ServerMessage::Parked { .. })),
+            "no window lists them: nothing is read"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    engine.list_parked(true);
+    let rows = next_parked(&mut engine);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].thread, thread);
+    assert_eq!(rows[0].provider, Some(Provider::Claude));
+
+    engine.rename_thread(thread, "Release notes").unwrap();
+    assert_eq!(
+        next_parked(&mut engine)[0].title.as_deref(),
+        Some("Release notes")
+    );
+
+    engine
+        .set_provider(
+            thread,
+            crate::engine::ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(next_parked(&mut engine)[0].provider, Some(Provider::Codex));
+
+    let file = dir.join("adopted.jsonl");
+    std::fs::write(
+        &file,
+        concat!(
+            r#"{"type":"user","sessionId":"rows-9c1d","cwd":"/workspace","message":{"role":"user","content":"first question"}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"rows-9c1d","message":{"model":"claude-haiku-4-5","content":[{"type":"text","text":"first answer"}]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let imported = engine.import(&file).unwrap();
+    let listed = |rows: Vec<protocol::ParkedThread>| -> Vec<ThreadId> {
+        rows.into_iter().map(|row| row.thread).collect()
+    };
+    assert_eq!(listed(next_parked(&mut engine)), [thread, imported]);
+
+    engine.delete(thread).unwrap();
+    assert_eq!(listed(next_parked(&mut engine)), [imported]);
+}
+
 /// The far end of `ssh box ferrited bridge`, played by the harness's own
 /// socket: every byte the window sends is kept, and the window closing its
 /// end closes the Server's, as ssh does.

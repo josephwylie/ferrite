@@ -404,6 +404,27 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         assert_eq!(view.facts.name(named).as_ref(), "Release notes");
         assert!(view.panes.is_empty(), "nothing open on the machine");
     });
+    view.read_with(cx, |view, _| {
+        use ferrite_core::groups::{Drag, DropTarget, GroupChange, Plan};
+        assert_eq!(
+            view.cockpit.plan_group_drop(
+                Drag::Thread {
+                    thread: other,
+                    group: None,
+                },
+                DropTarget::ThreadRow {
+                    thread: named,
+                    group: None,
+                    index: 0,
+                },
+            ),
+            Plan::Change(GroupChange::Create {
+                first: named,
+                second: other,
+            }),
+            "a drop is the machine's Server's to check"
+        );
+    });
     assert!(
         !dir.join("window").join("threads").exists(),
         "the window keeps no Store for the machine"

@@ -191,6 +191,7 @@ pub fn run(options: Options) -> i32 {
 /// this process, for the Store at `store`, whose Sessions `spawner` makes,
 /// and the Dial that reaches it as ssh reaches a machine's. It serves until
 /// the process ends.
+#[cfg(feature = "test-support")]
 pub fn fixture_machine(
     store: PathBuf,
     spawner: Box<dyn crate::engine::Spawner + Send>,
@@ -277,6 +278,7 @@ struct Client {
     /// Said hello in a generation this Server speaks.
     welcomed: bool,
     renders_visuals: bool,
+    lists_parked: bool,
     watching: BTreeSet<ThreadId>,
 }
 
@@ -417,6 +419,7 @@ impl Server {
                         connection,
                         welcomed: false,
                         renders_visuals: false,
+                        lists_parked: false,
                         watching: BTreeSet::new(),
                     },
                 );
@@ -424,6 +427,7 @@ impl Server {
             Heard::Gone(id) => {
                 self.clients.remove(&id);
                 self.renders.client_gone(id);
+                self.list_parked();
             }
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
@@ -455,6 +459,8 @@ impl Server {
                     };
                     client.welcomed = true;
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
+                    client.lists_parked = capabilities.contains(&Capability::ParkedThreads);
+                    self.list_parked();
                     let snapshot = self.engine.snapshot(&self.boot_id);
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
@@ -687,6 +693,15 @@ impl Server {
                 self.send(drawer, message);
             }
         }
+    }
+
+    /// Read the parked Threads' rows only while a window lists them.
+    fn list_parked(&mut self) {
+        let wanted = self
+            .clients
+            .values()
+            .any(|client| client.welcomed && client.lists_parked);
+        self.engine.list_parked(wanted);
     }
 
     /// Hand every message the Engine published to the clients that want

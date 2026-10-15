@@ -81,6 +81,9 @@ pub struct Peer {
 pub enum Capability {
     /// This client can draw Visuals for an agent.
     RenderVisual,
+    /// This client lists the Server's parked Threads off its `parked`
+    /// message: a window on a machine, whose logs stay there (ADR 0026).
+    ParkedThreads,
     #[serde(other)]
     Unknown,
 }

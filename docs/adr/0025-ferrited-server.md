@@ -192,7 +192,7 @@ Client → Server:
 
 | Message | Meaning |
 |---|---|
-| `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capability: `render_visual` (this client can draw Visuals). |
+| `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capabilities: `render_visual` (this client can draw Visuals); `parked_threads` (it lists the Server's parked Threads off `parked`, ADR 0026). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` is always sent. |
 | `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `search_files`, `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
@@ -210,7 +210,7 @@ Server → Client:
 | `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus, permission modes, supported controls, store error, generation. |
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
-| `parked {revision, threads[]}` | latest-wins | The Threads not open, as the Store says them: header facts, first-prompt title, last use, turn and Subagent counts. Added for machines (ADR 0026), whose windows have no Store to read. |
+| `parked {revision, threads[]}` | latest-wins | The Threads not open, as the Store says them: header facts, first-prompt title, last use, turn and Subagent counts. Added for machines (ADR 0026), whose windows have no Store to read: sent only while a `parked_threads` client is attached. |
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
 | `allowance_warning {provider, window, threshold, used_fraction}` | reliable | A provider's allowance rose past one of the operator's thresholds. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |

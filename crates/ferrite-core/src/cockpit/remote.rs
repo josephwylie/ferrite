@@ -642,16 +642,20 @@ fn attach_to(
     }
 }
 
-/// Who this window is, and that it draws Visuals when it can.
+/// Who this window is, that it draws Visuals when it can, and that on a
+/// machine it lists the parked Threads its Server publishes.
 fn hello(attach: &Attach) -> ClientMessage {
+    let mut capabilities = Vec::new();
+    if attach.renderer.is_some() {
+        capabilities.push(Capability::RenderVisual);
+    }
+    if matches!(attach.server, Endpoint::Machine(_)) {
+        capabilities.push(Capability::ParkedThreads);
+    }
     ClientMessage::Hello {
         generation: protocol::GENERATION,
         client: attach.client.clone(),
-        capabilities: if attach.renderer.is_some() {
-            vec![Capability::RenderVisual]
-        } else {
-            Vec::new()
-        },
+        capabilities,
     }
 }
 

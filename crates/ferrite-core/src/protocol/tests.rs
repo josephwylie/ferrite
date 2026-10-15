@@ -261,6 +261,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "hello_parked_threads",
+            Sample::Client(ClientMessage::Hello {
+                generation: 1,
+                client: Peer {
+                    name: "ferrite".into(),
+                    version: "0.9.0".into(),
+                },
+                capabilities: vec![Capability::ParkedThreads],
+            }),
+        ),
+        (
             "watch",
             Sample::Client(ClientMessage::Watch {
                 thread,

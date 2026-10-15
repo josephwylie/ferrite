@@ -117,9 +117,10 @@ impl Cockpit {
     }
 
     fn with(link: Link, parked: parked::Parked, dir: &Path) -> Self {
+        let local = matches!(parked, parked::Parked::Store(_));
         Self {
             link,
-            shared: shared::Shared::new(dir),
+            shared: shared::Shared::new(dir, local),
             parked,
             roster: Roster::default(),
             synced: Vec::new(),
@@ -290,8 +291,7 @@ impl Cockpit {
                     if new_boot {
                         self.mirrors = mirror::Mirrors::default();
                     }
-                    let dir = self.shared.dir().to_path_buf();
-                    self.shared = shared::Shared::from_snapshot(&snapshot, &dir);
+                    self.shared.attached(&snapshot);
                     self.parked.attached(&snapshot);
                     self.mirrors.retain(&self.shared.open);
                     for state in snapshot.threads {
