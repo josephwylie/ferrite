@@ -113,4 +113,15 @@ mod tests {
         assert_eq!(from_tui_args(&args).args, args);
         assert_eq!(from_tui_args(&strings(&["-c"])).args, strings(&["-c"]));
     }
+
+    /// Projects' turn-end hook (ADR 0031): Codex runs its `notify` at each
+    /// turn end, and the app-server is handed it as written.
+    #[test]
+    fn projects_turn_end_notify_reaches_the_app_server() {
+        let args = strings(&[
+            "-c",
+            r#"notify=["/d/bin/herdr-projects","turn-ended","--id","app/1","--role","agent","--token","t"]"#,
+        ]);
+        assert_eq!(from_tui_args(&args).args, args);
+    }
 }
