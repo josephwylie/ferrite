@@ -34,14 +34,15 @@ Each is marked `Ferrite:` in a comment.
   under Ferrite: `web-ui` answers as upstream does where none is installed.
   `serve` opens no front door (`cli/mod.rs`).
 - **`install` and `update`** answer that Ferrite ships the program and
-  updates it with the app, and change nothing (`cli/ferrite.rs`). `doctor`
+  updates it with the app, and change nothing (`cli/ferrite.rs`); with
+  `--json`, as `{"said": …}`. `doctor`
   is upstream's: it takes over older installs and says where things stand.
 - **`take-over`** (`cli/ferrite.rs`, and its flags in `cli/flags.rs`):
   Ferrite's Server runs it once at every start, before the keeper. Like
   any command it runs upstream's start first (`take_over::at_start`, the
   home folder's move, the old copy, the settings' move); then it prints the
   line upstream keeps for the human until it is said, once, for the
-  Server's toast.
+  Server's toast (with `--json`, `{"said": …}`, empty once said).
 - **Tests.** `CARGO_BIN_EXE_herdr-projects` is `CARGO_BIN_EXE_ferrite-projects`
   throughout. Not taken: the web board's tests (`web_*.rs` but `web_link`
   and `web_link_ask`, and `web` and `web_as` in `common/board.rs`,

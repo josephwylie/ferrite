@@ -83,8 +83,8 @@ fn run(cmd: &str, a: &Args) -> Res<i32> {
         "help" => { print!("{}", help::HELP); return Ok(0); }
         _ if a.flags.b("help") => { print!("{}", help::HELP); return Ok(0); }
         // Ferrite: the program ships in Ferrite's app and is updated with it; its Server runs take-over (cli/ferrite.rs).
-        "install" | "update" => { println!("{}", ferrite::SHIPPED); return Ok(0); }
-        "take-over" => { let said = ferrite::take_over_said(); if !said.is_empty() { println!("{said}"); } return Ok(0); }
+        "install" | "update" => { ferrite::say(ferrite::SHIPPED, a.flags.b("json")); return Ok(0); }
+        "take-over" => { ferrite::say(&ferrite::take_over_said(), a.flags.b("json")); return Ok(0); }
         "doctor" => { println!("{}", crate::take_over::look::look_here().join("\n")); return Ok(0); }
         "version" => { println!("herdr-projects {} ({})", crate::store::files::VERSION, crate::store::files::bin().display()); return Ok(0); }
         "docs" => {

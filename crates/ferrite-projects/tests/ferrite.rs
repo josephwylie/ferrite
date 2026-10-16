@@ -77,6 +77,7 @@ fn real_programs_take_over_says_once_what_was_taken_over() {
     assert_eq!(said.lines().count(), 1, "one line, for one toast");
     assert!(exists(&home.join(".herdr-projects-legacy/app/PROJECT.md")));
     assert_eq!(run(&w, &home, &["take-over"]).1, "", "said once");
+    assert_eq!(run(&w, &home, &["take-over", "--json"]).1, "{\"said\":\"\"}\n", "--json says it too");
 }
 
 #[test]
@@ -86,6 +87,7 @@ fn real_programs_install_and_update_leave_the_program_to_ferrite() {
     std::fs::create_dir_all(&home).unwrap();
     for cmd in ["install", "update"] {
         assert_eq!(run(&w, &home, &[cmd]), (0, format!("{}\n", sw::cli::ferrite::SHIPPED)));
+        assert_eq!(run(&w, &home, &[cmd, "--json"]).1, format!("{}\n", json!({ "said": sw::cli::ferrite::SHIPPED })));
     }
 }
 

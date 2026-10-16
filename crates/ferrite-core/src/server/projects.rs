@@ -58,6 +58,10 @@ fn binary(given: Option<OsString>, exe: &Path) -> PathBuf {
         .unwrap_or_else(|| exe.with_file_name("ferrite-projects"))
 }
 
+/// The take-over, then its toast. Whatever starts the keeper goes here,
+/// between `take-over`'s return and the toast, never beside it: the
+/// program takes over at the start of every command (`keeper` and `hook`
+/// too), and two at once would race to set the 0.2 folders aside.
 fn startup(binary: &Path, store: &Path, env: &[(&str, OsString)]) {
     let notes = run(binary, env, &["take-over".as_ref()]);
     let socket = crate::api::address(store);

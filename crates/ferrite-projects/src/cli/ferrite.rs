@@ -17,3 +17,8 @@ pub fn take_over_said() -> String {
     move_told(&home, &env);
     said
 }
+
+/// What these commands say: the text, a line of its own; with `--json`, `{"said": …}` (empty when nothing was said).
+pub fn say(said: &str, json: bool) {
+    if json { println!("{}", serde_json::json!({ "said": said })); } else if !said.is_empty() { println!("{said}"); }
+}

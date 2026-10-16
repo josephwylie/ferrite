@@ -241,3 +241,11 @@ before it ships, record the new commit, and run the crates' tests
   migration, the ticker) and ADR 0030's terms in CONTEXT.md are gone. Its
   library stays, in `crates/ferrite-projects-0-2`, only while the window's
   0.2 Projects view still draws from it, and leaves with that view.
+  That view runs 0.2 commands the shipped 1.0 program refuses, and its
+  "configure" writes 0.2's hooks, skill link and journal, which the next
+  Server start sets aside into a further `-legacy` folder. So the 1.0
+  program lands with the view that replaces it, never before: the 0.2
+  library, its `configure` and its tests go in the same merge.
+- Whatever starts the keeper at Server start runs after `take-over` has
+  returned, on the same thread (`server/projects.rs`): every command takes
+  over at its start, and two at once would race over the 0.2 folders.
