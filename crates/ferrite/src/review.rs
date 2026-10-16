@@ -594,7 +594,7 @@ impl ReviewView {
             .as_ref()
             .is_some_and(|find| find.holds_focus(window, cx))
         {
-            return Some(window.focused(cx)?);
+            return window.focused(cx);
         }
         fields
             .into_iter()
