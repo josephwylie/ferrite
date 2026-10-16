@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 use super::Server;
 use crate::api::schema::{
-    AgentPromptParams, AgentReadParams, AgentWaitParams, DecisionAnswerParams, ThreadStartParams,
+    AgentPromptParams, AgentReadParams, AgentWaitParams, DecisionAnswerParams, ThreadReviveParams,
+    ThreadStartParams,
 };
 use crate::api::{
     self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
@@ -52,6 +53,21 @@ impl Server {
                         return;
                     }
                     (Ok(thread), None) => thread_result(&self.engine, thread),
+                    (Err(error), _) => Err(error),
+                }
+            }
+            Method::ThreadRevive(params) => {
+                let ready = params.ready.then(|| {
+                    let within = timeout(params.timeout_ms).unwrap_or(api::READY);
+                    Wait::until(Until::Ready, Some(within), now)
+                });
+                let thread = params.thread;
+                match (self.revive_thread(params), ready) {
+                    (Ok(()), Some(wait)) => {
+                        self.api.wait(&self.engine, caller, id, thread, wait);
+                        return;
+                    }
+                    (Ok(()), None) => thread_result(&self.engine, thread),
                     (Err(error), _) => Err(error),
                 }
             }
@@ -130,6 +146,10 @@ impl Server {
                 .project(&params.project)
                 .and_then(|project| self.project_result(project)),
             Method::ProjectOpen(params) => self.open_project(params),
+            Method::ProjectFocus(params) => self.project(&params.project).and_then(|project| {
+                self.focus_project(project);
+                self.project_result(project)
+            }),
             Method::ProjectRename(params) => self.project(&params.project).and_then(|project| {
                 self.execute(Op::Project {
                     action: ProjectAction::Rename {
@@ -204,6 +224,8 @@ impl Server {
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
             args: params.args,
+            env: params.env.into_iter().collect(),
+            launcher: params.launcher,
             resume: params.resume,
             project,
         };
@@ -222,6 +244,39 @@ impl Server {
             self.say(ServerMessage::Focus { thread });
         }
         Ok(thread)
+    }
+
+    /// Start a parked Thread's agent again in place, as `params` says; an
+    /// open Thread is closed first (`thread.close`), as Herdr's pane is
+    /// quit before its agent is started again.
+    fn revive_thread(&mut self, params: ThreadReviveParams) -> Result<(), ApiError> {
+        let thread = params.thread;
+        if self.engine.thread(thread).is_some() {
+            return Err(ApiError::new(
+                Code::InvalidRequest,
+                "this Thread is open: close it first (thread.close)",
+            ));
+        }
+        let parked = self
+            .engine
+            .parked()
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
+        if !parked.contains(&thread) {
+            return Err(ApiError::new(
+                Code::UnknownThread,
+                "no parked Thread has that id",
+            ));
+        }
+        let launch = Launch {
+            args: params.args,
+            env: params.env.into_iter().collect(),
+            launcher: params.launcher,
+            resume: params.resume,
+            project: None,
+        };
+        self.engine
+            .revive_with(thread, launch)
+            .map_err(|error| ApiError::new(Code::Failed, error.to_string()))
     }
 
     /// Herdr's rule: nothing is sent to an agent a Decision blocks, since

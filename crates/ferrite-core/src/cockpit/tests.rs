@@ -129,6 +129,8 @@ struct Fake {
     resumed: Rc<RefCell<Vec<Option<String>>>>,
     /// The extra CLI arguments each spawn was handed.
     args: Rc<RefCell<Vec<Vec<String>>>>,
+    /// The environment and launcher each spawn was handed.
+    launched: Rc<RefCell<Vec<Launched>>>,
     cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
     additional_directories: Rc<RefCell<Vec<Vec<std::path::PathBuf>>>>,
     /// The title each spawn was handed.
@@ -188,7 +190,11 @@ impl Spawner for Fake {
         self.resumed
             .borrow_mut()
             .push(request.resume.map(|target| target.to_string()));
-        self.args.borrow_mut().push(request.args.to_vec());
+        self.args.borrow_mut().push(request.launch.args.to_vec());
+        self.launched.borrow_mut().push((
+            request.launch.env.to_vec(),
+            request.launch.launcher.to_vec(),
+        ));
         self.cwds
             .borrow_mut()
             .push(request.cwd.map(|path| path.to_path_buf()));
@@ -5008,6 +5014,69 @@ fn a_thread_started_with_args_is_revived_with_them() {
     core.park(thread).unwrap();
     core.revive(thread).unwrap();
     assert_eq!(*fake.args.borrow(), [args.clone(), args]);
+}
+
+type Launched = (Vec<(String, String)>, Vec<String>);
+
+/// `thread.start --env --launcher` (ADR 0031): saved with the arguments,
+/// so a revive starts its agent the same way.
+#[test]
+fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
+    let (mut core, fake) = cockpit("launch-env");
+    let env = vec![("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".to_string())];
+    let launcher: Vec<String> = ["bwrap", "--ro-bind", "/r", "/r", "--"]
+        .map(String::from)
+        .into();
+    let launch = crate::engine::Launch {
+        env: env.clone(),
+        launcher: launcher.clone(),
+        ..Default::default()
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch)
+        .unwrap();
+    core.park(thread).unwrap();
+    core.revive(thread).unwrap();
+    let launched = (env, launcher);
+    assert_eq!(*fake.launched.borrow(), [launched.clone(), launched]);
+}
+
+/// `thread.revive` (ADR 0031): a parked Thread starts again in place, its
+/// launch replaced and its conversation carried on only when one is named.
+#[test]
+fn a_thread_revived_with_a_new_launch_keeps_its_id() {
+    let (mut core, fake) = cockpit("launch-revive");
+    let launch = crate::engine::Launch {
+        args: vec!["--permission-mode".into(), "plan".into()],
+        resume: Some("sess-1".into()),
+        ..Default::default()
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch)
+        .unwrap();
+    core.park(thread).unwrap();
+    let again = crate::engine::Launch {
+        args: vec!["--model".into(), "opus".into()],
+        ..Default::default()
+    };
+    core.engine_mut().revive_with(thread, again).unwrap();
+    assert!(core.engine().thread(thread).is_some());
+    assert_eq!(fake.args.borrow().last().unwrap(), &["--model", "opus"]);
+    assert_eq!(*fake.resumed.borrow().last().unwrap(), None, "a new conversation");
+    core.park(thread).unwrap();
+    let resumed = crate::engine::Launch {
+        resume: Some("sess-1".into()),
+        ..Default::default()
+    };
+    core.engine_mut().revive_with(thread, resumed).unwrap();
+    assert_eq!(fake.resumed.borrow().last().unwrap().as_deref(), Some("sess-1"));
+    assert!(fake.args.borrow().last().unwrap().is_empty(), "replaced, not kept");
+    // What the last revive saved is what the next plain one starts with.
+    core.park(thread).unwrap();
+    core.revive(thread).unwrap();
+    assert!(fake.args.borrow().last().unwrap().is_empty());
 }
 
 /// `thread.start --resume` (ADR 0030): the first Session carries on the

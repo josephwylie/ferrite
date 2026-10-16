@@ -100,8 +100,12 @@ pub struct ClaudeConfig {
     /// nothing. Fixed for the Session: the CLI lists its tools once.
     pub visuals: Option<crate::visual::Visuals>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
-    /// set over whatever the CLI inherited.
-    pub env: Vec<(&'static str, std::ffi::OsString)>,
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
     /// Extra arguments, after Ferrite's own (`thread.start --args`).
     pub args: Vec<String>,
 }
@@ -120,6 +124,7 @@ impl Default for ClaudeConfig {
             resume: None,
             visuals: None,
             env: Vec::new(),
+            launcher: Vec::new(),
             args: Vec::new(),
         }
     }
@@ -227,7 +232,7 @@ impl ClaudeSession {
         let program = super::spawnable_program(&config.program);
         check_version(&program)?;
 
-        let mut command = Command::new(&program);
+        let mut command = super::launched(&config.launcher, &program);
         command
             .no_console_window()
             .agent_environment()

@@ -191,6 +191,8 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "nav.focus",
             "events.subscribe",
             "notification.show",
+            "project.focus",
+            "thread.revive",
         ]
     );
 }
@@ -363,6 +365,18 @@ fn samples() -> Vec<Request> {
             sound: WireSound::None,
             important: false,
         })),
+        request(Method::ProjectFocus(ProjectParams {
+            project: "3".into(),
+        })),
+        request(Method::ThreadRevive(ThreadReviveParams {
+            thread: thread(),
+            args: vec!["--model".into(), "opus".into()],
+            resume: Some("4f2a".into()),
+            env: [("HERDR_PROJECTS_DATA_DIR".into(), "/data".into())].into(),
+            launcher: Vec::new(),
+            ready: true,
+            timeout_ms: Some(60_000),
+        })),
     ]
 }
 
@@ -382,6 +396,8 @@ fn thread_start() -> ThreadStartParams {
         ready: false,
         timeout_ms: None,
         resume: None,
+        env: Default::default(),
+        launcher: Vec::new(),
     }
 }
 
@@ -436,6 +452,21 @@ fn later_samples() -> Vec<(&'static str, Request)> {
         (
             "nav_focus_clear",
             request(Method::NavFocus(NavFocusParams { project: None })),
+        ),
+        (
+            "thread_start_launch",
+            request(Method::ThreadStart(ThreadStartParams {
+                worktree: false,
+                env: [
+                    ("HERDR_PROJECTS_CONFIG_DIR".into(), "/config".into()),
+                    ("HERDR_PROJECTS_DATA_DIR".into(), "/data".into()),
+                ]
+                .into(),
+                launcher: ["bwrap", "--dev-bind", "/", "/", "--ro-bind", "/r", "/r", "--"]
+                    .map(String::from)
+                    .into(),
+                ..thread_start()
+            })),
         ),
     ]
 }
@@ -1073,6 +1104,43 @@ fn herdr_projects_calls_read_as_their_parameters() {
     assert_eq!(
         parse("nav.focus", &[]),
         Ok(Method::NavFocus(NavFocusParams { project: None }))
+    );
+    match parse(
+        "thread.start",
+        &[
+            "--env",
+            r#"{"HERDR_PROJECTS_DATA_DIR":"/data"}"#,
+            "--launcher",
+            "bwrap",
+            "--launcher",
+            "--ro-bind",
+            "--launcher",
+            "--",
+        ],
+    ) {
+        Ok(Method::ThreadStart(params)) => {
+            assert_eq!(params.env["HERDR_PROJECTS_DATA_DIR"], "/data");
+            assert_eq!(params.launcher, ["bwrap", "--ro-bind", "--"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        parse("thread.revive", &["12", "--resume", "4f2a", "--ready"]),
+        Ok(Method::ThreadRevive(ThreadReviveParams {
+            thread: thread(),
+            args: Vec::new(),
+            resume: Some("4f2a".into()),
+            env: Default::default(),
+            launcher: Vec::new(),
+            ready: true,
+            timeout_ms: None,
+        }))
+    );
+    assert_eq!(
+        parse("project.focus", &["3"]),
+        Ok(Method::ProjectFocus(ProjectParams {
+            project: "3".into()
+        }))
     );
     assert_eq!(
         parse(

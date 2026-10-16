@@ -59,6 +59,20 @@ pub(crate) fn spawnable_program(program: &str) -> String {
     program.to_string()
 }
 
+/// The command that runs `program` through `launcher` (`bwrap … --`,
+/// `thread.start --launcher`): the launcher's words, then the program;
+/// the program itself without one. Its arguments follow.
+pub(crate) fn launched(launcher: &[String], program: &str) -> std::process::Command {
+    match launcher.split_first() {
+        Some((first, rest)) => {
+            let mut command = std::process::Command::new(first);
+            command.args(rest).arg(program);
+            command
+        }
+        None => std::process::Command::new(program),
+    }
+}
+
 /// The shim a bare `program` resolves to on this PATH: directories in
 /// order, and within one, `.exe` (which needs no help) before `.cmd` and
 /// `.bat`. Compiled everywhere so the walk is testable off Windows.

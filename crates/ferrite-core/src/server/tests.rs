@@ -2114,6 +2114,68 @@ fn a_thread_is_interrupted_and_closed_by_id() {
     assert_eq!(gone["error"]["code"], "unknown_thread", "{gone}");
 }
 
+/// Herdr's `pane quit` then `agent start` in that pane: a closed Thread
+/// is started again in place, keeping its id, once its agent is ready.
+#[test]
+fn a_closed_thread_is_revived_in_place() {
+    let harness = start("api-revive");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "args": ["--model", "opus"] }),
+    );
+    let thread = started["result"]["thread"]["thread"].clone();
+    let open = caller.answer("2", "thread.revive", serde_json::json!({ "thread": thread }));
+    assert_eq!(open["error"]["code"], "invalid_request", "{open}");
+    caller.answer("3", "thread.close", serde_json::json!({ "thread": thread }));
+    let revived = caller.answer(
+        "4",
+        "thread.revive",
+        serde_json::json!({ "thread": thread, "resume": "4f2a", "ready": true }),
+    );
+    assert_eq!(revived["result"]["thread"]["thread"], thread, "{revived}");
+    assert_eq!(revived["result"]["thread"]["attention"], "idle", "{revived}");
+    let got = caller.answer("5", "thread.get", serde_json::json!({ "thread": thread }));
+    assert!(got.get("result").is_some(), "{got}");
+    let unknown = caller.answer("6", "thread.revive", serde_json::json!({ "thread": 999 }));
+    assert_eq!(unknown["error"]["code"], "unknown_thread", "{unknown}");
+}
+
+/// Herdr's `workspace focus`: every window lands on the Project's first
+/// open Thread.
+#[test]
+fn a_project_is_focused_by_id() {
+    let harness = start("api-project-focus");
+    let mut window = attach(&harness.address);
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir }),
+    );
+    let info = &started["result"]["thread"];
+    let thread = ThreadId::new(info["thread"].as_u64().unwrap());
+    let focused = caller.answer(
+        "2",
+        "project.focus",
+        serde_json::json!({ "project": info["project"] }),
+    );
+    assert_eq!(
+        focused["result"]["project"]["id"], info["project"],
+        "{focused}"
+    );
+    assert_eq!(
+        told(&mut window, |message| matches!(
+            message,
+            ServerMessage::Focus { .. }
+        )),
+        ServerMessage::Focus { thread }
+    );
+    let missing = caller.answer("3", "project.focus", serde_json::json!({ "project": "999" }));
+    assert_eq!(missing["error"]["code"], "project_not_found", "{missing}");
+}
+
 /// Herdr's Spaces are Ferrite's Projects: opened by directory (once),
 /// labelled, renamed, started in, focused in the nav, and closed, which
 /// parks their Threads.

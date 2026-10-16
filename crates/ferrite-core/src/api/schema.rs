@@ -9,7 +9,8 @@
 //!
 //! - `invalid_request`, `unknown_method`: the line, or its parameters.
 //! - `unknown_thread`, `project_not_found`, `unknown_decision`: no such
-//!   open Thread, Project, or pending Decision on the Thread.
+//!   open Thread (parked, for `thread.revive`), Project, or pending
+//!   Decision on the Thread.
 //! - `agent_blocked`: a Decision waits; nothing was sent.
 //! - `agent_starting`: the Session is starting and holds a prompt already.
 //! - `agent_not_ready`: `thread.start --ready` found the agent blocked, or
@@ -26,6 +27,7 @@
 //! Thread ids are the Store's, so they hold across a Server's restart
 //! (ADR 0029); a Thread's `attention_seq` counts from the Server's start.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use schemars::JsonSchema;
@@ -130,6 +132,10 @@ operations! {
         "What the Threads are now, then every change as it happens.";
     NotificationShow(NotificationShowParams) => "notification.show", ["title"],
         "Show a toast in every Ferrite window.";
+    ProjectFocus(ProjectParams) => "project.focus", ["project"],
+        "Land every Ferrite window on a Project's first open Thread.";
+    ThreadRevive(ThreadReviveParams) => "thread.revive", ["thread"],
+        "Start a parked Thread's agent again in place, keeping its id.";
 }
 
 /// No parameters.
@@ -188,6 +194,42 @@ pub struct ThreadStartParams {
     /// (`provider_session`), rather than a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
+    /// Set in the agent's environment, under Ferrite's own, for every
+    /// Session of that provider the Thread has, revived ones too.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// A program the provider's CLI is run through, and its arguments, for
+    /// every Session of that provider: `bwrap --ro-bind <tree> <tree> --`
+    /// runs it where `<tree>` cannot be written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launcher: Vec<String>,
+}
+
+/// A parked Thread started again (Herdr's `agent start` in the pane whose
+/// agent was ended): what it starts with replaces what it was started
+/// with, and it carries on `resume`'s conversation, or a new one under its
+/// history when there is none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadReviveParams {
+    pub thread: ThreadId,
+    /// As `thread.start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// As `thread.start`'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
+    /// As `thread.start`'s.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// As `thread.start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launcher: Vec<String>,
+    /// As `thread.start`'s.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ready: bool,
+    /// As `thread.start`'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

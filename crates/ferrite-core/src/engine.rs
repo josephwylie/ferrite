@@ -46,12 +46,19 @@ mod windows;
 pub use windows::WindowId;
 
 /// How a Thread's first Session starts, beyond its provider and checkout
-/// (`thread.start`, ADR 0030).
+/// (`thread.start`, ADR 0030), or a parked one's next (`thread.revive`,
+/// ADR 0031).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Launch {
     /// Extra arguments for the provider's CLI, after Ferrite's own, for
     /// every Session of that provider while the Thread is open.
     pub args: Vec<String>,
+    /// Set in the agent's environment, under Ferrite's own, for every
+    /// Session of that provider.
+    pub env: Vec<(String, String)>,
+    /// A program the provider's CLI is run through, and its arguments
+    /// (`bwrap … --`): the CLI and its arguments follow them.
+    pub launcher: Vec<String>,
     /// The provider's own id of a conversation to carry on.
     pub resume: Option<String>,
     /// The Project the Thread joins when its checkout is a directory inside
@@ -88,10 +95,22 @@ pub struct SpawnRequest<'a> {
     /// Other roots in the same Project. Providers expose these alongside
     /// `cwd`; they never change which directory the Session starts in.
     pub additional_directories: Vec<PathBuf>,
-    /// Extra arguments for the provider's CLI, after Ferrite's own
-    /// (`thread.start --args`, ADR 0030): what the operator's safety
-    /// settings add, a model flag.
+    /// What the Thread was started with beyond Ferrite's own
+    /// (`thread.start`).
+    pub launch: AgentLaunch<'a>,
+}
+
+/// What a Session starts with beyond Ferrite's own (`thread.start --args
+/// --env --launcher`, ADR 0030, ADR 0031).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentLaunch<'a> {
+    /// Extra arguments for the provider's CLI, after Ferrite's own: what
+    /// the operator's safety settings add, a model flag.
     pub args: &'a [String],
+    /// Set in the agent's environment, under Ferrite's own.
+    pub env: &'a [(String, String)],
+    /// The program the CLI is run through, and its arguments.
+    pub launcher: &'a [String],
 }
 
 fn project_additional_directories(
@@ -559,17 +578,17 @@ struct Thread {
     /// replacement Session drops it, since its answer would be the old
     /// Session's.
     tuning: Option<Tuning>,
-    /// The extra CLI arguments the Thread was started with, and the
-    /// Provider they were written for (`thread.start --args`). Every
-    /// Session of that Provider starts with them; saved, so a revive does
-    /// too (`launch_args`).
+    /// The extra CLI arguments, environment and launcher the Thread was
+    /// started with, and the Provider they were written for
+    /// (`thread.start`). Every Session of that Provider starts with them;
+    /// saved, so a revive does too (`launch_args`).
     agent_args: Option<launch_args::LaunchArgs>,
 }
 
 impl Thread {
-    /// The extra CLI arguments a Session of `provider` starts with: the
-    /// ones the Thread was started with, for their Provider only.
-    fn agent_args(&self, provider: Provider) -> &[String] {
+    /// What a Session of `provider` starts with beyond Ferrite's own: what
+    /// the Thread was started with, for its Provider only.
+    fn agent_launch(&self, provider: Provider) -> AgentLaunch<'_> {
         launch_args::for_provider(self.agent_args.as_ref(), provider)
     }
 
@@ -1159,7 +1178,7 @@ impl Engine {
                     project,
                     cwd.as_deref(),
                 ),
-                args: thread.agent_args(thread.provider),
+                launch: thread.agent_launch(thread.provider),
             },
         );
         Some(spawned.map(|session| {
@@ -1274,10 +1293,9 @@ impl Engine {
         launch: Launch,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
+        let agent_args = launch_args::LaunchArgs::of(provider, &launch);
         let Launch {
-            args,
-            resume,
-            project,
+            resume, project, ..
         } = launch;
         let root =
             match &workspace {
@@ -1359,14 +1377,13 @@ impl Engine {
                 return Err(io::Error::other(e.to_string()));
             }
         }
-        let agent_args = (!args.is_empty()).then_some(launch_args::LaunchArgs { provider, args });
-        if let Some(saved) = &agent_args {
-            if let Err(e) = launch_args::save(&launch_args::path(self.store.dir(), id), saved) {
+        if agent_args.is_some() {
+            let path = launch_args::path(self.store.dir(), id);
+            if let Err(e) = launch_args::save(&path, agent_args.as_ref()) {
                 let _ = self.store.delete(id);
                 return Err(e);
             }
         }
-        let args = agent_args.as_ref().map_or(&[][..], |saved| &saved.args);
         let session = match self.spawner.start(SpawnRequest {
             thread: id,
             provider,
@@ -1380,7 +1397,7 @@ impl Engine {
                 Some(project),
                 Some(binding.cwd()),
             ),
-            args,
+            launch: launch_args::for_provider(agent_args.as_ref(), provider),
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -1705,7 +1722,7 @@ impl Engine {
                         project,
                         cwd,
                     ),
-                    args: state.agent_args(provider),
+                    launch: state.agent_launch(provider),
                 },
             )
             .map_err(ProvisionError::Spawn)?;
@@ -1983,6 +2000,24 @@ impl Engine {
     /// worktree that cannot be made is that start's failure, said in the
     /// Pane.
     pub fn revive_after(&mut self, thread: ThreadId, delay: Duration) -> Result<(), LoadError> {
+        self.reopen(thread, delay, None)
+    }
+
+    /// Reopen a parked Thread as `launch` says (`thread.revive`, ADR 0031):
+    /// its arguments, environment and launcher replace the saved ones, and
+    /// its Session carries on `launch.resume`'s conversation, or starts a
+    /// new one under the Thread's history when there is none. The Thread
+    /// keeps its id, as a Herdr pane does when its agent is started again.
+    pub fn revive_with(&mut self, thread: ThreadId, launch: Launch) -> Result<(), LoadError> {
+        self.reopen(thread, Duration::ZERO, Some(launch))
+    }
+
+    fn reopen(
+        &mut self,
+        thread: ThreadId,
+        delay: Duration,
+        launch: Option<Launch>,
+    ) -> Result<(), LoadError> {
         // Bounded: what Activity retains, not the whole log (ADR 0009).
         let mut revival = self.store.revive(thread)?;
         let snapshot = revival.snapshot();
@@ -1993,7 +2028,10 @@ impl Engine {
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
         let project_id = snapshot.project_id();
-        let resume = snapshot.resume_target().map(str::to_string);
+        let resume = match &launch {
+            Some(launch) => launch.resume.clone(),
+            None => snapshot.resume_target().map(str::to_string),
+        };
         // A worktree the agent made and the Thread followed into is the
         // agent's, not Ferrite's: gone while parked, the Thread goes back
         // to main rather than rebuilding somebody else's tree. Ferrite's
@@ -2024,12 +2062,18 @@ impl Engine {
             .map(Path::to_path_buf);
         let additional_directories =
             project_additional_directories(&self.registry, project_id, cwd.as_deref());
-        let (agent_args, unreadable_args) =
-            match launch_args::load(&launch_args::path(self.store.dir(), thread)) {
+        let saved = launch_args::path(self.store.dir(), thread);
+        let (agent_args, unreadable_args) = match &launch {
+            Some(launch) => {
+                let agent_args = launch_args::LaunchArgs::of(provider, launch);
+                launch_args::save(&saved, agent_args.as_ref())?;
+                (agent_args, None)
+            }
+            None => match launch_args::load(&saved) {
                 Ok(saved) => (saved, None),
                 Err(error) => (None, Some(error)),
-            };
-        let args = launch_args::for_provider(agent_args.as_ref(), provider);
+            },
+        };
         let session = self
             .spawner
             .start_after(
@@ -2043,7 +2087,7 @@ impl Engine {
                     cwd: cwd.as_deref(),
                     name: title.as_deref(),
                     additional_directories,
-                    args,
+                    launch: launch_args::for_provider(agent_args.as_ref(), provider),
                 },
             )
             .map_err(LoadError::Io)?;
@@ -2199,7 +2243,7 @@ impl Engine {
                     cwd: cwd.as_deref(),
                     name: state.title.as_deref(),
                     additional_directories,
-                    args: state.agent_args(state.provider),
+                    launch: state.agent_launch(state.provider),
                 },
             ) {
                 Ok(session) => {

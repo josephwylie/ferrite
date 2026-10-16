@@ -101,11 +101,17 @@ impl Server {
             }
         };
         if params.focus {
-            if let Some(&thread) = self.threads_of(project).first() {
-                self.say(ServerMessage::Focus { thread });
-            }
+            self.focus_project(project);
         }
         self.project_result(project)
+    }
+
+    /// Land every window on `project`'s first open Thread, if it has one
+    /// (Herdr's `workspace focus`).
+    pub(super) fn focus_project(&mut self, project: ProjectId) {
+        if let Some(&thread) = self.threads_of(project).first() {
+            self.say(ServerMessage::Focus { thread });
+        }
     }
 
     /// Park every open Thread of `project`, as closing their Panes does.

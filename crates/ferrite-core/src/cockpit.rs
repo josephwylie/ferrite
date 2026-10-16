@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use crate::activity::{DecisionHandle, Subject};
 pub use crate::engine::{
-    title_from_prompt, BootstrapResult, Bootstrapped, DeleteError, Engine, HistoryDirection,
+    title_from_prompt, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine, HistoryDirection,
     LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart, ReviveGroupError,
     RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
