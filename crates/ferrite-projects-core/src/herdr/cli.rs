@@ -4,7 +4,7 @@
 //! answers agent_blocked. A test answers for herdr itself (`set_fake`), so its many calls start no program.
 use crate::json::*;
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
@@ -26,13 +26,8 @@ pub fn set_fake(f: Option<Rc<dyn Fake>>) { FAKE.with(|x| *x.borrow_mut() = f); }
 pub fn fake() -> Option<Rc<dyn Fake>> { FAKE.with(|x| x.borrow().clone()) }
 
 pub fn bin() -> String { std::env::var("HERDR_BIN_PATH").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "herdr".into()) }
-fn config_home() -> PathBuf { std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()).map(PathBuf::from).unwrap_or_else(|| crate::store::files::user_home().join(".config")) }
 /// The session a plain command talks to: the pane it runs in, else the default session.
-pub fn current_socket() -> String {
-    if let Ok(s) = std::env::var("HERDR_SOCKET_PATH") { if !s.is_empty() { return s; } }
-    let base = config_home().join("herdr");
-    match std::env::var("HERDR_SESSION") { Ok(s) if !s.is_empty() => base.join("sessions").join(s).join("herdr.sock"), _ => base.join("herdr.sock") }.display().to_string()
-}
+pub fn current_socket() -> String { super::ferrite::socket() } // Ferrite: one Server per computer, at its API socket
 pub fn session_name(socket: &str) -> String {
     let parts: Vec<&str> = socket.split('/').collect();
     let n = parts.len();

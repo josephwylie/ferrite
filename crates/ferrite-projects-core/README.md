@@ -32,11 +32,16 @@ Inside vendored files a change is the smallest that works and is marked
   are written in, as Ferrite's workspace has its own. The dependencies
   upstream's workspace declares are declared, as upstream does, in
   Ferrite's root `Cargo.toml`.
-- **`src/herdr/ferrite.rs`** is the seam: `cli::launch` (every herdr
-  command) and `socket::ask` (every request on herdr's socket) go to it
-  once a test's stand-in has had its turn. Each call is answered from
-  Ferrite's Server API as it is wired and refused `not_wired` until then.
-  Every public signature of `src/herdr/` is upstream's. Left as they are:
+- **`src/herdr/ferrite.rs`** (and `src/herdr/ferrite/`) is the seam:
+  `cli::launch` (every herdr command) and `socket::ask` (every request on
+  herdr's socket) go to it once a test's stand-in has had its turn. Each
+  call is answered from Ferrite's Server API in herdr's shapes, or refused
+  `not_wired` where Ferrite has no counterpart. Three more lines reach it:
+  `cli::current_socket` is the Server's API socket (one session,
+  `default`), `Herdr::pane_quit` parks the pane's Thread rather than
+  signal a process, and `agents/start_failed.rs` explains an agent kind
+  Ferrite has no Provider for. Every public signature of `src/herdr/` is
+  upstream's. Left as they are:
   `socket::on_tab_shown`, `flow`'s `extras/config.rs` and `board`'s
   `job_far.rs`, which start herdr themselves, as only the terminal board
   and herdr's first-run setup reach them, and Ferrite runs neither.

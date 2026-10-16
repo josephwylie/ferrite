@@ -83,57 +83,81 @@ crates' own tests run.
 `cli::launch` runs every herdr command and `socket::ask` sends every
 request on herdr's socket. After a test's stand-in (`set_fake`) has had
 its turn, both now go to `herdr/ferrite.rs`, which answers each call in
-herdr's words from Ferrite's Server through the `ferrite` CLI (ADR
-0027) and refuses an unwired one with the code `not_wired` before
-anything runs, which callers treat as any refusal of herdr's. A refusal
-is retired by wiring it, never by working round it in a caller.
+herdr's words and shapes from Ferrite's Server, a request on its API
+socket as the `ferrite` CLI (ADR 0027) sends it, and refuses one with no
+Ferrite counterpart with the code `not_wired` before anything runs,
+which callers treat as any refusal of herdr's. A refusal is retired by
+wiring it, never by working round it in a caller. Three more `Ferrite:`
+lines reach the seam: `cli::current_socket` is the Server's API socket
+(`FERRITE_SOCKET`, else `api.sock` in the Store), so there is one
+session, `default`, and `Herdr::alive` is the Server answering;
+`Herdr::pane_quit` parks the pane's Thread instead of signalling a
+process; and `agents/start_failed.rs` explains an agent kind with no
+Provider.
+
+A herdr Space is a Project, by its id, except that a linked worktree is a
+Space of its own, by its path, as herdr's worktree Spaces are. A tab, a
+pane and an agent are one Thread. herdr places a pane at a shell and
+starts an agent in it later, and again after it ended, under the same
+pane id; a Thread is born with its agent. So a pane the board places is
+kept by an id of its own (`p1`, `p2`, …) in `ferrite-panes.json` beside
+the board's data, with its Space, folder, tab label and `--env`, and that
+id names the Thread started there from then on, and the same Thread
+again when its agent is started anew. Any other Thread is a pane named by
+its Thread's id. A pane whose Thread is not open is at its shell.
 
 How each herdr call is answered:
 
 | herdr call | Ferrite |
 |---|---|
-| `workspace list`, `get` | `project.list`, `project.get` (a worktree's Space is its path, from `thread.list`) |
-| `workspace create --cwd --label` | `project.open`, staging the Space's first Thread |
-| `workspace create … --env` | **added**: `env` on `thread.start` |
-| `workspace rename`, `close` | `project.rename`, `project.close` |
-| `workspace focus` | **added**: `project.focus` |
-| `tab create`, `pane split`, `worktree open` | a staged Thread, started by `agent start` |
-| `worktree create` | `worktree.create`, then a staged Thread there |
-| `worktree remove --workspace` | `worktree.remove` (never forced) |
-| `tab list`, `pane list`, `agent list` | `thread.list` |
-| `tab get`, `pane get`, `agent get` | `thread.get` (its Attention is the agent's status) |
-| `tab rename` | `thread.rename` |
-| `tab close`, `pane close` | `thread.close` |
-| `tab focus`, `agent focus`, `pane zoom` (focus) | `thread.focus` |
-| `agent start` | `thread.start --ready` (`--args`, `--resume`, `--project`) |
-| `pane quit` then `agent start` in that pane | **added**: `thread.revive`, a parked Thread's agent started again in place with new arguments, so its id lasts as a pane's does |
+| `workspace list`, `get` | `project.list` (`repo_root` is its `repo_key`), then each linked worktree a pane is in |
+| `workspace create --cwd --label --env` | `project.open` (the home folder labelled `~`, as herdr does), and a pane placed there with that `env` |
+| `workspace rename`, `focus` | `project.rename`, **added** `project.focus`; a worktree's Space: its label kept with its panes, `thread.focus` of its first Thread |
+| `workspace close` | `thread.close` of each Thread the board placed in a Project's Space (a Thread of the operator's there stays open, and so does the Project); every Thread in a worktree's Space |
+| `tab create`, `pane split`, `worktree open` | a placed pane (`worktree open` of a Space a pane is in answers that pane, `already_open`) |
+| `worktree create` | `worktree.create`, then a pane placed in its Space |
+| `worktree remove --workspace` | `worktree.remove` by the Space's path; `--force` and a Project's Space are refused |
+| `tab list`, `pane list`, `agent list`, `tab get`, `pane get`, `agent get` | `thread.list` and the placed panes; an agent is a Thread, its Attention herdr's status word for word; `agent get` of a pane at its shell is `agent_not_found` |
+| `tab rename` | the placed pane's label; any other Thread: `thread.rename` |
+| `tab close`, `pane close` | `thread.close`, and the placed pane forgotten |
+| `tab focus`, `agent focus`, `agent attach`, `pane zoom --on` | `thread.focus` (a pane at its shell has nothing to land on); `pane zoom --off`: nothing |
+| `agent start` | `thread.start --ready --timeout-ms` (`--args`, `--resume`, `--project`, **added** `--env`); in a pane whose agent of that kind ran before, **added** `thread.revive --ready`, so the Thread keeps its id as the pane does. `claude` and `codex` only: any other kind is refused `no_provider` before anything starts |
+| `pane quit` | `thread.close` (the `Ferrite:` line in `Herdr::pane_quit`) |
+| `pane run` (`env HERDR_PROJECTS_AGENT=<name> bwrap … -- <program> …`) | `agent start` with the mount as **added** `--launcher`; any other command is refused. Only Linux machines with `bwrap` get here: elsewhere upstream refuses a plan in a repo itself |
 | `agent prompt` | `agent.prompt --until working --until blocked` |
-| `agent read`, `pane read` | `agent.read --lines` |
-| `agent send-keys` | `agent.interrupt` (Esc, Ctrl+C), `decision.answer` (a menu's keys) |
-| `pane send-text` | `decision.answer` (a typed answer) |
-| `pane process-info` (`pane_idle`, `pane_childless`) | answered from the staged Thread: no shell runs |
-| `pane run` (a plan writer under bubblewrap) | **added**: a launcher prefix on `thread.start`, needed only on Linux machines with `bwrap` |
-| `pane report-metadata`, `workspace report-metadata` | none: the nav draws its rows from the board's data |
+| `agent read`, `pane read --lines` | `agent.read --lines`; a pane at its shell reads empty |
+| `agent send-keys` | `agent.interrupt` (Esc, Ctrl+C), `decision.answer` (a menu's keys: enter, digits, `y`, `n`); enter with nothing pending, and any key at a shell, does nothing; any other key is refused before anything is sent |
+| `pane send-text` | `decision.answer` (a typed answer); at a shell, nothing |
+| `pane process-info` (`pane_idle`, `pane_childless`) | answered from the pane, no process asked: its shell alone at a shell, a program in front where its Thread is open, under a pid no system gives |
+| `pane report-metadata`, `workspace report-metadata` | nothing asked: the nav draws its rows from the board's data |
+| `integration status` | nothing missing: Ferrite's Providers report Attention themselves |
+| `machine list --json` | `machine.list`, in its order, each `session` `default`, `enabled` |
 | `pane move` (a coordinator from before it had a tab) | refused: no Ferrite install has that layout |
-| `integration status` | none: Ferrite's Providers report Attention themselves |
-| `machine list` | `machine.list` |
-| `plugin list`, `config-dir`, `disable` | none: the web UI and herdr-superwork, neither of which Ferrite has |
-| `plugin pane open`, `pane layout`, `terminal session control`, `popup.close`, `tab.get`, `events.subscribe` | none: the board's terminal runtime, replaced by Seam 3 |
-| `--default-config`, `config check`, `server reload-config`, `agent attach` | none: herdr's first-run setup and attaching from a plain terminal; Ferrite's keymap binds the board |
+| `plugin list`, `config-dir`, `disable` | refused: the web UI and herdr-superwork, neither of which Ferrite has (`webui/find.rs` finds no web UI, `take_over`'s `old_plugin_off` is false) |
+| `plugin pane open`, `pane layout`, `terminal session control`, `popup.close`, `tab.get`, `events.subscribe` | refused: the board's terminal runtime, replaced by Seam 3 |
+| `--default-config`, `config check`, `server reload-config` | refused: herdr's first-run setup |
 
-An agent kind Ferrite has no Provider for (only `claude` and `codex`
-run) fails `no_provider` at `agent start`, as a missing program does.
-`socket::on_tab_shown`, `flow`'s `extras/config.rs` and `board`'s
-`job_far.rs` start herdr themselves; only the terminal runtime and
-herdr's first-run setup reach them, and Ferrite runs neither.
+herdr's error codes come back as herdr gives them: no open Thread is
+`pane_not_found`, `tab_not_found` or `agent_not_found` by the command, no
+Project `workspace_not_found`; a Server that is not running `no_server`,
+one that does not answer in time `timeout` ("herdr did not answer in
+time"), and `cli::launch` still refuses an argument over 131072 bytes
+`too_long` first. `socket::on_tab_shown`, `flow`'s `extras/config.rs`
+and `board`'s `job_far.rs` start herdr themselves; only the terminal
+runtime and herdr's first-run setup reach them, and Ferrite runs
+neither.
 
 ### Seam 2: the API grows what the board needs
 
 What 1.0 needs and Ferrite lacks is added to the API (ADR 0027):
 declared once in the `operations!` table so the CLI binding, catalog and
 schema follow, with a v1 fixture. The additions are those marked above:
-`env` and a launcher prefix on `thread.start`, `project.focus` and
-`thread.revive`.
+
+| Operation | Does |
+|---|---|
+| `thread.start` | gains `env` (set in the agent's environment, under Ferrite's own) and `launcher` (a program the provider's CLI runs through, and its arguments: `bwrap … --`), each for every Session of that provider and saved with its `args`, so a revive or a Server restart starts it the same way; fixture `thread_start_launch` |
+| `project.focus` | every window lands on the Project's first open Thread, as `project.open --focus` does by directory |
+| `thread.revive` | a parked Thread's agent started again in place, keeping its id (`unknown_thread` if no parked Thread has it; an open one is refused `invalid_request`: close it first): its `args`, `env` and `launcher` replace those it was started with, it carries on `resume`'s conversation or starts a new one under its history, and `ready`, `timeout_ms` are `thread.start`'s. `thread.close` stays the stop half |
 
 ### Seam 3: the board in GPUI
 

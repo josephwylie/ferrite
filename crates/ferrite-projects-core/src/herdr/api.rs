@@ -109,6 +109,7 @@ impl Herdr {
     pub fn pane_run(&self, id: &str, command: &str) -> HRes<Value> { self.call(args(&["pane", "run", id, command])) }
     /// End the program in the pane's foreground, so the pane is at its shell again. True once herdr sees no agent there.
     pub fn pane_quit(&self, id: &str, wait_ms: i64) -> bool {
+        if super::cli::fake().is_none() { return super::ferrite::pane_quit(self.socket.as_deref(), id); } // Ferrite: its Thread is parked, never signalled
         let gone = || matches!(self.agent_get(id), Ok(None));
         let info = self.process_info(id);
         let shell = info.as_ref().map(|i| i.i("shell_pid")).unwrap_or(-1);
