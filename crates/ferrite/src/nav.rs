@@ -217,6 +217,14 @@ impl ProjectBlock {
             .map(|row| row.thread)
             .chain(self.rows.iter().map(|(row, _)| row.thread))
     }
+
+    /// What the project's head says: the roll-up of its coordinator and
+    /// its Threads (`RowStatus::roll_up`), as a Group's row says its
+    /// members'.
+    pub fn status(&self) -> RowStatus {
+        RowStatus::roll_up(self.head.iter().chain(self.rows.iter().map(|(row, _)| row)))
+            .unwrap_or_default()
+    }
 }
 
 /// Smart filtering (`Settings::smart_filtering`): two sections over the
@@ -1023,16 +1031,18 @@ fn title_ink(selected: bool, parked: bool) -> u32 {
 
 // ------------------------------------------------------------- Projects
 
-/// A project's head row: the cursor cell, its coordinator's mark, the
-/// project's name in bold (the one bold title in the column) and its
-/// summary at the right. Selected while the board shows the coordinator.
+/// A project's head row: the cursor cell, the project's roll-up mark
+/// (`ProjectBlock::status`) — a coordinator's idle dot while all are
+/// idle, as its own row would draw it — the project's name in
+/// bold (the one bold title in the column) and its summary at the right.
+/// Selected while the board shows the coordinator.
 pub fn project_head(index: usize, block: &ProjectBlock) -> Stateful<Div> {
     let selected = block.head.as_ref().is_some_and(|row| row.selected);
     let key = SharedString::from(format!("nav-projects-head-{}", block.slug));
     let summary = head_summary(&block.name, &block.summary);
     let mark = match &block.head {
-        Some(row) => cell(status_mark(row.status)),
-        None => blank_cell(),
+        Some(_) => cell(status_mark(block.status())),
+        None => roll_up_cell(block.status()),
     };
     row_frame(("nav-projects-head", index), key, selected)
         .debug_selector(move || format!("nav-projects-head-{index}"))
@@ -1510,6 +1520,40 @@ mod tests {
             Some("2 need you".into())
         );
         assert_eq!(head_summary("docs", &SharedString::default()), None);
+    }
+
+    /// A project's head rolls up its coordinator and its Threads by the four
+    /// states: an idle coordinator over a Thread that needs you says so.
+    #[test]
+    fn a_project_head_rolls_up_its_coordinator_and_threads() {
+        let row = |status| ThreadRow { status, ..thread() };
+        let block = |head: Option<RowStatus>, rows: &[RowStatus]| ProjectBlock {
+            slug: "checkout".into(),
+            name: "Checkout".into(),
+            summary: SharedString::default(),
+            head: head.map(row),
+            head_sub: None,
+            rows: rows.iter().map(|status| (row(*status), None)).collect(),
+        };
+        let idle = Some(RowStatus::Idle);
+        assert_eq!(
+            block(
+                idle,
+                &[RowStatus::Done, RowStatus::NeedsYou, RowStatus::Working]
+            )
+            .status(),
+            RowStatus::NeedsYou
+        );
+        assert_eq!(
+            block(idle, &[RowStatus::Working, RowStatus::Done]).status(),
+            RowStatus::Done
+        );
+        assert_eq!(
+            block(Some(RowStatus::Working), &[RowStatus::Idle]).status(),
+            RowStatus::Working
+        );
+        assert_eq!(block(idle, &[]).status(), RowStatus::Idle);
+        assert_eq!(block(None, &[RowStatus::Done]).status(), RowStatus::Done);
     }
 
     #[test]
