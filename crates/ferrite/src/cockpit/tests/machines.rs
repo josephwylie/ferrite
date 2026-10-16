@@ -1158,7 +1158,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
 }
 
 /// A review beside a machine's Thread reads its checkout through the
-/// machine's Server (`review_diff`, `list_commits`, ADR 0021) — no git here
+/// machine's Server (`review_read`, `list_commits`, ADR 0021) — no git here
 /// is asked — and its lines take comments as a local review's do: the
 /// uncommitted work, then one of the branch's commits picked from the list.
 #[gpui::test]
@@ -1235,7 +1235,7 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     open_review(ferrite_reviewr::model::Scope::Uncommitted, cx);
     until(cx, |cx| cx.debug_bounds("review-lines").is_some());
     assert!(
-        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"review_diff""#),
+        String::from_utf8_lossy(&SENT_TO_BOX.lock().unwrap()).contains(r#""op":"review_read""#),
         "the machine's Server read the checkout"
     );
     cx.simulate_keystrokes("c");
