@@ -494,3 +494,39 @@ fn ctrl_c_twice_closes_the_board(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-c");
     assert!(closed.get());
 }
+
+// ------------------------------------------------------------- placement
+
+/// The popup is 90% of the board, and all of it under 110×30 cells, as
+/// upstream's takes a whole pane there.
+#[test]
+fn the_popup_takes_the_whole_board_when_it_is_small() {
+    let (columns, rows) = super::POPUP_FULL_BELOW;
+    let (wide, tall) = (columns * crate::theme::CH, rows * crate::theme::ROW);
+    assert_eq!(
+        super::popup_size(wide * 2.0, tall * 2.0),
+        (
+            wide * 2.0 * super::POPUP_SHARE,
+            tall * 2.0 * super::POPUP_SHARE
+        )
+    );
+    assert_eq!(
+        super::popup_size(wide - 1.0, tall * 2.0),
+        (wide - 1.0, tall * 2.0)
+    );
+    assert_eq!(
+        super::popup_size(wide * 2.0, tall - 1.0),
+        (wide * 2.0, tall - 1.0)
+    );
+}
+
+/// The board's "brings you back to the board" names the key that opens
+/// it, as the board writes keys.
+#[test]
+fn the_board_key_is_the_projects_toggle() {
+    let want = match crate::keymap::PLATFORM {
+        crate::keymap::Platform::Mac => "cmd+shift+a",
+        crate::keymap::Platform::Windows => "ctrl+shift+a",
+    };
+    assert_eq!(super::board_key(), want);
+}
