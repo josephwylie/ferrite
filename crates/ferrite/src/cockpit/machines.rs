@@ -163,9 +163,7 @@ impl CockpitView {
             {
                 self.notice_verb(alert.open_verb(), cx)
             }
-            Some((Landing::Alert(Alert { thread, .. }) | Landing::Thread(thread), _)) => {
-                self.land_on_thread(thread, cx)
-            }
+            Some((Landing::Alert(Alert { thread, .. }), _)) => self.land_on_thread(thread, cx),
             None => {}
         }
     }

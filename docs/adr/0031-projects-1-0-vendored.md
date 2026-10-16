@@ -194,6 +194,71 @@ so the board matches 1.0's design exactly. Its first-run setup (herdr's
 config) and its size warning (a pane shared with a remote view) are
 herdr's and are not drawn.
 
+In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
+`render`). Its seams:
+
+- **Runtime.** The view owns the `State` from `run/start.rs`'s `view`
+  (the saved view, the tasks read from disk alone, so the first frame needs
+  nothing slow), reads on the background executor once a second and right
+  after an action (`data::load`, the selected task and the chat's `snap`),
+  ticks once a second, runs each job on the background executor and saves
+  the view with `run/prefs.rs` (`view.json`, the popup's
+  `view-popup.json`). `settle_ms` is 0: a resize lays out at once.
+- **Keys.** A keystroke is said as `run/input.rs` says crossterm's
+  (`keys::press_of`): Option is alt, so Option+letter is `alt+<letter>`,
+  not the character it composes; ⌘ stays the window's, but ⌘V, one paste.
+  Under the keymap's `Projects` context every keystroke the table binds
+  anywhere is masked (`keymap::board_reads_its_keys`, again after the
+  operator's keys), so nothing bound around the board acts first: not a
+  wall's y/n/a and digits, not Submit's enter, not Windows' ctrl keys,
+  which are the board's there as in a terminal (ctrl+c closes it). The
+  window keeps ⌘ and `projects::Toggle`. The board's `?` menu stays the
+  list of its keys. Text is read key by key, as a terminal with Option as
+  Meta reads it: the board registers no input handler, so an input method
+  (CJK) and dead keys compose nothing in its text box and its
+  `Screen::cursor` places no candidate window. An input handler would
+  hand Option's dead keys (Option+E, U, I, N, `) to the input method in
+  place of the board's alt keys; text composed elsewhere comes in whole
+  by ⌘V.
+- **Inks.** `board.theme`'s `herdr` (and `auto`, `dark`) is Ferrite's own
+  colours given as herdr's tokens and finished by the board's own rules
+  (`theme::greys`, `theme::picks`: the greys held readable, its review
+  blue, queue pink, todo grey, automations purple); `light` and a herdr
+  theme's name are that palette on its own ground. `NO_COLOR` paints
+  nothing. Every piece starts on its cell; a glyph Geist Mono lacks gets a
+  box of its own cells.
+- **Placement.** `board.open: tab` draws the board in the board's place,
+  kept while you are on a Thread; `popup`, a sheet over a veil, 90% of the
+  board (all of it under 110×30 cells). The projects key shows it, and on
+  it, goes back to where you came from; landing on a Thread moves a tab's
+  board aside. `board.notify: bell` rings the system bell.
+- **Opening an agent.** Every agent runs in a Ferrite window, so
+  `cli::in_herdr` is true (a `Ferrite:` mark): Enter's job focuses the
+  agent through the adapter (`agent focus`, `thread.focus`) and says
+  "Opened <id>'s agent", or closes the popup; it never hands over a
+  terminal. The popup opens on the task whose agent runs in the focused
+  Thread (`Ctx::from`, the Thread's id, which is its agent's pane id to
+  the adapter).
+- **What the runtime leaves out.** `Ctx::own_key` is unset: herdr hands
+  its popup the key that opened it, which the board must catch to close;
+  here `projects::Toggle` acts before the board. The board does not start
+  the keeper (`keeper::ensure_keeper` runs the `herdr-projects keeper`
+  command, which Ferrite's binary is not): starting it is the flow
+  crate's seam, and until a keeper runs the loader does its tick
+  (`keeper::tick_once`). herdr's dots (`ui.status_indicators = "dots"`)
+  are a herdr setting Ferrite has no counterpart for: the board always
+  draws its marks; the vendored dots stay drawable for upstream's
+  merges.
+
+Not drawn, being a terminal's alone: the first-run setup (`view/setup.rs`,
+herdr's config blocks and board key), the held-size warning
+(`view/mod.rs`'s `held_lines`: no remote view holds a window), OSC 7501
+records (the nav draws its rows from the board's data), attaching the
+terminal to another machine's agent (the board says it cannot), the web
+UI's offer, and loading a new binary in place (the board is part of
+Ferrite, which updates whole, so `herdr-projects was updated` is never
+said).
+
 herdr's sidebar rows become Ferrite's nav rows, drawn from the same data
 (`flow`'s `flow/sidebar*.rs`). The key that opens the board, herdr's
 `prefix+a`, is Ferrite's existing `projects::Toggle`; the board's own

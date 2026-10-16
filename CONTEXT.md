@@ -239,6 +239,13 @@ A rule that adds a task, and puts an agent on it, on a schedule or when
 something happens on the board (a merge, say).
 _Avoid_: routine, cron job.
 
+**Work board**
+herdr-projects 1.0's board (ADR 0031): the list of tasks by need — needs
+you, ready to approve, working, to do, done — each delegated to an agent,
+with the chat to the Coordinator under it. Opened by the projects key in
+the board's place (`board.open: tab`) or as a sheet over it (`popup`).
+_Avoid_: dashboard, kanban; "the board" alone is the Cockpit's Panes.
+
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,

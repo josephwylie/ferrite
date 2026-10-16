@@ -38,7 +38,7 @@ pub fn session_name(socket: &str) -> String {
     let n = parts.len();
     if n >= 3 && parts[n - 1] == "herdr.sock" && parts[n - 3] == "sessions" { parts[n - 2].to_string() } else { "default".into() }
 }
-pub fn in_herdr() -> bool { std::env::var("HERDR_ENV").as_deref() == Ok("1") }
+pub fn in_herdr() -> bool { true } // Ferrite: every agent runs in a Ferrite window, which focuses it (herdr's `HERDR_ENV`)
 pub fn socket_exists(socket: &str) -> bool { use std::os::unix::fs::FileTypeExt; std::fs::metadata(socket).map(|m| m.file_type().is_socket()).unwrap_or(false) }
 
 /// Runs the program: what it gave, or why it could not be run. `timeout_ms` ends a program that takes longer.

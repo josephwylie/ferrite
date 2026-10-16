@@ -4,7 +4,7 @@
 //! no ticker runs.
 
 use super::*;
-use crate::projects::{Model, Place, ProjectEntry, ThreadEntry};
+use crate::projects::{Model, ProjectEntry, ThreadEntry};
 use ferrite_projects::thread::Group;
 
 fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
@@ -216,29 +216,173 @@ fn the_servers_nav_focus_shows_one_project_and_its_clear_all(cx: &mut TestAppCon
     });
 }
 
-/// "Continue this Thread as a project" opens its dialog only once the
-/// adoptable-agent check passed; a refusal is a toast, and no dialog.
+/// At wall range y/n/a and the digits answer the flagged Thread; a focused
+/// work board reads them as its own keys instead, and the Decision still
+/// waits.
 #[gpui::test]
-fn adopting_opens_the_dialog_only_once_the_check_passed(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("projects-adopt", 1);
-    let thread = core.threads()[0];
+fn a_board_at_wall_range_takes_the_walls_answer_keys(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("wall-board", 24);
+    let group = group_all(&mut core);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1060.), px(770.)));
+    cx.update(|window, cx| assert_eq!(view.read(cx).level_now(window), Level::Wall));
+    fake.streams.borrow()[7].send(decision("perm_08")).unwrap();
+    tick(cx);
+    let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
+
+    view.update_in(cx, |view, window, cx| {
+        view.stage_board(crate::board::fixture::board(), window, cx)
+    });
+    let board = view.read_with(cx, |view, _| {
+        view.projects
+            .board
+            .as_ref()
+            .expect("the board")
+            .view
+            .clone()
+    });
+    cx.update(|window, cx| {
+        let focus = board.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    tick(cx);
+    cx.update(|window, cx| assert_eq!(view.read(cx).level_now(window), Level::Wall));
+
+    cx.simulate_keystrokes("y n a 1 2 3");
+
+    board.update(cx, |board, _| {
+        assert_eq!(board.state().expect("the board's state").value(), "yna123");
+    });
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.cockpit
+                .thread(flagged)
+                .and_then(|open| open.pending())
+                .is_some(),
+            "the wall's Decision still waits"
+        );
+    });
+}
+
+/// The tab's work board, staged over the Panes and holding the keyboard.
+fn focused_tab_board(
+    view: &Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Entity<crate::board::BoardView> {
+    view.update_in(cx, |view, window, cx| {
+        view.stage_board(crate::board::fixture::board(), window, cx)
+    });
+    let board = view.read_with(cx, |view, _| {
+        view.projects
+            .board
+            .as_ref()
+            .expect("the board")
+            .view
+            .clone()
+    });
+    cx.update(|window, cx| {
+        let focus = board.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    tick(cx);
+    board
+}
+
+fn board_holds_the_keyboard(
+    board: &Entity<crate::board::BoardView>,
+    cx: &mut gpui::VisualTestContext,
+) -> bool {
+    cx.update(|window, cx| board.read(cx).focus.contains_focused(window, cx))
+}
+
+/// A press on a Thread's nav row lands on that Thread: the tab's board
+/// gives way, still open, and the keyboard goes to the Thread, as herdr's
+/// board tab gives way to the tab you pick.
+#[gpui::test]
+fn a_nav_row_click_moves_the_tab_board_aside(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("board-nav-click", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    hold_nav_open(&view, cx);
+    let other = view.read_with(cx, |view, _| {
+        let focused = view.focused_thread();
+        view.panes
+            .iter()
+            .filter_map(|pane| pane.thread())
+            .find(|thread| Some(*thread) != focused)
+            .expect("a second Thread")
+    });
+    let board = focused_tab_board(&view, cx);
+
+    let row = cx
+        .debug_bounds(format!("nav-thread-{}", other.get()).leak())
+        .expect("the other Thread's nav row");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+
+    view.read_with(cx, |view, _| {
+        assert!(!view.projects.board_shown(), "the board gave way");
+        assert!(view.projects.board.is_some(), "a tab's board stays open");
+        assert_eq!(view.focused_thread(), Some(other));
+    });
+    assert!(
+        !board_holds_the_keyboard(&board, cx),
+        "the keyboard went to the Thread"
+    );
+}
+
+/// ⌘] steps to the next Pane from the board too: the board gives way.
+#[gpui::test]
+fn the_next_pane_key_moves_the_tab_board_aside(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("board-next-pane", 2);
+    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let place = || Place {
-        root: std::env::temp_dir().join("ferrite-projects-adopt-unused"),
-        config_dir: std::env::temp_dir().join("ferrite-projects-adopt-unused"),
-    };
-    let before = toasts(cx);
+    let before = view.read_with(cx, |view, _| view.focused_thread());
+    let board = focused_tab_board(&view, cx);
+
+    cx.simulate_keystrokes("cmd-]");
+    tick(cx);
+
+    view.read_with(cx, |view, _| {
+        assert!(!view.projects.board_shown(), "the board gave way");
+        assert_ne!(view.focused_thread(), before, "the next Pane");
+    });
+    assert!(!board_holds_the_keyboard(&board, cx));
+}
+
+/// The board key on a board that shows but lost the keyboard (a press in
+/// the nav) takes you back to the board, not away from it.
+#[gpui::test]
+fn the_board_key_refocuses_a_shown_board(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("board-refocus", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let board = focused_tab_board(&view, cx);
+    let elsewhere = cx.update(|window, cx| {
+        let elsewhere = cx.focus_handle();
+        window.focus(&elsewhere, cx);
+        elsewhere
+    });
+    assert!(!board_holds_the_keyboard(&board, cx));
 
     view.update_in(cx, |view, window, cx| {
-        let refusal = Err("no agent is detected in pane 1".to_string());
-        view.adopt_or_refuse(place(), thread, refusal, window, cx);
-        assert!(view.projects.sheet.is_none(), "refused: no dialog");
+        view.projects.place = Some(crate::projects::Place {
+            root: "/nonexistent/projects".into(),
+            config_dir: "/nonexistent/projects-config".into(),
+        });
+        view.toggle_projects(window, cx);
     });
-    assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
+    assert!(view.read_with(cx, |view, _| view.projects.board_shown()));
+    assert!(board_holds_the_keyboard(&board, cx), "back on the board");
 
-    view.update_in(cx, |view, window, cx| {
-        view.adopt_or_refuse(place(), thread, Ok(()), window, cx);
-        assert!(view.projects.sheet.is_some(), "the dialog");
-    });
+    view.update_in(cx, |view, window, cx| view.toggle_projects(window, cx));
+    assert!(
+        !view.read_with(cx, |view, _| view.projects.board_shown()),
+        "focused, the key leaves it"
+    );
+    cx.update(|window, _| assert!(elsewhere.is_focused(window)));
 }
