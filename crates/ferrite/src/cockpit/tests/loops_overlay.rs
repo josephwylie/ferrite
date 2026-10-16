@@ -69,6 +69,7 @@ fn shown_at(draws: &[(std::time::Instant, Option<Caret>)], at: std::time::Instan
 /// the pulse clock's grid the caret on screen is the blink's value there.
 #[gpui::test]
 fn the_caret_blinks_in_the_overlay_and_keeps_its_look(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     let (view, cx) = focused("overlay-caret", 2, cx);
     let composer = composer_of(&view, cx);
     composer.update(cx, |composer, _| composer.clear_caret_log());
@@ -139,6 +140,7 @@ fn typing_reaches_a_line_the_overlay_draws_the_caret_of(cx: &mut TestAppContext)
 /// neither rebuilding the Cockpit.
 #[gpui::test]
 fn an_open_palettes_caret_blinks_in_the_overlay_over_its_float(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     let (view, cx) = focused("overlay-float", 2, cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)

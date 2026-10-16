@@ -14224,6 +14224,18 @@ mod tests {
         group
     }
 
+    /// Hold this test's wall clock still, for a test that counts renders. The
+    /// executor's clock is stepped, but a nav row's age, a notice's and the
+    /// bottom bar's minute turn on the wall clock, at the machine's pace: one
+    /// turning inside a counted window (a loaded machine stretches the window
+    /// into real seconds) redraws until the real clock catches the stepped
+    /// one. Install before the Cockpit, so every stamp reads this time.
+    fn hold_wall_clock() -> ferrite_core::clock::ThreadFixture {
+        // Mid-minute, so nothing that reads it sits on a turn.
+        let at = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_791_399_990);
+        ferrite_core::clock::ThreadFixture::install(at.into())
+    }
+
     fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
         let fake = Fake::default();
         let store = Store::open(scratch(name)).unwrap();

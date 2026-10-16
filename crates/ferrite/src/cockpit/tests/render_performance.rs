@@ -1147,6 +1147,7 @@ fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut Tes
 #[gpui::test]
 fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
     let (core, _fake) = cockpit("idle-focused", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -1569,6 +1570,7 @@ const WORKING_BOARD_BUDGET: usize = 30;
 #[gpui::test]
 fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
     let (core, fake) = cockpit("nav-hover-sweep", 4);
     let threads = core.threads().to_vec();
     long_transcripts(&fake);
@@ -1637,6 +1639,7 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
 #[gpui::test]
 fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
     let (core, fake) = cockpit("decision-idle", 2);
     let thread = core.threads()[0];
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
