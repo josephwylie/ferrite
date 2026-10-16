@@ -17,7 +17,8 @@ pub fn hook_files(p: &Places, env: &Env) -> (Vec<PathBuf>, PathBuf) {
     (vec![dir_of(p, env, "CLAUDE_CONFIG_DIR", ".claude").join("settings.json"), dir_of(p, env, "CODEX_HOME", ".codex").join("hooks.json"), p.home.join(".factory/settings.json"), p.home.join(".gemini/settings.json")],
      dir_of(p, env, "COPILOT_HOME", ".copilot").join("hooks").join("herdr-projects.json"))
 }
-fn old_hook(v: &Value) -> bool { v.get("command").and_then(|c| c.as_str()).map(|c| c.contains("herdr-projects") && c.contains(" hook --agent ")).unwrap_or(false) }
+// Ferrite: Ferrite's 0.2 ran the same hooks by its own name, `… ferrite-projects --root … hook --agent …`.
+fn old_hook(v: &Value) -> bool { v.get("command").and_then(|c| c.as_str()).map(|c| (c.contains("herdr-projects") || c.contains("ferrite-projects")) && c.contains(" hook --agent ")).unwrap_or(false) }
 /// A settings value without the old hooks: an entry that held only those goes, and so does a list or a table they
 /// leave empty. (value, changed); None: it goes.
 fn strip(v: &Value) -> (Option<Value>, bool) {
@@ -45,15 +46,16 @@ fn backup(file: &Path) { let _ = fs::copy(file, format!("{}.bak-herdr-projects",
 /// The old hooks taken out of every file. Returns the files changed, and those that could not be read (not JSON).
 pub fn undo_hooks(p: &Places, env: &Env) -> (Vec<String>, Vec<String>) {
     let (files, copilot) = hook_files(p, env);
+    let ferrite = copilot.with_file_name("ferrite-projects.json"); // Ferrite: Ferrite's 0.2's own file for Copilot
     let (mut done, mut unread) = (vec![], vec![]);
-    for f in files.iter().chain(std::iter::once(&copilot)) {
+    for f in files.iter().chain([&copilot, &ferrite]) { // Ferrite: and Ferrite's
         let Ok(text) = fs::read_to_string(f) else { continue };
         if !text.contains(" hook --agent ") { continue; }
         let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&text) else { unread.push(f.display().to_string()); continue };
         let (out, ch) = strip_map(&o);
         if !ch { continue; }
         backup(f);
-        let ok = if f == &copilot && !out.contains_key("hooks") { fs::remove_file(f).is_ok() } else { fs::write(f, format!("{}\n", serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default())).is_ok() };
+        let ok = if (f == &copilot || f == &ferrite) && !out.contains_key("hooks") { fs::remove_file(f).is_ok() } else { fs::write(f, format!("{}\n", serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default())).is_ok() }; // Ferrite: and Ferrite's
         if ok { done.push(f.display().to_string()); }
     }
     (done, unread)

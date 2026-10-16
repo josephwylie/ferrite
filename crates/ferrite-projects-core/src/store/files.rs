@@ -48,9 +48,16 @@ pub fn artifacts_dir(id: &str) -> PathBuf { dir_of(id).join("artifacts") }
 /// Once an update put a new file at that path, Linux names the running one "… (deleted)", a file nothing can be started
 /// from: the path is the one without it, where the new program is.
 pub fn bin() -> PathBuf {
+    if let Some(p) = env("FERRITE_PROJECTS_BIN") { return PathBuf::from(p); } // Ferrite: the board also runs inside Ferrite's app, whose program this is not: it names the bundled `ferrite-projects` (ADR 0031)
     use std::os::unix::ffi::OsStrExt;
     let Ok(p) = std::env::current_exe() else { return PathBuf::from("herdr-projects") };
-    match p.as_os_str().as_bytes().strip_suffix(b" (deleted)") { Some(b) => PathBuf::from(std::ffi::OsStr::from_bytes(b)), None => p }
+    shipped(match p.as_os_str().as_bytes().strip_suffix(b" (deleted)") { Some(b) => PathBuf::from(std::ffi::OsStr::from_bytes(b)), None => p }) // Ferrite
+}
+/// Ferrite: inside Ferrite's app with no `FERRITE_PROJECTS_BIN`, this program is the `ferrite-projects` shipped beside
+/// the app's `ferrite`, its links resolved: what agents and hooks run.
+fn shipped(exe: PathBuf) -> PathBuf {
+    if exe.file_name().is_none_or(|n| n != "ferrite") { return exe; }
+    fs::canonicalize(&exe).unwrap_or(exe).with_file_name("ferrite-projects")
 }
 pub fn absolute(p: &Path) -> PathBuf { if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir().map(|d| d.join(p)).unwrap_or_else(|_| p.to_path_buf()) } }
 

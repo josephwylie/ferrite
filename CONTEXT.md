@@ -204,27 +204,38 @@ one Thread can start, prompt, wait on and read other Threads. Only the
 operator answers a Decision; an agent passes the operator's answer on.
 _Avoid_: MCP, RPC, plugin API.
 
+**Board**
+Projects' one list of tasks (ADR 0031, herdr-projects 1.0 vendored), every
+repository's on this machine, each task tagged with its repository and
+grouped by what it waits for: needs you, ready to approve, working, to do,
+done. Its data is herdr-projects' home folder, `~/.herdr-projects`;
+`ferrite-projects`, shipped in the app, is its command line.
+_Avoid_: kanban, queue, project (a Ferrite Project is a registered
+repository root).
+
+**Task**
+One piece of work on the board: yours, or delegated to an ordinary agent
+that works it in a worktree and branch of its own, as a Ferrite Thread.
+Finished work goes down the finish line (committed, main merged in, the
+repository's check, a draft pull request, a second agent's review) and
+merges only on the operator's yes unless its settings say otherwise.
+_Avoid_: ticket, job, project thread.
+
 **Coordinator**
-Any agent whose working directory is exactly a Projects project's folder
-(ADR 0030, herdr-projects vendored as `ferrite-projects`): it plans with
-the operator and delegates each task to a project thread, never doing the
-work itself. A Projects project is a folder under the Projects root —
-`PROJECT.md` (settings and standing instructions), `TASKS.md`, the inbox,
-`threads/`, Memory — not a Ferrite Project (a registered repository
-root); the repositories it works in are listed in its `PROJECT.md`.
+The board's own agent, one long-lived chat at the bottom of the board:
+what the operator types becomes tasks, added or delegated. It plans and
+delegates; the tasks' agents do the work.
 _Avoid_: manager, orchestrator, lead agent.
 
-**Project thread**
-One task of a Projects project, recorded as `threads/t-NNNN.toml`: a
-worktree, tab, checkout or adopted agent, each a Ferrite Thread, briefed
-with the project's instructions and Memory and reporting back to the
-coordinator through its report and the project's inbox.
-_Avoid_: worker, subagent (that is Main's own delegate).
+**Keeper**
+The small background process (`ferrite-projects keeper`) that carries the
+board's tasks through the finish line and landing while no board is open.
+_Avoid_: ticker, daemon.
 
-**Memory**
-A Projects project's lasting knowledge: `MEMORY.md`, an index of one line
-per file in `memory/`. Every project thread's brief carries it; the
-coordinator keeps it.
+**Automation**
+A rule that adds a task, and puts an agent on it, on a schedule or when
+something happens on the board (a merge, say).
+_Avoid_: routine, cron job.
 
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each

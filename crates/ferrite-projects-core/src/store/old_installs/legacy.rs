@@ -28,8 +28,9 @@ pub fn old_entries(root: &Path) -> Vec<String> {
     names(root).into_iter().filter(|n| MARKS.contains(&n.as_str()) || project(&root.join(n))).collect()
 }
 /// The old version's settings folder holds its own files and none of this version's.
+/// Ferrite: Ferrite's 0.2 (`ferrite-projects`) kept the same folder, its journal named `ferrite-owned.json`.
 fn old_settings(dir: &Path) -> bool {
-    lstat(dir).map(|m| m.is_dir()).unwrap_or(false) && !dir.join("config.json").exists() && ["config.toml", "owned.json", "approved-routines.json"].iter().any(|f| dir.join(f).exists())
+    lstat(dir).map(|m| m.is_dir()).unwrap_or(false) && !dir.join("config.json").exists() && ["config.toml", "owned.json", "ferrite-owned.json", "approved-routines.json"].iter().any(|f| dir.join(f).exists())
 }
 
 /// Its ticker holds `.ticker.lock` while it runs. None: free (or no lock); Some(pid): held.
