@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 use super::{FileSuggestion, SettingAck};
@@ -369,7 +370,13 @@ impl ClaudeSession {
         // back a Session so that reason reaches the Pane.
         let id = session.take_request_id();
         debug_assert_eq!(id, HANDSHAKE_REQUEST_ID);
-        let mut initialize = serde_json::json!({"subtype": "initialize"});
+        // `perTaskStopAffordance` says this host stops a background task by
+        // `stop_task` (the shelf's ×, a Subagent tab's escape). Without it the
+        // CLI fails closed: an interrupt also kills every background agent and
+        // workflow (2.1.299, `per_task_stop_sparing`, confirmed by capture).
+        // With it, an interrupt aborts only Main's turn.
+        let mut initialize =
+            serde_json::json!({"subtype": "initialize", "perTaskStopAffordance": true});
         if visuals {
             // The in-band server (`mcp`): the CLI tunnels its MCP traffic
             // back over this pipe, starting before it answers this request.
@@ -608,7 +615,17 @@ impl ClaudeSession {
         }))
     }
 
-    /// Interrupt the running turn over the stdio control protocol.
+    /// Stop one Subagent and nothing else: `stop_task` with its task id.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let id = lock(&self.decoder).task_of(key).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "this subagent has no task to stop")
+        })?;
+        self.control(SessionControl::StopTask { id })
+    }
+
+    /// Interrupt Main's running turn over the stdio control protocol.
+    /// Background agents, workflows and tasks survive it: the handshake
+    /// declared `perTaskStopAffordance`.
     pub fn interrupt(&mut self) -> io::Result<()> {
         let request_id = self.take_request_id();
         self.write_line(&serde_json::json!({

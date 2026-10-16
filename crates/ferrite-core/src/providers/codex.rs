@@ -34,6 +34,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::activity::AgentKey;
+use crate::store::Provider;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 use super::FileSuggestion;
@@ -663,6 +665,20 @@ impl CodexSession {
         result
     }
 
+    /// Stop one Subagent: interrupt its own thread's running turn. Main and
+    /// the other Subagents run on; a Subagent running no turn is left be.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let id = self.take_request_id();
+        let Some(request) = lock(&self.requests).interrupt_child(id, key)? else {
+            return Ok(());
+        };
+        let result = self.write_line(&request);
+        if result.is_err() {
+            lock(&self.requests).discard(id);
+        }
+        result
+    }
+
     /// What the thread/start response said this install can do, answered at
     /// spawn — never assumed.
     pub fn capabilities(&self) -> &CodexCapabilities {
@@ -1200,8 +1216,9 @@ fn publish_activity(
     true
 }
 
-/// Main's interrupt target. Child lifecycle shares this connection but cannot
-/// replace or retire Main's turn. The handshake is the sole identity authority.
+/// Main's interrupt target, and each Subagent's own. Child lifecycle shares
+/// this connection but cannot replace or retire Main's turn; it names only
+/// the child's. The handshake is the sole identity authority.
 struct MainTurnTracker {
     main_thread_id: Option<String>,
     early_turns: HashMap<String, String>,
@@ -1231,11 +1248,15 @@ impl MainTurnTracker {
             return;
         };
         if let Some(main_thread_id) = &self.main_thread_id {
-            if thread_id != main_thread_id {
-                return;
-            }
             let mut requests = lock(&self.requests);
-            if started {
+            if thread_id != main_thread_id {
+                let key = AgentKey::new(Provider::Codex, main_thread_id, thread_id);
+                if started {
+                    requests.child_started(key, thread_id, turn_id, EARLY_TURN_THREAD_LIMIT);
+                } else {
+                    requests.child_completed(&key, turn_id);
+                }
+            } else if started {
                 requests.started(turn_id);
             } else {
                 requests.completed(turn_id);

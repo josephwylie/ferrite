@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use ferrite_core::activity::AgentKey;
 use ferrite_core::providers::{CodexConfig, CodexSession, Session};
+use ferrite_core::store::Provider;
 use ferrite_core::SessionEvent;
 use serde_json::{json, Value};
 
@@ -220,5 +222,28 @@ fn overflowing_early_candidates_never_falls_back_to_a_child() {
     assert_eq!(
         stub.interrupts(),
         vec![json!({"threadId": "main", "turnId": "main-turn"})]
+    );
+}
+
+#[test]
+fn stopping_a_subagent_interrupts_its_own_turn_and_never_mains() {
+    let stub = Stub::new();
+    let mut session: Box<dyn Session> = Box::new(stub.spawn(""));
+    let alpha = AgentKey::new(Provider::Codex, "main", "alpha");
+    session.send("phase-1").unwrap();
+    wait_for(session.as_ref(), "one");
+    session.stop_subagent(&alpha).unwrap();
+    session.send("phase-2").unwrap(); // alpha's turn completes.
+    wait_for(session.as_ref(), "two");
+    session.stop_subagent(&alpha).unwrap(); // Nothing left to stop.
+    session.interrupt().unwrap(); // Main's turn, still its own target.
+    session.send("flush").unwrap();
+    wait_for(session.as_ref(), "flushed");
+    assert_eq!(
+        stub.interrupts(),
+        vec![
+            json!({"threadId": "alpha", "turnId": "alpha-turn"}),
+            json!({"threadId": "main", "turnId": "main-turn"}),
+        ]
     );
 }

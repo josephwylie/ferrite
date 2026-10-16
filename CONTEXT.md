@@ -30,12 +30,13 @@ Subagent. Switching Subject changes the view, not the Thread or its Title.
 
 **Main**
 The Thread's primary agent context, addressed by its Composer and interrupt
-control. Main can be idle while a Subagent is working.
+control. Main can be idle while a Subagent is working; interrupting Main
+stops its turn alone, never a Subagent or background task.
 
 **Subagent**
 A provider-managed agent delegated within Main's ancestry, observed through
 the owning Session. It may delegate further or work again after completion;
-its transcript and Decisions remain its own.
+its transcript and Decisions remain its own. Escape on its tab stops it alone.
 _Avoid_: Thread, Session, worker Pane.
 
 **Provider**

@@ -2412,6 +2412,24 @@ impl Engine {
         session.control(action)
     }
 
+    /// Stop one Subagent of `thread`; Main's turn and the others run on.
+    /// A failure is said in the transcript, as an interrupt's is.
+    pub fn stop_subagent(&mut self, thread: ThreadId, key: &AgentKey) {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        let Some(session) = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+        else {
+            return;
+        };
+        if let Err(e) = session.stop_subagent(key) {
+            state.apply(Input::Notice(format!("stop failed: {e}")));
+        }
+    }
+
     /// Threads the store holds that no Pane is showing — what a restart finds,
     /// and what "reopen" reopens.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {

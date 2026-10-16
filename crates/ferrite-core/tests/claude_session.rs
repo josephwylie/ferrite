@@ -750,13 +750,14 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
          --dangerously-skip-permissions"
     );
     assert_eq!(sent.len(), 6);
-    // Feature detection comes first, before a word of the Thread.
+    // Feature detection comes first, before a word of the Thread. Declaring
+    // per-task stops keeps an interrupt from killing background agents.
     assert_eq!(
         sent[0],
         serde_json::json!({
             "type": "control_request",
             "request_id": "req_1",
-            "request": {"subtype": "initialize"},
+            "request": {"subtype": "initialize", "perTaskStopAffordance": true},
         })
     );
     assert_eq!(

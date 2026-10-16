@@ -5,7 +5,7 @@ use std::{collections::HashMap, io};
 use serde_json::{json, Value};
 
 use crate::{
-    activity::{ActivityEvent, ExecutionEvent},
+    activity::{ActivityEvent, AgentKey, ExecutionEvent},
     SessionEvent, TurnOutcome,
 };
 
@@ -23,6 +23,9 @@ pub(super) struct Requests {
     starting: Option<u64>,
     pub current_turn: Option<String>,
     deferred_interrupt: Option<u64>,
+    /// Each running Subagent's thread and turn: what stopping it alone
+    /// interrupts. Main's turn is `current_turn`, never one of these.
+    child_turns: HashMap<AgentKey, (String, String)>,
 }
 
 impl Requests {
@@ -57,6 +60,33 @@ impl Requests {
             self.deferred_interrupt = Some(id);
         }
         Ok(None)
+    }
+
+    /// Interrupt one Subagent's running turn; `None` when it runs none.
+    pub fn interrupt_child(&mut self, id: u64, key: &AgentKey) -> io::Result<Option<Value>> {
+        let Some((thread, turn)) = self.child_turns.get(key) else {
+            return Ok(None);
+        };
+        let request = interrupt_request(id, thread, turn);
+        self.register(id, Purpose::Interrupt)?;
+        Ok(Some(request))
+    }
+
+    pub fn child_started(&mut self, key: AgentKey, thread: &str, turn: &str, limit: usize) {
+        if self.child_turns.len() < limit || self.child_turns.contains_key(&key) {
+            self.child_turns
+                .insert(key, (thread.to_owned(), turn.to_owned()));
+        }
+    }
+
+    pub fn child_completed(&mut self, key: &AgentKey, turn: &str) {
+        if self
+            .child_turns
+            .get(key)
+            .is_some_and(|(_, running)| running == turn)
+        {
+            self.child_turns.remove(key);
+        }
     }
 
     pub fn started(&mut self, turn: &str) {

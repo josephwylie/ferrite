@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::activity::{DecisionHandle, Subject};
+use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
     title_from_prompt, BootstrapResult, Bootstrapped, DeleteError, Engine, HistoryDirection,
     LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart, ReviveGroupError,
@@ -1221,6 +1221,22 @@ impl Cockpit {
         self.act(
             |engine| engine.interrupt(thread),
             |server| said(server, Op::Interrupt { thread }),
+        );
+    }
+
+    /// Stop one Subagent of `thread`; Main's turn and the others run on.
+    pub fn stop_subagent(&mut self, thread: ThreadId, key: &AgentKey) {
+        self.act(
+            |engine| engine.stop_subagent(thread, key),
+            |server| {
+                said(
+                    server,
+                    Op::StopSubagent {
+                        thread,
+                        key: key.as_str().into(),
+                    },
+                )
+            },
         );
     }
 

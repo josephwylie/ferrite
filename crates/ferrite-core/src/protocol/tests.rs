@@ -472,6 +472,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
         ),
         ("command_interrupt", command(7, Op::Interrupt { thread })),
         (
+            "command_stop_subagent",
+            command(
+                51,
+                Op::StopSubagent {
+                    thread,
+                    key: "claude:root:agent-1".into(),
+                },
+            ),
+        ),
+        (
             "command_answer",
             command(
                 8,

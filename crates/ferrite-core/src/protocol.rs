@@ -177,6 +177,12 @@ pub enum Op {
     Interrupt {
         thread: ThreadId,
     },
+    /// Stop one Subagent, named by its `WireSubject` key; Main's turn and
+    /// the other Subagents run on.
+    StopSubagent {
+        thread: ThreadId,
+        key: String,
+    },
     /// Names the handle the client drew: a request id is unique only
     /// within one provider process.
     Answer {

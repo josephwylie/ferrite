@@ -5885,11 +5885,40 @@ impl CockpitView {
             cx.notify();
             return;
         }
+        // Escape stops what the Pane shows: on Main its turn, never the
+        // Subagents and background work it started; on a Subagent's tab
+        // that Subagent alone.
         if let Some(thread) = self.focused_thread().filter(|_| !self.machine_lost()) {
-            self.cockpit.interrupt(thread);
+            match self.panes[self.focused()].selected.clone() {
+                ferrite_core::activity::Subject::Main => self.cockpit.interrupt(thread),
+                ferrite_core::activity::Subject::Subagent(key) => self.stop_subagent(thread, &key),
+            }
             self.facts.acted(&self.cockpit, thread);
         }
         cx.notify();
+    }
+
+    /// Stop the Subagent `key` while it runs. A finished one has nothing to
+    /// stop, and its tab's escape must not reach Main instead.
+    fn stop_subagent(&mut self, thread: ThreadId, key: &ferrite_core::activity::AgentKey) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let running = open
+            .activity()
+            .subject(&ferrite_core::activity::Subject::Subagent(key.clone()))
+            .is_some_and(|view| {
+                matches!(
+                    view.status(),
+                    ferrite_core::activity::AgentStatus::Pending
+                        | ferrite_core::activity::AgentStatus::Working
+                        | ferrite_core::activity::AgentStatus::Waiting
+                )
+            });
+        if !running {
+            return;
+        }
+        self.cockpit.stop_subagent(thread, key);
     }
 
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
@@ -13999,6 +14028,7 @@ mod tests {
         tx: Sender<SessionEvent>,
         rx: Receiver<SessionEvent>,
         interrupts: Rc<RefCell<usize>>,
+        stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
@@ -14101,6 +14131,10 @@ mod tests {
             *self.interrupts.borrow_mut() += 1;
             Ok(())
         }
+        fn stop_subagent(&mut self, key: &ferrite_core::activity::AgentKey) -> std::io::Result<()> {
+            self.stopped.borrow_mut().push(key.clone());
+            Ok(())
+        }
         fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> std::io::Result<()> {
             self.answered.borrow_mut().push((id.to_string(), answer));
             Ok(())
@@ -14110,6 +14144,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct Fake {
         interrupts: Rc<RefCell<usize>>,
+        stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
         model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
         session_discovery:
             Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>>>>,
@@ -14181,6 +14216,7 @@ mod tests {
                 tx,
                 rx,
                 interrupts: self.interrupts.clone(),
+                stopped: self.stopped.clone(),
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
                 answered: self.answered.clone(),
@@ -25794,6 +25830,60 @@ mod tests {
             assert!(view.cockpit.notifications().decision(&id).unwrap().read);
             assert!(!view.bell.open);
         });
+    }
+
+    /// Escape stops what the Pane shows: a Subagent's tab stops that
+    /// Subagent alone, Main's tab interrupts Main's turn alone.
+    #[gpui::test]
+    fn escape_on_a_subagent_tab_stops_only_that_subagent(cx: &mut TestAppContext) {
+        use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+        let (mut core, fake) = cockpit("escape-subagent", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "keep working".into());
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let running = AgentKey::new(Provider::Claude, "native", "running");
+        let finished = AgentKey::new(Provider::Claude, "native", "finished");
+        for (key, state) in [
+            (&running, AgentStatus::Working),
+            (&finished, AgentStatus::Idle),
+        ] {
+            let mut info = AgentInfo::new(key.clone());
+            info.parent = Some(Subject::Main);
+            let stream = &fake.streams.borrow()[0];
+            stream
+                .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+                .unwrap();
+            stream
+                .send(SessionEvent::Activity(ActivityEvent::Status {
+                    key: key.clone(),
+                    state,
+                }))
+                .unwrap();
+        }
+        tick(cx);
+        let escape_on = |subject: Subject, cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.select_subject(thread, subject, window, cx)
+                })
+            });
+            tick(cx);
+            cx.simulate_keystrokes("escape");
+            tick(cx);
+        };
+
+        escape_on(Subject::Subagent(running.clone()), cx);
+        assert_eq!(*fake.stopped.borrow(), [running.clone()]);
+        assert_eq!(*fake.interrupts.borrow(), 0, "Main's turn runs on");
+
+        escape_on(Subject::Subagent(finished), cx);
+        assert_eq!(*fake.stopped.borrow(), [running.clone()], "nothing to stop");
+        assert_eq!(*fake.interrupts.borrow(), 0, "nor does it reach Main");
+
+        escape_on(Subject::Main, cx);
+        assert_eq!(*fake.interrupts.borrow(), 1);
+        assert_eq!(*fake.stopped.borrow(), [running], "no Subagent is stopped");
     }
 
     // ---- WP-A tests (append above the end line)

@@ -86,6 +86,11 @@ impl Engine {
                 self.interrupt(*thread);
                 Ok(None)
             }
+            Op::StopSubagent { thread, key } => {
+                self.open_thread(thread)?;
+                self.stop_subagent(*thread, &AgentKey::from_stored(key.clone()));
+                Ok(None)
+            }
             Op::Answer {
                 thread,
                 handle,

@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver};
 
+use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 mod claude;
@@ -165,7 +166,17 @@ pub trait Session {
     fn take_suggestion(&mut self) -> Option<String> {
         None
     }
+    /// Interrupt Main's turn, and only that: Subagents, background tasks and
+    /// workflows keep running (stopping one is `stop_subagent` or
+    /// `SessionControl::StopTask`).
     fn interrupt(&mut self) -> io::Result<()>;
+    /// Stop one Subagent, leaving Main and every other Subagent running.
+    fn stop_subagent(&mut self, _key: &AgentKey) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this Session cannot stop a subagent",
+        ))
+    }
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
     /// Tell the provider what the Thread is now called, so its own session
@@ -244,6 +255,10 @@ impl Session for ClaudeSession {
         ClaudeSession::interrupt(self)
     }
 
+    fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        ClaudeSession::stop_subagent(self, key)
+    }
+
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
         ClaudeSession::respond_to_decision(self, id, answer)
     }
@@ -293,6 +308,10 @@ impl Session for CodexSession {
 
     fn interrupt(&mut self) -> io::Result<()> {
         CodexSession::interrupt(self)
+    }
+
+    fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        CodexSession::stop_subagent(self, key)
     }
 
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
