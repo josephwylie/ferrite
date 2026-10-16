@@ -31,17 +31,12 @@ use sw_board::board::update::{update, Effect, Event};
 use sw_board::board::view::screen;
 use sw_board::shown::ink::{Ink, Inked};
 
-use super::{keys, render};
+use super::{keys, machines, mouse, render};
 use crate::components;
 use crate::theme::{CH, PLANE, ROW};
 
 /// How often the board ticks and the loader looks again.
 const BEAT: std::time::Duration = std::time::Duration::from_secs(1);
-/// How often the list of other machines is asked for again, and how long
-/// one that did not answer is left alone (`run/mod.rs`'s `poll`).
-const MACHINES_MS: i64 = 60_000;
-const QUIET_MS: i64 = 30_000;
-const ASK_LIST_MS: u64 = 20_000;
 /// The popup's edge, inside which its cells are.
 const POPUP_EDGE: f32 = 1.0;
 /// How long the popup says how to come back before it closes on an
@@ -86,7 +81,10 @@ pub(crate) struct BoardView {
     /// What the loader looks closer at, and the poke that has it read now.
     wants: Wants,
     kick: Option<mpsc::UnboundedSender<()>>,
-    machines_at: i64,
+    /// When other machines were last asked what (`machines`).
+    polling: machines::Polling,
+    /// The mouse: what is selected, the links, where the cells are.
+    pub(super) pointer: mouse::Pointer,
     /// Whether its view is saved for the next time it opens: never for a
     /// still board, which is no one's.
     keeps_view: bool,
@@ -134,7 +132,8 @@ impl BoardView {
             size: (120, 40),
             wants: Wants::default(),
             kick: None,
-            machines_at: 0,
+            polling: machines::Polling::default(),
+            pointer: mouse::Pointer::default(),
             keeps_view,
         }
     }
@@ -282,27 +281,17 @@ impl BoardView {
         }
     }
 
-    /// Ask other machines for their tasks (`now_too`: also one that did not
-    /// answer a moment ago), and every minute for the list of machines.
+    /// Ask other machines what is due (`machines::Polling`; `now_too`: also
+    /// one that did not answer a moment ago), each answer fed back.
     fn poll(&mut self, now_too: bool, cx: &mut Context<Self>) {
-        let now = sw_board::clock::now();
-        if now - self.machines_at > MACHINES_MS {
-            self.machines_at = now;
-            answer(cx, || Event::Machines(sw_board::remote::machines()));
-        }
         let Some(board) = self.board.as_mut() else {
             return;
         };
-        for (label, remote) in board.state.remotes.iter_mut() {
-            if remote.busy || (!now_too && !remote.ok && now - remote.fail_at < QUIET_MS) {
-                continue;
-            }
-            remote.busy = true;
-            let (label, machine) = (label.clone(), remote.machine.clone());
-            answer(cx, move || Event::Remote {
-                answer: sw_board::remote::ask_list(&machine, ASK_LIST_MS),
-                label,
-            });
+        for ask in self
+            .polling
+            .due(&mut board.state, sw_board::clock::now(), now_too)
+        {
+            answer(cx, move || ask.answer());
         }
     }
 
@@ -343,7 +332,6 @@ impl BoardView {
         }
     }
 
-    #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn state(&mut self) -> Option<&mut State> {
         self.board.as_mut().map(|board| &mut board.state)
     }
@@ -409,7 +397,8 @@ fn cells(width: f32, height: f32) -> (usize, usize) {
 
 impl Render for BoardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let lines = self.screen();
+        let screen = self.screen();
+        let lines = self.pointer.frame(screen);
         let theme = self.board.as_ref().map(|board| &board.theme);
         // The reading plane under the board, popup too: its greys are held
         // readable on it; a named theme paints its own ground.
@@ -423,7 +412,7 @@ impl Render for BoardView {
             div()
         };
         let (width, height) = self.pixels;
-        surface
+        let surface = surface
             .debug_selector(|| "projects-board".into())
             .track_focus(&self.focus)
             .key_context("Projects")
@@ -431,8 +420,14 @@ impl Render for BoardView {
             .h(px(height))
             .overflow_hidden()
             .bg(rgb(ground))
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_key_down(cx.listener(Self::on_key))
-            .child(components::text_ui().flex().flex_col().children(rows))
+            .on_key_down(cx.listener(Self::on_key));
+        mouse::listen(surface, cx).child(
+            components::text_ui()
+                .relative()
+                .flex()
+                .flex_col()
+                .children(rows)
+                .child(self.pointer.layer()),
+        )
     }
 }

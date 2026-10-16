@@ -154,7 +154,7 @@ config) and its size warning (a pane shared with a remote view) are
 herdr's and are not drawn.
 
 In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
-`render`). Its seams:
+`render`, `mouse`, `links`, `machines`). Its seams:
 
 - **Runtime.** The view owns the `State` from `run/start.rs`'s `view`
   (the saved view, the tasks read from disk alone, so the first frame needs
@@ -180,6 +180,31 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
   board (all of it under 110×30 cells). The projects key shows it, and on
   it, goes back to where you came from; landing on a Thread moves a tab's
   board aside. `board.notify: bell` rings the system bell.
+- **Mouse** (`mouse`). `run/mouse.rs` for GPUI: the wheel and a click
+  go to `update` as the board's own events at their cell (`update/mouse.rs`
+  decides: the chat's message under the pointer scrolls two lines a step,
+  elsewhere the wheel is ↑↓, a click selects a row or folds a heading,
+  none of it in the menu, the whole task or a question). One wheel event
+  per line the wheel or trackpad moves, so a faster swipe goes further. A
+  drag selects the board's own text, drawn in reverse, and letting go
+  copies it to the clipboard where the terminal wrote OSC 52 (`Copied N
+  characters.`); a double click copies a word, never the frames.
+- **Links** (`links`). The words `view/` marks with an address (a pull
+  request, `↗ Open review`, `Open report`, `Open plan`, a piece of
+  evidence), which a terminal opens as OSC 8 links, open on a click. The
+  evidence and report pages stay on `flow`'s own page server (`serve`,
+  127.0.0.1, shared with `tailscale serve` where it is installed).
+- **Other machines** (`machines`). As `run/mod.rs`'s `poll`: the list of
+  machines (`remote::machines`, Herdr's machine list, answered from
+  `machine.list` in its order) at most once a minute, each machine in
+  view over upstream's ssh (`herdr-projects remote list`) whenever the
+  board polls (every 5 s with other machines shown), one that did not
+  answer only after 30 s unless the poll is for now. Two messages name
+  herdr's way to a machine and say Ferrite's instead (`Ferrite:`): no
+  machine yet is added in Settings, under Machines, not by `herdr machine
+  add`; another machine's agent brought to the front there is gone to
+  from the nav, not herdr's sidebar. A machine has one Server, whose
+  session is `default`, so the header never says `session <name>`.
 
 Not drawn, being a terminal's alone: the first-run setup (`view/setup.rs`,
 herdr's config blocks and board key), the held-size warning
