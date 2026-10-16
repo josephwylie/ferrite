@@ -69,7 +69,13 @@ through to Main. Nothing Ferrite sends kills every agent at once.
 - Codex children run their own threads. `turn/interrupt` names a thread and
   its turn, so Main's interrupt cannot reach a child; a child stops by
   `turn/interrupt` on its own thread's running turn, and one running no turn
-  is left be.
+  is left be. An interrupt leaves the turn's command running (0.163.0: an
+  interrupted child's `sleep` ran to completion, and Main's own did too), so
+  stopping a child also sends `thread/backgroundTerminals/clean` for its
+  thread; Main's survivors stay visible as background terminals instead.
+  Main's interrupt leaves children running, including one Main was `wait`ing
+  on. A stopped child sends Main no completion, so a `wait` on it does not
+  return (over 240 s observed) until Main is interrupted.
 
 ## Persistence and recovery
 

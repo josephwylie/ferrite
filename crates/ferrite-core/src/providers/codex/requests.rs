@@ -62,14 +62,21 @@ impl Requests {
         Ok(None)
     }
 
-    /// Interrupt one Subagent's running turn; `None` when it runs none.
-    pub fn interrupt_child(&mut self, id: u64, key: &AgentKey) -> io::Result<Option<Value>> {
-        let Some((thread, turn)) = self.child_turns.get(key) else {
-            return Ok(None);
+    /// Stop one Subagent: interrupt its running turn, then end the terminals
+    /// it started, which outlive an interrupt (0.163.0 ran an interrupted
+    /// child's `sleep` to completion). Empty when it runs no turn.
+    pub fn stop_child(&mut self, ids: [u64; 2], key: &AgentKey) -> io::Result<Vec<Value>> {
+        let Some((thread, turn)) = self.child_turns.get(key).cloned() else {
+            return Ok(Vec::new());
         };
-        let request = interrupt_request(id, thread, turn);
-        self.register(id, Purpose::Interrupt)?;
-        Ok(Some(request))
+        for id in ids {
+            self.register(id, Purpose::Interrupt)?;
+        }
+        Ok(vec![
+            interrupt_request(ids[0], &thread, &turn),
+            json!({"jsonrpc":"2.0", "id":ids[1], "method":"thread/backgroundTerminals/clean",
+                "params":{"threadId":thread}}),
+        ])
     }
 
     pub fn child_started(&mut self, key: AgentKey, thread: &str, turn: &str, limit: usize) {

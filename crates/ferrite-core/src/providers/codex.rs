@@ -665,16 +665,18 @@ impl CodexSession {
         result
     }
 
-    /// Stop one Subagent: interrupt its own thread's running turn. Main and
-    /// the other Subagents run on; a Subagent running no turn is left be.
+    /// Stop one Subagent: interrupt its own thread's running turn and end
+    /// the terminals it started. Main and the other Subagents run on; a
+    /// Subagent running no turn is left be.
     pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
-        let id = self.take_request_id();
-        let Some(request) = lock(&self.requests).interrupt_child(id, key)? else {
-            return Ok(());
-        };
-        let result = self.write_line(&request);
+        let ids = [self.take_request_id(), self.take_request_id()];
+        let requests = lock(&self.requests).stop_child(ids, key)?;
+        let result = requests
+            .iter()
+            .try_for_each(|request| self.write_line(request));
         if result.is_err() {
-            lock(&self.requests).discard(id);
+            let mut pending = lock(&self.requests);
+            ids.into_iter().for_each(|id| pending.discard(id));
         }
         result
     }
