@@ -107,13 +107,23 @@ impl CockpitView {
     }
 
     /// The projects shortcut (herdr's `prefix+a`): the board, or back to
-    /// where you came from when it shows.
+    /// where you came from when it holds the keyboard.
     pub(super) fn toggle_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.projects.board_shown() {
+        if self.board_focused(window, cx) {
             self.leave_board(window, cx);
         } else {
             self.show_board(window, cx);
         }
+    }
+
+    /// Whether the board shows and holds the keyboard: shown but left (a
+    /// press in the nav), the board key takes you back to it.
+    fn board_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.projects
+            .board
+            .as_ref()
+            .filter(|board| board.shown)
+            .is_some_and(|board| board.view.read(cx).focus.contains_focused(window, cx))
     }
 
     /// The board, opened where `board.open` says — or a tab's, shown again

@@ -6237,11 +6237,13 @@ impl CockpitView {
     }
 
     fn next_pane(&mut self, _: &NextPane, _window: &mut Window, cx: &mut Context<Self>) {
+        self.board_gives_way();
         self.cockpit.step_focus(1);
         cx.notify();
     }
 
     fn previous_pane(&mut self, _: &PreviousPane, _window: &mut Window, cx: &mut Context<Self>) {
+        self.board_gives_way();
         self.cockpit.step_focus(-1);
         cx.notify();
     }
@@ -7419,6 +7421,7 @@ impl CockpitView {
         chosen: Option<ProjectId>,
         cx: &mut Context<Self>,
     ) {
+        self.board_gives_way();
         // A second press with a draft already up must not stack another:
         // focus the standing draft and re-aim it at the caller's target.
         // A draft mid-bootstrap is on its way out and does not count.
@@ -8921,6 +8924,7 @@ impl CockpitView {
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.empty_shown = false;
         if self.cockpit.focus_thread(thread) {
+            self.board_gives_way();
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
             }
@@ -8973,10 +8977,12 @@ impl CockpitView {
     }
 
     /// Focus by grid index — the pointer's and the tests' spelling of the
-    /// core's one door.
+    /// core's one door. Every move to a Pane takes a tab's work board out
+    /// of the way, as herdr's board tab gives way to the tab you pick.
     fn focus_pane(&mut self, index: usize) {
-        if let Some(pane) = self.panes.get(index) {
-            self.cockpit.focus(pane.identity);
+        if let Some(identity) = self.panes.get(index).map(|pane| pane.identity) {
+            self.board_gives_way();
+            self.cockpit.focus(identity);
         }
     }
 
