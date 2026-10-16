@@ -140,7 +140,8 @@ fn a_thread_whose_task_went_keeps_its_own_row(cx: &mut TestAppContext) {
 }
 
 /// A task's own space is headed with the task's number and title as the
-/// entry says them, its numbers at the heading's right.
+/// entry says them, its branch still at the heading's right and its
+/// numbers under it.
 #[gpui::test]
 fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-board-space", 1);
@@ -151,6 +152,7 @@ fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext)
         let project = view.nav_state().sections[0]
             .project
             .expect("a named Project");
+        let branch = view.nav_state().sections[0].branch.clone();
         let space = ferrite_core::api::project_id(project);
         view.projects.sidebar.spaces.insert(
             space,
@@ -169,6 +171,7 @@ fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext)
             .expect("the space's section");
         assert_eq!(section.label.as_ref(), "HSW-152 Show automations");
         assert_eq!(section.numbers.as_deref(), Some("8% 16m"));
+        assert_eq!(section.branch, branch, "the branch stays");
     });
 }
 

@@ -431,6 +431,7 @@ pub(crate) fn capture(output: String) {
         unreadable: None,
         keys_refused: Vec::new(),
         projects: None,
+        board: false,
     };
     let window = cx
         .open_window(gpui::size(gpui::px(1440.), gpui::px(900.)), |window, cx| {

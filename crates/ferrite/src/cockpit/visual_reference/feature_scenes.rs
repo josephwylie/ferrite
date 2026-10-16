@@ -219,7 +219,7 @@ fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
             "id": format!("checkout/{}", 152 + n),
             "title": title,
             "agent": "claude",
-            "link": { "pane": workers[n].get().to_string(), "socket": "here" },
+            "link": { "pane": format!("p{n}"), "socket": "here" },
             "live": { "status": "working" },
             "at": at,
             "since": at,
@@ -244,7 +244,11 @@ fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
             json!({ "stage": "approval", "state": "blocked", "kind": "permission", "reviewRound": 1, "review": passed, "reviews": [passed], "pr": "https://github.com/acme/checkout/pull/48" }),
         ),
     ];
-    let mut sidebar = sidebar::of(&rows, now);
+    // The adapter's panes, each placed for its task's agent.
+    let threads = (0..rows.len())
+        .map(|n| (format!("p{n}"), workers[n]))
+        .collect();
+    let mut sidebar = sidebar::of(&rows, &threads, now);
     let coordinator = coordinator_entry(
         &coordinator_stands("working", ""),
         0,

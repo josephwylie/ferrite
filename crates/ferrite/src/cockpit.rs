@@ -708,6 +708,10 @@ pub struct Preferences {
     /// Where Projects keeps its projects (ADR 0030). `None` in the test and
     /// demo constructors, so no suite reads the operator's own.
     pub projects: Option<crate::projects::Place>,
+    /// Whether the nav and the bottom bar read 1.0's board (ADR 0031).
+    /// False in the test and demo constructors, so no suite reads the
+    /// operator's own.
+    pub board: bool,
 }
 
 impl Preferences {
@@ -727,6 +731,7 @@ impl Preferences {
             unreadable: None,
             keys_refused: Vec::new(),
             projects: None,
+            board: false,
         }
     }
 }
@@ -1528,6 +1533,8 @@ impl CockpitView {
         let projects_place = prefs.projects.clone();
         if let Some(place) = projects_place.clone() {
             Self::start_projects_refresh(place, cx);
+        }
+        if prefs.board {
             Self::start_sidebar_refresh(cx);
         }
         cx.on_app_quit(|view, _cx| {
@@ -1727,6 +1734,7 @@ impl CockpitView {
             unreadable: self.prefs.unreadable.clone(),
             keys_refused: Vec::new(),
             projects: self.prefs.projects.clone(),
+            board: self.prefs.board,
         }
     }
 
@@ -8630,11 +8638,26 @@ impl CockpitView {
                 section_groups.push(groups.len());
                 groups.push(block.clone());
             }
+            // A section's own Threads, not a Group's guest from another
+            // Project: they say its branch and the Space it stands for.
+            let own: Vec<ThreadId> = section_solos
+                .iter()
+                .map(|index| solos[*index].thread)
+                .chain(
+                    section_groups
+                        .iter()
+                        .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
+                )
+                .filter(|thread| project_of(*thread) == key)
+                .collect();
+            // A heading names its branch; `Other` names no Project, so no
+            // branch either.
+            let branch = key.and_then(|_| self.section_branch(&own));
             // A task's own space is named as its row is (ADR 0031), its
-            // numbers at the heading's right.
+            // numbers under the heading.
             let space = key.and_then(|project| {
-                let id = ferrite_core::api::project_id(project);
-                self.projects.sidebar.spaces.get(&id)
+                let space = self.section_space(project, &own);
+                self.projects.sidebar.spaces.get(&space)
             });
             let numbers = space
                 .map(|space| SharedString::from(space.progress.clone()))
@@ -8660,23 +8683,6 @@ impl CockpitView {
                     })
                 })
                 .unwrap_or_else(|| SharedString::from("other"));
-            // A heading names its branch; `Other` names no Project, so no
-            // branch either.
-            // Only the section's own Threads say it: a Group's guest from
-            // another Project has that Project's checkout.
-            let branch = key.and_then(|_| {
-                let rows: Vec<ThreadId> = section_solos
-                    .iter()
-                    .map(|index| solos[*index].thread)
-                    .chain(
-                        section_groups
-                            .iter()
-                            .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
-                    )
-                    .filter(|thread| project_of(*thread) == key)
-                    .collect();
-                self.section_branch(&rows)
-            });
             let status = nav::RowStatus::roll_up(
                 section_solos.iter().map(|index| &solos[*index]).chain(
                     section_groups
@@ -8837,7 +8843,9 @@ impl CockpitView {
         };
         // A Thread the board runs is its sidebar entry (ADR 0031): the
         // task's number and title, nothing at the right, its rows under it.
-        if let Some(told) = self.projects.sidebar.agents.get(&thread) {
+        // Only an open Thread is a live agent: a parked one stays one line.
+        let told = open.and(self.projects.sidebar.agents.get(&thread));
+        if let Some(told) = told {
             row = nav::ThreadRow {
                 name: told.entry.name.clone().into(),
                 details: nav::RowDetails::default(),
@@ -8879,6 +8887,20 @@ impl CockpitView {
                 .get(*thread)
                 .and_then(|facts| facts.default_branch.clone())
         })
+    }
+
+    /// The Space a Project heading stands for (`sidebar::section_space`),
+    /// by the worktrees its open rows work in.
+    fn section_space(&self, project: ProjectId, rows: &[ThreadId]) -> String {
+        use ferrite_core::workspace::WorkspaceBinding;
+        let worktrees = rows.iter().filter_map(|thread| {
+            let view = self.cockpit.thread(*thread)?;
+            Some(match view.workspace() {
+                Some(WorkspaceBinding::Worktree { path, .. }) => Some(path.as_path()),
+                _ => None,
+            })
+        });
+        crate::sidebar::section_space(worktrees, project)
     }
 
     /// Land on a Thread from the nav's other doors — a smart or rail row: the
@@ -13403,7 +13425,9 @@ impl CockpitView {
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
             let first = index == 0;
-            let mut block = nav::section(first).child(self.project_heading(index, section, cx));
+            let mut block = nav::section(first)
+                .child(self.project_heading(index, section, cx))
+                .children(section.numbers.clone().map(nav::space_numbers));
             if !section.folded {
                 if !section.solos.is_empty() {
                     let rows = section

@@ -3,18 +3,22 @@
 //! agent's pane and of each task's own space, and the board header's tally
 //! for the bottom bar. Every word is the vendored crates' own
 //! (`flow/sidebar_entry.rs`, `core/status_words.rs`); nothing is written
-//! anywhere. A pane is a Thread here, and its id is the Thread's.
+//! anywhere.
 //!
-//! The board's rows are made as `flow::live::board_for` makes them, with
-//! this window's Threads standing in for herdr's `agent list`: an open
-//! Thread is a live pane, and its Attention is the agent's status.
+//! The rows are `flow::live::board_for`'s, read through Ferrite's herdr
+//! adapter as the board reads them, so the nav and the board never
+//! disagree. A pane's id is the adapter's (`p3` for a pane the board
+//! placed); its agent is an open Thread, whose id the adapter gives as the
+//! agent's terminal.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
-use ferrite_core::{Attention, ThreadId};
+use ferrite_core::workspace::registry::ProjectId;
+use ferrite_core::ThreadId;
 use sw_board::board::view::list::tally;
 use sw_board::coordinator::look::look;
-use sw_board::flow::live::{shown, Session};
+use sw_board::flow::live::{board_seen, Session};
 use sw_board::flow::sidebar::shown_name;
 use sw_board::flow::sidebar_entry::{coordinator_entry, entry_of, reviewer_entry, Entry};
 use sw_board::flow::task::is_agent_task;
@@ -22,7 +26,6 @@ use sw_board::json::*;
 use sw_board::shown::ink::Ink;
 use sw_board::shown::states::{as_row, group_of, status_ink};
 use sw_board::status_words::coordinator_stands;
-use sw_board::store::tasks::{list, ListOpts};
 
 use crate::nav::TaskRows;
 use crate::theme;
@@ -36,7 +39,7 @@ pub(crate) struct Sidebar {
     /// Each live agent's entry, by its Thread: a task's agent, its reviewer
     /// while a review runs, the Coordinator.
     pub agents: HashMap<ThreadId, Told>,
-    /// A task's own space, by its Project's API id: named with the task's
+    /// A task's own space, by its Space (`section_space`): named with the task's
     /// number and title, the row's numbers under it.
     pub spaces: HashMap<String, Entry>,
     /// The board header's tally: `3 need you · 1 ready · 2 working`.
@@ -67,55 +70,61 @@ impl Told {
     }
 }
 
-/// The board's data as the nav shows it, for this window's open Threads.
-/// Reads files and asks the Server for the Coordinator: off the UI thread.
-pub(crate) fn read(threads: &HashMap<ThreadId, Attention>) -> Sidebar {
+/// The board's data as the nav shows it. Reads files and asks the Server:
+/// off the UI thread.
+pub(crate) fn read() -> Sidebar {
     let here = sw_board::herdr::cli::current_socket();
-    let tasks = list(ListOpts::default());
-    let session = session(threads);
-    let mut seen = BTreeMap::new();
-    let mut rows: Vec<Obj> = tasks
-        .iter()
-        .map(|task| shown(task, &session, &here, &mut seen))
-        .collect();
-    sw_board::shown::queue::number(&mut rows);
-    let mut sidebar = of(&rows, sw_board::clock::now());
+    let (rows, session) = board_seen(&here);
+    let mut sidebar = of(&rows, &threads_of(&session), sw_board::clock::now());
     if let Some((thread, told)) = coordinator(&here) {
         sidebar.agents.insert(thread, told);
     }
     sidebar
 }
 
-/// herdr's session as this window's Threads make it: every open Thread a
-/// pane with an agent in it.
-fn session(threads: &HashMap<ThreadId, Attention>) -> Session {
-    let pane = |thread: &ThreadId| thread.get().to_string();
-    Session::Up {
-        agents: threads
-            .iter()
-            .map(|(thread, attention)| {
-                let status = serde_json::to_value(attention).unwrap_or_default();
-                let agent = json!({ "pane_id": pane(thread), "agent_status": status });
-                (pane(thread), agent)
-            })
-            .collect(),
-        panes: threads
-            .keys()
-            .map(|thread| (pane(thread), json!({ "pane_id": pane(thread) })))
-            .collect(),
+/// Each live agent's Thread, by its pane's id, from herdr's agent list as
+/// Ferrite's adapter answers it.
+fn threads_of(session: &Session) -> HashMap<String, ThreadId> {
+    let Session::Up { agents, .. } = session else {
+        return HashMap::new();
+    };
+    agents
+        .iter()
+        .filter_map(|(pane, agent)| Some((pane.clone(), thread_in(agent)?)))
+        .collect()
+}
+
+/// The Thread an agent of the adapter's runs in: its terminal's id. A pane
+/// with no open Thread has no agent.
+fn thread_in(agent: &Value) -> Option<ThreadId> {
+    agent.s("terminal_id").parse().ok().map(ThreadId::new)
+}
+
+/// The Space a Project heading stands for, as the adapter names Spaces:
+/// the linked worktree every one of its open Threads works in (`None` for
+/// one in no worktree), else the Project's API id.
+pub(crate) fn section_space<'a>(
+    mut worktrees: impl Iterator<Item = Option<&'a Path>>,
+    project: ProjectId,
+) -> String {
+    let first = worktrees.next();
+    match first.filter(|first| worktrees.all(|other| other == *first)) {
+        Some(Some(path)) => path.display().to_string(),
+        _ => ferrite_core::api::project_id(project),
     }
 }
 
-/// The entries of the board's rows (`flow::live::board_for`'s), as
-/// `sync_sidebar` picks them: each live pane of a task or one of its
-/// attempts on this machine, never an archived one's, and each task's own
-/// space. A task waiting for its pick has no pane and no numbers: its
+/// The entries of the board's rows (`flow::live::board_for`'s), each by
+/// its pane's Thread (`threads`), as `sync_sidebar` picks them: each live
+/// pane of a task or one of its attempts on this machine, never an
+/// archived one's, and each task's own space. A task waiting for its pick has no pane and no numbers: its
 /// attempts' entries say `pick one`.
-pub(crate) fn of(rows: &[Obj], now: i64) -> Sidebar {
+pub(crate) fn of(rows: &[Obj], threads: &HashMap<String, ThreadId>, now: i64) -> Sidebar {
     let mut sidebar = Sidebar {
         tally: tallied(rows),
         ..Sidebar::default()
     };
+    let thread_of = |pane: &str| threads.get(pane).copied();
     for task in rows.iter().flat_map(with_attempts) {
         let live = task.at("live");
         let away = ["gone", "down", "away"].iter().any(|word| live.b(word));
@@ -180,7 +189,7 @@ fn coordinator(socket: &str) -> Option<(ThreadId, Told)> {
     };
     let stands = coordinator_stands(&look.state, &look.error);
     let entry = coordinator_entry(&stands, look.queue, said);
-    Some((thread_of(&look.pane)?, coordinator_told(entry)))
+    Some((thread_in(&look.agent)?, coordinator_told(entry)))
 }
 
 /// The Coordinator's entry in the line above the board's box's ink.
@@ -189,11 +198,6 @@ pub(crate) fn coordinator_told(entry: Entry) -> Told {
         entry,
         ink: Ink::Muted,
     }
-}
-
-/// The Thread a pane id names.
-fn thread_of(pane: &str) -> Option<ThreadId> {
-    pane.parse().ok().map(ThreadId::new)
 }
 
 /// A board ink in Ferrite's theme: the one place the nav turns the board's

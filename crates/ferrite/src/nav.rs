@@ -179,8 +179,8 @@ pub struct ProjectSection {
     /// The branch the heading names at its right: the checkout every row
     /// shares, else the Project's default. `None` says nothing.
     pub branch: Option<SharedString>,
-    /// A task's own space: its row's numbers (`8% 16m`), which the heading
-    /// names at its right before the branch (ADR 0031).
+    /// A task's own space: its row's numbers (`8% 16m`), under the heading
+    /// (ADR 0031).
     pub numbers: Option<SharedString>,
     /// The heading's triangle folded it: it draws `▸` and nothing under it.
     pub folded: bool,
@@ -1099,14 +1099,12 @@ fn task_line(text: SharedString, ink: u32, cells: f32) -> Div {
 /// where a row's cursor sits (`▾` open, `▸` folded), its rows' roll-up mark
 /// where theirs sit, the label — lowercase in `CHROME_MUTED`, the one
 /// heading style — and its branch, dim, at the right, still there under
-/// the pointer; a task's space says its numbers there instead. A plain row: it washes like any other, and the cockpit
+/// the pointer. A plain row: it washes like any other, and the cockpit
 /// wires its press to the fold. A new Thread in this Project is a palette
-/// command.
+/// command. A task's own space has its numbers under it
+/// (`space_numbers`).
 pub fn project_section(index: usize, section: &ProjectSection) -> Stateful<Div> {
-    let branch = section
-        .numbers
-        .clone()
-        .or_else(|| section.branch.as_deref().map(short_branch));
+    let branch = section.branch.as_deref().map(short_branch);
     let key = SharedString::from(format!("nav-project-section-{index}"));
     row_frame(("nav-project-section", index), key, false)
         .debug_selector(move || format!("nav-project-section-{index}"))
@@ -1119,6 +1117,13 @@ pub fn project_section(index: usize, section: &ProjectSection) -> Stateful<Div> 
             section.label.clone(),
         ))
         .child(word_cell(branch))
+}
+
+/// A task's own space's numbers (`8% 16m`) under its heading, dim at the
+/// label's edge, as herdr's sidebar has them under the space's name (ADR
+/// 0031).
+pub fn space_numbers(numbers: SharedString) -> Div {
+    task_line(numbers, CHROME_MUTED, 2.0)
 }
 
 /// A branch held to `NAV_BRANCH_MAX_CH` cells, an ellipsis standing for the

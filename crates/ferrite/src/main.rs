@@ -445,6 +445,7 @@ fn main() {
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
                                     projects: projects::Place::resolve(),
+                                    board: true,
                                 },
                                 cx,
                             );

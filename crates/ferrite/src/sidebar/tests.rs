@@ -20,6 +20,23 @@ const MINUTE: i64 = 60_000;
 const AGENT: u64 = 7;
 const REVIEWER: u64 = 8;
 
+/// The adapter's id of the pane a Thread was placed in: never the Thread's.
+fn pane(thread: u64) -> String {
+    format!("p{thread}")
+}
+
+/// Each placed pane's open Thread, as the agent list gives them.
+fn threads() -> HashMap<String, ThreadId> {
+    [AGENT, REVIEWER, 11, 12]
+        .into_iter()
+        .map(|thread| (pane(thread), ThreadId::new(thread)))
+        .collect()
+}
+
+fn sidebar(rows: &[Obj]) -> Sidebar {
+    of(rows, &threads(), NOW)
+}
+
 /// A task as the board shows it, its agent live in Thread 7, with `patch`.
 fn task(patch: Value) -> Obj {
     let mut task = obj(json!({
@@ -27,7 +44,7 @@ fn task(patch: Value) -> Obj {
         "title": "Show automations in the main list",
         "agent": "claude",
         "app": "claude",
-        "link": { "pane": AGENT.to_string(), "socket": "here" },
+        "link": { "pane": pane(AGENT), "socket": "here" },
         "live": { "status": "working" },
     }));
     task.extend(obj(patch));
@@ -35,7 +52,7 @@ fn task(patch: Value) -> Obj {
 }
 
 fn told(rows: &[Obj], thread: u64) -> Option<Told> {
-    of(rows, NOW).agents.get(&ThreadId::new(thread)).cloned()
+    sidebar(rows).agents.get(&ThreadId::new(thread)).cloned()
 }
 
 /// The nav's lines under a root row: row 2, then row 3 where it says
@@ -222,7 +239,7 @@ fn a_review_has_the_agents_entry_and_the_reviewers() {
     isolated();
     let row = task(json!({
         "stage": "reviewing", "state": "working", "reviewRound": 2, "note": "Reading the diff", "progress": 40,
-        "link": { "pane": AGENT.to_string(), "socket": "here", "reviewer": { "pane": REVIEWER.to_string() } },
+        "link": { "pane": pane(AGENT), "socket": "here", "reviewer": { "pane": pane(REVIEWER) } },
     }));
     let rows = std::slice::from_ref(&row);
     let agent = told(rows, AGENT).expect("the agent's entry");
@@ -320,7 +337,7 @@ fn only_a_live_agent_on_this_machine_has_an_entry() {
             with(json!({ "stage": "todo", "state": "idle", "link": {} })),
         ),
     ] {
-        assert!(of(&[row], NOW).agents.is_empty(), "{why}");
+        assert!(sidebar(&[row]).agents.is_empty(), "{why}");
     }
 }
 
@@ -332,7 +349,7 @@ fn a_tasks_attempts_waiting_for_a_pick_say_pick_one() {
     let attempt = |n: u64| {
         json!({
             "id": format!("proj/1.{n}"), "title": "Show automations in the main list", "stage": "tried",
-            "state": "done", "link": { "pane": n.to_string(), "socket": "here" }, "live": { "status": "idle" },
+            "state": "done", "link": { "pane": pane(n), "socket": "here" }, "live": { "status": "idle" },
         })
     };
     let row = task(
@@ -347,31 +364,92 @@ fn a_tasks_attempts_waiting_for_a_pick_say_pick_one() {
             lines(&told)
         );
     }
-    assert_eq!(of(rows, NOW).agents.len(), 2, "the task itself has no pane");
+    assert_eq!(sidebar(rows).agents.len(), 2, "the task itself has no pane");
 }
 
 /// A task's own space is named with its number and title, its numbers
-/// under it.
+/// under it, by the Space the adapter named: a Project's id, or a linked
+/// worktree's path.
 #[test]
 fn a_tasks_own_space_carries_its_name_and_numbers() {
     isolated();
-    let row = task(json!({
-        "stage": "working", "state": "working", "progress": 8, "eta": 16,
-        "link": { "pane": AGENT.to_string(), "socket": "here", "workspace": "3", "ownsWorkspace": true },
-    }));
-    let sidebar = of(std::slice::from_ref(&row), NOW);
-    let space = &sidebar.spaces["3"];
-    assert_eq!(
-        (space.name.as_str(), space.progress.as_str()),
-        (task_name(&row).as_str(), "8% 16m")
-    );
+    for space in ["3", "/repo/.worktrees/hsw-152"] {
+        let row = task(json!({
+            "stage": "working", "state": "working", "progress": 8, "eta": 16,
+            "link": { "pane": pane(AGENT), "socket": "here", "workspace": space, "ownsWorkspace": true },
+        }));
+        let sidebar = sidebar(std::slice::from_ref(&row));
+        let entry = &sidebar.spaces[space];
+        assert_eq!(
+            (entry.name.as_str(), entry.progress.as_str()),
+            (task_name(&row).as_str(), "8% 16m"),
+            "{space}"
+        );
+    }
     let shared = task(
-        json!({ "stage": "working", "state": "working", "link": { "pane": "7", "socket": "here", "workspace": "3" } }),
+        json!({ "stage": "working", "state": "working", "link": { "pane": pane(AGENT), "socket": "here", "workspace": "3" } }),
     );
     assert!(
-        of(&[shared], NOW).spaces.is_empty(),
+        sidebar(&[shared]).spaces.is_empty(),
         "a space the task does not own keeps its name"
     );
+}
+
+/// A heading's Space as the adapter names it: the linked worktree all its
+/// open Threads work in, else its Project's id.
+#[test]
+fn a_headings_space_is_its_shared_worktree_else_its_project() {
+    let project: ProjectId = serde_json::from_value(json!(3)).unwrap();
+    let id = ferrite_core::api::project_id(project);
+    let tree = Some(Path::new("/repo/.worktrees/hsw-152"));
+    let other = Some(Path::new("/repo/.worktrees/skl-6"));
+    let space = |worktrees: &[Option<&Path>]| section_space(worktrees.iter().copied(), project);
+    assert_eq!(space(&[tree, tree]), "/repo/.worktrees/hsw-152");
+    assert_eq!(space(&[tree, None]), id, "one on the main checkout");
+    assert_eq!(space(&[tree, other]), id, "two worktrees");
+    assert_eq!(space(&[None]), id);
+    assert_eq!(space(&[]), id, "nothing open");
+}
+
+/// A pane's Thread is the agent's terminal in the adapter's agent list: a
+/// placed pane keeps its own id, and a pane with no open Thread, or herdr
+/// down, names none.
+#[test]
+fn a_panes_thread_is_its_agents_terminal() {
+    let agents = [
+        (
+            "p3",
+            json!({ "pane_id": "p3", "terminal_id": "7", "agent_status": "working" }),
+        ),
+        (
+            "12",
+            json!({ "pane_id": "12", "terminal_id": "12", "agent_status": "idle" }),
+        ),
+        ("p4", json!({ "pane_id": "p4", "terminal_id": "p4" })),
+    ];
+    let session = Session::Up {
+        agents: agents
+            .into_iter()
+            .map(|(pane, agent)| (pane.to_string(), agent))
+            .collect(),
+        panes: HashMap::new(),
+    };
+    let threads = threads_of(&session);
+    assert_eq!(threads.get("p3"), Some(&ThreadId::new(7)));
+    assert_eq!(threads.get("12"), Some(&ThreadId::new(12)));
+    assert_eq!(threads.get("p4"), None);
+    assert!(threads_of(&Session::Down).is_empty());
+}
+
+/// A task whose pane has no open Thread here is no nav row: its agent
+/// ended, or the pane was never started.
+#[test]
+fn a_pane_with_no_open_thread_has_no_row() {
+    isolated();
+    let row = task(
+        json!({ "stage": "working", "state": "working", "link": { "pane": "p9", "socket": "here" } }),
+    );
+    assert!(sidebar(&[row]).agents.is_empty());
 }
 
 /// The bottom bar's tally is the board header's: how many tasks stand in
@@ -390,10 +468,10 @@ fn the_tally_is_the_board_headers() {
         task(json!({ "id": "proj/6", "stage": "done", "state": "done", "archivedAt": NOW })),
     ];
     assert_eq!(
-        of(&rows, NOW).tally,
+        sidebar(&rows).tally,
         "1 needs you \u{b7} 1 ready \u{b7} 2 working \u{b7} 1 to do"
     );
-    assert_eq!(of(&[], NOW).tally, "", "no tasks, nothing to say");
+    assert_eq!(sidebar(&[]).tally, "", "no tasks, nothing to say");
 }
 
 /// The Coordinator: named `Coordinator`, where it stands as the line above

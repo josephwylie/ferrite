@@ -159,16 +159,21 @@ herdr's sidebar rows become Ferrite's nav rows, drawn from the same data
 keys are its own, as in the terminal.
 
 The nav reads the board as `sync_sidebar` does, at most once a second
-and at once when a Thread's Attention changes, off the UI thread: the
-board's rows are made with this window's open Threads standing in for
-herdr's agent list (a Thread's Attention is its agent's status), and each
-live agent's Thread (a task's agent, its reviewer during a review, the
-Coordinator) is drawn as its entry where the Thread already sits in the
-tree: row 1 the task's number and title beside Ferrite's own Attention
-dot, then row 2 (who is on it and where it stands, its time last and
-dropped first on a short row) in the task's status ink, then row 3 (its
-numbers, or the Coordinator's latest message). A task's own space heads
-its Project with the task's name and numbers. Nothing is reported to
+and at once when an open Thread's Attention changes, off the UI thread:
+the board's rows are `flow::live::board_for`'s, read through the adapter
+as the board reads them (`board_seen` hands the nav the same session), so
+the nav and the board never disagree. A pane's id is the adapter's, and
+its Thread is the agent the adapter lists there (its terminal), so only
+an open Thread is a live agent. Each live agent's Thread (a task's agent,
+its reviewer during a review, the Coordinator) is drawn as its entry
+where the Thread already sits in the tree: row 1 the task's number and
+title beside Ferrite's own Attention dot, then row 2 (who is on it and
+where it stands, its time last and dropped first on a short row) in the
+task's status ink, then row 3 (its numbers, or the Coordinator's latest
+message). A task's own space names the heading of the Space its Threads
+share (a linked worktree all of them work in, else their Project), its
+branch still at the right and its numbers under it. The nav reads the
+board whether or not 0.2's projects root resolves. Nothing is reported to
 herdr, so `report-metadata` is answered by no call; a task archived or
 removed while its Thread lives simply has no entry. A window on another
 machine draws none of this computer's board. The bottom bar says the

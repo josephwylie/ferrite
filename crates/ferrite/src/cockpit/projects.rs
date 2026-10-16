@@ -16,7 +16,6 @@ use crate::sidebar::{self, Sidebar};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
 use gpui::Subscription;
-use std::collections::HashMap;
 
 /// The share of the board the sheet covers, as Herdr's popup pane did.
 const SHEET_SHARE: f32 = 0.8;
@@ -78,22 +77,19 @@ impl CockpitView {
     }
 
     /// Read the board's sidebar every `sidebar::REFRESH`, off the UI
-    /// thread, and at once when a Thread's Attention changes, as the
+    /// thread, and at once when an open Thread's Attention changes, as the
     /// upstream writer tells herdr at once; the window redraws only when it
-    /// changed.
+    /// changed. Nothing is read while the window is on another machine,
+    /// whose board tells its own.
     pub(super) fn start_sidebar_refresh(cx: &mut Context<Self>) {
         const LOOK: std::time::Duration = std::time::Duration::from_millis(100);
         cx.spawn(async move |this, cx| loop {
-            let Ok(threads) = this.update(cx, |view, cx| view.board_threads(cx)) else {
+            let Ok(pulse) = this.update(cx, |view, cx| view.board_pulse(cx)) else {
                 break;
             };
-            let reading = threads.clone();
+            let here = pulse.is_some();
             let sidebar = cx
-                .background_spawn(async move {
-                    reading
-                        .map(|threads| sidebar::read(&threads))
-                        .unwrap_or_default()
-                })
+                .background_spawn(async move { here.then(sidebar::read).unwrap_or_default() })
                 .await;
             let alive = this.update(cx, |view, cx| {
                 if view.projects.sidebar != sidebar {
@@ -106,7 +102,7 @@ impl CockpitView {
             }
             for _ in 0..(sidebar::REFRESH.as_millis() / LOOK.as_millis()) {
                 cx.background_executor().timer(LOOK).await;
-                let changed = this.update(cx, |view, cx| view.board_threads(cx) != threads);
+                let changed = this.update(cx, |view, cx| view.board_pulse(cx) != pulse);
                 if changed.unwrap_or(true) {
                     break;
                 }
@@ -115,18 +111,31 @@ impl CockpitView {
         .detach();
     }
 
-    /// The panes herdr would list for this computer's board: every open
-    /// Thread and its Attention, the agent's status. `None` while the
-    /// window is on another machine, whose Threads are not this board's
-    /// panes: that machine's board tells its own.
-    fn board_threads(&self, cx: &gpui::App) -> Option<HashMap<ThreadId, Attention>> {
+    /// Each open Thread's Attention as the Server reckons it (a Decision
+    /// waiting, a turn running, an unseen Notice), from the mirror alone:
+    /// what the board's agent list says changes with it. `None` while the
+    /// window is on another machine.
+    fn board_pulse(&self, cx: &gpui::App) -> Option<Vec<(ThreadId, Attention)>> {
         if self.away_machine(cx).is_some() {
             return None;
         }
+        let notices = self.cockpit.notifications();
         let threads = self.cockpit.threads().into_iter();
         Some(
             threads
-                .map(|thread| (thread, self.thread_row(thread).status.attention()))
+                .filter_map(|thread| {
+                    let view = self.cockpit.thread(thread)?;
+                    let attention = if view.pending().is_some() {
+                        Attention::Blocked
+                    } else if view.needs_queue() || view.background_work() {
+                        Attention::Working
+                    } else if notices.attention(thread) {
+                        Attention::Done
+                    } else {
+                        Attention::Idle
+                    };
+                    Some((thread, attention))
+                })
                 .collect(),
         )
     }
