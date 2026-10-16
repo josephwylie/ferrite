@@ -7,7 +7,6 @@
 //! the operator would have done on the way to that view: scroll, hover a
 //! path, open a picker, the palette or the bell, fold the nav.
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 
 use ferrite_core::groups::GroupId;
@@ -15,7 +14,7 @@ use ferrite_core::workspace::BranchStatus;
 use ferrite_core::ThreadId;
 use gpui::{Context, Window};
 
-use super::{CockpitView, Scene, Setup};
+use super::{CockpitView, Home, Scene, Setup};
 use crate::demo::parity::{self, Cast, Clock, Fixture, Look, World, CAPTURE};
 use crate::motion;
 use crate::nav::NavFold;
@@ -129,19 +128,6 @@ impl Drop for Held {
     }
 }
 
-/// HOME as it was before the capture pointed it at the world's: restored
-/// when the scene is dropped, after its screenshot is saved.
-struct Home(Option<OsString>);
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        match self.0.take() {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
-    }
-}
-
 /// The parity scene `state` (one of `SHOTS`) and its setup.
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     let shot = SHOTS
@@ -177,8 +163,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     );
     // Paths read `~/ferrite` and `~/Desktop/Projects`, as the prototype
     // prints them, for as long as the capture runs.
-    let home = Home(std::env::var_os("HOME"));
-    std::env::set_var("HOME", &world.home);
+    let home = Home::point_at(&world.home);
     let World {
         core,
         feeds,

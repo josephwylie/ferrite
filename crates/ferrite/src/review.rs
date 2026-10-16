@@ -1804,10 +1804,16 @@ impl ReviewView {
                 .mt(px(self.grid.half()))
                 .p(px(cell))
                 .bg(paint::BAND2)
+                // A review or a comment is anchored to its own kind's
+                // word: only a finding's place is worth a second mention.
                 .child(muted(format!(
-                    "{} \u{b7} {kind} \u{b7} {}{}",
+                    "{} \u{b7} {kind}{}{}",
                     comment.author,
-                    comment.anchor,
+                    if comment.anchor == kind {
+                        String::new()
+                    } else {
+                        format!(" \u{b7} {}", comment.anchor)
+                    },
                     if state.is_empty() {
                         String::new()
                     } else {
@@ -2287,6 +2293,40 @@ fn row_highlights(
         .map(|&(start, end)| (byte(start)..byte(end), word))
         .collect();
     crate::find::washed(runs, &washes)
+}
+
+/// What a reference scene stages without the cockpit's readers: the slot's
+/// states as the operator's keys would leave them, on seeded data.
+#[cfg(feature = "visual-reference")]
+impl ReviewView {
+    /// The rows `anchor` to `head` picked, as a click and a ⇧-click do.
+    pub(crate) fn stage_pick(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
+        self.pick(anchor, false, cx);
+        self.pick(head, true, cx);
+    }
+
+    /// The PR tab open on `pr`.
+    pub(crate) fn stage_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
+        self.pr_open = true;
+        self.show_pr(pr, cx);
+    }
+
+    /// The search field open on `query`, answered by `results`.
+    pub(crate) fn stage_search(
+        &mut self,
+        query: &str,
+        results: SearchResults,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_search(window, cx);
+        if let Some(search) = &self.search {
+            search
+                .field
+                .update(cx, |field, cx| field.set(query.to_string(), cx));
+        }
+        self.show_found(query, Ok(results), cx);
+    }
 }
 
 impl Focusable for ReviewView {

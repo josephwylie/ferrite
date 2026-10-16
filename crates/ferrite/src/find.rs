@@ -323,8 +323,8 @@ impl Find {
             .child(bar)
     }
 
-    /// Put `text` on the line (what a test types).
-    #[cfg(test)]
+    /// Put `text` on the line (what a test, or a reference scene, types).
+    #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn type_query(&self, text: &str, cx: &mut App) {
         self.field
             .update(cx, |line, cx| line.set(text.to_string(), cx));

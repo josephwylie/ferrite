@@ -92,6 +92,32 @@ impl CockpitView {
         }
     }
 
+    /// A reference scene's sheet: open on the section `tabs` along from
+    /// threads, fitted to the board as it will draw, every key answered,
+    /// and its popup thread stopped (`ProjectsSheet::stop`).
+    #[cfg(feature = "visual-reference")]
+    pub(super) fn stage_projects_sheet(
+        &mut self,
+        tabs: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use ferrite_projects::keys::{KeyCode, KeyEvent, KeyModifiers};
+        self.toggle_projects(window, cx);
+        let Some(sheet) = self.projects.sheet.clone() else {
+            return;
+        };
+        let board = self.board_bounds(window);
+        sheet.update(cx, |sheet, cx| {
+            sheet.fit(board.w * SHEET_SHARE, board.h * SHEET_SHARE);
+            for _ in 0..tabs {
+                sheet.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), cx);
+            }
+            sheet.settle(cx);
+            sheet.stop();
+        });
+    }
+
     pub(super) fn close_projects(&mut self, cx: &mut Context<Self>) {
         if self.projects.drop_sheet() {
             cx.notify();

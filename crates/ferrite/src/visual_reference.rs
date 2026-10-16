@@ -14,6 +14,9 @@
 #[path = "cockpit/visual_reference/parity_scenes.rs"]
 mod parity_scenes;
 
+#[path = "cockpit/visual_reference/feature_scenes.rs"]
+mod feature_scenes;
+
 #[path = "cockpit/visual_reference/live.rs"]
 mod live;
 pub(crate) use live::capture as live_capture;
@@ -31,8 +34,9 @@ use ferrite_core::{
     settings::ReadingSize,
     store::{Provider, Store},
     workspace::WorkspaceChoice,
-    Decision, DecisionAnswer, DecisionKind, Hunk, QueueEvent, QueuedPrompt, SessionCommand,
-    SessionEvent, ThreadId, ToolResult, TurnOutcome,
+    ControlKind, Decision, DecisionAnswer, DecisionKind, Hunk, McpServer, McpStatus,
+    PermissionModeChoice, QueueEvent, QueuedPrompt, SessionCommand, SessionEvent, ThreadId,
+    ToolResult, TurnOutcome,
 };
 use gpui::{AppContext, Context, HeadlessAppContext, Window};
 use std::{
@@ -50,12 +54,17 @@ struct Fixture(Feeds);
 struct FixtureSession {
     rx: mpsc::Receiver<SessionEvent>,
     tx: mpsc::Sender<SessionEvent>,
+    provider: Provider,
 }
 impl Spawner for Fixture {
-    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn Session>> {
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         let (tx, rx) = mpsc::channel();
         self.0.borrow_mut().push(tx.clone());
-        Ok(Box::new(FixtureSession { rx, tx }))
+        Ok(Box::new(FixtureSession {
+            rx,
+            tx,
+            provider: request.provider,
+        }))
     }
 }
 impl Session for FixtureSession {
@@ -75,6 +84,34 @@ impl Session for FixtureSession {
                 text: text.into(),
             })));
         Ok(())
+    }
+    /// The modes each CLI offers a Session that did not launch in bypass.
+    fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        let modes: &[(&str, &str)] = match self.provider {
+            Provider::Claude => &[
+                ("default", "Default"),
+                ("acceptEdits", "Accept edits"),
+                ("plan", "Plan"),
+                ("dontAsk", "Don't ask"),
+                ("auto", "Auto"),
+            ],
+            Provider::Codex => &[
+                ("untrusted", "Ask for untrusted commands"),
+                ("on-request", "Ask as needed"),
+                ("never", "Never ask"),
+            ],
+        };
+        modes
+            .iter()
+            .map(|(value, label)| PermissionModeChoice {
+                value: (*value).into(),
+                label: (*label).into(),
+            })
+            .collect()
+    }
+    /// MCP sign-in and reconnect, as both CLIs answer them.
+    fn supports_control(&self, kind: ControlKind) -> bool {
+        matches!(kind, ControlKind::LoginMcp | ControlKind::ReconnectMcp)
     }
     fn interrupt(&mut self) -> io::Result<()> {
         Ok(())
@@ -199,6 +236,27 @@ struct Scene {
 
 type Setup = Box<dyn FnOnce(&mut CockpitView, &mut Window, &mut Context<CockpitView>)>;
 
+/// HOME as it was before a capture pointed it at its own root, so paths
+/// print `~/…`: restored when the scene is dropped, after its screenshot.
+struct Home(Option<std::ffi::OsString>);
+
+impl Home {
+    fn point_at(home: &Path) -> Self {
+        let was = Home(std::env::var_os("HOME"));
+        std::env::set_var("HOME", home);
+        was
+    }
+}
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
 impl Scene {
     fn new(tag: &str) -> Self {
         let root =
@@ -206,6 +264,9 @@ impl Scene {
         // Only our own disposable directory; never the operator's store.
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create disposable reference root");
+        // Paths print `~/work/…`, not the temp directory's, and nothing
+        // reads the operator's home.
+        let home = Home::point_at(&root);
         let feeds = Feeds::default();
         let mut core = Cockpit::new(
             Store::open(root.join("store")).expect("open disposable store"),
@@ -216,7 +277,7 @@ impl Scene {
             core,
             feeds,
             root,
-            hold: Vec::new(),
+            hold: vec![Box::new(home)],
         }
     }
 
@@ -386,6 +447,15 @@ const STATES: &[(&str, &[&str])] = &[
     // (end parity)
 ];
 
+/// Every state: the table's, then the feature scenes' at the app size.
+fn all_states() -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    STATES.iter().copied().chain(
+        feature_scenes::STATES
+            .iter()
+            .map(|state| (*state, &["app"] as &'static [&'static str])),
+    )
+}
+
 /// A comma list from the environment; `None` is "everything".
 fn wanted(var: &str, known: &[&str]) -> Option<Vec<String>> {
     let list: Vec<String> = std::env::var(var)
@@ -410,7 +480,7 @@ pub fn capture(output: String) {
     std::fs::create_dir_all(&output).expect("create artifact directory");
     let states = wanted(
         "FERRITE_REF_STATES",
-        &STATES.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        &all_states().map(|(name, _)| name).collect::<Vec<_>>(),
     );
     let sizes = wanted(
         "FERRITE_REF_SIZES",
@@ -424,7 +494,7 @@ pub fn capture(output: String) {
         {
             continue;
         }
-        for (state, defaults) in STATES {
+        for (state, defaults) in all_states() {
             if states
                 .as_ref()
                 .is_some_and(|states| !states.iter().any(|s| s == state))
@@ -466,6 +536,7 @@ fn render(
         crate::theme::init_components(cx);
         crate::register_fonts(cx);
         crate::visual::init(cx);
+        crate::visual::diagram::init(true, cx);
     });
     let mut entity = None;
     let window = cx
@@ -558,6 +629,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
     let none: Setup = Box::new(|_, _, _| {});
     match state {
         state if parity_scenes::handles(state) => parity_scenes::build(state),
+        state if feature_scenes::handles(state) => feature_scenes::build(state),
         "conversation" => (conversation(label), none),
         "toolgroups" => (tool_groups(label), none),
         "toolgroups-open" => {
@@ -855,8 +927,28 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // The session card over a Session that reports its MCP servers:
+        // one healthy, one waiting on a sign-in, one failed with its error.
         "sessioncard" => {
             let scene = conversation(label);
+            let server = |name: &str, status, error: Option<&str>| McpServer {
+                name: name.into(),
+                status,
+                error: error.map(Into::into),
+            };
+            scene.feeds.borrow()[0]
+                .send(SessionEvent::McpServers {
+                    servers: vec![
+                        server("github", McpStatus::Connected, None),
+                        server("linear", McpStatus::NeedsAuth, None),
+                        server(
+                            "postgres",
+                            McpStatus::Failed,
+                            Some("connection refused: 127.0.0.1:5432"),
+                        ),
+                    ],
+                })
+                .expect("fixture Session is listening");
             let setup: Setup = Box::new(|view, _, _| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 let generation = view.cockpit.thread(thread).expect("open").generation();

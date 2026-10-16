@@ -1029,7 +1029,7 @@ fn title_ink(selected: bool, parked: bool) -> u32 {
 pub fn project_head(index: usize, block: &ProjectBlock) -> Stateful<Div> {
     let selected = block.head.as_ref().is_some_and(|row| row.selected);
     let key = SharedString::from(format!("nav-projects-head-{}", block.slug));
-    let summary = Some(block.summary.clone()).filter(|summary| !summary.is_empty());
+    let summary = head_summary(&block.name, &block.summary);
     let mark = match &block.head {
         Some(row) => cell(status_mark(row.status)),
         None => blank_cell(),
@@ -1045,6 +1045,23 @@ pub fn project_head(index: usize, block: &ProjectBlock) -> Stateful<Div> {
             block.name.clone(),
         ))
         .child(word_cell(summary))
+}
+
+/// A project head's word: its summary while the name fits beside it whole,
+/// else only the summary's first part — what needs you leads
+/// (`2 need you · 1 working`) — and the name gives way.
+fn head_summary(name: &str, summary: &SharedString) -> Option<SharedString> {
+    if summary.is_empty() {
+        return None;
+    }
+    let name_w = name.chars().count() as f32 * CH;
+    if name_w <= title_w(2.0, Some(summary)) {
+        return Some(summary.clone());
+    }
+    summary
+        .split(" \u{b7} ")
+        .next()
+        .map(|first| SharedString::from(first.to_string()))
 }
 
 /// The dim line under a project's row: what its state line adds and its
@@ -1482,6 +1499,19 @@ mod tests {
     /// The terminal grammar: square rows with no radius, every item one
     /// 20px line 1ch in from the column's edge, and a Project section a
     /// half row below the one above it.
+    /// A project head's summary gives way to its name: whole while both
+    /// fit, else only what needs you.
+    #[test]
+    fn a_project_heads_summary_gives_way_to_its_name() {
+        let summary = SharedString::from("2 need you \u{b7} 1 working");
+        assert_eq!(head_summary("docs", &summary), Some(summary.clone()));
+        assert_eq!(
+            head_summary("Checkout revamp", &summary),
+            Some("2 need you".into())
+        );
+        assert_eq!(head_summary("docs", &SharedString::default()), None);
+    }
+
     #[test]
     fn nav_rows_are_square_terminal_lines() {
         let mut row = thread_row(&thread());

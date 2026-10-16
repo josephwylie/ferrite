@@ -286,10 +286,11 @@ pub fn footer(hints: &[(&str, &str)]) -> Div {
     footer_line(text)
 }
 
-/// A footer row of already-joined words, all `TEXT_MUTED`.
+/// A footer row of already-joined words, all `TEXT_MUTED`: cut with an
+/// ellipsis where the row is narrower than its hints.
 pub fn footer_line(text: impl Into<SharedString>) -> Div {
     let text: SharedString = text.into();
-    footer_shell().child(text)
+    footer_shell().child(div().min_w_0().truncate().child(text))
 }
 
 /// The footer's row with nothing in it yet: the `FLOAT_RULE` rule, half a

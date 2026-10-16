@@ -192,8 +192,8 @@ impl ProjectsSheet {
     }
 
     /// Wait for the popup to answer every key sent so far — what the tests
-    /// read, where no frame may arrive between two keys.
-    #[cfg(test)]
+    /// and reference scenes read, where no frame may arrive between two keys.
+    #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn settle(&mut self, cx: &mut Context<Self>) {
         let Body::Popup(live) = &mut self.body else {
             return;
@@ -209,6 +209,19 @@ impl ProjectsSheet {
             }
         }
         self.apply(frames, cx);
+    }
+
+    /// Stop the popup's thread once every key is answered: the reference
+    /// harness's scheduler must not be woken from another thread mid-capture,
+    /// so the sheet holds the screen it has.
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn stop(&mut self) {
+        if let Body::Popup(live) = &mut self.body {
+            live.ops = mpsc::channel().0;
+            // The thread answers the dropped sender by returning, which
+            // closes its frames: wait for that.
+            while live.frames.recv().is_ok() {}
+        }
     }
 
     /// The lines drawn now — what the tests read.

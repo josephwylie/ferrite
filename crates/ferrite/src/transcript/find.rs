@@ -51,6 +51,14 @@ impl TranscriptView {
         }
     }
 
+    /// Put `text` on the open bar's line, as typed (a reference scene).
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn type_find(&self, text: &str, cx: &mut gpui::App) {
+        if let Some(find) = &self.find {
+            find.bar.type_query(text, cx);
+        }
+    }
+
     pub(crate) fn close_find(&mut self, cx: &mut Context<Self>) {
         if self.find.take().is_some() {
             cx.notify();
