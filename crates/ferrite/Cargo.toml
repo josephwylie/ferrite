@@ -28,6 +28,8 @@ ferrite-focus-notify = { path = "../ferrite-focus-notify" }
 ferrite-reviewr = { path = "../ferrite-reviewr" }
 # Projects (ADR 0030): herdr-projects, vendored; the window draws its data.
 ferrite-projects = { path = "../ferrite-projects" }
+# herdr-projects 1.0, vendored (ADR 0031): the board, its flow and its data.
+sw-board = { workspace = true }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }

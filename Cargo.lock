@@ -2186,6 +2186,7 @@ dependencies = [
  "image",
  "percent-encoding",
  "serde_json",
+ "sw-board",
  "url",
  "windows-sys 0.61.2",
  "winresource",

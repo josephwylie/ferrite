@@ -1528,6 +1528,7 @@ impl CockpitView {
         let projects_place = prefs.projects.clone();
         if let Some(place) = projects_place.clone() {
             Self::start_projects_refresh(place, cx);
+            Self::start_sidebar_refresh(cx);
         }
         cx.on_app_quit(|view, _cx| {
             view.cockpit.halt_sessions();
@@ -4550,8 +4551,8 @@ impl CockpitView {
     }
 
     /// One ask: to land on a Thread, as its nav row would; a toast, which
-    /// fades as a finished turn's does unless important, with its chime; or
-    /// the nav focused on one Projects project (ADR 0030).
+    /// fades as a finished turn's does unless important, with its chime.
+    /// 0.2's nav focus (ADR 0030) is heard and set aside.
     fn present(
         &mut self,
         asked: ferrite_core::cockpit::Asked,
@@ -4582,7 +4583,9 @@ impl CockpitView {
                     self.chime(sound);
                 }
             }
-            Asked::NavFocus(slug) => self.focus_nav_on_project(slug, cx),
+            // 0.2's `focus` verb: 1.0's board has no project to focus the
+            // nav on, and its sidebar rows sit where their Threads do.
+            Asked::NavFocus(_) => {}
         }
     }
 
@@ -8461,12 +8464,6 @@ impl CockpitView {
             selected: solo == Some(thread),
             ..self.thread_row(thread)
         };
-        // Projects' blocks come first, and their Threads are theirs alone;
-        // focused on one, the nav shows that block and nothing else.
-        let blocks = self.project_blocks(row);
-        let claimed = projects::claimed(&blocks);
-        let project_focus = projects::focused(&self.projects, &blocks);
-
         // The loose rows: open Threads with no home Group, in creation
         // order. Drafts are not rows (#29) — the grid is where a draft
         // lives — and a parked loose Thread waits in the Parked section.
@@ -8475,9 +8472,7 @@ impl CockpitView {
             .panes
             .iter()
             .filter_map(PaneView::thread)
-            .filter(|thread| {
-                !homed.contains(thread) && !claimed.contains(thread) && self.admitted(*thread)
-            })
+            .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
             .collect();
         threads.sort();
         threads.dedup();
@@ -8543,7 +8538,7 @@ impl CockpitView {
                 let mut shown: Vec<nav::ThreadRow> = members
                     .iter()
                     .copied()
-                    .filter(|thread| !claimed.contains(thread) && self.admitted(*thread))
+                    .filter(|thread| self.admitted(*thread))
                     .map(row)
                     .collect();
                 if shown.is_empty() {
@@ -8613,6 +8608,7 @@ impl CockpitView {
                 mixed: true,
                 label: SharedString::from("groups"),
                 branch: None,
+                numbers: None,
                 folded: self.nav_folds.contains(&NavFold::Groups),
                 status: mixed
                     .iter()
@@ -8634,9 +8630,21 @@ impl CockpitView {
                 section_groups.push(groups.len());
                 groups.push(block.clone());
             }
-            let label = key
-                .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| SharedString::from(project.title.to_lowercase()))
+            // A task's own space is named as its row is (ADR 0031), its
+            // numbers at the heading's right.
+            let space = key.and_then(|project| {
+                let id = ferrite_core::api::project_id(project);
+                self.projects.sidebar.spaces.get(&id)
+            });
+            let numbers = space
+                .map(|space| SharedString::from(space.progress.clone()))
+                .filter(|numbers| !numbers.is_empty());
+            let label = space
+                .map(|space| SharedString::from(space.name.clone()))
+                .or_else(|| {
+                    key.and_then(|project| self.cockpit.registry().project(project))
+                        .map(|project| SharedString::from(project.title.to_lowercase()))
+                })
                 .or_else(|| {
                     key.and_then(|_| {
                         section_solos
@@ -8682,6 +8690,7 @@ impl CockpitView {
                 mixed: false,
                 label,
                 branch,
+                numbers,
                 folded: key
                     .is_some_and(|project| self.nav_folds.contains(&NavFold::Project(project))),
                 status,
@@ -8730,12 +8739,8 @@ impl CockpitView {
             .smart_filtering
             .then(|| self.smart_sections());
 
-        if project_focus {
-            sections.clear();
-        }
         nav::NavState {
             smart,
-            projects: blocks,
             sections,
             groups,
             solos,
@@ -8817,7 +8822,7 @@ impl CockpitView {
             .and_then(|facts| facts.last_used)
             .map(|at| crate::facts::since_label(at, now))
             .unwrap_or_default();
-        let row = nav::ThreadRow {
+        let mut row = nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
             status,
@@ -8828,7 +8833,19 @@ impl CockpitView {
                 facts.and_then(|facts| facts.pr.label()),
             ),
             tail: nav::NavTail::of(status, slot.as_ref(), age),
+            task: None,
         };
+        // A Thread the board runs is its sidebar entry (ADR 0031): the
+        // task's number and title, nothing at the right, its rows under it.
+        if let Some(told) = self.projects.sidebar.agents.get(&thread) {
+            row = nav::ThreadRow {
+                name: told.entry.name.clone().into(),
+                details: nav::RowDetails::default(),
+                tail: nav::NavTail::None,
+                task: Some(told.rows()),
+                ..row
+            };
+        }
         #[cfg(test)]
         drawn::record_row(
             thread,
@@ -13276,25 +13293,6 @@ impl CockpitView {
         let focused = self.cockpit.roster().focused_thread();
         let mut rows: Vec<nav::RailRow> = Vec::new();
         let mut listed = std::collections::HashSet::new();
-        let project_rows = state.projects.iter().flat_map(|block| {
-            block
-                .head
-                .iter()
-                .chain(block.rows.iter().map(|(row, _)| row))
-        });
-        for row in project_rows {
-            if listed.insert(row.thread) {
-                rows.push(nav::RailRow {
-                    key: keyed
-                        .iter()
-                        .position(|shown| *shown == Some(row.thread))
-                        .map(|at| at + 1),
-                    thread: row.thread,
-                    status: row.status,
-                    selected: row.selected,
-                });
-            }
-        }
         for section in &state.sections {
             let solos = section
                 .solos
@@ -13402,12 +13400,9 @@ impl CockpitView {
         if let Some(smart) = state.smart.as_ref().filter(|_| !folded) {
             own.push(self.smart_sections_element(smart, cx).into_any_element());
         }
-        if !folded {
-            own.extend(self.project_blocks_element(&state.projects, cx));
-        }
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
-            let first = index == 0 && state.projects.is_empty();
+            let first = index == 0;
             let mut block = nav::section(first).child(self.project_heading(index, section, cx));
             if !section.folded {
                 if !section.solos.is_empty() {
@@ -13429,7 +13424,7 @@ impl CockpitView {
         }
         // An empty tree says so at its top, before the ground. It names the
         // Project the filter chose.
-        if state.sections.is_empty() && state.projects.is_empty() && !folded {
+        if state.sections.is_empty() && !folded {
             let filtered = self
                 .nav_filter
                 .and_then(|project| self.cockpit.registry().project(project))

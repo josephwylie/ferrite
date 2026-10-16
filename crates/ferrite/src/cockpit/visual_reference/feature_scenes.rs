@@ -1,5 +1,5 @@
 //! Scenes for the features the first references predate: the Projects
-//! sheet and the nav's project blocks (ADR 0030), the Review slot (ADR
+//! sheet (ADR 0030) and the board's rows in the nav (ADR 0031), the Review slot (ADR
 //! 0021), find in a transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
@@ -26,6 +26,11 @@ use super::{conversation, Scene, Setup};
 use crate::nav::NavFold;
 use crate::projects::{Model, Place};
 use crate::review::ReviewView;
+use crate::sidebar::{self, Sidebar};
+use ferrite_core::ThreadId;
+use sw_board::flow::sidebar_entry::coordinator_entry;
+use sw_board::json::{json, obj, Value};
+use sw_board::status_words::coordinator_stands;
 
 /// Every state this module draws, at the app size.
 pub(super) const STATES: &[&str] = &[
@@ -75,8 +80,10 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 
 /// One project under the scene's own projects root, its coordinator and
 /// three workers fixture Threads, the ticker's lock held so the records
-/// read as live. `section` opens the sheet (⌘⇧A) on that tab, counting
-/// from threads; `None` is the nav and the bottom bar alone.
+/// read as live; the same Threads are the board's Coordinator and three
+/// tasks' agents in the nav, the board's tally in the bottom bar (ADR
+/// 0031). `section` opens the sheet (⌘⇧A) on that tab, counting from
+/// threads; `None` is the nav and the bottom bar alone.
 fn projects(section: Option<usize>) -> (Scene, Setup) {
     let mut scene = Scene::new(&format!("projects-{section:?}"));
     let checkout = scene.project("checkout");
@@ -181,8 +188,10 @@ fn projects(section: Option<usize>) -> (Scene, Setup) {
     lock.try_lock().expect("hold the ticker lock");
     scene.hold.push(Box::new(lock));
 
+    let sidebar = board_sidebar(head, &threads);
     let setup: Setup = Box::new(move |view, window, cx| {
         view.set_nav_fold(NavFold::Parked, false, cx);
+        view.projects.sidebar = sidebar;
         view.projects.model = Model::load(&place);
         view.projects.place = Some(place);
         // The cart copy's request stood before the window opened: heard,
@@ -195,6 +204,56 @@ fn projects(section: Option<usize>) -> (Scene, Setup) {
         cx.notify();
     });
     (scene, setup)
+}
+
+/// The board as the nav shows it: `head` its Coordinator, at work, and the
+/// workers three tasks' agents — one working, one asking, one ready to
+/// approve with its PR — read under the scene's own HOME.
+fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
+    let now = sw_board::clock::now();
+    let at = now - 12 * 60_000;
+    let passed =
+        json!({ "round": 1, "gate": "major", "meets": true, "pass": true, "findings": [] });
+    let task = |n: usize, title: &str, more: Value| {
+        let mut task = obj(json!({
+            "id": format!("checkout/{}", 152 + n),
+            "title": title,
+            "agent": "claude",
+            "link": { "pane": workers[n].get().to_string(), "socket": "here" },
+            "live": { "status": "working" },
+            "at": at,
+            "since": at,
+        }));
+        task.extend(obj(more));
+        task
+    };
+    let rows = [
+        task(
+            0,
+            "Stripe webhook retries",
+            json!({ "stage": "working", "state": "working", "progress": 60, "eta": 4 }),
+        ),
+        task(
+            1,
+            "Cart copy pass",
+            json!({ "stage": "asks", "state": "blocked", "kind": "question" }),
+        ),
+        task(
+            2,
+            "Order confirmation emails",
+            json!({ "stage": "approval", "state": "blocked", "kind": "permission", "reviewRound": 1, "review": passed, "reviews": [passed], "pr": "https://github.com/acme/checkout/pull/48" }),
+        ),
+    ];
+    let mut sidebar = sidebar::of(&rows, now);
+    let coordinator = coordinator_entry(
+        &coordinator_stands("working", ""),
+        0,
+        "Three threads are out. Webhook retries is writing its tests.",
+    );
+    sidebar
+        .agents
+        .insert(head, sidebar::coordinator_told(coordinator));
+    sidebar
 }
 
 /// The files the sheet's other tabs read: tasks, the inbox, routines and

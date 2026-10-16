@@ -1,5 +1,6 @@
 //! The Projects sheet as the window drives it — the popup's sections and
-//! its project picker, on a scratch root — and the snapshot the nav reads.
+//! its project picker, on a scratch root — and the snapshot the palette's
+//! scope reads.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use ferrite_projects::keys::{KeyCode, KeyEvent, KeyModifiers};
 use ferrite_projects::paths::{self, Ctx, Env, SessionFlags};
 use ferrite_projects::project;
 use ferrite_projects::runner::{Cmd, Output, Runner};
-use ferrite_projects::thread::{self, Group};
+use ferrite_projects::thread;
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
 use super::*;
@@ -172,7 +173,7 @@ fn esc_closes_the_popup(cx: &mut TestAppContext) {
 }
 
 #[test]
-fn the_snapshot_lists_open_threads_by_need_with_their_sub_lines() {
+fn the_snapshot_knows_the_project_of_each_open_thread_here() {
     let scratch = Scratch::new("model");
     let place = scratch.place(&["Alpha"]);
     let alpha = project::Project::load(&place.root, "alpha").unwrap();
@@ -208,50 +209,12 @@ fn the_snapshot_lists_open_threads_by_need_with_their_sub_lines() {
     .unwrap();
 
     let model = Model::load(&place);
-    assert!(!model.ticker, "no ticker runs on a scratch root");
-    assert_eq!(model.needs_you, None, "no stale count without the ticker");
     let project = &model.projects[0];
+    assert_eq!(project.slug, "alpha");
     assert_eq!(
-        (project.slug.as_str(), project.name.as_str()),
-        ("alpha", "Alpha")
-    );
-    assert_eq!(
-        project.summary, "1 need you · 1 working",
-        "the line counts the groups the ticker recorded, as herdr-projects' sidebar does"
-    );
-    let rows: Vec<(&str, Option<ThreadId>, Group, &str, &str)> = project
-        .threads
-        .iter()
-        .map(|row| {
-            (
-                row.id.as_str(),
-                row.thread,
-                row.group,
-                row.display.as_str(),
-                row.sub.as_str(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            (
-                "t-0002",
-                Some(ThreadId::new(12)),
-                Group::WaitingOnYou,
-                "t-0002 · Second",
-                "needs you · blocked"
-            ),
-            (
-                "t-0001",
-                Some(ThreadId::new(11)),
-                Group::Working,
-                "t-0001 · First",
-                "~40% · Writing tests"
-            ),
-            ("t-0004", None, Group::Working, "t-0004 · Elsewhere", ""),
-        ],
-        "needs you first; another machine's pane is no Thread here"
+        project.threads,
+        [ThreadId::new(11), ThreadId::new(12)],
+        "open threads only; another machine's pane is no Thread here"
     );
     assert_eq!(
         model.project_of(ThreadId::new(12)).map(|p| p.slug.as_str()),

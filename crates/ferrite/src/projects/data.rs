@@ -1,5 +1,5 @@
 //! The one door from the window into `ferrite_projects`: where its projects
-//! live, the snapshot the nav and the bottom bar read, and the commands the
+//! live, the snapshot the palette's scope reads, and the commands the
 //! dialogs run. Every act is the crate's own function or the same CLI
 //! subcommand its popup ran (`popup::run_hp`), off the UI thread.
 
@@ -10,8 +10,8 @@ use ferrite_projects::herdr::Herdr;
 use ferrite_projects::paths::{self, Ctx, Env, SessionFlags};
 use ferrite_projects::project::{self, Project, Status};
 use ferrite_projects::runner::RealRunner;
-use ferrite_projects::thread::{self, Group};
-use ferrite_projects::{adopt, coordinator, setup, sidebar, ticker};
+use ferrite_projects::thread;
+use ferrite_projects::{adopt, coordinator, setup};
 
 /// Where Projects keeps its projects and the operator's settings for them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,125 +85,57 @@ impl Jump {
     }
 }
 
-/// What the nav, the bottom bar and the scope read, refreshed every
-/// `popup::REFRESH` off the UI thread.
+/// What the palette's scope reads — the project the focused Thread heads
+/// or works for — refreshed every `popup::REFRESH` off the UI thread.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Model {
-    /// Whether the ticker runs: without it every recorded state is stale,
-    /// so the nav draws its plain rows.
-    pub ticker: bool,
-    /// `projects: N need you` for the bottom bar, while the ticker runs.
-    pub needs_you: Option<String>,
     pub projects: Vec<ProjectEntry>,
 }
 
-/// One listed project: its head (the coordinator) and its open threads in
-/// the sidebar's order — by need (`Group::rank`), then id.
+/// One listed project: its coordinator and its open threads' Threads here.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProjectEntry {
     pub slug: String,
-    /// `project::display_name`: the coordinator row's name.
-    pub name: String,
-    /// `sidebar::project_line`: `2 need you · 3 working`, `paused`, `idle`.
-    pub summary: String,
     pub coordinator: Option<ThreadId>,
-    /// The coordinator's sub-line (`sidebar::sub_line` of its row state).
-    pub coordinator_sub: String,
-    pub threads: Vec<ThreadEntry>,
+    pub threads: Vec<ThreadId>,
 }
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ThreadEntry {
-    /// The project's own id, `t-0002`.
-    pub id: String,
-    pub thread: Option<ThreadId>,
-    pub group: Group,
-    /// `sidebar::thread_display`, held to Herdr's 80 columns.
-    pub display: String,
-    /// `sidebar::sub_line`: what the state line adds, and fresh activity.
-    pub sub: String,
-}
-
-/// Herdr's cap on an agent's display name.
-const DISPLAY_MAX: usize = 80;
 
 impl Model {
     /// Read every listed project's records, as the ticker last wrote them.
     pub(crate) fn load(place: &Place) -> Model {
         let root = place.root.as_path();
-        let ticker = ticker::lock_state(root) != ticker::LockState::Free;
         let projects = project::list_slugs(root)
             .into_iter()
             .filter_map(|slug| Project::load(root, &slug).ok())
             .filter(|project| project.status() != Status::Archived)
             .map(|project| ProjectEntry::of(&project))
             .collect();
-        Model {
-            ticker,
-            needs_you: sidebar::needs_you_line(root),
-            projects,
-        }
+        Model { projects }
     }
 
     /// The project a Thread belongs to: the one it heads or works for.
     pub(crate) fn project_of(&self, thread: ThreadId) -> Option<&ProjectEntry> {
         self.projects.iter().find(|project| {
-            project.coordinator == Some(thread)
-                || project.threads.iter().any(|row| row.thread == Some(thread))
+            project.coordinator == Some(thread) || project.threads.contains(&thread)
         })
     }
 }
 
 impl ProjectEntry {
     fn of(project: &Project) -> ProjectEntry {
-        let paused = project.status() == Status::Paused;
-        let name = project
-            .read_project_md()
-            .map(|(settings, _)| project::display_name(&settings.name, &project.slug))
-            .unwrap_or_else(|_| project.slug.clone());
-        let record = project.coordinator();
-        let live = coordinator::live(project);
-        let pane = live
+        let pane = coordinator::live(project)
             .first()
             .map(|pane| pane.pane_id.clone())
-            .or_else(|| record.as_ref().map(|record| record.pane_id.clone()))
+            .or_else(|| project.coordinator().map(|record| record.pane_id))
             .unwrap_or_default();
-        let coordinator_sub = live
-            .iter()
-            .find(|live| live.pane_id == pane)
-            .filter(|_| !paused)
-            .map(|live| sidebar::sub_line(&coordinator::row_state(live, None).1, ""))
-            .unwrap_or_default();
-        let mut threads: Vec<ThreadEntry> = thread::list(project)
-            .into_iter()
-            .filter(|t| t.status != thread::Status::Resolved)
-            .map(|t| {
-                let group = Group::from_token(&t.last_group).unwrap_or(Group::Working);
-                ThreadEntry {
-                    thread: thread_of(&t.pane_id, &t.machine),
-                    display: sidebar::thread_display(&t)
-                        .chars()
-                        .take(DISPLAY_MAX)
-                        .collect(),
-                    sub: if paused {
-                        String::new()
-                    } else {
-                        sidebar::sub_line(&t.state_line, &t.activity)
-                    },
-                    id: t.id,
-                    group,
-                }
-            })
-            .collect();
-        threads.sort_by(|a, b| (a.group.rank(), &a.id).cmp(&(b.group.rank(), &b.id)));
-        let groups: Vec<Group> = sidebar::recorded_groups(project);
         ProjectEntry {
             slug: project.slug.clone(),
-            name,
-            summary: sidebar::project_line(&groups, paused),
             coordinator: thread_of(&pane, ""),
-            coordinator_sub,
-            threads,
+            threads: thread::list(project)
+                .into_iter()
+                .filter(|t| t.status != thread::Status::Resolved)
+                .filter_map(|t| thread_of(&t.pane_id, &t.machine))
+                .collect(),
         }
     }
 }

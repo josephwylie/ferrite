@@ -1,9 +1,9 @@
 //! Projects (ADR 0030): herdr-projects, vendored as `ferrite_projects`,
 //! drawn natively. Its popup, overview and asks are the Projects sheet
-//! (`sheet`); its sidebar rows are nav rows, its tab-bar count a word in
-//! the bottom bar; everything reads the crate's own data through `data`.
-//! The cockpit's half — the palette commands, the sheet's place on the
-//! board, the nav blocks — is `cockpit::projects`.
+//! (`sheet`); everything reads the crate's own data through `data`. The
+//! cockpit's half — the palette commands, the sheet's place on the board —
+//! is `cockpit::projects`. The nav's rows and the bottom bar's tally come
+//! from 1.0's board (`crate::sidebar`, ADR 0031).
 
 mod data;
 mod sheet;
@@ -13,8 +13,6 @@ mod tests;
 pub(crate) use data::{
     adoptable, configure, doctor_body, pickable, Jump, Model, Place, Verb, DOCTOR_TITLE,
 };
-#[cfg(test)]
-pub(crate) use data::{ProjectEntry, ThreadEntry};
 pub(crate) use sheet::{run_verb, Ask, Outcome, ProjectsSheet, SheetEvent};
 
 gpui::actions!(
@@ -32,21 +30,17 @@ pub(crate) enum Command {
     New,
     Verb(Verb),
     Overview,
-    Focus,
-    Unfocus,
     Adopt,
     Configure,
     Doctor,
 }
 
 impl Command {
-    pub(crate) const ALL: [Command; 11] = [
+    pub(crate) const ALL: [Command; 9] = [
         Command::New,
         Command::Verb(Verb::Open),
         Command::Popup,
         Command::Overview,
-        Command::Focus,
-        Command::Unfocus,
         Command::Adopt,
         Command::Verb(Verb::Pause),
         Command::Verb(Verb::Resume),
@@ -63,8 +57,6 @@ impl Command {
             Command::Verb(Verb::Pause) => "Projects: pause project",
             Command::Verb(Verb::Resume) => "Projects: resume project",
             Command::Overview => "Projects: overview",
-            Command::Focus => "Projects: focus nav on this project",
-            Command::Unfocus => "Projects: clear nav focus",
             Command::Adopt => "Projects: continue this Thread as a project",
             Command::Configure => "Projects: configure",
             Command::Doctor => "Projects: doctor",

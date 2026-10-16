@@ -42,6 +42,7 @@ mod rich;
 mod scrollbar;
 mod select;
 mod shortcuts;
+mod sidebar;
 mod status;
 mod system_notifications;
 mod theme;
