@@ -67,7 +67,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     };
     let with_edge = |key: &str| format!("{edge}-{key}");
     let with_primary = |key: &str| format!("{primary}-{key}");
-    vec![
+    let mut table = vec![
         ("backspace".into(), "composer::Backspace", None),
         ("delete".into(), "composer::Delete", None),
         ("left".into(), "composer::Left", None),
@@ -377,22 +377,6 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Enter in the sheet's filter line submits nothing: the bare row
         // would send the Pane's draft from under the sheet.
         ("enter".into(), NO_ACTION, Some("Shortcuts")),
-        // The work board reads every key but ⌘ itself, as herdr-projects'
-        // board reads its terminal's (`board::keys::press_of`), ⌘V as one
-        // paste: nothing bound under it acts first. Its keys are its own,
-        // listed by its `?` menu.
-        ("enter".into(), NO_ACTION, Some("Projects")),
-        ("escape".into(), NO_ACTION, Some("Projects")),
-        ("backspace".into(), NO_ACTION, Some("Projects")),
-        ("delete".into(), NO_ACTION, Some("Projects")),
-        ("left".into(), NO_ACTION, Some("Projects")),
-        ("right".into(), NO_ACTION, Some("Projects")),
-        ("home".into(), NO_ACTION, Some("Projects")),
-        ("end".into(), NO_ACTION, Some("Projects")),
-        ("tab".into(), NO_ACTION, Some("Projects")),
-        ("shift-tab".into(), NO_ACTION, Some("Projects")),
-        ("?".into(), NO_ACTION, Some("Projects")),
-        (with_primary("v"), NO_ACTION, Some("Projects")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie
@@ -460,7 +444,56 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("shift-enter".into(), "find::Previous", Some("Find")),
         (with_primary("shift-g"), "find::Previous", Some("Find")),
         ("escape".into(), "find::Close", Some("Find")),
-    ]
+    ];
+    board_reads_its_keys(&mut table, platform);
+    table
+}
+
+/// The work board's key context.
+const PROJECTS: &str = "Projects";
+
+/// The work board reads every key but the window's own, as herdr-projects'
+/// board reads its terminal's (`board::keys::press_of`): every keystroke
+/// the table binds anywhere is masked under it, so nothing bound around it
+/// (a wall's y/n/a and digits, Submit's enter, Windows' ctrl keys) acts
+/// before it. The window keeps ⌘ but its paste, which the board takes as
+/// one paste, and the key that opens and leaves the board
+/// (`projects::Toggle`). Its keys are its own, listed by its `?` menu.
+///
+/// Run again over a changed table, it masks the keys now bound and lifts
+/// the mask from a key the window now keeps.
+fn board_reads_its_keys(table: &mut Vec<Binding>, platform: Platform) {
+    let paste = match platform {
+        Platform::Mac => "cmd-v",
+        Platform::Windows => "ctrl-v",
+    };
+    let kept: Vec<String> = table
+        .iter()
+        .filter(|(keys, action, _)| {
+            *action == "projects::Toggle"
+                || (keys.as_str() != paste
+                    && parse(keys, platform)
+                        .is_ok_and(|strokes| strokes[0].modifiers.platform))
+        })
+        .map(|(keys, _, _)| keys.clone())
+        .collect();
+    let is_mask = |action: &str, context: Option<&str>| {
+        action == NO_ACTION && context == Some(PROJECTS)
+    };
+    table.retain(|(keys, action, context)| !is_mask(action, *context) || !kept.contains(keys));
+    let mut masked: Vec<String> = table
+        .iter()
+        .filter(|(_, action, context)| is_mask(action, *context))
+        .map(|(keys, _, _)| keys.clone())
+        .collect();
+    let mut rows = Vec::new();
+    for (keys, _, _) in table.iter() {
+        if !kept.contains(keys) && !masked.contains(keys) {
+            masked.push(keys.clone());
+            rows.push((keys.clone(), NO_ACTION, Some(PROJECTS)));
+        }
+    }
+    table.extend(rows);
 }
 
 /// Actions with no default key, for the operator to bind (Settings
@@ -598,6 +631,7 @@ pub fn with_user_keys(
                 holder != bound && held_context == context && Some(held) == strokes.as_ref()
             })
     });
+    board_reads_its_keys(&mut table, platform);
     (table, refused)
 }
 
@@ -651,6 +685,41 @@ pub fn active() -> Vec<Binding> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The work board reads every key the table binds but the window's ⌘
+    /// and the key that leaves it: each is masked under it, on both
+    /// platforms and with the operator's keys laid over the defaults.
+    #[test]
+    fn the_board_reads_every_key_but_the_windows_own() {
+        let masked = |table: &[Binding], keys: &str| {
+            table.contains(&(keys.into(), NO_ACTION, Some(PROJECTS)))
+        };
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for keys in ["y", "n", "a", "1", "2", "3", "enter", "escape", "?", "tab"] {
+                assert!(masked(&table, keys), "{platform:?}: {keys}");
+            }
+            let (primary, toggle) = match platform {
+                Platform::Mac => ("cmd", "cmd-shift-a"),
+                Platform::Windows => ("ctrl", "ctrl-shift-a"),
+            };
+            assert!(masked(&table, &format!("{primary}-v")), "the board pastes");
+            assert!(!masked(&table, toggle), "the key that leaves the board");
+            assert_eq!(
+                masked(&table, &format!("{primary}-k")),
+                platform == Platform::Windows,
+                "⌘ is the window's; Windows' ctrl keys are the board's"
+            );
+        }
+        let keys = BTreeMap::from([
+            ("projects::Toggle".to_string(), Some("ctrl-g".to_string())),
+            ("palette::Toggle".to_string(), Some("ctrl-p".to_string())),
+        ]);
+        let (table, refused) = with_user_keys(Platform::Mac, &keys);
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(!masked(&table, "ctrl-g"), "the operator's key leaves the board");
+        assert!(masked(&table, "ctrl-p"), "an operator's key is masked too");
+    }
 
     /// Windows has no cmd key: a binding spelled cmd-* is dead there.
     #[test]

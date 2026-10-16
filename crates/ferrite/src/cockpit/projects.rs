@@ -206,9 +206,9 @@ impl CockpitView {
         }
     }
 
-    /// A reference scene's board: `board` drawn as it is, in the board's
-    /// place.
-    #[cfg(feature = "visual-reference")]
+    /// A reference scene's or a test's board: `board` drawn as it is, in
+    /// the board's place.
+    #[cfg(any(test, feature = "visual-reference"))]
     pub(super) fn stage_board(
         &mut self,
         board: crate::board::Board,

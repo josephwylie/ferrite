@@ -374,8 +374,10 @@ fn prepare(opening: Opening) -> Board {
         },
         board_key: opening.board_key,
         leave_ms: LEAVE_MS,
-        // Ferrite is where every agent runs: opening one focuses its
-        // Thread in this window.
+        // A window, never a bare terminal: another machine's agent is
+        // asked to come to the front there rather than handed this
+        // terminal. (This machine's agents are opened by the job, which
+        // asks `cli::in_herdr`, true under Ferrite.)
         in_herdr: true,
         ..Ctx::default()
     };

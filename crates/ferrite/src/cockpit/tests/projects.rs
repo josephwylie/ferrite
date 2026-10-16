@@ -215,3 +215,49 @@ fn the_servers_nav_focus_shows_one_project_and_its_clear_all(cx: &mut TestAppCon
         assert!(!view.nav_state().sections.is_empty(), "everything again");
     });
 }
+
+/// At wall range y/n/a and the digits answer the flagged Thread; a focused
+/// work board reads them as its own keys instead, and the Decision still
+/// waits.
+#[gpui::test]
+fn a_board_at_wall_range_takes_the_walls_answer_keys(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("wall-board", 24);
+    let group = group_all(&mut core);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1060.), px(770.)));
+    cx.update(|window, cx| assert_eq!(view.read(cx).level_now(window), Level::Wall));
+    fake.streams.borrow()[7].send(decision("perm_08")).unwrap();
+    tick(cx);
+    let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
+
+    view.update_in(cx, |view, window, cx| {
+        view.stage_board(crate::board::fixture::board(), window, cx)
+    });
+    let board = view.read_with(cx, |view, _| {
+        view.projects.board.as_ref().expect("the board").view.clone()
+    });
+    cx.update(|window, cx| {
+        let focus = board.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    tick(cx);
+    cx.update(|window, cx| assert_eq!(view.read(cx).level_now(window), Level::Wall));
+
+    cx.simulate_keystrokes("y n a 1 2 3");
+
+    board.update(cx, |board, _| {
+        assert_eq!(board.state().expect("the board's state").value(), "yna123");
+    });
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.cockpit
+                .thread(flagged)
+                .and_then(|open| open.pending())
+                .is_some(),
+            "the wall's Decision still waits"
+        );
+    });
+}
