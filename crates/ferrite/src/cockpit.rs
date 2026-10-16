@@ -1368,7 +1368,8 @@ thread_local! {
 
 /// What the last frame drew for each Pane and nav row, and how often each
 /// was built: the stale-chrome tests read what is on screen, not the model,
-/// and the frame budgets count the work each part did.
+/// and the frame budgets count the work each part did. Also how often the
+/// Projects board was asked for, by any door.
 #[cfg(test)]
 pub(crate) mod drawn {
     use std::cell::{Cell, RefCell};
@@ -1399,6 +1400,26 @@ pub(crate) mod drawn {
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static STATUS_USAGE: RefCell<Option<String>> = const { RefCell::new(None) };
         static STATUS_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static BAR_TALLY: RefCell<Option<String>> = const { RefCell::new(None) };
+        static PROJECTS_TOGGLES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The bar's Projects word as last drawn: the board header's tally.
+    pub(crate) fn record_bar_tally(tally: Option<String>) {
+        BAR_TALLY.with(|said| *said.borrow_mut() = tally);
+    }
+
+    pub(crate) fn bar_tally() -> Option<String> {
+        BAR_TALLY.with(|said| said.borrow().clone())
+    }
+
+    pub(crate) fn toggled_projects() {
+        PROJECTS_TOGGLES.with(|toggles| toggles.set(toggles.get() + 1));
+    }
+
+    /// How many times the Projects board was toggled on this thread.
+    pub(crate) fn projects_toggles() -> usize {
+        PROJECTS_TOGGLES.with(Cell::get)
     }
 
     /// The bar's status line was built reading these usage facts: the
@@ -8655,10 +8676,7 @@ impl CockpitView {
             let branch = key.and_then(|_| self.section_branch(&own));
             // A task's own space is named as its row is (ADR 0031), its
             // numbers under the heading.
-            let space = key.and_then(|project| {
-                let space = self.section_space(project, &own);
-                self.projects.sidebar.spaces.get(&space)
-            });
+            let space = key.and_then(|_| self.projects.sidebar.heading(own.iter().copied()));
             let numbers = space
                 .map(|space| SharedString::from(space.progress.clone()))
                 .filter(|numbers| !numbers.is_empty());
@@ -8887,20 +8905,6 @@ impl CockpitView {
                 .get(*thread)
                 .and_then(|facts| facts.default_branch.clone())
         })
-    }
-
-    /// The Space a Project heading stands for (`sidebar::section_space`),
-    /// by the worktrees its open rows work in.
-    fn section_space(&self, project: ProjectId, rows: &[ThreadId]) -> String {
-        use ferrite_core::workspace::WorkspaceBinding;
-        let worktrees = rows.iter().filter_map(|thread| {
-            let view = self.cockpit.thread(*thread)?;
-            Some(match view.workspace() {
-                Some(WorkspaceBinding::Worktree { path, .. }) => Some(path.as_path()),
-                _ => None,
-            })
-        });
-        crate::sidebar::section_space(worktrees, project)
     }
 
     /// Land on a Thread from the nav's other doors — a smart or rail row: the

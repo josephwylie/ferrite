@@ -34,7 +34,7 @@ fn threads() -> HashMap<String, ThreadId> {
 }
 
 fn sidebar(rows: &[Obj]) -> Sidebar {
-    of(rows, &threads(), NOW)
+    of(rows, &threads(), "here", NOW)
 }
 
 /// A task as the board shows it, its agent live in Thread 7, with `patch`.
@@ -395,31 +395,80 @@ fn a_tasks_own_space_carries_its_name_and_numbers() {
     );
 }
 
-/// A heading's Space as the adapter names it: the linked worktree all its
-/// open Threads work in, else its Project's id.
+/// A task that waits for your pick has no pane: its own space keeps the
+/// task's number and title, as upstream leaves the name it wrote, and loses
+/// its numbers. Another machine's task, or one in a space it does not own,
+/// names nothing here.
 #[test]
-fn a_headings_space_is_its_shared_worktree_else_its_project() {
-    let project: ProjectId = serde_json::from_value(json!(3)).unwrap();
-    let id = ferrite_core::api::project_id(project);
-    let tree = Some(Path::new("/repo/.worktrees/hsw-152"));
-    let other = Some(Path::new("/repo/.worktrees/skl-6"));
-    let space = |worktrees: &[Option<&Path>]| section_space(worktrees.iter().copied(), project);
-    assert_eq!(space(&[tree, tree]), "/repo/.worktrees/hsw-152");
-    assert_eq!(space(&[tree, None]), id, "one on the main checkout");
-    assert_eq!(space(&[tree, other]), id, "two worktrees");
-    assert_eq!(space(&[None]), id);
-    assert_eq!(space(&[]), id, "nothing open");
+fn a_space_waiting_for_a_pick_keeps_its_name_without_numbers() {
+    isolated();
+    let waiting = |link: Value| {
+        task(
+            json!({ "stage": "pick", "state": "blocked", "kind": "permission", "progress": 8, "eta": 16, "link": link }),
+        )
+    };
+    let row = waiting(json!({ "socket": "here", "workspace": "s1", "ownsWorkspace": true }));
+    let named = sidebar(std::slice::from_ref(&row));
+    let entry = &named.spaces["s1"];
+    assert_eq!(
+        (entry.name.as_str(), entry.progress.as_str()),
+        (task_name(&row).as_str(), "")
+    );
+    for (link, why) in [
+        (
+            json!({ "socket": "there", "workspace": "s1", "ownsWorkspace": true }),
+            "another machine's",
+        ),
+        (
+            json!({ "socket": "here", "workspace": "3" }),
+            "a space it does not own",
+        ),
+    ] {
+        assert!(sidebar(&[waiting(link)]).spaces.is_empty(), "{why}");
+    }
 }
 
-/// A pane's Thread is the agent's terminal in the adapter's agent list: a
-/// placed pane keeps its own id, and a pane with no open Thread, or herdr
-/// down, names none.
+/// A Project heading says a task's own space when every Thread under it the
+/// adapter places is in that Space: a Space the board made, a worktree's,
+/// a Project's own. Threads in two Spaces, or none placed, say nothing.
+#[test]
+fn a_heading_says_the_space_its_threads_share() {
+    let entry = |name: &str| Entry {
+        name: name.into(),
+        ..coordinator_entry("idle", 0, "")
+    };
+    let (made, tree) = ("s2", "/repo/.worktrees/hsw-152");
+    let mut sidebar = Sidebar::default();
+    sidebar.spaces.insert(made.into(), entry("HSW-152"));
+    sidebar.spaces.insert(tree.into(), entry("SKL-6"));
+    for (thread, space) in [(1, made), (2, made), (3, tree), (4, "3")] {
+        sidebar.places.insert(ThreadId::new(thread), space.into());
+    }
+    let heading = |threads: &[u64]| {
+        sidebar
+            .heading(threads.iter().copied().map(ThreadId::new))
+            .map(|entry| entry.name.clone())
+    };
+    assert_eq!(heading(&[1, 2]).as_deref(), Some("HSW-152"), "a made Space");
+    assert_eq!(
+        heading(&[3, 9]).as_deref(),
+        Some("SKL-6"),
+        "9 is not placed"
+    );
+    assert_eq!(heading(&[1, 3]), None, "two Spaces");
+    assert_eq!(heading(&[4]), None, "a Project's own Space no task owns");
+    assert_eq!(heading(&[9]), None, "nothing placed");
+}
+
+/// A pane's Thread is the agent's terminal in the adapter's agent list, in
+/// the Space the agent names: a placed pane keeps its own id, and a pane
+/// with no open Thread, or herdr down, names none.
 #[test]
 fn a_panes_thread_is_its_agents_terminal() {
     let agents = [
         (
             "p3",
-            json!({ "pane_id": "p3", "terminal_id": "7", "agent_status": "working" }),
+            json!({ "pane_id": "p3", "terminal_id": "7", "workspace_id": "s1", "agent_status": "working" }),
         ),
         (
             "12",
@@ -439,6 +488,13 @@ fn a_panes_thread_is_its_agents_terminal() {
     assert_eq!(threads.get("12"), Some(&ThreadId::new(12)));
     assert_eq!(threads.get("p4"), None);
     assert!(threads_of(&Session::Down).is_empty());
+    let places = places_of(&session);
+    assert_eq!(
+        places.get(&ThreadId::new(7)).map(String::as_str),
+        Some("s1")
+    );
+    assert_eq!(places.len(), 1, "no Space named, none placed");
+    assert!(places_of(&Session::Down).is_empty());
 }
 
 /// A task whose pane has no open Thread here is no nav row: its agent
@@ -500,4 +556,16 @@ fn the_coordinators_entry_says_where_it_stands_and_its_last_message() {
         let told = coordinator_told(coordinator_entry(&stands(state), 0, ""));
         assert_eq!(lines(&told), [said]);
     }
+}
+
+/// Only the Coordinator's message is dim, as the board greys it: where it
+/// stands is plain text.
+#[test]
+fn only_the_coordinators_message_is_dim() {
+    let told = coordinator_told(coordinator_entry("idle", 0, "Done."));
+    let inks: Vec<u32> = task_lines(&told.rows(), 2.0)
+        .into_iter()
+        .map(|(_, ink)| ink)
+        .collect();
+    assert_eq!(inks, [theme::TEXT, theme::CHROME_MUTED]);
 }

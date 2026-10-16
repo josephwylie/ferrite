@@ -3,6 +3,7 @@
 //! adopt dialog (ADR 0030).
 
 use super::*;
+use crate::cockpit::drawn;
 use crate::projects::Place;
 use crate::sidebar::{coordinator_told, Sidebar, Told};
 use sw_board::flow::sidebar_entry::{coordinator_entry, Entry};
@@ -57,8 +58,8 @@ fn sidebar(threads: &[ThreadId]) -> Sidebar {
         ]
         .into_iter()
         .collect(),
-        spaces: Default::default(),
         tally: "1 needs you \u{b7} 2 working".into(),
+        ..Sidebar::default()
     }
 }
 
@@ -141,10 +142,11 @@ fn a_thread_whose_task_went_keeps_its_own_row(cx: &mut TestAppContext) {
 
 /// A task's own space is headed with the task's number and title as the
 /// entry says them, its branch still at the heading's right and its
-/// numbers under it.
+/// numbers under it: the Space the board made for it, its Thread in it.
 #[gpui::test]
 fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-board-space", 1);
+    let thread = core.threads()[0];
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
 
@@ -153,9 +155,10 @@ fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext)
             .project
             .expect("a named Project");
         let branch = view.nav_state().sections[0].branch.clone();
-        let space = ferrite_core::api::project_id(project);
-        view.projects.sidebar.spaces.insert(
-            space,
+        let sidebar = &mut view.projects.sidebar;
+        sidebar.places.insert(thread, "s1".into());
+        sidebar.spaces.insert(
+            "s1".into(),
             entry(
                 "HSW-152 Show automations",
                 "agent \u{b7} working",
@@ -175,9 +178,11 @@ fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext)
     });
 }
 
-/// The bottom bar says the board header's tally while the board has tasks.
+/// The bottom bar says the board header's tally while the board has tasks,
+/// and a press on it opens the board, as its key does.
 #[gpui::test]
 fn the_bottom_bar_says_the_boards_tally(cx: &mut TestAppContext) {
+    let tally = "3 need you \u{b7} 1 ready \u{b7} 2 working";
     let (core, _fake) = cockpit("bar-board-tally", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -185,13 +190,19 @@ fn the_bottom_bar_says_the_boards_tally(cx: &mut TestAppContext) {
         cx.debug_bounds("bottom-bar-projects").is_none(),
         "no tasks, no word"
     );
+    assert_eq!(drawn::bar_tally(), None);
 
     view.update(cx, |view, cx| {
-        view.projects.sidebar.tally = "3 need you \u{b7} 1 ready \u{b7} 2 working".into();
+        view.projects.sidebar.tally = tally.into();
         cx.notify();
     });
     tick(cx);
-    assert!(cx.debug_bounds("bottom-bar-projects").is_some());
+    assert_eq!(drawn::bar_tally().as_deref(), Some(tally));
+    let word = cx.debug_bounds("bottom-bar-projects").expect("the word");
+    let toggles = drawn::projects_toggles();
+    cx.simulate_click(word.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(drawn::projects_toggles(), toggles + 1, "projects::Toggle");
 }
 
 /// The toasts the window shows now.

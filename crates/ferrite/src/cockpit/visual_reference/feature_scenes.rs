@@ -248,7 +248,7 @@ fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
     let threads = (0..rows.len())
         .map(|n| (format!("p{n}"), workers[n]))
         .collect();
-    let mut sidebar = sidebar::of(&rows, &threads, now);
+    let mut sidebar = sidebar::of(&rows, &threads, "here", now);
     let coordinator = coordinator_entry(
         &coordinator_stands("working", ""),
         0,

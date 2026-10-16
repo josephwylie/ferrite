@@ -151,6 +151,8 @@ impl CockpitView {
 
     /// The projects shortcut: the popup, open or shut.
     pub(super) fn toggle_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        super::drawn::toggled_projects();
         if self.projects.sheet.is_some() {
             self.close_projects(cx);
         } else {
@@ -549,6 +551,8 @@ impl CockpitView {
     /// the board has tasks; a press opens the board.
     pub(super) fn projects_bar_word(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let tally = &self.projects.sidebar.tally;
+        #[cfg(test)]
+        super::drawn::record_bar_tally((!tally.is_empty()).then(|| tally.clone()));
         (!tally.is_empty()).then(|| {
             div()
                 .id("bottom-bar-projects")

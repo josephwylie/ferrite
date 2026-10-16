@@ -169,10 +169,15 @@ its reviewer during a review, the Coordinator) is drawn as its entry
 where the Thread already sits in the tree: row 1 the task's number and
 title beside Ferrite's own Attention dot, then row 2 (who is on it and
 where it stands, its time last and dropped first on a short row) in the
-task's status ink, then row 3 (its numbers, or the Coordinator's latest
-message). A task's own space names the heading of the Space its Threads
-share (a linked worktree all of them work in, else their Project), its
-branch still at the right and its numbers under it. The nav reads the
+task's status ink (the Coordinator's in plain text), then row 3, dim (its
+numbers, or the Coordinator's latest message). A task's own space names
+the heading whose placed Threads all share that Space, as the adapter
+lists each agent's (a Space the board made, a linked worktree, a
+Project's own), its branch still at the right and its numbers under it;
+while the task waits for a pick the name stays and the numbers go, as
+upstream leaves them. Status inks are Ferrite's theme equivalents behind
+one function (`sidebar::ink`) until the board's GPUI drawing lands, when
+that function takes the board theme's inks. The nav reads the
 board whether or not 0.2's projects root resolves. Nothing is reported to
 herdr, so `report-metadata` is answered by no call; a task archived or
 removed while its Thread lives simply has no entry. A window on another
@@ -181,7 +186,8 @@ board header's tally (`3 need you · 1 ready · 2 working`) and opens the
 board. Upstream raises no pop-up of its own when a task needs you, is
 ready or fails: `board.notify` alone decides (a bell where a board is
 open, or a command), so the window adds none. 0.2's nav focus (`nav.focus`)
-has no 1.0 counterpart; the window ignores it until the API drops it.
+has no 1.0 counterpart; the window ignores it until the API drops it,
+which waits on 0.2's crate: its own CLI still calls `nav focus`.
 
 ### Migration from 0.2
 
