@@ -1,10 +1,13 @@
 ---
-status: accepted
+status: superseded by 0031
 date: 2026-10-15
 supersedes: 0028
 ---
 
 # Projects: herdr-projects vendored as Ferrite's coordinator
+
+> Superseded by ADR 0031: herdr-projects 1.0 is vendored in place of
+> 0.2.34, and what this ADR built leaves with it.
 
 Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`)
 and replaces Ferrite's own Coordinator Threads (ADR 0028). Builds on the
