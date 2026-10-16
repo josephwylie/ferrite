@@ -257,12 +257,6 @@ impl Shelf {
     pub(crate) fn retain(&self, live: &dyn Fn(&str) -> bool) {
         self.inner.borrow_mut().slots.retain(|id, _| live(id));
     }
-
-    /// How many visuals hold a view (tests).
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.inner.borrow().slots.len()
-    }
 }
 
 /// Whether a visual's row shows its page at all: not once a later one

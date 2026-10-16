@@ -476,12 +476,11 @@ fn board_reads_its_keys(table: &mut Vec<Binding>, platform: Platform) {
         })
         .map(|(keys, _, _)| keys.clone())
         .collect();
-    let is_mask =
-        |action: &str, context: Option<&str>| action == NO_ACTION && context == Some(PROJECTS);
-    table.retain(|(keys, action, context)| !is_mask(action, *context) || !kept.contains(keys));
+    table
+        .retain(|(keys, action, context)| !is_board_mask(action, *context) || !kept.contains(keys));
     let mut masked: Vec<String> = table
         .iter()
-        .filter(|(_, action, context)| is_mask(action, *context))
+        .filter(|(_, action, context)| is_board_mask(action, *context))
         .map(|(keys, _, _)| keys.clone())
         .collect();
     let mut rows = Vec::new();
@@ -492,6 +491,11 @@ fn board_reads_its_keys(table: &mut Vec<Binding>, platform: Platform) {
         }
     }
     table.extend(rows);
+}
+
+/// Whether a row is the board's mask over a key (`board_reads_its_keys`).
+fn is_board_mask(action: &str, context: Option<&str>) -> bool {
+    action == NO_ACTION && context == Some(PROJECTS)
 }
 
 /// Actions with no default key, for the operator to bind (Settings
@@ -788,12 +792,15 @@ mod tests {
     }
 
     /// The two platforms differ in spelling only: same actions, same order,
-    /// same key contexts.
+    /// same key contexts. The board's masks are not compared: they follow
+    /// each platform's distinct keystrokes, fewer on Windows, where ⌘ and
+    /// ctrl keys share one spelling.
     #[test]
     fn both_platforms_bind_the_same_actions_in_the_same_contexts() {
         let shape = |platform: Platform| -> Vec<(&'static str, Option<&'static str>)> {
             bindings(platform)
                 .into_iter()
+                .filter(|(_, action, context)| !is_board_mask(action, *context))
                 .map(|(_, action, context)| (action, context))
                 .collect()
         };
@@ -1251,7 +1258,17 @@ mod tests {
             at(&defaults, "y", "cockpit::Allow"),
             "the row keeps its place"
         );
-        assert_eq!(table.len(), defaults.len() - 2);
+        let actions = |table: &[Binding]| {
+            table
+                .iter()
+                .filter(|(_, action, context)| !is_board_mask(action, *context))
+                .count()
+        };
+        assert_eq!(
+            actions(&table),
+            actions(&defaults) - 2,
+            "one NewThread row, no ToggleNav"
+        );
     }
 
     /// The operator's key is theirs: another action's default on the same

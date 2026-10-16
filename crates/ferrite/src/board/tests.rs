@@ -83,7 +83,7 @@ fn keystrokes_read_as_the_terminal_board_reads_keys() {
 }
 
 /// The keys the board's own table names are the ones a keystroke makes:
-/// `y`/`n` answer, `Y` is not `y`, ctrl+c closes, every newline key is one.
+/// `y`/`n` answer, `Y` is not `y`, ctrl+c closes, every newline key types one.
 #[test]
 fn keystrokes_press_the_boards_own_keys() {
     use sw_board::board::keys::{is, K};
@@ -107,12 +107,17 @@ fn keystrokes_press_the_boards_own_keys() {
     );
     assert!(is(&press("c", None, control), K::Close));
     assert!(is(&press("/", Some("?"), shift), K::Menu));
+    assert!(is(&press("enter", None, shift), K::Newline));
+    // The board's newline key is shift+enter; the text box takes ctrl+j and
+    // alt+enter as its own editing keys too (`TextBox::handle`).
     for newline in [
         press("enter", None, shift),
         press("j", None, control),
         press("enter", None, alt),
     ] {
-        assert!(is(&newline, K::Newline), "{newline:?}");
+        let mut text = sw_board::board::textbox::TextBox::default();
+        assert!(text.handle(&newline), "{newline:?}");
+        assert_eq!(text.text(), "\n", "{newline:?}");
     }
     assert!(is(&press("p", Some("π"), alt), K::Side));
     assert!(is(&press("k", Some("˚"), alt), K::ChatScrollUp));
@@ -651,7 +656,7 @@ fn a_folded_heading_says_how_many_tasks_it_holds() {
     use sw_board::board::update::heads::group_id;
     let theme = render::ferrite_theme(false);
     let mut state = board();
-    let open = draw(&mut state, &theme, 120, 40);
+    let open = draw(&mut state, &theme, 120, 60);
     assert_eq!(
         run(line_with(&open, "▾ to do"), "▾").fg,
         colour(&theme, Ink::Muted)
@@ -659,7 +664,7 @@ fn a_folded_heading_says_how_many_tasks_it_holds() {
     let id = group_id(&state, "", "to do");
     state.folded.insert(id);
     relist(&mut state);
-    let lines = draw(&mut state, &theme, 120, 40);
+    let lines = draw(&mut state, &theme, 120, 60);
     let heading = line_with(&lines, "▸ to do");
     assert_eq!(text(heading).trim_end(), " ▸ to do  2 tasks");
     assert_eq!(run(heading, "▸").fg, colour(&theme, Ink::Muted));

@@ -1918,9 +1918,9 @@ mod tests {
             [("agent \u{b7} working \u{b7} R#1 PR#113".to_string(), YELLOW)],
             "the time goes first; no numbers, no row 3"
         );
-        // 28ch against a member's 26.
+        // 29ch against a member's 28.
         assert_eq!(
-            lines(&task("reviewer \u{b7} under review", "2m", "40% 3m"), 3.0),
+            lines(&task("reviewer \u{b7} under review", "12m", "40% 3m"), 3.0),
             [
                 ("reviewer \u{b7} under review".to_string(), YELLOW),
                 ("40% 3m".to_string(), CHROME_MUTED)

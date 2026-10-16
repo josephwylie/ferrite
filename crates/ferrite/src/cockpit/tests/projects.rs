@@ -392,12 +392,15 @@ fn a_nav_row_click_moves_the_tab_board_aside(cx: &mut TestAppContext) {
     );
 }
 
-/// ⌘] steps to the next Pane from the board too: the board gives way.
+/// ⌘] steps to the next Pane of a Group from the board too: the board
+/// gives way.
 #[gpui::test]
 fn the_next_pane_key_moves_the_tab_board_aside(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("board-next-pane", 2);
+    let (mut core, _fake) = cockpit("board-next-pane", 2);
+    let group = group_all(&mut core);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     let before = view.read_with(cx, |view, _| view.focused_thread());
     let board = focused_tab_board(&view, cx);
@@ -413,15 +416,21 @@ fn the_next_pane_key_moves_the_tab_board_aside(cx: &mut TestAppContext) {
 }
 
 /// The board key on a board that shows but lost the keyboard (a press in
-/// the nav) takes you back to the board, not away from it.
+/// the Composer) takes you back to the board, not away from it; pressed
+/// on the board, it takes you back where you were. (Where you were is
+/// drawn: the window's focus pump moves the keyboard off a handle that
+/// is not.)
 #[gpui::test]
 fn the_board_key_refocuses_a_shown_board(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("board-refocus", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let board = focused_tab_board(&view, cx);
-    let elsewhere = cx.update(|window, cx| {
-        let elsewhere = cx.focus_handle();
+    let elsewhere = view.update_in(cx, |view, window, cx| {
+        let elsewhere = view.panes[view.focused()]
+            .composer
+            .read(cx)
+            .focus_handle(cx);
         window.focus(&elsewhere, cx);
         elsewhere
     });

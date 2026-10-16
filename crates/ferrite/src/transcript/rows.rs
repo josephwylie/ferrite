@@ -815,10 +815,6 @@ mod tests {
         }));
     }
 
-    fn ids(rows: &TranscriptRows) -> Vec<RowId> {
-        rows.rows().iter().map(|row| row.id().clone()).collect()
-    }
-
     /// Adjacent routine calls fold into one group row, named by its first
     /// call's block, holding every call in order.
     #[test]

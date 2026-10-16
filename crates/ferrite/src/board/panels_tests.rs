@@ -357,7 +357,8 @@ fn review(round: u32, pass: bool) -> Value {
         "findings": findings, "checks": ["Ran the whole check."] })
 }
 
-/// A task whose second review failed, with evidence behind a link.
+/// A task whose second review failed, with evidence behind a link. Its pull
+/// request's checks pass: failing checks would come first (`awaits_yes`).
 fn reviewed() -> Obj {
     let last = review(2, false);
     let mut shown = last.clone();
@@ -365,7 +366,7 @@ fn reviewed() -> Obj {
     task(
         13,
         json!({ "state": "blocked", "kind": "permission", "stage": "approval", "title": "Cut titles between words",
-        "pr": "https://github.com/a/b/pull/61", "prState": "failing", "reviews": [review(1, true), last], "review": shown, "reviewRound": 2,
+        "pr": "https://github.com/a/b/pull/61", "reviews": [review(1, true), last], "review": shown, "reviewRound": 2,
         "msg": "Approve to merge? Review: Fail · 1 critical." }),
     )
 }
