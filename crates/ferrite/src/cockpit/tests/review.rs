@@ -412,40 +412,56 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
     let stale = baseline();
+    // The tree the turn's start will snapshot: the checkout as it stands,
+    // written to objects of its own so the repo learns of it only from
+    // the snapshot.
+    let scratch = repo.parent().unwrap().join("start-tree");
+    std::fs::create_dir_all(scratch.join("objects")).unwrap();
+    let start = {
+        let out = std::process::Command::new("sh")
+            .args(["-c", "git add -A && git write-tree"])
+            .current_dir(&repo)
+            .env("GIT_INDEX_FILE", scratch.join("index"))
+            .env("GIT_OBJECT_DIRECTORY", scratch.join("objects"))
+            .env(
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                repo.join(".git/objects"),
+            )
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let snapshotted = || {
+        std::process::Command::new("git")
+            .args(["cat-file", "-e", &start])
+            .current_dir(&repo)
+            .status()
+            .expect("git")
+            .success()
+    };
+    assert!(!snapshotted(), "the premise: no snapshot before the turn");
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    // A write that lands before the start's snapshot is part of it, so
-    // each try is a fresh turn with a fresh write.
-    for attempt in 0..5 {
-        view.update(cx, |view, _| {
-            let thread = view.panes[0].thread().unwrap();
-            view.cockpit.send(thread, "Add notes".into());
-        });
-        tick(cx);
-        std::thread::sleep(Duration::from_millis(300));
-        std::fs::write(repo.join("notes.md"), format!("fresh {attempt}\n")).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        for _ in 0..200 {
-            tick(cx);
-            if baseline() != stale {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if baseline() != stale {
-            break;
-        }
-    }
-    assert_ne!(
+    view.update(cx, |view, _| {
+        let thread = view.panes[0].thread().unwrap();
+        view.cockpit.send(thread, "Add notes".into());
+    });
+    // The turn's write lands once its start is snapshotted, never in it.
+    until(cx, |_| snapshotted());
+    std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    until(cx, |_| baseline() != stale);
+    assert_eq!(
         baseline(),
-        stale,
+        start,
         "the turn's start replaced the old baseline"
     );
     open_review(&view, Scope::LastTurn, cx);
