@@ -42,9 +42,9 @@ Inside vendored files a change is the smallest that works and is marked
   `job_far.rs`, which start herdr themselves, as only the terminal board
   and herdr's first-run setup reach them, and Ferrite runs neither.
 - **`src/store/files.rs`**: `bin()`, the program handed to agents and
-  hooks, is the shipped `ferrite-projects` when the code runs inside
-  Ferrite's app (the executable is `ferrite`): its sibling, links resolved,
-  or `FERRITE_PROJECTS_BIN`.
+  hooks, is `FERRITE_PROJECTS_BIN` when that is set, and otherwise, when
+  the code runs inside Ferrite's app (the executable is `ferrite`), the
+  shipped `ferrite-projects` beside it, links resolved.
 - **The take-over of 0.2** knows Ferrite's 0.2 by its own names beside
   upstream's: its settings folder by its journal `ferrite-owned.json`
   (core's `store/old_installs/legacy.rs`), its hooks by `ferrite-projects
