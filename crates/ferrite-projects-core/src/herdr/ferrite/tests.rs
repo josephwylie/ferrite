@@ -166,7 +166,8 @@ fn a_server_that_is_not_running_is_no_server_and_one_that_never_answers_a_timeou
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let listener = UnixListener::bind(dir.join("api.sock")).unwrap();
-    std::thread::spawn(move || { let _held: Vec<_> = listener.incoming().collect(); });
+    // Holds every connection, answering none. (Collecting `incoming()` would size its Vec by the endless iterator's hint.)
+    std::thread::spawn(move || { let mut held = Vec::new(); for c in listener.incoming() { held.push(c); } });
     let silent = Server { socket: dir.join("api.sock"), timeout: Duration::from_millis(100) };
     let e = silent.call("thread.list", json!({})).unwrap_err();
     assert_eq!((e.code.as_str(), e.message.as_str()), ("timeout", "herdr did not answer in time"));

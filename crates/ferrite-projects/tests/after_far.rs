@@ -111,7 +111,8 @@ fn unknown_machines_and_tasks_a_machine_that_does_not_answer_and_a_circle_across
     let (w, far) = far_world();
     let a = w.add("A");
     let e = run(&["after", &a, "nobox:ELA-3"]).unwrap_err();
-    assert_eq!(e, "nobox:ELA-3: nobox is not a machine the board knows (herdr machine list, or the board.machines setting): it cannot be waited for. Nothing was changed.");
+    // Ferrite: herdr's machine list is Ferrite's.
+    assert_eq!(e, "nobox:ELA-3: nobox is not a machine the board knows (ferrite machine list, or the board.machines setting): it cannot be waited for. Nothing was changed.");
     answers(&far, json!([{ "found": false, "msg": "No task ELA-9" }]));
     let e = run(&["after", &a, "vm-str:ELA-9"]).unwrap_err();
     assert_eq!(e, "No task ELA-9 on vm-str: vm-str:ELA-9 cannot be waited for. Nothing was changed.");

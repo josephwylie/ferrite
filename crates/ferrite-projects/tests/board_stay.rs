@@ -5,10 +5,8 @@ use crate::common;
 use common::board::{open, open_with, Board};
 use common::*;
 use serde_json::json;
-use sw::board::job;
-use sw::board::keys::Press;
 use sw::board::state::{Ctx, State};
-use sw::board::update::{list::relist, update, Effect, Event};
+use sw::board::update::list::relist;
 use sw::json::*;
 
 fn has(text: &str, re: &str) -> bool { regex::Regex::new(re).unwrap().is_match(text) }
@@ -24,21 +22,6 @@ fn open_keyed(root: &std::path::Path, board_key: &str) -> Board {
     let mut b = Board { s, rows: 34, cols: 120, closed: false, theme: sw::board::theme::Theme::default_dark(true) };
     b.load(); relist(&mut b.s); b.load();
     b
-}
-/// A key whose job may hand this terminal to an agent (outside a herdr client): what it attaches to is `went`, and
-/// `then` runs while you are in there.
-fn press_attaching(b: &mut Board, key: &str, went: &mut Vec<String>, then: &dyn Fn()) {
-    let mut fx = update(&mut b.s, Event::Key(Press::chord(key)));
-    while let Some(e) = fx.pop() {
-        match e {
-            Effect::Run(j) => { let d = job::run(j); fx.extend(update(&mut b.s, Event::Done(d))); }
-            Effect::Attach { args, .. } => { went.push(args.last().cloned().unwrap_or_default()); then(); }
-            Effect::Close => b.closed = true,
-            Effect::Save => sw::board::run::prefs::save(&b.s),
-            _ => {}
-        }
-    }
-    b.load();
 }
 fn shown(b: &Board) -> Vec<String> { let mut v: Vec<String> = b.s.rows.iter().filter_map(|r| if let sw::board::state::Row::Rec(x) = r { Some(x.t("id")) } else { None }).collect(); v.sort(); v }
 
@@ -104,26 +87,8 @@ fn enter_on_a_task_goes_into_its_agent_and_the_board_stays_as_it_was_from_the_ro
         s.load(); assert_eq!(s.s.sel, near); assert_eq!(shown(&s), vec![near.clone()]);
         s.s.filter.clear(); sw::board::run::prefs::save(&s.s);
     }
-    // Outside a herdr client (plain SSH) the same terminal attaches to the agent and the board comes back when that
-    // ends. It is the same there: the task stopped while you were in it, under a filter it no longer matches.
-    {
-        w.script(json!({ "worker": [{ "status": "working", "screen": "● Editing\n" }] }));
-        let other = w.add("Say hello again"); w.add("Another working neighbour");
-        delegate(&other); settle(&other);
-        let there = task(&other).at("link").t("pane");
-        set_env(&[]);
-        let mut s = open(&w.root, 34); s.s.filter = "working".into(); s.s.sel = other.clone(); s.load(); relist(&mut s.s);
-        let mut went = vec![];
-        let o = other.clone();
-        press_attaching(&mut s, "enter", &mut went, &|| { sw::actions::talk::stop(&o).unwrap(); });
-        assert_eq!(went, vec![there.clone()]); assert!(!s.closed); assert_eq!(task(&other).s("stage"), "stopped");
-        assert_eq!(s.s.sel, other, "back on the task you went into"); s.load(); s.load(); assert_eq!(s.s.sel, other);
-        press_attaching(&mut s, "enter", &mut went, &|| {}); assert_eq!(went, vec![there.clone(), there.clone()]);
-        s.press(&["down"]); if s.s.sel == other { s.press(&["up"]); }
-        s.load(); assert_ne!(s.s.sel, other); assert!(!shown(&s).contains(&other));
-        s.s.filter.clear(); sw::board::run::prefs::save(&s.s);
-        set_env(&[("HERDR_ENV", "1")]);
-    }
+    // Ferrite: upstream's case outside a herdr client (plain SSH, the terminal attaches to the agent) is not Ferrite's:
+    // every agent runs in a Ferrite window (`herdr::cli::in_herdr`), so its part of this test is left out.
     // An agent that has exited leaves a bare pane: herdr goes to its space and tab, and the board stays too.
     w.patch(|st| { for p in st["panes"].as_array_mut().unwrap() { if p.s("pane_id") == pane { p["agent"] = serde_json::Value::Null; } } });
     let mut s = open(&w.root, 34); s.s.sel = id.clone(); s.load(); relist(&mut s.s);

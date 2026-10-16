@@ -1,7 +1,7 @@
 //! Ferrite: what Ferrite changes (README.md, ADR 0031). Its 0.2 (`ferrite-projects` 0.2.34) is taken over as upstream's
 //! is, by the names it wrote; the Server's `take-over` says once what that did; `install` and `update` leave the
 //! program to Ferrite; and inside Ferrite's app the program agents and hooks run is the shipped one.
-use crate::common::{delegate, task, world, world_with, Opts, World};
+use crate::common::{delegate, settle, task, world, world_with, Opts, World};
 use crate::takeover_kit::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -108,9 +108,12 @@ fn the_program_handed_to_agents_is_the_one_ferrite_names() {
 #[test]
 fn under_ferrite_a_tasks_agent_is_known_by_its_thread() {
     let w = world();
+    w.script(json!({ "worker": [{ "status": "working", "screen": "● Editing\n" }] }));
     let id = w.add("Pick a colour");
     delegate(&id);
+    settle(&id);
     let pane = task(&id).at("link").t("pane");
+    assert!(!pane.is_empty(), "its agent has a pane");
     unsafe { std::env::set_var("HERDR_PANE_ID", &pane) };
     let caller = sw::cli::caller().map(|(t, role)| (t.t("id"), role));
     let a = sw::cli::flags::parse(&["report", "--state", "blocked", "--msg", "Which colour?"].map(String::from));

@@ -121,6 +121,7 @@ fn a_repo_with_only_herdr_superworks_settings_file_keeps_its_settings() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Ferrite: macOS kills a copy of /bin/sleep as it starts (SIGKILL), before it can be sent SIGTERM")]
 fn real_programs_herdr_superworks_own_processes_are_stopped_and_no_other() {
     use sw::take_over::Sys;
     let w = world_with(Opts::default());

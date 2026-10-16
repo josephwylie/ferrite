@@ -14,7 +14,7 @@ use std::rc::Rc;
 use serde_json::{json, Value};
 use sw_board::board::data::Data;
 use sw_board::board::job;
-use sw_board::board::keys::Press;
+use sw_board::board::keys::{name, Press, K};
 use sw_board::board::state::{Ctx, State};
 use sw_board::board::update::{list::relist, update, Effect, Event};
 use sw_board::herdr::cli::{self, Fake, Ran};
@@ -65,7 +65,7 @@ fn board_on_theirs() -> State {
     let vm_a = Machine { label: "vm-a".into(), target: "me@vm-a".into(), ..Default::default() };
     update(&mut s, Event::Machines(vec![vm_a]));
     update(&mut s, Event::Remote { label: "vm-a".into(), answer: Ok(json!({ "host": "vm-a", "version": "1.0.1", "tasks": [theirs()] })) });
-    update(&mut s, Event::Key(Press::chord("alt+m")));
+    update(&mut s, Event::Key(Press::chord(&name(K::Scope))));
     s.sel = "vm-a:far/1".into();
     relist(&mut s);
     s

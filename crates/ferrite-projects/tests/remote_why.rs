@@ -109,7 +109,8 @@ fn real_programs_herdr_projects_machines_this_machine_as_a_bare_login_shell_then
     let lost = sw::remote::check::here(20000);
     assert_eq!((lost.at("ok"), lost.at("why").s("kind")), (&json!(false), "path"));
     assert!(has(&lost.at("why").arr("detail").iter().map(text).collect::<Vec<_>>().join("\n"), r"(?s)must be on the PATH that a login shell gets.*Test it from another machine: ssh "));
-    assert!(has(&sw::remote::check::say(&json!({ "here": lost, "machines": [], "off": false })), r"(?s)this machine: other machines cannot ask it: herdr-projects is not found there\n.*No other machines\. Add one with"));
+    // Ferrite: machines are saved in Ferrite's Settings, not by `herdr machine add`.
+    assert!(has(&sw::remote::check::say(&json!({ "here": lost, "machines": [], "off": false })), r"(?s)this machine: other machines cannot ask it: herdr-projects is not found there\n.*No other machines\. Add one in Settings"));
     // an older one that is found is found
     fake_shell(&w, "{\"ok\":false,\"msg\":\"Unknown request hello\"}\n", "", 0);
     assert_eq!(sw::remote::check::here(20000).at("ok"), &json!(true));

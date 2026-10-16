@@ -68,6 +68,7 @@ fn what_is_not_the_boards_to_move_stays_a_folder_you_named_another_copys_board_o
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Ferrite: needs util-linux's flock, which macOS does not have")]
 fn real_programs_a_lock_file_that_was_replaced_between_opening_it_and_locking_it_is_not_taken_for_the_lock() {
     let w = world_with(Opts::default());
     let file = sw::store::files::data_dir().join("locks").join(format!("{}.lock", sw::store::files::base64url(b"x")));
@@ -86,6 +87,7 @@ fn real_programs_a_lock_file_that_was_replaced_between_opening_it_and_locking_it
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Ferrite: needs util-linux's flock, which macOS does not have")]
 fn real_programs_the_old_command_runs_at_every_moment_of_a_real_move_and_a_lock_held_through_it_stays_held() {
     let w = world_with(Opts::default());
     let h = old_home(&w.base, None);

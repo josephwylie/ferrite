@@ -51,7 +51,8 @@ fn enter_on_another_machines_agent_has_its_herdr_put_it_in_front_and_never_attac
     assert!(went.is_empty(), "this terminal is not the agent's: {went:?}");
     let asked = reopen_asked(&far);
     assert_eq!((asked.s("action"), asked.s("id"), asked.at("focus")), ("reopen", "far/1", &json!(true)));
-    assert_eq!(b.s.msg, "vm-a: its agent is in front there. Pick vm-a in herdr's sidebar to go to it: “Theirs”; Local there brings you back here.");
+    // Ferrite: a window goes to another machine from its nav, not herdr's sidebar.
+    assert_eq!(b.s.msg, "vm-a: its agent is in front there. Pick vm-a in the nav to go to it: “Theirs”; local there brings you back here.");
     assert!(!b.closed); assert_eq!(b.s.sel, "vm-a:far/1");
     // Its agent had exited and could not be restarted: its bare terminal is what is in front.
     far.answers("vm-a", "do.reopen", &json!({ "ok": true, "msg": "", "pane": "w3:p2", "workspace": "w3", "hasAgent": false, "focused": true }));
@@ -65,12 +66,8 @@ fn enter_on_another_machines_agent_has_its_herdr_put_it_in_front_and_never_attac
     far.answers("vm-a", "do.reopen", &json!({ "ok": true, "msg": "", "pane": "w3:p2", "workspace": "w3", "hasAgent": true }));
     let went = enter(&mut b);
     assert_eq!(went.len(), 1); assert!(went[0].ends_with("herdr agent attach w3:p2"), "{went:?}");
-    // Outside a herdr client (plain SSH) there is no window to put it in front of: the terminal attaches.
-    set_herdr(false);
-    let mut b = board_on_theirs(&w);
-    let went = enter(&mut b);
-    assert_eq!(reopen_asked(&far).at("focus"), &json!(false));
-    assert_eq!(went.len(), 1); assert!(went[0].ends_with("herdr agent attach w3:p2"), "{went:?}");
+    // Ferrite: upstream's case outside a herdr client (plain SSH, the terminal attaches) is not Ferrite's: every agent
+    // runs in a Ferrite window (`herdr::cli::in_herdr`).
 }
 
 #[test]
