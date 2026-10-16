@@ -772,12 +772,12 @@ pub const R_TIGHT: f32 = 0.0;
 /// it is nothing. `CockpitView::cell()` subtracts whichever is live, so the
 /// nav stays part of the semantic-zoom input.
 pub const NAV_WIDTH: f32 = 36.0 * CH;
-/// 32px — the window-chrome band across the top of the window, the
-/// prototype's titlebar (`TITLEBAR_H`). It says nothing (ADR 0014): over
-/// the nav it is the column's own chrome, where the host traffic lights
-/// centre (`TRAFFIC_Y`); over the board the plane the window drags by (on
-/// Windows with the caption buttons, `titlebar::strip`), an overlay that
-/// adds no layout. The Pane board starts under it, at `BOARD_TOP`.
+/// 32px — the window-chrome band, the prototype's titlebar (`TITLEBAR_H`).
+/// It says nothing (ADR 0014): it is the nav column's own top chrome, where
+/// the host traffic lights centre (`TRAFFIC_Y`) and the window drags by.
+/// The board starts at the window's top beside it; the band crosses the
+/// board only on Windows (the caption buttons) and, on macOS, while the
+/// nav is a rail (`titlebar::board_top`).
 pub const WIN_CHROME_H: f32 = TITLEBAR_H;
 /// 32px — the titlebar band, and `STATUS_BAR_H` 24 the bottom bar (one
 /// `ROW` and 4px, closed above by a `LINE`).
@@ -794,11 +794,6 @@ pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
 /// rule restores 10px. Port 10px.)
 pub const GRID_GAP: f32 = ferrite_core::layout::GRID_GAP;
 pub const GRID_PAD: f32 = 10.0;
-/// Where the board starts: under the titlebar band, then the same 10px it
-/// keeps on its other three sides. Flush to the band, a Pane's top-right
-/// corner sits directly beneath the caption buttons, and their hover face
-/// — edge-to-edge by design — reads as lying over the Pane.
-pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
 /// A toast's width: 52 cells (the prototype's `.toast`).
 pub const TOAST_W: f32 = 52.0 * CH;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
@@ -1067,7 +1062,7 @@ pub fn init_components(cx: &mut gpui::App) {
     // holds the rest.
     theme.notification.placement = gpui::Anchor::BottomRight;
     theme.notification.margins = gpui::base::Edges {
-        top: px(BOARD_TOP),
+        top: px(WIN_CHROME_H + GRID_PAD),
         right: px(GRID_PAD),
         bottom: px(TOAST_ABOVE_COMPOSER),
         left: px(SPACE_2),
@@ -1397,8 +1392,9 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // Edit values and append tokens only inside this section.
 //
 // **The board is a terminal multiplexer's** (theme rules 2, 3, 7). The window
-// is three rows: the titlebar band (`WIN_CHROME_H`), the board beside the
-// sidebar, the bottom bar (`STATUS_BAR_H`). Panes sit flush, square and
+// is two rows: the board beside the sidebar, and the bottom bar
+// (`STATUS_BAR_H`); the sidebar keeps the titlebar band (`WIN_CHROME_H`)
+// at its own top. Panes sit flush, square and
 // flat on the reading plane (`paint::PLANE`), split by `BOARD_SEAM` 1px
 // `paint::LINE` seams; there is no gutter and no card. The sidebar owns the
 // one `CHROME_SEAM_W` column between it and the board, and the board's left
@@ -1440,7 +1436,8 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // sparkline.
 //
 // **The window chrome** (ADR 0014). The titlebar band says nothing: it is
-// the traffic lights' row and the window's drag strip. The window's one
+// the nav's top chrome, the traffic lights' row and the window's drag
+// strip; the board runs to the window's top beside it. The window's one
 // bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
 // `paint::LINE` rule: the sidebar toggle and the bell, the session in
 // `ACCENT` at the strong weight, `1 solo` and a tab per Group (the current
@@ -1735,8 +1732,9 @@ pub const USAGE_CARD_BAR_H: f32 = 4.0;
 pub const USAGE_TIGHT: f32 = 0.80;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
-/// its state and two quiet actions.
-pub const SESSION_CARD_W: f32 = 320.0;
+/// its state and two quiet actions (`needs sign-in`, `Sign in`,
+/// `Reconnect`): 52 cells.
+pub const SESSION_CARD_W: f32 = 52.0 * CH;
 /// The changed-files card: wide enough for a file name, a short directory
 /// and its `+N −N` on one menu row.
 pub const CHANGED_FILES_CARD_W: f32 = 360.0;
@@ -2138,8 +2136,9 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // the rail (`NAV_FOLDED_W`) over `motion::RESIZE` (200ms) while its
 // content fades independently (`MOTION_NAV_FADE_MS`, CSS `ease`: 1 → 0
 // folding, 0 → 1 opening). The titlebar band over it says nothing, so it
-// has nothing to keep: folded, the traffic lights overhang the rail onto
-// the plane.
+// has nothing to keep: folded, the traffic lights overhang the rail, and
+// on macOS the band crosses the board so they overhang the plane rather
+// than the top Pane (`titlebar::board_top`).
 
 /// 20px — one nav line, the pitch of every item in the column: a Thread, a
 /// Group, a member, a Project heading, the section headers.

@@ -22,24 +22,24 @@ logo. Herdr, the calmer reference, has no top toolbar and one status line.
 
 ## Decision
 
-- **The titlebar band says nothing.** It stays `WIN_CHROME_H` tall: on macOS
-  the host traffic lights sit in it and AppKit moves the window on any
-  press-and-drag inside it; on Windows it is the drag region and the
-  caption buttons. It draws no location, no doors and no cell of its own
-  over the nav: the nav's chrome runs from the window's top, and folded,
-  the lights sit on the plane. On Windows the drag region spans the band's
-  full width, over the nav as well as the board. Solo still has no head;
-  the nav's selected row names the Thread.
-  Removing the band outright was rejected. On macOS a click still reaches
-  content in the band (the old `⌘K` door, toggle and bell were clicked
-  there), but a drag does not: it moves the window. A Pane head is dragged
-  to rearrange the board and a transcript is dragged to select text, so
-  neither can live under it. gpui's `app_owns_titlebar_drag` would hand the
-  drag back, but then the lights (and on Windows the caption buttons) would
-  sit over the top row's Pane heads or Solo's transcript, and the window
-  would still need a surface of its own to drag by. So the band keeps its
-  height and gives up only its content; the vertical space does not come
-  back.
+- **The titlebar band says nothing, and lives in the nav.** It is
+  `WIN_CHROME_H` tall at the top of the nav column: the host traffic lights
+  sit in it on macOS, and the window drags by it. It draws no location, no
+  doors and no cell of its own. The board beside it starts at the window's
+  top, so Pane heads (and Solo's transcript) take the band's height back.
+  Solo still has no head; the nav's selected row names the Thread.
+  On macOS the window sets gpui's `app_owns_titlebar_drag`: otherwise
+  AppKit moves the window from any press-and-drag in the titlebar's
+  height, and a Pane head is dragged to rearrange the board, a transcript
+  to select text. The nav's top chrome starts the window drag itself
+  (`start_window_move`; a double-click takes the system's titlebar action).
+  Two places keep the band across the board: on Windows, which has no
+  lights but needs its caption buttons at the window's top-right and a drag
+  region the whole width; and on macOS while the nav is folded to its rail,
+  narrower than the lights, so they overhang the plane rather than the top
+  Pane's head.
+  (This revises the first version of this decision, which kept the band's
+  height across the whole window because AppKit owned the drag.)
 - **One bar per window: the bottom bar.** Left to right: the sidebar toggle,
   the bell (its list now opens upward) and, off macOS, the Settings gear;
   `ferrite`; the view tabs; the **focused Pane's status line**; the stretch;
@@ -80,6 +80,9 @@ logo. Herdr, the calmer reference, has no top toolbar and one status line.
 - No chrome shows the focused Thread's working clock any more, so the frame
   stops riding it (ADR 0012's clock riders): the frame wakes for the bar's
   minute and the bell's ages only.
+- With the nav open on macOS the window drags only by the nav's top
+  chrome (and, folded, by the band across the board), not by the board's
+  top edge.
 - `nav::chrome_band`, the folded titlebar cell and its cross-fade, the
   titlebar's `Location`/`Title` and the `⌘K` door are gone, with their
   tokens.

@@ -1,13 +1,14 @@
 //! The window's own titlebar, on the platforms that make an app draw one.
 //!
-//! macOS is given its titlebar: `appears_transparent` hides the face, the
-//! traffic lights stay AppKit's, and the band above the board is already a
-//! drag strip the system owns. Windows gives nothing — a window either
-//! wears the whole system titlebar or draws every part of one itself. It
-//! wore the system's, which put a second bar above the app's own band and
-//! left room for lights that are not there. Ferrite draws the titlebar
-//! instead: one empty band the window drags by, and the caption buttons at
-//! the window's top-right corner where Windows puts them.
+//! macOS keeps the host's traffic lights, but the app owns the drag
+//! (`app_owns_titlebar_drag`): AppKit would otherwise move the window from
+//! any press in the titlebar's height, and Pane heads, which are dragged to
+//! rearrange the board, start at the window's top. The window drags by the
+//! nav's empty chrome above its first row, where the lights sit
+//! (`mac_drag_region`). Windows gives nothing — a window either wears the
+//! whole system titlebar or draws every part of one itself. Ferrite draws
+//! the titlebar there: one empty band the window drags by, and the caption
+//! buttons at the window's top-right corner where Windows puts them.
 //!
 //! gpui does the platform half. A div tagged `window_control_area(..)`
 //! answers `WM_NCHITTEST` with the matching non-client code, so **Windows**
@@ -53,23 +54,45 @@ pub const DEV: bool = option_env!("FERRITE_RELEASE").is_none();
 /// hiding it there would take the traffic lights with it.
 pub const CUSTOM: bool = cfg!(target_os = "windows");
 
-/// The band above the Pane board, as an overlay: the board's geometry
-/// already reserves `WIN_CHROME_H` at the top (`board_bounds`) and the nav
-/// leaves its top `WIN_CHROME_H` empty (`nav::content`), so this adds no
-/// layout — it claims what the window already left empty.
+/// Whether the titlebar band runs across the board too, holding it down by
+/// `WIN_CHROME_H` (ADR 0014): on Windows, for the caption buttons, and on
+/// macOS while the nav is a rail, when the traffic lights would overhang
+/// the top Pane. Otherwise the band is the nav's own top chrome and the
+/// board starts at the window's top.
+pub fn band_over_board(nav_railed: bool) -> bool {
+    CUSTOM || (cfg!(target_os = "macos") && nav_railed)
+}
+
+/// Where the Pane board starts: under the band, or at the window's top.
+pub fn board_top(nav_railed: bool) -> f32 {
+    if band_over_board(nav_railed) {
+        WIN_CHROME_H
+    } else {
+        0.0
+    }
+}
+
+/// The titlebar band, as an overlay: the nav leaves its top `WIN_CHROME_H`
+/// empty (`nav::content`) and the board starts at `board_top`, so this adds
+/// no layout — it claims what the window already left empty. Over the nav
+/// alone it ends at `board_left`; across the board it paints the reading
+/// plane (`paint::PLANE`) from there.
 ///
 /// The band says nothing (ADR 0014): it is the window's titlebar and no
-/// more — on macOS the empty strip AppKit drags by, on Windows a drag
-/// region across the window's full width and the caption buttons. It
-/// paints the reading plane (`paint::PLANE`, the same glass as the board
-/// under it) from `board_left`; left of that the nav's own chrome shows.
+/// more — the strip the window drags by and, on Windows, the caption
+/// buttons.
 ///
 /// `draggable` is false while a menu, popover or the settings panel is
-/// open. Such an overlay can reach into the band, and Windows would route
-/// the press to the frame instead of to the row under the pointer.
-pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
-    let stretch = if CUSTOM && draggable {
+/// open. Such an overlay can reach into the band, and the drag would take
+/// the press meant for the row under the pointer.
+pub fn strip(board_left: f32, nav_railed: bool, draggable: bool, maximized: bool) -> Div {
+    let over_board = band_over_board(nav_railed);
+    let stretch = if !draggable {
+        div().flex_1().h_full()
+    } else if CUSTOM {
         drag_region(maximized)
+    } else if cfg!(target_os = "macos") {
+        mac_drag_region()
     } else {
         div().flex_1().h_full()
     };
@@ -77,22 +100,49 @@ pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
         .absolute()
         .top_0()
         .left_0()
-        .right_0()
+        .map(|band| {
+            if over_board {
+                band.right_0()
+            } else {
+                band.w(px(board_left))
+            }
+        })
         .h(px(WIN_CHROME_H))
         .flex()
         .flex_row()
-        .child(
-            div()
-                .debug_selector(|| "titlebar-plane".into())
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(board_left))
-                .right_0()
-                .bg(paint::PLANE),
-        )
+        .when(over_board, |band| {
+            band.child(
+                div()
+                    .debug_selector(|| "titlebar-plane".into())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(board_left))
+                    .right_0()
+                    .bg(paint::PLANE),
+            )
+        })
         .child(stretch)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
+}
+
+/// The empty stretch macOS drags the window by: a press starts AppKit's
+/// window drag, a double-click takes the system's titlebar action (zoom or
+/// minimise). The traffic lights are AppKit's own buttons over it.
+fn mac_drag_region() -> Div {
+    div()
+        .debug_selector(|| "titlebar-drag".into())
+        .flex_1()
+        .h_full()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |event, window, cx| {
+            gpui::base::GlobalState::suppress_text_selection(cx);
+            if event.click_count == 2 {
+                window.titlebar_double_click();
+            } else {
+                window.start_window_move();
+            }
+        })
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -435,17 +485,36 @@ mod tests {
         );
     }
 
-    /// The strip claims the band the board already leaves empty — it must
+    /// The strip claims the band the window already leaves empty — it must
     /// take no layout of its own, or every Pane would move down by
     /// `WIN_CHROME_H`.
     #[gpui::test]
-    fn the_strip_is_an_overlay_of_the_band_the_board_reserves(cx: &mut gpui::TestAppContext) {
+    fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
-            let mut strip = strip(crate::nav::WIDTH, true, false);
+            let mut strip = strip(crate::nav::WIDTH, false, true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });
+    }
+
+    /// The board starts at the window's top unless the band must run over
+    /// it: always on Windows (the caption buttons), and on macOS only while
+    /// the nav is a rail the traffic lights overhang.
+    #[test]
+    fn the_board_starts_at_the_top_unless_the_band_crosses_it() {
+        let expected = |railed: bool| {
+            if CUSTOM || (cfg!(target_os = "macos") && railed) {
+                WIN_CHROME_H
+            } else {
+                0.0
+            }
+        };
+        assert_eq!(board_top(false), expected(false));
+        assert_eq!(board_top(true), expected(true));
+        if cfg!(target_os = "macos") {
+            assert_eq!((board_top(false), board_top(true)), (0.0, WIN_CHROME_H));
+        }
     }
 
     /// F-9: a usage segment reads the provider's more used window, the 5h

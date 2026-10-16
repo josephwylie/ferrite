@@ -2773,14 +2773,12 @@ impl CockpitView {
     }
 
     /// The board the Panes lay out in, in window coordinates (theme WP-C):
-    /// flush right of the sidebar and its 1px seam, under the titlebar band
-    /// and over the bottom bar, with no gutter of its own. It starts under
-    /// the band (`WIN_CHROME_H`): with a transparent macOS titlebar AppKit
-    /// still drags the window from that strip, and a Pane head drawn inside
-    /// it could not be dragged onto another Pane — the window moved instead.
+    /// flush right of the sidebar and its 1px seam, from the window's top
+    /// (or under the titlebar band where it crosses the board,
+    /// `titlebar::board_top`) to the bottom bar, with no gutter of its own.
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         let viewport = window.viewport_size();
-        let top = crate::theme::WIN_CHROME_H;
+        let top = crate::titlebar::board_top(self.nav_railed());
         let left = self.board_left();
         let bounds = layout::Rect {
             x: left,
@@ -10025,16 +10023,11 @@ impl CockpitView {
             window.focus(&wanted, cx);
         }
 
-        // The board sits flush under the titlebar band (theme WP-C): the
-        // band stays the window's own drag strip, and nothing pads the
-        // board on its other sides.
-        let frame = || {
-            div()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .pt(px(crate::theme::WIN_CHROME_H))
-        };
+        // The board starts at the window's top, or flush under the
+        // titlebar band where it crosses the board (`titlebar::board_top`);
+        // nothing pads it on its other sides.
+        let board_top = crate::titlebar::board_top(self.nav_railed());
+        let frame = || div().flex_1().min_w_0().min_h_0().pt(px(board_top));
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
         if self.empty_board_shown()
@@ -10346,6 +10339,7 @@ impl CockpitView {
             // the drag region stands down while one is open.
             .child(crate::titlebar::strip(
                 self.board_left(),
+                self.nav_railed(),
                 !self.overlay_open(),
                 self.maximized,
             ))

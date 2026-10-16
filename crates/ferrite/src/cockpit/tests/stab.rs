@@ -796,25 +796,48 @@ fn the_empty_board_titlebar_says_nothing(cx: &mut TestAppContext) {
     );
 }
 
-/// The band paints the plane from the board's own left edge, not a seam
-/// past it; where the app draws its own titlebar the window drags by the
-/// band's full width, over the nav as well as the board (ADR 0014).
+/// The band is the nav's top chrome (ADR 0014): the board starts at the
+/// window's top beside it and, on macOS, the window drags by the nav's top.
+/// Where the band crosses the board — always on Windows, and on macOS while
+/// the nav is a rail the traffic lights overhang — the board starts under
+/// it and the band paints the plane from the board's own left edge.
 #[gpui::test]
-fn the_titlebar_band_spans_the_window(cx: &mut TestAppContext) {
+fn the_titlebar_band_is_the_navs_top(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("titlebar-band", 1);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
-    let plane = cx.debug_bounds("titlebar-plane").expect("the band's plane");
-    let board = cx.debug_bounds("board").expect("the board");
-    assert_eq!(plane.left(), board.left());
-    let drag = cx.debug_bounds("titlebar-drag");
-    if crate::titlebar::CUSTOM {
-        let drag = drag.expect("the drag region");
-        assert_eq!(drag.left(), px(0.), "the band over the nav drags too");
-    } else {
-        assert!(drag.is_none(), "macOS: AppKit owns the drag");
-    }
+    let check = |cx: &mut gpui::VisualTestContext, crosses: bool| {
+        let board = view.read_with(cx, |view, _| view.board.get());
+        let plane = cx.debug_bounds("titlebar-plane");
+        if crosses {
+            assert_eq!(
+                board.y,
+                crate::theme::WIN_CHROME_H,
+                "the board starts under the band"
+            );
+            let plane = plane.expect("the band's plane");
+            assert!(
+                (plane.left() - px(board.x)).abs() < px(1.),
+                "{plane:?} / {board:?}"
+            );
+        } else {
+            assert_eq!(board.y, 0.0, "the board starts at the window's top");
+            assert!(plane.is_none(), "the band ends at the nav");
+        }
+        if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
+            let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
+            assert_eq!(drag.left(), px(0.), "the band over the nav drags");
+            if !crosses {
+                // gpui snaps the edge to a device pixel.
+                assert!(drag.right() <= px(board.x + 1.), "no drag over the board");
+            }
+        }
+    };
+    check(cx, crate::titlebar::CUSTOM);
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    tick(cx);
+    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
 }
 
 /// The checks card grows to its own tally: the counts line is never cut

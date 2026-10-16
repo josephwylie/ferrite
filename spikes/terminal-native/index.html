@@ -59,17 +59,18 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .shot #stage{top:0}
 
 /* ------------------------------------------------------------------ window */
-.win{width:1440px;height:900px;background:var(--bg);display:grid;grid-template-rows:32px minmax(0,1fr) calc(var(--lh) + 4px);
+.win{width:1440px;height:900px;background:var(--bg);display:grid;grid-template-rows:var(--tbh) minmax(0,1fr) calc(var(--lh) + 4px);
   position:relative;overflow:hidden;border-radius:10px;box-shadow:0 0 0 1px var(--frame),0 30px 80px rgba(0,0,0,.6)}
 .shot .win{border-radius:0;box-shadow:none}
-.win{--navw:36ch;--tbw:36ch}
-.win.collapsed{--navw:0px;--tbw:0px}
-/* the titlebar says nothing (ADR 0014): the lights' row and the drag strip */
-.tb{position:relative;display:grid;grid-template-columns:var(--tbw) 1px minmax(0,1fr);align-items:stretch;background:var(--bg);white-space:pre;transition:grid-template-columns .2s ease}
-.dark .tb{border-bottom:1px solid var(--line)}
+.win{--navw:36ch;--tbw:36ch;--tbh:0px}
+.win.collapsed{--navw:0px;--tbw:0px;--tbh:32px}
+/* the titlebar says nothing (ADR 0014): the lights' row and the drag strip,
+   the nav's own top; it crosses the board only while the nav is folded */
+.tb{position:relative;overflow:hidden;display:grid;grid-template-columns:var(--tbw) 1px minmax(0,1fr);align-items:stretch;background:var(--bg);white-space:pre;transition:grid-template-columns .2s ease}
+.dark .collapsed .tb{border-bottom:1px solid var(--line)}
 .tbl{background:var(--nav);min-width:0}
 .collapsed .tb .vline,.collapsed .main > .vline{background:var(--bg)}
-.lights{position:absolute;left:14px;top:0;bottom:0;display:flex;gap:8px;align-items:center}
+.lights{position:absolute;left:14px;top:0;height:32px;z-index:1;display:flex;gap:8px;align-items:center}
 .ib{flex:none;width:28px;height:24px;display:grid;place-items:center;color:var(--dim);position:relative;transition:background .1s,color .1s}
 .ib:hover,.ib.on{background:var(--hover);color:var(--fg)}
 .ib svg{width:15px;height:15px}
@@ -81,7 +82,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .main{display:grid;grid-template-columns:var(--navw) 1px minmax(0,1fr);min-height:0;transition:grid-template-columns .2s ease}
 
 /* --------------------------------------------------------------------- nav */
-.nav{background:var(--nav);overflow:hidden;padding:calc(var(--lh)/2) 0;display:flex;flex-direction:column;min-height:0;min-width:0}
+.nav{background:var(--nav);overflow:hidden;padding:calc(32px + var(--lh)/2) 0 calc(var(--lh)/2);display:flex;flex-direction:column;min-height:0;min-width:0}
 .nav > *{min-width:36ch;transition:opacity .15s ease}
 .collapsed .nav > *{opacity:0}
 #notes{width:76ch;left:8px;bottom:calc(var(--lh) + 8px)}
@@ -445,8 +446,8 @@ table.t .num{text-align:right}
     <div class="tbl"></div>
     <div class="vline"></div>
     <div></div>
-    <div class="lights"><i></i><i></i><i></i></div>
   </div>
+  <div class="lights"><i></i><i></i><i></i></div>
 
   <div class="main">
     <!-- ========================================================== nav -->

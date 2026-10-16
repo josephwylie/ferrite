@@ -390,9 +390,9 @@ fn main() {
                 .open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
-                        // The titlebar band blends into the app: the strip is
-                        // the visible titlebar, and on macOS the traffic
-                        // lights sit in its band (#22 D24). Windows has no
+                        // The titlebar blends into the app: on macOS the
+                        // traffic lights sit in the nav's top chrome (#22
+                        // D24). Windows has no
                         // lights to keep, so hiding its titlebar hides the
                         // caption buttons too — `titlebar.rs` draws them back
                         // into the same band, which is the whole point: one
@@ -405,6 +405,11 @@ fn main() {
                                 px(theme::TRAFFIC_Y),
                             )),
                         }),
+                        // The board starts at the window's top, where a
+                        // Pane head is dragged to rearrange it: AppKit must
+                        // not move the window from there. The nav's top
+                        // chrome drags it instead (`titlebar::strip`).
+                        app_owns_titlebar_drag: cfg!(target_os = "macos"),
                         // Below this the title, the add control and the
                         // caption group collide, and no Pane reaches L2.
                         window_min_size: Some(size(
