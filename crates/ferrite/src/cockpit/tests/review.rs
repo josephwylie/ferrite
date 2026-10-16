@@ -40,6 +40,50 @@ fn edited(name: &str) -> (Cockpit, Fake, std::path::PathBuf) {
     (core, fake, repo)
 }
 
+/// The Thread's turn that made the checkout's edit: "Tidy the nav", then
+/// an `Edit` of `src/nav.rs` the files-changed card lists, then its end.
+fn tidied(core: &mut Cockpit, fake: &Fake, repo: &std::path::Path) {
+    let thread = core.threads()[0];
+    core.send(thread, "Tidy the nav".into());
+    let path = repo.join("src/nav.rs").display().to_string();
+    let stream = fake.streams.borrow()[0].clone();
+    for event in [
+        SessionEvent::ToolStarted {
+            id: "edit-1".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": path }),
+        },
+        SessionEvent::ToolCompleted {
+            id: "edit-1".into(),
+            output: String::new(),
+            is_error: false,
+            result: ferrite_core::ToolResult::FileEdit {
+                path,
+                hunks: vec![ferrite_core::Hunk {
+                    old_start: 1,
+                    old_lines: 3,
+                    new_start: 1,
+                    new_lines: 3,
+                    lines: vec![
+                        " fn row() {".into(),
+                        "-    let wide = 1;".into(),
+                        "+    let wide = 2;".into(),
+                        " }".into(),
+                    ],
+                    section: None,
+                }],
+            },
+        },
+        SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        },
+    ] {
+        stream.send(event).unwrap();
+    }
+    core.pump();
+}
+
 /// Pump until `done`: a review reads its checkout off the UI thread.
 fn until(
     cx: &mut gpui::VisualTestContext,
@@ -176,10 +220,8 @@ fn the_mouse_picks_comments_and_switches_scope(cx: &mut TestAppContext) {
 /// once with the next send.
 #[gpui::test]
 fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
-    let (mut core, fake, _repo) = edited("review-history");
-    let thread = core.threads()[0];
-    core.send(thread, "Tidy the nav".into());
-    core.pump();
+    let (mut core, fake, repo) = edited("review-history");
+    tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -227,7 +269,8 @@ fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
 /// `review` opens the Review; the shelf chip's × drops every comment.
 #[gpui::test]
 fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
-    let (core, _fake, _repo) = edited("review-range");
+    let (mut core, fake, repo) = edited("review-range");
+    tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
