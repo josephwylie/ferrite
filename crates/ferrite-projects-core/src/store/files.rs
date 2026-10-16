@@ -50,7 +50,14 @@ pub fn artifacts_dir(id: &str) -> PathBuf { dir_of(id).join("artifacts") }
 pub fn bin() -> PathBuf {
     use std::os::unix::ffi::OsStrExt;
     let Ok(p) = std::env::current_exe() else { return PathBuf::from("herdr-projects") };
-    match p.as_os_str().as_bytes().strip_suffix(b" (deleted)") { Some(b) => PathBuf::from(std::ffi::OsStr::from_bytes(b)), None => p }
+    shipped(match p.as_os_str().as_bytes().strip_suffix(b" (deleted)") { Some(b) => PathBuf::from(std::ffi::OsStr::from_bytes(b)), None => p }) // Ferrite
+}
+/// Ferrite: inside Ferrite's app (the board in its window, its Server), this program is the `ferrite-projects` shipped
+/// beside the app's `ferrite`, its links resolved: what agents and hooks run. `FERRITE_PROJECTS_BIN` names another.
+fn shipped(exe: PathBuf) -> PathBuf {
+    if let Some(given) = env("FERRITE_PROJECTS_BIN") { return PathBuf::from(given); }
+    if exe.file_name().is_none_or(|n| n != "ferrite") { return exe; }
+    fs::canonicalize(&exe).unwrap_or(exe).with_file_name("ferrite-projects")
 }
 pub fn absolute(p: &Path) -> PathBuf { if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir().map(|d| d.join(p)).unwrap_or_else(|_| p.to_path_buf()) } }
 

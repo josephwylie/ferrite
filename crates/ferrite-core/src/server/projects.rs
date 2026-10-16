@@ -1,10 +1,10 @@
-//! Projects at Server start (ADR 0030), in place of Herdr's plugin
-//! `[[startup]]` hook: the one-time migration of ADR 0028's
-//! `coordinators.json`, then the Projects ticker. Both are the shipped
-//! `ferrite-projects`, run off the pump's thread; a failure is logged and
-//! never holds the Server up. `ticker start` itself does nothing when the
-//! Projects root has no project. The migration's notes are for the user:
-//! besides the log, they are a toast once a window is there to show it.
+//! Projects at Server start (ADR 0031): herdr-projects 1.0's take-over of
+//! older installs (the 0.2 Projects set aside, its hooks and skill links
+//! taken out), before the keeper starts. It is the shipped
+//! `ferrite-projects take-over`, run off the pump's thread; a failure is
+//! logged and never holds the Server up. The program says what it did once,
+//! and nothing when there was nothing to take over; what it says is for the
+//! user: besides the log, a toast once a window is there to show it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -14,10 +14,7 @@ use std::time::Duration;
 use crate::api::schema::{Method, NotificationShowParams};
 use crate::api::Request;
 
-/// What ADR 0028's coordinators were kept in, beside the Store.
-const COORDINATORS: &str = "coordinators.json";
-
-/// How often, and how many times, the migration's notes look for a window:
+/// How often, and how many times, the take-over's notes look for a window:
 /// the Server starts before its first window says hello.
 const TELL_EVERY: Duration = Duration::from_secs(2);
 const TELL_TRIES: u32 = 150;
@@ -62,20 +59,7 @@ fn binary(given: Option<OsString>, exe: &Path) -> PathBuf {
 }
 
 fn startup(binary: &Path, store: &Path, env: &[(&str, OsString)]) {
-    let coordinators = store.join(COORDINATORS);
-    let notes = if coordinators.exists() {
-        run(
-            binary,
-            env,
-            &[
-                "migrate-ferrite-coordinators".as_ref(),
-                coordinators.as_os_str(),
-            ],
-        )
-    } else {
-        Vec::new()
-    };
-    run(binary, env, &["ticker".as_ref(), "start".as_ref()]);
+    let notes = run(binary, env, &["take-over".as_ref()]);
     let socket = crate::api::address(store);
     tell(&notes, |body| toast(&socket, body), TELL_EVERY, TELL_TRIES);
 }
@@ -92,7 +76,7 @@ fn tell(notes: &[String], mut show: impl FnMut(&str) -> bool, every: Duration, t
         }
         std::thread::sleep(every);
     }
-    crate::log!("server: Projects: no window showed the migration's notes");
+    crate::log!("server: Projects: no window showed the take-over's notes");
 }
 
 /// A toast in every window through the Server's own API; true when a
@@ -101,7 +85,7 @@ fn toast(socket: &Path, body: &str) -> bool {
     let request = Request {
         id: "projects".into(),
         method: Method::NotificationShow(NotificationShowParams {
-            title: "Ferrite's coordinators are now projects".into(),
+            title: "Projects took over the older version".into(),
             body: Some(body.into()),
             sound: crate::protocol::WireSound::None,
             important: false,
@@ -129,7 +113,7 @@ fn run(binary: &Path, env: &[(&str, OsString)], args: &[&OsStr]) -> Vec<String> 
     let said = args.join(OsStr::new(" "));
     let said = said.to_string_lossy();
     match output {
-        // What it says on success is for the user: the migration's notes.
+        // What it says on success is for the user: the take-over's notes.
         Ok(output) if output.status.success() => {
             let notes: Vec<String> = String::from_utf8_lossy(&output.stdout)
                 .lines()
@@ -195,8 +179,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn coordinators_are_migrated_before_the_ticker_starts() {
-        let dir = scratch("order");
+    fn the_take_over_runs_with_what_reaches_this_server() {
+        let dir = scratch("take-over");
         let (script, calls) = recorder(&dir, 0);
         let env = [
             ("FERRITE_BIN", "/f".into()),
@@ -205,20 +189,7 @@ mod tests {
         startup(&script, &dir, &env);
         assert_eq!(
             std::fs::read_to_string(&calls).unwrap(),
-            "ticker start | /f /s none\n",
-            "nothing to migrate"
-        );
-
-        std::fs::remove_file(&calls).unwrap();
-        let coordinators = dir.join(COORDINATORS);
-        std::fs::write(&coordinators, "{}").unwrap();
-        startup(&script, &dir, &env);
-        assert_eq!(
-            std::fs::read_to_string(&calls).unwrap(),
-            format!(
-                "migrate-ferrite-coordinators {} | /f /s none\nticker start | /f /s none\n",
-                coordinators.display()
-            )
+            "take-over | /f /s none\n"
         );
     }
 
@@ -226,8 +197,8 @@ mod tests {
     fn the_notes_are_one_toast_once_a_window_shows_it() {
         let mut asked = Vec::new();
         let notes = [
-            "migrated to `app`".to_string(),
-            "  worker Thread 3: not migrated".to_string(),
+            "The old herdr-projects (0.2) was set aside.".to_string(),
+            "Taken out of the old herdr-projects: its hooks.".to_string(),
         ];
         tell(
             &notes,
@@ -260,14 +231,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_failing_migration_still_starts_the_ticker() {
+    fn a_failing_take_over_is_logged_not_shown() {
         let dir = scratch("failing");
-        let (script, calls) = recorder(&dir, 1);
-        std::fs::write(dir.join(COORDINATORS), "{}").unwrap();
-        startup(&script, &dir, &[]);
-        let calls = std::fs::read_to_string(&calls).unwrap();
-        assert_eq!(calls.lines().count(), 2, "{calls}");
-        assert!(calls.lines().last().unwrap().starts_with("ticker start"));
+        let (script, _) = recorder(&dir, 1);
+        assert!(run(&script, &[], &["take-over".as_ref()]).is_empty());
         // A binary that is not there is logged, not a panic.
         startup(&dir.join("missing"), &dir, &[]);
     }

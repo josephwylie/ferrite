@@ -3700,6 +3700,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "herdr-projects"
+version = "1.0.1"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "fancy-regex 0.14.0",
+ "libc",
+ "ratatui",
+ "regex",
+ "serde_json",
+ "sw-board",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
