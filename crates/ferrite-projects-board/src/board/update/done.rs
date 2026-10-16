@@ -34,7 +34,7 @@ pub fn apply(s: &mut State, d: Done, fx: &mut Vec<Effect>) {
                 fx.push(Effect::Save);
                 let title = s.items.iter().find(|r| r.s("id") == id).map(|r| crate::shown::words::clean(if r.b("title") { r.s("title") } else { r.s("rid") })).unwrap_or_else(|| id.clone());
                 let what = if agent { "its agent" } else { "its terminal (its agent has exited)" };
-                s.flash(format!("{host}: {what} is in front there. Pick {host} in herdr's sidebar to go to it: “{title}”; Local there brings you back here."), Ink::Green);
+                s.flash(format!("{host}: {what} is in front there. Pick {host} in the nav to go to it: “{title}”; local there brings you back here."), Ink::Green); // Ferrite: a window goes to another machine from its nav, not herdr's sidebar.
             }
             Then::Attach { command, args, .. } => fx.push(Effect::Attach { command, args }),
             Then::Paste(text) => { s.paste_text = [s.paste_text.clone(), text].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n\n"); }

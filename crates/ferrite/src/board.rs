@@ -5,7 +5,10 @@
 //! `keys` says a keystroke as the board names keys; `render` draws the
 //! lines `view::screen` lays out on Ferrite's cell grid, an ink per named
 //! ink. The view (`board/view/`) stays the authority on what each part
-//! says and what gives way when room is short.
+//! says and what gives way when room is short. `mouse` turns GPUI's mouse
+//! into the board's wheel and clicks and copies what a drag selects;
+//! `links` opens the addresses the view marks; `machines` says when other
+//! machines are asked for their tasks.
 //!
 //! Where it shows is `board.open`: `tab`, the board in the board's place,
 //! kept while you are on a Thread; `popup`, a sheet over the board (90% of
@@ -16,6 +19,11 @@
 #[cfg(any(test, feature = "visual-reference"))]
 pub(crate) mod fixture;
 mod keys;
+mod links;
+mod machines;
+mod mouse;
+#[cfg(test)]
+mod panels_tests;
 pub(crate) mod render;
 mod runtime;
 #[cfg(test)]

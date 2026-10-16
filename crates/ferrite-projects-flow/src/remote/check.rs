@@ -60,6 +60,6 @@ pub fn say(r: &Value) -> String {
         out.join("\n")
     };
     let mut all: Vec<String> = rows.iter().map(|x| one(x)).collect();
-    if r.arr("machines").is_empty() { all.push(if r.b("off") { "Other machines are off (unset board.machines turns them on).".into() } else { "No other machines. Add one with: herdr machine add <name> <ssh target>  (or name them in the board.machines setting).".into() }); }
+    if r.arr("machines").is_empty() { all.push(if r.b("off") { "Other machines are off (unset board.machines turns them on).".into() } else { "No other machines. Add one in Settings, under Machines  (or name them in the board.machines setting).".into() }); } // Ferrite: machines are saved in Ferrite's Settings, not by `herdr machine add`.
     all.join("\n")
 }

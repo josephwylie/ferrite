@@ -104,7 +104,7 @@ pub fn checked(me: Option<&str>, refs: &[String]) -> Res<Vec<String>> {
     let mut answers: HashMap<String, Value> = HashMap::new();
     let mut by: Vec<(Machine, Vec<(String, String)>)> = vec![];
     for (r, p, rest) in &far_refs {
-        let Some(m) = ms.iter().find(|m| m.label.eq_ignore_ascii_case(p)) else { crate::fail!("{r}: {p} is not a machine the board knows (herdr machine list, or the board.machines setting): it cannot be waited for. Nothing was changed.") };
+        let Some(m) = ms.iter().find(|m| m.label.eq_ignore_ascii_case(p)) else { crate::fail!("{r}: {p} is not a machine the board knows (ferrite machine list, or the board.machines setting): it cannot be waited for. Nothing was changed.") }; // Ferrite: herdr's machine list is Ferrite's.
         match by.iter_mut().find(|(x, _)| x.label == m.label) { Some((_, v)) => v.push((r.clone(), rest.clone())), None => by.push((m.clone(), vec![(r.clone(), rest.clone())])) }
     }
     for (m, named) in &by {
