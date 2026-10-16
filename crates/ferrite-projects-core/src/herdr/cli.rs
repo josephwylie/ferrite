@@ -27,7 +27,10 @@ pub fn fake() -> Option<Rc<dyn Fake>> { FAKE.with(|x| x.borrow().clone()) }
 
 pub fn bin() -> String { std::env::var("HERDR_BIN_PATH").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "herdr".into()) }
 /// The session a plain command talks to: the pane it runs in, else the default session.
-pub fn current_socket() -> String { super::ferrite::socket() } // Ferrite: one Server per computer, at its API socket
+pub fn current_socket() -> String {
+    if let Ok(s) = std::env::var("HERDR_SOCKET_PATH") { if !s.is_empty() { return s; } }
+    super::ferrite::socket() // Ferrite: one Server per computer, at its API socket, which the Server hands everything it starts as herdr's
+}
 pub fn session_name(socket: &str) -> String {
     let parts: Vec<&str> = socket.split('/').collect();
     let n = parts.len();

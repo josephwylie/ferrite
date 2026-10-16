@@ -183,7 +183,7 @@ How each herdr call is answered:
 | `machine list --json` | `machine.list`, in its order, each `session` `default`, `enabled` |
 | `pane move` (a coordinator from before it had a tab) | refused: no Ferrite install has that layout |
 | `plugin list`, `config-dir`, `disable` | refused: the web UI and herdr-superwork, neither of which Ferrite has (`webui/find.rs` finds no web UI, `take_over`'s `old_plugin_off` is false) |
-| `plugin pane open`, `pane layout`, `pane zoom`, `terminal session control`, `popup.close`, `tab.get`, `events.subscribe` | refused: the board's terminal runtime, replaced by Seam 3. `socket::on_tab_shown` asks the seam for its subscription by a `Ferrite:` line and, refused, connects nowhere (upstream's popup test in `board_stay_keys.rs` is ignored) |
+| `plugin pane open`, `pane layout`, `pane zoom`, `terminal session control`, `popup.close`, `tab.get`, `events.subscribe` | refused: the board's terminal runtime, replaced by Seam 3. `socket::on_tab_shown` asks the seam for its subscription by a `Ferrite:` line and, refused, connects nowhere (upstream's popup test in `board_stay_keys.rs`, which would wait on herdr's answer for ever, is ignored; sw-board's `tests/ferrite_tab_watch.rs` holds the watch to asking nothing and closing nothing) |
 | `--default-config`, `config check`, `server reload-config` | refused: herdr's first-run setup |
 
 herdr's error codes come back as herdr gives them: no open Thread is

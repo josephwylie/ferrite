@@ -14,4 +14,4 @@ Ferrite does not draw what only a terminal board has: the first-run setup
 OSC 7501 records, attaching the terminal to an agent, the web UI's offer
 and loading a new binary in place; nor herdr's dots, an input method's
 composition, `Ctx::own_key` or the keeper's start (ADR 0031, Seam 3).
-Ferrite's own test of the crate is `tests/ferrite_open_agent.rs`.
+Ferrite's own tests of the crate are `tests/ferrite_*.rs`.
