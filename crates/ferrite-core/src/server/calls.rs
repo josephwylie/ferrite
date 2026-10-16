@@ -147,8 +147,12 @@ impl Server {
                 .and_then(|project| self.project_result(project)),
             Method::ProjectOpen(params) => self.open_project(params),
             Method::ProjectFocus(params) => self.project(&params.project).and_then(|project| {
-                self.focus_project(project);
-                self.project_result(project)
+                let landed = self.focus_project(project);
+                let mut answer = self.project_result(project)?;
+                if let Some(thread) = landed {
+                    answer["thread"] = json!(thread);
+                }
+                Ok(answer)
             }),
             Method::ProjectRename(params) => self.project(&params.project).and_then(|project| {
                 self.execute(Op::Project {

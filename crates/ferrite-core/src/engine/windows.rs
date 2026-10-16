@@ -23,7 +23,16 @@ pub(super) struct Windows {
 /// has been counted through: Herdr's `state_change_seq`, for telling that
 /// something happened between two looks. Counted from this Server's start.
 #[derive(Default)]
-pub(super) struct AttentionCount(HashMap<ThreadId, (Attention, u64)>);
+pub(super) struct AttentionCount(HashMap<ThreadId, Counted>);
+
+/// One Thread's count.
+#[derive(Clone, Copy)]
+pub(super) struct Counted {
+    attention: Attention,
+    seq: u64,
+    /// `seq` when its last turn ended: Herdr's `completion_seq`.
+    completed: Option<u64>,
+}
 
 impl Engine {
     /// A window's word about itself (`Op::Focused`, `Op::Composing`);
@@ -95,7 +104,17 @@ impl Engine {
         self.attention_count
             .0
             .get(&thread)
-            .map_or(0, |(_, seq)| *seq)
+            .map_or(0, |counted| counted.seq)
+    }
+
+    /// `attention_seq` as it was when `thread`'s last turn ended: its
+    /// Attention came to rest (idle or done) from work (working or
+    /// blocked). `None` until a turn has ended since this Server started.
+    pub fn completion_seq(&self, thread: ThreadId) -> Option<u64> {
+        self.attention_count
+            .0
+            .get(&thread)
+            .and_then(|counted| counted.completed)
     }
 
     /// Count each open Thread's Attention change since the last count; a
@@ -111,13 +130,22 @@ impl Engine {
             };
             counted
                 .entry(thread)
-                .and_modify(|(was, seq)| {
-                    if *was != attention {
-                        *was = attention;
-                        *seq += 1;
+                .and_modify(|counted| {
+                    if counted.attention == attention {
+                        return;
                     }
+                    let at_work = |a| matches!(a, Attention::Working | Attention::Blocked);
+                    counted.seq += 1;
+                    if at_work(counted.attention) && !at_work(attention) {
+                        counted.completed = Some(counted.seq);
+                    }
+                    counted.attention = attention;
                 })
-                .or_insert((attention, 0));
+                .or_insert(Counted {
+                    attention,
+                    seq: 0,
+                    completed: None,
+                });
         }
         self.attention_count.0 = counted;
     }

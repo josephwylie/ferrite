@@ -1969,7 +1969,11 @@ fn a_thread_reports_what_a_coordinator_reads_of_it() {
         assert_eq!(info[fact], value, "{fact}: {started}");
     }
     assert!(info.get("worktree").is_none(), "{started}");
-    let _provider = harness
+    assert!(
+        info.get("completion_seq").is_none(),
+        "no turn ended: {started}"
+    );
+    let provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -2025,6 +2029,27 @@ fn a_thread_reports_what_a_coordinator_reads_of_it() {
     );
     let counted = caller.answer("5", "thread.get", serde_json::json!({ "thread": thread }));
     assert_eq!(counted["result"]["thread"]["attention_seq"], 1, "{counted}");
+    assert!(
+        counted["result"]["thread"].get("completion_seq").is_none(),
+        "{counted}"
+    );
+
+    // A turn that ends is counted, and named by the count it ended at.
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let ended = loop {
+        let got = caller.answer("5", "thread.get", serde_json::json!({ "thread": thread }));
+        if got["result"]["thread"]["attention_seq"] == 2 || Instant::now() >= deadline {
+            break got;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(ended["result"]["thread"]["completion_seq"], 2, "{ended}");
 
     // A window that left takes what it said with it.
     drop(window);
@@ -2165,6 +2190,7 @@ fn a_project_is_focused_by_id() {
         focused["result"]["project"]["id"], info["project"],
         "{focused}"
     );
+    assert_eq!(focused["result"]["thread"], info["thread"], "{focused}");
     assert_eq!(
         told(&mut window, |message| matches!(
             message,
@@ -2174,6 +2200,18 @@ fn a_project_is_focused_by_id() {
     );
     let missing = caller.answer("3", "project.focus", serde_json::json!({ "project": "999" }));
     assert_eq!(missing["error"]["code"], "project_not_found", "{missing}");
+
+    // A Project with no open Thread has nothing to land on: nothing moves.
+    let empty = harness.dir.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let opened = caller.answer("4", "project.open", serde_json::json!({ "cwd": empty }));
+    let unfocused = caller.answer(
+        "5",
+        "project.focus",
+        serde_json::json!({ "project": opened["result"]["project"]["id"] }),
+    );
+    assert!(unfocused["result"]["project"].is_object(), "{unfocused}");
+    assert!(unfocused["result"].get("thread").is_none(), "{unfocused}");
 }
 
 /// Herdr's Spaces are Ferrite's Projects: opened by directory (once),

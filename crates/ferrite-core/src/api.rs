@@ -187,6 +187,11 @@ pub struct ThreadInfo {
     /// How many times its Attention changed since the Server started: a
     /// different number means something happened in between.
     pub attention_seq: u64,
+    /// `attention_seq` when its last turn ended (its Attention came to
+    /// rest from work): Herdr's `completion_seq`. Absent until a turn has
+    /// ended since the Server started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_seq: Option<u64>,
     /// A prompt is held for its starting Session.
     pub held_prompt: bool,
     /// Prompts waiting in the provider's queue.
@@ -217,6 +222,7 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
         project: engine.project_id(thread).map(project_id),
         provider_session: view.provider_session().map(Into::into),
         attention_seq: engine.attention_seq(thread),
+        completion_seq: engine.completion_seq(thread),
         held_prompt: engine.holds_prompt(thread),
         queued_prompts: view.provider_queue_len().try_into().unwrap_or(u32::MAX),
         draft: engine.composing(thread),
