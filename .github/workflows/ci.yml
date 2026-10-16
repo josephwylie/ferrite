@@ -40,7 +40,7 @@ jobs:
       - name: Test Projects
         run: cargo test -p ferrite-projects --locked
       - name: Test Projects 1.0
-        run: cargo test -p sw-core -p sw-flow -p sw-board --locked
+        run: cargo test -p sw-core -p sw-flow -p sw-board -p herdr-projects --locked
       - name: Build app
         run: cargo build -p ferrite --locked
       # The Chromium adapter is shared with Windows: keep it compiling here.

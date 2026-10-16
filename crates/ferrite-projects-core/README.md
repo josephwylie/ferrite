@@ -17,10 +17,11 @@ edition (2024):
 | `crates/flow` | `crates/ferrite-projects-flow` | `sw-flow` |
 | `crates/board` | `crates/ferrite-projects-board` | `sw-board` |
 
-Not taken: `crates/web` (the board in the herdr web UI; Ferrite has none),
-and upstream's command line crate (`src/`, `tests/`), its plugin manifest,
-scripts, assets and docs. Why, and how the rest of Ferrite meets these
-crates: `docs/adr/0031-projects-1-0-vendored.md`.
+Upstream's command line crate (`src/`, `tests/`) is
+`crates/ferrite-projects` (`../ferrite-projects/README.md`). Not taken:
+`crates/web` (the board in the herdr web UI; Ferrite has none), and
+upstream's plugin manifest, scripts, assets and docs. Why, and how the rest
+of Ferrite meets these crates: `docs/adr/0031-projects-1-0-vendored.md`.
 
 ## Ferrite changes
 
@@ -40,6 +41,16 @@ Inside vendored files a change is the smallest that works and is marked
   `socket::on_tab_shown`, `flow`'s `extras/config.rs` and `board`'s
   `job_far.rs`, which start herdr themselves, as only the terminal board
   and herdr's first-run setup reach them, and Ferrite runs neither.
+- **`src/store/files.rs`**: `bin()`, the program handed to agents and
+  hooks, is `FERRITE_PROJECTS_BIN` when that is set, and otherwise, when
+  the code runs inside Ferrite's app (the executable is `ferrite`), the
+  shipped `ferrite-projects` beside it, links resolved.
+- **The take-over of 0.2** knows Ferrite's 0.2 by its own names beside
+  upstream's: its settings folder by its journal `ferrite-owned.json`
+  (core's `store/old_installs/legacy.rs`), its hooks by `ferrite-projects
+  … hook --agent …` and Copilot's file `hooks/ferrite-projects.json`
+  (flow's `take_over/outside.rs`). Tested in `crates/ferrite-projects`'s
+  `tests/ferrite.rs`.
 
 ## Upstream updates
 

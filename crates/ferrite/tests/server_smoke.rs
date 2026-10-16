@@ -9,12 +9,17 @@ use std::time::{Duration, Instant};
 use ferrite_core::link::{self, Client};
 use ferrite_core::protocol::{self, ClientMessage, Op, Peer, ServerMessage, When};
 
+/// A `ferrite-projects` that is not there, so the Server leaves Projects off.
+const NO_PROJECTS: &str = "/nonexistent/ferrite-projects";
+
 fn server(store: &Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_ferrite"))
         .arg("server")
         .env("FERRITE_STORE", store)
         // A terminal's launch: the login shell is not asked.
         .env("TERM", "dumb")
+        // Projects off: its take-over would act on this user's home.
+        .env("FERRITE_PROJECTS_BIN", NO_PROJECTS)
         .spawn()
         .expect("the binary starts")
 }
@@ -92,6 +97,7 @@ fn ensure_running_starts_one_server_and_finds_it_again() {
     std::fs::create_dir_all(&store).unwrap();
     std::env::set_var("FERRITE_STORE", &store);
     std::env::set_var("TERM", "dumb");
+    std::env::set_var("FERRITE_PROJECTS_BIN", NO_PROJECTS);
     let executable = Path::new(env!("CARGO_BIN_EXE_ferrite"));
     ferrite_core::server::agent::ensure_running(&store, executable).unwrap();
     ferrite_core::server::agent::ensure_running(&store, executable).unwrap();
