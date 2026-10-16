@@ -125,11 +125,12 @@ impl CockpitView {
         let back = window.focused(cx);
         if self.projects.board.is_none() {
             let placement = Placement::read();
+            let focused = self.focused_thread();
             let opening = Opening {
-                cwd: self
-                    .focused_thread()
+                cwd: focused
                     .and_then(|thread| self.thread_path(thread))
                     .unwrap_or_else(sw_board::store::files::user_home),
+                from: focused.map(|thread| thread.to_string()).unwrap_or_default(),
                 popup: placement == Placement::Popup,
                 board_key: crate::board::board_key(),
             };

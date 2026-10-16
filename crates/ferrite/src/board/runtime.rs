@@ -56,6 +56,9 @@ const ATTACH_REFUSED: &str =
 pub(crate) struct Opening {
     /// The folder it opens in: the focused Thread's, else home.
     pub cwd: PathBuf,
+    /// The focused Thread's id, the pane its agent is to the adapter: the
+    /// popup opens on the task whose agent that is (`Ctx::from`).
+    pub from: String,
     /// Over the board as a sheet (`board.open: popup`), not in its place.
     pub popup: bool,
     /// The key that opens and leaves it, as the board writes keys.
@@ -334,19 +337,21 @@ impl BoardView {
         let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             screen(&mut board.state, &board.theme, columns, rows)
         }));
-        match drawn {
-            Ok(screen) => screen.lines,
-            Err(_) => vec![
-                Inked::plain(" herdr-projects view error"),
-                Inked::plain(format!(" press {} to close", key_name("back"))),
-            ],
-        }
+        drawn.map_or_else(|_| view_error(), |screen| screen.lines)
     }
 
-    #[cfg(any(test, feature = "visual-reference"))]
+    #[cfg(test)]
     pub(crate) fn state(&mut self) -> Option<&mut State> {
         self.board.as_mut().map(|board| &mut board.state)
     }
+}
+
+/// What a view that panicked whole says, as upstream's runtime says it.
+pub(super) fn view_error() -> Vec<Inked> {
+    vec![
+        Inked::plain(" herdr-projects view error"),
+        Inked::plain(format!(" press {} to close", key_name("back"))),
+    ]
 }
 
 /// Run `work` on the background executor and feed the board what it
@@ -362,10 +367,18 @@ fn answer(cx: &mut Context<BoardView>, work: impl FnOnce() -> Event + Send + 'st
 /// What the board opens on, read from disk alone (`run/start.rs`'s
 /// `prepare`, without the terminal's): the view it had when it last
 /// closed, the notes the store has to say once, and its theme.
+///
+/// Two of upstream's are not done here. `own_key` stays unset: herdr hands
+/// its popup its own key, which the board must catch to close; here
+/// `projects::Toggle` is bound around the board and acts before it. And
+/// the keeper is not started (`keeper::ensure_keeper` runs the
+/// `herdr-projects keeper` command, which Ferrite's binary is not; ADR
+/// 0031, Seam 3): with no keeper alive the loader ticks for it.
 fn prepare(opening: Opening) -> Board {
     use sw_board::store::{files, keys_given, move_home};
     let ctx = Ctx {
         cwd: opening.cwd.display().to_string(),
+        from: opening.from,
         popup: opening.popup,
         own_pane: if opening.popup {
             place::POPUP.into()

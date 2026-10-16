@@ -166,8 +166,19 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
 - **Keys.** A keystroke is said as `run/input.rs` says crossterm's
   (`keys::press_of`): Option is alt, so Option+letter is `alt+<letter>`,
   not the character it composes; ⌘ stays the window's, but ⌘V, one paste.
-  The keymap's `Projects` context binds nothing under the board, whose `?`
-  menu stays the list of its keys.
+  Under the keymap's `Projects` context every keystroke the table binds
+  anywhere is masked (`keymap::board_reads_its_keys`, again after the
+  operator's keys), so nothing bound around the board acts first: not a
+  wall's y/n/a and digits, not Submit's enter, not Windows' ctrl keys,
+  which are the board's there as in a terminal (ctrl+c closes it). The
+  window keeps ⌘ and `projects::Toggle`. The board's `?` menu stays the
+  list of its keys. Text is read key by key, as a terminal with Option as
+  Meta reads it: the board registers no input handler, so an input method
+  (CJK) and dead keys compose nothing in its text box and its
+  `Screen::cursor` places no candidate window. An input handler would
+  hand Option's dead keys (Option+E, U, I, N, `) to the input method in
+  place of the board's alt keys; text composed elsewhere comes in whole
+  by ⌘V.
 - **Inks.** `board.theme`'s `herdr` (and `auto`, `dark`) is Ferrite's own
   colours given as herdr's tokens and finished by the board's own rules
   (`theme::greys`, `theme::picks`: the greys held readable, its review
@@ -180,6 +191,23 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
   board (all of it under 110×30 cells). The projects key shows it, and on
   it, goes back to where you came from; landing on a Thread moves a tab's
   board aside. `board.notify: bell` rings the system bell.
+- **Opening an agent.** Every agent runs in a Ferrite window, so
+  `cli::in_herdr` is true (a `Ferrite:` mark): Enter's job focuses the
+  agent through the adapter (`agent focus`, `thread.focus`) and says
+  "Opened <id>'s agent", or closes the popup; it never hands over a
+  terminal. The popup opens on the task whose agent runs in the focused
+  Thread (`Ctx::from`, the Thread's id, which is its agent's pane id to
+  the adapter).
+- **What the runtime leaves out.** `Ctx::own_key` is unset: herdr hands
+  its popup the key that opened it, which the board must catch to close;
+  here `projects::Toggle` acts before the board. The board does not start
+  the keeper (`keeper::ensure_keeper` runs the `herdr-projects keeper`
+  command, which Ferrite's binary is not): starting it is the flow
+  crate's seam, and until a keeper runs the loader does its tick
+  (`keeper::tick_once`). herdr's dots (`ui.status_indicators = "dots"`)
+  are a herdr setting Ferrite has no counterpart for: the board always
+  draws its marks; the vendored dots stay drawable for upstream's
+  merges.
 
 Not drawn, being a terminal's alone: the first-run setup (`view/setup.rs`,
 herdr's config blocks and board key), the held-size warning

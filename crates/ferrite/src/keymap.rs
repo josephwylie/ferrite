@@ -472,14 +472,12 @@ fn board_reads_its_keys(table: &mut Vec<Binding>, platform: Platform) {
         .filter(|(keys, action, _)| {
             *action == "projects::Toggle"
                 || (keys.as_str() != paste
-                    && parse(keys, platform)
-                        .is_ok_and(|strokes| strokes[0].modifiers.platform))
+                    && parse(keys, platform).is_ok_and(|strokes| strokes[0].modifiers.platform))
         })
         .map(|(keys, _, _)| keys.clone())
         .collect();
-    let is_mask = |action: &str, context: Option<&str>| {
-        action == NO_ACTION && context == Some(PROJECTS)
-    };
+    let is_mask =
+        |action: &str, context: Option<&str>| action == NO_ACTION && context == Some(PROJECTS);
     table.retain(|(keys, action, context)| !is_mask(action, *context) || !kept.contains(keys));
     let mut masked: Vec<String> = table
         .iter()
@@ -717,7 +715,10 @@ mod tests {
         ]);
         let (table, refused) = with_user_keys(Platform::Mac, &keys);
         assert!(refused.is_empty(), "{refused:?}");
-        assert!(!masked(&table, "ctrl-g"), "the operator's key leaves the board");
+        assert!(
+            !masked(&table, "ctrl-g"),
+            "the operator's key leaves the board"
+        );
         assert!(masked(&table, "ctrl-p"), "an operator's key is masked too");
     }
 

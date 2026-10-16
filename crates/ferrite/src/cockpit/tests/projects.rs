@@ -237,7 +237,12 @@ fn a_board_at_wall_range_takes_the_walls_answer_keys(cx: &mut TestAppContext) {
         view.stage_board(crate::board::fixture::board(), window, cx)
     });
     let board = view.read_with(cx, |view, _| {
-        view.projects.board.as_ref().expect("the board").view.clone()
+        view.projects
+            .board
+            .as_ref()
+            .expect("the board")
+            .view
+            .clone()
     });
     cx.update(|window, cx| {
         let focus = board.read(cx).focus.clone();

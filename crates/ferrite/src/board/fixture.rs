@@ -206,10 +206,12 @@ pub(crate) fn rows(now: i64) -> Vec<(&'static str, Obj)> {
 
 /// The board on the fixture rows, `proj/5` selected, in Ferrite's theme.
 pub(crate) fn board() -> Board {
-    let items = rows(NOW)
-        .into_iter()
-        .map(|(_, row)| std::sync::Arc::new(row))
-        .collect();
+    board_of(rows(NOW).into_iter().map(|(_, row)| row).collect())
+}
+
+/// The board on `rows`, `proj/5` selected, in Ferrite's theme.
+pub(crate) fn board_of(rows: Vec<Obj>) -> Board {
+    let items = rows.into_iter().map(std::sync::Arc::new).collect();
     let data = Data {
         items,
         loaded: true,

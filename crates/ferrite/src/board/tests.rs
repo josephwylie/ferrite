@@ -462,6 +462,245 @@ fn wide_graphemes_take_their_cells() {
     assert!(lines.iter().all(|line| cells(line) <= 100));
 }
 
+/// The fixture rows, `proj/5` given an agent in a pane and a conversation
+/// the loader read for it (`snap`): your words, then its answer.
+fn talking_board() -> State {
+    sw_board::clock::set(Some(NOW));
+    let rows = fixture::rows(NOW)
+        .into_iter()
+        .map(|(_, mut row)| {
+            if row.s("id") == "proj/5" {
+                row.put("link", serde_json::json!({ "pane": "w1:p5" }));
+                row.put(
+                    "snap",
+                    serde_json::json!({ "talk": { "who": "agent", "readable": true, "list": [
+                        { "who": "you", "text": "Check every caller of the resize handler too." },
+                        { "who": "them", "text": "Every caller had the same mistake; all three are fixed." },
+                    ] } }),
+                );
+            }
+            row
+        })
+        .collect();
+    fixture::board_of(rows).state
+}
+
+fn press(state: &mut State, chord: &str) {
+    let press = match chord {
+        " " => Press::char(' '),
+        chord => Press {
+            chord: chord.into(),
+            ch: None,
+        },
+    };
+    update(state, Event::Key(press));
+    state.now = NOW;
+}
+
+fn at_line(lines: &[Vec<Run>], starts: &str) -> usize {
+    lines
+        .iter()
+        .position(|line| text(line).starts_with(starts))
+        .unwrap_or_else(|| panic!("no line starts {starts:?}"))
+}
+
+/// Talking to a task's agent: the chat's head line names it (its mark, its
+/// number, its title in bold), and its latest message stands in a rounded
+/// box in the agent's ink, under the speaker's label, over the text box.
+#[test]
+fn the_chat_shows_the_agents_message_in_its_box() {
+    let theme = render::ferrite_theme(false);
+    let mut state = talking_board();
+    press(&mut state, " ");
+    assert!(state.reply, "space talks to the selected task's agent");
+    let lines = draw(&mut state, &theme, 120, 40);
+    let top = at_line(&lines, "╭");
+    let head = &lines[top - 1];
+    assert!(text(head).contains("#5"), "{:?}", text(head));
+    assert!(run(head, "Max length for task titles").bold);
+    let working = colour(&theme, Ink::Yellow);
+    assert_eq!(
+        run(&lines[top], "╭").fg,
+        working,
+        "the box in the agent's ink"
+    );
+    assert_eq!(run(&lines[top], "╮").fg, working);
+    let bottom = at_line(&lines, "╰");
+    assert_eq!(run(&lines[bottom], "╯").fg, working);
+    assert!(
+        text(&lines[top]).contains("alt+k more ↑"),
+        "{:?}",
+        text(&lines[top])
+    );
+    let said = line_with(&lines[top..bottom], "Agent:");
+    assert_eq!(run(said, "Agent:").fg, colour(&theme, Ink::Muted));
+    assert_eq!(run(said, "│").fg, working);
+    let message = line_with(&lines[top..bottom], "Every caller had the same mistake");
+    let soft = colour(&theme, Ink::Soft);
+    assert!(
+        message
+            .iter()
+            .filter(|run| run.text.chars().any(char::is_alphabetic))
+            .all(|run| run.fg == soft),
+        "its words, in the soft grey: {message:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| text(line).contains("You:")),
+        "the box opens on the newest message alone"
+    );
+}
+
+/// alt+k opens the box to the conversation above the newest message, alt+j
+/// from its end closes it again; alt+c hides the message and shows it.
+#[test]
+fn the_chat_scrolls_and_hides_on_its_keys() {
+    let theme = render::ferrite_theme(false);
+    let mut state = talking_board();
+    press(&mut state, " ");
+    let shows = |state: &mut State, words: &str| {
+        draw(state, &theme, 120, 40)
+            .iter()
+            .any(|line| text(line).contains(words))
+    };
+    assert!(!shows(&mut state, "You:"));
+    press(&mut state, "alt+k");
+    assert!(shows(&mut state, "You:"), "your words, above its answer");
+    let lines = draw(&mut state, &theme, 120, 40);
+    assert_eq!(
+        run(line_with(&lines, "You:"), "You:").fg,
+        colour(&theme, Ink::Muted)
+    );
+    press(&mut state, "alt+j");
+    assert!(
+        !shows(&mut state, "You:"),
+        "down from the end: the newest alone"
+    );
+
+    press(&mut state, "alt+c");
+    assert!(!state.chat_open);
+    assert!(!shows(&mut state, "╭"), "hidden: the plain text box");
+    press(&mut state, "alt+c");
+    assert!(shows(&mut state, "╭"));
+}
+
+/// Under 14 lines the chat folds away by itself: the text box and its hints
+/// keep the room.
+#[test]
+fn the_chat_folds_under_fourteen_lines() {
+    let theme = render::ferrite_theme(false);
+    let mut state = talking_board();
+    press(&mut state, " ");
+    let lines = draw(&mut state, &theme, 120, 13);
+    assert!(state.chat_folded);
+    assert!(!lines.iter().any(|line| text(line).starts_with("╭")));
+    assert!(lines.iter().any(|line| text(line).starts_with("❯")));
+    let lines = draw(&mut state, &theme, 120, 14);
+    assert!(!state.chat_folded);
+    assert!(lines.iter().any(|line| text(line).starts_with("╭")));
+}
+
+/// Done tasks past the first five fold into one quiet line that says the
+/// key that shows them.
+#[test]
+fn done_past_five_folds_into_one_line() {
+    let theme = render::ferrite_theme(false);
+    sw_board::clock::set(Some(NOW));
+    let mut rows: Vec<Obj> = fixture::rows(NOW)
+        .into_iter()
+        .filter(|(_, row)| row.s("id") == "proj/5")
+        .map(|(_, row)| row)
+        .collect();
+    for n in 0..7 {
+        let mut done = rows[0].clone();
+        done.put("id", format!("proj/{}", 30 + n));
+        done.put("title", format!("Finished {n}"));
+        done.put("state", "done");
+        done.put("stage", "done");
+        done.put("at", NOW - (n + 1) * 60_000);
+        rows.push(done);
+    }
+    let mut state = fixture::board_of(rows).state;
+    let lines = draw(&mut state, &theme, 120, 40);
+    let shown = lines
+        .iter()
+        .filter(|line| text(line).contains("Finished"))
+        .count();
+    assert_eq!(shown, 5);
+    let note = line_with(&lines, "more done");
+    assert_eq!(text(note).trim_end(), "   ↓ 2 more done (alt+d shows them)");
+    assert_eq!(
+        run(note, "↓ 2 more done (alt+d shows them)").fg,
+        colour(&theme, Ink::Muted)
+    );
+    press(&mut state, "alt+d");
+    let lines = draw(&mut state, &theme, 120, 40);
+    assert!(!lines.iter().any(|line| text(line).contains("more done")));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| text(line).contains("Finished"))
+            .count(),
+        7
+    );
+}
+
+/// A folded heading is one row: ▸, its name in its group's ink, and how
+/// many tasks it holds; its rows are gone.
+#[test]
+fn a_folded_heading_says_how_many_tasks_it_holds() {
+    use sw_board::board::update::heads::group_id;
+    let theme = render::ferrite_theme(false);
+    let mut state = board();
+    let open = draw(&mut state, &theme, 120, 40);
+    assert_eq!(
+        run(line_with(&open, "▾ to do"), "▾").fg,
+        colour(&theme, Ink::Muted)
+    );
+    let id = group_id(&state, "", "to do");
+    state.folded.insert(id);
+    relist(&mut state);
+    let lines = draw(&mut state, &theme, 120, 40);
+    let heading = line_with(&lines, "▸ to do");
+    assert_eq!(text(heading).trim_end(), " ▸ to do  2 tasks");
+    assert_eq!(run(heading, "▸").fg, colour(&theme, Ink::Muted));
+    assert_eq!(run(heading, "to do").fg, colour(&theme, Ink::Todo));
+    assert_eq!(run(heading, "2 tasks").fg, colour(&theme, Ink::Muted));
+    assert!(!lines.iter().any(|line| text(line).contains("TTTTTTTTTT")));
+}
+
+/// A part that fails to draw says so in its place, in one red line (the
+/// view's `failed`, under its guard). Rust cannot make a part of the
+/// vendored view fail in a test, so this draws the line the guard's answer
+/// makes, as upstream's own test does.
+#[test]
+fn a_part_that_fails_says_so_in_red() {
+    let theme = render::ferrite_theme(false);
+    let why =
+        sw_board::board::view::guard::part(|| -> usize { panic!("{}", "no rows") }).unwrap_err();
+    let line = Inked::plain("  ").add(Inked::of(
+        format!("✗ The list could not be shown: {why}"),
+        Ink::Red,
+    ));
+    let runs = render::runs(&line, &theme);
+    assert_eq!(text(&runs), "  ✗ The list could not be shown: no rows");
+    assert_eq!(run(&runs, "✗").fg, RED);
+    assert_eq!(run(&runs, "The list could not be shown: no rows").fg, RED);
+}
+
+/// A view that panics whole is two plain lines that say how to close it,
+/// as upstream's runtime says it.
+#[test]
+fn a_view_that_fails_whole_says_how_to_close() {
+    let theme = render::ferrite_theme(false);
+    let lines: Vec<Vec<Run>> = super::runtime::view_error()
+        .iter()
+        .map(|line| render::runs(line, &theme))
+        .collect();
+    let said: Vec<String> = lines.iter().map(|line| text(line)).collect();
+    assert_eq!(said, [" herdr-projects view error", " press esc to close"]);
+    assert!(lines.iter().flatten().all(|run| run.fg == TEXT));
+}
+
 /// Ctrl+C shows how the board closes; a second one within two seconds
 /// closes it — through the view, as GPUI delivers the keys.
 #[gpui::test]
