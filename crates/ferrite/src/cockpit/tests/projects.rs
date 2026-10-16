@@ -4,7 +4,7 @@
 //! no ticker runs.
 
 use super::*;
-use crate::projects::{Model, Place, ProjectEntry, ThreadEntry};
+use crate::projects::{Model, ProjectEntry, ThreadEntry};
 use ferrite_projects::thread::Group;
 
 fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
@@ -213,32 +213,5 @@ fn the_servers_nav_focus_shows_one_project_and_its_clear_all(cx: &mut TestAppCon
         view.present(Asked::NavFocus(None), window, cx);
         assert_eq!(view.projects.focus, None);
         assert!(!view.nav_state().sections.is_empty(), "everything again");
-    });
-}
-
-/// "Continue this Thread as a project" opens its dialog only once the
-/// adoptable-agent check passed; a refusal is a toast, and no dialog.
-#[gpui::test]
-fn adopting_opens_the_dialog_only_once_the_check_passed(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("projects-adopt", 1);
-    let thread = core.threads()[0];
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    let place = || Place {
-        root: std::env::temp_dir().join("ferrite-projects-adopt-unused"),
-        config_dir: std::env::temp_dir().join("ferrite-projects-adopt-unused"),
-    };
-    let before = toasts(cx);
-
-    view.update_in(cx, |view, window, cx| {
-        let refusal = Err("no agent is detected in pane 1".to_string());
-        view.adopt_or_refuse(place(), thread, refusal, window, cx);
-        assert!(view.projects.sheet.is_none(), "refused: no dialog");
-    });
-    assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
-
-    view.update_in(cx, |view, window, cx| {
-        view.adopt_or_refuse(place(), thread, Ok(()), window, cx);
-        assert!(view.projects.sheet.is_some(), "the dialog");
     });
 }

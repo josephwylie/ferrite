@@ -1,17 +1,13 @@
-//! The Projects sheet as the window drives it — the popup's sections and
-//! its project picker, on a scratch root — and the snapshot the nav reads.
+//! The snapshot the nav reads, on a scratch root, and the configure
+//! action.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use ferrite_core::ThreadId;
-use ferrite_projects::keys::{KeyCode, KeyEvent, KeyModifiers};
-use ferrite_projects::paths::{self, Ctx, Env, SessionFlags};
+use ferrite_projects::paths::{Ctx, Env};
 use ferrite_projects::project;
 use ferrite_projects::runner::{Cmd, Output, Runner};
 use ferrite_projects::thread::{self, Group};
-use gpui::{Entity, TestAppContext, VisualTestContext};
 
 use super::*;
 
@@ -44,131 +40,6 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-fn press(sheet: &Entity<ProjectsSheet>, cx: &mut VisualTestContext, code: KeyCode) {
-    sheet.update(cx, |sheet, cx| {
-        sheet.key(KeyEvent::new(code, KeyModifiers::NONE), cx)
-    });
-}
-
-fn typed(sheet: &Entity<ProjectsSheet>, cx: &mut VisualTestContext, text: &str) {
-    for c in text.chars() {
-        press(sheet, cx, KeyCode::Char(c));
-    }
-}
-
-/// The popup on `place`, as wide as a window's sheet. The popup runs on a
-/// thread of its own, whose frames wake the window from off the scheduler.
-fn open(cx: &mut TestAppContext, place: Place) -> (Entity<ProjectsSheet>, &mut VisualTestContext) {
-    cx.executor().allow_parking();
-    let (sheet, cx) = cx.add_window_view(|_, cx| ProjectsSheet::popup(place, None, cx));
-    sheet.update(cx, |sheet, _| sheet.fit(1400.0, 600.0));
-    (sheet, cx)
-}
-
-/// The screen once the popup has answered every key.
-fn screen(sheet: &Entity<ProjectsSheet>, cx: &mut VisualTestContext) -> Vec<String> {
-    sheet.update(cx, |sheet, cx| {
-        sheet.settle(cx);
-        sheet.screen()
-    })
-}
-
-#[gpui::test]
-fn tab_and_shift_tab_walk_the_six_sections_and_wrap(cx: &mut TestAppContext) {
-    let scratch = Scratch::new("sections");
-    let place = scratch.place(&["Alpha"]);
-    let (sheet, cx) = open(cx, place);
-    let header = screen(&sheet, cx)[0].clone();
-    assert!(
-        header.starts_with(" Projects · all projects   [threads] · tasks · inbox"),
-        "{header}"
-    );
-    assert!(header.ends_with("  1 project · 0 need you"), "{header}");
-    for name in [
-        "tasks", "inbox", "routines", "settings", "memory", "threads",
-    ] {
-        press(&sheet, cx, KeyCode::Tab);
-        let header = screen(&sheet, cx)[0].clone();
-        assert!(header.contains(&format!("[{name}]")), "{name}: {header}");
-    }
-    press(&sheet, cx, KeyCode::BackTab);
-    assert!(
-        screen(&sheet, cx)[0].contains("[memory]"),
-        "shift-tab wraps back"
-    );
-    press(&sheet, cx, KeyCode::Right);
-    assert!(screen(&sheet, cx)[0].contains("[threads]"));
-    press(&sheet, cx, KeyCode::Left);
-    assert!(screen(&sheet, cx)[0].contains("[memory]"));
-    // Each section's keys, as upstream says them, in the footer.
-    let footer = screen(&sheet, cx).last().cloned().unwrap();
-    assert!(
-        footer.contains("↵ read  P project  / find  tab section  esc close"),
-        "{footer}"
-    );
-}
-
-#[gpui::test]
-fn the_picker_filters_on_name_and_slug_and_scopes_the_popup(cx: &mut TestAppContext) {
-    let scratch = Scratch::new("picker");
-    let place = scratch.place(&["Alpha", "Beta"]);
-    let (sheet, cx) = open(cx, place);
-    press(&sheet, cx, KeyCode::Char('/'));
-    typed(&sheet, cx, "be");
-    let lines = screen(&sheet, cx);
-    assert!(
-        lines[2].starts_with(" Switch to project  / be\u{258f}"),
-        "{lines:?}"
-    );
-    assert!(lines[3].starts_with("   Beta (beta) · idle"), "{lines:?}");
-    assert!(
-        !lines.iter().any(|line| line.contains("Alpha")),
-        "{lines:?}"
-    );
-    press(&sheet, cx, KeyCode::Enter);
-    let header = screen(&sheet, cx)[0].clone();
-    assert!(
-        header.starts_with(" Projects · beta   [threads]"),
-        "{header}"
-    );
-    // P opens on the scope, marked; esc leaves it as it was.
-    press(&sheet, cx, KeyCode::Char('P'));
-    let lines = screen(&sheet, cx);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with(" • Beta (beta) · ")),
-        "{lines:?}"
-    );
-    press(&sheet, cx, KeyCode::Esc);
-    assert!(screen(&sheet, cx)[0].starts_with(" Projects · beta "));
-    // Nothing matches: it says so.
-    press(&sheet, cx, KeyCode::Char('/'));
-    typed(&sheet, cx, "zz");
-    assert!(screen(&sheet, cx)
-        .iter()
-        .any(|line| line.starts_with("  no projects match")));
-}
-
-#[gpui::test]
-fn esc_closes_the_popup(cx: &mut TestAppContext) {
-    let scratch = Scratch::new("close");
-    let place = scratch.place(&["Alpha"]);
-    let (sheet, cx) = open(cx, place);
-    let events = Rc::new(RefCell::new(Vec::new()));
-    let seen = events.clone();
-    cx.update(|_, cx| {
-        cx.subscribe(&sheet, move |_, event: &SheetEvent, _| {
-            seen.borrow_mut().push(event.clone())
-        })
-        .detach()
-    });
-    screen(&sheet, cx);
-    press(&sheet, cx, KeyCode::Esc);
-    screen(&sheet, cx);
-    assert_eq!(*events.borrow(), [SheetEvent::Close]);
 }
 
 #[test]
@@ -298,50 +169,6 @@ impl Runner for OneThread {
     }
 }
 
-/// "Continue this Thread as a project" refuses before its dialog opens, as
-/// upstream's action did: a Thread with no agent, and one a project
-/// already has, each with `adopt::adoptable_agent`'s words.
-#[test]
-fn adopting_refuses_a_thread_without_an_agent_or_already_a_projects() {
-    let scratch = Scratch::new("adoptable");
-    let place = scratch.place(&["Alpha"]);
-    let env = Env::from_process().unwrap();
-    let ctx = Ctx {
-        env: &env,
-        root: place.root.clone(),
-        config_dir: place.config_dir.clone(),
-        runner: &OneThread,
-        detached_ticker: false,
-    };
-    assert_eq!(data::adoptable_in(&ctx, ThreadId::new(7)), Ok(()));
-    let refused = data::adoptable_in(&ctx, ThreadId::new(8)).unwrap_err();
-    assert!(
-        refused.starts_with("no agent is detected in pane 8"),
-        "{refused}"
-    );
-
-    let session = paths::resolve_session(&SessionFlags::default(), &env, &OneThread).unwrap();
-    let alpha = project::Project::load(&place.root, "alpha").unwrap();
-    alpha
-        .update_coordinator(|record| {
-            record.socket = session.socket.to_string_lossy().into_owned();
-            record.cwd = alpha.dir().to_string_lossy().into_owned();
-        })
-        .unwrap();
-    thread::allocate(&alpha, |t| {
-        t.title = "Adopted".into();
-        t.status = thread::Status::Open;
-        t.kind = thread::Kind::Adopted;
-        t.pane_id = "7".into();
-        t.cwd = "/work".into();
-    })
-    .unwrap();
-    assert_eq!(
-        data::adoptable_in(&ctx, ThreadId::new(7)),
-        Err("pane 7 is already thread t-0001 of `alpha`".into())
-    );
-}
-
 /// The configure action is `setup::configure_ferrite`, run in process —
 /// no CLI flags to fall out of step with the parser — and says so in
 /// herdr-projects' words.
@@ -396,21 +223,4 @@ fn the_configure_action_sets_the_hooks_and_the_skill() {
     assert!(ferrite_projects::setup::skill_source(&place.config_dir)
         .join("SKILL.md")
         .is_file());
-}
-
-/// A popup row whose pane id names no Thread says so rather than closing
-/// on nothing.
-#[test]
-fn a_jump_to_a_pane_that_is_no_thread_is_refused_in_words() {
-    assert_eq!(
-        Jump::of("box", "7"),
-        Ok(Jump {
-            machine: "box".into(),
-            thread: ThreadId::new(7)
-        })
-    );
-    assert_eq!(
-        Jump::of("", "w1:p2"),
-        Err("pane `w1:p2` is not a Ferrite Thread; there is nothing to jump to".into())
-    );
 }

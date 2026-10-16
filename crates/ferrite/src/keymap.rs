@@ -258,7 +258,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // focused Thread's branch in the Review beside it.
         (with_primary("shift-p"), "palette::ShowParked", None),
         (with_primary("shift-d"), "palette::ReviewBranch", None),
-        // ⌘⇧A: the Projects popup (ADR 0030), herdr-projects' prefix+a.
+        // ⌘⇧A: the work board (ADR 0031), herdr-projects' prefix+a.
         (with_primary("shift-a"), "projects::Toggle", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
@@ -377,9 +377,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Enter in the sheet's filter line submits nothing: the bare row
         // would send the Pane's draft from under the sheet.
         ("enter".into(), NO_ACTION, Some("Shortcuts")),
-        // The Projects sheet reads every plain key itself, as the popup
-        // reads its terminal's (`projects::sheet::key_of`): nothing bound
-        // under it acts first.
+        // The work board reads every key but ⌘ itself, as herdr-projects'
+        // board reads its terminal's (`board::keys::press_of`), ⌘V as one
+        // paste: nothing bound under it acts first. Its keys are its own,
+        // listed by its `?` menu.
         ("enter".into(), NO_ACTION, Some("Projects")),
         ("escape".into(), NO_ACTION, Some("Projects")),
         ("backspace".into(), NO_ACTION, Some("Projects")),
@@ -391,6 +392,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("tab".into(), NO_ACTION, Some("Projects")),
         ("shift-tab".into(), NO_ACTION, Some("Projects")),
         ("?".into(), NO_ACTION, Some("Projects")),
+        (with_primary("v"), NO_ACTION, Some("Projects")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie

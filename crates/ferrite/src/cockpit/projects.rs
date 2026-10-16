@@ -1,37 +1,47 @@
-//! Projects' cockpit half (ADR 0030): the snapshot the nav and the bottom
-//! bar read, refreshed off the UI thread; the palette's Projects commands
-//! (herdr-projects' action menu); the Projects sheet's place on the board
-//! and what it asks of the window; and the nav's project blocks.
+//! Projects' cockpit half (ADR 0030, ADR 0031): the snapshot the nav and
+//! the bottom bar read, refreshed off the UI thread; the palette's Projects
+//! commands; the work board's place on the board (`board`) and what it asks
+//! of the window; and the nav's project blocks.
 //!
 //! A project's scope is the focused Thread's: the project it heads or
 //! works for, where upstream asked which Herdr workspace the pane was in.
 
 use super::*;
+use crate::board::{BoardEvent, BoardView, Opening, Placement};
 use crate::float::{self, FloatPlace};
 use crate::palette::{
     Act, Command as PaletteCommand, Row as PaletteRow, Section as PaletteSection,
 };
-use crate::projects::{self, Ask, Command, Jump, Model, Outcome, Place, ProjectsSheet, SheetEvent};
+use crate::projects::{self, Command, Model, Place};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
-use gpui::Subscription;
-
-/// The share of the board the sheet covers, as Herdr's popup pane did.
-const SHEET_SHARE: f32 = 0.8;
+use gpui::{FocusHandle, Subscription};
 
 /// What the cockpit holds for Projects.
 #[derive(Default)]
 pub(super) struct ProjectsState {
     /// Where the projects live; `None` in the test and demo constructors,
-    /// so no suite reads the operator's own.
+    /// so no suite reads the operator's own (nor opens the board on them).
     pub place: Option<Place>,
     pub model: Model,
     /// The project the nav shows alone (`focus`), coordinator first.
     pub focus: Option<String>,
-    pub sheet: Option<Entity<ProjectsSheet>>,
-    events: Option<Subscription>,
-    /// What a sheet's act said, for the next frame's toast.
+    /// The work board, while it is open.
+    pub board: Option<BoardSlot>,
+    /// What a command's work said, for the next frame's toast.
     toasts: Vec<(String, String, bool)>,
+}
+
+/// The work board as the cockpit holds it.
+pub(super) struct BoardSlot {
+    pub view: Entity<BoardView>,
+    pub placement: Placement,
+    /// Shown now: a tab's board stays open, hidden, while you are on a
+    /// Thread, as herdr's board tab does.
+    pub shown: bool,
+    /// What held the keyboard before it showed: it goes back there.
+    back: Option<FocusHandle>,
+    _events: Subscription,
 }
 
 impl ProjectsState {
@@ -42,10 +52,23 @@ impl ProjectsState {
         }
     }
 
-    /// Take the sheet down; whether one was up.
-    pub(super) fn drop_sheet(&mut self) -> bool {
-        self.events = None;
-        self.sheet.take().is_some()
+    /// Whether the board shows and holds the keyboard.
+    pub(super) fn board_shown(&self) -> bool {
+        self.board.as_ref().is_some_and(|board| board.shown)
+    }
+
+    /// Whether the board shows as the popup, over a veil.
+    pub(super) fn popup_shown(&self) -> bool {
+        self.board
+            .as_ref()
+            .is_some_and(|board| board.shown && board.placement == Placement::Popup)
+    }
+
+    /// Take the popup down for another float; a tab's board stays.
+    pub(super) fn drop_popup(&mut self) {
+        if self.popup_shown() {
+            self.board = None;
+        }
     }
 }
 
@@ -83,120 +106,125 @@ impl CockpitView {
             .map(|project| project.slug.clone())
     }
 
-    /// The projects shortcut: the popup, open or shut.
+    /// The projects shortcut (herdr's `prefix+a`): the board, or back to
+    /// where you came from when it shows.
     pub(super) fn toggle_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.projects.sheet.is_some() {
-            self.close_projects(cx);
+        if self.projects.board_shown() {
+            self.leave_board(window, cx);
         } else {
-            self.run_projects_command(Command::Popup, window, cx);
+            self.show_board(window, cx);
         }
     }
 
-    /// A reference scene's sheet: open on the section `tabs` along from
-    /// threads, fitted to the board as it will draw, every key answered,
-    /// and its popup thread stopped (`ProjectsSheet::stop`).
-    #[cfg(feature = "visual-reference")]
-    pub(super) fn stage_projects_sheet(
-        &mut self,
-        tabs: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        use ferrite_projects::keys::{KeyCode, KeyEvent, KeyModifiers};
-        self.toggle_projects(window, cx);
-        let Some(sheet) = self.projects.sheet.clone() else {
+    /// The board, opened where `board.open` says — or a tab's, shown again
+    /// as you left it.
+    fn show_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.projects.place.is_none() {
+            return;
+        }
+        let back = window.focused(cx);
+        if self.projects.board.is_none() {
+            let placement = Placement::read();
+            let opening = Opening {
+                cwd: self
+                    .focused_thread()
+                    .and_then(|thread| self.thread_path(thread))
+                    .unwrap_or_else(sw_board::store::files::user_home),
+                popup: placement == Placement::Popup,
+                board_key: crate::board::board_key(),
+            };
+            let view = cx.new(|cx| BoardView::open(opening, cx));
+            let events = cx.subscribe_in(&view, window, Self::on_board_event);
+            self.projects.board = Some(BoardSlot {
+                view,
+                placement,
+                shown: false,
+                back: None,
+                _events: events,
+            });
+        }
+        if let Some(board) = self.projects.board.as_mut() {
+            if board.placement == Placement::Popup {
+                self.clear_for_float();
+                self.floats.palette = None;
+            }
+        }
+        let Some(board) = self.projects.board.as_mut() else {
             return;
         };
-        let board = self.board_bounds(window);
-        sheet.update(cx, |sheet, cx| {
-            sheet.fit(board.w * SHEET_SHARE, board.h * SHEET_SHARE);
-            for _ in 0..tabs {
-                sheet.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), cx);
-            }
-            sheet.settle(cx);
-            sheet.stop();
-        });
-    }
-
-    pub(super) fn close_projects(&mut self, cx: &mut Context<Self>) {
-        if self.projects.drop_sheet() {
-            cx.notify();
-        }
-    }
-
-    /// Put `sheet` over the board, holding the keyboard.
-    fn show_projects_sheet(
-        &mut self,
-        sheet: impl FnOnce(&mut Context<ProjectsSheet>) -> ProjectsSheet,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.clear_for_float();
-        self.floats.palette = None;
-        let sheet = cx.new(sheet);
-        self.projects.events = Some(cx.subscribe_in(&sheet, window, Self::on_sheet_event));
-        let focus = sheet.read(cx).focus.clone();
-        self.projects.sheet = Some(sheet);
+        board.shown = true;
+        board.back = back;
+        let focus = board.view.read(cx).focus.clone();
         window.focus(&focus, cx);
         cx.notify();
     }
 
-    fn on_sheet_event(
-        &mut self,
-        _: &Entity<ProjectsSheet>,
-        event: &SheetEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event.clone() {
-            SheetEvent::Close => self.close_projects(cx),
-            SheetEvent::Jump(jump) => self.jump_to(jump, window, cx),
-            SheetEvent::Refused(why) => {
-                self.projects_toast("Projects".into(), why, true, window, cx)
-            }
-            SheetEvent::Open(path) => {
-                if ferrite_projects::settings::is_text(&path) {
-                    self.close_projects(cx);
-                    self.open_beside(beside::Beside::Reader { path, line: None }, window, cx);
-                } else {
-                    crate::file_links::FileLink {
-                        path,
-                        location: None,
-                    }
-                    .open(window, cx);
-                }
-            }
-            SheetEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
-            SheetEvent::Notify { title, body } => {
-                self.projects_toast(title, body, false, window, cx)
+    /// Back to where you came from: a tab's board stays open, hidden; the
+    /// popup closes.
+    fn leave_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(board) = self.projects.board.as_mut() else {
+            return;
+        };
+        board.shown = false;
+        let back = board.back.take();
+        if board.placement == Placement::Popup {
+            self.projects.board = None;
+        }
+        if let Some(back) = back {
+            window.focus(&back, cx);
+        }
+        cx.notify();
+    }
+
+    /// Landing on a Thread (an agent opened from the board, a nav row)
+    /// takes a tab's board out of the way, still open.
+    pub(super) fn board_gives_way(&mut self) {
+        if let Some(board) = self.projects.board.as_mut() {
+            if board.placement == Placement::Tab {
+                board.shown = false;
+                board.back = None;
             }
         }
     }
 
-    /// Land on the Thread a popup row jumps to: here, when it runs on the
-    /// machine the window is on; else the window goes to its machine and
-    /// lands on it there once attached.
-    pub(super) fn jump_to(&mut self, jump: Jump, window: &mut Window, cx: &mut Context<Self>) {
-        let machines = self.machines.as_ref().map(|machines| machines.read(cx));
-        let index = match machines {
-            Some(machines) => machines.named(&jump.machine),
-            None => jump.machine.is_empty().then_some(0),
-        };
-        let here = machines.map_or(Some(0), |machines| machines.index(&machines.selected_key()));
-        match index {
-            Some(index) if Some(index) == here => self.land_on_thread(jump.thread, cx),
-            Some(index) => cx.emit(GoToMachine {
-                index,
-                open: Some(Landing::Thread(jump.thread)),
-            }),
-            None => {
-                let body = format!(
-                    "{} runs on `{}`, which is not one of this window's machines",
-                    jump.thread, jump.machine
-                );
-                self.projects_toast("Projects".into(), body, true, window, cx)
+    fn on_board_event(
+        &mut self,
+        _: &Entity<BoardView>,
+        event: &BoardEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            BoardEvent::Close => {
+                let back = self.projects.board.take().and_then(|board| board.back);
+                if let Some(back) = back {
+                    window.focus(&back, cx);
+                }
+                cx.notify();
             }
+            BoardEvent::Bell => window.play_system_bell(),
         }
+    }
+
+    /// A reference scene's board: `board` drawn as it is, in the board's
+    /// place.
+    #[cfg(feature = "visual-reference")]
+    pub(super) fn stage_board(
+        &mut self,
+        board: crate::board::Board,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| BoardView::still(board, cx));
+        let events = cx.subscribe_in(&view, window, Self::on_board_event);
+        self.projects.board = Some(BoardSlot {
+            view,
+            placement: Placement::Tab,
+            shown: true,
+            back: None,
+            _events: events,
+        });
+        cx.notify();
     }
 
     fn projects_toast(
@@ -256,72 +284,9 @@ impl CockpitView {
         let Some(place) = self.projects.place.clone() else {
             return;
         };
-        let scope = self.projects_scope();
         match command {
-            Command::Popup => {
-                self.show_projects_sheet(|cx| ProjectsSheet::popup(place, scope, cx), window, cx)
-            }
-            Command::Overview => {
-                let slugs = match scope {
-                    Some(slug) => vec![slug],
-                    None => projects::pickable(&place),
-                };
-                self.show_projects_sheet(|cx| ProjectsSheet::overview(place, slugs, cx), window, cx)
-            }
-            Command::New => self.show_projects_sheet(
-                |cx| ProjectsSheet::ask(place, Ask::new_project(), cx),
-                window,
-                cx,
-            ),
-            Command::Verb(verb) => match scope {
-                Some(slug) => {
-                    self.projects_work(move || said(projects::run_verb(&place, verb, &slug)), cx)
-                }
-                None => {
-                    let slugs = projects::pickable(&place);
-                    match slugs.as_slice() {
-                        [] => {
-                            let body = format!("there are no projects in {}", place.root.display());
-                            self.projects_toast("Projects".into(), body, true, window, cx);
-                        }
-                        [only] => {
-                            let slug = only.clone();
-                            self.projects_work(
-                                move || said(projects::run_verb(&place, verb, &slug)),
-                                cx,
-                            )
-                        }
-                        _ => self.show_projects_sheet(
-                            |cx| ProjectsSheet::pick(place, verb, slugs, cx),
-                            window,
-                            cx,
-                        ),
-                    }
-                }
-            },
-            Command::Adopt => {
-                // Upstream adopts only a running local agent pane: a Thread
-                // on another machine is not this computer's Server's.
-                if let Some(machine) = self.away_machine(cx) {
-                    let body = format!(
-                        "this window is on `{machine}`; only a running local agent pane can be adopted"
-                    );
-                    self.projects_toast("Projects".into(), body, true, window, cx);
-                    return;
-                }
-                let Some(thread) = self.focused_thread() else {
-                    self.projects_toast(
-                        "Projects".into(),
-                        "no Thread is focused".into(),
-                        true,
-                        window,
-                        cx,
-                    );
-                    return;
-                };
-                self.adopt_if_adoptable(place, thread, window, cx)
-            }
-            Command::Focus => match scope {
+            Command::Board => self.toggle_projects(window, cx),
+            Command::Focus => match self.projects_scope() {
                 Some(slug) => self.focus_nav_on_project(Some(slug), cx),
                 None => self.projects_toast(
                     "Projects".into(),
@@ -348,72 +313,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// "Continue this Thread as a project": the adoptable-agent check off
-    /// the UI thread, then the dialog — or its refusal, before any input.
-    fn adopt_if_adoptable(
-        &mut self,
-        place: Place,
-        thread: ThreadId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn_in(window, async move |view, cx| {
-            let checking = place.clone();
-            let adoptable = cx
-                .background_spawn(async move { projects::adoptable(&checking, thread) })
-                .await;
-            view.update_in(cx, |view, window, cx| {
-                view.adopt_or_refuse(place, thread, adoptable, window, cx)
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// The adopt dialog once the check passed; else its refusal, and no
-    /// dialog.
-    pub(super) fn adopt_or_refuse(
-        &mut self,
-        place: Place,
-        thread: ThreadId,
-        adoptable: Result<(), String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match adoptable {
-            Ok(()) => self.ask_adopt(place, thread, window, cx),
-            Err(refusal) => self.projects_toast("Projects".into(), refusal, true, window, cx),
-        }
-    }
-
-    /// The machine the window is on, by name, when that is not this
-    /// computer.
-    pub(super) fn away_machine(&self, cx: &gpui::App) -> Option<String> {
-        let machines = self.machines.as_ref()?.read(cx);
-        let index = machines.index(&machines.selected_key())?;
-        machines.machine(index).map(|machine| machine.name.clone())
-    }
-
-    /// The adopt dialog for `thread`, its name and directory offered.
-    fn ask_adopt(
-        &mut self,
-        place: Place,
-        thread: ThreadId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let label = self.facts.name(thread).to_string();
-        let cwd = self
-            .thread_path(thread)
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        self.show_projects_sheet(
-            |cx| ProjectsSheet::ask(place, Ask::adopt(thread, label, cwd), cx),
-            window,
-            cx,
-        )
-    }
-
     /// `focus`/`unfocus`: the nav shows only `slug`'s block, coordinator
     /// first, its Threads by need — or everything again.
     pub(crate) fn focus_nav_on_project(&mut self, slug: Option<String>, cx: &mut Context<Self>) {
@@ -434,7 +333,6 @@ impl CockpitView {
             .filter(|command| match command {
                 Command::Focus => in_project,
                 Command::Unfocus => self.projects.focus.is_some(),
-                Command::Adopt => self.focused_thread().is_some() && !in_project,
                 _ => true,
             })
             .map(|command| PaletteRow {
@@ -443,7 +341,7 @@ impl CockpitView {
                 context: command.detail().into(),
                 status: None,
                 detail: None,
-                keys: (command == Command::Popup)
+                keys: (command == Command::Board)
                     .then(|| crate::components::bound_chord("projects::Toggle"))
                     .flatten(),
                 act: Act::Command(PaletteCommand::Projects(command)),
@@ -451,19 +349,43 @@ impl CockpitView {
             .collect()
     }
 
-    /// The sheet over the board: a veil, and the sheet at 80% of the
-    /// board, centred, as Herdr hung its popup pane.
+    /// The board where it shows: in a tab, over the whole board in the
+    /// board's place; as the popup, over a veil, 90% of the board (all of
+    /// it when that is small), centred, as herdr hangs its popup.
     pub(super) fn projects_float(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(sheet) = self.projects.sheet.clone() else {
+        let Some(board_slot) = self.projects.board.as_ref().filter(|board| board.shown) else {
             return Vec::new();
         };
         let board = self.board_bounds(window);
-        let (width, height) = (board.w * SHEET_SHARE, board.h * SHEET_SHARE);
-        sheet.update(cx, |sheet, _| sheet.fit(width, height));
+        let popup = board_slot.placement == Placement::Popup;
+        let (width, height) = if popup {
+            crate::board::popup_size(board.w, board.h)
+        } else {
+            (board.w, board.h)
+        };
+        let view = board_slot.view.clone();
+        view.update(cx, |view, _| view.fit(width, height));
+        let anchor = gpui::Bounds::new(
+            gpui::point(px(board.x), px(board.y)),
+            gpui::size(px(board.w), px(board.h)),
+        );
+        let float = float::hang(
+            view.into(),
+            anchor,
+            FloatPlace::BoardTop {
+                top: (board.h - height) / 2.0,
+                width,
+            },
+            window,
+            cx,
+        );
+        if !popup {
+            return vec![float];
+        }
         let veil = deferred(
             div()
                 .debug_selector(|| "projects-veil".into())
@@ -476,28 +398,14 @@ impl CockpitView {
                 .occlude()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    cx.listener(|view, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        view.close_projects(cx);
+                        view.leave_board(window, cx);
                     }),
                 ),
         )
         .with_priority(float::VEIL_PRIORITY)
         .into_any_element();
-        let anchor = gpui::Bounds::new(
-            gpui::point(px(board.x), px(board.y)),
-            gpui::size(px(board.w), px(board.h)),
-        );
-        let float = float::hang(
-            sheet.into(),
-            anchor,
-            FloatPlace::BoardTop {
-                top: (board.h - height) / 2.0,
-                width,
-            },
-            window,
-            cx,
-        );
         vec![veil, float]
     }
 
@@ -514,7 +422,7 @@ impl CockpitView {
                 .child(SharedString::from(word))
                 .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
-                    view.run_projects_command(Command::Popup, window, cx);
+                    view.run_projects_command(Command::Board, window, cx);
                 }))
                 .into_any_element(),
         )
@@ -605,14 +513,6 @@ impl CockpitView {
                 section.into_any_element()
             })
             .collect()
-    }
-}
-
-/// A verb's outcome as a toast: its title, its words, whether it failed.
-fn said(outcome: Outcome) -> (String, String, bool) {
-    match outcome {
-        Outcome::Done { title, body } => (title, body, false),
-        Outcome::Refused(error) => ("Projects".into(), error, true),
     }
 }
 

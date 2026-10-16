@@ -646,11 +646,10 @@ pub struct GoToMachine {
 }
 
 /// What a window goes to a machine for: an alert about one of its
-/// Threads, or one of its Threads (a Projects row on that machine).
+/// Threads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Landing {
     Alert(crate::notifications::Alert),
-    Thread(ThreadId),
 }
 
 impl EventEmitter<GoToMachine> for CockpitView {}
@@ -8869,6 +8868,7 @@ impl CockpitView {
     /// view, else its Pane if open, else revived — exactly as a press on
     /// its own row does.
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.board_gives_way();
         let target: Option<GroupId> = {
             let groups = self.cockpit.groups();
             let viewed = match self.cockpit.roster().view() {

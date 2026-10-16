@@ -177,7 +177,7 @@ impl CockpitView {
     pub(super) fn floats_hold_focus(&self) -> bool {
         self.floats.palette.is_some()
             || self.floats.shortcuts.is_some()
-            || self.projects.sheet.is_some()
+            || self.projects.board_shown()
             || self.bell.open
     }
 
@@ -185,7 +185,7 @@ impl CockpitView {
     pub(super) fn sheet_float_open(&self) -> bool {
         self.floats.palette.is_some()
             || self.floats.shortcuts.is_some()
-            || self.projects.sheet.is_some()
+            || self.projects.popup_shown()
     }
 
     /// Close every other surface a float opening replaces.
@@ -199,7 +199,7 @@ impl CockpitView {
         self.changed_files_card = None;
         self.bell.open = false;
         self.floats.shortcuts = None;
-        self.projects.drop_sheet();
+        self.projects.drop_popup();
     }
 
     // ------------------------------------------------------------ palette

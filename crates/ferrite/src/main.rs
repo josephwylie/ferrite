@@ -6,6 +6,7 @@
 mod attachment_preview;
 mod attachments;
 mod background_chips;
+mod board;
 mod cli_updates;
 mod cockpit;
 mod components;

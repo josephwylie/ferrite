@@ -843,7 +843,6 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
                 .as_ref()
                 .and_then(|(landing, _)| match landing {
                     Landing::Alert(Alert { away, thread, .. }) => Some((away.clone(), *thread)),
-                    Landing::Thread(_) => None,
                 }),
             Some((None, here)),
             "on its Thread once it answers"
@@ -1261,79 +1260,4 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         ],
         "a commit's lines take comments as the uncommitted work's do"
     );
-}
-
-/// A Projects row's ↵ on a Thread lands on it where it runs: here when
-/// the record names no machine, else the window goes to the machine the
-/// record names and lands there once attached.
-#[gpui::test]
-fn a_projects_jump_lands_on_its_thread_on_its_machine(cx: &mut TestAppContext) {
-    use crate::projects::Jump;
-    let (core, _fake) = cockpit("machines-jump", 2);
-    let machines = cx.new(|_| machines("jump", None));
-    let (root, cx) = machine_window(cx, core, machines);
-    let first = shown(&root, cx);
-    let here = first.read_with(cx, |view, _| {
-        let threads = view.cockpit.threads();
-        *threads
-            .iter()
-            .find(|thread| Some(**thread) != view.focused_thread())
-            .unwrap()
-    });
-    first.update_in(cx, |view, window, cx| {
-        view.jump_to(Jump::of("", &here.to_string()).unwrap(), window, cx)
-    });
-    tick(cx);
-    assert_eq!(shown(&root, cx).entity_id(), first.entity_id(), "stays");
-    first.read_with(cx, |view, _| assert_eq!(view.focused_thread(), Some(here)));
-
-    first.update_in(cx, |view, window, cx| {
-        view.jump_to(Jump::of("box", "7").unwrap(), window, cx)
-    });
-    tick(cx);
-    let on_box = shown(&root, cx);
-    assert_ne!(on_box.entity_id(), first.entity_id(), "the window went");
-    on_box.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.machine().map(|bridge| bridge.name()),
-            Some("box")
-        );
-        assert_eq!(
-            view.landing.as_ref().map(|(landing, _)| landing.clone()),
-            Some(Landing::Thread(ThreadId::new(7))),
-            "on its Thread once box answers"
-        );
-    });
-}
-
-/// "Continue this Thread as a project" on a window on another machine is
-/// refused before any check or dialog: as upstream, only a running local
-/// agent pane can be adopted, and this computer's Server is the one asked.
-#[gpui::test]
-fn adopting_on_another_machine_is_refused_up_front(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("machines-adopt", 1);
-    let machines = cx.new(|_| machines("adopt", Some("box")));
-    let (root, cx) = machine_window(cx, core, machines);
-    let on_box = shown(&root, cx);
-    let toasts = |cx: &mut gpui::VisualTestContext| {
-        cx.update(|window, cx| {
-            gpui::component::Root::read(window, cx)
-                .notification
-                .read(cx)
-                .notifications()
-                .len()
-        })
-    };
-    let before = toasts(cx);
-    on_box.update_in(cx, |view, window, cx| {
-        assert_eq!(view.away_machine(cx).as_deref(), Some("box"));
-        view.projects.place = Some(crate::projects::Place {
-            root: std::env::temp_dir().join("ferrite-projects-adopt-away"),
-            config_dir: std::env::temp_dir().join("ferrite-projects-adopt-away"),
-        });
-        view.run_projects_command(crate::projects::Command::Adopt, window, cx);
-        assert!(view.projects.sheet.is_none(), "no dialog");
-    });
-    tick(cx);
-    assert_eq!(toasts(cx), before + 1, "the refusal is a toast");
 }

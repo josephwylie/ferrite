@@ -1,12 +1,11 @@
-//! Scenes for the features the first references predate: the Projects
-//! sheet and the nav's project blocks (ADR 0030), the Review slot (ADR
+//! Scenes for the features the first references predate: the work board
+//! (ADR 0031) and the nav's project blocks (ADR 0030), the Review slot (ADR
 //! 0021), find in a transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
 //! nothing of the operator's (the projects root is under the scene's own).
 
 use std::fs::File;
-use std::path::Path;
 
 use ferrite_core::protocol::{
     ReviewPullRequest, WireCheck, WireCheckStatus, WireMerge, WirePr, WirePrComment,
@@ -30,12 +29,7 @@ use crate::review::ReviewView;
 /// Every state this module draws, at the app size.
 pub(super) const STATES: &[&str] = &[
     "projects-nav",
-    "projects-threads",
-    "projects-tasks",
-    "projects-inbox",
-    "projects-routines",
-    "projects-settings",
-    "projects-memory",
+    "projects-board",
     "review-uncommitted",
     "review-commits",
     "review-pr",
@@ -52,13 +46,8 @@ pub(super) fn handles(state: &str) -> bool {
 
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     match state {
-        "projects-nav" => projects(None),
-        "projects-threads" => projects(Some(0)),
-        "projects-tasks" => projects(Some(1)),
-        "projects-inbox" => projects(Some(2)),
-        "projects-routines" => projects(Some(3)),
-        "projects-settings" => projects(Some(4)),
-        "projects-memory" => projects(Some(5)),
+        "projects-nav" => projects(false),
+        "projects-board" => projects(true),
         "review-uncommitted" => review(Staged::Uncommitted),
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
@@ -75,10 +64,10 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 
 /// One project under the scene's own projects root, its coordinator and
 /// three workers fixture Threads, the ticker's lock held so the records
-/// read as live. `section` opens the sheet (⌘⇧A) on that tab, counting
-/// from threads; `None` is the nav and the bottom bar alone.
-fn projects(section: Option<usize>) -> (Scene, Setup) {
-    let mut scene = Scene::new(&format!("projects-{section:?}"));
+/// read as live: the nav and the bottom bar. With `board`, the work board
+/// (⌘⇧A) over them in the board's place, on upstream's fixture rows.
+fn projects(board: bool) -> (Scene, Setup) {
+    let mut scene = Scene::new(&format!("projects-{}", if board { "board" } else { "nav" }));
     let checkout = scene.project("checkout");
     let place = Place {
         root: scene.root.join("projects"),
@@ -174,7 +163,6 @@ fn projects(section: Option<usize>) -> (Scene, Setup) {
         })
         .expect("record a fixture thread");
     }
-    seed_project_files(&alpha.dir());
     // The ticker runs while its lock is held: the records are live, and
     // the bottom bar counts what needs the operator.
     let lock = File::create(place.root.join(".ticker.lock")).expect("create the ticker lock");
@@ -186,94 +174,16 @@ fn projects(section: Option<usize>) -> (Scene, Setup) {
         view.projects.model = Model::load(&place);
         view.projects.place = Some(place);
         // The cart copy's request stood before the window opened: heard,
-        // not toasted over the sheet.
+        // not toasted over the board.
         view.ring_bell(cx);
         view.bell.clear_toasts();
-        if let Some(tabs) = section {
-            view.stage_projects_sheet(tabs, window, cx);
+        if board {
+            sw_board::clock::set(Some(crate::board::fixture::NOW));
+            view.stage_board(crate::board::fixture::board(), window, cx);
         }
         cx.notify();
     });
     (scene, setup)
-}
-
-/// The files the sheet's other tabs read: tasks, the inbox, routines and
-/// memory. Inbox ids and stamps are fixed, and the routines carry no
-/// schedule a clock would move.
-fn seed_project_files(dir: &Path) {
-    let write = |relative: &str, text: &str| {
-        let path = dir.join(relative);
-        std::fs::create_dir_all(path.parent().expect("a parent")).expect("create a fixture dir");
-        std::fs::write(path, text).expect("write a fixture file");
-    };
-    write(
-        "TASKS.md",
-        "# Tasks\n\n\
-         ## Now\n\
-         - [ ] Retry failed Stripe webhooks with backoff (claude) · t-0001\n  \
-           Idempotency keys already land in the orders table.\n\
-         - [ ] Rewrite the cart's empty and error states (claude) · t-0002\n\
-         - [ ] Send order confirmation from the new template (claude) · t-0003\n\n\
-         ## Next\n\
-         - [ ] Apple Pay on the payment step (me)\n\
-         - [ ] Load test checkout at 3x sale traffic\n\
-         - [x] Move prices to integer cents\n",
-    );
-    for (id, kind, subject, summary, event) in [
-        (
-            "20261015T091200Z-review-t-0003-1",
-            "review",
-            "t-0003",
-            "PR #48 approved by maria",
-            "approved",
-        ),
-        (
-            "20261015T094500Z-blocked-t-0002-1",
-            "blocked",
-            "t-0002",
-            "Asks which tone the empty cart should take",
-            "blocked on a prompt",
-        ),
-        (
-            "20261015T101500Z-checks-t-0001-1",
-            "checks",
-            "t-0001",
-            "test (ubuntu-latest) failed on webhook_retry_backoff",
-            "checks-failed",
-        ),
-    ] {
-        write(
-            &format!("inbox/{id}.md"),
-            &format!(
-                "+++\nid = \"{id}\"\nkind = \"{kind}\"\nsubject = \"{subject}\"\n\
-                 summary = \"{summary}\"\nevent = \"{event}\"\n\
-                 created = \"2026-10-15T09:00:00Z\"\n+++\n"
-            ),
-        );
-    }
-    write(
-        "routines/merged-notes.md",
-        "+++\non = \"pr\"\nevents = [\"merged\"]\n+++\n\
-         Add the merged PR to the release notes draft.\n",
-    );
-    write(
-        "routines/failing-checks.md",
-        "+++\non = \"pr\"\nevents = [\"checks-failed\"]\n+++\n\
-         Read the failing check's log and say what broke.\n",
-    );
-    write(
-        "routines/nightly-load.md",
-        "+++\nschedule = \"daily 02:00\"\nenabled = false\n+++\n\
-         Run the checkout load test and report p99.\n",
-    );
-    write(
-        "memory/decisions.md",
-        "# Decisions\n\n- Prices are integer cents everywhere.\n",
-    );
-    write(
-        "memory/stripe.md",
-        "# Stripe\n\nWebhooks retry for three days.\n",
-    );
 }
 
 // -------------------------------------------------------------------- review
