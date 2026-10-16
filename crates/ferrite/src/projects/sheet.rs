@@ -49,8 +49,12 @@ pub(crate) struct ProjectsSheet {
     pub focus: FocusHandle,
     place: Place,
     body: Body,
-    /// The sheet's size in cells (columns, lines), as the cockpit hangs it.
+    /// The sheet's size in cells (columns, lines), as the cockpit hangs it:
+    /// the most it may grow to, and the screen the popup draws.
     size: (usize, usize),
+    /// The most lines it has drawn since it opened: it never shrinks back,
+    /// so switching to a shorter section holds the sheet still.
+    tallest: usize,
 }
 
 enum Body {
@@ -137,6 +141,7 @@ impl ProjectsSheet {
             place,
             body,
             size: DEFAULT_SIZE,
+            tallest: 0,
         }
     }
 
@@ -323,8 +328,14 @@ impl ProjectsSheet {
         .detach();
     }
 
-    /// Every line of the sheet, top to bottom.
+    /// Every line of the sheet, top to bottom: its screen fitted to what it
+    /// holds (`fit_content`), never shorter than it has been.
     fn lines(&self) -> Vec<Line> {
+        fit_content(self.screen_lines(), self.tallest.max(MIN_LINES))
+    }
+
+    /// The full screen, `size` lines tall, its footer at the foot.
+    fn screen_lines(&self) -> Vec<Line> {
         let (_, height) = self.size;
         match &self.body {
             Body::Popup(live) => live.lines.clone(),
@@ -353,6 +364,30 @@ impl ProjectsSheet {
 
 /// The popup's size before the cockpit first fits it.
 const DEFAULT_SIZE: (usize, usize) = (100, 30);
+
+/// The fewest lines the sheet draws, header and footer included: most
+/// sections fit, so moving between them rarely changes its height.
+const MIN_LINES: usize = 16;
+
+/// A screen cut to its content: the header, the body down to its last
+/// written line and a line of air, then the footer's two lines — at least
+/// `floor` lines, at most the screen. The popup still draws (and scrolls)
+/// at the full size, so a long section fills the sheet and says `↓ more`.
+fn fit_content(mut lines: Vec<Line>, floor: usize) -> Vec<Line> {
+    let footer = lines.split_off(lines.len().saturating_sub(2));
+    let written = lines
+        .iter()
+        .rposition(|line| {
+            !line.text.trim().is_empty() || line.rule || line.right.is_some() || line.style.reverse
+        })
+        .map_or(0, |last| last + 1);
+    let body = (written + 1)
+        .max(floor.saturating_sub(footer.len()))
+        .min(lines.len());
+    lines.truncate(body);
+    lines.extend(footer);
+    lines
+}
 
 /// How many cells a box `width` by `height` pixels holds, inside the
 /// float's side padding.
@@ -942,17 +977,18 @@ fn line_element(index: usize, line: Line) -> gpui::AnyElement {
 
 impl Render for ProjectsSheet {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (_, height) = self.size;
+        let lines = self.lines();
+        self.tallest = lines.len();
         crate::menu::float()
             .debug_selector(|| "projects-sheet".into())
             .track_focus(&self.focus)
             .key_context("Projects")
-            .h(px(height as f32 * ROW))
+            .h(px(lines.len() as f32 * ROW))
             .overflow_hidden()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_key_down(cx.listener(Self::on_key))
             .children(
-                self.lines()
+                lines
                     .into_iter()
                     .enumerate()
                     .map(|(index, line)| line_element(index, line)),
@@ -1094,5 +1130,28 @@ mod tests {
         assert_eq!(lines.len(), 8);
         assert!(lines[6].rule);
         assert_eq!(lines[7].text, "keys");
+    }
+
+    /// The sheet fits what it holds: the body to its last written line and
+    /// a line of air, the footer under it; never under the floor, never
+    /// over the screen.
+    #[test]
+    fn a_sheet_fits_its_content_between_its_floor_and_its_screen() {
+        let screen = |body: usize| {
+            let written = (0..body).map(|i| plain(&format!("row {i}")));
+            let lines = [bold("t"), rule()].into_iter().chain(written);
+            pad_to(lines.chain([rule(), dim("keys")]).collect(), 30)
+        };
+        let short = fit_content(screen(3), 4);
+        assert_eq!(short.len(), 2 + 3 + 1 + 2, "body, a line of air, footer");
+        assert_eq!(short[4].text, "row 2");
+        assert!(short[6].rule);
+        assert_eq!(short[7].text, "keys");
+        assert_eq!(fit_content(screen(3), 16).len(), 16, "the floor holds");
+        assert_eq!(
+            fit_content(screen(26), 16).len(),
+            30,
+            "a full screen stays whole"
+        );
     }
 }
