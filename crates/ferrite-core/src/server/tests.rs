@@ -106,19 +106,24 @@ struct Harness {
 }
 
 fn start(name: &str) -> Harness {
-    serve(name, None)
+    serve(name, None, None)
 }
 
 /// A Server whose Sessions start only as the returned Sender lets each
 /// through, one `()` each.
 fn start_gated(name: &str) -> (Harness, Sender<()>) {
     let (gate, opens) = mpsc::channel();
-    (serve(name, Some(Arc::new(Mutex::new(opens)))), gate)
+    (serve(name, Some(Arc::new(Mutex::new(opens))), None), gate)
 }
 
-fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
+/// A Server whose Projects run `projects`, when given, for their hooks.
+fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>, projects: Option<PathBuf>) -> Harness {
     let dir = scratch(name);
     let store = dir.join("threads");
+    let projects = projects.map(|program| {
+        let env = super::projects::environment(&store, Path::new("/bin/ferrite"), &program);
+        super::projects::Projects::started(program, env)
+    });
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
     let api = crate::api::address(&store);
@@ -143,6 +148,7 @@ fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
         let mut server = Server::new(engine, info, renders, defaults, settings_dir);
+        server.projects = projects;
         server.relaunch = Box::new(move |executable: &Path| {
             relaunches.send(executable.to_owned()).unwrap();
             Ok(())
@@ -2618,4 +2624,72 @@ fn repository(dir: &Path) -> PathBuf {
         "base",
     ]);
     repo
+}
+
+/// herdr-projects' hook hears the Threads as herdr's panes (ADR 0031): an
+/// agent detected as one opens, its status as its Attention changes, the
+/// pane closed as it parks, each by this Server's API socket.
+#[cfg(unix)]
+#[test]
+fn projects_hook_hears_threads_as_herdrs_panes() {
+    let bin = scratch("projects-hooks-bin");
+    let (program, file) = super::projects::tests::recorder(&bin, 0);
+    let harness = serve("projects-hooks", None, Some(program));
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    call(&harness).answer(
+        "1",
+        "agent.prompt",
+        serde_json::json!({ "thread": thread, "text": "go" }),
+    );
+    window.command(2, Op::Park { thread });
+
+    let socket = harness.api.display().to_string();
+    let pane = format!(r#""pane_id":"{thread}""#);
+    let heard = |event: &str, says: &str| {
+        let said = |call: &String| {
+            call.starts_with(&format!("hook {event} "))
+                && call.contains(&pane)
+                && call.contains(says)
+                && call.ends_with(&format!(" {socket} none"))
+        };
+        let calls = super::projects::tests::calls(&file, |calls| calls.iter().any(said));
+        assert!(
+            calls.iter().any(said),
+            "no {event} saying {says}: {calls:#?}"
+        );
+    };
+    heard("pane.agent_detected", r#""agent":"claude""#);
+    heard("pane.agent_status_changed", r#""agent_status":"working""#);
+    heard("pane.closed", r#"{"event":"pane.closed","#);
+}
+
+/// herdr-projects' hook hears a worktree `worktree.remove` removed as
+/// herdr's `worktree.removed`, by its path.
+#[cfg(unix)]
+#[test]
+fn projects_hook_hears_a_removed_worktree() {
+    let bin = scratch("projects-worktree-bin");
+    let (program, file) = super::projects::tests::recorder(&bin, 0);
+    let harness = serve("projects-worktree", None, Some(program));
+    let repo = repo_in(&harness.dir);
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": repo, "worktree": true, "branch": "t-1", "base": "main" }),
+    );
+    let tree = started["result"]["thread"]["worktree"].clone();
+    let removed = caller.answer("2", "worktree.remove", serde_json::json!({ "path": tree }));
+    assert!(removed.get("result").is_some(), "{removed}");
+
+    let said = format!(
+        r#"{{"event":"worktree.removed","data":{{"workspace_id":{tree},"worktree":{{"path":{tree}}}}}}}"#
+    );
+    let heard = |call: &String| call.starts_with("hook worktree.removed ") && call.contains(&said);
+    let calls = super::projects::tests::calls(&file, |calls| calls.iter().any(heard));
+    assert!(
+        calls.iter().any(heard),
+        "no worktree.removed for {tree}: {calls:#?}"
+    );
 }

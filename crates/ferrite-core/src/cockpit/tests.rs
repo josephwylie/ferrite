@@ -1221,6 +1221,41 @@ fn deleting_a_thread_preserves_a_shared_registered_worktree() {
     );
 }
 
+/// A Thread from before the registry, bound to an unregistered worktree,
+/// takes its clean tree with it; the tree is told as removed, as
+/// `worktree.remove`'s is (Projects' `worktree.removed`, ADR 0031).
+#[test]
+fn deleting_a_legacy_worktree_thread_tells_its_tree_removed() {
+    let root = scratch("delete-legacy-worktree");
+    let repo = init_repo(&root);
+    let path = root.join("legacy-tree");
+    crate::workspace::git_for_tests(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "legacy",
+            path.to_str().unwrap(),
+        ],
+    );
+    let store = Store::open(scratch("delete-legacy-worktree-store")).unwrap();
+    let binding = WorkspaceBinding::Worktree {
+        repo,
+        path: path.clone(),
+    };
+    let (thread, writer) = store.create(Provider::Claude, None, binding).unwrap();
+    drop(writer);
+    let mut engine = Engine::try_new(store, Box::new(Fake::default())).unwrap();
+
+    engine.delete(thread).unwrap();
+
+    assert!(!path.exists(), "the clean tree is removed");
+    assert_eq!(engine.take_removed_worktrees(), [path]);
+    assert!(engine.take_removed_worktrees().is_empty(), "told once");
+}
+
 /// Deleting a main-bound Thread deletes the Thread — the operator's
 /// checkout is not Ferrite's to touch.
 #[test]

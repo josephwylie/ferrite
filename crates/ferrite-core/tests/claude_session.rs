@@ -810,6 +810,40 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     );
 }
 
+/// Projects' turn-end hooks (ADR 0031): herdr-projects hands its agent a
+/// `--settings` file of `Stop`/`StopFailure` hooks through `thread.start
+/// --args`; it reaches the CLI last, after Ferrite's own flags, with the
+/// environment those hooks run the program in.
+#[test]
+fn projects_settings_reach_the_cli_after_ferrites_flags() {
+    let log = log_path("argv-projects.log");
+    let program = stub(
+        "claude-echoes-projects",
+        &format!(
+            "{PRELUDE}\necho \"$@ | $HERDR_SOCKET_PATH $FERRITE_PROJECTS_BIN\" > '{}'\nexec cat > /dev/null",
+            log.display()
+        ),
+    );
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        env: vec![
+            ("HERDR_SOCKET_PATH", "/store/api.sock".into()),
+            ("FERRITE_PROJECTS_BIN", "/f/ferrite-projects".into()),
+        ],
+        args: vec!["--settings".into(), "/d/tasks/app/1/claude.json".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    let recorded = read_lines(&log, 1);
+    drop(session);
+    assert_eq!(
+        recorded[0],
+        "-p --input-format stream-json --output-format stream-json \
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
+    );
+}
+
 #[test]
 fn effort_changes_clear_the_override_without_replacing_the_process() {
     let log = log_path("live-effort.log");

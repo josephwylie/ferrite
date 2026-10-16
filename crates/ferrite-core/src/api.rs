@@ -55,16 +55,24 @@ pub fn address(store_dir: &Path) -> PathBuf {
 
 /// What every Session's agent is told about where it runs: its own Thread,
 /// and, where the Server takes API connections, the socket and the binary
-/// that speaks to it — the bundle's executable is rarely on `PATH`.
+/// that speaks to it — the bundle's executable is rarely on `PATH`. While
+/// Projects run their shipped `projects` program, also herdr's pane
+/// environment, as herdr gives every pane (ADR 0031).
 pub fn caller_environment(
     thread: ThreadId,
     socket: Option<&Path>,
+    projects: Option<&Path>,
 ) -> Vec<(&'static str, OsString)> {
     let mut env = vec![("FERRITE_THREAD_ID", thread.to_string().into())];
     if let Some(socket) = socket {
         env.push(("FERRITE_SOCKET", socket.into()));
         if let Ok(bin) = std::env::current_exe() {
             env.push(("FERRITE_BIN", bin.into()));
+        }
+        if let Some(program) = projects {
+            env.extend(crate::server::projects::pane_environment(
+                thread, socket, program,
+            ));
         }
     }
     env
@@ -748,8 +756,8 @@ impl Api {
 
     /// One pass, after the Engine's: tell the subscribers which Threads
     /// opened, closed or changed Attention, and answer the waits that
-    /// settled.
-    pub fn pump(&mut self, engine: &Engine) {
+    /// settled. Answers what it told, for the Server's own listeners.
+    pub fn pump(&mut self, engine: &Engine) -> Vec<Event> {
         let open = engine.open_threads().to_vec();
         let mut events: Vec<Event> = open
             .iter()
@@ -777,8 +785,8 @@ impl Api {
             }
         }
         self.open = open;
-        for event in events {
-            self.publish(event);
+        for event in &events {
+            self.publish(event.clone());
         }
         let now = Instant::now();
         for mut waiting in std::mem::take(&mut self.waits) {
@@ -788,6 +796,7 @@ impl Api {
             }
         }
         self.release_hung_up();
+        events
     }
 
     fn publish(&mut self, event: Event) {

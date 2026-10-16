@@ -1,10 +1,11 @@
 //! Ferrite: what Ferrite changes (README.md, ADR 0031). Its 0.2 (`ferrite-projects` 0.2.34) is taken over as upstream's
 //! is, by the names it wrote; the Server's `take-over` says once what that did; `install` and `update` leave the
 //! program to Ferrite; and inside Ferrite's app the program agents and hooks run is the shipped one.
-use crate::common::{world, world_with, Opts, World};
+use crate::common::{delegate, task, world, world_with, Opts, World};
 use crate::takeover_kit::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use sw::json::*;
 
 const HOOK: &str = "'/Applications/Ferrite.app/Contents/MacOS/ferrite-projects' --root /h/.herdr-projects hook --agent claude 2>/dev/null || true";
 
@@ -99,4 +100,25 @@ fn the_program_handed_to_agents_is_the_one_ferrite_names() {
     unsafe { std::env::remove_var("FERRITE_PROJECTS_BIN") };
     assert_eq!(bin, PathBuf::from("/Applications/Ferrite.app/Contents/MacOS/ferrite-projects"));
     assert_ne!(sw::store::files::bin().file_name().unwrap(), "ferrite", "the tests run as themselves");
+}
+
+/// Under Ferrite's Server every agent is told herdr's pane environment: `HERDR_PANE_ID`, its Thread's id, which its
+/// task's link names as the pane, and `HERDR_SOCKET_PATH`, the Server's API socket (ferrite-core's
+/// `server::projects::pane_environment`). So a task's own agent is known as its agent: its "blocked" is its own.
+#[test]
+fn under_ferrite_a_tasks_agent_is_known_by_its_thread() {
+    let w = world();
+    let id = w.add("Pick a colour");
+    delegate(&id);
+    let pane = task(&id).at("link").t("pane");
+    unsafe { std::env::set_var("HERDR_PANE_ID", &pane) };
+    let caller = sw::cli::caller().map(|(t, role)| (t.t("id"), role));
+    let a = sw::cli::flags::parse(&["report", "--state", "blocked", "--msg", "Which colour?"].map(String::from));
+    let said = sw::cli::tasks::command("report", &a).map(|(_, said)| said);
+    unsafe { std::env::remove_var("HERDR_PANE_ID") };
+    assert_eq!(caller, Some((id.clone(), "agent")));
+    assert!(said.as_ref().is_ok_and(|s| s.starts_with("Reported: you are waiting, not finished")), "{:?}", said.map_err(|e| e.msg));
+    let t = task(&id);
+    assert_eq!(t.s("stage"), "asks");
+    assert!(t.at("selfBlocked").is_number(), "its own report: the stop after it is no finish");
 }

@@ -64,10 +64,14 @@ const INHERITED_MARKERS: &[&str] = &[
     "ZELLIJ_SESSION_NAME",
     "ZELLIJ_PANE_ID",
     // A Ferrite's own caller context (`api::caller_environment`): the
-    // Thread a Ferrite started from inside an agent is not this one's.
+    // Thread a Ferrite started from inside an agent is not this one's, nor
+    // the Server its Projects link.
     "FERRITE_THREAD_ID",
     "FERRITE_SOCKET",
     "FERRITE_BIN",
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
+    "FERRITE_PROJECTS_BIN",
 ];
 
 /// The environment of a provider CLI Ferrite starts: the inherited

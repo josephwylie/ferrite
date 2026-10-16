@@ -212,10 +212,127 @@ the home folder's move, the copy of older data and the settings' move);
 then it prints the line upstream keeps for the human until it is said
 (`move_note`, `move_told`), so the take-over is done once and said once.
 The Server logs what it prints and shows it as one toast once a window is
-there (`server/projects.rs`). ADR 0028's `coordinators.json` and
+there (`server/projects.rs`). Between the two, the Server runs the
+startup hook that starts the keeper (Seam 4). ADR 0028's `coordinators.json` and
 `ferrite_migrate.rs` leave with the 0.2 crate: neither 0.2 nor ADR 0028
 ever shipped, and the projects that migration made are set aside with
 the rest of 0.2's.
+
+### Seam 4: the keeper and hooks under the Server
+
+herdr runs herdr-projects by its plugin manifest (`herdr-plugin.toml`):
+`hook` at startup and on `pane.agent_status_changed`,
+`pane.agent_detected`, `pane.closed` and `worktree.removed`. The Server
+plays herdr's part (`server/projects.rs`), with the shipped
+`ferrite-projects` (beside the executable, or `FERRITE_PROJECTS_BIN`;
+none there, Projects are off and the Server says so in its log):
+
+| herdr | the Server |
+|---|---|
+| `[[startup]]` | `hook`, `HERDR_PLUGIN_EVENT=startup`, once `take-over` returned |
+| `pane.agent_detected` | a Thread opened |
+| `pane.agent_status_changed` | a Thread's Attention changed (`idle`, `working`, `done`, `blocked`) |
+| `pane.closed` | a Thread closed (parked or deleted) |
+| `worktree.removed` | the Engine removed one: `worktree.remove`, or a deleted Thread's own unregistered tree (`Engine::take_removed_worktrees`) |
+
+At Server start, on the `projects` thread, in this order: `take-over`
+(Migration from 0.2), then the startup hook, waited for, then the
+take-over's toast. Every command of the program takes over at its start
+(`take_over::at_start`, which holds no lock), so nothing runs it beside
+another: the startup hook only once `take-over` returned, and no event's
+hook until the startup hook returned. The events before that run no
+hook; the startup hook's housekeeping and the keeper's ticks look at
+every task, as they do after a missed hook under herdr.
+
+Each event is the API's own (`Api::pump` answers what it told its
+subscribers), handed over in herdr's words: `HERDR_PLUGIN_EVENT`, and
+`HERDR_PLUGIN_EVENT_JSON` as `{event, data}` with `pane_id` a Thread's
+id, `workspace_id` its Project's (a worktree Thread's, its worktree's
+path, as Seam 1 names a worktree's Space) and `agent` its Provider. The
+fixtures in `server/fixtures/projects-hook/` hold both sides to it: the
+Server's test writes them, and `sw-flow`'s `tests/ferrite_hook_events.rs`
+feeds them to upstream's `hook`. The Server never waits for an event's
+hook; each is reaped once it ends.
+
+The keeper is upstream's, untouched. The startup hook starts it, as
+every hook does when no keeper beats; one runs per machine (its own
+lock and heartbeat); it ticks with the board open or closed; it ends
+once this Server is gone (`keeper-work` finds herdr's socket, here the
+Server's API socket, gone or not answering three times); and it hands
+over to the new program once an update replaces the bundled one, as
+upstream does. A Server restart restarts it: the old keeper ends after
+three failed checks of the socket (about three seconds), and while it
+still beats the new Server's startup hook skips, so the Server runs the
+startup hook once more ten seconds after the first returned, past the
+old one, and that starts a fresh keeper with this Server's environment.
+A restart quicker than those checks keeps the old keeper, which answers
+the same socket with the same program and the same environment.
+
+Until the herdr adapter answers `Herdr::alive` (Seam 1), `keeper-work`
+finds the socket refusing, ends after its three checks and exits 3, and
+the next hook starts it again at most every four seconds
+(`due("keeper-start", 4000)`): the keeper keeps running only once the
+adapter does.
+
+What the hook, the keeper and everything they start are handed:
+`HERDR_SOCKET_PATH`, the Server's API socket, which every task's link
+names as herdr's socket; `FERRITE_SOCKET` and `FERRITE_BIN` for the
+`ferrite` CLI; and `FERRITE_PROJECTS_BIN`, the program, which
+`store/files.rs`'s `bin()` returns, so the launcher
+(`data/bin/herdr-projects`) and the turn-end hooks it writes run the
+bundled program (`server::projects::environment`). Every Session's
+agent, while Projects run, is told herdr's pane environment
+(`server::projects::pane_environment`, through
+`api::caller_environment`), as herdr sets it in every pane:
+`HERDR_PANE_ID`, its Thread's id, the same `pane_id` its events' hooks
+send, with `HERDR_SOCKET_PATH` and `FERRITE_PROJECTS_BIN`. With the
+first two, upstream's `cli::caller()` knows a task's own agent (or
+reviewer): its `report --state blocked` is its own (`selfBlocked`, and
+the "Reported: you are waiting" reply), and what it adds is from its
+task. Without `HERDR_SOCKET_PATH`, what an agent or the Coordinator
+delegates would link herdr's default socket, which the hook's
+`mine(socket)` and the keeper's `board_for(socket)` never match. All
+three are caller context: a Session never inherits them from whatever
+started Ferrite (`spawn::INHERITED_MARKERS`). Ferrite's app sets
+`HERDR_SOCKET_PATH` in its own process before the board runs (the
+board's lane), or a task the board makes links herdr's default socket
+too. `HERDR_PLUGIN_ID` is not
+set: upstream's `login_env` (asking a login shell for `PATH` and gh's
+login) runs only under herdr. The Server already took the login shell's
+environment when launched from the Finder (`login_shell`), and these
+processes inherit it, so `gh`, `git`, `claude` and `codex` resolve and
+gh's login is there without anything being written down.
+
+The turn-end hooks reach Ferrite's Providers through `thread.start
+--args` unchanged: Claude's `--settings` file (`Stop`, `StopFailure`,
+and `PreToolUse` on `ExitPlanMode` for a plan) follows Ferrite's own
+arguments, with herdr's pane environment for the program it runs
+(`tests/claude_session.rs`,
+`projects_settings_reach_the_cli_after_ferrites_flags`), and Codex's
+`-c notify=[…]` goes to its app-server as written
+(`providers::codex::launch` tests). That the CLIs then run them is
+theirs and is checked only by a live run: Claude's hooks in its
+stream-json print mode, where Ferrite also sets an effort through
+`apply_flag_settings`, the same flag layer `--settings` fills, and
+Codex's `notify` under the app-server rather than its terminal. Until a
+live run shows both, the keeper's tick and the hook's
+`agent_status_changed` (a Thread at `done` or `idle`) still find a
+turn's end, as upstream does when a hook is missed.
+
+A Thread parked is `pane.closed`, and the hook then reconciles its task,
+which may find it gone. Under herdr, the fallback hand-over's `pane
+quit` keeps the pane, so `thread.revive` (Seam 1) must keep the Thread
+open across the hand-over, or `pane get` must answer for a parked
+Thread, or a hand-over in two calls marks its task's agent gone mid-way.
+
+What proves each flow behaviour, through Ferrite or still only against
+herdr's fake, and what waits on another seam, is listed in
+`crates/ferrite-projects-flow/README.md`.
+
+`board.notify` stays upstream's: `bell` is the board view's to ring, a
+command runs as upstream runs it, and nothing raises a notification with
+the board closed, as upstream raises none. The take-over's toast is the
+Server's, not the keeper's (Migration from 0.2).
 
 ### Upstream updates
 
@@ -246,6 +363,12 @@ before it ships, record the new commit, and run the crates' tests
   Server start sets aside into a further `-legacy` folder. So the 1.0
   program lands with the view that replaces it, never before: the 0.2
   library, its `configure` and its tests go in the same merge.
-- Whatever starts the keeper at Server start runs after `take-over` has
-  returned, on the same thread (`server/projects.rs`): every command takes
-  over at its start, and two at once would race over the 0.2 folders.
+- The startup hook, which starts the keeper, runs after `take-over` has
+  returned, on the same thread, and the events' hooks only after it
+  (`server/projects.rs`): every command takes over at its start, and two
+  at once would race over the 0.2 folders.
+- Every Thread event runs a short process, as every pane event does
+  under herdr; the hook keeps its own housekeeping to once in two
+  seconds, and where no task was ever made only sees that a keeper
+  runs. So a keeper runs on every machine with a Server, as on every
+  machine with the plugin, idle while there are no tasks.
