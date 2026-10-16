@@ -29,10 +29,7 @@ pub fn head_lines(s: &State, w: usize) -> Vec<Inked> {
     let c = |k: &str| n.get(k).copied().unwrap_or(0);
     // The repo with its key beside it (`gtm-agent · AGT`), in the header's quiet ink as the rest of it.
     let where_ = if s.archive_view { "archive".to_string() } else { crate::board::tags::repo_with_key(&repo_label(&s.data.repo), s.data.keys.get(&s.data.repo).map(|k| k.as_str()).unwrap_or("")) };
-    let tally: Vec<String> = if s.archive_view { vec![format!("{} archived", c("archived"))] } else {
-        [(c("needs you") > 0).then(|| format!("{} {} you", c("needs you"), if c("needs you") == 1 { "needs" } else { "need" })), (c("ready to approve") > 0).then(|| format!("{} ready", c("ready to approve"))),
-         (c("working") > 0).then(|| format!("{} working", c("working"))), (c("to do") > 0).then(|| format!("{} to do", c("to do"))), (c("done") > 0).then(|| format!("{} done", c("done")))].into_iter().flatten().collect()
-    };
+    let tally: Vec<String> = if s.archive_view { vec![format!("{} archived", c("archived"))] } else { tally(c) }; // Ferrite: the tally, said once for the bottom bar too
     let mut rest: Vec<String> = vec![];
     if scope.is_empty() { rest.push(where_); }
     rest.extend(tally);
@@ -53,6 +50,12 @@ pub fn head_lines(s: &State, w: usize) -> Vec<Inked> {
     let found: usize = s.grouped.iter().map(|(_, r)| r.len()).sum();
     head.push(Inked::plain(" ").add(Inked::of(crate::text::cut(&format!("filter \"{f}\" · {found} of {} · {} {}", s.items.len(), key_name("back"), if s.mode == Mode::Find { "cancels" } else { "clears" }), w.saturating_sub(1).max(1)), Ink::Accent)));
     head
+}
+/// Ferrite: how many tasks stand in each group, as the header says it (`3 need you · 1 ready · 2 working`); Ferrite's
+/// bottom bar says it too.
+pub fn tally(c: impl Fn(&str) -> usize) -> Vec<String> {
+    [(c("needs you") > 0).then(|| format!("{} {} you", c("needs you"), if c("needs you") == 1 { "needs" } else { "need" })), (c("ready to approve") > 0).then(|| format!("{} ready", c("ready to approve"))),
+     (c("working") > 0).then(|| format!("{} working", c("working"))), (c("to do") > 0).then(|| format!("{} to do", c("to do"))), (c("done") > 0).then(|| format!("{} done", c("done")))].into_iter().flatten().collect()
 }
 /// The machines in view whose tasks could not be read (or have not come yet), each with why: what the list says
 /// where their tasks would be. On that machine's own board the whole of it follows.
