@@ -58,6 +58,7 @@ fn closes(w: &World, n: usize, tab: &str, shows: Value, tabs: &'static [&'static
 }
 
 #[test]
+#[ignore = "Ferrite: herdr's tab events are its terminal's; socket::on_tab_shown refuses them through the seam (ADR 0031)"]
 fn the_popup_is_never_left_behind_its_board_closes_the_moment_herdr_shows_another_tab() {
     let w = world();
     // herdr tells of every tab that comes to show; its own tab showing again is nothing, another tab of the space and

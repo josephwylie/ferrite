@@ -35,6 +35,7 @@ pub fn explain(s: &Start, said: &str, screen: &str) -> Why {
     let again = s.again;
     let why = |short: String, next: String| Why { short, next, auth: false };
     if all.contains("too long to hand to herdr") { return why("its message was too long to hand over".into(), format!("Shorten it, then {again}.")); }
+    if said.contains(crate::herdr::ferrite::NO_PROVIDER) { return why(format!("Ferrite cannot run {k}"), format!("Choose claude or codex ({}), then {again}.", s.setting)); } // Ferrite: a kind without a Provider
     if said.contains("herdr program was not found") { return why("herdr was not found".into(), format!("Install herdr so that `herdr` runs here, then {again}.")); }
     if (!s.kind.is_empty() && !installed(s.kind)) || MISSING.is_match(screen) {
         return why(format!("{k} is not installed here"), format!("Install {k} so that `{}` runs in a terminal here, or choose another program ({}), then {again}.", super::kinds::program(k), s.setting));

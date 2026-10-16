@@ -130,8 +130,12 @@ pub struct CodexConfig {
     /// threads; the renderer still answers a resumed thread's calls.
     pub visuals: Option<crate::visual::Visuals>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
-    /// set over whatever the CLI inherited.
-    pub env: Vec<(&'static str, std::ffi::OsString)>,
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
     /// Extra arguments to `codex app-server`: what `launch::from_tui_args`
     /// leaves of a Thread's launch arguments, a `-c key=value` override,
     /// say.
@@ -151,6 +155,7 @@ impl Default for CodexConfig {
             resume: None,
             visuals: None,
             env: Vec::new(),
+            launcher: Vec::new(),
             args: Vec::new(),
         }
     }
@@ -295,7 +300,7 @@ impl CodexSession {
     }
 
     fn spawn_once(program: &str, config: &CodexConfig) -> Result<Self, CodexSpawnError> {
-        let mut command = Command::new(program);
+        let mut command = super::launched(&config.launcher, program);
         command
             .arg("app-server")
             .args(&config.args)

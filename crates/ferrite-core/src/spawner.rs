@@ -349,8 +349,20 @@ impl Spawn {
         let resume = request.resume.map(|target| target.to_string());
         let name = request.name.map(|name| name.to_string());
         let additional_directories = request.additional_directories;
-        let args = request.args.to_vec();
-        let env = crate::api::caller_environment(request.thread, self.api.as_deref());
+        let args = request.launch.args.to_vec();
+        let launcher = request.launch.launcher.to_vec();
+        // The Thread's own environment, then Ferrite's over it.
+        let env: Vec<(String, std::ffi::OsString)> = request
+            .launch
+            .env
+            .iter()
+            .map(|(name, value)| (name.clone(), value.into()))
+            .chain(
+                crate::api::caller_environment(request.thread, self.api.as_deref())
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value)),
+            )
+            .collect();
         let defaults = self
             .defaults
             .lock()
@@ -377,6 +389,7 @@ impl Spawn {
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),
                 env,
+                launcher,
                 args,
             }),
             Provider::Codex => {
@@ -397,6 +410,7 @@ impl Spawn {
                     additional_directories,
                     visuals: self.visuals(defaults.visuals),
                     env,
+                    launcher,
                     args: launch.args,
                 })
             }
@@ -510,7 +524,7 @@ mod tests {
             name: None,
             cwd: None,
             additional_directories: Vec::new(),
-            args: &[],
+            launch: Default::default(),
         };
         let served = Spawn {
             api: Some(PathBuf::from("/store/api.sock")),
@@ -519,7 +533,7 @@ mod tests {
         let SessionConfig::Codex(codex) = served.config(request(Provider::Codex)) else {
             panic!("a Codex request makes a Codex config");
         };
-        let names: Vec<&str> = codex.env.iter().map(|(name, _)| *name).collect();
+        let names: Vec<&str> = codex.env.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
             ["FERRITE_THREAD_ID", "FERRITE_SOCKET", "FERRITE_BIN"]
@@ -531,7 +545,50 @@ mod tests {
         let SessionConfig::Claude(claude) = alone.config(request(Provider::Claude)) else {
             panic!("a Claude request makes a Claude config");
         };
-        assert_eq!(claude.env, [("FERRITE_THREAD_ID", "12".into())]);
+        assert_eq!(
+            claude.env,
+            [("FERRITE_THREAD_ID".to_string(), "12".into())]
+        );
+    }
+
+    /// A Thread's own environment goes under Ferrite's, and its launcher
+    /// to the CLI's command (`thread.start --env --launcher`, ADR 0031).
+    #[test]
+    fn a_threads_env_and_launcher_reach_its_cli() {
+        let env = [
+            ("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".to_string()),
+            ("FERRITE_THREAD_ID".to_string(), "99".to_string()),
+        ];
+        let launcher = ["bwrap".to_string(), "--".to_string()];
+        let request = SpawnRequest {
+            thread: ThreadId::new(12),
+            provider: Provider::Claude,
+            model: None,
+            effort: None,
+            resume: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: crate::engine::AgentLaunch {
+                args: &[],
+                env: &env,
+                launcher: &launcher,
+            },
+        };
+        let SessionConfig::Claude(claude) = Spawn::new(Arc::default(), None).config(request)
+        else {
+            panic!("a Claude request makes a Claude config");
+        };
+        assert_eq!(
+            claude.env,
+            [
+                ("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".into()),
+                ("FERRITE_THREAD_ID".to_string(), "99".into()),
+                ("FERRITE_THREAD_ID".to_string(), "12".into()),
+            ],
+            "Ferrite's own is set last, over the Thread's"
+        );
+        assert_eq!(claude.launcher, launcher);
     }
 
     #[derive(Default)]

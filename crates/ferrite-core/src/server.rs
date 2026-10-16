@@ -195,7 +195,7 @@ pub fn run(options: Options) -> i32 {
     crate::log!(
         "server: {} listening, boot {}",
         server.info.version,
-        server.boot_id
+        server.engine.boot_id()
     );
     projects::start(&options.store);
     server.serve(hear)
@@ -277,16 +277,6 @@ fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
     }
 }
 
-/// A boot's identity: a resume names it, and a Server that restarted has
-/// another, so no client resumes into a stream that is not there.
-fn boot_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:x}-{:x}", std::process::id(), nanos)
-}
-
 struct Client {
     connection: Connection,
     /// Said hello in a generation this Server speaks.
@@ -314,7 +304,6 @@ type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
 struct Server {
     engine: Engine,
-    boot_id: String,
     info: ServerInfo,
     clients: BTreeMap<ClientId, Client>,
     /// Each open Thread's recent inputs, for a client that reconnects.
@@ -360,7 +349,6 @@ impl Server {
     ) -> Self {
         Self {
             engine,
-            boot_id: boot_id(),
             info,
             clients: BTreeMap::new(),
             rings: HashMap::new(),
@@ -473,8 +461,12 @@ impl Server {
             } = message
             {
                 let uptime = protocol::ms_since(crate::clock::instant(), self.engine.boot());
-                let welcome =
-                    protocol::welcome(generation, self.info.clone(), self.boot_id.clone(), uptime);
+                let welcome = protocol::welcome(
+                    generation,
+                    self.info.clone(),
+                    self.engine.boot_id().into(),
+                    uptime,
+                );
                 let accepted = !matches!(welcome, ServerMessage::Welcome { error: Some(_), .. });
                 let _ = client.connection.send(welcome);
                 if accepted {
@@ -488,7 +480,7 @@ impl Server {
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
                     client.lists_parked = capabilities.contains(&Capability::ParkedThreads);
                     self.list_parked();
-                    let snapshot = self.engine.snapshot(&self.boot_id);
+                    let snapshot = self.engine.snapshot();
                     self.send(id, ServerMessage::Snapshot(snapshot));
                     if let Some(project) = self.nav_focus.clone() {
                         self.send(
@@ -523,7 +515,7 @@ impl Server {
     fn watch(&mut self, id: ClientId, thread: ThreadId, resume: Option<protocol::Resume>) {
         self.broadcast();
         let missed = resume
-            .filter(|resume| resume.boot_id == self.boot_id)
+            .filter(|resume| resume.boot_id == self.engine.boot_id())
             .and_then(|resume| self.rings.get(&thread)?.since(resume.after));
         match missed {
             Some(missed) => {

@@ -167,6 +167,7 @@ fn an_imported_codex_session_continues_on_the_next_prompt() {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        launcher: Vec::new(),
         args: Vec::new(),
     };
 

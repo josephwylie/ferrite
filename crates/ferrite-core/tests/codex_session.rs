@@ -893,6 +893,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         resume: None,
         visuals: None,
         env: Vec::new(),
+        launcher: Vec::new(),
         args: vec!["-c".into(), "model_verbosity=low".into()],
     })
     .unwrap();

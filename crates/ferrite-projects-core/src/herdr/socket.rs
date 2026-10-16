@@ -19,6 +19,7 @@ pub fn popup_close(socket: Option<&str>) -> HRes<bool> {
 /// Told each time herdr shows another tab: `on(tab id)` on a thread of its own. `started`: called once herdr has taken
 /// the subscription. A connection that fails or ends is left at that.
 pub fn on_tab_shown(socket: Option<String>, on: impl Fn(String) + Send + 'static, started: impl FnOnce() + Send + 'static) {
+    if super::ferrite::ask("events.subscribe", &json!({ "subscriptions": [{ "type": "tab.focused" }] }), socket.as_deref()).is_err() { return; } // Ferrite: refused through the seam, as every request on herdr's socket
     std::thread::spawn(move || {
         let path = socket.unwrap_or_else(current_socket);
         let Ok(mut s) = UnixStream::connect(&path) else { return };

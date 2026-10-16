@@ -67,6 +67,7 @@ impl Herdr {
     /// Put the keyboard on one pane of the tab that shows: zoom it (zooming focuses), and take the zoom off again
     /// unless the tab was zoomed (herdr 0.9.3 has no "focus this pane").
     pub fn pane_focus(&self, id: &str) -> HRes<()> {
+        if super::cli::fake().is_none() { return super::ferrite::pane_focus(self.socket.as_deref(), id); } // Ferrite: its Thread is focused, no pane zoomed
         let Some(before) = self.pane_layout(id) else { return Ok(()) };
         if before.s("focused_pane_id") == id { return Ok(()); }
         self.call(args(&["pane", "zoom", id, "--on"]))?;
@@ -109,6 +110,7 @@ impl Herdr {
     pub fn pane_run(&self, id: &str, command: &str) -> HRes<Value> { self.call(args(&["pane", "run", id, command])) }
     /// End the program in the pane's foreground, so the pane is at its shell again. True once herdr sees no agent there.
     pub fn pane_quit(&self, id: &str, wait_ms: i64) -> bool {
+        if super::cli::fake().is_none() { return super::ferrite::pane_quit(self.socket.as_deref(), id); } // Ferrite: its Thread is parked, never signalled
         let gone = || matches!(self.agent_get(id), Ok(None));
         let info = self.process_info(id);
         let shell = info.as_ref().map(|i| i.i("shell_pid")).unwrap_or(-1);

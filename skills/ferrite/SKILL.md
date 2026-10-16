@@ -156,11 +156,13 @@ A project's coordinator and its threads are Projects' (ADR 0030), not this skill
 ```bash
 "$F" notification show "Review ready" --body "3 findings in Thread 14"
 "$F" thread focus 14
+"$F" project focus 3
 ```
 
 `notification show` puts a toast in every Ferrite window (`windows` says how
-many saw it); `thread focus` brings a Thread on screen. Focus a Thread only
-when the user asked to see it: it moves their view.
+many saw it); `thread focus` brings a Thread on screen, `project focus` a
+Project's first open Thread. Focus only when the user asked to see it: it
+moves their view.
 
 ## Stop, close and clean up
 
@@ -172,6 +174,10 @@ when the user asked to see it: it moves their view.
 
 `agent interrupt` stops the running turn, as the user's Esc does.
 `thread close` parks a Thread: its agent stops, its history stays.
+`"$F" thread revive 14 --resume <provider_session>` starts a parked
+Thread's agent again in place, keeping its id (`--args`, `--env` and
+`--launcher` as `thread start` takes them; without `--resume` it starts a
+new conversation under the Thread's history).
 `worktree remove` removes a worktree by its directory (a Thread's
 `worktree`), parking the Threads in it; its branch stays. It is never
 forced: a worktree with modified or untracked files is refused
@@ -186,7 +192,8 @@ whether the user is looking at the Thread (`focused`), whether they have
 unsent text in its prompt box (`draft`: do not prompt it then), its
 prompts `held_prompt` and `queued_prompts`, its `worktree` and `branch`,
 its agent's own conversation id (`provider_session`), and
-`attention_seq`, which grows with every change of attention. There are
+`attention_seq`, which grows with every change of attention (one count
+for the Server's `boot`, which a restart changes). There are
 no trust or permission screens to read: whatever the agent asks the user
 is a Decision, and its Thread is `blocked` until it is answered.
 
