@@ -165,7 +165,7 @@ impl TextViewState {
 
                         match parsed_update.result {
                             Ok(content) => {
-                                state.parsed_content = content;
+                                state.parsed_content = *content;
                                 state.parsed_error = None;
                                 state.compatible_layout_update = parsed_update.selection_compatible;
                             }
@@ -738,7 +738,7 @@ impl Future for UpdateFuture {
                         full_parse: !options.append,
                         selection_compatible: options.mode == ParseMode::Compatible,
                         baseline_ack: options.mode == ParseMode::BaselineAck,
-                        result: res,
+                        result: res.map(Box::new),
                     });
                     if hit_coalesce_budget {
                         cx.waker().wake_by_ref();
@@ -781,8 +781,16 @@ struct ParsedUpdate {
     full_parse: bool,
     selection_compatible: bool,
     baseline_ack: bool,
-    result: Result<ParsedContent, SharedString>,
+    // Ferrite (vendor/README.md): boxed. The style knobs made `ParsedContent`
+    // ~10 KB, and the unbounded channel builds a 31-slot block of these on the
+    // stack in debug builds: a ~670 KB frame that overflowed the 512 KB
+    // dispatch worker stack on the first parse.
+    result: Result<Box<ParsedContent>, SharedString>,
 }
+
+// Keep it boxed: this crate's tests do not run in Ferrite, so the guard is a
+// compile-time one.
+const _: () = assert!(std::mem::size_of::<ParsedUpdate>() <= 64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParseMode {

@@ -55,6 +55,13 @@ selection calculation and copying of offscreen text remain unchanged.
   document, so selection and copy keep its source. Remove when upstream
   offers custom code block rendering.
 
+- `ParsedUpdate` (`text/state.rs`) carries its parsed content boxed. The
+  style knobs grew `ParsedContent` to ~10 KB, and the unbounded result
+  channel builds a 31-slot block of updates on the stack in a debug build:
+  a ~670 KB frame that overflowed the 512 KB dispatch worker stack on the
+  first parse. A compile-time size assertion keeps it boxed. Keep while
+  the knobs stay inline in `TextViewStyle`.
+
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
 tables, rules and custom blocks, including nested siblings and virtualized
