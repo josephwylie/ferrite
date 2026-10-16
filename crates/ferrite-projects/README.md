@@ -1,9 +1,10 @@
-# herdr-projects (shipped as `ferrite-projects`)
+# herdr-projects (to ship as `ferrite-projects`)
 
 herdr-projects 1.0's command line crate: `src/` (`cli/`, the `sw` library
 that passes on every crate below it as its own, and the docs generator) and
 its tests (`tests/`, one test program over `sw`). Its binary is what
-agents, hooks and Ferrite's Server run.
+agents, hooks and Ferrite's Server will run, once the board replaces the
+window's 0.2 Projects view (see "Shipped").
 
 ## Vendored
 
@@ -24,8 +25,8 @@ it has no one name constant to set, so it is left as it is.
 Each is marked `Ferrite:` in a comment.
 
 - **`Cargo.toml`**: upstream's `[workspace.package]` values written in;
-  the `[[bin]]` is named `ferrite-projects`; `sw-board` in place of
-  `sw-web`.
+  `sw-board` in place of `sw-web`. The `[[bin]]` keeps upstream's name,
+  `herdr-projects`, until it ships.
 - **No web crate.** `crates/web` (the board inside herdr-web-ui, a herdr
   plugin that puts herdr's panes in a browser) is not taken: Ferrite has no
   herdr-web-ui and its board is a GPUI view. `src/lib.rs` re-exports
@@ -38,13 +39,12 @@ Each is marked `Ferrite:` in a comment.
   `--json`, as `{"said": …}`. `doctor`
   is upstream's: it takes over older installs and says where things stand.
 - **`take-over`** (`cli/ferrite.rs`, and its flags in `cli/flags.rs`):
-  Ferrite's Server runs it once at every start, before the keeper. Like
+  for Ferrite's Server to run at every start, before the keeper. Like
   any command it runs upstream's start first (`take_over::at_start`, the
   home folder's move, the old copy, the settings' move); then it prints the
   line upstream keeps for the human until it is said, once, for the
   Server's toast (with `--json`, `{"said": …}`, empty once said).
-- **Tests.** `CARGO_BIN_EXE_herdr-projects` is `CARGO_BIN_EXE_ferrite-projects`
-  throughout. Not taken: the web board's tests (`web_*.rs` but `web_link`
+- **Tests.** Not taken: the web board's tests (`web_*.rs` but `web_link`
   and `web_link_ask`, and `web` and `web_as` in `common/board.rs`,
   `answered` and `ask_again` in `far/mod.rs`); a test that also checked the
   web board keeps its terminal part, the rest marked. Not taken either, as
@@ -61,12 +61,17 @@ Each is marked `Ferrite:` in a comment.
 
 ## Shipped
 
-`scripts/install-app.sh` builds it (`cargo build -p herdr-projects --bin
-ferrite-projects`) and copies it into the app bundle's `Contents/MacOS`,
-beside `ferrite`, signed with the app. The Server finds it there (or at
-`FERRITE_PROJECTS_BIN`), and so does the code inside the app
-(`store::files::bin`), so the launcher agents and hooks are handed runs the
-shipped program. It is Unix-only, as upstream is.
+Not yet. While the window's Projects view is 0.2's, the program Ferrite
+ships as `ferrite-projects` is 0.2's (`../ferrite-projects-0-2`): that
+view runs 0.2 commands, and 0.2's hooks run it, which this program
+refuses. This one is built and tested, not bundled. It ships in the same
+merge that replaces the view and removes the 0.2 crate (ADR 0031): then
+`scripts/install-app.sh` builds it in place of 0.2's and copies it into
+the app bundle's `Contents/MacOS` as `ferrite-projects`, beside
+`ferrite`, signed with the app; the Server runs its `take-over` at start
+in place of 0.2's ticker, and the code inside the app hands agents and
+hooks that program (`store::files::bin`, beside `ferrite` or at
+`FERRITE_PROJECTS_BIN`). It is Unix-only, as upstream is.
 
 Tested in CI on macOS: `cargo test -p sw-core -p sw-flow -p sw-board -p
 herdr-projects`.

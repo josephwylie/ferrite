@@ -1,10 +1,10 @@
 # ferrite-projects (0.2.34, leaving)
 
-> Replaced by herdr-projects 1.0 (ADR 0031), whose command line is now
-> `crates/ferrite-projects` and ships as `ferrite-projects`. This crate's
-> binary and its Server glue are gone; its library stays only while the
-> window's 0.2 Projects view draws from it, and leaves with that view. What
-> follows describes it as it was.
+> Being replaced by herdr-projects 1.0 (ADR 0031), whose command line is
+> `crates/ferrite-projects`. Until the board replaces the window's 0.2
+> Projects view, this crate is still what that view runs and what ships as
+> `ferrite-projects`, with its Server glue (`server/projects.rs`); all of it
+> leaves in the board's merge. Its README is as it was before the move.
 
 Ferrite's coordinator ("Projects"): a coordinator conversation, parallel
 worker Threads, shared memory and an overview of what needs the operator.

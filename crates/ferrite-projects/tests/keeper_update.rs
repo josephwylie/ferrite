@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn copy(w: &World) -> PathBuf {
     let exe = w.base.join("bin").join("herdr-projects");
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_ferrite-projects"), &exe).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_herdr-projects"), &exe).unwrap();
     exe
 }
 /// The keeper, started as a hook starts it, on a herdr that is there with nothing in it (so its ticking goes on).
@@ -63,7 +63,7 @@ fn real_programs_a_keeper_whose_program_is_replaced_starts_its_successor_on_the_
     let exe = copy(&w);
     let old = start(&w, &exe);
     assert!(until(10000, || started().len() == 1), "the keeper did not start: {}", log());
-    replace(&exe, |p| { std::fs::copy(env!("CARGO_BIN_EXE_ferrite-projects"), p).unwrap(); });
+    replace(&exe, |p| { std::fs::copy(env!("CARGO_BIN_EXE_herdr-projects"), p).unwrap(); });
     successor_runs(old);
     assert!(log().contains("ending: the plugin was updated"), "{}", log());
 }
@@ -74,7 +74,7 @@ fn real_programs_a_keeper_that_sees_its_new_program_half_written_keeps_on_and_st
     let exe = copy(&w);
     let old = start(&w, &exe);
     assert!(until(10000, || started().len() == 1), "the keeper did not start: {}", log());
-    let whole = std::fs::read(env!("CARGO_BIN_EXE_ferrite-projects")).unwrap();
+    let whole = std::fs::read(env!("CARGO_BIN_EXE_herdr-projects")).unwrap();
     // The linker has written half of the new file and has it open still: it cannot be started yet ("text file busy").
     let mut f = None;
     replace(&exe, |p| { let mut o = std::fs::File::create(p).unwrap(); o.write_all(&whole[..whole.len() / 2]).unwrap(); f = Some(o); });

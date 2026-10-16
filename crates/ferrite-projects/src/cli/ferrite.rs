@@ -1,5 +1,5 @@
 //! Ferrite: what the command line answers differently when Ferrite ships it (ADR 0031). Ferrite's app carries this
-//! program as `ferrite-projects` and updates it with itself, and its Server runs `take-over` once at its start.
+//! program as `ferrite-projects` and updates it with itself, and its Server runs `take-over` at its start.
 
 use crate::store::files::user_home;
 use crate::store::move_home::{env_now, move_note, move_told};
@@ -8,7 +8,7 @@ use crate::store::move_home::{env_now, move_note, move_told};
 pub const SHIPPED: &str = "ferrite-projects ships inside Ferrite and is updated with it: update Ferrite to update it. \
                            Nothing was changed.";
 
-/// `take-over`: Ferrite's Server runs it once at its start, before the keeper. Like any command, it has taken over
+/// `take-over`: Ferrite's Server runs it at its start, before the keeper. Like any command, it has taken over
 /// older installs first (`take_over::at_start`, then the moves after it); this says what they did, once, for the
 /// Server to show. Empty when there was nothing to say, or it was said before.
 pub fn take_over_said() -> String {
