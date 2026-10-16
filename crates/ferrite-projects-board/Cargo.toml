@@ -1,0 +1,21 @@
+# The board's screen, on sw-flow: its state, what a key does, and what it draws (board/).
+# Which crate holds what, and why: docs/crates.md.
+[package]
+name = "sw-board"
+# Ferrite: upstream's [workspace.package] values, which Ferrite's workspace does not share.
+version = "1.0.1"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+name = "sw_board"
+
+[dependencies]
+sw-flow.workspace = true
+crossterm.workspace = true
+libc.workspace = true
+ratatui.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+unicode-segmentation.workspace = true
