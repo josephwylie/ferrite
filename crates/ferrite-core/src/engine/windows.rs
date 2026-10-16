@@ -106,11 +106,14 @@ impl Engine {
 
     /// The change `thread`'s Attention was last counted at this boot
     /// (`count_attention`): a higher number means something happened since.
+    /// A Thread opened since the last count (a revive's answer) is at the
+    /// count it will be counted at, past every number it carried.
     pub fn attention_seq(&self, thread: ThreadId) -> u64 {
-        self.attention_count
+        let count = &self.attention_count;
+        count
             .threads
             .get(&thread)
-            .map_or(0, |counted| counted.seq)
+            .map_or(count.seq, |counted| counted.seq)
     }
 
     /// `attention_seq` as it was when `thread`'s last turn ended: its

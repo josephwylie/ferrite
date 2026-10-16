@@ -7,21 +7,14 @@ use super::*;
 use sw_core::herdr::Herdr;
 use sw_core::json::*;
 
-/// The board keeps its placed panes beside its data, in a folder the
-/// process names once: every test here shares it.
-fn board_data() -> PathBuf {
-    static DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    DATA.get_or_init(|| {
-        let dir = scratch("herdr-board-data");
-        std::env::set_var("HERDR_PROJECTS_DATA_DIR", &dir);
-        dir
-    })
-    .clone()
-}
-
-fn herdr(harness: &Harness) -> Herdr {
-    board_data();
-    Herdr::new(Some(harness.api.display().to_string()))
+/// The board keeps its placed panes beside its data, in the folder the
+/// process's environment names: each test here names its own, one at a
+/// time, so no test's panes are taken for another's Threads.
+fn herdr(harness: &Harness) -> (Herdr, std::sync::MutexGuard<'static, ()>) {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let one = ONE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::env::set_var("HERDR_PROJECTS_DATA_DIR", harness.dir.join("board-data"));
+    (Herdr::new(Some(harness.api.display().to_string())), one)
 }
 
 /// The agent in `pane` once `done` holds of it, for at most five seconds.
@@ -70,7 +63,7 @@ fn turn(h: &Herdr, pane: &str, provider: &Sender<SessionEvent>) -> Value {
 #[test]
 fn a_pane_s_agent_runs_quits_and_runs_again_on_the_real_server() {
     let harness = start("herdr-revive");
-    let h = herdr(&harness);
+    let (h, _one) = herdr(&harness);
     let cwd = harness.dir.display().to_string();
     let env = [("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".to_string())];
     let made = h.workspace_create(&cwd, "board", &env).unwrap();
@@ -154,7 +147,7 @@ fn a_pane_s_agent_runs_quits_and_runs_again_on_the_real_server() {
 fn a_pane_focused_lands_the_windows_on_its_thread() {
     let harness = start("herdr-focus");
     let mut window = attach(&harness.address);
-    let h = herdr(&harness);
+    let (h, _one) = herdr(&harness);
     let cwd = harness.dir.display().to_string();
     let made = h.workspace_create(&cwd, "", &[]).unwrap();
     let pane = made.at("root_pane").t("pane_id");

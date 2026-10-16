@@ -2264,11 +2264,10 @@ fn a_project_is_focused_by_id() {
     let harness = start("api-project-focus");
     let mut window = attach(&harness.address);
     let mut caller = call(&harness);
-    let started = caller.answer(
-        "1",
-        "thread.start",
-        serde_json::json!({ "cwd": harness.dir }),
-    );
+    // Side by side: a folder inside a Project's root is that Project's.
+    let busy = harness.dir.join("busy");
+    std::fs::create_dir_all(&busy).unwrap();
+    let started = caller.answer("1", "thread.start", serde_json::json!({ "cwd": busy }));
     let info = &started["result"]["thread"];
     let thread = ThreadId::new(info["thread"].as_u64().unwrap());
     let focused = caller.answer(
