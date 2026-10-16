@@ -384,6 +384,12 @@ impl NavTail {
             NavTail::Working(_) | NavTail::Age(_) | NavTail::None => None,
         }
     }
+
+    /// The word is a time — a working Thread's elapsed or the age — which
+    /// a short row drops before its title is cut.
+    pub fn timed(&self) -> bool {
+        matches!(self, NavTail::Working(_) | NavTail::Age(_))
+    }
 }
 
 /// A Thread row's state, for its mark, least urgent first: the order a
@@ -924,11 +930,11 @@ pub fn thread_row_with_title(
     editing: bool,
 ) -> Stateful<Div> {
     let thread = row.thread;
-    let word = (!editing).then(|| row_words(row)).flatten();
     let cells = match place {
         RowPlace::Root => 2.0,
         RowPlace::Member { .. } => 3.0,
     };
+    let word = (!editing).then(|| row_words(row, cells)).flatten();
     let key = SharedString::from(format!(
         "nav-thread-{}-{}",
         group.map_or(0, GroupId::get),
@@ -963,12 +969,36 @@ pub fn thread_row_with_title(
         )
 }
 
-/// What a tree row says at its right: its checkout's facts, then its word.
-fn row_words(row: &ThreadRow) -> Option<SharedString> {
-    match (row.details.text(), row.tail.text()) {
-        (Some(details), Some(word)) => Some(format!("{details} {word}").into()),
+/// What a tree row says at its right, beside a title in `cells` mark
+/// cells: its checkout's facts, then its word — as much as leaves the
+/// title whole. The title gives way last: a time (`NavTail::timed`) goes
+/// first, as soon as the title would be cut; then, only while the title
+/// would keep less than `NAV_TITLE_MIN_CH`, the word, the drift, and the
+/// PR's label, in that order.
+fn row_words(row: &ThreadRow, cells: f32) -> Option<SharedString> {
+    let join = |details: Option<SharedString>, word: Option<SharedString>| match (details, word) {
+        (Some(details), Some(word)) => Some(SharedString::from(format!("{details} {word}"))),
         (details, word) => details.or(word),
+    };
+    let word = row.tail.text();
+    let full = join(row.details.text(), word.clone());
+    let title = row.name.chars().count() as f32 * CH;
+    if title <= title_w(cells, full.as_deref()) {
+        return full;
     }
+    let untimed = (!row.tail.timed()).then_some(word).flatten();
+    let pr = RowDetails {
+        pr: row.details.pr.clone(),
+        ..RowDetails::default()
+    };
+    [
+        join(row.details.text(), untimed),
+        row.details.text(),
+        pr.text(),
+    ]
+    .into_iter()
+    .find(|words| title_w(cells, words.as_deref()) >= NAV_TITLE_MIN_CH * CH)
+    .flatten()
 }
 
 // ------------------------------------------------------- smart filtering
@@ -1890,13 +1920,64 @@ mod tests {
             details: details(1, 0, true, None),
             ..thread()
         };
-        assert_eq!(row_words(&row), Some("\u{2191}1* 2h".into()));
+        assert_eq!(row_words(&row, 2.0), Some("\u{2191}1* 2h".into()));
         let quiet = ThreadRow {
             tail: NavTail::None,
             ..row.clone()
         };
-        assert_eq!(row_words(&quiet), Some("\u{2191}1*".into()));
-        assert_eq!(row_words(&thread()), Some("2h".into()));
+        assert_eq!(row_words(&quiet, 2.0), Some("\u{2191}1*".into()));
+        assert_eq!(row_words(&thread(), 2.0), Some("2h".into()));
+    }
+
+    /// The title gives way last: a time goes as soon as the title would be
+    /// cut, and the word, the drift and the PR's label only while the title
+    /// would keep fewer than `NAV_TITLE_MIN_CH` cells.
+    #[test]
+    fn a_short_row_drops_its_time_before_it_cuts_the_title() {
+        let row = |name: &str, tail: NavTail, ahead: u32| ThreadRow {
+            name: name.into(),
+            tail,
+            details: RowDetails {
+                ahead,
+                pr: Some("#12 \u{2713}".into()),
+                ..RowDetails::default()
+            },
+            ..thread()
+        };
+        let working = || NavTail::Working("1s".into());
+        // 30ch beside a root row's two cells.
+        assert_eq!(
+            row_words(&row("Tax rounding", working(), 0), 2.0),
+            Some("#12 \u{2713} 1s".into()),
+            "room for everything"
+        );
+        assert_eq!(
+            row_words(&row("Stripe webhook retries", working(), 0), 2.0),
+            Some("#12 \u{2713}".into()),
+            "the time goes so the title stays whole"
+        );
+        assert_eq!(
+            row_words(
+                &row("Order confirmation emails and receipts", NavTail::Done, 0),
+                2.0
+            ),
+            Some("#12 \u{2713} done".into()),
+            "a state word stays while the title keeps its minimum"
+        );
+        assert_eq!(
+            row_words(
+                &row(
+                    "Order confirmation emails and receipts",
+                    NavTail::Waiting("approval"),
+                    12
+                ),
+                3.0
+            ),
+            Some("\u{2191}12 #12 \u{2713}".into()),
+            "the word goes before the checkout's facts"
+        );
+        assert!(NavTail::Age("2h".into()).timed());
+        assert!(!NavTail::Done.timed());
     }
 
     /// The nav never says `now` (C10): a Thread used seconds ago has an

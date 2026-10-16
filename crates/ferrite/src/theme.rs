@@ -2159,6 +2159,9 @@ pub const NAV_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_PAD_X;
 pub const NAV_SECTION_GAP: f32 = HALF_ROW;
 /// The most cells a Project heading's branch takes before it truncates.
 pub const NAV_BRANCH_MAX_CH: usize = 16;
+/// The fewest cells a Thread row's title keeps before the facts and the
+/// word at its right give way (`nav::row_words`).
+pub const NAV_TITLE_MIN_CH: f32 = 16.0;
 /// 4px — a drop target that takes no layout of its own ("insert above this
 /// Group", "append after the last member"): an absolute hit band over the
 /// edge of the row it borders.
