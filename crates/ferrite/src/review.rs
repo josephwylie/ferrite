@@ -13,10 +13,10 @@
 //! row, a shift-press or a drag stretches the pick to a range in the same
 //! file; ↑↓ and ⇧↑↓ do the same from the keyboard. A right-click asks the
 //! cockpit for the slot's context menu (`MenuAsked`). `c` (or ⏎, or the
-//! `+ comment` beside the pick) opens a one-line field under it; ⏎ there
-//! adds the comment to the Pane's Composer, where it waits for the next
-//! send (`ferrite_reviewr::ferrite::attach`). ⌫ (or a comment's `×`) takes
-//! back the latest comment under the pick.
+//! `+ comment` in the pick's right gutter) opens a one-line field under
+//! it; ⏎ there adds the comment to the Pane's Composer, where it waits for
+//! the next send (`ferrite_reviewr::ferrite::attach`). ⌫ (or a comment's
+//! `×`) takes back the latest comment under the pick.
 //!
 //! `/` searches the checkout — file names and lines, by the vendored
 //! `fff-search` — and a result opens its file whole (the file view), whose
@@ -140,6 +140,12 @@ const BASE_FOOTER: [(&str, &str); 3] = [
 
 /// The keys while a file or the pull request is shown.
 const BACK_FOOTER: [(&str, &str); 3] = [("r", "reread"), ("/", "search"), ("esc", "back")];
+
+/// The pick's affordance, at its line's right (`line_row`).
+const COMMENT_ON: &str = "+ comment";
+/// The gutter every line keeps for it: its cells, two of air after the
+/// code and one before the edge.
+const COMMENT_GUTTER_CELLS: f32 = COMMENT_ON.len() as f32 + 3.0;
 
 /// The operator picked another scope; the cockpit loads it and calls
 /// `show` (`show_commits` for the commits scope).
@@ -1472,26 +1478,33 @@ impl ReviewView {
                     .text_color(rgb(ink.code_color))
                     .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
             )
-            .when(last_picked && self.editor.is_none(), |line| {
-                line.child(
-                    div()
-                        .id(("review-comment-on", at))
-                        .debug_selector(|| "review-add-comment".into())
-                        .flex_shrink_0()
-                        .px(px(cell))
-                        .text_color(rgb(ACCENT))
-                        .hover_control(format!("review-comment-on-{at}"))
-                        .child("+ comment")
-                        // On the press, before the row's own press re-picks one line.
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|view, _: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                view.open_editor(window, cx);
-                            }),
-                        ),
-                )
-            })
+            // Every line keeps the affordance's gutter at its right, so the
+            // pick's `+ comment` never covers its code nor moves a line.
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(COMMENT_GUTTER_CELLS * cell))
+                    .when(last_picked && self.editor.is_none(), |gutter| {
+                        gutter.child(
+                            div()
+                                .id(("review-comment-on", at))
+                                .debug_selector(|| "review-add-comment".into())
+                                .pl(px(2. * cell))
+                                .pr(px(cell))
+                                .text_color(rgb(ACCENT))
+                                .hover_control(format!("review-comment-on-{at}"))
+                                .child(COMMENT_ON)
+                                // On the press, before the row's own press re-picks one line.
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _: &MouseDownEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        view.open_editor(window, cx);
+                                    }),
+                                ),
+                        )
+                    }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
