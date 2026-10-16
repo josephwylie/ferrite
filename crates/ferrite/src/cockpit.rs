@@ -707,6 +707,10 @@ pub struct Preferences {
     /// Where Projects keeps its projects (ADR 0030). `None` in the test and
     /// demo constructors, so no suite reads the operator's own.
     pub projects: Option<crate::projects::Place>,
+    /// Whether the nav and the bottom bar read 1.0's board (ADR 0031).
+    /// False in the test and demo constructors, so no suite reads the
+    /// operator's own.
+    pub board: bool,
 }
 
 impl Preferences {
@@ -726,6 +730,7 @@ impl Preferences {
             unreadable: None,
             keys_refused: Vec::new(),
             projects: None,
+            board: false,
         }
     }
 }
@@ -1362,7 +1367,8 @@ thread_local! {
 
 /// What the last frame drew for each Pane and nav row, and how often each
 /// was built: the stale-chrome tests read what is on screen, not the model,
-/// and the frame budgets count the work each part did.
+/// and the frame budgets count the work each part did. Also how often the
+/// Projects board was asked for, by any door.
 #[cfg(test)]
 pub(crate) mod drawn {
     use std::cell::{Cell, RefCell};
@@ -1393,6 +1399,26 @@ pub(crate) mod drawn {
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static STATUS_USAGE: RefCell<Option<String>> = const { RefCell::new(None) };
         static STATUS_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static BAR_TALLY: RefCell<Option<String>> = const { RefCell::new(None) };
+        static PROJECTS_TOGGLES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The bar's Projects word as last drawn: the board header's tally.
+    pub(crate) fn record_bar_tally(tally: Option<String>) {
+        BAR_TALLY.with(|said| *said.borrow_mut() = tally);
+    }
+
+    pub(crate) fn bar_tally() -> Option<String> {
+        BAR_TALLY.with(|said| said.borrow().clone())
+    }
+
+    pub(crate) fn toggled_projects() {
+        PROJECTS_TOGGLES.with(|toggles| toggles.set(toggles.get() + 1));
+    }
+
+    /// How many times the Projects board was toggled on this thread.
+    pub(crate) fn projects_toggles() -> usize {
+        PROJECTS_TOGGLES.with(Cell::get)
     }
 
     /// The bar's status line was built reading these usage facts: the
@@ -1525,8 +1551,8 @@ impl CockpitView {
             updating::schedule_checks(cx);
         }
         let projects_place = prefs.projects.clone();
-        if let Some(place) = projects_place.clone() {
-            Self::start_projects_refresh(place, cx);
+        if prefs.board {
+            Self::start_sidebar_refresh(cx);
         }
         cx.on_app_quit(|view, _cx| {
             view.cockpit.halt_sessions();
@@ -1725,6 +1751,7 @@ impl CockpitView {
             unreadable: self.prefs.unreadable.clone(),
             keys_refused: Vec::new(),
             projects: self.prefs.projects.clone(),
+            board: self.prefs.board,
         }
     }
 
@@ -4549,8 +4576,8 @@ impl CockpitView {
     }
 
     /// One ask: to land on a Thread, as its nav row would; a toast, which
-    /// fades as a finished turn's does unless important, with its chime; or
-    /// the nav focused on one Projects project (ADR 0030).
+    /// fades as a finished turn's does unless important, with its chime.
+    /// 0.2's nav focus (ADR 0030) is heard and set aside.
     fn present(
         &mut self,
         asked: ferrite_core::cockpit::Asked,
@@ -4581,7 +4608,9 @@ impl CockpitView {
                     self.chime(sound);
                 }
             }
-            Asked::NavFocus(slug) => self.focus_nav_on_project(slug, cx),
+            // 0.2's `focus` verb: 1.0's board has no project to focus the
+            // nav on, and its sidebar rows sit where their Threads do.
+            Asked::NavFocus(_) => {}
         }
     }
 
@@ -8492,12 +8521,6 @@ impl CockpitView {
             selected: solo == Some(thread),
             ..self.thread_row(thread)
         };
-        // Projects' blocks come first, and their Threads are theirs alone;
-        // focused on one, the nav shows that block and nothing else.
-        let blocks = self.project_blocks(row);
-        let claimed = projects::claimed(&blocks);
-        let project_focus = projects::focused(&self.projects, &blocks);
-
         // The loose rows: open Threads with no home Group, in creation
         // order. Drafts are not rows (#29) — the grid is where a draft
         // lives — and a parked loose Thread waits in the Parked section.
@@ -8506,9 +8529,7 @@ impl CockpitView {
             .panes
             .iter()
             .filter_map(PaneView::thread)
-            .filter(|thread| {
-                !homed.contains(thread) && !claimed.contains(thread) && self.admitted(*thread)
-            })
+            .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
             .collect();
         threads.sort();
         threads.dedup();
@@ -8574,7 +8595,7 @@ impl CockpitView {
                 let mut shown: Vec<nav::ThreadRow> = members
                     .iter()
                     .copied()
-                    .filter(|thread| !claimed.contains(thread) && self.admitted(*thread))
+                    .filter(|thread| self.admitted(*thread))
                     .map(row)
                     .collect();
                 if shown.is_empty() {
@@ -8644,6 +8665,7 @@ impl CockpitView {
                 mixed: true,
                 label: SharedString::from("groups"),
                 branch: None,
+                numbers: None,
                 folded: self.nav_folds.contains(&NavFold::Groups),
                 status: mixed
                     .iter()
@@ -8665,9 +8687,33 @@ impl CockpitView {
                 section_groups.push(groups.len());
                 groups.push(block.clone());
             }
-            let label = key
-                .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| SharedString::from(project.title.to_lowercase()))
+            // A section's own Threads, not a Group's guest from another
+            // Project: they say its branch and the Space it stands for.
+            let own: Vec<ThreadId> = section_solos
+                .iter()
+                .map(|index| solos[*index].thread)
+                .chain(
+                    section_groups
+                        .iter()
+                        .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
+                )
+                .filter(|thread| project_of(*thread) == key)
+                .collect();
+            // A heading names its branch; `Other` names no Project, so no
+            // branch either.
+            let branch = key.and_then(|_| self.section_branch(&own));
+            // A task's own space is named as its row is (ADR 0031), its
+            // numbers under the heading.
+            let space = key.and_then(|_| self.projects.sidebar.heading(own.iter().copied()));
+            let numbers = space
+                .map(|space| SharedString::from(space.progress.clone()))
+                .filter(|numbers| !numbers.is_empty());
+            let label = space
+                .map(|space| SharedString::from(space.name.clone()))
+                .or_else(|| {
+                    key.and_then(|project| self.cockpit.registry().project(project))
+                        .map(|project| SharedString::from(project.title.to_lowercase()))
+                })
                 .or_else(|| {
                     key.and_then(|_| {
                         section_solos
@@ -8683,23 +8729,6 @@ impl CockpitView {
                     })
                 })
                 .unwrap_or_else(|| SharedString::from("other"));
-            // A heading names its branch; `Other` names no Project, so no
-            // branch either.
-            // Only the section's own Threads say it: a Group's guest from
-            // another Project has that Project's checkout.
-            let branch = key.and_then(|_| {
-                let rows: Vec<ThreadId> = section_solos
-                    .iter()
-                    .map(|index| solos[*index].thread)
-                    .chain(
-                        section_groups
-                            .iter()
-                            .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
-                    )
-                    .filter(|thread| project_of(*thread) == key)
-                    .collect();
-                self.section_branch(&rows)
-            });
             let status = nav::RowStatus::roll_up(
                 section_solos.iter().map(|index| &solos[*index]).chain(
                     section_groups
@@ -8713,6 +8742,7 @@ impl CockpitView {
                 mixed: false,
                 label,
                 branch,
+                numbers,
                 folded: key
                     .is_some_and(|project| self.nav_folds.contains(&NavFold::Project(project))),
                 status,
@@ -8761,12 +8791,8 @@ impl CockpitView {
             .smart_filtering
             .then(|| self.smart_sections());
 
-        if project_focus {
-            sections.clear();
-        }
         nav::NavState {
             smart,
-            projects: blocks,
             sections,
             groups,
             solos,
@@ -8848,7 +8874,7 @@ impl CockpitView {
             .and_then(|facts| facts.last_used)
             .map(|at| crate::facts::since_label(at, now))
             .unwrap_or_default();
-        let row = nav::ThreadRow {
+        let mut row = nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
             status,
@@ -8859,7 +8885,21 @@ impl CockpitView {
                 facts.and_then(|facts| facts.pr.label()),
             ),
             tail: nav::NavTail::of(status, slot.as_ref(), age),
+            task: None,
         };
+        // A Thread the board runs is its sidebar entry (ADR 0031): the
+        // task's number and title, nothing at the right, its rows under it.
+        // Only an open Thread is a live agent: a parked one stays one line.
+        let told = open.and(self.projects.sidebar.agents.get(&thread));
+        if let Some(told) = told {
+            row = nav::ThreadRow {
+                name: told.entry.name.clone().into(),
+                details: nav::RowDetails::default(),
+                tail: nav::NavTail::None,
+                task: Some(told.rows()),
+                ..row
+            };
+        }
         #[cfg(test)]
         drawn::record_row(
             thread,
@@ -13311,25 +13351,6 @@ impl CockpitView {
         let focused = self.cockpit.roster().focused_thread();
         let mut rows: Vec<nav::RailRow> = Vec::new();
         let mut listed = std::collections::HashSet::new();
-        let project_rows = state.projects.iter().flat_map(|block| {
-            block
-                .head
-                .iter()
-                .chain(block.rows.iter().map(|(row, _)| row))
-        });
-        for row in project_rows {
-            if listed.insert(row.thread) {
-                rows.push(nav::RailRow {
-                    key: keyed
-                        .iter()
-                        .position(|shown| *shown == Some(row.thread))
-                        .map(|at| at + 1),
-                    thread: row.thread,
-                    status: row.status,
-                    selected: row.selected,
-                });
-            }
-        }
         for section in &state.sections {
             let solos = section
                 .solos
@@ -13437,13 +13458,12 @@ impl CockpitView {
         if let Some(smart) = state.smart.as_ref().filter(|_| !folded) {
             own.push(self.smart_sections_element(smart, cx).into_any_element());
         }
-        if !folded {
-            own.extend(self.project_blocks_element(&state.projects, cx));
-        }
         let mut zones = 0usize;
         for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
-            let first = index == 0 && state.projects.is_empty();
-            let mut block = nav::section(first).child(self.project_heading(index, section, cx));
+            let first = index == 0;
+            let mut block = nav::section(first)
+                .child(self.project_heading(index, section, cx))
+                .children(section.numbers.clone().map(nav::space_numbers));
             if !section.folded {
                 if !section.solos.is_empty() {
                     let rows = section
@@ -13464,7 +13484,7 @@ impl CockpitView {
         }
         // An empty tree says so at its top, before the ground. It names the
         // Project the filter chose.
-        if state.sections.is_empty() && state.projects.is_empty() && !folded {
+        if state.sections.is_empty() && !folded {
             let filtered = self
                 .nav_filter
                 .and_then(|project| self.cockpit.registry().project(project))

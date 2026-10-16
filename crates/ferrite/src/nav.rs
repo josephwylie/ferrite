@@ -116,10 +116,6 @@ pub(crate) enum NavFold {
 pub struct NavState {
     /// Smart filtering's sections over the tree, or `None` while it is off.
     pub smart: Option<SmartSections>,
-    /// Projects' blocks (ADR 0030), first in the tree: each project's
-    /// coordinator, then its Threads by need. Their Threads are in no
-    /// section below.
-    pub projects: Vec<ProjectBlock>,
     /// One section per Project with a row to show, in creation order, then
     /// `Other` for Threads whose Project cannot be read.
     pub sections: Vec<ProjectSection>,
@@ -183,6 +179,9 @@ pub struct ProjectSection {
     /// The branch the heading names at its right: the checkout every row
     /// shares, else the Project's default. `None` says nothing.
     pub branch: Option<SharedString>,
+    /// A task's own space: its row's numbers (`8% 16m`), under the heading
+    /// (ADR 0031).
+    pub numbers: Option<SharedString>,
     /// The heading's triangle folded it: it draws `▸` and nothing under it.
     pub folded: bool,
     /// The most urgent of its rows (`RowStatus::roll_up`), which its
@@ -192,39 +191,6 @@ pub struct ProjectSection {
     pub solos: Vec<usize>,
     /// Indices into `NavState::groups`.
     pub groups: Vec<usize>,
-}
-
-/// One project of Projects (herdr-projects' sidebar rows, ADR 0030): its
-/// head — the coordinator's row, named with the project's name in bold,
-/// its summary (`2 need you · 3 working`, `paused`) at the right — then its
-/// Threads by need, then id, each `t-0002 · title` over a dim sub-line.
-#[derive(Clone)]
-pub struct ProjectBlock {
-    pub slug: SharedString,
-    pub name: SharedString,
-    pub summary: SharedString,
-    /// The coordinator's row, when it is a Thread here.
-    pub head: Option<ThreadRow>,
-    pub head_sub: Option<SharedString>,
-    pub rows: Vec<(ThreadRow, Option<SharedString>)>,
-}
-
-impl ProjectBlock {
-    /// Every Thread the block draws.
-    pub fn threads(&self) -> impl Iterator<Item = ThreadId> + '_ {
-        self.head
-            .iter()
-            .map(|row| row.thread)
-            .chain(self.rows.iter().map(|(row, _)| row.thread))
-    }
-
-    /// What the project's head says: the roll-up of its coordinator and
-    /// its Threads (`RowStatus::roll_up`), as a Group's row says its
-    /// members'.
-    pub fn status(&self) -> RowStatus {
-        RowStatus::roll_up(self.head.iter().chain(self.rows.iter().map(|(row, _)| row)))
-            .unwrap_or_default()
-    }
 }
 
 /// Smart filtering (`Settings::smart_filtering`): two sections over the
@@ -278,6 +244,26 @@ pub struct ThreadRow {
     pub details: RowDetails,
     /// The one word at the row's right (C10).
     pub tail: NavTail,
+    /// The board's words for the Thread's agent, under its row (ADR 0031):
+    /// a task's agent, its reviewer, the Coordinator. Its row 1 is `name`,
+    /// the task's number and title, with no word at the right.
+    pub task: Option<TaskRows>,
+}
+
+/// Rows 2 and 3 of herdr's sidebar entry for a Thread the board runs, in
+/// the board's own words (`sidebar::Told::rows`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskRows {
+    /// Row 2: who is on it and where it stands, then its time, last
+    /// (`agent · working · R#1 PR#113 · 6m`).
+    pub stands_timed: SharedString,
+    /// Row 2 without its time, for a row too short for the whole.
+    pub stands: SharedString,
+    /// Row 2's ink: where the task stands.
+    pub ink: u32,
+    /// Row 3, dim: the row's numbers, bare (`8% 16m`, `Q#2`), or the
+    /// Coordinator's latest message.
+    pub third: SharedString,
 }
 
 /// A row's checkout facts: commits ahead of and behind its upstream and a
@@ -921,7 +907,8 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
 /// leaves it, and at the right its checkout's facts and its word. `group`
 /// scopes the row's blend when the Thread is listed under several Groups.
 /// `editing` is a rename in progress: the field takes the title's box and
-/// the word's.
+/// the word's. A Thread the board runs has its entry's rows under that line
+/// (`task_lines`), the whole entry one row to the pointer.
 pub fn thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
@@ -940,18 +927,16 @@ pub fn thread_row_with_title(
         group.map_or(0, GroupId::get),
         thread.get()
     ));
-    let frame = row_frame(("nav-thread", thread.get() as usize), key, row.selected)
-        .debug_selector(move || format!("nav-thread-{}", thread.get()));
     // A member's lead is the prototype's typed `  ├ ` (one run); the
     // cursor takes its first two cells when the row is selected.
-    let frame = match place {
-        RowPlace::Root => frame.child(cursor_cell(row.selected)),
+    let head = match place {
+        RowPlace::Root => line().child(cursor_cell(row.selected)),
         RowPlace::Member { last } if row.selected => {
-            frame.child(cursor_cell(true)).child(tree_cell(last))
+            line().child(cursor_cell(true)).child(tree_cell(last))
         }
-        RowPlace::Member { last } => frame.child(tree_lead(last)),
+        RowPlace::Member { last } => line().child(tree_lead(last)),
     };
-    frame
+    let head = head
         .child(cell(status_mark(row.status)))
         .child(
             fitted(
@@ -962,11 +947,29 @@ pub fn thread_row_with_title(
             )
             .debug_selector(move || format!("nav-title-{}", thread.get())),
         )
-        .children(
-            (!editing).then(|| {
-                word_cell(word).debug_selector(move || format!("nav-since-{}", thread.get()))
-            }),
-        )
+        .children((!editing).then(|| {
+            word_cell(word).debug_selector(move || format!("nav-since-{}", thread.get()))
+        }));
+    // A task row is its entry's lines, one row under the pointer.
+    let frame = match &row.task {
+        None => head,
+        Some(task) => div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(head)
+            .children(
+                task_lines(task, cells)
+                    .into_iter()
+                    .map(|(text, ink)| task_line(text, ink, cells)),
+            ),
+    };
+    wash(
+        frame.id(("nav-thread", thread.get() as usize)),
+        key,
+        row.selected,
+    )
+    .debug_selector(move || format!("nav-thread-{}", thread.get()))
 }
 
 /// What a tree row says at its right, beside a title in `cells` mark
@@ -1059,59 +1062,37 @@ fn title_ink(selected: bool, parked: bool) -> u32 {
     }
 }
 
-// ------------------------------------------------------------- Projects
+// ------------------------------------------------------- the board's rows
 
-/// A project's head row: the cursor cell, the project's roll-up mark
-/// (`ProjectBlock::status`) — a coordinator's idle dot while all are
-/// idle, as its own row would draw it — the project's name in
-/// bold (the one bold title in the column) and its summary at the right.
-/// Selected while the board shows the coordinator.
-pub fn project_head(index: usize, block: &ProjectBlock) -> Stateful<Div> {
-    let selected = block.head.as_ref().is_some_and(|row| row.selected);
-    let key = SharedString::from(format!("nav-projects-head-{}", block.slug));
-    let summary = head_summary(&block.name, &block.summary);
-    let mark = match &block.head {
-        Some(_) => cell(status_mark(block.status())),
-        None => roll_up_cell(block.status()),
+/// What a task row says under its row, at its title's edge `cells` in,
+/// each line in its ink (ADR 0031): row 2, its time dropped first when the
+/// whole would be cut (the rule `row_words` keeps), then row 3. A line
+/// with nothing to say is not drawn.
+pub fn task_lines(task: &TaskRows, cells: f32) -> Vec<(SharedString, u32)> {
+    let whole = task.stands_timed.chars().count() as f32 * CH <= title_w(cells, None);
+    let stands = if whole {
+        &task.stands_timed
+    } else {
+        &task.stands
     };
-    row_frame(("nav-projects-head", index), key, selected)
-        .debug_selector(move || format!("nav-projects-head-{index}"))
-        .child(cursor_cell(selected))
-        .child(mark)
-        .child(fitted(
-            title_w(2.0, summary.as_deref()),
-            title_ink(selected, false),
-            W_STRONG,
-            block.name.clone(),
-        ))
-        .child(word_cell(summary))
+    [
+        (stands.clone(), task.ink),
+        (task.third.clone(), CHROME_MUTED),
+    ]
+    .into_iter()
+    .filter(|(text, _)| !text.is_empty())
+    .collect()
 }
 
-/// A project head's word: its summary while the name fits beside it whole,
-/// else only the summary's first part — what needs you leads
-/// (`2 need you · 1 working`) — and the name gives way.
-fn head_summary(name: &str, summary: &SharedString) -> Option<SharedString> {
-    if summary.is_empty() {
-        return None;
-    }
-    let name_w = name.chars().count() as f32 * CH;
-    if name_w <= title_w(2.0, Some(summary)) {
-        return Some(summary.clone());
-    }
-    summary
-        .split(" \u{b7} ")
-        .next()
-        .map(|first| SharedString::from(first.to_string()))
-}
-
-/// The dim line under a project's row: what its state line adds and its
-/// fresh activity (`~40% · Writing tests`, `review · PR #4`), at the
-/// title's edge.
-pub fn sub_line(text: SharedString) -> Div {
-    line()
-        .pl(px(NAV_PAD_X + 2.0 * NAV_CELL))
-        .text_color(rgb(CHROME_MUTED))
-        .child(fitted(title_w(2.0, None), CHROME_MUTED, W_BODY, text))
+/// One line under a task row, at its title's edge, cut with `…` where it
+/// is long.
+fn task_line(text: SharedString, ink: u32, cells: f32) -> Div {
+    line().pl(px(NAV_PAD_X + cells * NAV_CELL)).child(fitted(
+        title_w(cells, None),
+        ink,
+        W_BODY,
+        text,
+    ))
 }
 
 /// A Project heading (or the `groups` heading), one line: its triangle
@@ -1120,7 +1101,8 @@ pub fn sub_line(text: SharedString) -> Div {
 /// heading style — and its branch, dim, at the right, still there under
 /// the pointer. A plain row: it washes like any other, and the cockpit
 /// wires its press to the fold. A new Thread in this Project is a palette
-/// command.
+/// command. A task's own space has its numbers under it
+/// (`space_numbers`).
 pub fn project_section(index: usize, section: &ProjectSection) -> Stateful<Div> {
     let branch = section.branch.as_deref().map(short_branch);
     let key = SharedString::from(format!("nav-project-section-{index}"));
@@ -1135,6 +1117,13 @@ pub fn project_section(index: usize, section: &ProjectSection) -> Stateful<Div> 
             section.label.clone(),
         ))
         .child(word_cell(branch))
+}
+
+/// A task's own space's numbers (`8% 16m`) under its heading, dim at the
+/// label's edge, as herdr's sidebar has them under the space's name (ADR
+/// 0031).
+pub fn space_numbers(numbers: SharedString) -> Div {
+    task_line(numbers, CHROME_MUTED, 2.0)
 }
 
 /// A branch held to `NAV_BRANCH_MAX_CH` cells, an ellipsis standing for the
@@ -1509,6 +1498,7 @@ mod tests {
             selected,
             details: RowDetails::default(),
             tail: NavTail::Age("2h".into()),
+            task: None,
         }
     }
 
@@ -1529,6 +1519,7 @@ mod tests {
             mixed: false,
             label: "Ferrite".into(),
             branch: branch.map(SharedString::from),
+            numbers: None,
             folded,
             status: RowStatus::Idle,
             solos: Vec::new(),
@@ -1539,53 +1530,6 @@ mod tests {
     /// The terminal grammar: square rows with no radius, every item one
     /// 20px line 1ch in from the column's edge, and a Project section a
     /// half row below the one above it.
-    /// A project head's summary gives way to its name: whole while both
-    /// fit, else only what needs you.
-    #[test]
-    fn a_project_heads_summary_gives_way_to_its_name() {
-        let summary = SharedString::from("2 need you \u{b7} 1 working");
-        assert_eq!(head_summary("docs", &summary), Some(summary.clone()));
-        assert_eq!(
-            head_summary("Checkout revamp", &summary),
-            Some("2 need you".into())
-        );
-        assert_eq!(head_summary("docs", &SharedString::default()), None);
-    }
-
-    /// A project's head rolls up its coordinator and its Threads by the four
-    /// states: an idle coordinator over a Thread that needs you says so.
-    #[test]
-    fn a_project_head_rolls_up_its_coordinator_and_threads() {
-        let row = |status| ThreadRow { status, ..thread() };
-        let block = |head: Option<RowStatus>, rows: &[RowStatus]| ProjectBlock {
-            slug: "checkout".into(),
-            name: "Checkout".into(),
-            summary: SharedString::default(),
-            head: head.map(row),
-            head_sub: None,
-            rows: rows.iter().map(|status| (row(*status), None)).collect(),
-        };
-        let idle = Some(RowStatus::Idle);
-        assert_eq!(
-            block(
-                idle,
-                &[RowStatus::Done, RowStatus::NeedsYou, RowStatus::Working]
-            )
-            .status(),
-            RowStatus::NeedsYou
-        );
-        assert_eq!(
-            block(idle, &[RowStatus::Working, RowStatus::Done]).status(),
-            RowStatus::Done
-        );
-        assert_eq!(
-            block(Some(RowStatus::Working), &[RowStatus::Idle]).status(),
-            RowStatus::Working
-        );
-        assert_eq!(block(idle, &[]).status(), RowStatus::Idle);
-        assert_eq!(block(None, &[RowStatus::Done]).status(), RowStatus::Done);
-    }
-
     #[test]
     fn nav_rows_are_square_terminal_lines() {
         let mut row = thread_row(&thread());
@@ -1693,6 +1637,7 @@ mod tests {
             selected: false,
             details: RowDetails::default(),
             tail: NavTail::None,
+            task: None,
         };
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
         let line = Some(px(NAV_LINE).into());
@@ -1927,6 +1872,72 @@ mod tests {
         };
         assert_eq!(row_words(&quiet, 2.0), Some("\u{2191}1*".into()));
         assert_eq!(row_words(&thread(), 2.0), Some("2h".into()));
+    }
+
+    fn task(stands: &str, time: &str, third: &str) -> TaskRows {
+        let timed = [stands, time]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        TaskRows {
+            stands_timed: timed.into(),
+            stands: stands.into(),
+            ink: YELLOW,
+            third: third.into(),
+        }
+    }
+
+    fn lines(task: &TaskRows, cells: f32) -> Vec<(String, u32)> {
+        task_lines(task, cells)
+            .into_iter()
+            .map(|(text, ink)| (text.to_string(), ink))
+            .collect()
+    }
+
+    /// A Thread the board runs draws its sidebar entry under its row (ADR
+    /// 0031): row 2 where it stands in its task's ink, its time last and
+    /// the first thing a short row drops, then row 3 dim — and no line
+    /// where a row says nothing.
+    #[test]
+    fn a_task_rows_entry_drops_its_time_before_it_cuts_where_it_stands() {
+        assert_eq!(
+            lines(&task("agent \u{b7} working", "6m", "8% 16m"), 2.0),
+            [
+                ("agent \u{b7} working \u{b7} 6m".to_string(), YELLOW),
+                ("8% 16m".to_string(), CHROME_MUTED)
+            ],
+            "room for the whole"
+        );
+        // 33ch against a root row's 30.
+        assert_eq!(
+            lines(
+                &task("agent \u{b7} working \u{b7} R#1 PR#113", "6m", ""),
+                2.0
+            ),
+            [("agent \u{b7} working \u{b7} R#1 PR#113".to_string(), YELLOW)],
+            "the time goes first; no numbers, no row 3"
+        );
+        // 28ch against a member's 26.
+        assert_eq!(
+            lines(&task("reviewer \u{b7} under review", "2m", "40% 3m"), 3.0),
+            [
+                ("reviewer \u{b7} under review".to_string(), YELLOW),
+                ("40% 3m".to_string(), CHROME_MUTED)
+            ],
+            "a member's title edge is a cell further in"
+        );
+        assert_eq!(
+            lines(
+                &task("Coordinator \u{b7} idle", "", "Done. Both tasks are added."),
+                2.0
+            ),
+            [
+                ("Coordinator \u{b7} idle".to_string(), YELLOW),
+                ("Done. Both tasks are added.".to_string(), CHROME_MUTED)
+            ],
+            "the Coordinator's message under it, dim"
+        );
     }
 
     /// The title gives way last: a time goes as soon as the title would be

@@ -1,11 +1,9 @@
 //! Scenes for the features the first references predate: the work board
-//! (ADR 0031) and the nav's project blocks (ADR 0030), the Review slot (ADR
+//! and its rows in the nav (ADR 0031), the Review slot (ADR
 //! 0021), find in a transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
 //! nothing of the operator's (the projects root is under the scene's own).
-
-use std::fs::File;
 
 use ferrite_core::protocol::{
     ReviewPullRequest, WireCheck, WireCheckStatus, WireMerge, WirePr, WirePrComment,
@@ -14,7 +12,6 @@ use ferrite_core::protocol::{
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
 use ferrite_core::{SessionEvent, TurnOutcome};
-use ferrite_projects::{coordinator, project, thread};
 use ferrite_reviewr::ferrite::FileSides;
 use ferrite_reviewr::git::CommitRow;
 use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as ReviewScope, Side};
@@ -23,8 +20,13 @@ use gpui::{AppContext, Focusable};
 
 use super::{conversation, Scene, Setup};
 use crate::nav::NavFold;
-use crate::projects::{Model, Place};
+use crate::projects::Place;
 use crate::review::ReviewView;
+use crate::sidebar::{self, Sidebar};
+use ferrite_core::ThreadId;
+use sw_board::flow::sidebar_entry::coordinator_entry;
+use sw_board::json::{json, obj, Value};
+use sw_board::status_words::coordinator_stands;
 
 /// Every state this module draws, at the app size.
 pub(super) const STATES: &[&str] = &[
@@ -62,10 +64,10 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 
 // ------------------------------------------------------------------ projects
 
-/// One project under the scene's own projects root, its coordinator and
-/// three workers fixture Threads, the ticker's lock held so the records
-/// read as live: the nav and the bottom bar. With `board`, the work board
-/// (⌘⇧A) over them in the board's place, on upstream's fixture rows.
+/// One project's coordinator and three workers fixture Threads, the
+/// board's Coordinator and three tasks' agents in the nav, the board's
+/// tally in the bottom bar. With `board`, the work board (⌘⇧A) over them
+/// in the board's place, on upstream's fixture rows.
 fn projects(board: bool) -> (Scene, Setup) {
     let mut scene = Scene::new(&format!("projects-{}", if board { "board" } else { "nav" }));
     let checkout = scene.project("checkout");
@@ -88,30 +90,15 @@ fn projects(board: bool) -> (Scene, Setup) {
         )
         .end(0.31);
     let workers = [
-        (
-            "Stripe webhook retries",
-            "working",
-            "working · ~60%",
-            "Writing the retry tests",
-        ),
-        (
-            "Cart copy pass",
-            "waiting-on-you",
-            "needs you · blocked",
-            "",
-        ),
-        (
-            "Order confirmation emails",
-            "ready-for-review",
-            "ready for review · PR #48",
-            "",
-        ),
+        ("Stripe webhook retries", "working"),
+        ("Cart copy pass", "waiting-on-you"),
+        ("Order confirmation emails", "ready-for-review"),
     ];
-    // Each worker's Thread says what its record does: one working, one
+    // Each worker's Thread says what its task does: one working, one
     // asking, one finished with its PR up.
     let mut threads = Vec::new();
     let mut finished = None;
-    for (title, group, ..) in workers {
+    for (title, group) in workers {
         let (id, feed) = scene.open(Provider::Claude, &checkout, title);
         scene.core.send(id, format!("{title}."));
         feed.boot(Provider::Claude, 20_000);
@@ -133,45 +120,10 @@ fn projects(board: bool) -> (Scene, Setup) {
         feed.text("PR #48 is up for review.").end(0.14);
     }
 
-    let alpha = project::create(
-        &place.root,
-        "Checkout revamp",
-        "Ship the new checkout before the sale",
-        Vec::new(),
-    )
-    .expect("create the fixture project");
-    alpha
-        .update_coordinator(|record| record.pane_id = head.to_string())
-        .expect("record the coordinator");
-    coordinator::save_live(
-        &alpha,
-        &[coordinator::LivePane {
-            pane_id: head.to_string(),
-            agent_status: "working".into(),
-            ..Default::default()
-        }],
-    )
-    .expect("record the coordinator's pane");
-    for ((title, group, state, activity), id) in workers.into_iter().zip(&threads) {
-        thread::allocate(&alpha, |record| {
-            record.title = title.into();
-            record.status = thread::Status::Open;
-            record.last_group = group.into();
-            record.pane_id = id.to_string();
-            record.state_line = state.into();
-            record.activity = activity.into();
-        })
-        .expect("record a fixture thread");
-    }
-    // The ticker runs while its lock is held: the records are live, and
-    // the bottom bar counts what needs the operator.
-    let lock = File::create(place.root.join(".ticker.lock")).expect("create the ticker lock");
-    lock.try_lock().expect("hold the ticker lock");
-    scene.hold.push(Box::new(lock));
-
+    let sidebar = board_sidebar(head, &threads);
     let setup: Setup = Box::new(move |view, window, cx| {
         view.set_nav_fold(NavFold::Parked, false, cx);
-        view.projects.model = Model::load(&place);
+        view.projects.sidebar = sidebar;
         view.projects.place = Some(place);
         // The cart copy's request stood before the window opened: heard,
         // not toasted over the board.
@@ -184,6 +136,60 @@ fn projects(board: bool) -> (Scene, Setup) {
         cx.notify();
     });
     (scene, setup)
+}
+
+/// The board as the nav shows it: `head` its Coordinator, at work, and the
+/// workers three tasks' agents — one working, one asking, one ready to
+/// approve with its PR — read under the scene's own HOME.
+fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
+    let now = sw_board::clock::now();
+    let at = now - 12 * 60_000;
+    let passed =
+        json!({ "round": 1, "gate": "major", "meets": true, "pass": true, "findings": [] });
+    let task = |n: usize, title: &str, more: Value| {
+        let mut task = obj(json!({
+            "id": format!("checkout/{}", 152 + n),
+            "title": title,
+            "agent": "claude",
+            "link": { "pane": format!("p{n}"), "socket": "here" },
+            "live": { "status": "working" },
+            "at": at,
+            "since": at,
+        }));
+        task.extend(obj(more));
+        task
+    };
+    let rows = [
+        task(
+            0,
+            "Stripe webhook retries",
+            json!({ "stage": "working", "state": "working", "progress": 60, "eta": 4 }),
+        ),
+        task(
+            1,
+            "Cart copy pass",
+            json!({ "stage": "asks", "state": "blocked", "kind": "question" }),
+        ),
+        task(
+            2,
+            "Order confirmation emails",
+            json!({ "stage": "approval", "state": "blocked", "kind": "permission", "reviewRound": 1, "review": passed, "reviews": [passed], "pr": "https://github.com/acme/checkout/pull/48" }),
+        ),
+    ];
+    // The adapter's panes, each placed for its task's agent.
+    let threads = (0..rows.len())
+        .map(|n| (format!("p{n}"), workers[n]))
+        .collect();
+    let mut sidebar = sidebar::of(&rows, &threads, "here", now);
+    let coordinator = coordinator_entry(
+        &coordinator_stands("working", ""),
+        0,
+        "Three threads are out. Webhook retries is writing its tests.",
+    );
+    sidebar
+        .agents
+        .insert(head, sidebar::coordinator_told(coordinator));
+    sidebar
 }
 
 // -------------------------------------------------------------------- review

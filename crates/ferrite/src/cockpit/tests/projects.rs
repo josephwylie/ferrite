@@ -1,11 +1,12 @@
-//! Projects in the cockpit (ADR 0030): the nav's project blocks — the
-//! coordinator heading its project, its Threads by need under it, nothing
-//! listed twice — the nav's focus on one project, and the plain rows while
-//! no ticker runs.
+//! Projects in the cockpit: the board's sidebar entries as nav rows and
+//! its tally in the bottom bar, Server notifications, and the work board
+//! in the window (ADR 0031).
 
 use super::*;
-use crate::projects::{Model, ProjectEntry, ThreadEntry};
-use ferrite_projects::thread::Group;
+use crate::cockpit::drawn;
+use crate::sidebar::{coordinator_told, Sidebar, Told};
+use sw_board::flow::sidebar_entry::{coordinator_entry, Entry};
+use sw_board::shown::ink::Ink;
 
 fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
     let mut threads = core.threads();
@@ -13,110 +14,194 @@ fn sorted_threads(core: &Cockpit) -> Vec<ThreadId> {
     threads
 }
 
-fn entry(id: &str, thread: ThreadId, group: Group, title: &str, sub: &str) -> ThreadEntry {
-    ThreadEntry {
-        id: id.into(),
-        thread: Some(thread),
-        group,
-        display: format!("{id} \u{b7} {title}"),
-        sub: sub.into(),
+fn entry(name: &str, stands: &str, age: &str, progress: &str) -> Entry {
+    Entry {
+        name: name.into(),
+        place: stands.into(),
+        stands: stands.into(),
+        age: age.into(),
+        line: String::new(),
+        progress: progress.into(),
     }
 }
 
-/// Alpha: `threads[0]` coordinates, `threads[2]` waits on the operator,
-/// `threads[1]` works — listed in that order, by need.
-fn model(threads: &[ThreadId], ticker: bool) -> Model {
-    Model {
-        ticker,
-        needs_you: Some("projects: 1 need you".into()),
-        projects: vec![ProjectEntry {
-            slug: "alpha".into(),
-            name: "Alpha".into(),
-            summary: "1 need you \u{b7} 1 working".into(),
-            coordinator: Some(threads[0]),
-            coordinator_sub: String::new(),
-            threads: vec![
-                entry(
-                    "t-0002",
-                    threads[2],
-                    Group::WaitingOnYou,
-                    "Second",
-                    "needs you \u{b7} blocked",
-                ),
-                entry("t-0001", threads[1], Group::Working, "First", ""),
-            ],
-        }],
+/// `threads[0]` is the Coordinator, `threads[1]` a task's agent at work and
+/// `threads[2]` its reviewer; `threads[3]` is no agent of the board's.
+fn sidebar(threads: &[ThreadId]) -> Sidebar {
+    let task = "HSW-152 Show automations in the main list";
+    let agent = entry(task, "agent \u{b7} under review \u{b7} R#1", "6m", "40% 3m");
+    let reviewer = entry(
+        task,
+        "reviewer \u{b7} under review \u{b7} R#1",
+        "6m",
+        "40% 3m",
+    );
+    let coordinator = coordinator_entry("idle", 1, "Done.\nBoth tasks are added.");
+    Sidebar {
+        agents: [
+            (threads[0], coordinator_told(coordinator)),
+            (
+                threads[1],
+                Told {
+                    entry: agent.clone(),
+                    ink: Ink::Review,
+                },
+            ),
+            (
+                threads[2],
+                Told {
+                    entry: reviewer,
+                    ink: Ink::Review,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        tally: "1 needs you \u{b7} 2 working".into(),
+        ..Sidebar::default()
     }
 }
 
+/// Each live agent's Thread is its entry: row 1 the task's number and
+/// title (the Thread's own name hidden, no word at its right), rows 2 and 3
+/// under it; the Coordinator's message under its row; a Thread the board
+/// does not run keeps its own row.
 #[gpui::test]
-fn a_project_heads_its_threads_by_need_and_owns_their_rows(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("nav-projects", 4);
+fn the_boards_agents_are_their_sidebar_entries(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-board-rows", 4);
     let threads = sorted_threads(&core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
 
     view.update(cx, |view, _| {
-        view.projects.model = model(&threads, true);
+        view.projects.sidebar = sidebar(&threads);
         let state = view.nav_state();
-        assert_eq!(state.projects.len(), 1);
-        let block = &state.projects[0];
+        let rows: Vec<&nav::ThreadRow> = state.ordered_solos();
+        let row = |thread: ThreadId| *rows.iter().find(|row| row.thread == thread).unwrap();
+
+        let agent = row(threads[1]);
         assert_eq!(
-            (block.name.as_ref(), block.summary.as_ref()),
-            ("Alpha", "1 need you \u{b7} 1 working")
+            agent.name.as_ref(),
+            "HSW-152 Show automations in the main list"
         );
-        assert_eq!(block.head.as_ref().map(|row| row.thread), Some(threads[0]));
-        let rows: Vec<(ThreadId, &str, Option<&str>)> = block
-            .rows
-            .iter()
-            .map(|(row, sub)| (row.thread, row.name.as_ref(), sub.as_deref()))
-            .collect();
         assert_eq!(
-            rows,
-            [
-                (
-                    threads[2],
-                    "t-0002 \u{b7} Second",
-                    Some("needs you \u{b7} blocked")
-                ),
-                (threads[1], "t-0001 \u{b7} First", None),
-            ]
+            (&agent.tail, agent.details.text()),
+            (&nav::NavTail::None, None)
         );
-        let loose: Vec<ThreadId> = state.ordered_solos().iter().map(|row| row.thread).collect();
+        let task = agent.task.as_ref().expect("the agent's entry");
         assert_eq!(
-            loose,
-            [threads[3]],
-            "a project's Threads are listed once, in its block"
+            (task.stands_timed.as_ref(), task.third.as_ref()),
+            ("agent \u{b7} under review \u{b7} R#1 \u{b7} 6m", "40% 3m")
         );
+        assert_eq!(task.ink, crate::sidebar::ink(Ink::Review));
+        assert_eq!(
+            row(threads[2])
+                .task
+                .as_ref()
+                .map(|task| task.stands.as_ref()),
+            Some("reviewer \u{b7} under review \u{b7} R#1"),
+            "the reviewer's own entry"
+        );
+
+        let coordinator = row(threads[0]);
+        assert_eq!(coordinator.name.as_ref(), "Coordinator");
+        let said = coordinator.task.as_ref().expect("the Coordinator's entry");
+        assert_eq!(
+            (said.stands.as_ref(), said.third.as_ref()),
+            (
+                "Coordinator \u{b7} idle \u{b7} 1 message waits to be sent",
+                "Done. Both tasks are added."
+            )
+        );
+
+        let own = row(threads[3]);
+        assert!(own.task.is_none(), "no agent of the board's");
+        assert_eq!(own.name, view.facts.name(threads[3]));
     });
 }
 
+/// A task archived or removed while its Thread lives has the board's words
+/// taken off: its row is the Thread's own again.
 #[gpui::test]
-fn focus_shows_one_project_and_no_ticker_shows_the_plain_rows(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("nav-projects-focus", 4);
+fn a_thread_whose_task_went_keeps_its_own_row(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-board-gone", 2);
     let threads = sorted_threads(&core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
 
-    view.update(cx, |view, cx| {
-        view.projects.model = model(&threads, true);
-        view.focus_nav_on_project(Some("alpha".into()), cx);
-        let state = view.nav_state();
-        assert_eq!(state.projects.len(), 1);
-        assert!(state.sections.is_empty(), "focused: the project alone");
-        view.focus_nav_on_project(None, cx);
-        assert!(
-            !view.nav_state().sections.is_empty(),
-            "unfocused: everything again"
-        );
-
-        // A stopped ticker's records are stale: plain rows, every Thread.
-        view.projects.model = model(&threads, false);
-        let state = view.nav_state();
-        assert!(state.projects.is_empty());
-        let loose: Vec<ThreadId> = state.ordered_solos().iter().map(|row| row.thread).collect();
-        assert_eq!(loose, threads);
+    view.update(cx, |view, _| {
+        view.projects.sidebar = sidebar(&[threads[0], threads[1], threads[1]]);
+        assert!(view.thread_row(threads[1]).task.is_some());
+        view.projects.sidebar = Sidebar::default();
+        let row = view.thread_row(threads[1]);
+        assert!(row.task.is_none());
+        assert_eq!(row.name, view.facts.name(threads[1]));
     });
+}
+
+/// A task's own space is headed with the task's number and title as the
+/// entry says them, its branch still at the heading's right and its
+/// numbers under it: the Space the board made for it, its Thread in it.
+#[gpui::test]
+fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-board-space", 1);
+    let thread = core.threads()[0];
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+
+    view.update(cx, |view, _| {
+        let project = view.nav_state().sections[0]
+            .project
+            .expect("a named Project");
+        let branch = view.nav_state().sections[0].branch.clone();
+        let sidebar = &mut view.projects.sidebar;
+        sidebar.places.insert(thread, "s1".into());
+        sidebar.spaces.insert(
+            "s1".into(),
+            entry(
+                "HSW-152 Show automations",
+                "agent \u{b7} working",
+                "6m",
+                "8% 16m",
+            ),
+        );
+        let state = view.nav_state();
+        let section = state
+            .sections
+            .iter()
+            .find(|section| section.project == Some(project))
+            .expect("the space's section");
+        assert_eq!(section.label.as_ref(), "HSW-152 Show automations");
+        assert_eq!(section.numbers.as_deref(), Some("8% 16m"));
+        assert_eq!(section.branch, branch, "the branch stays");
+    });
+}
+
+/// The bottom bar says the board header's tally while the board has tasks,
+/// and a press on it opens the board, as its key does.
+#[gpui::test]
+fn the_bottom_bar_says_the_boards_tally(cx: &mut TestAppContext) {
+    let tally = "3 need you \u{b7} 1 ready \u{b7} 2 working";
+    let (core, _fake) = cockpit("bar-board-tally", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("bottom-bar-projects").is_none(),
+        "no tasks, no word"
+    );
+    assert_eq!(drawn::bar_tally(), None);
+
+    view.update(cx, |view, cx| {
+        view.projects.sidebar.tally = tally.into();
+        cx.notify();
+    });
+    tick(cx);
+    assert_eq!(drawn::bar_tally().as_deref(), Some(tally));
+    let word = cx.debug_bounds("bottom-bar-projects").expect("the word");
+    let toggles = drawn::projects_toggles();
+    cx.simulate_click(word.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(drawn::projects_toggles(), toggles + 1, "projects::Toggle");
 }
 
 /// The toasts the window shows now.
@@ -187,33 +272,6 @@ fn a_server_notification_is_silent_with_sounds_off(cx: &mut TestAppContext) {
         assert!(view.chimed.is_empty(), "sounds off: no chime");
     });
     assert_eq!(toasts(cx), before + 1, "the toast still shows");
-}
-
-/// `nav.focus` from the Server focuses the nav as the palette's `focus`
-/// does, and its clear shows everything again.
-#[gpui::test]
-fn the_servers_nav_focus_shows_one_project_and_its_clear_all(cx: &mut TestAppContext) {
-    use ferrite_core::cockpit::Asked;
-    let (core, _fake) = cockpit("projects-nav-focus", 4);
-    let threads = sorted_threads(&core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-
-    view.update_in(cx, |view, window, cx| {
-        view.projects.model = model(&threads, true);
-        view.present(Asked::NavFocus(Some("alpha".into())), window, cx);
-        let state = view.nav_state();
-        assert_eq!(state.projects.len(), 1);
-        assert_eq!(
-            state.projects[0].head.as_ref().map(|row| row.thread),
-            Some(threads[0]),
-            "the coordinator first"
-        );
-        assert!(state.sections.is_empty(), "focused: the project alone");
-        view.present(Asked::NavFocus(None), window, cx);
-        assert_eq!(view.projects.focus, None);
-        assert!(!view.nav_state().sections.is_empty(), "everything again");
-    });
 }
 
 /// At wall range y/n/a and the digits answer the flagged Thread; a focused

@@ -83,13 +83,16 @@ fn session_for(tasks: &[Task], socket: &str) -> Session {
     if needs { read_session(socket) } else { Session::Down }
 }
 /// This machine's tasks as one herdr session sees them (the keeper serves several sessions from one data folder).
-pub fn board_for(socket: &str) -> Vec<Obj> {
+pub fn board_for(socket: &str) -> Vec<Obj> { board_seen(socket).0 }
+/// Ferrite: `board_for`'s rows with the session they were read in, so Ferrite's nav finds each pane's Thread in the
+/// same reading (ADR 0031).
+pub fn board_seen(socket: &str) -> (Vec<Obj>, Session) {
     let tasks = list(ListOpts::default());
     let session = session_for(&tasks, socket);
     let mut seen = BTreeMap::new();
     let mut rows: Vec<Obj> = tasks.iter().map(|t| shown(t, &session, socket, &mut seen)).collect();
     crate::shown::queue::number(&mut rows);
-    rows
+    (rows, session)
 }
 pub fn board(include_archived: bool) -> Vec<Obj> {
     let here = current_socket();

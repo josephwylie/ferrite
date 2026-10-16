@@ -329,6 +329,37 @@ herdr's sidebar rows become Ferrite's nav rows, drawn from the same data
 `prefix+a`, is Ferrite's existing `projects::Toggle`; the board's own
 keys are its own, as in the terminal.
 
+The nav reads the board as `sync_sidebar` does, at most once a second
+and at once when an open Thread's Attention changes, off the UI thread:
+the board's rows are `flow::live::board_for`'s, read through the adapter
+as the board reads them (`board_seen` hands the nav the same session), so
+the nav and the board never disagree. A pane's id is the adapter's, and
+its Thread is the agent the adapter lists there (its terminal), so only
+an open Thread is a live agent. Each live agent's Thread (a task's agent,
+its reviewer during a review, the Coordinator) is drawn as its entry
+where the Thread already sits in the tree: row 1 the task's number and
+title beside Ferrite's own Attention dot, then row 2 (who is on it and
+where it stands, its time last and dropped first on a short row) in the
+task's status ink (the Coordinator's in plain text), then row 3, dim (its
+numbers, or the Coordinator's latest message). A task's own space names
+the heading whose placed Threads all share that Space, as the adapter
+lists each agent's (a Space the board made, a linked worktree, a
+Project's own), its branch still at the right and its numbers under it;
+while the task waits for a pick the name stays and the numbers go, as
+upstream leaves them. Status inks are Ferrite's theme equivalents behind
+one function (`sidebar::ink`) until the board's GPUI drawing lands, when
+that function takes the board theme's inks. The nav reads the
+board whether or not 0.2's projects root resolves. Nothing is reported to
+herdr, so `report-metadata` is answered by no call; a task archived or
+removed while its Thread lives simply has no entry. A window on another
+machine draws none of this computer's board. The bottom bar says the
+board header's tally (`3 need you · 1 ready · 2 working`) and opens the
+board. Upstream raises no pop-up of its own when a task needs you, is
+ready or fails: `board.notify` alone decides (a bell where a board is
+open, or a command), so the window adds none. 0.2's nav focus (`nav.focus`)
+has no 1.0 counterpart; the window ignores it until the API drops it,
+which waits on 0.2's crate: its own CLI still calls `nav focus`.
+
 ### Migration from 0.2
 
 1.0 never converts 0.2: its take-over (`sw_flow::take_over::at_start`,

@@ -1,10 +1,7 @@
-//! Projects' cockpit half (ADR 0030, ADR 0031): the snapshot the nav and
-//! the bottom bar read, refreshed off the UI thread; the palette's Projects
-//! commands; the work board's place on the board (`board`) and what it asks
-//! of the window; and the nav's project blocks.
-//!
-//! A project's scope is the focused Thread's: the project it heads or
-//! works for, where upstream asked which Herdr workspace the pane was in.
+//! Projects' cockpit half (ADR 0030, ADR 0031): the board's sidebar the
+//! nav and the bottom bar read, refreshed off the UI thread; the palette's
+//! Projects commands; and the work board's place on the board (`board`)
+//! and what it asks of the window.
 
 use super::*;
 use crate::board::{BoardEvent, BoardView, Opening, Placement};
@@ -12,7 +9,8 @@ use crate::float::{self, FloatPlace};
 use crate::palette::{
     Act, Command as PaletteCommand, Row as PaletteRow, Section as PaletteSection,
 };
-use crate::projects::{self, Command, Model, Place};
+use crate::projects::{self, Command, Place};
+use crate::sidebar::{self, Sidebar};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
 use gpui::{FocusHandle, Subscription};
@@ -23,9 +21,9 @@ pub(super) struct ProjectsState {
     /// Where the projects live; `None` in the test and demo constructors,
     /// so no suite reads the operator's own (nor opens the board on them).
     pub place: Option<Place>,
-    pub model: Model,
-    /// The project the nav shows alone (`focus`), coordinator first.
-    pub focus: Option<String>,
+    /// What herdr's sidebar would show of the board: the nav's task rows
+    /// and the bottom bar's tally.
+    pub sidebar: Sidebar,
     /// The work board, while it is open.
     pub board: Option<BoardSlot>,
     /// What a command's work said, for the next frame's toast.
@@ -73,42 +71,75 @@ impl ProjectsState {
 }
 
 impl CockpitView {
-    /// Read the snapshot every `popup::REFRESH`, off the UI thread; the
-    /// window redraws only when it changed.
-    pub(super) fn start_projects_refresh(place: Place, cx: &mut Context<Self>) {
+    /// Read the board's sidebar every `sidebar::REFRESH`, off the UI
+    /// thread, and at once when an open Thread's Attention changes, as the
+    /// upstream writer tells herdr at once; the window redraws only when it
+    /// changed. Nothing is read while the window is on another machine,
+    /// whose board tells its own.
+    pub(super) fn start_sidebar_refresh(cx: &mut Context<Self>) {
+        const LOOK: std::time::Duration = std::time::Duration::from_millis(100);
         cx.spawn(async move |this, cx| loop {
-            let reading = place.clone();
-            let model = cx
-                .background_spawn(async move { Model::load(&reading) })
+            let Ok(pulse) = this.update(cx, |view, cx| view.board_pulse(cx)) else {
+                break;
+            };
+            let here = pulse.is_some();
+            let sidebar = cx
+                .background_spawn(async move { here.then(sidebar::read).unwrap_or_default() })
                 .await;
             let alive = this.update(cx, |view, cx| {
-                if view.projects.model != model {
-                    view.projects.model = model;
+                if view.projects.sidebar != sidebar {
+                    view.projects.sidebar = sidebar;
                     cx.notify();
                 }
             });
             if alive.is_err() {
                 break;
             }
-            cx.background_executor()
-                .timer(ferrite_projects::popup::REFRESH)
-                .await;
+            for _ in 0..(sidebar::REFRESH.as_millis() / LOOK.as_millis()) {
+                cx.background_executor().timer(LOOK).await;
+                let changed = this.update(cx, |view, cx| view.board_pulse(cx) != pulse);
+                if changed.unwrap_or(true) {
+                    break;
+                }
+            }
         })
         .detach();
     }
 
-    /// The focused Thread's project, if it has one.
-    fn projects_scope(&self) -> Option<String> {
-        let thread = self.focused_thread()?;
-        self.projects
-            .model
-            .project_of(thread)
-            .map(|project| project.slug.clone())
+    /// Each open Thread's Attention as the Server reckons it (a Decision
+    /// waiting, a turn running, an unseen Notice), from the mirror alone:
+    /// what the board's agent list says changes with it. `None` while the
+    /// window is on another machine.
+    fn board_pulse(&self, cx: &gpui::App) -> Option<Vec<(ThreadId, Attention)>> {
+        if self.away_machine(cx).is_some() {
+            return None;
+        }
+        let notices = self.cockpit.notifications();
+        let threads = self.cockpit.threads().into_iter();
+        Some(
+            threads
+                .filter_map(|thread| {
+                    let view = self.cockpit.thread(thread)?;
+                    let attention = if view.pending().is_some() {
+                        Attention::Blocked
+                    } else if view.needs_queue() || view.background_work() {
+                        Attention::Working
+                    } else if notices.attention(thread) {
+                        Attention::Done
+                    } else {
+                        Attention::Idle
+                    };
+                    Some((thread, attention))
+                })
+                .collect(),
+        )
     }
 
     /// The projects shortcut (herdr's `prefix+a`): the board, or back to
     /// where you came from when it holds the keyboard.
     pub(super) fn toggle_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        super::drawn::toggled_projects();
         if self.board_focused(window, cx) {
             self.leave_board(window, cx);
         } else {
@@ -297,17 +328,6 @@ impl CockpitView {
         };
         match command {
             Command::Board => self.toggle_projects(window, cx),
-            Command::Focus => match self.projects_scope() {
-                Some(slug) => self.focus_nav_on_project(Some(slug), cx),
-                None => self.projects_toast(
-                    "Projects".into(),
-                    "this Thread does not belong to a project".into(),
-                    true,
-                    window,
-                    cx,
-                ),
-            },
-            Command::Unfocus => self.focus_nav_on_project(None, cx),
             Command::Configure => self.projects_work(move || projects::configure(&place), cx),
             Command::Doctor => self.projects_work(
                 move || {
@@ -324,13 +344,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// `focus`/`unfocus`: the nav shows only `slug`'s block, coordinator
-    /// first, its Threads by need — or everything again.
-    pub(crate) fn focus_nav_on_project(&mut self, slug: Option<String>, cx: &mut Context<Self>) {
-        if self.projects.focus != slug {
-            self.projects.focus = slug;
-            cx.notify();
-        }
+    /// The machine the window is on, by name, when that is not this
+    /// computer.
+    pub(super) fn away_machine(&self, cx: &gpui::App) -> Option<String> {
+        let machines = self.machines.as_ref()?.read(cx);
+        let index = machines.index(&machines.selected_key())?;
+        machines.machine(index).map(|machine| machine.name.clone())
     }
 
     /// The palette's Projects rows, while there is a place to read.
@@ -338,14 +357,8 @@ impl CockpitView {
         if self.projects.place.is_none() {
             return Vec::new();
         }
-        let in_project = self.projects_scope().is_some();
         Command::ALL
             .into_iter()
-            .filter(|command| match command {
-                Command::Focus => in_project,
-                Command::Unfocus => self.projects.focus.is_some(),
-                _ => true,
-            })
             .map(|command| PaletteRow {
                 section: PaletteSection::Commands,
                 name: command.title().into(),
@@ -420,123 +433,25 @@ impl CockpitView {
         vec![veil, float]
     }
 
-    /// `projects: N need you`, while the ticker runs and someone does.
+    /// The board header's tally (`3 need you · 1 ready · 2 working`), while
+    /// the board has tasks; a press opens the board.
     pub(super) fn projects_bar_word(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let word = self.projects.model.needs_you.clone()?;
-        Some(
+        let tally = &self.projects.sidebar.tally;
+        #[cfg(test)]
+        super::drawn::record_bar_tally((!tally.is_empty()).then(|| tally.clone()));
+        (!tally.is_empty()).then(|| {
             div()
                 .id("bottom-bar-projects")
                 .debug_selector(|| "bottom-bar-projects".into())
                 .flex_shrink_0()
-                .text_color(rgb(crate::theme::YELLOW))
+                .text_color(rgb(crate::theme::CHROME_MUTED))
                 .cursor_pointer()
-                .child(SharedString::from(word))
-                .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                .child(SharedString::from(tally.clone()))
+                .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
-                    view.run_projects_command(Command::Board, window, cx);
+                    window.dispatch_action(Box::new(projects::Toggle), cx);
                 }))
-                .into_any_element(),
-        )
+                .into_any_element()
+        })
     }
-
-    /// The nav's project blocks, from the snapshot, while the ticker runs:
-    /// each project with a Thread here, by slug; focused, that one alone.
-    pub(super) fn project_blocks(
-        &self,
-        row: impl Fn(ThreadId) -> nav::ThreadRow,
-    ) -> Vec<nav::ProjectBlock> {
-        let model = &self.projects.model;
-        if !model.ticker {
-            return Vec::new();
-        }
-        let known = |thread: &ThreadId| {
-            self.facts.get(*thread).is_some() || self.cockpit.thread(*thread).is_some()
-        };
-        model
-            .projects
-            .iter()
-            .filter(|project| {
-                self.projects
-                    .focus
-                    .as_ref()
-                    .is_none_or(|slug| *slug == project.slug)
-            })
-            .filter_map(|project| {
-                let head = project.coordinator.filter(known).map(&row);
-                let rows: Vec<(nav::ThreadRow, Option<SharedString>)> = project
-                    .threads
-                    .iter()
-                    .filter_map(|entry| {
-                        let thread = entry.thread.filter(known)?;
-                        let sub = Some(SharedString::from(entry.sub.clone()))
-                            .filter(|sub| !sub.is_empty());
-                        Some((
-                            nav::ThreadRow {
-                                name: entry.display.clone().into(),
-                                ..row(thread)
-                            },
-                            sub,
-                        ))
-                    })
-                    .collect();
-                (head.is_some() || !rows.is_empty()).then(|| nav::ProjectBlock {
-                    slug: project.slug.clone().into(),
-                    name: project.name.clone().into(),
-                    summary: project.summary.clone().into(),
-                    head_sub: Some(SharedString::from(project.coordinator_sub.clone()))
-                        .filter(|sub| !sub.is_empty()),
-                    head,
-                    rows,
-                })
-            })
-            .collect()
-    }
-
-    /// The project blocks at the top of the tree: each its head (a press
-    /// lands on the coordinator) and its Threads' rows, each over its
-    /// sub-line.
-    pub(super) fn project_blocks_element(
-        &self,
-        blocks: &[nav::ProjectBlock],
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        blocks
-            .iter()
-            .enumerate()
-            .map(|(index, block)| {
-                let head = nav::project_head(index, block);
-                let head = match block.head.as_ref().map(|row| row.thread) {
-                    Some(thread) => {
-                        head.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            view.land_on_thread(thread, cx)
-                        }))
-                    }
-                    None => head,
-                };
-                let mut section = nav::section(index == 0)
-                    .child(head)
-                    .children(block.head_sub.clone().map(nav::sub_line));
-                for (row, sub) in &block.rows {
-                    section = section
-                        .child(self.thread_element(row, None, nav::RowPlace::Root, cx))
-                        .children(sub.clone().map(nav::sub_line));
-                }
-                section.into_any_element()
-            })
-            .collect()
-    }
-}
-
-/// Every project's Threads are its own rows: the nav lists them nowhere
-/// else.
-pub(super) fn claimed(blocks: &[nav::ProjectBlock]) -> std::collections::HashSet<ThreadId> {
-    blocks.iter().flat_map(nav::ProjectBlock::threads).collect()
-}
-
-/// Whether the nav is focused on a project it can show.
-pub(super) fn focused(state: &ProjectsState, blocks: &[nav::ProjectBlock]) -> bool {
-    state
-        .focus
-        .as_ref()
-        .is_some_and(|slug| blocks.iter().any(|block| block.slug == slug.as_str()))
 }

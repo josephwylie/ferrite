@@ -43,6 +43,7 @@ mod rich;
 mod scrollbar;
 mod select;
 mod shortcuts;
+mod sidebar;
 mod status;
 mod system_notifications;
 mod theme;
@@ -445,6 +446,7 @@ fn main() {
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
                                     projects: projects::Place::resolve(),
+                                    board: true,
                                 },
                                 cx,
                             );

@@ -1,13 +1,10 @@
-//! The snapshot the nav reads, on a scratch root, and the configure
-//! action.
+//! The configure action, on a scratch root.
 
 use std::path::PathBuf;
 
-use ferrite_core::ThreadId;
 use ferrite_projects::paths::{Ctx, Env};
 use ferrite_projects::project;
 use ferrite_projects::runner::{Cmd, Output, Runner};
-use ferrite_projects::thread::{self, Group};
 
 use super::*;
 
@@ -40,98 +37,6 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-#[test]
-fn the_snapshot_lists_open_threads_by_need_with_their_sub_lines() {
-    let scratch = Scratch::new("model");
-    let place = scratch.place(&["Alpha"]);
-    let alpha = project::Project::load(&place.root, "alpha").unwrap();
-    thread::allocate(&alpha, |t| {
-        t.title = "First".into();
-        t.status = thread::Status::Open;
-        t.last_group = "working".into();
-        t.pane_id = "11".into();
-        t.state_line = "working · ~40%".into();
-        t.activity = "Writing tests".into();
-    })
-    .unwrap();
-    thread::allocate(&alpha, |t| {
-        t.title = "Second".into();
-        t.status = thread::Status::Open;
-        t.last_group = "waiting-on-you".into();
-        t.pane_id = "12".into();
-        t.state_line = "needs you · blocked".into();
-    })
-    .unwrap();
-    thread::allocate(&alpha, |t| {
-        t.title = "Done".into();
-        t.status = thread::Status::Resolved;
-        t.pane_id = "13".into();
-    })
-    .unwrap();
-    thread::allocate(&alpha, |t| {
-        t.title = "Elsewhere".into();
-        t.status = thread::Status::Open;
-        t.machine = "box".into();
-        t.pane_id = "14".into();
-    })
-    .unwrap();
-
-    let model = Model::load(&place);
-    assert!(!model.ticker, "no ticker runs on a scratch root");
-    assert_eq!(model.needs_you, None, "no stale count without the ticker");
-    let project = &model.projects[0];
-    assert_eq!(
-        (project.slug.as_str(), project.name.as_str()),
-        ("alpha", "Alpha")
-    );
-    assert_eq!(
-        project.summary, "1 need you · 1 working",
-        "the line counts the groups the ticker recorded, as herdr-projects' sidebar does"
-    );
-    let rows: Vec<(&str, Option<ThreadId>, Group, &str, &str)> = project
-        .threads
-        .iter()
-        .map(|row| {
-            (
-                row.id.as_str(),
-                row.thread,
-                row.group,
-                row.display.as_str(),
-                row.sub.as_str(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            (
-                "t-0002",
-                Some(ThreadId::new(12)),
-                Group::WaitingOnYou,
-                "t-0002 · Second",
-                "needs you · blocked"
-            ),
-            (
-                "t-0001",
-                Some(ThreadId::new(11)),
-                Group::Working,
-                "t-0001 · First",
-                "~40% · Writing tests"
-            ),
-            ("t-0004", None, Group::Working, "t-0004 · Elsewhere", ""),
-        ],
-        "needs you first; another machine's pane is no Thread here"
-    );
-    assert_eq!(
-        model.project_of(ThreadId::new(12)).map(|p| p.slug.as_str()),
-        Some("alpha")
-    );
-    assert!(
-        model.project_of(ThreadId::new(13)).is_none(),
-        "a resolved thread is no one's"
-    );
 }
 
 /// The CLI as the adapter runs it: `thread list` answers one Thread, 7,
