@@ -37,7 +37,7 @@ fn a_title_that_fits_is_kept_a_longer_one_is_cut_at_a_word_and_ends_in_an_ellips
 
 /// The program run in the world's repo: what it printed.
 fn board(w: &World, args: &[&str]) -> String {
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ferrite-projects")).args(args).current_dir(&w.root)
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_herdr-projects")).args(args).current_dir(&w.root)
         .env("HERDR_SOCKET_PATH", "/nonexistent").env("HERDR_BIN_PATH", "/bin/false").output().unwrap();
     assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8_lossy(&o.stdout).into_owned()

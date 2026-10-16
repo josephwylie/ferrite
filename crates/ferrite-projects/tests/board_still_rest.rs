@@ -47,7 +47,7 @@ fn plain(s: &str) -> String { regex::Regex::new(r"\x1b\[[0-9;?<>=]*[A-Za-z]|\x1b
 fn copy(w: &World) -> std::path::PathBuf {
     let exe = w.base.join("bin").join("herdr-projects");
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_ferrite-projects"), &exe).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_herdr-projects"), &exe).unwrap();
     exe
 }
 /// The program's file changed (a merge into the checkout it runs from): its time moves on.

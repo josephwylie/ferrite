@@ -6,7 +6,7 @@ use sw::json::*;
 
 /// The program run in the world's repo: its exit code, what it printed and what it said went wrong.
 fn run(w: &World, args: &[&str]) -> (i32, String, String) {
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ferrite-projects")).args(args).current_dir(&w.root)
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_herdr-projects")).args(args).current_dir(&w.root)
         .env("HERDR_SOCKET_PATH", "/nonexistent").env("HERDR_BIN_PATH", "/bin/false").output().unwrap();
     (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
 }

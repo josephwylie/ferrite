@@ -13,9 +13,10 @@ autotests = false
 name = "sw"
 path = "src/lib.rs"
 
-# Ferrite: shipped with the app as `ferrite-projects` (scripts/install-app.sh).
+# Ferrite: upstream's name until the board replaces 0.2's Projects view; then
+# it ships with the app as `ferrite-projects` (ADR 0031, "The command line").
 [[bin]]
-name = "ferrite-projects"
+name = "herdr-projects"
 path = "src/main.rs"
 
 [[test]]

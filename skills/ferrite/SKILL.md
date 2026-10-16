@@ -147,18 +147,9 @@ is one event under the same id: `thread_opened`, `thread_closed`,
 `attention`, `decision_requested`, `decision_closed`. It runs until you stop
 it. Prefer `agent wait` when you only need to know when a Thread settles.
 
-## Work on the board
+## Coordinate a project
 
-The work board (its tasks, the agents delegated to them, the Coordinator)
-is Projects' (ADR 0031), not this skill's. Its program ships beside
-Ferrite's and is not on `PATH` either:
-
-```bash
-"$(dirname "$F")/ferrite-projects" --skill
-```
-
-prints how an agent adds, lists, reports on and delegates tasks; follow
-what it prints.
+A project's coordinator and its threads are Projects' (ADR 0030), not this skill's: the project folder's AGENTS.md names the full `ferrite-projects --root …` command; run its `skill` subcommand and follow what it prints.
 
 ## Tell the user
 

@@ -108,7 +108,7 @@ fn real_programs_the_agents_command_names_its_board_with_nothing_in_the_environm
     let cmd = real_shim(&w);
     // Run as the agent would: by the path in its rules, from its folder, with nothing in the environment pointing at
     // this board. The shim here runs this test's own program, so it is pointed at the real one first.
-    let text = read(&cmd).replace(&sw::store::files::bin().display().to_string(), env!("CARGO_BIN_EXE_ferrite-projects"));
+    let text = read(&cmd).replace(&sw::store::files::bin().display().to_string(), env!("CARGO_BIN_EXE_herdr-projects"));
     std::fs::write(&cmd, text).unwrap();
     let o = std::process::Command::new(&cmd).args(["add", "Found on the way", "--desc", "A follow-up."]).current_dir(&w.root)
         .env("HERDR_PROJECTS_HOME", w.base.join("default-home")).env_remove("HERDR_PROJECTS_DATA_DIR").env_remove("HERDR_PROJECTS_CONFIG_DIR")

@@ -48,7 +48,7 @@ fn research_only_is_decided_when_the_agent_starts_and_the_repos_file_is_the_one_
 #[test]
 fn real_programs_a_change_while_the_repos_setup_still_runs_counts_for_the_agent_that_starts_after_it() {
     let w = world();
-    let bin = env!("CARGO_BIN_EXE_ferrite-projects");
+    let bin = env!("CARGO_BIN_EXE_herdr-projects");
     let seen = w.base.join("seen.json");
     w.script(json!({ "worker": [{ "status": "working" }] }));
     let setup = format!("'{bin}' list --json > '{0}.before' && '{bin}' set {NAME} true --task proj/1 > /dev/null && '{bin}' list --json > '{0}'", seen.display());
