@@ -41,6 +41,7 @@ At upstream commit `c019063b65b3ff6a68688345b9f304533c8fb83c`
 | `crates/core` | `crates/ferrite-projects-core` | `sw-core` (`sw_core`) |
 | `crates/flow` | `crates/ferrite-projects-flow` | `sw-flow` (`sw_flow`) |
 | `crates/board` | `crates/ferrite-projects-board` | `sw-board` (`sw_board`) |
+| the command line (`src/`, `tests/`) | `crates/ferrite-projects` | `herdr-projects` (`sw`), its binary `ferrite-projects` |
 
 Each keeps upstream's package and library names (no Ferrite crate
 clashes with them, so their manifests and every `use` stay upstream's),
@@ -65,16 +66,41 @@ three-way merge with few conflicts; seams are clean Ferrite code.
 puts herdr's panes in a browser. Ferrite has no herdr-web-ui and no web
 front for its windows; its board is a GPUI view (Seam 3). `flow` keeps
 its own small `webui/` module (finding the web UI, its link, its front
-door), which finds no web UI under Ferrite and so does nothing.
+door), which finds no web UI under Ferrite and so does nothing:
+`ferrite-projects web-ui` answers as upstream does where no web UI is
+installed, and `serve` opens no front door.
 
-### Not yet taken: the command line
+### The command line
 
 Upstream's command line crate (`src/`: `cli/`, the `sw` library that
-re-exports every crate, and the made docs) and its tests (`tests/`, one
-program over `sw`) are what agents and hooks run. They are taken when
-the 0.2.34 crate leaves `crates/ferrite-projects`, whose binary name they
-share, with `sw`'s re-export of `sw_web` dropped. Until then the three
-crates' own tests run.
+re-exports every crate, and the docs generator) and its tests (`tests/`,
+one program over `sw`) are taken verbatim into `crates/ferrite-projects`,
+keeping the package and library names (`herdr-projects`, `sw`), edition
+2024 and formatting. Its binary is named `ferrite-projects`; it is what
+agents and hooks run, and every command, answer and refusal is
+upstream's. `sw` re-exports `sw_board` in place of `sw_web`. Upstream's
+text keeps its own name, `herdr-projects`: it has no one name constant
+to set at a seam.
+
+What differs, each at a `Ferrite:` mark (`crates/ferrite-projects/README.md`
+lists them):
+
+- `install` and `update` answer that Ferrite ships the program and
+  updates it with the app, and change nothing; `doctor` still takes over
+  older installs and says where things stand.
+- `take-over`, which Ferrite's Server runs (below), says once what the
+  take-over at the start of every command did.
+- `store::files::bin`, the program handed to agents and hooks, is the
+  shipped `ferrite-projects` (beside the app's `ferrite`, links resolved,
+  or `FERRITE_PROJECTS_BIN`) when the code runs inside the app.
+- The tests of the web board and of upstream's own repository tooling
+  (`scripts/`, the plugin's `bin/run.sh` and `herdr-plugin.toml`, the
+  source guard) are not taken; a test that also checked the web board
+  keeps its terminal part.
+
+The binary ships in the app bundle's `Contents/MacOS`, beside `ferrite`
+(`scripts/install-app.sh`, `cargo build -p herdr-projects --bin
+ferrite-projects`), and is signed with it.
 
 ### Seam 1: the herdr adapter
 
@@ -172,9 +198,21 @@ hook command and Copilot's `hooks/ferrite-projects.json`, the
 `ferrite-owned.json` journal) are recognised at a `Ferrite:` seam beside
 upstream's.
 
-It runs where `migrate-ferrite-coordinators` ran (ADR 0030): once at
-Server start, before the keeper, through the shipped binary, its lines
-logged and shown as one toast. ADR 0028's `coordinators.json` and
+Ferrite's 0.2 kept its projects in that same root and its settings in that
+same folder, with its own journal, `ferrite-owned.json`; its hooks ran
+`ferrite-projects … hook --agent …`, Copilot's in `hooks/ferrite-projects.json`.
+Those names are recognised at `Ferrite:` marks beside upstream's (`legacy.rs`
+and `take_over/outside.rs`), so the same take-over sets Ferrite's 0.2 aside:
+nothing deleted, nothing converted, each file it changes backed up first.
+
+It runs where `migrate-ferrite-coordinators` ran (ADR 0030): at every
+Server start, before the keeper, as `ferrite-projects take-over`. As any
+command does, it first runs upstream's start (`take_over::at_start`, then
+the home folder's move, the copy of older data and the settings' move);
+then it prints the line upstream keeps for the human until it is said
+(`move_note`, `move_told`), so the take-over is done once and said once.
+The Server logs what it prints and shows it as one toast once a window is
+there (`server/projects.rs`). ADR 0028's `coordinators.json` and
 `ferrite_migrate.rs` leave with the 0.2 crate: neither 0.2 nor ADR 0028
 ever shipped, and the projects that migration made are set aside with
 the rest of 0.2's.
@@ -184,10 +222,13 @@ the rest of 0.2's.
 The vendored commit is recorded in each crate's `README.md`. For each
 crate, apply upstream's diff from that commit to the new one
 (`git diff c019063..<new> -- crates/core | git apply --3way -p3
---directory=crates/ferrite-projects-core`), resolve conflicts at the
-`Ferrite:` marks, answer (or refuse) any herdr call upstream starts
-making in `herdr/ferrite.rs` before it ships, record the new commit, and
-run the crates' tests.
+--directory=crates/ferrite-projects-core`; for the command line,
+`git diff c019063..<new> -- src tests | git apply --3way
+--directory=crates/ferrite-projects`, leaving out what touches only the
+web crate's tests), resolve conflicts at the `Ferrite:` marks, answer
+(or refuse) any herdr call upstream starts making in `herdr/ferrite.rs`
+before it ships, record the new commit, and run the crates' tests
+(`cargo test -p sw-core -p sw-flow -p sw-board -p herdr-projects`).
 
 ## Consequences
 
@@ -196,5 +237,7 @@ run the crates' tests.
 - The workspace's `serde_json` gains `float_roundtrip`, as upstream's
   data needs (a closing note's time read back is the time written);
   `preserve_order` was already unified in.
-- The 0.2.34 crate, its Server glue and ADR 0030's terms in CONTEXT.md
-  stay until the app runs on 1.0, then go together.
+- The 0.2.34 crate's binary, its Server glue (the coordinators'
+  migration, the ticker) and ADR 0030's terms in CONTEXT.md are gone. Its
+  library stays, in `crates/ferrite-projects-0-2`, only while the window's
+  0.2 Projects view still draws from it, and leaves with that view.

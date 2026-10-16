@@ -6,7 +6,9 @@ date: 2026-10-15
 # Coordinator Threads
 
 > Superseded by ADR 0030: herdr-projects is vendored as Ferrite's
-> coordinator, and what this ADR built is removed.
+> coordinator, and what this ADR built is removed. Since ADR 0031 nothing
+> reads `coordinators.json` any more, not even to migrate it: an old file
+> is left where it is.
 
 Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
 "Features taken from plugins" → Coordinator Threads), on the API of ADR
