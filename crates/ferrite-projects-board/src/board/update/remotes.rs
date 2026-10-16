@@ -16,7 +16,7 @@ pub fn machines(s: &mut State, list: Vec<Machine>, fx: &mut Vec<Effect>) {
     if s.all() && !s.ctx.web && list.is_empty() && s.remotes.is_empty() {
         s.scope.clear(); fx.push(Effect::Save);
         let off = crate::store::settings::lookup::setting("board.machines", None) == json!("none");
-        s.flash(if off { "Other machines are off (unset board.machines turns them on).".to_string() } else { "No other machines. Add one with: herdr machine add <name> <ssh target>  (or name them in the board.machines setting).".into() }, Ink::Yellow);
+        s.flash(if off { "Other machines are off (unset board.machines turns them on).".to_string() } else { "No other machines. Add one in Settings, under Machines  (or name them in the board.machines setting).".into() }, Ink::Yellow); // Ferrite: machines are saved in Ferrite's Settings, not by `herdr machine add`.
     }
     let auto = crate::store::settings::lookup::setting("board.machines", None).as_str().unwrap_or("auto") == "auto";
     s.own_order = auto.then(|| list.iter().map(|m| m.label.clone()).collect());
